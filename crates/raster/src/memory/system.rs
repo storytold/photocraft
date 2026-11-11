@@ -67,6 +67,22 @@ pub fn available_with_swap() -> Option<u64> {
     }
 }
 
+/// Whether `dir` is on a file system kept in memory rather than on a disk (Linux `tmpfs` and
+/// `ramfs`, as `/tmp` is on many distributions and in a Flatpak sandbox). Writing there to free
+/// memory frees none. `false` where that cannot be told, and on the other platforms, whose
+/// temporary folders are on a disk.
+pub fn ram_backed(dir: &std::path::Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::ram_backed_at(std::path::Path::new("/proc"), dir)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = dir;
+        false
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub(super) mod linux {
     use super::SystemMemory;
@@ -180,6 +196,17 @@ pub(super) mod linux {
     pub(super) fn available_at(proc_root: &Path, sys_root: &Path) -> Option<u64> {
         let snap = snapshot_at(proc_root, sys_root);
         snap.available_ram.map(|ram| ram.saturating_add(snap.swap_free.unwrap_or(0)))
+    }
+
+    /// [`super::ram_backed`] with an explicit `/proc`. The mount holding `dir` is the one with
+    /// the longest mount point `dir` is under, and the last listed of several on one point.
+    pub(super) fn ram_backed_at(proc_root: &Path, dir: &Path) -> bool {
+        let Ok(info) = std::fs::read_to_string(proc_root.join("self/mountinfo")) else { return false };
+        // Mount points are listed resolved: a folder not made yet is compared as it is written.
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let mounts = parse_mountinfo(&info);
+        let holding = mounts.iter().filter(|m| dir.starts_with(&m.mount_point)).max_by_key(|m| m.mount_point.len());
+        holding.is_some_and(|m| matches!(m.fstype.as_str(), "tmpfs" | "ramfs"))
     }
 
     /// A `/proc/meminfo` field in bytes.
@@ -881,6 +908,30 @@ mod tests {
         assert_eq!(linux::membership_for_test("0:memory:/app\n"), None, "the unified hierarchy cannot name controllers");
         assert_eq!(linux::membership_for_test("4::/app\n"), None, "a v1 line must name a controller");
         assert_eq!(linux::membership_for_test("4:memory:relative\n"), None, "cgroup paths are absolute");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_ram_backed_follows_the_mount_holding_the_folder() {
+        let (proc, _) = fixture("ram-backed");
+        write(
+            &proc.join("self/mountinfo"),
+            "20 1 8:1 / / rw - ext4 /dev/root rw\n\
+             31 20 0:40 / /pc-fixture/tmp rw,nosuid - tmpfs tmpfs rw\n\
+             32 31 8:2 / /pc-fixture/tmp/disk rw - ext4 /dev/sdb1 rw\n\
+             33 20 0:41 / /pc-fixture/shadowed rw - tmpfs tmpfs rw\n\
+             34 20 8:2 / /pc-fixture/shadowed rw - ext4 /dev/sdb1 rw\n",
+        );
+        let ram_backed = |dir: &str| linux::ram_backed_at(&proc, Path::new(dir));
+        assert!(ram_backed("/pc-fixture/tmp"));
+        assert!(ram_backed("/pc-fixture/tmp/work"));
+        assert!(!ram_backed("/pc-fixture/tmp/disk/work"), "a disk mounted inside a tmpfs is a disk");
+        assert!(!ram_backed("/pc-fixture/tmpfiles"), "a name that only starts like the mount point is elsewhere");
+        assert!(!ram_backed("/pc-fixture/shadowed"), "the last mount on a point is the one in use");
+        assert!(!ram_backed("/pc-fixture/home"));
+        std::fs::remove_file(proc.join("self/mountinfo")).unwrap();
+        assert!(!ram_backed("/pc-fixture/tmp"), "unknown is not memory");
+        std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
     }
 
     #[cfg(target_os = "linux")]

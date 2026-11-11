@@ -115,6 +115,33 @@ mod native {
     }
 }
 
+/// The folder the default `"(system temp)"` scratch disk stands for: the system's temporary
+/// folder, unless that is kept in memory, where spilling tiles would free nothing. A folder the
+/// user names is used as it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_temp() -> std::path::PathBuf {
+    let env = |name: &str| std::env::var_os(name);
+    default_scratch_dir(std::env::temp_dir(), user_cache_dir(&env), photocraft_raster::memory::system::ram_backed)
+}
+
+/// `temp`, or the `photocraft/scratch` folder of the user's `cache` folder when `temp` is kept
+/// in memory and the cache folder is not.
+#[cfg(not(target_arch = "wasm32"))]
+fn default_scratch_dir(temp: std::path::PathBuf, cache: Option<std::path::PathBuf>, ram_backed: impl Fn(&std::path::Path) -> bool) -> std::path::PathBuf {
+    if !ram_backed(&temp) {
+        return temp;
+    }
+    cache.map(|c| c.join("photocraft").join("scratch")).filter(|dir| !ram_backed(dir)).unwrap_or(temp)
+}
+
+/// The user's cache folder by the XDG convention: `$XDG_CACHE_HOME` when it is an absolute
+/// path, else `~/.cache`. Only asked where the temporary folder can be kept in memory.
+#[cfg(not(target_arch = "wasm32"))]
+fn user_cache_dir(env: &impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let dir = |name: &str| env(name).map(std::path::PathBuf::from).filter(|p| p.is_absolute());
+    dir("XDG_CACHE_HOME").or_else(|| dir("HOME").map(|home| home.join(".cache")))
+}
+
 pub(crate) fn configure(prefs: &Preferences) {
     let budget = photocraft_raster::memory::configure(photocraft_raster::memory::Policy {
         percent: prefs.performance.memory_usage_percent,
@@ -128,7 +155,7 @@ pub(crate) fn configure(prefs: &Preferences) {
             .disks
             .iter()
             .find(|d| d.enabled && !d.path.trim().is_empty())
-            .map(|d| if d.path.trim() == "(system temp)" { std::env::temp_dir() } else { std::path::PathBuf::from(d.path.trim()) });
+            .map(|d| if d.path.trim() == "(system temp)" { system_temp() } else { std::path::PathBuf::from(d.path.trim()) });
         // An unusable or full directory pauses eviction without dropping resident pixels and
         // is retried with backoff; History's byte limit applies meanwhile (sync_scratch_state).
         // The reason is exposed in ui.inspect and the application's status bar.
@@ -143,4 +170,32 @@ pub(crate) fn configure(prefs: &Preferences) {
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (prefs, budget);
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_default_scratch_folder_leaves_a_temp_folder_kept_in_memory() {
+        let (temp, cache) = (PathBuf::from("/tmp"), Some(PathBuf::from("/home/u/.cache")));
+        let on_disk = |_: &Path| false;
+        let tmpfs = |dir: &Path| dir.starts_with("/tmp");
+        let all_memory = |_: &Path| true;
+        assert_eq!(default_scratch_dir(temp.clone(), cache.clone(), on_disk), temp);
+        assert_eq!(default_scratch_dir(temp.clone(), cache.clone(), tmpfs), PathBuf::from("/home/u/.cache/photocraft/scratch"));
+        assert_eq!(default_scratch_dir(temp.clone(), None, tmpfs), temp, "no cache folder known");
+        assert_eq!(default_scratch_dir(temp.clone(), cache, all_memory), temp, "the cache folder is no better");
+    }
+
+    #[test]
+    fn the_cache_folder_follows_the_xdg_convention() {
+        let env =
+            |vars: &'static [(&'static str, &'static str)]| move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(*v));
+        assert_eq!(user_cache_dir(&env(&[("XDG_CACHE_HOME", "/x/cache"), ("HOME", "/home/u")])), Some(PathBuf::from("/x/cache")));
+        assert_eq!(user_cache_dir(&env(&[("XDG_CACHE_HOME", "relative"), ("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.cache")));
+        assert_eq!(user_cache_dir(&env(&[("HOME", "/home/u")])), Some(PathBuf::from("/home/u/.cache")));
+        assert_eq!(user_cache_dir(&env(&[])), None);
+    }
 }

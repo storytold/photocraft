@@ -1,4 +1,5 @@
 use super::METHODS;
+use super::events::{events_poll, events_subscribe};
 use super::inspect::inspect;
 use super::params::{
     BUTTONS, KEY_MODIFIERS, MAX_CLICKS, MAX_SCREEN_POINT, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice,
@@ -23,6 +24,15 @@ fn u64_param(p: &Value, key: &str) -> Option<u64> {
     p.get(key).and_then(Value::as_u64)
 }
 
+/// The optional `client` of a request, checked by the engine's own rule (a non-string fails the same way).
+fn client_param(p: &Value) -> Result<Option<String>, String> {
+    match p.get("client") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => photocraft_engine::multisession::validate_client(Some(s.as_str())),
+        Some(_) => photocraft_engine::multisession::validate_client(Some("")),
+    }
+}
+
 fn wait_param(p: &Value) -> bool {
     p.get("wait").and_then(Value::as_bool).unwrap_or(true)
 }
@@ -34,8 +44,13 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
         "ui.context.choose" => context_choose(app, ctx, &req.params),
         "engine.execute" | "ui.menu.invoke" => execute_command(app, ctx, req),
         "engine.commands" => wrap(app.run("command.list", json!({}))),
+        "events.poll" => events_poll(app, &req.params),
+        "events.subscribe" => events_subscribe(app, req),
+        "events.unsubscribe" => ok(json!({"subscribed": false})),
         // Background jobs (#210): running ones with progress, then the last few that ended.
         "jobs.list" => wrap(app.session.execute("jobs.list", json!({})).map_err(|e| e.to_string())),
+        // Multi-client protocol: `client` sits at the level of the request params.
+        "client.leave" | "hub.probe" => wrap(app.session.execute(req.method.as_str(), req.params.clone()).map_err(|e| e.to_string())),
         "jobs.cancel" => jobs_cancel(app, &req.params),
         "ui.menu.list" => {
             // Report the same enablement the native menu shows, so a listed item is invokable.
@@ -89,11 +104,23 @@ fn mode_menu_choose(app: &mut PhotocraftApp, ctx: &egui::Context, label: &str) -
 /// `engine.execute` and `ui.menu.invoke`: run command `command` (or `id`) with `params`, as the menu would or, for `engine.execute`, directly.
 fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
+    let client = match client_param(p) {
+        Ok(client) => client,
+        Err(e) => return err(e),
+    };
     let Some(id) = str_param(p, "command").or(str_param(p, "id")) else { return err("missing `command`") };
     if req.method == "engine.execute" && METHODS.contains(&id) && photocraft_engine::commands::find(id).is_none() {
         return err(photocraft_engine::command_hints::protocol_method_as_command(id));
     }
-    let params = p.get("params").cloned().unwrap_or(json!({}));
+    let mut params = p.get("params").cloned().unwrap_or(json!({}));
+    if let Some(client) = client {
+        match params.as_object_mut() {
+            Some(fields) => {
+                fields.insert("client".to_string(), Value::String(client));
+            }
+            None => return err("`client` needs `params` to be an object"),
+        }
+    }
     let wait = wait_param(p);
     // A control-channel menu click must respect the same modal gate as the native menu.
     // The documented `ui` requests of Camera Raw and the full-window workspaces operate
@@ -101,7 +128,9 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
     // own modal gate. Both command entry points respect document ownership.
     let open_modal = if app.camera_raw.is_some() { Some("filter.cameraRaw") } else { crate::distort_ui::modal_workspace(app) };
     let continuation = open_modal == Some(id)
-        && params.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("ui").is_some_and(Value::is_object))
+        && params
+            .as_object()
+            .is_some_and(|fields| fields.keys().filter(|k| k.as_str() != "client").count() == 1 && fields.get("ui").is_some_and(Value::is_object))
         && app.ui.dialogs.is_empty()
         && app.discard.is_none()
         && !crate::crop_ui::blocks(app, id);
@@ -1618,7 +1647,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let warnings = app.open_automation_bytes_from_with_approval(&name, &bytes, Some(path), approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

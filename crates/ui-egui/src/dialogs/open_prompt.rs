@@ -327,6 +327,8 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
     let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
+    // A smart object opened from a file is untitled (admit_as_smart_object takes no path), so only other opens keep their source path.
+    let save_path = path.as_ref().filter(|path| !smart_object && !read_only && !photocraft_engine::file_cmds::is_template(path)).cloned();
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
@@ -334,7 +336,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
             app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
-        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
+        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, save_path) }
     } else if smart_object {
         // A damage-only hold has no colour question: apply the policy as the engine's open does,
         // then admit it as the smart object document it is (name, history label, snapshot).
@@ -342,7 +344,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         app.session.color.open_policy(&mut doc, ignore_exif);
         photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
     } else {
-        app.session.open_document(doc, None).0
+        app.session.open_document(doc, save_path).0
     };
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;

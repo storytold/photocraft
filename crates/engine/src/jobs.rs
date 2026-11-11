@@ -525,6 +525,8 @@ struct Running {
     coalesce: Option<String>,
     color_restrict: Option<crate::color_channels::Restriction>,
     filter_mask_layer: Option<LayerId>,
+    /// Active document before the command, used when a job lands.
+    snapshot_events: crate::events::Snapshot,
     /// The document's layer selection when the job started: applying targets it, not whatever
     /// got selected meanwhile (a Type click does that without editing the document, #7366).
     layers: Option<LayerSelection>,
@@ -656,6 +658,19 @@ impl Jobs {
     /// Does a job started now run on a worker thread? (Not inline, and not stepped on this thread.)
     fn threaded(&self) -> bool {
         self.spawn && !self.cooperative && !cfg!(target_arch = "wasm32")
+    }
+
+    /// A client's pixel-selection slot was swapped into or out of the document and the swap had
+    /// to copy it (a job still holds the old allocation): running jobs that started on `old`
+    /// follow it to `new`. The swap changes whose selection sits in the document, not the
+    /// document a job computed on, so it must not discard that job's result; a real edit never
+    /// comes through here and is still caught when the job lands.
+    pub(crate) fn follow_selection_swap(&mut self, old: &Weak<Document>, new: &Weak<Document>) {
+        for job in &mut self.running {
+            if job.snapshot.as_ref().is_some_and(|w| Weak::ptr_eq(w, old)) {
+                job.snapshot = Some(new.clone());
+            }
+        }
     }
 }
 
@@ -879,6 +894,7 @@ fn new_job<T: Send + 'static>(
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
         filter_mask_layer: s.filter_mask_layer,
+        snapshot_events: Default::default(),
         layers,
         rx: None,
         stepper: None,
@@ -1061,9 +1077,36 @@ impl Session {
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
+        // `execute` does not wrap `start`, so the client is taken and the selection slot entered
+        // here, exactly as `execute` does (current_client saved and restored for nesting).
+        let mut params = params;
+        let client = crate::multisession_adapter::take_client(&mut params)?;
+        let known = crate::commands::find(id).is_some();
+        let prev = self.current_client.clone();
+        // Only the outermost call takes the pixel-selection slot (nested calls share it).
+        let outer = prev.is_none();
+        self.current_client = client.clone();
+        if known {
+            self.enter_selection_slot(client.as_deref().unwrap_or(""));
+            if let (true, Some(name)) = (outer, client.as_deref()) {
+                self.enter_pixel_slot(name);
+            }
+            if let Some(name) = client.as_deref() {
+                self.note_peer(name);
+            }
+        }
         let before = self.active_layer_stamp();
         let started = self.dispatch(id, params, true);
         self.note_layer_change(before);
+        // Unconditional (Ok or Err): a job that starts returns at once, so the UI's pixel
+        // selection goes back into the document now.
+        if let (true, true, Some(name)) = (known, outer, client.as_deref()) {
+            self.exit_pixel_slot(name);
+        }
+        if let (true, Some(name), Ok(_)) = (known, client.as_deref(), &started) {
+            self.store_selection_slot(name);
+        }
+        self.current_client = prev;
         started
     }
 
@@ -1259,6 +1302,10 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
+        let source_path = match &source {
+            OpenSource::Path(path) => Some(path.clone()),
+            OpenSource::Bytes(_) => None,
+        };
         let mut opts = import_options(self.prefs());
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
@@ -1388,7 +1435,10 @@ impl Session {
                         let held = s.hold_open(r.document, r.source_read_only);
                         return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
                     }
-                    let (index, color) = s.open_document(r.document, None);
+                    // Bind the verified source before document.opened is emitted. Read-only
+                    // imports still ask for a fresh Save destination.
+                    let path = source_path.clone().filter(|_| !r.source_read_only);
+                    let (index, color) = s.open_document(r.document, path);
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
                     if let Some(st) = s.active_mut() {
                         st.source_read_only = r.source_read_only;
@@ -1793,6 +1843,8 @@ impl Session {
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
         let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
+        let mut event_snapshot = crate::events::Snapshot::of(self.active());
+        event_snapshot.client = self.current_client.clone();
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
@@ -1804,8 +1856,13 @@ impl Session {
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
         self.live_commit = live_commit.filter(|live| live.cmd == id);
+        let was_running = std::mem::replace(&mut self.event_command_running, true);
+        // A named client may only change the layers it created: this state goes back otherwise.
+        let layer_client = self.current_client.clone();
+        let layer_guard = self.layer_guard(layer_client.as_deref());
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+        self.event_command_running = was_running;
         self.live_commit = None;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
@@ -1819,6 +1876,8 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        // A job changes nothing yet: it is checked when it lands (`apply_job`).
+        let r = if pending.is_none() { r.and_then(|v| self.keep_to_own_layers(id, layer_client.as_deref(), layer_guard).map(|()| v)) } else { r };
         if pending.is_none()
             && let Some((doc, revision)) = &before
         {
@@ -1845,6 +1904,7 @@ impl Session {
                 job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id));
                 job.automation = automation;
                 job.pre_selected = pre_selected.clone();
+                job.snapshot_events = std::mem::take(&mut event_snapshot);
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
                 self.jobs.running.push(job);
@@ -1866,12 +1926,14 @@ impl Session {
                     }
                 }
                 self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
+                self.emit_events(id, &event_snapshot);
+
                 Ok(Started::Done(v))
             }
         };
-        // A closed document's freed buffers went to the scratch pool (`before` and the action
-        // recording snapshot kept it alive until here). Drop both before handing the pool back
-        // to the OS (#10479). Compare ids since Split/Merge Channels open replacement documents.
+        drop(event_snapshot);
+        // A closed document's snapshots must be dropped before the scratch pool is released;
+        // otherwise their buffers return to the pool only after release (#10479).
         if docs_before.iter().any(|id| !self.docs.iter().any(|st| st.doc.id == *id)) {
             drop(before);
             drop(record_before);
@@ -2034,6 +2096,7 @@ impl Session {
             recorded_by,
             automation,
             pre_selected,
+            snapshot_events,
             before,
             ..
         } = job;
@@ -2082,11 +2145,29 @@ impl Session {
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
         let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let was_running = std::mem::replace(&mut self.event_command_running, true);
+        // Landing outside any client call: the job's client owns the pixel selection while its
+        // result is applied (nested inside a client call, the slot is already taken).
+        let landing_client = if self.current_client.is_none() { snapshot_events.client.as_deref().filter(|c| !c.is_empty()) } else { None };
+        if let Some(name) = landing_client {
+            self.enter_pixel_slot(name);
+        }
+        // The job of a named client lands on that client's own layers only (as in dispatch).
+        let layer_client = snapshot_events.client.clone();
+        let layer_guard = match (layer_client.as_deref().filter(|c| !c.is_empty()), target) {
+            (Some(_), Some(i)) => self.docs.get(i).cloned(),
+            _ => None,
+        };
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
+        let r = r.and_then(|v| self.keep_to_own_layers(command, layer_client.as_deref(), layer_guard).map(|()| v));
+        self.event_command_running = was_running;
+        if let Some(name) = landing_client {
+            self.exit_pixel_slot(name);
+        }
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
         }
@@ -2101,6 +2182,8 @@ impl Session {
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.
             self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
+            self.emit_events(command, snapshot_events);
+
             if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
                 *start = self.journal.len();
             }
@@ -2121,6 +2204,22 @@ impl Session {
             self.note_active_change();
         }
         r
+    }
+
+    /// Run a capability-scoped edit whose bytes were already read by the caller, and emit the
+    /// same document events as command dispatch. Failed edits leave the event cursor unchanged.
+    pub fn run_edit_with_events<T>(&mut self, command: &str, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let mut before = crate::events::Snapshot::of(self.active());
+        before.client = self.current_client.clone();
+        let value = edit(self)?;
+        self.emit_events(command, &before);
+        Ok(value)
+    }
+
+    /// Log only the changes produced by a successful command.
+    fn emit_events(&mut self, id: &str, before: &crate::events::Snapshot) {
+        let st = before.document.and_then(|doc| self.docs.iter().find(|st| st.doc.id.0 == doc));
+        crate::events::after_command(&mut self.events, id, before, st);
     }
 
     fn end_job(&mut self, job: &Running, outcome: JobOutcome) {

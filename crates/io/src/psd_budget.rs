@@ -6,8 +6,8 @@
 
 use photocraft_geom::TILE_SIZE;
 use photocraft_psd::{
-    PsdFile,
-    layer::{CHANNEL_REAL_USER_MASK, CHANNEL_USER_MASK, Rect},
+    ChannelData, Compression, PsdFile,
+    layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK, Rect},
 };
 
 use crate::IoError;
@@ -123,6 +123,45 @@ fn inflate_scratch(plane_bytes: u64, channels: u64) -> Result<u64, IoError> {
     mul(plane_bytes.saturating_add(1).clamp(8192, 1 << 20), channels)
 }
 
+/// How a plane is stored: its compression method, and the bytes it takes in the file.
+type Encoded = (Option<Compression>, u64);
+
+fn encoding(channel: &ChannelData) -> Encoded {
+    (channel.compression, channel.encoded_len())
+}
+
+/// Peak bytes the row decoders of `channels` hold while their `w` × `h` planes are decoded
+/// together, `band` rows at a time (`photocraft_psd::RowDecoder`).
+///
+/// Only a ZIP stream is inflated whole, because it cannot be entered part way. Raw and RLE
+/// channels are read a band at a time, so they cost a band whatever the size of the layer:
+/// reserving a whole plane for them refuses large documents that decode in a few megabytes.
+fn decode_workspace(channels: impl Iterator<Item = Encoded>, w: u64, h: u64, band: u64, sample: u64) -> Result<u64, IoError> {
+    let plane = mul(mul(w, h)?, sample)?;
+    let band_plane = mul(mul(w, band)?, sample)?;
+    let mut total = 0u64;
+    for (compression, encoded) in channels {
+        let held = match compression {
+            // The encoded stream, the inflated plane and the inflater's own buffer.
+            Some(Compression::Zip | Compression::ZipPrediction) => {
+                let inflated = plane.checked_add(inflate_scratch(plane, 1)?).ok_or_else(overflow)?;
+                inflated.checked_add(encoded).ok_or_else(overflow)?
+            }
+            // The row count table (up to 4 bytes a row) beside the row offsets made from it
+            // (8 bytes a row), then the encoded rows of a band. PackBits writes at most two
+            // bytes for a decoded one, and a band can never hold more than the channel does.
+            Some(Compression::Rle) => mul(h.saturating_add(1), 12)?.checked_add(encoded.min(mul(band_plane, 2)?)).ok_or_else(overflow)?,
+            // The band's bytes as read from the source.
+            Some(Compression::Raw) => band_plane,
+            // No decoder is made for these: the layer is left empty.
+            Some(Compression::Unknown(_)) | None => 0,
+        };
+        // Every decoder hands out its band as a new buffer.
+        total = total.checked_add(held).and_then(|v| v.checked_add(band_plane)).ok_or_else(overflow)?;
+    }
+    Ok(total)
+}
+
 fn mul(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_mul(b).ok_or_else(overflow)
 }
@@ -164,9 +203,11 @@ impl ImportBudget {
 
 /// Computes the conservative preflight pixel memory and workspace estimate for `file`.
 ///
-/// No decoding here: even a compact ZIP stream must be refused before inflation. The sum
-/// deliberately counts full decoded planes for every compression method, plus their row
-/// buffers, interleave output and float conversion workspace.
+/// No decoding here: even a compact ZIP stream must be refused before inflation. Layers and
+/// masks count what their decoders hold (a whole plane for a ZIP channel, a band of rows for
+/// the others) plus the interleaved band, and so does a merged image read in bands
+/// (`psd_import::merged_in_bands`); any other merged image counts full decoded planes, with
+/// its interleave output and float conversion workspace.
 pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
     let mut budget = ImportBudget::default();
     let h = &file.header;
@@ -181,13 +222,14 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
         for rec in file.layers() {
             if !rec.rect.is_empty() && rec.channels.iter().any(|c| c.id >= 0 || c.id == -1) {
                 let (w, hh) = rec.rect.size()?;
-                let pixels = mul(w as u64, hh as u64)?;
                 budget.surface(rec.rect, cc + 1, sample)?;
-                // Whole ZIP planes + band planes + interleave + temporary float pixels.
-                // Counting a full layer for each band buffer also covers a single very wide row.
-                let workspace = mul(pixels, mul(cc + 1, sample * 3 + 4)?)?.checked_add(inflate_scratch(mul(pixels, sample)?, cc + 1)?).ok_or_else(overflow)?;
-                // RLE row indexes live beside decoded planes.
-                budget.scratch(workspace.checked_add(mul(hh as u64 + 1, (cc + 1) * 8)?).ok_or_else(overflow)?);
+                // The colour channels and transparency decode side by side, a band at a time.
+                let row_bytes = mul(w as u64, mul(cc + 1, sample)?)?;
+                let band = super::psd_import::max_band_rows(hh, usize::try_from(row_bytes).unwrap_or(usize::MAX)) as u64;
+                let ids = (0..cc).filter_map(|id| i16::try_from(id).ok()).chain([CHANNEL_TRANSPARENCY]);
+                let decoders = decode_workspace(ids.filter_map(|id| rec.channel(id)).map(encoding), w as u64, hh as u64, band, sample)?;
+                // The band interleaved: it is written to the tiles as it is, in its sample type.
+                budget.scratch(decoders.checked_add(mul(row_bytes, band)?).ok_or_else(overflow)?);
             }
             if let Some(mask) = rec.layer_mask() {
                 for (id, rect) in [(CHANNEL_USER_MASK, mask.rect), (CHANNEL_REAL_USER_MASK, mask.real.map_or(mask.rect, |m| m.rect))] {
@@ -196,9 +238,10 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                     }
                     let (w, hh) = rect.size()?;
                     budget.surface(rect, 1, sample)?;
-                    // The layer's ZIP decoders have been dropped before record_mask runs.
-                    let pixels = mul(w as u64, hh as u64)?;
-                    budget.scratch(mul(pixels, sample * 3 + 4)?.checked_add(inflate_scratch(mul(pixels, sample)?, 1)?).ok_or_else(overflow)?);
+                    // The layer's ZIP decoders have been dropped before record_mask runs. A
+                    // mask decodes one tile row at a time and converts its samples in place.
+                    let band = (TILE_SIZE as u64).min(hh as u64);
+                    budget.scratch(decode_workspace(rec.channel(id).map(encoding).into_iter(), w as u64, hh as u64, band, sample)?);
                 }
             }
         }
@@ -212,12 +255,32 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
         budget.surface(canvas, channels.max(cc + 1), sample.max(1))?;
         // A fallback surface can coexist with the layers when none produced usable pixels.
         budget.surface(canvas, cc + 1, sample.max(1))?;
-        // The merged planes stay alive while layers are built.
-        let merged = mul(mul(h.row_bytes() as u64, u64::from(h.height))?, channels)?;
-        budget.retain(merged)?;
-        // Include float expansion/readback and RGBA fallback, even for packed bitmap input.
-        let converted = mul(pixels, mul(channels.max(cc + 1), sample * 3 + 12)?)?;
-        budget.scratch(converted.checked_add(inflate_scratch(merged, 1)?).ok_or_else(overflow)?);
+        if super::psd_import::merged_in_bands(file) {
+            // No plane is held whole: the background layer and the extra channels are written
+            // a band at a time from the row decoders, which all live until the import ends.
+            let (w, rows) = (u64::from(h.width), u64::from(h.height));
+            let row_bytes = mul(w, mul(cc + 1, sample)?)?;
+            let band = super::psd_import::max_band_rows(h.height as usize, usize::try_from(row_bytes).unwrap_or(usize::MAX)) as u64;
+            let stored = (Some(file.image_data.compression), file.image_data.encoded_len());
+            let decoders = decode_workspace(std::iter::repeat_n(stored, usize::from(h.channels)), w, rows, band, sample)?;
+            if matches!(file.image_data.compression, Compression::Rle) {
+                // Each RLE decoder keeps the offsets of its plane's rows (8 bytes a row) while
+                // the layers are built, so they add to the layers' workspace.
+                budget.retain(mul(mul(rows.saturating_add(1), channels)?, 8)?)?;
+            }
+            // An RLE image has one row table for all its planes, read before each takes its part.
+            let table = mul(mul(rows, channels)?.saturating_add(1), 8)?;
+            // The band interleaved, and a tile row of float pixels while transparency is unmatted.
+            let converted = mul(row_bytes, band)?.checked_add(mul(mul(w, rows.min(TILE_SIZE as u64))?, (cc + 1) * 4)?).ok_or_else(overflow)?;
+            budget.scratch(decoders.checked_add(table).and_then(|v| v.checked_add(converted)).ok_or_else(overflow)?);
+        } else {
+            // The merged planes stay alive while layers are built.
+            let merged = mul(mul(h.row_bytes() as u64, u64::from(h.height))?, channels)?;
+            budget.retain(merged)?;
+            // Include float expansion/readback and RGBA fallback, even for packed bitmap input.
+            let converted = mul(pixels, mul(channels.max(cc + 1), sample * 3 + 12)?)?;
+            budget.scratch(converted.checked_add(inflate_scratch(merged, 1)?).ok_or_else(overflow)?);
+        }
     }
     let mut patterns = photocraft_psd::patterns::PatternBudget::default();
     for block in file.global_blocks.iter().filter(|b| crate::pattern_map::PATTERN_KEYS.contains(&b.key)) {

@@ -14,8 +14,12 @@ setting limits graphics resources. Memory virtual address-space usage is diagnos
 not a measurement of committed memory or a substitute for scratch storage.
 
 Enable a directory in Preferences → Scratch Disks. `(system temp)` selects the operating
-system's temporary directory. Only the first enabled, nonempty directory is used. Changing
-directories creates a new scratch file; old disk-backed tiles keep their old file alive.
+system's temporary directory, unless that directory is kept in memory (a `tmpfs` `/tmp`, as on
+many Linux distributions and in a Flatpak sandbox): spilling there would free no memory, so
+the `photocraft/scratch` folder of the user's cache directory (`$XDG_CACHE_HOME`, by default
+`~/.cache`) is used instead. A directory you name is used as it is. Only the first enabled,
+nonempty directory is used. Changing directories creates a new scratch file; old disk-backed
+tiles keep their old file alive.
 The development override `PHOTOCRAFT_TILE_BUDGET_MB` fixes the tile allowance for stress tests.
 
 Scratch extents are LZ4 compressed, CRC-checked and reused after a tile is released. Closing
