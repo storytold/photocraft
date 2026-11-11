@@ -206,6 +206,43 @@ fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Removes selected components, including any subpaths joined to them, in one History step.
+fn delete_components(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.deleteComponents";
+    let heads = p.get("subpaths").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or_else(|| bad(CMD, "`subpaths` must list component starts"))?;
+    let name = p.get("name").and_then(Value::as_str).ok_or_else(|| bad(CMD, "`name` must identify a saved path or layer"))?;
+    if crate::vector_cmds::is_work(Some(name)) || p.get("typePath").and_then(Value::as_bool) == Some(true) {
+        return Err(bad(CMD, "only saved paths, shape paths and vector masks are supported"));
+    }
+    if name == "layer" {
+        let id = layer_id(s, p)?;
+        let st = s.active().ok_or_else(|| bad(CMD, "no active document"))?;
+        let layer = st.doc.layer(id).ok_or_else(|| bad(CMD, "no such layer"))?;
+        let locks = st.doc.effective_locks(id);
+        if locks.all || locks.pixels || (!matches!(layer.content, LayerContent::Shape(_)) && layer.vector_mask.is_none()) {
+            return Err(bad(CMD, "layer has no editable shape path or vector mask"));
+        }
+    }
+    edit_path(s, CMD, p, "Delete Selection", |path| {
+        let components = path.components();
+        if heads.len() > components.len() {
+            return Err("more indices than path components".into());
+        }
+        let mut remove = vec![false; path.subpaths.len()];
+        for value in heads {
+            let head = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("each component start must be a subpath index")?;
+            let range = components.binary_search_by_key(&head, |r| r.start).ok().and_then(|i| components.get(i)).ok_or("no component at that subpath index")?;
+            remove.get_mut(range.clone()).ok_or("component is out of bounds")?.fill(true);
+        }
+        if name == "layer" && remove.iter().all(|v| *v) {
+            return Err("cannot remove the last component of a shape path or vector mask".into());
+        }
+        let mut keep = remove.into_iter().map(|v| !v);
+        path.subpaths.retain(|_| keep.next().unwrap_or(false));
+        Ok(())
+    })
+}
+
 /// Merge Shape Components on a path (the Pen's and Path Selection's Path Operations menu): the
 /// components' operations are baked into plain combined outlines, as for a shape layer.
 fn merge_components(s: &mut Session, p: &Value) -> Result<Value> {
@@ -321,6 +358,12 @@ pub fn specs() -> Vec<CommandSpec> {
             merge_components,
         ),
         spec(
+            "path.deleteComponents",
+            "Delete Selection",
+            r#""subpaths":[i,…] (indices of the first subpath of each component to delete from a saved path, shape path or vector mask)"#.into(),
+            delete_components,
+        ),
+        spec(
             "path.setOperation",
             "Path Operation",
             r#""subpaths":[i,…],"op":"combine|subtract|intersect|exclude" (the shape components holding these subpaths take the operation; the first component always combines and keeps its own; the Path Operations menu with components selected)"#.into(),
@@ -335,6 +378,32 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn deleting_components_rejects_invalid_indices_without_changing_history() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let path = json!({"subpaths": [
+            {"closed": true, "knots": [[1,1], [30,1], [30,30], [1,30]]},
+            {"closed": true, "op": "join", "knots": [[5,5], [5,10], [10,10], [10,5]]},
+            {"closed": true, "knots": [[31,31], [35,31], [35,35], [31,35]]}
+        ]});
+        s.execute("path.set", json!({"name": "Saved", "path": path})).unwrap();
+        let st = s.active().unwrap();
+        let (before, steps) = (st.doc.paths.clone(), st.history.past_len());
+        for p in [
+            json!({}),
+            json!({"name":"Saved","subpaths":[]}),
+            json!({"name":"Saved","subpaths":[0,1]}),
+            json!({"name":"Saved","subpaths":[-1]}),
+            json!({"name":"Saved","subpaths":[99999]}),
+        ] {
+            assert!(s.execute("path.deleteComponents", p.clone()).is_err(), "{p}");
+            let st = s.active().unwrap();
+            assert_eq!(st.doc.paths, before, "{p}");
+            assert_eq!(st.history.past_len(), steps, "{p}");
+        }
+    }
 
     fn session() -> Session {
         let mut s = Session::new();

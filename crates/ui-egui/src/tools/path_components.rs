@@ -52,6 +52,51 @@ pub(crate) fn selected(app: &PhotocraftApp) -> Option<(PathRef, Path, Vec<usize>
     (!heads.is_empty()).then_some((r, path, heads))
 }
 
+/// Delete the Path Selection tool's saved path or selected components before Edit › Clear can run.
+pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.drag.is_some() {
+        return false;
+    }
+    let mods = ctx.input(|i| i.modifiers);
+    if mods.command || mods.ctrl || mods.shift || mods.alt || !ctx.input(|i| i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete)) {
+        return false;
+    }
+    let visible = app.ui.view.shows(app.ui.view.show.target_path);
+    let action = match visible.then(|| selected(app)).flatten() {
+        Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
+            let mut params = target.params(app);
+            params["subpaths"] = json!(heads);
+            Some(("path.deleteComponents", params))
+        }
+        // The finished Work Path keeps its existing Delete shortcut.
+        Some(_) => return false,
+        None if !app.ui.direct_selection.anchors.is_empty() && matches!(app.ui.direct_selection.target, Some(PathRef::Layer(_) | PathRef::Saved(_))) => None,
+        None if !visible => return false,
+        None => {
+            let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app) else { return false };
+            Some(("path.delete", PathRef::Saved(index).params(app)))
+        }
+    };
+    if !ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete)) {
+        return false;
+    }
+    // A stale or newly locked selection still owns the key, but cannot change the document.
+    if let Some((command, params)) = action {
+        match app.run(command, params) {
+            Ok(_) => app.ui.direct_selection = DirectSelection::default(),
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+#[path = "path_selection_delete_key_tests.rs"]
+mod path_selection_delete_key_tests;
+
 /// The operation every selected component has, for the menu's icon; `None` when they differ.
 pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
     let (_, path, heads) = selected(app)?;

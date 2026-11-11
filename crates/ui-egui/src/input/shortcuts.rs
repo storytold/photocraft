@@ -747,6 +747,9 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
+    if focus != crate::shortcut_dispatch::Focus::DeletingWidget && crate::path_components::handle_delete_key(app, ctx) {
+        return true;
+    }
     // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
     // Photoshop (#5702), never Edit › Clear on the pixels under it.
     if focus != crate::shortcut_dispatch::Focus::DeletingWidget && crate::vector_ui::delete_key_deletes_work_path(app) {
