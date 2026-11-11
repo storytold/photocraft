@@ -126,20 +126,22 @@ pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, ctx: &egui::Contex
     let toggled: Vec<LayerId> =
         doc.walk().into_iter().filter(|(_, _, l)| before.get(&l.id).is_some_and(|was| was.visible != l.visible)).map(|(_, _, l)| l.id).collect();
     follow(app, ctx, id, doc, &toggled);
-    let mut restored: Vec<Rect> = Vec::new();
-    for (_, _, l) in doc.walk() {
-        let Some(was) = before.get(&l.id) else { continue };
-        if was.visible == l.visible {
+    let walk = doc.walk();
+    let changed: Vec<(&photocraft_doc::Layer, &photocraft_doc::Layer)> =
+        walk.iter().filter_map(|(_, _, l)| before.get(&l.id).filter(|was| was.visible != l.visible).map(|was| (*was, *l))).collect();
+    // Every layer being hidden is kept first, while the texture still shows `shown`: a picture
+    // put back below could otherwise land in one taken here.
+    for &(was, l) in changed.iter().filter(|(was, _)| was.visible) {
+        // What the canvas shows over it, if that is all drawn.
+        let Some(rect) = reach(&shown, was).filter(|r| meets(r, &damage)) else { continue };
+        if pending.iter().any(|b| meets(b, &rect)) {
             continue;
         }
-        if was.visible {
-            // Being hidden: keep what the canvas shows over it, if that is all drawn.
-            let Some(rect) = reach(&shown, was).filter(|r| meets(r, &damage)) else { continue };
-            if pending.iter().any(|b| meets(b, &rect)) {
-                continue;
-            }
-            keep(app, gpu, id, l.id, rect, &shown, display_key);
-        } else if let Some(rect) = reach(doc, l).filter(|r| meets(r, &damage))
+        keep(app, gpu, id, l.id, rect, &shown, display_key);
+    }
+    let mut restored: Vec<Rect> = Vec::new();
+    for &(_, l) in changed.iter().filter(|(was, _)| !was.visible) {
+        if let Some(rect) = reach(doc, l).filter(|r| meets(r, &damage))
             && put_back(app, gpu, id, l.id, rect, doc, display_key)
         {
             restored.push(rect);
@@ -151,18 +153,22 @@ pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, ctx: &egui::Contex
 /// Keep what the display texture of document `id` shows over `rect` as layer `board`'s picture,
 /// taken when the canvas showed `shown`, evicting the least recently used pictures to fit.
 fn keep(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, rect: Rect, shown: &Arc<Document>, display_key: u64) {
-    let Some(snap) = gpu.snapshot_rect(id.0, rect) else { return };
+    // Sized before anything is allocated: a picture over the budget isn't taken at all, and the
+    // old ones make room before the new one exists.
+    let Some(bytes) = gpu.snapshot_bytes(id.0, rect) else { return };
     let limit = budget(gpu);
-    if snap.bytes > limit {
+    if bytes > limit {
         return;
     }
     let cache = &mut app.board_cache;
     cache.shots.remove(&(id, board));
     // Least recently used first, until the new one fits.
-    while cache.shots.values().map(|s| s.snap.bytes).sum::<u64>() + snap.bytes > limit {
+    while cache.shots.values().map(|s| s.snap.bytes).sum::<u64>() + bytes > limit {
         let Some(oldest) = cache.shots.iter().min_by_key(|(_, s)| s.used).map(|(k, _)| *k) else { break };
         cache.shots.remove(&oldest);
     }
+    let Some(snap) = gpu.snapshot_rect(id.0, rect) else { return };
+    let cache = &mut app.board_cache;
     cache.clock += 1;
     // The layer's id, not its name: names are the user's text and stay out of the log.
     log::info!("storyboard cache: kept layer {} ({}x{}, {} MB; {} kept)", board.0, rect.width(), rect.height(), snap.bytes >> 20, cache.shots.len() + 1);

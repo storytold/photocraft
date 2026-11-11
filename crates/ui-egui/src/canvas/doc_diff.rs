@@ -27,10 +27,9 @@ pub(crate) fn changed_area(old: &Document, new: &Document) -> Option<Rect> {
     if !same_outside_layers(old, new) {
         return None;
     }
-    let canvas = old.bounds();
     let mut area = Changed::Nothing;
     let mut view_only = false;
-    diff_list(&old.layers, &new.layers, canvas, &mut area, &mut view_only);
+    diff_list(&old.layers, &new.layers, &mut area, &mut view_only);
     match area {
         // Not clipped to the canvas yet: the caller widens it by the effects' reach first, then
         // the refresh clips it, so effects of pixels just past the edge are redrawn too.
@@ -75,7 +74,7 @@ pub(crate) fn same_pixels(old: &Document, new: &Document) -> bool {
         return false;
     }
     let mut area = Changed::Nothing;
-    diff_list(&old.layers, &new.layers, old.bounds(), &mut area, &mut false);
+    diff_list(&old.layers, &new.layers, &mut area, &mut false);
     area == Changed::Nothing
 }
 
@@ -86,7 +85,7 @@ fn same_outside_layers(old: &Document, new: &Document) -> bool {
 }
 
 /// Compare two sibling lists layer by layer. The same layers in the same order, or `Unknown`.
-fn diff_list(old: &[Layer], new: &[Layer], canvas: Rect, area: &mut Changed, view_only: &mut bool) {
+fn diff_list(old: &[Layer], new: &[Layer], area: &mut Changed, view_only: &mut bool) {
     if old.len() != new.len() || old.iter().zip(new).any(|(a, b)| a.id != b.id) {
         area.add(None);
         return;
@@ -95,13 +94,13 @@ fn diff_list(old: &[Layer], new: &[Layer], canvas: Rect, area: &mut Changed, vie
         if *area == Changed::Unknown {
             return;
         }
-        diff_layer(a, b, canvas, area, view_only);
+        diff_layer(a, b, area, view_only);
     }
 }
 
 /// Add where one layer differs between the two documents to `area`; set `view_only` when
 /// only a group was opened or closed.
-fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed, view_only: &mut bool) {
+fn diff_layer(a: &Layer, b: &Layer, area: &mut Changed, view_only: &mut bool) {
     if same_props(a, b) {
         if let (LayerContent::Group(ga), LayerContent::Group(gb)) = (&a.content, &b.content)
             && ga.expanded != gb.expanded
@@ -113,7 +112,7 @@ fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed, view_only:
             // pixel by pixel (effects spread further, which the caller's effect reach covers).
             (LayerContent::Raster(sa), LayerContent::Raster(sb)) => area.add(tile_diff(sa, sb)),
             // Only children changed: where they did.
-            (LayerContent::Group(ga), LayerContent::Group(gb)) => diff_list(&ga.children, &gb.children, canvas, area, view_only),
+            (LayerContent::Group(ga), LayerContent::Group(gb)) => diff_list(&ga.children, &gb.children, area, view_only),
             // `same_props` compares every other kind of content in full: nothing differs.
             _ => {}
         }
@@ -121,9 +120,12 @@ fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed, view_only:
     }
     // Shown, hidden, restyled, re-masked, moved, or content other than pixels: the layer's whole
     // reach, before and after. `change_bounds` is `None` (unbounded) for adjustment layers and
-    // groups holding one that reaches below.
-    area.add(photocraft_compose::change_bounds(a, canvas));
-    area.add(photocraft_compose::change_bounds(b, canvas));
+    // groups holding one that reaches below. Not clipped to the canvas, like the tiles below: a
+    // layer past the edge changes nothing there itself, but an effect around it (a group's
+    // shadow) can reach in once the caller widens the area by the effects' reach.
+    let everywhere = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
+    area.add(photocraft_compose::change_bounds(a, everywhere));
+    area.add(photocraft_compose::change_bounds(b, everywhere));
 }
 
 /// The layers equal except for a pixel layer's own pixels and a group's children.
@@ -222,6 +224,20 @@ mod tests {
         let r = changed_area(&before, &after).expect("hiding a pixel layer is bounded");
         assert!(r.contains(100, 100) && r.contains(299, 199), "{r:?}");
         assert!(r.width() < 2000, "not the whole canvas: {r:?}");
+    }
+
+    /// A layer past the canvas edge keeps its bounds: an effect around it (a group's shadow) can
+    /// reach onto the canvas once the caller widens the area, so its change isn't "nothing".
+    #[test]
+    fn a_change_past_the_canvas_edge_keeps_its_bounds() {
+        let (mut s, _, b) = doc_with_two_layers();
+        paint(&mut s, b, Rect::new(2100, 100, 2200, 200));
+        let before = s.active().unwrap().doc.clone();
+        s.execute("layer.hideLayers", json!({"layer": b.0})).unwrap();
+        let after = s.active().unwrap().doc.clone();
+        assert!(!same_pixels(&before, &after), "an effect could carry it onto the canvas");
+        let r = changed_area(&before, &after).expect("hiding a pixel layer is bounded");
+        assert!(r.contains(2100, 100) && r.contains(2199, 199), "past the edge: {r:?}");
     }
 
     /// A structure change, no visible difference, or an adjustment layer: nothing bounded.

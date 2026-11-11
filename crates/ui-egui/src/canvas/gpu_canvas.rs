@@ -199,6 +199,18 @@ pub fn supports_f16_canvas(adapter: &wgpu::Adapter) -> bool {
     f.allowed_usages.contains(usages) && f.flags.contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
 }
 
+/// Whether [`GpuCanvas::snapshot_rect`] can copy `rect` of `d`: a whole-document texture set (no
+/// pages), the rect inside it and within one texture of side `max`.
+fn snapshot_fits(d: &DocTextures, max: u32, rect: photocraft_geom::Rect) -> bool {
+    let inside = rect.x0 >= 0 && rect.y0 >= 0 && rect.x1 as u32 <= d.size[0] && rect.y1 as u32 <= d.size[1];
+    !rect.is_empty() && inside && rect.width() <= max && rect.height() <= max && !d.tiles.iter().any(|t| t.page.is_some())
+}
+
+/// The bytes a snapshot of `rect` of `d` takes.
+fn snapshot_size(d: &DocTextures, rect: photocraft_geom::Rect) -> u64 {
+    rect.size().area() * u64::from(d.format.block_copy_size(None).unwrap_or(8))
+}
+
 impl GpuCanvas {
     /// Create pipelines and register resources with the egui renderer.
     pub fn new(rs: &RenderState) -> Self {
@@ -591,9 +603,7 @@ impl GpuCanvas {
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let renderer = self.rs.renderer.read();
         let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
-        let max = device.limits().max_texture_dimension_2d;
-        let inside = rect.x0 >= 0 && rect.y0 >= 0 && rect.x1 as u32 <= d.size[0] && rect.y1 as u32 <= d.size[1];
-        if rect.is_empty() || !inside || rect.width() > max || rect.height() > max || d.tiles.iter().any(|t| t.page.is_some()) {
+        if !snapshot_fits(d, device.limits().max_texture_dimension_2d, rect) {
             return None;
         }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -609,8 +619,15 @@ impl GpuCanvas {
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_canvas_snapshot") });
         copy_between(&mut enc, d, rect, &texture, true);
         queue.submit([enc.finish()]);
-        let bytes = rect.size().area() * u64::from(d.format.block_copy_size(None).unwrap_or(8));
-        Some(CanvasSnapshot { rect, format: d.format, texture, bytes })
+        Some(CanvasSnapshot { rect, format: d.format, texture, bytes: snapshot_size(d, rect) })
+    }
+
+    /// What [`Self::snapshot_rect`] would allocate for `rect` (bytes), without allocating it.
+    /// `None` where it would take none.
+    pub fn snapshot_bytes(&self, key: u64, rect: photocraft_geom::Rect) -> Option<u64> {
+        let renderer = self.rs.renderer.read();
+        let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
+        snapshot_fits(d, self.rs.device.limits().max_texture_dimension_2d, rect).then(|| snapshot_size(d, rect))
     }
 
     /// Put a [`Self::snapshot_rect`] copy back into document `key`'s display texture (and its
