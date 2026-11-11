@@ -257,27 +257,37 @@ fn adapter_report_ui(app: &PhotocraftApp) -> Vec<String> {
     v
 }
 
-/// Help › System Info's on-screen report, in the current UI language: the adapter report, the
-/// render path and its history, and the slow frames.
-pub fn diagnostics_report_ui(app: &PhotocraftApp) -> Vec<String> {
+/// The adapter report, the render path and its history, and the slow frames; history entries
+/// name their documents with `names`.
+fn report(app: &PhotocraftApp, names: bool) -> Vec<String> {
     let mut v = adapter_report_ui(app);
-    v.extend(crate::render_path::report_lines(app));
+    v.extend(crate::render_path::report_lines(app, names));
     v.extend(crate::frame_stages::report_lines(&app.slow_frames));
     v
 }
 
-/// The diagnostics report in English, whatever the UI language: the one source for Help › System
-/// Info ▸ Copy, `help.systemInfo`, Help › Report an Issue and the log.
-pub fn diagnostics_report(app: &PhotocraftApp) -> Vec<String> {
-    crate::i18n::with_language(crate::i18n::Lang::EN, || diagnostics_report_ui(app))
+/// Help › System Info's on-screen report, in the current UI language, documents by name.
+pub fn diagnostics_report_ui(app: &PhotocraftApp) -> Vec<String> {
+    report(app, true)
 }
 
-/// The adapter part of [`diagnostics_report`] as one English log line, the home folder as `~`
-/// (a monitor profile's path in its reason names the user).
+/// The diagnostics report in English, whatever the UI language: the one source for Help › System
+/// Info ▸ Copy, `help.systemInfo`, Help › Report an Issue and the log. It is pasted into public
+/// issues, so documents are `document {id}` and the home folder is `~` (a monitor profile's path
+/// in its reason names the user).
+pub fn diagnostics_report(app: &PhotocraftApp) -> Vec<String> {
+    let home = home();
+    crate::i18n::with_language(crate::i18n::Lang::EN, || report(app, false)).iter().map(|l| without_home(l, home.as_deref())).collect()
+}
+
+/// The adapter part of [`diagnostics_report`] as one English log line, the home folder as `~`.
 pub fn adapter_report_line(app: &PhotocraftApp) -> String {
     let lines = crate::i18n::with_language(crate::i18n::Lang::EN, || adapter_report_ui(app));
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok();
-    without_home(&format!("adapter report: {}", lines.join("; ").replace(['\n', '\r'], " ")), home.as_deref())
+    without_home(&format!("adapter report: {}", lines.join("; ").replace(['\n', '\r'], " ")), home().as_deref())
+}
+
+fn home() -> Option<String> {
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()
 }
 
 /// `text` with each path inside `home` starting at `~` instead. `/` and `\` match each other, and
@@ -596,6 +606,27 @@ mod tests {
         let json = system_info_json(&app);
         assert_eq!(json["diagnostics"]["slowFrames"].as_array().map(Vec::len), Some(1));
         assert_eq!(json["diagnostics"]["renderPath"]["history"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn copied_report_keeps_the_home_folder_and_document_names_out() {
+        use crate::render_path::{CpuReason, Path, note};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let Some(home) = home().filter(|h| h.trim_end_matches(['/', '\\']).len() > 1) else { return };
+        let profile = format!("{}/Profiles/Mine.icc", home.trim_end_matches(['/', '\\']));
+        // A display read before, then a re-read that fails on a profile in the home folder.
+        let display = photocraft_engine::display_color::Display { id: 1, name: "Display".into(), frame: [0.0, 0.0, 800.0, 600.0], profile_name: None, icc: None };
+        app.session.color.set_displays(Ok(vec![display]));
+        app.session.color.set_displays(Err(format!("cannot read profile `{profile}`: not found")));
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Jane_Smith_wedding_proofs.psd"})).unwrap();
+        let doc = app.session.active().unwrap().doc.id.0;
+        note(&mut app, doc, Path::Cpu(CpuReason::ViewTransform));
+        let copied = diagnostics_report(&app).join("\n");
+        assert!(copied.contains("cannot read profile `~/Profiles/Mine.icc`"), "{copied}");
+        assert!(!copied.contains(&profile) && !copied.contains("Jane_Smith"), "{copied}");
+        assert!(copied.contains(&format!("document {doc}: CPU (viewTransform: ")), "{copied}");
+        // Help › System Info on screen still names the document.
+        assert!(diagnostics_report_ui(&app).iter().any(|l| l.contains("Jane_Smith_wedding_proofs.psd: CPU (")));
     }
 
     #[test]

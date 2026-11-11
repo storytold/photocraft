@@ -364,8 +364,9 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
 }
 
 /// The diagnostics report's render-path lines (Help › System Info, `gpu_status`): the active
-/// document's path, then the history, newest first.
-pub fn report_lines(app: &PhotocraftApp) -> Vec<String> {
+/// document's path, then the history, newest first. History entries name their document only
+/// with `names` (on screen); the copied report says `document {id}`, as it goes into issues.
+pub fn report_lines(app: &PhotocraftApp, names: bool) -> Vec<String> {
     let doc = app.session.active().map_or(0, |st| st.doc.id.0);
     let mut v = vec![match app.render_path.current(doc) {
         // A software adapter still runs the GPU canvas: the GPU path, drawn in software. Without
@@ -385,7 +386,11 @@ pub fn report_lines(app: &PhotocraftApp) -> Vec<String> {
     v.push(crate::i18n::fmt(tl!(template), &[("count", &n)]));
     // In the UI language on screen; the reasons' own text stays as the log has it.
     for c in app.render_path.history().rev() {
-        let who = if c.doc == 0 { tl!("all documents").to_string() } else { doc_name(app, c.doc) };
+        let who = match c.doc {
+            0 => tl!("all documents").to_string(),
+            doc if names => doc_name(app, doc),
+            doc => format!("document {doc}"),
+        };
         let what = match (&c.reason, c.preview) {
             (Some(r), true) => r.to_string(),
             (None, true) => tl!("adjustment preview no longer uses the CPU proxy").to_string(),
@@ -585,7 +590,7 @@ mod tests {
         app.perf.gpu_info.device_type = "cpu".into();
         app.perf.gpu_info.canvas = "gpu".into();
         frame(&mut app);
-        let lines = report_lines(&app);
+        let lines = report_lines(&app, false);
         assert_eq!(lines[0], "Render path: GPU (softwareAdapter: the graphics adapter is a software renderer)");
         // The history says the same of the change, as the canvas was then.
         assert!(lines[2].ends_with(" ms: all documents: GPU (softwareAdapter: the graphics adapter is a software renderer)"), "{lines:?}");
@@ -594,7 +599,7 @@ mod tests {
         app.perf.gpu_info.device_type = "cpu".into();
         app.perf.gpu_info.canvas = "cpu".into();
         frame(&mut app);
-        let lines = report_lines(&app);
+        let lines = report_lines(&app, false);
         assert_eq!(lines[0], "Render path: CPU (softwareAdapter: the graphics adapter is a software renderer)");
         assert!(lines[2].ends_with(" ms: all documents: CPU (softwareAdapter: the graphics adapter is a software renderer)"), "{lines:?}");
     }
