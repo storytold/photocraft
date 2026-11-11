@@ -1141,11 +1141,11 @@ fn apply_tiled_with_impl(
     // caller-supplied, so a short parameter set can ask for a huge source window per tile.
     if let Halo::Radius(reach) = halo {
         let (w, h) = (area.width().min(tile as u32) as usize, area.height().min(tile as u32) as usize);
-        // A Filter Gallery applies every effect to one working window, so it holds the source read, that
-        // window and one effect's temporary at a time, however many effects the stack has.
-        let copies = if matches!(params, FilterParams::FilterGallery { .. }) { 3 } else { 1 };
-        let read_samples =
-            w.checked_add(2 * reach as usize)?.checked_mul(h.checked_add(2 * reach as usize)?)?.checked_mul(fmt.channels())?.checked_mul(copies)?;
+        // A Filter Gallery applies every effect to one working window. Beside the source read (`channels`
+        // samples per pixel) one effect holds the three-channel window plus its worst temporaries: two more
+        // three-channel copies and a plane or gradient set, 12 samples per pixel however many effects there are.
+        let per_pixel = fmt.channels().checked_add(if matches!(params, FilterParams::FilterGallery { .. }) { 12 } else { 0 })?;
+        let read_samples = w.checked_add(2 * reach as usize)?.checked_mul(h.checked_add(2 * reach as usize)?)?.checked_mul(per_pixel)?;
         let tile_count = u64::from(area.width()).div_ceil(tile as u64).checked_mul(u64::from(area.height()).div_ceil(tile as u64))?;
         // Reject hostile source-window sizes before Image::read allocates them.
         // Ordinary filter parameters and automatic tiles fit these bounds.
