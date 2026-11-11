@@ -678,3 +678,20 @@ fn a_contents_warp_prices_the_meshs_reach_and_moves_what_is_outside() {
     let (bx, by) = back(gx, gy);
     assert!((bx - ex).abs() < 1e-3 && (by - ey).abs() < 1e-3, "({bx}, {by}) vs ({ex}, {ey})");
 }
+
+/// A warp saved before `envelope` existed reopens as its preset is made now: an Arc is an
+/// envelope, a custom mesh and a Twist are not, and a saved value is kept as saved.
+#[test]
+fn a_warp_saved_without_its_envelope_flag_takes_its_presets() {
+    let read = |v: serde_json::Value| serde_json::from_value::<Warp>(v).unwrap();
+    let b = json!([0.0, 0.0, 100.0, 50.0]);
+    let arc = read(json!({"style": "arc", "bend": 50.0, "bounds": b}));
+    assert!(arc.envelope, "an Arc");
+    assert_eq!(arc, Warp::preset(WarpStyle::Arc, 50.0, [0.0, 0.0, 100.0, 50.0]), "as Arc is made now");
+    assert!(!read(json!({"style": "twist", "bend": 50.0, "bounds": b})).envelope, "a Twist is a full mesh");
+    assert!(!read(json!({"style": "arc", "bend": 50.0, "bounds": b, "envelope": false})).envelope, "saved: kept");
+    let custom = Warp::custom(photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 100.0, 50.0], 1, 1), [0.0, 0.0, 100.0, 50.0]);
+    let mut saved = serde_json::to_value(&custom).unwrap();
+    saved.as_object_mut().unwrap().remove("envelope");
+    assert_eq!(read(saved), custom, "a custom mesh is no envelope");
+}

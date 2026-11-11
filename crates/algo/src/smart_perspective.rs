@@ -168,6 +168,11 @@ fn draw(img: &Image, h: &[f64; 9], depth: Depth, kernel: Option<(f64, f64)>) -> 
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
+    // Positions below are in 1/256 px from this box: it must be one in document pixels, or a
+    // quad far off the canvas would overflow them.
+    for v in [x0, x1, y0, y1] {
+        i32::try_from(v).ok()?;
+    }
     let (nx, ny) = ((x1 - x0) as usize, (y1 - y0) as usize);
     if nx.max(img.w).checked_mul(ny.max(img.h))?.checked_mul(img.n)? > MAX_SAMPLES {
         return None;
@@ -510,6 +515,19 @@ pub fn from_corner(h: [f64; 9], x: f64, y: f64) -> [f64; 9] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A quad far off the canvas is refused, not overflowed: its box is reckoned in 1/256 px.
+    #[test]
+    fn a_far_quad_is_refused_without_a_panic() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.fill_rect(Rect::new(0, 0, 10, 10), &[1.0, 0.0, 0.0, 1.0]);
+        for (tx, ty) in [(1e17, 0.0), (0.0, 1e17), (-1e17, 0.0), (0.0, -1e17)] {
+            let h = [100.0, 0.0, tx, 0.0, 100.0, ty, 1e-3, 0.0, 1.0];
+            assert!(render(&s, Rect::new(0, 0, 10, 10), h).is_none(), "offset ({tx}, {ty})");
+        }
+        assert!(render(&s, Rect::new(0, 0, 10, 10), [10.0, 0.0, 5.0, 0.0, 10.0, 5.0, 1e-3, 0.0, 1.0]).is_some(), "a near quad renders");
+    }
 
     #[test]
     fn projective_weights_sum_to_one() {

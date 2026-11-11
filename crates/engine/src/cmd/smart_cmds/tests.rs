@@ -1151,6 +1151,25 @@ fn convert_to_layers_applies_the_placement() {
     assert!(mean_diff(&flat(&s), &before) < 2e-3);
 }
 
+/// A pixel layer inside a group is drawn as the smart object draws it, as one outside a group
+/// is: a rotated smart object converts back to the same pixels either way.
+#[test]
+fn convert_to_layers_draws_a_grouped_pixel_layer_as_an_ungrouped_one() {
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let unpacked = |grouped: bool| {
+        let mut s = session(8);
+        paint(&mut s);
+        if grouped {
+            s.execute("layer.groupLayers", json!({})).unwrap();
+        }
+        let id = convert(&mut s);
+        s.execute("edit.transform", json!({"layer": id, "matrix": [cos, sin, -sin, cos, 12.0, 3.0]})).unwrap();
+        convert_to_layers(&mut s);
+        flat(&s)
+    };
+    assert_eq!(max_diff(&unpacked(true), &unpacked(false)), 0.0);
+}
+
 #[test]
 fn convert_to_layers_rejects_what_it_cannot_unpack() {
     let mut s = session(8);

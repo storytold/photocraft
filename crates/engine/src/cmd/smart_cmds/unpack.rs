@@ -10,6 +10,7 @@ use photocraft_algo::transform::Interp;
 use photocraft_cms::Intent;
 use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use super::{affine_homography, authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
@@ -112,29 +113,64 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, canvas: photocraft_geom:
     {
         check_destination_shapes(layers, transform, doc.size, doc.pixel_format().bytes_per_pixel()).map_err(other)?;
     }
-    for l in layers {
-        // A pixel layer's own pixels, resized as the smart object draws them.
-        let pixels = match &l.content {
-            LayerContent::Raster(surface) if snapped.is_some() => photocraft_algo::warp::scale_snapped(surface, canvas, [a, d, e, f]),
+    // A pixel layer's own pixels, resized as the smart object draws them.
+    let render = |surface: &Surface| -> Option<Surface> {
+        if snapped.is_some() {
+            return photocraft_algo::warp::scale_snapped(surface, canvas, [a, d, e, f]);
+        }
+        match sm.perspective {
             // Rotated or skewed (not in perspective): as the smart object draws it.
-            LayerContent::Raster(surface) if sm.perspective.is_none() => {
+            None => {
                 let (cx, cy) = (f64::from(canvas.x0), f64::from(canvas.y0));
                 photocraft_algo::smart_affine::render(surface, canvas, [a, b, c, d, e + a * cx + c * cy, f + b * cx + d * cy])
             }
             // In a one-way perspective: as the smart object draws it.
-            LayerContent::Raster(surface) => sm.perspective.and_then(|p| {
+            Some(p) => {
                 let corner = photocraft_algo::smart_perspective::from_corner(p, f64::from(canvas.x0), f64::from(canvas.y0));
                 photocraft_algo::smart_perspective::render(surface, canvas, corner)
-            }),
-            _ => None,
-        };
-        released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
-        if let (Some(p), LayerContent::Raster(surface)) = (pixels, &mut l.content) {
-            *surface = p;
+            }
         }
+    };
+    for l in layers {
+        // The pixel layers in it, a group's too, drawn before the transform moves the layer.
+        let mut pixels = std::collections::HashMap::new();
+        rendered(l, &render, 0, &mut pixels);
+        released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
+        put_rendered(l, &mut pixels, 0);
         crate::transform_cmds::refresh_text(doc, l);
     }
     Ok(())
+}
+
+/// Each pixel layer in `l` (itself, or any layer in it when it is a group), drawn by `render`,
+/// by id. Nesting stops at [`photocraft_doc::MAX_GROUP_DEPTH`].
+fn rendered(l: &Layer, render: &dyn Fn(&Surface) -> Option<Surface>, depth: usize, out: &mut std::collections::HashMap<LayerId, Surface>) {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return;
+    }
+    if let LayerContent::Raster(surface) = &l.content
+        && let Some(p) = render(surface)
+    {
+        out.insert(l.id, p);
+    }
+    for child in l.children().unwrap_or_default() {
+        rendered(child, render, depth + 1, out);
+    }
+}
+
+/// Puts the pixels [`rendered`] drew back into their layers in `l`.
+fn put_rendered(l: &mut Layer, pixels: &mut std::collections::HashMap<LayerId, Surface>, depth: usize) {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return;
+    }
+    if let (Some(p), LayerContent::Raster(surface)) = (pixels.remove(&l.id), &mut l.content) {
+        *surface = p;
+    }
+    if let Some(children) = l.children_mut() {
+        for child in children {
+            put_rendered(child, pixels, depth + 1);
+        }
+    }
 }
 
 /// Runs `f` with every lock and mask link in `l`'s tree released, so a transform moves all of

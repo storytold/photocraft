@@ -361,6 +361,23 @@ fn sold_placed(quad: [f64; 8], warp: Descriptor) -> Vec<u8> {
     data
 }
 
+/// A quad whose one slanted side is less than a pixel off its axis is a parallelogram once that
+/// side is put on the axis: the affine placement then has the straightened side, not the slant.
+#[test]
+fn a_quad_straightened_into_a_parallelogram_is_placed_straight() {
+    let none = Descriptor::new("warp").with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpNone") });
+    let quad = [10.0, 20.0, 410.0, 20.0, 410.0, 420.0, 10.4, 420.0];
+    let data = sold_placed(quad, none);
+    assert!(parse_smart_perspective(b"SoLd", &data).is_none(), "straightened, it is affine");
+    let (_, a) = parse_smart(b"SoLd", &data);
+    let [m0, m1, m2, m3, m4, m5] = a.m;
+    let map = |x: f64, y: f64| (m0 * x + m2 * y + m4, m1 * x + m3 * y + m5);
+    for (x, y, want) in [(0.0, 0.0, (10.2, 20.0)), (0.0, 1000.0, (10.2, 420.0)), (1000.0, 1000.0, (410.0, 420.0))] {
+        let got = map(x, y);
+        assert!((got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9, "{x},{y} → {got:?}, not {want:?}");
+    }
+}
+
 /// A `warpCylinder` descriptor as #4112 describes it: horizontal, no perspective, seven
 /// `warpValues` in the space of `bounds`.
 fn cylinder_desc(values: Value) -> Descriptor {

@@ -368,6 +368,11 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
     if a0 * d0 - b0 * c0 <= 1e-12 {
         return None;
     }
+    // The source is loaded whole: past the size limit, before anything is allocated.
+    let loaded = (bounds.width() as usize).checked_mul(bounds.height() as usize)?.checked_mul(nc)?;
+    if loaded > MAX_SAMPLES {
+        return None;
+    }
     let depth = Depth::of(fmt.sample);
     let mut img = load(src, bounds, depth);
     if bleed_contents {
@@ -414,6 +419,9 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
     if y1 <= y0 {
         return None;
     }
+    // The result's box in document pixels: every position below (in 1/256 px) is reckoned from
+    // it, so a placement far off the canvas returns `None` here rather than overflow there.
+    let rect = Rect::new(i32::try_from(x0).ok()?, i32::try_from(y0).ok()?, i32::try_from(x1).ok()?, i32::try_from(y1).ok()?);
     let ny = (y1 - y0) as usize;
     let biggest = nx.max(w).checked_mul(ny.max(h))?.checked_mul(nc)?;
     if biggest > MAX_SAMPLES {
@@ -430,7 +438,6 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
         Some(n1) => reduce_columns(&inter, n1, depth),
         None => inter,
     };
-    let rect = Rect::new(i32::try_from(x0).ok()?, i32::try_from(y0).ok()?, i32::try_from(x1).ok()?, i32::try_from(y1).ok()?);
     let Some(stride) = Stride::new(length, inter.h) else {
         return store(fmt, rect, depth, clear, |_, _, _| {});
     };
@@ -644,6 +651,22 @@ mod tests {
         let hidden = px.chunks(4).filter(|p| p[3] == 0.0 && p[..3].iter().any(|v| *v != 0.0)).count();
         assert_eq!(hidden, 0, "colour under alpha 0");
         assert!(px.chunks(4).any(|p| p[3] > 0.99), "the picture is drawn");
+    }
+
+    /// A source past the size limit is refused before it is loaded, and a placement far off the
+    /// canvas is refused rather than overflowing the 1/256 px positions.
+    #[test]
+    fn huge_sources_and_far_placements_are_refused_without_a_panic() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.fill_rect(Rect::new(0, 0, 10, 10), &[1.0, 0.0, 0.0, 1.0]);
+        assert!(render(&s, Rect::new(0, 0, 40_000, 40_000), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]).is_none(), "too big to load");
+        // Scaled up, so the box keeps its width that far out (at 1e17 a double steps by 16).
+        for e in [1e17, -1e17, 4e9] {
+            assert!(render(&s, Rect::new(0, 0, 10, 10), [100.0, 0.0, 0.0, 1.0, e, 0.0]).is_none(), "x offset {e}");
+            assert!(render(&s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 100.0, 0.0, e]).is_none(), "y offset {e}");
+        }
+        assert!(render(&s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0, 5.0, 5.0]).is_some(), "an ordinary placement still renders");
     }
 
     /// The probe source: 128 x 128, each row one grey from a 32-bit LCG (seed 777), opaque.

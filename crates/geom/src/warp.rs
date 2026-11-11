@@ -1157,7 +1157,7 @@ fn move_control_points(points: &mut [[f64; 2]], nx: usize, ny: usize, cols: usiz
 
 /// A complete warp: what Photoshop's `warp` descriptor stores, plus the custom mesh.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "SavedWarp")]
 pub struct Warp {
     pub style: WarpStyle,
     /// Bend in percent (-100..100), presets only.
@@ -1186,6 +1186,55 @@ pub struct Warp {
     pub envelope: bool,
 }
 
+/// A [`Warp`] as saved: a file from before [`Warp::envelope`] has none, and its presets are
+/// envelopes all the same ([`Warp::preset`]), so it reopens as it would be made now.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedWarp {
+    style: WarpStyle,
+    #[serde(default)]
+    bend: f64,
+    #[serde(default)]
+    h_distort: f64,
+    #[serde(default)]
+    v_distort: f64,
+    #[serde(default)]
+    vertical: bool,
+    bounds: [f64; 4],
+    #[serde(default)]
+    mesh: Option<BezierMesh>,
+    #[serde(default)]
+    values: Vec<f64>,
+    #[serde(default)]
+    envelope: Option<bool>,
+}
+
+impl From<SavedWarp> for Warp {
+    fn from(w: SavedWarp) -> Warp {
+        let envelope = w.envelope.unwrap_or_else(|| preset_envelope(w.style));
+        Warp {
+            style: w.style,
+            bend: w.bend,
+            h_distort: w.h_distort,
+            v_distort: w.v_distort,
+            vertical: w.vertical,
+            bounds: w.bounds,
+            mesh: w.mesh,
+            values: w.values,
+            envelope,
+        }
+    }
+}
+
+/// Whether `style`'s preset is an envelope ([`Warp::envelope`]): every bend preset but Fisheye,
+/// Twist and the Shells; never a custom mesh or a cylinder.
+fn preset_envelope(style: WarpStyle) -> bool {
+    !matches!(
+        style,
+        WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder | WarpStyle::Fisheye | WarpStyle::Twist | WarpStyle::ShellLower | WarpStyle::ShellUpper
+    )
+}
+
 /// Relative to the magnitude so the fit's rounding at large origins isn't rejected.
 fn point_fits(expected: [f64; 2], actual: [f64; 2]) -> bool {
     let tol = |e: f64| (1e-9 * e.abs().max(1.0)).min(1e-6);
@@ -1200,11 +1249,7 @@ impl Warp {
 
     /// A preset style.
     pub fn preset(style: WarpStyle, bend: f64, bounds: [f64; 4]) -> Warp {
-        let envelope = !matches!(
-            style,
-            WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder | WarpStyle::Fisheye | WarpStyle::Twist | WarpStyle::ShellLower | WarpStyle::ShellUpper
-        );
-        Warp { style, bend, envelope, ..Warp::none(bounds) }
+        Warp { style, bend, envelope: preset_envelope(style), ..Warp::none(bounds) }
     }
 
     /// A custom warp from a mesh.
