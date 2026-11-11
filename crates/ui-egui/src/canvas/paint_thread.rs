@@ -233,7 +233,7 @@ impl PaintThread {
     /// Tests: from now on the thread holds the next step it takes, as a slow brush would, until
     /// the returned function lets it go (from any thread).
     #[cfg(test)]
-    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static {
+    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static + use<> {
         self.shared.lock().held = true;
         let shared = self.shared.clone();
         move || {
