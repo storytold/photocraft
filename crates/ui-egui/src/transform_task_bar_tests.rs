@@ -420,7 +420,7 @@ fn transform_task_bar_grip_drag_moves_the_saved_bar_without_changing_the_box() {
     // A real pointer click after the grip drop still reaches a child button through the Area sense.
     let button = h.get_by_label("Rotate 90° Clockwise").rect().center();
     assert!(shown.contains(button));
-    task_bar_screen_drag(&mut h, button, button);
+    click(&mut h, "Rotate 90° Clockwise");
     let transform = h.state().ui.transform.as_ref().unwrap();
     assert_eq!((transform.session, transform.pivot), (before.0, before.1));
     assert_ne!(transform.quad, before.2, "the relocated rotation button still works");
@@ -440,7 +440,7 @@ fn crop_task_bar_grip_drag_moves_the_saved_bar_without_changing_the_crop() {
     assert_eq!((h.state().ui.crop_rect, h.state().ui.crop_angle), before);
     let cancel = h.get_by_label("Cancel").rect().center();
     assert!(shown.contains(cancel));
-    task_bar_screen_drag(&mut h, cancel, cancel);
+    click(&mut h, "Cancel");
     assert!(h.state().ui.crop_rect.is_none(), "the relocated Cancel button still dismisses the crop");
     assert_eq!(history(&h), edits);
 }
