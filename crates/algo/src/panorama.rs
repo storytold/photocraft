@@ -900,7 +900,7 @@ mod tests {
     fn an_oversized_level_count_is_clamped() {
         let (w, h) = (4, 4);
         let img = RoiImage { x0: 0, y0: 0, w, h, ch: 1, px: vec![0.5; w * h], alpha: vec![1.0; w * h] };
-        let (out, cov) = multiband(w, h, &[img], &[vec![1.0; w * h]], usize::MAX);
+        let (out, cov) = multiband(w, h, &[img], &[vec![1.0; w * h]], usize::MAX).unwrap();
         assert_eq!(out.len(), w * h);
         assert!(out.iter().all(|v| (v - 0.5).abs() < 1e-5), "{out:?}");
         assert!(cov.iter().all(|c| *c == 1.0), "{cov:?}");
