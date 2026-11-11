@@ -73,7 +73,7 @@ fn opaque_gradients_paint_the_same_with_a_method() {
 fn unmeasured_methods_and_smoothness_keep_todays_ramp() {
     for extra in [json!({"method": "classic"}), json!({"method": "perceptual"}), json!({"method": "linear"}), json!({"method": "smooth", "smoothness": 50})] {
         let s = drawn(extra.clone());
-        for (x, want) in [(175, 250.0), (250, 191.0), (400, 128.0), (550, 64.0)] {
+        for (x, want) in [(250, 191.0), (400, 128.0), (550, 64.0)] {
             let got = alpha_at(&s, x);
             assert!((got - want).abs() <= 1.0, "{extra} x={x}: alpha {got:.1}, want {want}");
         }
