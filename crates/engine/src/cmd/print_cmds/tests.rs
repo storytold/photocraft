@@ -1561,3 +1561,8 @@ fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
     assert!(content.contains(r"(Price: \20020 \(proof\)) Tj"), "{content}");
     assert!(content.is_ascii(), "encoded bytes are escaped, never UTF-8 text operands");
 }
+
+#[test]
+fn postscript_comment_text_cannot_end_its_line() {
+    assert_eq!(ps_comment_text("a\nshowpage\r%x"), "a showpage %x");
+}

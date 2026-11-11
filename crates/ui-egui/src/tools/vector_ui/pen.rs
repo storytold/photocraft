@@ -374,9 +374,11 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
     let mut original = pen.clone();
     original.dragging = false;
     original.adjusting_last = false;
+    let draft = super::pen_resume::draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, closed);
     }
+    let before = super::pen_resume::current_doc(app);
     if let Err(e) = commit_path(app, &pen, closed) {
         app.ui.pen = Some(PenPath { commit_failed: true, ..original });
         app.ui.status = e.clone();
@@ -384,6 +386,8 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
         return Err(e);
     }
     app.ui.pen_doc = None;
+    // Undo back to this finish gives the path back to the Pen (`pen_resume_on_undo`).
+    super::pen_resume::remember_finish(app, draft, &before);
     Ok(())
 }
 
@@ -419,13 +423,17 @@ pub fn pen_end(app: &mut PhotocraftApp) {
     if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
         app.ui.direct_selection = Default::default();
     }
+    let draft = super::pen_resume::draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, false);
     }
     let refused = std::mem::take(&mut app.ui.status);
+    let before = super::pen_resume::current_doc(app);
     let kept = app.run("path.set", json!({"name": "work", "op": "combine", "path": pen_to_json(&pen, false)})).is_ok();
     if kept {
         app.ui.selected_path = Some("work".into());
+        // Undo gives the path back to the Pen here too (`pen_resume_on_undo`).
+        super::pen_resume::remember_finish(app, draft, &before);
     }
     let outcome = if kept { tl!("The path was kept as the Work Path") } else { tl!("The path was discarded") };
     app.ui.status = format!("{refused} ({outcome})");

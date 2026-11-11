@@ -44,6 +44,10 @@ pub struct LayerExportReport {
 pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<LayerExportReport> {
     let cmd = "file.export.layersToFiles";
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    // The format becomes the file extension inside one filename component handed to `write`.
+    if format.is_empty() || !format.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "`format` must be a file extension such as png".into() });
+    }
     let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate

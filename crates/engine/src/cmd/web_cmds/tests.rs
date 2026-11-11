@@ -1396,6 +1396,25 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
     }
 }
 
+/// Quick Export as WebP goes through the regular exporter, which embeds a document's XMP and
+/// EXIF whole: the export preferences' metadata choice must still apply to it.
+#[test]
+fn quick_export_webp_keeps_only_the_chosen_metadata() {
+    let dir = tmp("quick_webp_metadata");
+    let mut s = session(8);
+    s.execute("file.fileInfo", json!({"copyright": "© Example", "description": "secret notes"})).unwrap();
+    let has = |b: &[u8], needle: &[u8]| b.windows(needle.len()).any(|w| w == needle);
+    for (choice, lossless) in [("none", true), ("copyright", false)] {
+        s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "metadata": choice, "webpLossless": lossless})).unwrap();
+        let path = format!("{dir}/{choice}.webp");
+        s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(!has(&bytes, b"secret notes"), "{choice}: the description is not {choice}");
+        assert_eq!(has(&bytes, b"Example"), choice == "copyright", "{choice}");
+    }
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
 /// #5305: `folder` writes the whole image there under the document's own name, so an action
 /// recorded with the suggested name saves each document it is played on under that name; it is
 /// a destination, never a remembered setting.
