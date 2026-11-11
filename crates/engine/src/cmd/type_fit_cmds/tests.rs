@@ -425,6 +425,25 @@ fn refused_targets() {
 }
 
 #[test]
+fn a_layer_named_by_its_name_is_checked_as_it_runs() {
+    // With two layers selected the menus are off; a call naming one by its name is enabled
+    // exactly when running it would act, as for one named by its id.
+    let (mut s, a) = session_with_box_text("abc", 12.0, [0.0, 0.0, 100.0, 100.0]);
+    let b = LayerId(s.execute("type.create", json!({"x": 0, "y": 0, "text": "def", "box": [0, 120, 100, 100]})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+    assert!(s.active().unwrap().selected_layers().len() > 1);
+    let name = s.active().unwrap().doc.layer(a).unwrap().name.clone();
+    let named = json!({"layer": name});
+    assert!(s.is_enabled_with("type.convertToDynamicText", &named));
+    assert!(!s.is_enabled_with("type.releaseDynamicText", &named));
+    s.execute("type.convertToDynamicText", named.clone()).unwrap();
+    assert!(text(&s, a).fit.is_some() && text(&s, b).fit.is_none());
+    assert!(s.is_enabled_with("type.releaseDynamicText", &named));
+    s.execute("type.releaseDynamicText", named).unwrap();
+    assert!(text(&s, a).fit.is_none());
+}
+
+#[test]
 fn a_fitted_layer_loaded_as_vertical_must_be_released_first() {
     // The commands refuse to make a fitted layer vertical; a file can still hold one. Edits are
     // refused until it is released, and the solver never sees it.

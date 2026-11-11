@@ -424,8 +424,33 @@ impl Ex<'_> {
     /// baked layer is kept for the document's `Txt2`.
     /// One warning per fitted layer: how it was saved, or why it could not be baked.
     fn bake_dynamic_text(&mut self, l: &Layer, t: &photocraft_doc::TextLayer) -> Option<(photocraft_doc::TextLayer, Option<[f32; 4]>)> {
+        use photocraft_doc::text::{Orientation, TextDirection, TextShape};
+        let mut eng = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A fitted layer whose lines were never solved (or no longer match its text): solve a
+        // copy, so the file keeps the fitted look; the document is left alone. Vertical and
+        // right-to-left type can't be fitted and aren't solved.
+        let solved;
+        let t = if t.fit.is_some()
+            && !t.text.is_empty()
+            && matches!(t.shape, TextShape::Box { .. } | TextShape::Area { .. })
+            && !photocraft_text::fit::is_fitted_lines(t)
+        {
+            let rtl =
+                t.paragraph_runs().iter().any(|p| p.style.direction == TextDirection::Rtl) || photocraft_text::layout::first_strong_rtl(&t.text) == Some(true);
+            let mut copy = t.clone();
+            if t.orientation != Orientation::Vertical && !rtl {
+                photocraft_text::fit::refit(&mut eng, &mut copy, self.dpi);
+            }
+            if !photocraft_text::fit::is_fitted_lines(&copy) {
+                self.warnings.push(format!("layer \"{}\": Dynamic Text could not be solved; saved with its base sizes", l.name));
+                return None;
+            }
+            solved = copy;
+            &solved
+        } else {
+            t
+        };
         let baked = if photocraft_text::fit::is_fitted_lines(t) {
-            let mut eng = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match photocraft_text::fit::bake(&mut eng, t, self.dpi) {
                 Ok(b) => {
                     let ink = eng.layout(&b, self.dpi).bounds();
