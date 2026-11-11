@@ -68,6 +68,10 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
     pen.commit_failed = false;
     pen.adjusting_in = false;
     pen.last_pointer = Some([x, y]);
+    // Drawing on deselects an anchor Auto Add put on the path being drawn.
+    if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) && app.ui.direct_selection.drag.is_none() {
+        app.ui.direct_selection.anchors.clear();
+    }
     pen.reposition = false;
     // The press that carries a path on never closes it, even when its other end is in reach too:
     // the canvas showed the continue-path pointer there (`continues_path_at`).
@@ -970,3 +974,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
 #[cfg(test)]
 #[path = "freeform_history_name_tests.rs"]
 mod freeform_history_name_tests;
+
+#[cfg(test)]
+#[path = "pen_alt_drag_segment_tests.rs"]
+mod pen_alt_drag_segment_tests;

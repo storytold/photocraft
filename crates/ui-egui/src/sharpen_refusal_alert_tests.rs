@@ -91,5 +91,5 @@ fn the_brush_and_the_dodge_tool_keep_todays_behaviour() {
     let mut app = self::app(Tool::Dodge);
     app.run("layer.lockLayers", json!({"all": true})).unwrap();
     assert_eq!(alert(&app, Tool::Dodge, false), None);
-    assert_eq!(tool_name(Tool::Dodge), None);
+    assert_eq!(tool_name(&app, Tool::Dodge), None);
 }
