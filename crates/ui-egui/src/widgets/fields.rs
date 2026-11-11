@@ -2,7 +2,7 @@ use super::panel::{chevron_icon, surface};
 use super::scrub::{label_scrub_response, take_label_scrub};
 use super::slider::slider;
 use super::text_field::first_field_id;
-use super::units::{FieldUnits, field_resolution_id, fmt_num, fmt_num_prec, fmt_num2, parse_num_in, plain, unit_of_suffix};
+use super::units::{FieldUnits, field_resolution_id, fmt_num, fmt_num_fixed, fmt_num_prec, fmt_num2, parse_num_in, plain, unit_of_suffix};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Tokens, Ui, Vec2, pos2, theme, vec2};
 
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub. Typed
@@ -120,6 +120,8 @@ pub(super) struct FieldOpts {
     /// Show an unset value as an empty field rather than `0` (the Crop tool's free ratio sides,
     /// #10888). Editing, scrubbing and parsing are unchanged.
     pub(super) blank_when_zero: bool,
+    /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
+    pub(super) keep_zeros: bool,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -462,7 +464,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -482,6 +484,7 @@ fn number_edit(
             return String::new();
         }
         let text = match decimals {
+            Some(d) if keep_zeros => fmt_num_fixed(v, d),
             Some(d) => fmt_num_prec(v, d),
             None if fine => fmt_num2(v),
             None => fmt_num(v),
