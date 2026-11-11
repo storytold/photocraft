@@ -155,3 +155,28 @@ fn clear_also_resets_the_resolution_unit() {
     assert!(o.crop_width.is_empty() && o.crop_height.is_empty() && o.crop_resolution.is_empty());
     assert_eq!(o.crop_resolution_unit, crate::crop_size::PX_PER_IN);
 }
+
+#[test]
+fn the_resolution_never_rounds_past_the_limit() {
+    // The px/cm limit is 11811.0232…: just below it keeps 11811.023, just above it is out of range.
+    assert_eq!(resolution("11811.0232", "100", true), ("11811.023".to_string(), None));
+    assert_eq!(resolution("11811.0236", "100", true).0, "11811.023");
+    assert_eq!(crate::crop_size::fit_resolution(29_999.9995, false), "29999.999");
+    assert_eq!(crate::crop_size::fit_resolution(118.110_236, true), "118.11");
+}
+
+#[test]
+fn front_image_keeps_a_30000_ppi_documents_resolution_within_the_limit() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 150, "resolution": 30000})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::PerspectiveCrop;
+    let mut h = harness(app);
+    h.get_by_label("Front Image").click();
+    h.run();
+    let app = h.into_state();
+    assert_eq!(app.ui.tool_options.crop_resolution, "29999.999");
+    let ppi = crate::crop_size::resolution_ppi(&app.ui.tool_options).unwrap();
+    let mut app = app;
+    assert!(crop(&mut app, ppi).is_ok());
+}

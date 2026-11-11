@@ -146,16 +146,26 @@ pub fn clamp_resolution(typed: &str, previous: &str, per_cm: bool) -> (String, O
     let Some(v) = crate::widgets::parse_num(&typed.trim().replace(',', ".")).filter(|v| v.is_finite()) else {
         return (previous.to_string(), Some(tl!(INVALID_ENTRY_ALERT).to_string()));
     };
-    let (lo, hi) = if per_cm { (1.0 / 2.54, PCROP_MAX_PPI / 2.54) } else { (1.0, PCROP_MAX_PPI) };
-    // Three decimals, so the top limit is kept as it is rather than rounded past it.
-    let keep = |v: f64| crate::widgets::fmt_num_prec(v, 3);
+    let (lo, hi) = resolution_limits(per_cm);
     if (lo..=hi).contains(&v) {
-        return (keep(v), None);
+        return (fit_resolution(v, per_cm), None);
     }
     let alert = crate::i18n::fmt(tl!(RESOLUTION_RANGE_ALERT), &[("min", &alert_number(lo)), ("max", &alert_number(hi))]);
-    // The closest limit, rounded inwards so it stays within the range.
-    let closest = if v < lo { (lo * 1000.0).ceil() / 1000.0 } else { (hi * 1000.0).floor() / 1000.0 };
-    (keep(closest), Some(alert))
+    (fit_resolution(v, per_cm), Some(alert))
+}
+
+/// Perspective Crop's resolution range in px/in, or in px/cm (the per-inch limits divided by 2.54).
+fn resolution_limits(per_cm: bool) -> (f64, f64) {
+    if per_cm { (1.0 / 2.54, PCROP_MAX_PPI / 2.54) } else { (1.0, PCROP_MAX_PPI) }
+}
+
+/// A resolution as the Perspective Crop field keeps it: three decimals, so the top limit is kept as
+/// it is, and clamped to the limits rounded inwards, so the stored text never converts past them
+/// (Front Image on a 30000 ppi document keeps 29999.999).
+pub fn fit_resolution(v: f64, per_cm: bool) -> String {
+    let (lo, hi) = resolution_limits(per_cm);
+    let (lo, hi) = ((lo * 1000.0).ceil() / 1000.0, (hi * 1000.0).floor() / 1000.0);
+    crate::widgets::fmt_num_prec(((v * 1000.0).round() / 1000.0).clamp(lo, hi), 3)
 }
 
 /// "4 in", "1024 px", "8.5 in", "2.54 cm": the number (up to its unit's decimals) and the unit.

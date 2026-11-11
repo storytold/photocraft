@@ -468,8 +468,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let o = &mut app.ui.tool_options;
         o.crop_width = crate::crop_size::format_length(f64::from(size.width), Unit::Pixels);
         o.crop_height = crate::crop_size::format_length(f64::from(size.height), Unit::Pixels);
-        let res = if o.crop_resolution_unit == crate::crop_size::PX_PER_CM { dpi / 2.54 } else { dpi };
-        o.crop_resolution = crate::widgets::fmt_num2(res);
+        let per_cm = o.crop_resolution_unit == crate::crop_size::PX_PER_CM;
+        // Within the field's limits, so a 30000 ppi document's resolution still commits.
+        o.crop_resolution = crate::crop_size::fit_resolution(if per_cm { dpi / 2.54 } else { dpi }, per_cm);
     }
     if crate::widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
         crate::crop_size::clear(&mut app.ui.tool_options);
