@@ -269,7 +269,8 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
     // action would otherwise copy and walk it each time for free.
     let len = s.actions.list.get(idx).map_or(0, |a| a.steps.len());
     if playback_steps_used(s).saturating_add(u64::try_from(len).unwrap_or(u64::MAX)) > MAX_PLAYBACK_STEPS {
-        return Err(bad("actions.play", format!("action playback exceeded the {MAX_PLAYBACK_STEPS}-step limit")));
+        // A limit, not a bad parameter: an enclosing batch must fail the input instead of saving it.
+        return Err(EngineError::BatchLimit(format!("invalid parameters for `actions.play`: action playback exceeded the {MAX_PLAYBACK_STEPS}-step limit")));
     }
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
     if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
@@ -487,7 +488,7 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
     let mut failed = None;
     for (i, (id, params)) in action.enabled_steps().skip_while(|(i, _)| *i < from) {
         if !consume_playback_step(s) {
-            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS)}));
+            failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS), "limit": true}));
             break;
         }
         if let Some(auth) = s.authorize
@@ -502,6 +503,11 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
         }
         match playback_params(s, id, params).and_then(|p| if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, p) }) {
             Ok(value) => {
+                // A nested batch or action that stopped at a limit stops this action too.
+                if let Some(error) = limit_stop(&value) {
+                    failed = Some(json!({"step": i, "id": id, "error": error, "limit": true}));
+                    break;
+                }
                 if let Some(error) = nested_failure(id, &value) {
                     failed = Some(json!({"step": i, "id": id, "error": error}));
                     break;
@@ -510,6 +516,11 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             }
             Err(e) => {
                 failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                if matches!(e, EngineError::BatchLimit(_))
+                    && let Some(f) = failed.as_mut()
+                {
+                    f["limit"] = json!(true);
+                }
                 break;
             }
         }
@@ -557,6 +568,15 @@ pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize)
         params["from"] = json!(from);
     }
     s.journal.push(("actions.play".into(), params));
+}
+
+/// The message of a nesting or playback-limit stop reported by `value`, the result of a step: an
+/// input of a nested batch or droplet marked `"limit": true` in `errors`, or a played action whose
+/// failed step carries it. Such a stop fails the enclosing input rather than being swallowed.
+pub fn limit_stop(value: &Value) -> Option<String> {
+    let flagged = |v: &Value| v.get("limit") == Some(&json!(true));
+    let found = value.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| flagged(e))).or_else(|| value.get("failed").filter(|f| flagged(f)))?;
+    Some(found.get("error").and_then(Value::as_str).unwrap_or("batch limit reached").to_string())
 }
 
 /// Nested playback returns a structured failure even though the command itself succeeded.
@@ -925,7 +945,7 @@ mod security_tests {
         session.actions.budget_shared = true;
         session.actions.playback_steps = MAX_PLAYBACK_STEPS;
         let r = session.execute("actions.play", json!({"action": "A"}));
-        assert!(r.is_err(), "the carried count leaves no room for the action: {r:?}");
+        assert!(matches!(r, Err(EngineError::BatchLimit(_))), "the carried count leaves no room for the action: {r:?}");
         session.actions.budget_shared = false;
         let r = session.execute("actions.play", json!({"action": "A"})).unwrap();
         assert_eq!(r["ran"], 1, "a top-level call starts its own count");
@@ -949,6 +969,17 @@ mod security_tests {
         // Each call charges its 1000 stored steps plus the Play step itself.
         let ran = r["ran"].as_u64().unwrap();
         assert!(ran < MAX_PLAYBACK_STEPS / 1000, "{ran}");
+    }
+
+    /// Limit stops are recognised from a nested batch's `errors` and from a played action's `failed`;
+    /// an ordinary failure is not one.
+    #[test]
+    fn limit_stops_are_found_in_nested_results() {
+        let batch = json!({"files": [], "errors": [{"file": "a", "error": "x"}, {"file": "b", "error": "too deep", "limit": true}]});
+        assert_eq!(limit_stop(&batch).as_deref(), Some("too deep"));
+        let played = json!({"action": "A", "failed": {"step": 2, "id": "x", "error": "over", "limit": true}});
+        assert_eq!(limit_stop(&played).as_deref(), Some("over"));
+        assert_eq!(limit_stop(&json!({"errors": [{"file": "a", "error": "x"}], "failed": {"step": 0, "error": "y"}})), None);
     }
 
     #[test]

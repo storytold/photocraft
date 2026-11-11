@@ -346,10 +346,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     continue;
                 }
                 let r = scratch.execute(id, params.clone())?;
-                // A nested batch or droplet reports its own input failures in `errors`; only the ones
-                // that hit the nesting or shared playback limit fail this input too.
-                if let Some(limit) = r.get("errors").and_then(Value::as_array).and_then(|a| a.iter().find(|e| e.get("limit") == Some(&json!(true)))) {
-                    return Err(EngineError::BatchLimit(limit.get("error").and_then(Value::as_str).unwrap_or("batch limit reached").to_string()));
+                // A nested batch, droplet or played action reports its own failures in `errors` / `failed`;
+                // only the ones that hit the nesting or shared playback limit fail this input too.
+                if let Some(limit) = crate::actions_cmds::limit_stop(&r) {
+                    return Err(EngineError::BatchLimit(limit));
                 }
                 // A failed step inside a called action makes this file an error, not a saved result.
                 if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
