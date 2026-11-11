@@ -28,6 +28,12 @@ pub fn value_field_prec(ui: &mut Ui, value: &mut f32, range: std::ops::RangeIncl
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }, None).0
 }
 
+/// A [`value_field_prec`] that keeps its trailing zeros (`50.0`, `0.0`): Warp's Bend, H and V,
+/// which the reference shows to one decimal (#12503).
+pub fn value_field_fixed(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), keep_zeros: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field_prec`] that shows an unset `0` as an empty field (Crop's free ratio sides,
 /// #10888). Everything else, including scrubbing and typed input, is identical.
 pub fn value_field_prec_blank(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
@@ -119,6 +125,14 @@ pub fn fmt_num(v: f64) -> String {
 /// (#2434). [`photocraft_engine::prefs::Unit::decimals`] gives each ruler unit's places.
 pub fn fmt_num_prec(v: f64, decimals: u32) -> String {
     photocraft_engine::prefs::fmt_decimals(v, decimals as usize)
+}
+
+/// [`fmt_num_prec`] keeping its trailing zeros: `50.0` at one place.
+pub(super) fn fmt_num_fixed(v: f64, decimals: u32) -> String {
+    let s = fmt_num_prec(v, decimals);
+    let shown = s.split_once('.').map_or(0, |(_, frac)| frac.len());
+    let pad = (decimals as usize).saturating_sub(shown);
+    if pad == 0 { s } else { format!("{s}{}{}", if shown == 0 { "." } else { "" }, "0".repeat(pad)) }
 }
 
 /// Two-decimal variant of [`fmt_num`] for small ranges: `1.05`, `0.78`, `2`.

@@ -221,7 +221,7 @@ fn warp_bar_buttons_follow_the_fields_on_a_wide_bar() {
     h.run_steps(4);
     assert!(h.state().ui.transform.as_ref().unwrap().warp.is_some());
     let commit = h.get_by_label("Commit transform").rect();
-    assert!(commit.right() < width / 2.0, "commit sits next to the fields, not at the far right: {commit:?}");
+    assert!(commit.right() < width * 0.6, "commit sits next to the fields, not at the far right: {commit:?}");
     let reset = h.get_by_label("Reset warp").rect();
     assert!(reset.right() < commit.left() + 1.0, "reset is left of commit");
     h.get_by_label("Reset warp").click();
