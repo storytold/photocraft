@@ -93,8 +93,10 @@ impl Compositor {
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
         let live = live_passes(plan, runs, chunks);
-        stats.pass_bindings += plan.passes.len();
-        stats.passes_culled += live.iter().filter(|l| !**l).count();
+        // Counted from `first_pass`, as `bind_cell` binds: passes a checkpoint already covers aren't
+        // considered at all.
+        stats.pass_bindings += plan.passes.len().saturating_sub(first_pass);
+        stats.passes_culled += live.iter().skip(first_pass).filter(|l| !**l).count();
         let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, &live, stats);
         // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
         if self.layer_alloc.is_some() {

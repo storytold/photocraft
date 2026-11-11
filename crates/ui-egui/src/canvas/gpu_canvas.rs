@@ -931,6 +931,11 @@ impl GpuCanvas {
         if res.compositor.is_none() {
             let mut state = self.compositor_build.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match std::mem::replace(&mut *state, compositor_build::BuildState::Adopted) {
+                // Being built: the caller tries again shortly.
+                compositor_build::BuildState::Building => {
+                    *state = compositor_build::BuildState::Building;
+                    return Err(photocraft_gpu::Unsupported(COMPOSITOR_BUILDING.into()));
+                }
                 compositor_build::BuildState::Ready(comp) => res.compositor = Some(*comp),
                 compositor_build::BuildState::Failed(error) => {
                     res.compositor_failed = Some(error.clone());
@@ -939,7 +944,9 @@ impl GpuCanvas {
                 other => *state = other,
             }
         }
-        let Some(mut comp) = res.compositor.take() else { return Err(photocraft_gpu::Unsupported(COMPOSITOR_BUILDING.into())) };
+        // No build running and none adopted (nothing started one, as in the snapshot example):
+        // waiting would never end, so the blocks go back to the UI thread, which builds one.
+        let Some(mut comp) = res.compositor.take() else { return Err(photocraft_gpu::Unsupported("no GPU compositor yet; the UI thread builds it".into())) };
         comp.set_health(self.health.clone());
         comp.measure_gpu_time(device, queue);
         if let Some(b) = res.compositor_budget {

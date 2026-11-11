@@ -67,6 +67,7 @@ pub(crate) fn enabled() -> bool {
 }
 
 impl RedrawThread {
+    /// No threads on the web: the sweep draws on the UI thread.
     #[cfg(target_arch = "wasm32")]
     fn spawn(_: GpuCanvas, _: egui::Context) -> Option<Self> {
         None
