@@ -36,9 +36,7 @@ fn code(mode: ExplorerThumbnails) -> u8 {
 /// The mode a [`code`] stands for; `None` for 0 (not seen yet) or an unknown number.
 #[cfg(test)]
 fn mode_from(code: u8) -> Option<ExplorerThumbnails> {
-    [ExplorerThumbnails::Off, ExplorerThumbnails::WithLogo, ExplorerThumbnails::NoLogo]
-        .into_iter()
-        .find(|&mode| self::code(mode) == code)
+    [ExplorerThumbnails::Off, ExplorerThumbnails::WithLogo, ExplorerThumbnails::NoLogo].into_iter().find(|&mode| self::code(mode) == code)
 }
 
 /// Records `mode` as the preference now in force; true when it differs from the one seen before.
