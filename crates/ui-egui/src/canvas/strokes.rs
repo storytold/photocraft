@@ -86,10 +86,14 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
         return;
     }
-    // View › Pattern Preview repeats the source for the Clone Stamp only (`paint.cloneStamp`'s
-    // `wrap`); the Healing Brush samples it as it is.
-    let wrap = tool == Tool::CloneStamp && app.ui.view.pattern_preview;
+    // Both tools repeat source reads in Pattern Preview; this also refreshes a stationary hover.
+    let wrap = app.ui.view.pattern_preview;
     let Some(st) = app.session.active() else { return };
+    let target = paint_target(app);
+    if slot.document.is_some_and(|id| id != st.doc.id) && photocraft_engine::channel_cmds::gray_target(&json!({"target": target})).is_some() {
+        // Strokes reject these cross-document targets, including a mask selected only in the UI.
+        return;
+    }
     let source_revision =
         slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| (st.doc.id, st.revision, st.active_layer));
     let source_document = slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| std::sync::Arc::downgrade(&st.doc));
@@ -131,7 +135,7 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
             ),
         };
         let preview = if tool == Tool::Healing {
-            photocraft_engine::retouch_cmds::healing_preview(&app.session, rect, &map, &app.ui.tool_options.clone_sample)
+            photocraft_engine::retouch_cmds::healing_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
         } else {
             photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
         };

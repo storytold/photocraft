@@ -129,7 +129,18 @@ pub fn clone_preview_periodic(
 
 /// Healing Brush's source overlay, including its documented cross-document Grayscale exception.
 pub fn healing_preview(s: &Session, rect: Rect, map: &crate::presets::clone_source::Mapping, sample_layer: &str) -> Result<photocraft_compose::Buffer> {
-    preview_periodic(s, rect, map, sample_layer, false, PreviewSource::Healing)
+    healing_preview_periodic(s, rect, map, sample_layer, false)
+}
+
+/// Healing Brush's source overlay with the same Pattern Preview repetition as its stroke.
+pub fn healing_preview_periodic(
+    s: &Session,
+    rect: Rect,
+    map: &crate::presets::clone_source::Mapping,
+    sample_layer: &str,
+    wrap: bool,
+) -> Result<photocraft_compose::Buffer> {
+    preview_periodic(s, rect, map, sample_layer, wrap, PreviewSource::Healing)
 }
 
 /// The image beneath a clone overlay, always from the document being painted.
@@ -177,7 +188,9 @@ fn preview_periodic(
         PreviewSource::Destination => CloneFrom::default(),
         PreviewSource::Clone | PreviewSource::Healing => {
             let cmd = if matches!(kind, PreviewSource::Healing) { "healing.preview" } else { "clone.preview" };
-            clone_sampling::resolve(s, &json!({"sampleLayer": sample_layer}), cmd)?
+            let paint_cmd = if matches!(kind, PreviewSource::Healing) { "paint.healingBrush" } else { "paint.cloneStamp" };
+            let params = crate::channel_cmds::inject_target(s, paint_cmd, json!({"sampleLayer": sample_layer}));
+            clone_sampling::resolve(s, &params, cmd)?
         }
     };
     let region = clone_sample(&d.doc, Some(id), surf, which, &source, rect, map, wrap, "clone.preview")?;

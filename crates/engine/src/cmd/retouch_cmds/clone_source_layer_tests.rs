@@ -862,6 +862,81 @@ fn clone_no_alpha_healing_sources_match_alpha_sources_in_preview_and_commit() {
     }
 }
 
+/// Hover sampling must refuse the same cross-document grayscale targets as painting.
+#[test]
+fn clone_cross_document_hover_rejects_targeted_masks_and_channels_like_strokes() {
+    use crate::channel_cmds::ChannelTarget;
+    for target_mask in [false, true] {
+        let (mut s, _, _) = setup(8, "rgb");
+        s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        if target_mask {
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            s.active_mut().unwrap().channel_view.target = ChannelTarget::LayerMask;
+        } else {
+            s.execute("channel.new", json!({"fill": "white"})).unwrap();
+        }
+        let map = Mapping { source: (16.0, 16.0), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let rect = Rect::new(30, 30, 34, 34);
+        assert!(s.execute("paint.cloneStamp", json!({"points": [[32,32]], "size": 8})).is_err());
+        assert!(clone_preview(&s, rect, &map, "current").is_err(), "a refused cross-document target cannot have a source overlay");
+        assert!(super::clone::healing_preview(&s, rect, &map, "current").is_err());
+    }
+}
+
+/// A Poisson boundary cannot create source coverage for an absent sampled pixel.
+#[test]
+fn clone_healing_absent_source_preserves_nonuniform_destinations() {
+    for depth in [8, 16, 32] {
+        for mode in ["rgb", "gray", "cmyk", "lab"] {
+            for wrap in [false, true] {
+                for source_alpha in [false, true] {
+                    for target_alpha in [false, true] {
+                        for source_point in [[-100, -100], [0, 0]] {
+                            for blend in ["normal", "multiply"] {
+                                let (mut s, target) = no_alpha_scene(depth, mode, source_alpha, target_alpha, true, source_point, [0.5, 0.5, 0.5, 1.0]);
+                                s.edit("nonuniform destination", |doc, _| {
+                                    let bounds = doc.bounds();
+                                    let surf = doc.layer_mut(target).unwrap().surface_mut().unwrap();
+                                    let fmt = surf.format();
+                                    surf.fill_rect(bounds, &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+                                    for (x, y) in [(30, 32), (34, 34)] {
+                                        surf.write_region(Rect::new(x, y, x + 1, y + 1), &photocraft_raster::from_rgba(&fmt, [0.25, 0.25, 0.25, 1.0]));
+                                    }
+                                    Ok(())
+                                })
+                                .unwrap();
+                                let before = s.active().unwrap().doc.layer(target).unwrap().surface().unwrap().clone();
+                                let p = json!({"points": [[32,32]], "size": 14, "hardness": 100, "mode": blend, "wrap": wrap});
+                                let live = LiveRetouch::begin(&s, "paint.healingBrush", &p).unwrap();
+                                if !wrap {
+                                    assert_eq!(live.doc.layer(target).unwrap().surface().unwrap().rgba(30, 32), before.rgba(30, 32));
+                                }
+                                s.execute("paint.healingBrush", p).unwrap();
+                                let after = s.active().unwrap().doc.layer(target).unwrap().surface().unwrap();
+                                assert_eq!(after.format(), before.format());
+                                if wrap {
+                                    assert_ne!(after.rgba(30, 32), before.rgba(30, 32), "wrapped source pixels still heal: {depth}/{mode}/{blend}");
+                                    continue;
+                                }
+                                assert_eq!(
+                                    after.rgba(30, 32),
+                                    before.rgba(30, 32),
+                                    "absent source {source_point:?}, depth {depth}, alpha {source_alpha}/{target_alpha}, {blend}"
+                                );
+                                if source_point[0] < 0 {
+                                    assert_eq!(after.read_region(Rect::new(0, 0, 80, 80)), before.read_region(Rect::new(0, 0, 80, 80)));
+                                } else {
+                                    assert_ne!(after.rgba(34, 34), before.rgba(34, 34), "valid source pixels still heal");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Nonuniform soft-tip coverage must stay aligned across the opaque destination's working tiles.
 #[test]
 fn clone_no_alpha_soft_stroke_matches_reference_across_multiple_working_patches() {

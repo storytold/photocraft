@@ -1772,6 +1772,73 @@ fn clone_overlay_shows_for_the_healing_brush_too() {
     }
 }
 
+/// Pattern Preview changes the Healing Brush source overlay at a stationary cursor.
+#[test]
+fn clone_healing_overlay_wraps_with_the_live_texture_at_source_edges() {
+    let ctx = egui::Context::default();
+    let xf = clone_overlay_view(100.0, 1.0);
+    let mut app = clone_overlay_app(12.0);
+    app.ui.tool = Tool::Healing;
+    app.run("cloneSource.set", json!({"source": [0,0]})).unwrap();
+    app.run("file.new", json!({"width": 64, "height": 64, "background": "transparent"})).unwrap();
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_alpha(&app, &mut output)(30, 32), 0);
+    app.ui.view.pattern_preview = true;
+    assert_eq!(crate::retouch_ui::clone_params(&app).unwrap()["wrap"], true);
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_alpha(&app, &mut output)(30, 32), 255, "the repeated source is visible before painting");
+    let live = photocraft_engine::retouch_cmds::LiveRetouch::begin(
+        &app.session,
+        "paint.healingBrush",
+        &json!({"points": [[32,32]], "size": 12, "hardness": 100, "wrap": true}),
+    )
+    .unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(live.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(30, 32), [1.0; 4]);
+    app.ui.view.pattern_preview = false;
+    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+    assert_eq!(clone_overlay_alpha(&app, &mut output)(30, 32), 0);
+}
+
+/// Unsupported cross-document targets never reuse a cached pixel-layer source overlay.
+#[test]
+fn clone_overlay_suppresses_cross_document_masks_and_channels() {
+    for tool in [Tool::CloneStamp, Tool::Healing] {
+        for mask in [false, true] {
+            let ctx = egui::Context::default();
+            let xf = clone_overlay_view(100.0, 1.0);
+            let mut app = clone_overlay_app(12.0);
+            app.ui.tool = tool;
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            if mask {
+                app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            } else {
+                app.run("channel.new", json!({"fill": "white"})).unwrap();
+            }
+            app.run("channel.target", json!({"channel": "composite"})).unwrap();
+            app.ui.mask_target = false;
+            let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+            assert!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))));
+            output.textures_delta.clear();
+            let revision = app.session.active().unwrap().revision;
+            if mask {
+                app.ui.mask_target = true;
+            } else {
+                app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Alpha(0);
+            }
+            assert_eq!(app.session.active().unwrap().revision, revision, "only the target changed");
+            let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+            assert!(!output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), "{tool:?}, mask={mask}: the gesture has no supported source");
+            output.textures_delta.clear();
+            app.ui.mask_target = false;
+            app.run("channel.target", json!({"channel": "composite"})).unwrap();
+            let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+            assert!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), "returning to pixels restores the source overlay");
+            output.textures_delta.clear();
+        }
+    }
+}
+
 #[test]
 fn clone_overlay_keeps_magnified_pixels_crisp_on_upload_and_refresh() {
     let ctx = egui::Context::default();

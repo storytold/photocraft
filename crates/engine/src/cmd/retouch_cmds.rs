@@ -235,7 +235,7 @@ mod dab;
 mod heal;
 mod sampling;
 
-pub use clone::{LiveRetouch, clone_destination_preview, clone_preview, clone_preview_periodic, healing_preview};
+pub use clone::{LiveRetouch, clone_destination_preview, clone_preview, clone_preview_periodic, healing_preview, healing_preview_periodic};
 use clone::{blend_param, clamp_samples, clone_stamp};
 pub(crate) use dab::DabEffect;
 #[cfg(test)]

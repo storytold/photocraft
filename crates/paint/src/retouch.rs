@@ -161,6 +161,10 @@ pub fn over_native(fmt: &PixelFormat, dst: &mut [f32], src: &[f32], k: f32, lock
     match alpha_index(fmt) {
         Some(a) => {
             let (da, sa) = (dst[a], src[a] * k);
+            // Zero-weight source-over must preserve even the native float channel bits.
+            if sa <= 0.0 {
+                return;
+            }
             if lock_transparency {
                 // Alpha kept: source atop, the colour moves by the source alpha alone (#5783).
                 for c in 0..a {
@@ -232,6 +236,11 @@ pub fn apply_coverage(
             continue;
         }
         let src = paint.px(x, y);
+        // A transparent source cannot paint. Skip it before a blend-mode RGB round trip can
+        // change untouched native CMYK/Lab values (or Normal blending can round float values).
+        if a.and_then(|a| src.get(a)).is_some_and(|alpha| *alpha <= 0.0) {
+            continue;
+        }
         if blend == BlendMode::Normal {
             over_native(&fmt, px, src, k, lock_transparency);
         } else {
@@ -630,6 +639,25 @@ mod tests {
                 apply_coverage(&mut s, r, &[1.0; 16], 0.5, None, true, &paint, mode);
                 let p = s.rgba(1, 1);
                 assert!((p[0] - 0.5).abs() < 0.01 && (p[3] - 0.5).abs() < 0.01, "{fmt:?} {mode:?} {p:?}");
+            }
+        }
+    }
+
+    /// Missing source pixels must preserve native ink values even for non-Normal blend modes.
+    #[test]
+    fn transparent_retouch_source_preserves_native_channels_in_every_blend_mode() {
+        use photocraft_color::{ColorMode, SampleType};
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+                let fmt = PixelFormat::new(mode, sample, true);
+                for blend in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()) {
+                    let mut target = Surface::with_default(fmt, &vec![0.3; fmt.channels()]);
+                    let rect = Rect::new(0, 0, 2, 2);
+                    let before = target.read_region(rect);
+                    let paint = Region::new(rect, fmt.channels());
+                    apply_coverage(&mut target, rect, &[1.0; 4], 1.0, None, false, &paint, blend);
+                    assert_eq!(target.read_region(rect), before, "{fmt:?}, {blend:?}");
+                }
             }
         }
     }

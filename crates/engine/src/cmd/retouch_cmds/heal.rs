@@ -79,8 +79,17 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
             composite_region(pre, id, which, g, surf.format())
         };
         let dst = if fmt.alpha && !surf.format().alpha { super::clone_sampling::opaque_alpha(dst, surf.format()) } else { dst };
-        let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
-        let healed = heal_region(&fmt, &src, &dst, &mask);
+        // The solver can reconstruct positive alpha from the destination boundary even where
+        // no source pixel exists. Keep source availability separate from the solved channels.
+        let alpha = super::alpha_index(&fmt);
+        let has_source = |pixel: &[f32]| alpha.is_none_or(|a| pixel.get(a).is_some_and(|value| *value > 0.0));
+        let mask: Vec<bool> = cov.iter().zip(src.data.chunks_exact(fmt.channels())).map(|(c, pixel)| *c > 0.0 && has_source(pixel)).collect();
+        let mut healed = heal_region(&fmt, &src, &dst, &mask);
+        for (pixel, sample) in healed.data.chunks_exact_mut(fmt.channels()).zip(src.data.chunks_exact(fmt.channels())) {
+            if !has_source(sample) {
+                pixel.fill(0.0);
+            }
+        }
         if wrap {
             return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, fmt, |_, r| {
                 let part = healed.crop(r);
