@@ -51,6 +51,16 @@ const XATTR_CHUNK: usize = 4 << 10;
 /// Errors are the caller's to ignore: each piece is attempted on its own, and the first failure
 /// is returned only so a caller that wants to log one can.
 pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
+    // The group first: on Linux `chown` drops `security.capability`, so it must not follow the
+    // extended-attribute copy.
+    #[cfg(unix)]
+    let metadata = std::fs::metadata(from);
+    #[cfg(unix)]
+    let group = match &metadata {
+        Ok(m) => restore_group(m, to),
+        Err(_) => Ok(true),
+    };
+
     // The permission bits go on last. Writing an attribute needs the destination open for
     // writing, and replacing a read-only (0444) file would copy that mode onto the temporary
     // file and then be unable to touch it again.
@@ -73,22 +83,31 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
 
     // A save over a 0600 file must not widen it to whatever the process default is.
     #[cfg(unix)]
-    let permissions = std::fs::metadata(from).and_then(|m| set_permissions_keeping_group(&m, to));
+    let permissions = metadata.and_then(|m| group.and_then(|kept| set_permissions_keeping_group(&m, to, kept)));
     #[cfg(not(unix))]
     let permissions = std::fs::metadata(from).and_then(|m| std::fs::set_permissions(to, m.permissions()));
 
     attributes.and(acl).and(created).and(permissions)
 }
 
-/// Give `to` the permission bits of the replaced file (`from`), and its group when it has another:
-/// group bits are access for *that* group, so on a replacement owned by a different one (a
-/// setgid folder, say) they would hand the file to people the original never named. If the
-/// group cannot be restored (the owner is not a member), the group bits are left off.
+/// Give `to` the group of the replaced file (`from`) when it has another: group bits are access
+/// for *that* group, so on a replacement owned by a different one (a setgid folder, say) they
+/// would hand the file to people the original never named. `false` when the group cannot be
+/// restored (the owner is not a member): [`set_permissions_keeping_group`] then leaves the group
+/// bits off.
 #[cfg(unix)]
-fn set_permissions_keeping_group(from: &std::fs::Metadata, to: &Path) -> io::Result<()> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+fn restore_group(from: &std::fs::Metadata, to: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(std::fs::metadata(to)?.gid() == from.gid() || std::os::unix::fs::chown(to, None, Some(from.gid())).is_ok())
+}
+
+/// Give `to` the permission bits of the replaced file (`from`), without the group bits when
+/// [`restore_group`] could not give it the original's group.
+#[cfg(unix)]
+fn set_permissions_keeping_group(from: &std::fs::Metadata, to: &Path, group_kept: bool) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
     let mut permissions = from.permissions();
-    if std::fs::metadata(to)?.gid() != from.gid() && std::os::unix::fs::chown(to, None, Some(from.gid())).is_err() {
+    if !group_kept {
         permissions.set_mode(permissions.mode() & !0o070);
     }
     // After the chown, which clears setuid/setgid.
