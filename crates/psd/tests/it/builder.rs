@@ -307,3 +307,12 @@ fn iter_layers_indices() {
     assert!(f.layer(3).is_none());
     assert_eq!(f.layer(0).unwrap().version(), Version::Psd);
 }
+
+#[test]
+fn a_huge_default_composite_is_an_error_not_an_allocation() {
+    // 300000 x 300000 x 3 bytes is 270 GB: refused before any buffer is made.
+    assert!(PsdBuilder::new(300_000, 300_000).build().is_err());
+    // Unsupported dimensions get the validation error.
+    assert!(PsdBuilder::new(u32::MAX, u32::MAX).build().is_err());
+    assert!(PsdBuilder::new(0, 5).build().is_err());
+}

@@ -198,7 +198,8 @@ impl<'a> TileFile<'a> {
         if count > bytes.len() / 8 + 1 {
             return Err(invalid("tile count exceeds the file size"));
         }
-        let mut tiles = Vec::with_capacity(count);
+        // Not `count` up front: a compressed member can declare far more records than it holds.
+        let mut tiles = Vec::with_capacity(count.min(1 << 16));
         for _ in 0..count {
             let l = line(bytes, &mut pos)?;
             let mut f = l.split(',');
