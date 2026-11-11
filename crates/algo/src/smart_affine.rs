@@ -25,7 +25,7 @@
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
-use crate::smart_scale::{Depth, Image, MAX_SAMPLES, ONE, bleed, keys};
+use crate::smart_scale::{Depth, Image, MAX_SAMPLES, ONE, bleed, keys, load, store};
 
 /// Below this scale a pass first averages its lines down (rule 5).
 const SHRINK_LIMIT: f64 = 0.7;
@@ -68,22 +68,44 @@ pub(crate) fn round_half_up(v: f64) -> i64 {
     (v + 0.5).floor() as i64
 }
 
-/// The phase indices (1/128 sample) of `count` consecutive pixels of a line whose first pixel lies
-/// `dist0` (1/256 px) from the line's origin; `length` (1/256 px) covers `n` samples (rule 4).
-fn line_phases(dist0: i64, count: usize, length: i64, n: usize) -> Vec<i64> {
-    if length <= 0 {
-        return Vec::new();
+/// The walk of rule 4 along lines of one length: any pixel's phase, without walking to it.
+#[derive(Clone, Copy)]
+struct Stride {
+    /// The line keeps its scale, so a phase is the pixel's distance itself.
+    even: bool,
+    /// Phases per pixel, with [`WALK_BITS`] more fractional bits.
+    step: i128,
+    /// Phases per 1/256 px, as `num / den`, with the same bits.
+    num: i128,
+    den: i128,
+}
+
+impl Stride {
+    /// Lines whose `n` samples span `length` (1/256 px); `None` for no length.
+    fn new(length: i64, n: usize) -> Option<Self> {
+        if length <= 0 {
+            return None;
+        }
+        let num = n as i128 * 128 * 256;
+        let len = i128::from(length);
+        Some(Stride { even: length == n as i64 * 256, step: (num << WALK_BITS) / len, num: num << WALK_BITS, den: len * 256 })
     }
-    if length == n as i64 * 256 {
-        return (0..count as i64).map(|k| ((dist0 + 256 * k) * 128).div_euclid(256)).collect();
+
+    /// Where the walk starts on a line whose first pixel lies `dist0` (1/256 px) from its origin.
+    fn start(self, dist0: i64) -> i128 {
+        if self.even {
+            return i128::from(dist0);
+        }
+        -(-(i128::from(dist0) * self.num)).div_euclid(self.den)
     }
-    let num = n as i128 * 128 * 256;
-    let len = i128::from(length);
-    let step = (num << WALK_BITS) / len;
-    let exact = (i128::from(dist0) * num) << WALK_BITS;
-    let den = len * 256;
-    let start = -(-exact).div_euclid(den);
-    (0..count as i128).map(|k| (start + k * step).div_euclid(1 << WALK_BITS) as i64).collect()
+
+    /// The phase index (1/128 sample) of pixel `k` of the line that starts at `start`.
+    fn phase(self, start: i128, k: usize) -> i64 {
+        if self.even {
+            return ((start + 256 * k as i128) * 128).div_euclid(256) as i64;
+        }
+        (start + k as i128 * self.step).div_euclid(1 << WALK_BITS) as i64
+    }
 }
 
 /// Rows of `img` (its lines) averaged down to `n1` samples each (rule 5).
@@ -117,12 +139,167 @@ fn reduce(img: &Image, n1: usize, depth: Depth) -> Image {
 /// One pass along the rows of `img`: row `y` produces `count` pixels, the first lying `dist0[y]`
 /// (1/256 px) from that row's origin, the row's `img.w` samples spanning `length` (1/256 px).
 fn pass(img: &Image, dist0: &[i64], count: usize, length: i64, depth: Depth, table: &[[i64; 6]]) -> Option<Image> {
-    let scale = length as f64 / (img.w as f64 * 256.0);
-    if scale < SHRINK_LIMIT {
-        let n1 = round_half_up(img.w as f64 * scale / SHRINK_LIMIT).max(1) as usize;
+    if let Some(n1) = reduced(img.w, length) {
         return walk(&reduce(img, n1, depth), dist0, count, &vec![length; img.h], depth, table);
     }
     walk(img, dist0, count, &vec![length; img.h], depth, table)
+}
+
+/// The samples a line of `n` is first averaged down to when it spans `length` (1/256 px), if it
+/// shrinks that far (rule 5).
+fn reduced(n: usize, length: i64) -> Option<usize> {
+    let scale = length as f64 / (n as f64 * 256.0);
+    (scale < SHRINK_LIMIT).then(|| round_half_up(n as f64 * scale / SHRINK_LIMIT).max(1) as usize)
+}
+
+/// [`reduce`] for the pass down the columns: the columns of `img` averaged down to `n1` samples each.
+fn reduce_columns(img: &Image, n1: usize, depth: Depth) -> Image {
+    let (w, h, n) = (img.w, img.h, img.n);
+    // A row's node never falls as the rows go down, so each node averages one run of rows.
+    let mut runs = vec![(0usize, 0usize); n1];
+    for r in 0..h {
+        let j = (((r + 1) * n1).saturating_sub(1) / h.max(1)).min(n1.saturating_sub(1));
+        if let Some(run) = runs.get_mut(j) {
+            if run.1 == 0 {
+                run.0 = r;
+            }
+            run.1 = r + 1;
+        }
+    }
+    let mut px = vec![0.0f32; n1 * w * n];
+    crate::par::chunks_mut(&mut px, w * n, true, |j, row| {
+        let Some(&(a, b)) = runs.get(j) else { return };
+        let mut sums = vec![0.0f64; w * n];
+        for r in a..b {
+            let Some(src) = img.px.get(r * w * n..(r + 1) * w * n) else { continue };
+            sums.iter_mut().zip(src).for_each(|(s, v)| *s += f64::from(*v));
+        }
+        for (v, s) in row.iter_mut().zip(&sums) {
+            *v = depth.mean(*s, b - a);
+        }
+    });
+    Image { w, h: n1, n, px }
+}
+
+/// One pixel of the walk: the six weights `q` over samples `base..base + 6` of a line whose
+/// samples `0..=last` `sample` finds. Colour repeats the edge outwards; alpha reads transparency
+/// there. `acc` is scratch, a slot per channel.
+#[inline]
+fn six<'a>(sample: impl Fn(usize) -> Option<&'a [f32]>, base: i64, last: i64, q: &[i64; 6], depth: Depth, acc: &mut [f64], out: &mut [f32]) {
+    let alpha = out.len().saturating_sub(1);
+    acc.fill(0.0);
+    if depth.levels.is_some() && base >= 0 && base + 5 <= last {
+        // Whole levels, every sample on the line: a weight of zero adds nothing, so no tap needs
+        // a test.
+        for (t, &qq) in q.iter().enumerate() {
+            let Some(px) = sample(base as usize + t) else { continue };
+            let qq = qq as f64;
+            acc.iter_mut().zip(px).for_each(|(s, v)| *s += f64::from(*v) * qq);
+        }
+    } else {
+        for (t, &qq) in q.iter().enumerate() {
+            if qq == 0 {
+                continue;
+            }
+            let i = base + t as i64;
+            let Some(px) = sample(i.clamp(0, last.max(0)) as usize) else { continue };
+            let channels = if (0..=last).contains(&i) { out.len() } else { alpha };
+            let qq = qq as f64;
+            acc.iter_mut().zip(px).take(channels).for_each(|(s, v)| *s += f64::from(*v) * qq);
+        }
+    }
+    for (ch, (v, s)) in out.iter_mut().zip(acc.iter()).enumerate() {
+        *v = depth.settle(*s, ch == alpha);
+    }
+}
+
+/// Calls `$f::<N>($nc, ..)` with `N` the pixel width `$nc` when it is a usual one (grey, RGB or
+/// Lab, CMYK, each with alpha), and 0 for any other. `$f` takes its width from [`width`], so the
+/// usual widths are known when it is compiled and the loops over a pixel's samples unroll.
+macro_rules! by_width {
+    ($nc:expr, $f:ident($($arg:expr),*)) => {
+        match $nc {
+            2 => $f::<2>($nc, $($arg),*),
+            4 => $f::<4>($nc, $($arg),*),
+            5 => $f::<5>($nc, $($arg),*),
+            _ => $f::<0>($nc, $($arg),*),
+        }
+    };
+}
+
+/// The pixel width inside a function [`by_width`] calls.
+#[inline]
+const fn width<const N: usize>(nc: usize) -> usize {
+    if N == 0 { nc } else { N }
+}
+
+/// One line of [`walk`]: `row`'s pixels from the samples of `line`, `nc` to a pixel.
+fn walk_line<const N: usize>(nc: usize, line: &[f32], stride: Stride, start: i128, depth: Depth, table: &[[i64; 6]], row: &mut [f32]) {
+    let nc = width::<N>(nc).max(1);
+    let last = (line.len() / nc) as i64 - 1;
+    let (mut few, mut many) = ([0.0f64; 8], Vec::new());
+    let acc = scratch(nc, &mut few, &mut many);
+    for (k, out) in row.chunks_exact_mut(nc).enumerate() {
+        let ph = stride.phase(start, k);
+        let base = ph.div_euclid(128) - 2;
+        let Some(q) = table.get(ph.rem_euclid(128) as usize) else { continue };
+        six(|i| line.get(i * nc..(i + 1) * nc), base, last, q, depth, acc, out);
+    }
+}
+
+/// A slot per channel for [`six`]: on the stack for any real pixel.
+fn scratch<'a>(nc: usize, few: &'a mut [f64; 8], many: &'a mut Vec<f64>) -> &'a mut [f64] {
+    if nc <= few.len() {
+        return few.get_mut(..nc).unwrap_or_default();
+    }
+    many.resize(nc, 0.0);
+    many
+}
+
+/// The walk of rule 4 down the columns of an image, computed a row of the result at a time (so
+/// the rows can go straight into a surface's tiles).
+struct Columns<'a> {
+    img: &'a Image,
+    /// Each column's [`Stride::start`].
+    starts: Vec<i128>,
+    stride: Stride,
+    depth: Depth,
+    table: &'a [[i64; 6]],
+    /// Fully transparent pixels are cleared afterwards, so those off a column's end stay zero.
+    clear: bool,
+}
+
+impl Columns<'_> {
+    /// The pixels of row `y` from column `x` on, into `out` (zeros to start with).
+    fn row(&self, y: usize, x: usize, out: &mut [f32]) {
+        by_width!(self.img.n, columns_row(self, y, x, out));
+    }
+}
+
+/// [`Columns::row`] for pixels of `nc` samples.
+fn columns_row<const N: usize>(nc: usize, columns: &Columns, y: usize, x: usize, out: &mut [f32]) {
+    columns.row_of(width::<N>(nc).max(1), y, x, out);
+}
+
+impl Columns<'_> {
+    #[inline]
+    fn row_of(&self, nc: usize, y: usize, x: usize, out: &mut [f32]) {
+        let w = self.img.w;
+        let last = self.img.h as i64 - 1;
+        let (mut few, mut many) = ([0.0f64; 8], Vec::new());
+        let acc = scratch(nc, &mut few, &mut many);
+        for (i, px) in out.chunks_exact_mut(nc).enumerate() {
+            let col = x + i;
+            let Some(&start) = self.starts.get(col) else { continue };
+            let ph = self.stride.phase(start, y);
+            let base = ph.div_euclid(128) - 2;
+            if self.clear && (base > last || base + 5 < 0) {
+                continue;
+            }
+            let Some(q) = self.table.get(ph.rem_euclid(128) as usize) else { continue };
+            six(|r| self.img.px.get((r * w + col) * nc..(r * w + col + 1) * nc), base, last, q, self.depth, acc, px);
+        }
+    }
 }
 
 /// The walk of rule 4 along the rows of `img`, no averaging: row `y` produces `count` pixels, the
@@ -130,39 +307,12 @@ fn pass(img: &Image, dist0: &[i64], count: usize, length: i64, depth: Depth, tab
 /// `lengths[y]` (1/256 px).
 pub(crate) fn walk(img: &Image, dist0: &[i64], count: usize, lengths: &[i64], depth: Depth, table: &[[i64; 6]]) -> Option<Image> {
     let (n, nc) = (img.w, img.n);
-    let alpha = nc - 1;
-    let last = n as i64 - 1;
     let mut px = vec![0.0f32; count.checked_mul(img.h)?.checked_mul(nc)?];
     crate::par::chunks_mut(&mut px, count * nc, true, |y, row| {
         let (Some(&d0), Some(&length)) = (dist0.get(y), lengths.get(y)) else { return };
         let Some(line) = img.px.get(y * n * nc..(y + 1) * n * nc) else { return };
-        let phases = line_phases(d0, count, length, n);
-        let mut acc = vec![0.0f64; nc];
-        for (out, ph) in row.chunks_exact_mut(nc).zip(phases) {
-            let base = ph.div_euclid(128) - 2;
-            let Some(q) = table.get(ph.rem_euclid(128) as usize) else { continue };
-            acc.iter_mut().for_each(|v| *v = 0.0);
-            for (t, &qq) in q.iter().enumerate() {
-                if qq == 0 {
-                    continue;
-                }
-                let i = base + t as i64;
-                let inside = (0..=last).contains(&i);
-                let at = i.clamp(0, last.max(0)) as usize * nc;
-                let Some(sample) = line.get(at..at + nc) else { continue };
-                for (ch, v) in sample.iter().enumerate() {
-                    if ch == alpha && !inside {
-                        continue;
-                    }
-                    if let Some(a) = acc.get_mut(ch) {
-                        *a += f64::from(*v) * qq as f64;
-                    }
-                }
-            }
-            for (ch, v) in out.iter_mut().enumerate() {
-                *v = depth.settle(acc.get(ch).copied().unwrap_or(0.0), ch == alpha);
-            }
-        }
+        let Some(stride) = Stride::new(length, n) else { return };
+        by_width!(nc, walk_line(line, stride, stride.start(d0), depth, table, row));
     });
     Some(Image { w: count, h: img.h, n: nc, px })
 }
@@ -219,17 +369,7 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
         return None;
     }
     let depth = Depth::of(fmt.sample);
-    let unit = depth.levels.unwrap_or(1.0);
-    let (w, h) = (bounds.width() as usize, bounds.height() as usize);
-    let mut px = src.read_region(bounds);
-    if depth.levels.is_some() {
-        crate::par::chunks_mut(&mut px, 1 << 16, true, |_, part| {
-            for v in part {
-                *v = (v.clamp(0.0, 1.0) * unit).round();
-            }
-        });
-    }
-    let mut img = Image { w, h, n: nc, px };
+    let mut img = load(src, bounds, depth);
     if bleed_contents {
         bleed(&mut img);
     }
@@ -283,27 +423,178 @@ pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_conten
     // Pass 1: each source row onto the document columns x0..x1.
     let dist1: Vec<i64> = (0..h).map(|j| x0 * 256 - r256(e + c * (j as f64 + 0.5))).collect();
     let inter = pass(&img, &dist1, nx, r256(wf * a), depth, &table)?;
-    // Pass 2: each document column onto the rows y0..y1.
-    let cols = transpose(&inter);
-    let dist2: Vec<i64> = (0..nx).map(|i| y0 * 256 - r256(top(x0 + i as i64))).collect();
-    let out = transpose(&pass(&cols, &dist2, ny, r256(hf * k), depth, &table)?);
-    let mut surface = Surface::new(fmt);
-    let mut data = out.px;
-    crate::par::chunks_mut(&mut data, 1 << 16, true, |_, part| {
-        for v in part {
-            *v /= unit;
-        }
-    });
-    if clear {
-        crate::smart_scale::clear_hidden(&mut data, &fmt);
-    }
-    surface.write_region_par(Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32), &data);
-    Some(surface)
+    // Pass 2: each document column onto the rows y0..y1, a row at a time, straight into the
+    // result's tiles.
+    let length = r256(hf * k);
+    let inter = match reduced(inter.h, length) {
+        Some(n1) => reduce_columns(&inter, n1, depth),
+        None => inter,
+    };
+    let rect = Rect::new(i32::try_from(x0).ok()?, i32::try_from(y0).ok()?, i32::try_from(x1).ok()?, i32::try_from(y1).ok()?);
+    let Some(stride) = Stride::new(length, inter.h) else {
+        return store(fmt, rect, depth, clear, |_, _, _| {});
+    };
+    let starts = (0..nx).map(|i| stride.start(y0 * 256 - r256(top(x0 + i as i64)))).collect();
+    let columns = Columns { img: &inter, starts, stride, depth, table: &table, clear };
+    store(fmt, rect, depth, clear, |y, x, out| columns.row(y, x, out))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The phase indices (1/128 sample) of `count` consecutive pixels of a line whose first pixel
+    /// lies `dist0` (1/256 px) from the line's origin; `length` (1/256 px) covers `n` samples.
+    fn line_phases(dist0: i64, count: usize, length: i64, n: usize) -> Vec<i64> {
+        let Some(stride) = Stride::new(length, n) else { return Vec::new() };
+        let start = stride.start(dist0);
+        (0..count).map(|k| stride.phase(start, k)).collect()
+    }
+
+    /// The same phases as a walk along the line reaches them (rule 4 as first written).
+    fn walked_phases(dist0: i64, count: usize, length: i64, n: usize) -> Vec<i64> {
+        if length <= 0 {
+            return Vec::new();
+        }
+        if length == n as i64 * 256 {
+            return (0..count as i64).map(|k| ((dist0 + 256 * k) * 128).div_euclid(256)).collect();
+        }
+        let num = n as i128 * 128 * 256;
+        let len = i128::from(length);
+        let step = (num << WALK_BITS) / len;
+        let exact = (i128::from(dist0) * num) << WALK_BITS;
+        let den = len * 256;
+        let start = -(-exact).div_euclid(den);
+        (0..count as i128).map(|k| (start + k * step).div_euclid(1 << WALK_BITS) as i64).collect()
+    }
+
+    /// The walk along the rows as first written: every tap of every pixel tested.
+    fn walk_slow(img: &Image, dist0: &[i64], count: usize, lengths: &[i64], depth: Depth, table: &[[i64; 6]]) -> Image {
+        let (n, nc) = (img.w, img.n);
+        let (alpha, last) = (nc - 1, n as i64 - 1);
+        let mut px = vec![0.0f32; count * img.h * nc];
+        for (y, row) in px.chunks_exact_mut(count * nc).enumerate() {
+            let line = &img.px[y * n * nc..(y + 1) * n * nc];
+            for (out, ph) in row.chunks_exact_mut(nc).zip(walked_phases(dist0[y], count, lengths[y], n)) {
+                let base = ph.div_euclid(128) - 2;
+                let mut acc = vec![0.0f64; nc];
+                for (t, &qq) in table[ph.rem_euclid(128) as usize].iter().enumerate() {
+                    let i = base + t as i64;
+                    let at = i.clamp(0, last.max(0)) as usize * nc;
+                    for ch in 0..nc {
+                        if qq != 0 && (ch != alpha || (0..=last).contains(&i)) {
+                            acc[ch] += f64::from(line[at + ch]) * qq as f64;
+                        }
+                    }
+                }
+                for (ch, v) in out.iter_mut().enumerate() {
+                    *v = depth.settle(acc[ch], ch == alpha);
+                }
+            }
+        }
+        Image { w: count, h: img.h, n: nc, px }
+    }
+
+    /// An image of noise at `depth` (whole levels, or any value at 32 bits), every fifth pixel
+    /// transparent.
+    fn noisy(w: usize, h: usize, n: usize, depth: Depth, seed: u64) -> Image {
+        let mut s = seed;
+        let mut px = Vec::with_capacity(w * h * n);
+        for i in 0..w * h * n {
+            s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            let part = (s >> 40) as f32 / (1u64 << 24) as f32;
+            let hidden = i % n == n - 1 && (i / n).is_multiple_of(5);
+            px.push(if hidden { 0.0 } else { depth.levels.map_or(part * 2.0 - 0.5, |top| (part * top).round()) });
+        }
+        Image { w, h, n, px }
+    }
+
+    const DEPTHS: [Depth; 3] = [Depth { levels: Some(255.0) }, Depth { levels: Some(65535.0) }, Depth { levels: None }];
+
+    fn same(a: &[f32], b: &[f32]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits())
+    }
+
+    /// Fully transparent pixels of `n` samples lose their colour, as a cleared render's do.
+    fn cleared(px: &[f32], n: usize) -> Vec<f32> {
+        px.chunks_exact(n).flat_map(|p| if p[n - 1] <= 0.0 { vec![0.0; n] } else { p.to_vec() }).collect()
+    }
+
+    #[test]
+    fn any_pixels_phase_is_the_one_a_walk_reaches() {
+        for (n, length) in [(128, 128 * 256), (128, 96 * 256), (128, 96 * 256 + 1), (7, 3000), (4000, 4000 * 384 + 7), (1, 1), (5, 5 * 256), (6000, 3)] {
+            let stride = Stride::new(length, n).expect("a length");
+            for dist0 in [0, 1, 64, 255, 256, -1, -64, -100_000, 1_234_567, i64::from(i32::MIN), i64::from(i32::MAX)] {
+                let start = stride.start(dist0);
+                let got: Vec<i64> = (0..300).map(|k| stride.phase(start, k)).collect();
+                assert_eq!(got, walked_phases(dist0, 300, length, n), "{n} samples over {length}, from {dist0}");
+            }
+        }
+        assert!(Stride::new(0, 8).is_none() && Stride::new(-5, 8).is_none());
+    }
+
+    /// Pixel widths known when compiled, taps untested inside the line, sums settled without
+    /// whole numbers: the walk must still give what testing every tap gives, at every depth.
+    #[test]
+    fn a_walk_gives_what_testing_every_tap_gives() {
+        let table = weight_table();
+        // Lines that keep their scale, grow, shrink, start far off either end, or have no length.
+        let lengths = [37 * 256, 37 * 768, 37 * 128 + 13, 37 * 256, 5000, 1, 0];
+        let dist0 = [-700, 0, 64, 100_000, -3000, 5, 9];
+        for (d, depth) in DEPTHS.into_iter().enumerate() {
+            for nc in [2, 3, 4, 5, 9] {
+                let img = noisy(37, lengths.len(), nc, depth, (d * 16 + nc) as u64);
+                let got = walk(&img, &dist0, 90, &lengths, depth, &table).expect("walked");
+                let want = walk_slow(&img, &dist0, 90, &lengths, depth, &table);
+                assert!(same(&got.px, &want.px), "{nc} samples a pixel, depth {d}");
+            }
+        }
+    }
+
+    #[test]
+    fn averaging_columns_is_averaging_the_rows_of_the_image_on_its_side() {
+        for (d, depth) in DEPTHS.into_iter().enumerate() {
+            let img = noisy(7, 50, 4, depth, 40 + d as u64);
+            for n1 in [1, 2, 7, 35, 49, 50] {
+                let want = transpose(&reduce(&transpose(&img), n1, depth));
+                let got = reduce_columns(&img, n1, depth);
+                assert_eq!((got.w, got.h, got.n), (7, n1, 4));
+                assert!(same(&got.px, &want.px), "to {n1}, depth {d}");
+            }
+        }
+    }
+
+    /// The second pass goes down the columns a row of the result at a time; it must give the walk
+    /// along the rows of the image on its side, and where the render is cleared afterwards, all
+    /// that the clearing leaves.
+    #[test]
+    fn the_pass_down_the_columns_is_a_walk_of_the_image_on_its_side() {
+        let table = weight_table();
+        let (w, h, rows) = (9, 41, 70);
+        // Columns that start before the image, inside it and wholly past it.
+        let dist0: Vec<i64> = (0..w as i64).map(|i| i * 2600 - 6000).collect();
+        for (d, depth) in DEPTHS.into_iter().enumerate() {
+            for nc in [2, 3, 4, 5] {
+                let img = noisy(w, h, nc, depth, (d * 16 + nc) as u64);
+                for length in [41 * 256, 41 * 512 + 77, 41 * 230, 3] {
+                    let stride = Stride::new(length, h).expect("a length");
+                    let want = transpose(&walk(&transpose(&img), &dist0, rows, &vec![length; w], depth, &table).expect("walked"));
+                    for clear in [false, true] {
+                        let columns = Columns { img: &img, starts: dist0.iter().map(|&d| stride.start(d)).collect(), stride, depth, table: &table, clear };
+                        let mut got = vec![0.0f32; w * rows * nc];
+                        // A row in two spans, as tiles split it.
+                        for (y, row) in got.chunks_exact_mut(w * nc).enumerate() {
+                            let (left, right) = row.split_at_mut(4 * nc);
+                            columns.row(y, 0, left);
+                            columns.row(y, 4, right);
+                        }
+                        let (got, want) = if clear { (cleared(&got, nc), cleared(&want.px, nc)) } else { (got, want.px.clone()) };
+                        assert!(same(&got, &want), "{nc} samples a pixel, depth {d}, length {length}, clear {clear}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn a_line_that_keeps_its_scale_moves_by_whole_phases() {

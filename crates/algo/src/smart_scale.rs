@@ -55,6 +55,12 @@ pub(crate) struct Depth {
     pub(crate) levels: Option<f32>,
 }
 
+/// 1.5 × 2⁵²: an f64 this large has no fraction bits, so adding it to a far smaller number and
+/// taking it away again leaves that number rounded to a whole one.
+const ROUNDER: f64 = 6_755_399_441_055_744.0;
+/// Sums below this (2⁴⁰) are far smaller than [`ROUNDER`], and so are their halves and quotients.
+const WHOLE_LIMIT: f64 = 1_099_511_627_776.0;
+
 impl Depth {
     pub(crate) fn of(sample: SampleType) -> Self {
         match sample {
@@ -68,8 +74,17 @@ impl Depth {
     pub(crate) fn settle(self, sum: f64, alpha: bool) -> f32 {
         match self.levels {
             Some(top) => {
-                let s = sum.round() as i64;
-                ((s + ONE / 2).div_euclid(ONE) as f32).clamp(0.0, top)
+                // A whole sum (as every sum of whole levels is) settles without leaving f64:
+                // adding and taking away `ROUNDER` rounds to a whole number, and adding the half
+                // and scaling by a power of two are exact.
+                let whole = (sum + ROUNDER) - ROUNDER;
+                if whole == sum && sum.abs() < WHOLE_LIMIT {
+                    let scaled = (sum + (ONE / 2) as f64) * (1.0 / ONE as f64);
+                    let near = (scaled + ROUNDER) - ROUNDER;
+                    let floor = if near > scaled { near - 1.0 } else { near };
+                    return (floor as f32).clamp(0.0, top);
+                }
+                (nearest(sum).saturating_add(ONE / 2).div_euclid(ONE) as f32).clamp(0.0, top)
             }
             None if alpha => (sum / ONE as f64).clamp(0.0, 1.0) as f32,
             None => (sum / ONE as f64) as f32,
@@ -86,6 +101,24 @@ impl Depth {
     }
 }
 
+/// `level.round()` for a sample of a whole-number depth scaled to its levels (never negative,
+/// never NaN, far below 2³¹), without the call into the maths library.
+#[inline]
+fn whole(level: f32) -> f32 {
+    // Exact: an f64 holds an f32 plus a half, and cutting that off rounds halves up.
+    (f64::from(level) + 0.5) as i32 as f32
+}
+
+/// `sum` rounded to the nearest whole number, halves away from zero: `sum.round() as i64` (NaN is
+/// 0, the ends saturate) without the library call rounding costs where the target has no
+/// instruction for it. A pass settles every sample it writes, so this is its inner loop.
+pub(crate) fn nearest(sum: f64) -> i64 {
+    let whole = sum as i64;
+    // Exact: `whole` is `sum` truncated, which an f64 holds.
+    let rest = sum - whole as f64;
+    whole.saturating_add(i64::from(rest >= 0.5)).saturating_sub(i64::from(rest <= -0.5))
+}
+
 /// Clears the colour of every fully transparent pixel in `data` (interleaved pixels of `fmt`): the
 /// renders bleed the nearest visible colour into transparent source pixels, as the reference
 /// application filters them, and that colour must not stay behind under alpha 0, where it would
@@ -95,14 +128,78 @@ pub(crate) fn clear_hidden(data: &mut [f32], fmt: &photocraft_color::PixelFormat
     if !fmt.alpha || n < 2 {
         return;
     }
-    for p in data.chunks_exact_mut(n) {
-        if let Some((al, colour)) = p.split_last_mut()
-            && *al <= 0.0
-        {
-            colour.fill(0.0);
-            *al = 0.0;
+    crate::par::chunks_mut(data, n << 14, true, |_, part| {
+        for p in part.chunks_exact_mut(n) {
+            if let Some((al, colour)) = p.split_last_mut()
+                && *al <= 0.0
+            {
+                colour.fill(0.0);
+                *al = 0.0;
+            }
         }
-    }
+    });
+}
+
+/// Rows read per task by [`load`].
+const LOAD_ROWS: usize = 32;
+
+/// The pixels of `src` inside `bounds` as an [`Image`]: whole levels at 8 and 16 bits, the stored
+/// values at 32. Bands of rows are read on all cores.
+pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Image {
+    /// Rows read at a time.
+    const READ_ROWS: usize = 4;
+    let (w, h, n) = (bounds.width() as usize, bounds.height() as usize, src.channels());
+    let mut px = vec![0.0f32; w * h * n];
+    crate::par::chunks_mut(&mut px, LOAD_ROWS * w * n, true, |i, part| {
+        // A few rows at a time, through one buffer that stays in the cache.
+        let mut band = Vec::new();
+        for (j, rows) in part.chunks_mut((READ_ROWS * w * n).max(1)).enumerate() {
+            let count = rows.len() / (w * n).max(1);
+            let (Ok(top), Ok(count)) = (i32::try_from(i * LOAD_ROWS + j * READ_ROWS), i32::try_from(count)) else { return };
+            let y = bounds.y0.saturating_add(top);
+            src.read_region_into(Rect::new(bounds.x0, y, bounds.x1, y.saturating_add(count)), &mut band);
+            match depth.levels {
+                Some(unit) => rows.iter_mut().zip(&band).for_each(|(o, v)| *o = whole(v.clamp(0.0, 1.0) * unit)),
+                None => rows.iter_mut().zip(&band).for_each(|(o, v)| *o = *v),
+            }
+        }
+    });
+    Image { w, h, n, px }
+}
+
+/// A surface of `fmt` whose `rect` holds the rows `fill` computes: `fill(y, x, out)` writes the
+/// pixels of row `y` from column `x` on (both counted from `rect`'s corner) into `out`, a whole
+/// number of pixels in an [`Image`]'s samples, zero to start with. With `clear`, fully transparent
+/// pixels lose their colour ([`clear_hidden`]). Rows go straight into the surface's tiles, on all
+/// cores, so `fill` must not depend on call order. `None` if the tiles can't be allocated.
+pub(crate) fn store(
+    fmt: photocraft_color::PixelFormat,
+    rect: Rect,
+    depth: Depth,
+    clear: bool,
+    fill: impl Fn(usize, usize, &mut [f32]) + Sync,
+) -> Option<Surface> {
+    let n = fmt.channels();
+    let size = fmt.sample.bytes();
+    let unit = depth.levels.unwrap_or(1.0);
+    let hide = clear && fmt.alpha && n >= 2;
+    let mut surface = Surface::new(fmt);
+    let rows = |y: i32, x: i32, dst: &mut [u8]| {
+        let (Some(row), Some(col)) = (y.checked_sub(rect.y0), x.checked_sub(rect.x0)) else { return };
+        let (Ok(row), Ok(col)) = (usize::try_from(row), usize::try_from(col)) else { return };
+        let mut px = vec![0.0f32; dst.len() / size.max(1)];
+        fill(row, col, &mut px);
+        for (p, d) in px.chunks_exact_mut(n).zip(dst.chunks_exact_mut(n * size)) {
+            if hide && p.last().is_some_and(|al| *al <= 0.0) {
+                p.fill(0.0);
+            }
+            for (i, v) in p.iter().enumerate() {
+                photocraft_color::write_sample(d, fmt.sample, i, *v / unit);
+            }
+        }
+    };
+    surface.try_write_rows_with(rect, rows).ok()?;
+    Some(surface)
 }
 
 /// The pixels of `src` inside `bounds` (its contents' canvas; `src` has alpha), resized to
@@ -121,47 +218,48 @@ pub fn scale(src: &Surface, bounds: Rect, width: u32, height: u32, origin: (i32,
         return None;
     }
     let depth = Depth::of(fmt.sample);
-    let unit = depth.levels.unwrap_or(1.0);
-    let mut px = src.read_region(bounds);
-    if depth.levels.is_some() {
-        crate::par::chunks_mut(&mut px, 1 << 16, true, |_, part| {
-            for v in part {
-                *v = (v.clamp(0.0, 1.0) * unit).round();
-            }
-        });
-    }
-    let mut img = Image { w, h, n, px };
+    let mut img = load(src, bounds, depth);
     bleed(&mut img);
     if nx != w {
         img = axis(&img, nx, depth, false);
     }
-    if ny != h {
-        img = axis(&img, ny, depth, true);
+    let rect = Rect::new(origin.0, origin.1, origin.0.checked_add(i32::try_from(width).ok()?)?, origin.1.checked_add(i32::try_from(height).ok()?)?);
+    if ny == h {
+        return store(fmt, rect, depth, true, |y, x, out| {
+            if let Some(row) = img.px.get((y * img.w + x) * n..).and_then(|s| s.get(..out.len())) {
+                out.copy_from_slice(row);
+            }
+        });
     }
-    let mut out = Surface::new(fmt);
-    let mut data = img.px;
-    crate::par::chunks_mut(&mut data, 1 << 16, true, |_, part| {
-        for v in part {
-            *v /= unit;
+    // The rows are filtered as they are written: no image of the full size in between.
+    let (mid, k, a, stretch) = prepared(&img, ny, depth, true);
+    let img = mid.unwrap_or(img);
+    let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, k, a, stretch)).collect();
+    store(fmt, rect, depth, true, |y, x, out| {
+        if let Some(t) = taps.get(y) {
+            blend_rows(&img, t, x, depth, out);
         }
-    });
-    crate::smart_scale::clear_hidden(&mut data, &fmt);
-    out.write_region_par(Rect::new(origin.0, origin.1, origin.0 + width as i32, origin.1 + height as i32), &data);
-    Some(out)
+    })
 }
 
 /// One axis resized to `len` samples (`vertical`: the rows), with the Automatic filter for its
 /// scale, through the averaged image below ¼.
 fn axis(img: &Image, len: usize, depth: Depth, vertical: bool) -> Image {
+    let (mid, k, a, stretch) = prepared(img, len, depth, vertical);
+    pass(mid.as_ref().unwrap_or(img), len, k, a, stretch, depth, vertical)
+}
+
+/// What an axis's filtering pass to `len` samples works with: the averaged image it reads (below
+/// ¼; otherwise it reads `img` itself), then its scale, Keys parameter and stretch.
+fn prepared(img: &Image, len: usize, depth: Depth, vertical: bool) -> (Option<Image>, f64, f64, f64) {
     let have = if vertical { img.h } else { img.w };
     let k = len as f64 / have as f64;
     if k < 0.25 {
-        let mid = average(img, 4 * len, depth, vertical);
         let (a, stretch) = automatic(0.25);
-        pass(&mid, len, len as f64 / (4 * len) as f64, a, stretch, depth, vertical)
+        (Some(average(img, 4 * len, depth, vertical)), len as f64 / (4 * len) as f64, a, stretch)
     } else {
         let (a, stretch) = automatic(k);
-        pass(img, len, k, a, stretch, depth, vertical)
+        (None, k, a, stretch)
     }
 }
 
@@ -221,34 +319,77 @@ fn taps(o: usize, have: usize, k: f64, a: f64, stretch: f64) -> Taps {
 fn pass(img: &Image, len: usize, k: f64, a: f64, stretch: f64, depth: Depth, vertical: bool) -> Image {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
-    let alpha = n - 1;
     let taps: Vec<Taps> = (0..len).map(|o| taps(o, have, k, a, stretch)).collect();
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
     let mut px = vec![0.0f32; ow * oh * n];
-    let last = have as i64 - 1;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
-        for (x, out) in row.chunks_exact_mut(n).enumerate() {
-            let (o, line) = if vertical { (y, x) } else { (x, y) };
-            let Some(t) = taps.get(o) else { continue };
-            let read = |i: i64, c: usize| {
-                let i = i.clamp(0, last) as usize;
-                if vertical { img.at(line, i, c) } else { img.at(i, line, c) }
-            };
-            for (c, v) in out.iter_mut().enumerate() {
-                let mut sum = 0.0f64;
-                for (step, &q) in t.q.iter().enumerate() {
-                    let i = t.start + step as i64;
-                    // Colour repeats the edge outwards; alpha reads transparency there.
-                    if c == alpha && !(0..=last).contains(&i) {
-                        continue;
-                    }
-                    sum += f64::from(read(i, c)) * q as f64;
-                }
-                *v = depth.settle(sum, c == alpha);
+        if vertical {
+            if let Some(t) = taps.get(y) {
+                blend_rows(img, t, 0, depth, row);
             }
+        } else if let Some(line) = img.px.get(y * img.w * n..(y + 1) * img.w * n) {
+            blend_line(line, n, &taps, depth, row);
         }
     });
     Image { w: ow, h: oh, n, px }
+}
+
+/// One row of a horizontal pass: output pixel `o` of `row` is `taps[o]` over the pixels of `line`
+/// (`n` channels each). Colour repeats the edge outwards; alpha reads transparency there.
+fn blend_line(line: &[f32], n: usize, taps: &[Taps], depth: Depth, row: &mut [f32]) {
+    let alpha = n.saturating_sub(1);
+    let last = (line.len() / n.max(1)) as i64 - 1;
+    let mut acc = vec![0.0f64; n];
+    for (out, t) in row.chunks_exact_mut(n).zip(taps) {
+        acc.fill(0.0);
+        let window = usize::try_from(t.start).ok().filter(|_| t.start + t.q.len() as i64 - 1 <= last).and_then(|s| line.get(s * n..(s + t.q.len()) * n));
+        if let Some(window) = window {
+            // Every tap inside the line: its pixels lie side by side.
+            for (p, &q) in window.chunks_exact(n).zip(&t.q) {
+                let q = q as f64;
+                acc.iter_mut().zip(p).for_each(|(s, v)| *s += f64::from(*v) * q);
+            }
+        } else {
+            for (step, &q) in t.q.iter().enumerate() {
+                let i = t.start + step as i64;
+                let at = i.clamp(0, last.max(0)) as usize * n;
+                let Some(p) = line.get(at..at + n) else { continue };
+                let channels = if (0..=last).contains(&i) { n } else { alpha };
+                let q = q as f64;
+                acc.iter_mut().zip(p).take(channels).for_each(|(s, v)| *s += f64::from(*v) * q);
+            }
+        }
+        for (c, (v, s)) in out.iter_mut().zip(&acc).enumerate() {
+            *v = depth.settle(*s, c == alpha);
+        }
+    }
+}
+
+/// Part of one row of a vertical pass: `out`'s pixels, from column `x` on, are the taps `t` over
+/// the rows of `img`. Colour repeats the edge outwards; alpha reads transparency there.
+fn blend_rows(img: &Image, t: &Taps, x: usize, depth: Depth, out: &mut [f32]) {
+    let n = img.n;
+    let alpha = n.saturating_sub(1);
+    let last = img.h as i64 - 1;
+    let mut acc = vec![0.0f64; out.len()];
+    for (step, &q) in t.q.iter().enumerate() {
+        let i = t.start + step as i64;
+        let at = (i.clamp(0, last.max(0)) as usize * img.w + x) * n;
+        let Some(src) = img.px.get(at..).and_then(|s| s.get(..out.len())) else { continue };
+        let q = q as f64;
+        if (0..=last).contains(&i) {
+            acc.iter_mut().zip(src).for_each(|(s, v)| *s += f64::from(*v) * q);
+        } else {
+            for (s, p) in acc.chunks_exact_mut(n).zip(src.chunks_exact(n)) {
+                s.iter_mut().zip(p).take(alpha).for_each(|(s, v)| *s += f64::from(*v) * q);
+            }
+        }
+    }
+    for (o, s) in out.chunks_exact_mut(n).zip(acc.chunks_exact(n)) {
+        for (c, (v, s)) in o.iter_mut().zip(s).enumerate() {
+            *v = depth.settle(*s, c == alpha);
+        }
+    }
 }
 
 /// An axis averaged down to `len` samples: each the rounded mean of the samples it covers
@@ -366,7 +507,13 @@ fn bleed_in_strips(img: &mut Image, width: usize) {
     let (w, h, n) = (img.w, img.h, img.n);
     let alpha = n - 1;
     let Some(len) = w.checked_mul(h) else { return };
-    let visible: Vec<bool> = (0..len).map(|i| img.px.get(i * n + alpha).is_some_and(|&a| a > 0.0)).collect();
+    let mut visible = vec![false; len];
+    crate::par::chunks_mut(&mut visible, w.max(1), true, |y, row| {
+        let Some(line) = img.px.get(y * w * n..(y + 1) * w * n) else { return };
+        for (v, px) in row.iter_mut().zip(line.chunks_exact(n)) {
+            *v = px.get(alpha).is_some_and(|&a| a > 0.0);
+        }
+    });
     if !visible.contains(&false) || !visible.contains(&true) {
         return;
     }
@@ -701,5 +848,227 @@ mod tests {
             [30, 60, 240, 255],
         ];
         assert_eq!(matted_row(&eighth, 10, 12), want);
+    }
+
+    /// Numbers to test with: the same ones every run.
+    fn noise(seed: u64) -> impl FnMut() -> u64 {
+        let mut s = seed;
+        move || {
+            s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let z = (s ^ (s >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            let z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+    }
+
+    #[test]
+    fn nearest_rounds_as_the_library_does() {
+        let half = 0.5f64;
+        let special = [
+            0.0,
+            -0.0,
+            half,
+            -half,
+            half.next_down(),
+            -half.next_down(),
+            1.5,
+            -1.5,
+            2.5,
+            -2.5,
+            4_503_599_627_370_495.5,
+            -4_503_599_627_370_495.5,
+            4_503_599_627_370_496.0,
+            9_007_199_254_740_993.0,
+            9.3e18,
+            -9.3e18,
+            1e300,
+            -1e300,
+            f64::MAX,
+            f64::MIN,
+            f64::MIN_POSITIVE,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        for v in special {
+            assert_eq!(nearest(v), v.round() as i64, "{v}");
+        }
+        let mut next = noise(1);
+        for _ in 0..200_000 {
+            let bits = next();
+            // Any number at all, and ones on and beside the halves between whole numbers.
+            let any = f64::from_bits(bits);
+            let beside = ((bits >> 40) as i64 - (1 << 23)) as f64 / 2.0 + [0.0, 1e-6, -1e-6][(bits % 3) as usize];
+            for v in [any, beside] {
+                assert_eq!(nearest(v), v.round() as i64, "{v}");
+            }
+        }
+    }
+
+    /// Settling a whole sum stays in floating point; it must give the level the rule in whole
+    /// numbers gives, and anything else must still go through that rule.
+    #[test]
+    fn settling_a_sum_gives_the_level_of_the_whole_number_rule() {
+        let rule = |sum: f64, top: f32| ((sum.round() as i64).saturating_add(ONE / 2).div_euclid(ONE) as f32).clamp(0.0, top);
+        let mut sums = vec![
+            0.0,
+            -0.0,
+            0.5,
+            8191.0,
+            8192.0,
+            8193.0,
+            -8191.0,
+            -8192.0,
+            -8193.0,
+            8191.5,
+            8192.5,
+            WHOLE_LIMIT - 1.0,
+            WHOLE_LIMIT,
+            WHOLE_LIMIT + 8192.0,
+            -WHOLE_LIMIT,
+            1e30,
+            -1e30,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let mut next = noise(2);
+        for _ in 0..200_000 {
+            let bits = next();
+            // On and beside the sums where one level becomes the next, below zero and past the
+            // top too; halves; sums far too large; any number at all.
+            let level = (bits >> 44) as i64 - (1 << 18);
+            let edge = (level * ONE + ONE / 2 + (bits % 5) as i64 - 2) as f64;
+            sums.extend([edge, edge + 0.5, ((bits >> 8) as i64 - (1 << 55)) as f64, f64::from_bits(bits)]);
+        }
+        for top in [255.0, 65535.0] {
+            let depth = Depth { levels: Some(top) };
+            for &sum in &sums {
+                assert_eq!(depth.settle(sum, false).to_bits(), rule(sum, top).to_bits(), "{sum} of {top}");
+                assert_eq!(depth.settle(sum, true).to_bits(), rule(sum, top).to_bits(), "alpha {sum} of {top}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_loaded_level_is_rounded_as_the_library_rounds() {
+        assert_eq!(whole(0.5f32.next_down()), 0.0);
+        let mut next = noise(3);
+        for k in 0..=65535u32 {
+            let on_a_half = k as f32 + 0.5;
+            let anywhere = (next() >> 40) as f32 / 256.0;
+            for top in [255.0f32, 65535.0] {
+                // Every sample a surface can hold, scaled as `load` scales it.
+                let (eight, sixteen) = ((k % 256) as f32 / 255.0 * top, k as f32 / 65535.0 * top);
+                for v in [eight, sixteen, on_a_half, on_a_half.next_down(), on_a_half.next_up(), anywhere] {
+                    assert_eq!(whole(v), v.round(), "{v}");
+                }
+            }
+        }
+    }
+
+    /// A surface of `fmt` with noise in `r`.
+    fn noisy(fmt: photocraft_color::PixelFormat, r: Rect, seed: u64) -> Surface {
+        let mut next = noise(seed);
+        let mut s = Surface::new(fmt);
+        let data: Vec<f32> = (0..r.width() as usize * r.height() as usize * fmt.channels()).map(|_| (next() >> 40) as f32 / (1u64 << 24) as f32).collect();
+        s.write_region(r, &data);
+        s
+    }
+
+    const FORMATS: [photocraft_color::PixelFormat; 4] = {
+        use photocraft_color::PixelFormat;
+        [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAYA8]
+    };
+
+    /// `load` reads bands of rows on all cores; the image is the one a single read gives.
+    #[test]
+    fn loading_gives_the_levels_of_one_whole_read() {
+        for fmt in FORMATS {
+            let s = noisy(fmt, Rect::new(-40, -30, 300, 310), 4);
+            // Past the content on every side, and a height no band size divides.
+            let bounds = Rect::new(-57, -45, 280, 326);
+            let depth = Depth::of(fmt.sample);
+            let mut want = s.read_region(bounds);
+            if let Some(unit) = depth.levels {
+                want.iter_mut().for_each(|v| *v = (v.clamp(0.0, 1.0) * unit).round());
+            }
+            let got = load(&s, bounds, depth);
+            assert_eq!((got.w, got.h, got.n), (337, 371, fmt.channels()));
+            assert!(got.px == want, "{fmt:?}");
+        }
+    }
+
+    /// `store` converts rows straight into tiles; the surface is the one the whole image written
+    /// at once gives, cleared or not.
+    #[test]
+    fn storing_rows_gives_the_surface_of_one_whole_write() {
+        for fmt in FORMATS {
+            let depth = Depth::of(fmt.sample);
+            let n = fmt.channels();
+            let rect = Rect::new(-300, -70, 281, 300);
+            let (w, h) = (rect.width() as usize, rect.height() as usize);
+            // Each pixel from its place alone: whole levels (any value at 32 bits, alpha below
+            // zero too), every third pixel transparent with its colour left in.
+            let fill = |y: usize, x: usize, out: &mut [f32]| {
+                for (i, p) in out.chunks_exact_mut(n).enumerate() {
+                    let mut next = noise((y * w + x + i) as u64);
+                    for v in p.iter_mut() {
+                        let part = (next() >> 40) as f32 / (1u64 << 24) as f32;
+                        *v = depth.levels.map_or(part * 2.0 - 0.5, |top| (part * top).round());
+                    }
+                    if (y + x + i).is_multiple_of(3) {
+                        p[n - 1] = 0.0;
+                    }
+                }
+            };
+            for clear in [false, true] {
+                let mut data = vec![0.0f32; w * h * n];
+                for (y, row) in data.chunks_exact_mut(w * n).enumerate() {
+                    fill(y, 0, row);
+                }
+                let unit = depth.levels.unwrap_or(1.0);
+                data.iter_mut().for_each(|v| *v /= unit);
+                if clear {
+                    clear_hidden(&mut data, &fmt);
+                }
+                let mut want = Surface::new(fmt);
+                want.write_region_par(rect, &data);
+                let got = store(fmt, rect, depth, clear, fill).expect("stored");
+                assert!(got.read_region(rect) == want.read_region(rect), "{fmt:?}, clear {clear}");
+                assert_eq!(got.content_bounds(), want.content_bounds());
+                assert_eq!(got.tile_count(), want.tile_count());
+            }
+        }
+    }
+
+    /// A scale is the same picture whichever way it is put together: here against the passes
+    /// run one after the other on a whole image, as they first were.
+    #[test]
+    fn a_scale_gives_the_passes_run_one_by_one() {
+        for fmt in FORMATS {
+            let bounds = Rect::new(-5, 3, 85, 64);
+            let src = noisy(fmt, Rect::new(0, 10, 80, 60), 5);
+            let depth = Depth::of(fmt.sample);
+            for (width, height) in [(90, 61), (135, 61), (90, 20), (33, 150), (211, 97), (7, 5), (1, 1)] {
+                let mut img = load(&src, bounds, depth);
+                bleed(&mut img);
+                if width != img.w {
+                    img = axis(&img, width, depth, false);
+                }
+                if height != img.h {
+                    img = axis(&img, height, depth, true);
+                }
+                let unit = depth.levels.unwrap_or(1.0);
+                let mut data: Vec<f32> = img.px.iter().map(|v| v / unit).collect();
+                clear_hidden(&mut data, &fmt);
+                let rect = Rect::new(-9, 40, -9 + width as i32, 40 + height as i32);
+                let mut want = Surface::new(fmt);
+                want.write_region_par(rect, &data);
+                let got = scale(&src, bounds, width as u32, height as u32, (-9, 40)).expect("scaled");
+                assert!(got.read_region(rect) == want.read_region(rect), "{fmt:?} to {width} x {height}");
+                assert_eq!(got.content_bounds(), want.content_bounds());
+            }
+        }
     }
 }
