@@ -239,6 +239,30 @@ fn label(ui: &mut egui::Ui, text: &str) {
 mod tests {
     use super::*;
 
+    /// #8351: a Gradient Map that keeps Photoshop's gradient shows and edits its stops, not the
+    /// dense baked ones; its midpoints follow added and removed stops.
+    #[test]
+    fn gradient_map_editor_edits_photoshops_stops() {
+        use super::gradient_map::{read_stops, write_stops};
+        let baked: Vec<Value> = (0..=96).map(|k| json!([k as f64 / 96.0, "#808080"])).collect();
+        let mut v =
+            json!({"stops": baked, "source": {"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [0.3], "smoothness": 0.8, "method": "perceptual"}});
+        let stops = read_stops(&v);
+        assert_eq!(stops.len(), 2, "the editor shows Photoshop's two stops");
+        let mut three = stops.clone();
+        three.push((0.5, [1.0, 0.0, 0.0]));
+        write_stops(&mut v, &three);
+        assert_eq!(v["source"]["stops"].as_array().map(Vec::len), Some(3));
+        assert_eq!(v["source"]["midpoints"], json!([0.3, 0.5]), "the new segment starts halfway");
+        assert_eq!(v["stops"].as_array().map(Vec::len), Some(97), "the baked stops are the engine's to redo");
+        write_stops(&mut v, &stops);
+        assert_eq!(v["source"]["midpoints"], json!([0.3]));
+        // Without a source the map's own stops are edited.
+        let mut plain = json!({"stops": [[0, "#000000"], [1, "#ffffff"]]});
+        write_stops(&mut plain, &three);
+        assert_eq!(plain["stops"].as_array().map(Vec::len), Some(3));
+    }
+
     #[test]
     fn saturation_track_follows_the_hue() {
         // The Saturation slider track recolours with the hue (UI-217-16).
