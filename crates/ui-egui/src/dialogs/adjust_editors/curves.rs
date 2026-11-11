@@ -603,7 +603,12 @@ mod multi_channel_tests {
                 for kind in ["levels", "curves"] {
                     let base = adjust_params::to_params(&adjust_params::default_for(kind, st.doc.mode).unwrap());
                     let space = space_of(&base);
-                    let hist = Arc::new(tone::compute_histograms(&st.doc, HistSource::Colors { layer: st.active_layer.unwrap(), colors }, space));
+                    let hist = Arc::new(tone::compute_histograms(
+                        &st.doc,
+                        HistSource::Colors { layer: st.active_layer.unwrap(), colors },
+                        space,
+                        tone::HistScope::WholeInput,
+                    ));
                     // Native subset histograms have their own combined slot even in Lab, whose
                     // ordinary composite histograms instead start with Lightness at slot 0.
                     assert_eq!(hist.ch.len(), 1 + st.doc.pixel_format().mode.color_channels());
