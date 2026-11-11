@@ -684,9 +684,9 @@ impl Ctx<'_> {
                         // Every distinct source is kept until the import ends, so what they add up to is
                         // bounded: past the limit the layer keeps its stored pixels, unmixed.
                         let item = self.filter_effects.iter().find(|i| i.id == p.placed);
+                        // The surface keeps whole tiles over the item's rect, not its logical pixels.
                         let cost = item
-                            .and_then(|i| i.rect.size().ok())
-                            .map_or(0, |(w, h)| (w as u64).saturating_mul(h as u64).saturating_mul(self.fmt.bytes_per_pixel() as u64));
+                            .map_or(0, |i| photocraft_raster::tile_storage_bytes(Rect::new(i.rect.left, i.rect.top, i.rect.right, i.rect.bottom), &self.fmt));
                         let fits = self.unfiltered_bytes.saturating_add(cost) <= MAX_UNFILTERED_BYTES;
                         let made = item.filter(|_| fits).and_then(|i| crate::smart_map::unfiltered_from_item(i, self.fmt));
                         if made.is_some() {
@@ -710,7 +710,7 @@ impl Ctx<'_> {
                 crate::linked::embedded_payload_in_blocks(global.iter().map(|(_, key, data)| (key, data.as_slice())), &id).map(|(_, source)| source)
             })
         });
-        LayerContent::Smart(SmartObject {
+        let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
             vector_preview,
@@ -723,7 +723,9 @@ impl Ctx<'_> {
             warp,
             stack_mode: None,
             perspective,
-        })
+        };
+        crate::smart_map::pin_puppet_meshes(&mut sm);
+        LayerContent::Smart(sm)
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
@@ -1238,6 +1240,7 @@ fn read_initial_metadata(
     if let Some(scale) = crate::annotations_map::raw_scale(doc) {
         doc.measurement.scale = scale;
     }
+    crate::annotations_map::import_count_resource(doc);
     let _ = layered;
     (damaged, alloc_error)
 }

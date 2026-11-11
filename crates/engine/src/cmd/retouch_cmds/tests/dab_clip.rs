@@ -38,7 +38,7 @@ fn unclipped_dab_stroke(s: &Session, cmd: &str, p: &Value) -> Vec<f32> {
     let (canvas, sel) = (doc.bounds(), doc.selection.clone());
     let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p).unwrap();
     let mut effect = tool.effect(surf.format(), stroke.brush.spacing);
-    apply_dab_stroke(surf, &stroke, sel.as_ref(), lock, 64, |w, fp| effect(w, fp));
+    apply_dab_stroke(surf, &stroke, sel.as_ref(), lock, 64, |w, fp| effect(w, fp)).unwrap();
     surf.read_region(canvas)
 }
 
@@ -88,7 +88,7 @@ fn max_size_soft_brush_on_a_small_image_works_on_the_canvas_only() {
 
 /// What a clipped live stroke hands its effect at each dab: the working copy's rectangle, the
 /// footprint's and the footprint's clip.
-type Seen = std::rc::Rc<std::cell::RefCell<Vec<(Rect, Rect, Rect)>>>;
+type Seen = std::sync::Arc<std::sync::Mutex<Vec<(Rect, Rect, Rect)>>>;
 
 /// Start `cmd` live with a probe effect that records what each dab gets; with the tool's halo.
 fn probe_live(s: &Session, cmd: &str, p: &Value) -> (LiveDab, i32, Seen) {
@@ -96,7 +96,7 @@ fn probe_live(s: &Session, cmd: &str, p: &Value) -> (LiveDab, i32, Seen) {
     let halo = DabTool::parse(s, cmd, p, &stroke).unwrap().0.halo();
     let seen = Seen::default();
     let probe = seen.clone();
-    let record = move |work: &mut Region, fp: &Footprint| probe.borrow_mut().push((work.rect, fp.rect, fp.clip));
+    let record = move |work: &mut Region, fp: &Footprint| probe.lock().unwrap().push((work.rect, fp.rect, fp.clip));
     (LiveDab::begin_with_effect(s, cmd, p, Box::new(record)).unwrap(), halo, seen)
 }
 
@@ -113,8 +113,8 @@ fn live_dab_regions_stay_within_the_canvas_plus_halo() {
         let p = with_params(p.clone(), &extra);
         let (mut live, halo, seen) = probe_live(&s, cmd, &p);
         live.push(&[StrokePoint::new(30.0, 4.0, 1.0)]).unwrap();
-        assert!(!seen.borrow().is_empty(), "{cmd}: the effect ran");
-        for (work, fp, clip) in seen.borrow().iter() {
+        assert!(!seen.lock().unwrap().is_empty(), "{cmd}: the effect ran");
+        for (work, fp, clip) in seen.lock().unwrap().iter() {
             assert!(canvas.inflate(halo).contains_rect(work), "{cmd}: working copy {work:?} past the canvas plus halo {halo}");
             assert!(work.contains_rect(fp) && *clip == canvas, "{cmd}: footprint {fp:?} (clip {clip:?}), working copy {work:?}");
         }
@@ -138,8 +138,8 @@ fn max_size_soft_blur_on_a_small_image_works_on_the_canvas_only() {
     let p = json!({"points": [[10, 10], [54, 38]], "size": 5000, "hardness": 0});
     let (mut live, halo, seen) = probe_live(&s, "paint.blur", &p);
     live.push(&[StrokePoint::new(60.0, 4.0, 1.0)]).unwrap();
-    assert!(!seen.borrow().is_empty() && halo > 0, "halo {halo}");
-    for (work, fp, _) in seen.borrow().iter() {
+    assert!(!seen.lock().unwrap().is_empty() && halo > 0, "halo {halo}");
+    for (work, fp, _) in seen.lock().unwrap().iter() {
         assert!(canvas.inflate(halo).contains_rect(work) && work.contains_rect(fp), "{work:?} {fp:?}");
     }
     let r = s.execute("paint.blur", p).unwrap();

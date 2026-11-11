@@ -1,8 +1,9 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
-    BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect, Region, Result,
-    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, UNCLIPPED, Value, alpha_index, apply_dab_stroke_clipped, bad, damage_json, dodge_burn, flag,
-    footprint_within, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
+    BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
+    Region, Result, Session, Smudge, Stroke, StrokePoint, StrokeTooLarge, Surface, ToneRange, UNCLIPPED, Value, alpha_index, apply_dab_stroke_clipped, bad,
+    blend_from_str, damage_json, dodge_burn, fits_dab_stroke_budget, flag, footprint_within, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen,
+    num, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -62,7 +63,7 @@ fn tone_cells(area: Rect) -> u64 {
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
-fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
+fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
     struct Cell {
         cov: Vec<f32>,
         orig: Vec<f32>,
@@ -139,11 +140,22 @@ pub(super) enum DabTool {
     Tone { burn: bool, range: ToneRange, exposure: f32, protect: bool },
     Sponge { saturate: bool, vibrance: bool },
     Focus { sharpen: bool, strength: f32, protect: bool, sigma: f32 },
-    Smudge { strength: f32, finger: Option<[f32; 4]>, max_size: f32 },
+    Smudge { strength: f32, finger: Option<[f32; 4]>, max_size: f32, mode: BlendMode },
+}
+
+/// `paint.smudge`'s `mode` (#12959): the options bar's seven Painting Modes, Normal when absent.
+fn smudge_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
+    use BlendMode::{Color, Darken, Hue, Lighten, Luminosity, Normal, Saturation};
+    let Some(v) = p.get("mode") else { return Ok(Normal) };
+    let named = v.as_str().and_then(blend_from_str).filter(|m| matches!(m, Normal | Darken | Lighten | Hue | Saturation | Color | Luminosity));
+    named.ok_or_else(|| {
+        let given = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+        bad(cmd, format!("unknown mode `{given}` (normal|darken|lighten|hue|saturation|color|luminosity)"))
+    })
 }
 
 /// One dab's edit of the working copy.
-pub(crate) type DabEffect = Box<dyn FnMut(&mut Region, &Footprint)>;
+pub(crate) type DabEffect = Box<dyn FnMut(&mut Region, &Footprint) + Send>;
 
 /// Pixels an effect reads beyond the dab it writes. Smudge's pickup is a fixed-size square,
 /// independent of pressure, roundness and the dab's current angle.
@@ -210,7 +222,8 @@ impl DabTool {
             }
             "paint.smudge" => {
                 let finger = flag(p, "fingerPainting", false).then_some(s.tools.foreground);
-                (Self::Smudge { strength: num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0, finger, max_size: stroke.brush.size }, "Smudge Tool")
+                let strength = num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0;
+                (Self::Smudge { strength, finger, max_size: stroke.brush.size, mode: smudge_mode(p, cmd)? }, "Smudge Tool")
             }
             o => return Err(bad(o, "not a sequential-dab tool")),
         })
@@ -288,19 +301,40 @@ impl DabTool {
                     });
                 })
             }
-            Self::Smudge { strength, finger, max_size } => {
+            Self::Smudge { strength, finger, max_size, mode } => {
                 let finger_px = finger.map(|fg| photocraft_raster::from_rgba(&fmt, fg));
+                // The Mode was measured in 8-bit RGB (#12959); other colour modes and depths smudge as Normal.
+                let measured = fmt.mode == photocraft_color::ColorMode::Rgb && fmt.sample == photocraft_color::SampleType::U8;
+                let mode = if measured { mode } else { BlendMode::Normal };
                 // Premultiplied mixing: transparent pixels carry no colour, so no dark fringes.
-                let mut sm = Smudge::new(strength, finger_px, max_size).with_alpha(alpha_index(&fmt));
+                let mut sm = Smudge::new(strength, finger_px, max_size).with_alpha(alpha_index(&fmt)).with_mode(mode);
                 Box::new(move |work, fp| sm.dab(work, fp))
             }
         }
     }
 }
 
+/// The reference application refuses a Dodge or Sharpen stroke in Indexed Color and Bitmap
+/// documents, with its alert's words (#12686, #12953); other modes (Multichannel and Duotone were
+/// not measured) paint as before. The live stroke checks this too, so it previews nothing there.
+fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
+    let tool = match cmd {
+        "paint.dodge" => "dodge tool",
+        "paint.sharpen" => "sharpen tool",
+        _ => return Ok(()),
+    };
+    let why = match s.active().map(|st| st.doc.mode) {
+        Some(photocraft_color::ColorMode::Indexed) => "it does not work with Indexed Color images (convert image to RGB Color mode to edit).",
+        Some(photocraft_color::ColorMode::Bitmap) => "it does not work with Bitmap images (convert image to Grayscale mode to edit).",
+        _ => return Ok(()),
+    };
+    Err(EngineError::Other(format!("Could not use the {tool} because {why}")))
+}
+
 /// Dodge, Burn, Sponge, Blur, Sharpen and Smudge: each dab edits a working copy in order
 /// (`apply_dab_stroke_clipped`, on the canvas). Blur, Sharpen and Smudge can sample all layers.
 pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    mode_refusal(s, cmd)?;
     let (stroke, id) = parse_brush(s, p, cmd)?;
     let (tool, label) = DabTool::parse(s, cmd, p, &stroke)?;
     let all = matches!(tool, DabTool::Focus { .. } | DabTool::Smudge { .. }) && sample_all_layers(p);
@@ -320,10 +354,11 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         // copied, so a brush far larger than the image costs what the image does (#5633). The
         // copies (original, working, mixed back; Sample All Layers adds a composite and its
         // render) and what the effect keeps for the whole stroke (Dodge and Burn's tone cells,
-        // Smudge's carry) are priced before they are made.
+        // Smudge's carry) are priced before they are made, and the working area is held to the
+        // sequential-dab stroke budget every dab stroke is ([`admit_dab_commit`]).
         let what = format!("the {label} stroke");
         let ch = fmt.channels();
-        let admit = |area: Rect| admit_dab_area(area, ch, if all { 5 } else { 3 }, tool.retained_bytes(area, ch), &what);
+        let admit = |area: Rect| admit_dab_commit(area, ch, if all { 5 } else { 3 }, tool.retained_bytes(area, ch), &what, cmd);
         let (halo, canvas) = (tool.neighborhood().halo(), pre.bounds());
         apply_dab_stroke_clipped(surf, &stroke, sel, lock, halo, canvas, admit, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
@@ -351,6 +386,17 @@ const DAB_BUDGET: u64 = 1 << 20;
 /// `retained` bytes the effect keeps for the whole stroke ([`DabTool::retained_bytes`]).
 fn admit_dab_area(area: Rect, ch: usize, copies: u64, retained: u64, what: &str) -> Result<()> {
     admit_dab_area_with(area, ch, copies, retained, what, crate::memory_gate::ensure)
+}
+
+/// Admit a sequential-dab commit's clipped working `area` (`cmd` names it in errors): the budget
+/// every sequential-dab stroke is held to ([`fits_dab_stroke_budget`], three dense planes, "stroke
+/// too large" past it), then [`admit_dab_area`]. Measured on the clipped area, so a brush far
+/// larger than a small canvas still paints.
+fn admit_dab_commit(area: Rect, ch: usize, copies: u64, retained: u64, what: &str, cmd: &str) -> Result<()> {
+    if !fits_dab_stroke_budget(area, ch) {
+        return Err(bad(cmd, StrokeTooLarge.to_string()));
+    }
+    admit_dab_area(area, ch, copies, retained, what)
 }
 
 /// [`admit_dab_area`] against the memory check `gate`. `gate` is a parameter so tests can refuse
@@ -506,6 +552,7 @@ pub struct LiveDab {
 impl LiveDab {
     /// Start a live stroke of `cmd` from its params; their `points` are rendered.
     pub fn begin(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
+        mode_refusal(s, cmd)?;
         has_pixel_layer(s).map_err(EngineError::Other)?;
         if sample_all_layers(p) {
             return Err(bad(cmd, "Sample All Layers strokes aren't previewed live"));
@@ -647,6 +694,15 @@ impl LiveDab {
         self.preview_tail = true;
         self.push(&[])?;
         Ok(self)
+    }
+
+    /// Mix the dabs back without the layer's transparency lock, for a tool that erases a locked
+    /// layer anyway (the Background Eraser). Call it before pushing any points: build the dab with
+    /// the stroke's points taken out, then [`Self::push`] them (as `live_background_eraser` does),
+    /// because points pushed before it were already mixed back with the lock.
+    pub(crate) fn unlocked(mut self) -> Self {
+        self.lock = false;
+        self
     }
 
     /// Everything the stroke has touched so far.
@@ -832,7 +888,7 @@ mod tests {
         let (area, ch) = (Rect::new(10, 10, 300, 200), 4);
         let copies: u64 = 290 * 190 * 4 * 4 * 3;
         let dodge = DabTool::Tone { burn: false, range: ToneRange::Midtones, exposure: 0.5, protect: true };
-        let smudge = DabTool::Smudge { strength: 0.5, finger: None, max_size: 200.0 };
+        let smudge = DabTool::Smudge { strength: 0.5, finger: None, max_size: 200.0, mode: BlendMode::Normal };
         assert_eq!(dodge.retained_bytes(area, ch), 5 * 4 * (64 * 64) * (4 + 1) * 4);
         assert_eq!(smudge.retained_bytes(area, ch), 205 * 205 * 4 * 4);
         for tool in [&dodge, &smudge] {
@@ -852,4 +908,30 @@ mod tests {
         assert_eq!(dodge.retained_bytes(Rect::new(-1, -1, 0, 0), ch), cell);
         assert_eq!(dodge.retained_bytes(Rect::EMPTY, ch), 0);
     }
+
+    #[test]
+    fn dab_commit_holds_the_clipped_area_to_the_dab_stroke_budget() {
+        // An area over the sequential-dab stroke budget is refused as every dab stroke is, before
+        // the commit's own admission (whose test budget is far lower) is asked.
+        let huge = Rect::new(0, 0, 40_000, 40_000);
+        assert!(!fits_dab_stroke_budget(huge, 4));
+        let err = admit_dab_commit(huge, 4, 3, 0, "the Blur Tool stroke", "paint.blur").unwrap_err().to_string();
+        assert!(err.contains("paint.blur") && err.contains(&StrokeTooLarge.to_string()), "{err}");
+        // A brush far larger than a small canvas works on the canvas plus its halo: far inside it.
+        let small = Rect::new(0, 0, 32, 24).inflate(13);
+        assert!(fits_dab_stroke_budget(small, 4));
+        assert!(admit_dab_commit(small, 4, 3, 0, "the Blur Tool stroke", "paint.blur").is_ok());
+    }
 }
+
+#[cfg(test)]
+#[path = "dodge_refuses_indexed_tests.rs"]
+mod dodge_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "sharpen_refuses_indexed_tests.rs"]
+mod sharpen_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "smudge_mode_tests.rs"]
+mod smudge_mode_tests;
