@@ -69,16 +69,34 @@ fn text(session: &Session, id: photocraft_doc::LayerId) -> &TextLayer {
     t
 }
 
-/// A malformed rendered line must not override the font-based paragraph baseline.
+/// Accept only finite, consistent coordinates within the text box’s baseline tolerance.
 #[test]
-fn nonfinite_txt2_line_coordinates_do_not_create_a_baseline_hint() {
+fn txt2_line_coordinates_must_fit_the_paragraph_baseline_guards() {
     let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
     let LayerContent::Text(source) = &imported.layers[0].content else { panic!("type layer") };
     let tysh = source.psd_raw.as_ref().unwrap();
     let raw = &imported.metadata.psd_global_blocks.iter().find(|(_, key, _)| key == b"Txt2").unwrap().2;
     let tree = photocraft_text::psd::parse_txt2(raw).unwrap();
-    for (baseline, origin) in [(40.0, f64::NAN), (40.0, f64::INFINITY), (f64::NAN, 40.0), (f64::INFINITY, f64::INFINITY)] {
+    let TextShape::Box { x, width, height, .. } = source.shape else { panic!("paragraph box") };
+    // A nonzero top distinguishes absolute coordinates from offsets relative to the box.
+    let top = 20.0;
+    let bottom = top + f64::from(height);
+    let valid = top + f64::from(source.psd_first_baseline.as_ref().unwrap().offset_px);
+    let mut cases = vec![
+        (valid, valid + 0.019, true),
+        (valid, valid + 0.021, false),
+        (valid, valid - 0.021, false),
+        (top - 0.5, top - 0.5, true),
+        (top - 0.501, top - 0.501, false),
+        (bottom + 0.5, bottom + 0.5, true),
+        (bottom + 0.501, bottom + 0.501, false),
+    ];
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        cases.extend([(valid, invalid, false), (invalid, valid, false), (invalid, invalid, false)]);
+    }
+    for (baseline, origin, accepted) in cases {
         let mut layer = source.clone();
+        layer.shape = TextShape::Box { x, y: top as f32, width, height };
         layer.psd_first_baseline = None;
         let mut malformed = tree.clone();
         let E::Array(objects) = malformed.get_mut("1").unwrap().get_mut("1").unwrap() else { panic!("text objects") };
@@ -92,7 +110,29 @@ fn nonfinite_txt2_line_coordinates_do_not_create_a_baseline_hint() {
         line.set("10", E::Real(baseline));
         line.get_mut("0").unwrap().set("0", E::Array(vec![E::Real(0.0), E::Real(origin)]));
         photocraft_text::psd::apply_txt2_baseline(&mut layer, tysh, &malformed);
-        assert!(layer.psd_first_baseline.is_none(), "baseline={baseline}, origin={origin}");
+        let expected = accepted.then_some((baseline - top) as f32);
+        assert_eq!(layer.psd_first_baseline.map(|hint| hint.offset_px), expected, "baseline={baseline}, origin={origin}");
+    }
+}
+
+/// Changing vertical metrics makes the first line use the same layout as a layer without a hint.
+#[test]
+fn editing_vertical_metrics_invalidates_the_imported_baseline() {
+    let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
+    let id = imported.layers[0].id;
+    let mut engine = photocraft_text::TextEngine::new();
+    for params in [json!({"layer": id.0, "verticalScale": 150}), json!({"layer": id.0, "baselineShift": 5})] {
+        let mut session = Session::new();
+        session.add_document(imported.clone(), None);
+        let original = engine.layout(text(&session, id), 72.0).lines[0].baseline;
+        session.execute("type.setStyle", params.clone()).unwrap();
+        let layer = text(&session, id);
+        let mut without_hint = layer.clone();
+        without_hint.psd_first_baseline = None;
+        let fallback = engine.layout(&without_hint, 72.0);
+        let edited = engine.layout(layer, 72.0);
+        assert_eq!(edited.lines, fallback.lines, "{params}");
+        assert!((edited.lines[0].baseline - original).abs() > 1.0, "{params}");
     }
 }
 
