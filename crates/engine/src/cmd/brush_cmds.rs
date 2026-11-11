@@ -765,7 +765,7 @@ impl LiveStroke {
             crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
         }
         if let Some(tracker) = &mut self.gradient_damage {
-            dmg = dmg.union(&tracker.damage(&self.doc));
+            dmg = dmg.union(&tracker.damage(&self.doc, dmg));
         }
         Ok(dmg)
     }

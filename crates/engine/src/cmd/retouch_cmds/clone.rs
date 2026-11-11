@@ -331,7 +331,7 @@ impl LiveRetouch {
         }
         let mut damage = raw_damage;
         if let Some(tracker) = &mut self.gradient_damage {
-            damage = damage.union(&tracker.damage(&self.doc));
+            damage = damage.union(&tracker.damage(&self.doc, raw_damage));
         }
         Ok(damage)
     }

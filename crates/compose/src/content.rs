@@ -91,6 +91,34 @@ pub fn stroke_frame(doc: &Document, layer: &Layer, st: &photocraft_doc::StrokeFx
     effect_maps(layer, doc.bounds(), &cx).stroke_frame(st)
 }
 
+/// Exact live Gradient Stroke geometry and coverage from the compositor's existing maps.
+/// Gradient strokes are non-local maps: effect_region uses the same full source region for
+/// this lookup, CPU partial rendering and GPU planning. The global map key is unchanged.
+pub fn gradient_stroke_layout(doc: &Document, layer: &Layer) -> Option<effects::GradientStrokeLayout> {
+    if !layer.effects.enabled || !layer.effects.items.iter().any(|e| {
+        matches!(e, photocraft_doc::Effect::Stroke(st) if st.common.enabled && st.common.opacity > 0.0 && matches!(st.paint, photocraft_doc::FxPaint::Gradient(_)))
+    }) {
+        return None;
+    }
+    let source = crate::advanced::effects_source(layer);
+    let strokes: Vec<_> = source.effects.items.iter().filter_map(|e| match e {
+        photocraft_doc::Effect::Stroke(st) if st.common.enabled && st.common.opacity > 0.0 && matches!(st.paint, photocraft_doc::FxPaint::Gradient(_)) => Some(st),
+        _ => None,
+    }).collect();
+    if strokes.is_empty() {
+        return None;
+    }
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let cx = Ctx::for_doc(doc, &patterns);
+    let cmyk = crate::cmyk_space(doc);
+    let maps = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        crate::render::in_blend_space(doc.mode == photocraft_color::ColorMode::Lab, doc.depth == photocraft_color::SampleType::F32,
+            || effect_maps(&source, doc.bounds(), &cx))
+    });
+    let frames = strokes.iter().map(|st| maps.stroke_frame(st)).collect::<Option<Vec<_>>>()?;
+    Some(effects::GradientStrokeLayout { shape: maps.gradient_shape()?.clone(), frames })
+}
+
 pub fn surface_to_buffer(s: &Surface, rect: Rect) -> Buffer {
     let mut buf = Buffer::transparent(rect);
     s.read_rgba_into(rect, &mut buf.px);

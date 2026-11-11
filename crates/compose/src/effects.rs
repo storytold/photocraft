@@ -177,6 +177,81 @@ impl Map {
     }
 }
 
+/// Small, renderer-derived shape fingerprints, retained with the existing effect maps.
+/// Absolute 32-pixel blocks keep comparison independent of the map's padded region.
+#[derive(Clone)]
+pub struct GradientShape {
+    pub bounds: Rect,
+    blocks: Vec<((i32, i32), u64)>,
+}
+
+impl GradientShape {
+    fn new(shape: &Map, rect: Rect) -> Self {
+        use std::hash::Hasher;
+        let block = 32;
+        let (bx, by) = (rect.x0.div_euclid(block), rect.y0.div_euclid(block));
+        let width = if rect.is_empty() { 0 } else { (rect.x1 - 1).div_euclid(block) - bx + 1 };
+        let height = if rect.is_empty() { 0 } else { (rect.y1 - 1).div_euclid(block) - by + 1 };
+        let mut hashes = vec![std::collections::hash_map::DefaultHasher::new(); (width * height) as usize];
+        let mut occupied = vec![false; hashes.len()];
+        let mut bounds = Rect::EMPTY;
+        for y in 0..shape.h {
+            for x in 0..shape.w {
+                let value = shape.v[y * shape.w + x];
+                let (x, y) = (rect.x0 + x as i32, rect.y0 + y as i32);
+                if value > distance::INSIDE_EPS {
+                    bounds = bounds.union(&Rect::new(x, y, x + 1, y + 1));
+                }
+                if value != 0.0 {
+                    let (cx, cy) = (x.div_euclid(block), y.div_euclid(block));
+                    let index = ((cy - by) * width + cx - bx) as usize;
+                    let offset = y.rem_euclid(block) * block + x.rem_euclid(block);
+                    hashes[index].write_u64(((offset as u64) << 32) | u64::from(value.to_bits()));
+                    occupied[index] = true;
+                }
+            }
+        }
+        let blocks = hashes.iter().enumerate().filter(|(i, _)| occupied[*i]).map(|(i, h)| {
+            (((by + i as i32 / width), (bx + i as i32 % width)), h.finish())
+        }).collect();
+        Self { bounds, blocks }
+    }
+
+    /// Blocks whose actual rendered coverage changed, including non-local mask fallback or
+    /// feather-rounding changes. No mask-locality assumption or second pixel scan is needed.
+    pub fn changed_bounds(&self, current: &Self) -> Rect {
+        let mut before = self.blocks.iter().peekable();
+        let mut after = current.blocks.iter().peekable();
+        let mut changed = Rect::EMPTY;
+        while before.peek().is_some() || after.peek().is_some() {
+            let entry = match (before.peek(), after.peek()) {
+                (Some(a), Some(b)) if a.0 == b.0 => {
+                    let entry = (a.1 != b.1).then_some(a.0);
+                    before.next();
+                    after.next();
+                    entry
+                }
+                (Some(a), Some(b)) if a.0 < b.0 => before.next().map(|a| a.0),
+                (Some(_), Some(_)) => after.next().map(|a| a.0),
+                (Some(_), None) => before.next().map(|a| a.0),
+                (None, Some(_)) => after.next().map(|a| a.0),
+                (None, None) => None,
+            };
+            if let Some((y, x)) = entry {
+                changed = changed.union(&Rect::new(x * 32, y * 32, x * 32 + 32, y * 32 + 32));
+            }
+        }
+        changed
+    }
+}
+
+/// Exact Stroke frames and compact coverage metadata from one renderer map build.
+#[derive(Clone)]
+pub struct GradientStrokeLayout {
+    pub shape: GradientShape,
+    pub frames: Vec<Rect>,
+}
+
 /// Effect maps derived from a layer's shape (its alpha), computed once over the layer's whole
 /// region and cropped per render tile. They depend only on the shape, the effect settings and the
 /// global light, never on the backdrop, so they can be cached across tiles and edits.
@@ -199,9 +274,14 @@ pub struct FxMaps {
     outline: bool,
     /// Frames of gradient strokes by outside width (bits): see [`stroke_frame`].
     frames: Vec<(u32, Rect)>,
+    gradient_shape: Option<GradientShape>,
 }
 
 impl FxMaps {
+    pub fn gradient_shape(&self) -> Option<&GradientShape> {
+        self.gradient_shape.as_ref()
+    }
+
     /// The frame of a gradient stroke `st` of this layer (see [`stroke_frame`]), if built.
     pub fn stroke_frame(&self, st: &photocraft_doc::StrokeFx) -> Option<Rect> {
         self.frames.iter().find(|f| f.0 == stroke_widths(st).1.to_bits()).map(|f| f.1)
@@ -221,6 +301,7 @@ impl FxMaps {
             + usize::from(self.vdout_exact.is_some()))
             * n
             * 4
+            + self.gradient_shape.as_ref().map_or(0, |s| s.blocks.len() * std::mem::size_of::<((i32, i32), u64)>())
     }
 
     fn crop_vec(&self, v: &[f32], to: Rect, fill: f32) -> Vec<f32> {

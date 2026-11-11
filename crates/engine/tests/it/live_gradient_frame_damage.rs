@@ -342,3 +342,200 @@ fn symmetric_frame_growth_with_unchanged_angle_or_radial_mapping_stays_local() {
         same(&shown, &render(&live.doc, live.doc.bounds()));
     }
 }
+
+/// A raster mask can shrink the Stroke's gradient frame without changing its layer's pixels.
+#[test]
+fn mask_stroke_frame_change_repaints_distant_gradient_but_plain_mask_damage_stays_local() {
+    for gradient_stroke in [true, false] {
+        let (mut s, id) = raster_fixture("masked gradient Stroke fixture");
+        if gradient_stroke {
+            s.execute(
+                "layer.layerStyle.gradientOverlay",
+                json!({"from":"#000000","to":"#ffffff","angle":0,"scale":100,"opacity":100,"blend":"Normal","style":"linear"}),
+            )
+            .unwrap();
+            s.edit("use the gradient as an inside Stroke", |doc, _| {
+                let layer = doc.layer_mut(id).unwrap();
+                let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
+                layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
+                    common,
+                    size: 4.0,
+                    position: photocraft_doc::StrokePosition::Inside,
+                    paint: photocraft_doc::FxPaint::Gradient(gradient),
+                    overprint: false,
+                }));
+                Ok(())
+            })
+            .unwrap();
+        }
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let original = &s.active().unwrap().doc;
+        let frame = effects_frame(original.layer(id).unwrap(), original.bounds());
+        let mut shown = render(original, original.bounds());
+        let distant = Rect::new(256, 8, 272, 12);
+        let before = shown.get(256, 9);
+        let source_pixel = original.layer(id).unwrap().surface().unwrap().pixel(256, 9);
+        let mut params = live_params(896.0, 32.0);
+        params["target"] = json!("mask");
+        params["size"] = json!(96);
+        let mut live = LiveStroke::begin(&s, &params).unwrap();
+        // The first dab is beyond the content; the pushed dab removes its right edge through
+        // the mask. Neither dab changes the raw raster extent used by effects_frame.
+        same(&shown, &render(&live.doc, live.doc.bounds()));
+        let damage = live.push(&[StrokePoint::new(752.0, 32.0, 1.0)]).unwrap();
+        let layer = live.doc.layer(id).unwrap();
+        assert_eq!(effects_frame(layer, live.doc.bounds()), frame);
+        assert_eq!(layer.surface().unwrap().pixel(256, 9), source_pixel);
+        assert_eq!(layer.mask.as_ref().unwrap().surface.pixel(256, 9)[0], 1.0);
+        assert_eq!(layer.mask.as_ref().unwrap().surface.pixel(752, 32)[0], 0.0);
+        assert!(live.bounds().intersect(&distant).is_empty(), "the actual mask brush stays distant");
+        let cold = render(&live.doc, live.doc.bounds());
+        if gradient_stroke {
+            assert!((cold.get(256, 9)[0] - before[0]).abs() > 0.01, "the unchanged distant Stroke really changes colour");
+            assert!(damage.contains_rect(&distant), "mask-dependent Stroke mapping must invalidate its distant pixels");
+        } else {
+            assert_eq!(cold.get(256, 9), before);
+            assert!(damage.intersect(&distant).is_empty(), "a plain mask keeps local live damage");
+        }
+        let reach = if gradient_stroke { photocraft_compose::effects::margin(layer) } else { 0 };
+        apply_damage(&mut shown, &live.doc, damage.inflate(reach));
+        same(&shown, &cold);
+    }
+}
+
+/// A legitimate interior edit keeps the same rendered Stroke frame and stays local.
+#[test]
+fn an_interior_mask_hole_keeps_gradient_stroke_damage_local() {
+    let (mut s, id) = raster_fixture("interior mask Stroke control");
+    s.execute(
+        "layer.layerStyle.gradientOverlay",
+        json!({"from":"#000000","to":"#ffffff","angle":0,"scale":100,"opacity":100,"blend":"Normal","style":"linear"}),
+    )
+    .unwrap();
+    s.edit("inside gradient Stroke", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
+        layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
+            common, size: 4.0, position: photocraft_doc::StrokePosition::Inside,
+            paint: photocraft_doc::FxPaint::Gradient(gradient), overprint: false,
+        }));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let original = &s.active().unwrap().doc;
+    let frame = effects_frame(original.layer(id).unwrap(), original.bounds());
+    let mut shown = render(original, original.bounds());
+    let before = shown.get(256, 9);
+    let distant = Rect::new(256, 8, 272, 12);
+    let mut params = live_params(384.0, 32.0);
+    params["target"] = json!("mask");
+    let mut live = LiveStroke::begin(&s, &params).unwrap();
+    let initial = live.initial_damage();
+    assert!(initial.intersect(&distant).is_empty(), "an interior initial dab keeps the unchanged gradient frame local");
+    apply_damage(&mut shown, &live.doc, initial.inflate(photocraft_compose::effects::margin(live.doc.layer(id).unwrap())));
+    same(&shown, &render(&live.doc, live.doc.bounds()));
+    let damage = live.push(&[StrokePoint::new(416.0, 32.0, 1.0)]).unwrap();
+    let layer = live.doc.layer(id).unwrap();
+    assert_eq!(effects_frame(layer, live.doc.bounds()), frame);
+    // Mask support is strictly inside the original shape; its four extrema stay fully opaque.
+    // An inside Stroke has no outside-frame growth, so its compositor gradient bbox is unchanged.
+    assert!(Rect::new(68, 12, 764, 52).contains_rect(&live.bounds()));
+    for (x, y) in [(64, 8), (767, 8), (64, 55), (767, 55)] {
+        assert_eq!(layer.surface().unwrap().pixel(x, y)[3], 1.0);
+        assert_eq!(layer.mask.as_ref().unwrap().surface.pixel(x, y)[0], 1.0);
+    }
+    assert_eq!(layer.mask.as_ref().unwrap().surface.pixel(416, 32)[0], 0.0);
+    let cold = render(&live.doc, live.doc.bounds());
+    assert_eq!(cold.get(256, 9), before);
+    assert!(damage.intersect(&distant).is_empty(), "an interior push must not invalidate a distant unchanged Stroke");
+    apply_damage(&mut shown, &live.doc, damage.inflate(photocraft_compose::effects::margin(layer)));
+    same(&shown, &cold);
+}
+
+/// Exercise the real mask budget decision without a huge allocation, then use actual FxMaps
+/// to distinguish its old-hole/default-mask transition even though its Stroke frame is unchanged.
+#[test]
+fn mask_build_fallback_change_is_visible_in_cached_stroke_coverage() {
+    assert!(photocraft_compose::masks::can_build_mask(Rect::new(0, 0, 64, 64)));
+    assert!(!photocraft_compose::masks::can_build_mask(Rect::new(0, 0, 7200, 7200)));
+    let (mut s, id) = mapping_session("linear", 0.0, 100.0);
+    s.edit("inside gradient Stroke", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
+        layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
+            common, size: 4.0, position: photocraft_doc::StrokePosition::Inside,
+            paint: photocraft_doc::FxPaint::Gradient(gradient), overprint: false,
+        }));
+        Ok(())
+    }).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let layer = doc.layer(id).unwrap();
+    let photocraft_doc::Effect::Stroke(stroke) = &layer.effects.items[0] else { panic!("fixture Stroke") };
+    let rect = Rect::new(0, 0, 64, 64);
+    let tex = photocraft_compose::effects::TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
+    let mut old = vec![1.0; 64 * 64];
+    for y in 8..16 {
+        for x in 8..16 { old[y * 64 + x] = 0.0; }
+    }
+    let before = photocraft_compose::effects::build_maps(layer, old, rect, &doc.global_light, &tex);
+    // When the larger mask build is refused, the returned default1 mask removes the old hole.
+    let after = photocraft_compose::effects::build_maps(layer, vec![1.0; 64 * 64], rect, &doc.global_light, &tex);
+    assert_eq!(before.stroke_frame(stroke), after.stroke_frame(stroke));
+    let changed = before.gradient_shape().unwrap().changed_bounds(after.gradient_shape().unwrap());
+    assert!(changed.contains_rect(&Rect::new(8, 8, 16, 16)), "the distant old hole changed despite the stable outer frame");
+    assert!(changed.intersect(&Rect::new(48, 48, 56, 56)).is_empty(), "coverage comparison is not unconditional full extent damage");
+}
+
+/// A real Block-mode mask stroke crosses the effect-shape threshold far beyond its brush halo.
+#[test]
+fn feather_rounding_stroke_frame_changes_use_the_actual_renderer_maps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":512,"height":64,"mode":"rgb","depth":32,"background":"white"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.tools.brush = Default::default();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("sparse threshold-sensitive shape and mask", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        let surface = layer.surface_mut().unwrap();
+        surface.fill_rect(Rect::new(80, 0, 96, 64), &[0.5, 0.5, 0.5, 1.0]);
+        for y in [28, 30, 32, 34, 36] {
+            surface.fill_rect(Rect::new(80, y, 400, y + 1), &[0.5, 0.5, 0.5, 1.0]);
+        }
+        let mut mask = photocraft_doc::LayerMask::hide_all();
+        mask.density = 0.998_039_2;
+        mask.feather = 2.0;
+        mask.surface.fill_rect(Rect::new(0, 0, 1, 1), &[1.0]);
+        mask.surface.fill_rect(Rect::new(511, 63, 512, 64), &[1.0]);
+        layer.mask = Some(mask);
+        Ok(())
+    }).unwrap();
+    s.execute("layer.layerStyle.gradientOverlay", json!({"from":"#000000","to":"#ffffff","angle":0,"scale":100,"opacity":100,"blend":"Normal","style":"linear"})).unwrap();
+    s.edit("inside gradient Stroke", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        let photocraft_doc::Effect::GradientOverlay { common, gradient, .. } = layer.effects.items.remove(0) else { panic!("fixture overlay") };
+        layer.effects.items.push(photocraft_doc::Effect::Stroke(photocraft_doc::StrokeFx {
+            common, size: 4.0, position: photocraft_doc::StrokePosition::Inside,
+            paint: photocraft_doc::FxPaint::Gradient(gradient), overprint: false,
+        }));
+        Ok(())
+    }).unwrap();
+    let original = &s.active().unwrap().doc;
+    let mut shown = render(original, original.bounds());
+    let before = photocraft_compose::gradient_stroke_layout(original, original.layer(id).unwrap()).unwrap();
+    let mask = photocraft_compose::masks::combined_mask(original.layer(id).unwrap(), original.bounds()).unwrap();
+    assert_eq!(mask.sample_channel(350, 32, 0), 129.0 / 65535.0);
+    let params = json!({"points":[[136.0,32.0,1.0]],"target":"mask","block":true,"zoom":1.0,"color":"#ffffff","seed":42,"brush":{"smoothing":{"enabled":false}}});
+    let live = LiveStroke::begin_with(&s, "paint.pencil", &params).unwrap();
+    let layer = live.doc.layer(id).unwrap();
+    let current = photocraft_compose::gradient_stroke_layout(&live.doc, layer).unwrap();
+    let mask = photocraft_compose::masks::combined_mask(layer, live.doc.bounds()).unwrap();
+    assert_eq!(mask.sample_channel(350, 32, 0), 128.0 / 65535.0);
+    let distant = Rect::new(350, 28, 351, 37);
+    assert!(live.bounds().intersect(&distant).is_empty());
+    assert!(before.shape.changed_bounds(&current.shape).contains_rect(&distant));
+    assert!(live.initial_damage().contains_rect(&distant), "actual renderer coverage changes expand the initial damage");
+    let cold = render(&live.doc, live.doc.bounds());
+    apply_damage(&mut shown, &live.doc, live.initial_damage().inflate(photocraft_compose::effects::margin(layer)));
+    same(&shown, &cold);
+}
