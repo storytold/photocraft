@@ -274,7 +274,9 @@ fn sample_color(app: &mut PhotocraftApp, x: f64, y: f64, sample_layer: &str) -> 
         return None;
     }
     let size = app.ui.tool_options.eyedropper_size;
-    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer})).ok()?;
+    // The box depends on the view zoom at 100 % and below, as in Photoshop (#11751).
+    let zoom = f64::from(app.current_zoom());
+    let v = app.run("document.sampleColor", json!({"x": x, "y": y, "size": size, "sampleLayer": sample_layer, "zoom": zoom})).ok()?;
     match serde_json::from_value::<Vec<f32>>(v).ok()?[..] {
         [r, g, b, a] if a > 0.0 => Some([r, g, b]),
         _ => None,

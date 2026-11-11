@@ -228,6 +228,10 @@ fn sample_params(kind: &str) -> Value {
 #[test]
 fn curves_dialog_fits_its_graph_and_controls() {
     for language in ["en", "ru"] {
+        // English runs in every build; Russian needs the craft-i18n catalogs.
+        if language != "en" && !crate::i18n::needs_catalogs() {
+            continue;
+        }
         let _language = crate::i18n::language_scope(crate::i18n::Lang::from_code(language).unwrap());
         for theme in crate::theme::ThemeKind::ALL {
             for size in [egui::vec2(1280.0, 900.0), egui::vec2(900.0, 720.0)] {
@@ -812,6 +816,9 @@ fn curves_on_a_gray_target_seeds_neutral_fields_in_a_lab_document() {
 /// stays exactly "Green".
 #[test]
 fn curves_channel_popup_keeps_custom_names_verbatim_in_italian() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let it = crate::i18n::Lang::from_code("it").expect("it registered");
     let green = crate::i18n::tr(it, "Green");
     let _lang = crate::i18n::language_scope(it);
