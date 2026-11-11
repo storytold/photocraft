@@ -44,7 +44,8 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba4
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "081078bb1b44aeedfa5bef3d4f13d978dc77510a" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["raster"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
-craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+# JPEG: the band decoder (craft-libs#743).
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "97c83dc9e891d6a2b719b0288095be7e56a8cb17" }
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "b8f7d93b00dfb8f172938f3d2d796ae62dcfe123" }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
