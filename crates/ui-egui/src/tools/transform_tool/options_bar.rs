@@ -728,3 +728,7 @@ pub(super) fn rotate_about_pivot(app: &mut PhotocraftApp, da: f64) {
         [c[0] + x * cs - y * sn, c[1] + x * sn + y * cs]
     });
 }
+
+#[cfg(test)]
+#[path = "warp_options_bar_tests.rs"]
+mod warp_options_bar_tests;

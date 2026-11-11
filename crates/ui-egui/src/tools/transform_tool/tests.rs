@@ -1,6 +1,6 @@
 use super::*;
 
-fn session() -> TransformSession {
+pub(super) fn session() -> TransformSession {
     TransformSession {
         session: 1,
         layer: 1,
@@ -325,7 +325,7 @@ fn type_into_bar_field(n: usize, text: &str) -> TransformSession {
 
 /// The transform bar over the test box, after `setup` (e.g. picking the W/H unit). Tall enough
 /// for the fields' unit menu to open below the bar unscrolled.
-fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
+pub(super) fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
     use egui_kittest::Harness;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
@@ -345,7 +345,7 @@ fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<
 }
 
 /// [`type_into_bar_field`] after `setup`.
-fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
+pub(super) fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
     use egui_kittest::kittest::Queryable;
     let mut h = bar_harness(setup);
     h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).unwrap().click();
