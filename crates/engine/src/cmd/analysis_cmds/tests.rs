@@ -564,6 +564,7 @@ fn csv_text_cells_that_read_as_formulas_are_neutralised() {
     assert_eq!(csv_field(&json!(-5.5)), "-5.5", "numbers are not text cells");
 }
 
+#[test]
 fn geometric_features_match_full_measurements_without_gray() {
     let mask = [true, true, false, false, false, false, false, true, true];
     let gray = [0.2; 9];

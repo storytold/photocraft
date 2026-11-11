@@ -1074,11 +1074,6 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
     })
 }
 
-/// The JPEGTables tag: quantization and Huffman tables shared by every JPEG strip or tile.
-const TAG_JPEG_TABLES: u16 = 347;
-/// The Predictor tag (1 none, 2 horizontal differencing, 3 floating point).
-const TAG_PREDICTOR: u16 = 317;
-
 /// Steps [`jpeg_sof`] may take per strip or tile beyond the file's length: room to read again
 /// the few header segments of strips or tiles that share one stream (a sparse file pointing its
 /// blank tiles at one tile).
