@@ -15,7 +15,10 @@ impl Session {
     /// Runs synchronously, including job-capable commands (see [`jobs`]; [`Session::start`] runs
     /// those in the background).
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
-        match self.dispatch(id, params, false)? {
+        let before = self.active_layer_stamp();
+        let result = self.dispatch(id, params, false);
+        self.note_layer_change(before);
+        match result? {
             jobs::Started::Done(v) => Ok(v),
             // Not reached: inline dispatch never starts a job. Waiting is still correct.
             jobs::Started::Job(j) => self.wait_job(j),
@@ -288,7 +291,9 @@ impl Session {
         // state: not a history step. A mapped edit (the four above) gives the exact map; any other
         // size change falls back to dropping whatever is now outside.
         let mut samplers_removed = 0;
-        if let Some(a) = sampler_map {
+        // The points sit on pixel centres (#11725), so they follow the geometry map, the one the
+        // symmetry gets: `sampler_map` is that map shifted for pixel indices (a flip or rotation).
+        if let Some(a) = sampler_map.and(symmetry_map) {
             let bounds = st.doc.bounds();
             let n = st.color_samplers.len();
             st.color_samplers.retain_mut(|p| {
@@ -314,6 +319,7 @@ impl Session {
         // report its own, tighter damage after this.
         let damage = layer_multi_cmds::step_damage(&before, &st.doc);
         let keep_clean = st.keeps_clean(&before);
+        #[cfg(any(test, debug_assertions))]
         let hint_before = before.clone();
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
@@ -336,7 +342,10 @@ impl Session {
         st.last_damage = damage;
         self.samplers_removed += samplers_removed;
         // An `Arc` clone (history keeps the same document); dropped when the command ends.
-        self.hint_before = Some(hint_before);
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.hint_before = Some(hint_before);
+        }
         if damage.is_none_or(|d| !d.is_empty()) {
             // Free the mask early; a stale entry would only miss (it is keyed by pixels).
             self.subject_cache = Default::default();
@@ -348,32 +357,25 @@ impl Session {
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
     /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
-    /// it (or bound a change `step_damage` can't). A hint names the pixels the command wrote; where
-    /// they are a feathered layer mask's, it grows by the feather's reach first, as `step_damage`
-    /// does, so the blurred halo around a mask stroke is redrawn too (#11351). In debug and test
-    /// builds, a hint that misses a tile the edit changed is counted in [`Session::damage_misses`]
-    /// and logged; it never panics.
+    /// it (or bound a change `step_damage` can't). The hint is first grown as `step_damage` grows
+    /// a change (by a mask's feather and by effects, `grow_hint`), so the intersection keeps a
+    /// dab's soft ring and shadow. In debug and test builds, a hint that misses a tile the edit
+    /// changed is counted in [`Session::damage_misses`] and logged; it never panics.
     pub fn hint_damage(&mut self, rect: photocraft_geom::Rect) {
-        let mut rect = rect;
+        #[cfg(any(test, debug_assertions))]
         if let Some(before) = self.hint_before.take()
             && let Some(st) = self.active()
             && st.doc.id == before.id
         {
-            let reach = layer_multi_cmds::hint_reach(&before, &st.doc);
-            #[cfg(any(test, debug_assertions))]
-            {
-                let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
-                if misses > 0 {
-                    let step = st.history.undo_label().unwrap_or("?");
-                    eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
-                    self.damage_misses += misses;
-                }
-            }
-            if reach > 0 && !rect.is_empty() {
-                rect = rect.inflate(reach);
+            let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
+            if misses > 0 {
+                let step = st.history.undo_label().unwrap_or("?");
+                eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
+                self.damage_misses += misses;
             }
         }
         let Some(st) = self.active_mut() else { return };
+        let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
     }
 }
