@@ -152,6 +152,41 @@ fn eval(stops: &[(f32, [f32; 3])], mids: &[f32], smooth: f32, t: f32, m: Method)
     })
 }
 
+impl Method {
+    /// Its name in a [`photocraft_doc::adjust::GradientSource`] and in commands.
+    pub fn name(self) -> &'static str {
+        match self {
+            Method::Classic => "classic",
+            Method::Perceptual => "perceptual",
+            Method::Linear => "linear",
+            Method::Smooth => "smooth",
+        }
+    }
+
+    /// Its four-character code in a PSD gradient (`None` for Classic, which older blocks imply).
+    pub(crate) fn code(self) -> Option<&'static [u8; 4]> {
+        match self {
+            Method::Classic => None,
+            Method::Perceptual => Some(b"Perc"),
+            Method::Linear => Some(b"Lnr "),
+            Method::Smooth => Some(b"Smoo"),
+        }
+    }
+}
+
+/// A Gradient Map's kept Photoshop gradient (#8351) baked into the dense linear sRGB stops the
+/// compositors render. Hostile values (from a file or a command) are clamped: locations and
+/// Smoothness to 0..1, midpoints to 0.05..0.95, a missing midpoint is the middle.
+pub fn bake_source(src: &photocraft_doc::adjust::GradientSource) -> Vec<(f32, [f32; 3])> {
+    let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    let mut stops: Vec<(f32, Color)> = src.stops.iter().map(|(t, c)| (unit(*t), Color::rgba(unit(c[0]), unit(c[1]), unit(c[2]), 1.0))).collect();
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mids: Vec<f32> =
+        (0..stops.len().saturating_sub(1)).map(|k| src.midpoints.get(k).copied().filter(|m| m.is_finite()).map_or(0.5, |m| m.clamp(0.05, 0.95))).collect();
+    let method = Method::from_name(&src.method).unwrap_or(Method::Classic);
+    bake(stops, &mids, unit(src.smoothness), method).into_iter().map(|(t, c)| (t, c.to_rgb())).collect()
+}
+
 /// Dense linear stops reproducing Photoshop's interpolation. Returns the input unchanged when it
 /// already interpolates linearly in sRGB.
 pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, Color)> {
@@ -185,9 +220,115 @@ pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method
     out
 }
 
+/// Exponent of Photoshop's opacity response for Perceptual and Linear gradients: the opacity
+/// stops enter the method's space as if they were sRGB grey levels (Linear: linear light;
+/// Perceptual: Oklab L), and the interpolated linear-light value `y` comes out as opacity
+/// `y^0.65`. Fitted on Photoshop (scripted Gradient Overlays and gradient fill layers, which
+/// render identical pixels: 100 → 0 % and 100 → 20 → 90 % ramps with Smoothness 0 and 100 and
+/// midpoints 25 and 50 %, within 0.015 of every 8-bit sample; a flat 60 % renders as 47 %).
+const OPACITY_RESPONSE: f32 = 0.65;
+
+/// Dense linear opacity stops reproducing Photoshop's interpolation of a gradient's transparency
+/// (Smoothness, opacity midpoints and the method, see [`OPACITY_RESPONSE`]). Returns the input
+/// unchanged when it already interpolates linearly. Smooth keeps Classic's opacity curve: it was
+/// not measured (the Photoshop build it was fitted on has no Smooth method).
+pub fn bake_opacity(stops: Vec<(f32, f32)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, f32)> {
+    let method = if method == Method::Smooth { Method::Classic } else { method };
+    let plain_mids = midpoints.iter().all(|m| (m - 0.5).abs() < 1e-3);
+    let smoothness = if smoothness.is_finite() { smoothness.clamp(0.0, 1.0) } else { 0.0 };
+    if stops.len() < 2 || (smoothness <= 0.0 && method == Method::Classic && plain_mids) {
+        return stops;
+    }
+    let into = |o: f32| -> f32 {
+        let o = if o.is_finite() { o.clamp(0.0, 1.0) } else { 1.0 };
+        match method {
+            Method::Linear => lin(o),
+            Method::Perceptual => lin(o).cbrt(),
+            Method::Classic | Method::Smooth => o,
+        }
+    };
+    let out = |v: f32| -> f32 {
+        let v = if v.is_finite() { v } else { 1.0 };
+        let y = match method {
+            Method::Linear => v,
+            Method::Perceptual => v.max(0.0).powi(3),
+            Method::Classic | Method::Smooth => return v.clamp(0.0, 1.0),
+        };
+        y.clamp(0.0, 1.0).powf(OPACITY_RESPONSE)
+    };
+    let mut s = stops;
+    s.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let pts: Vec<(f32, [f32; 3])> = s.iter().map(|(t, o)| (*t, [into(*o); 3])).collect();
+    const N: usize = 96;
+    let mut baked: Vec<(f32, f32)> = (0..=N)
+        .map(|k| {
+            let t = k as f32 / N as f32;
+            // Smoothness and midpoints shape the curve as for Classic colours, in the method's space.
+            (t, out(eval(&pts, midpoints, smoothness, t, Method::Classic)[0]))
+        })
+        .collect();
+    baked.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
+    baked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn opacity_at(stops: &[(f32, f32)], t: f32) -> f32 {
+        let i = stops.windows(2).position(|w| t >= w[0].0 && t <= w[1].0).unwrap();
+        let (a, b) = (stops[i], stops[i + 1]);
+        a.1 + (b.1 - a.1) * (t - a.0) / (b.0 - a.0)
+    }
+
+    /// Photoshop Gradient Overlay samples (black, Normal, over white; a 256 px wide linear
+    /// gradient, pixel `x` at t = (x + 0.5) / 256): opacity stops, midpoints, Smoothness, method,
+    /// and (x, opacity) pairs read from the composite.
+    #[test]
+    fn opacity_matches_photoshop_samples() {
+        type Case = (&'static [(f32, f32)], &'static [f32], f32, Method, &'static [(f32, f32)]);
+        let ramp: &[(f32, f32)] = &[(0.0, 1.0), (1.0, 0.0)];
+        let three: &[(f32, f32)] = &[(0.0, 1.0), (0.25, 0.2), (1.0, 0.9)];
+        let cases: [Case; 9] = [
+            (ramp, &[0.5], 0.0, Method::Linear, &[(64.0, 0.827), (128.0, 0.631), (192.0, 0.400)]),
+            (ramp, &[0.5], 0.0, Method::Perceptual, &[(64.0, 0.565), (128.0, 0.255), (192.0, 0.063)]),
+            (ramp, &[0.25], 1.0, Method::Classic, &[(32.0, 0.796), (64.0, 0.502), (128.0, 0.298), (192.0, 0.122)]),
+            (ramp, &[0.25], 1.0, Method::Linear, &[(32.0, 0.859), (64.0, 0.631), (128.0, 0.447), (192.0, 0.247)]),
+            (ramp, &[0.25], 1.0, Method::Perceptual, &[(32.0, 0.639), (64.0, 0.255), (128.0, 0.090), (192.0, 0.016)]),
+            (ramp, &[0.5], 1.0, Method::Classic, &[(64.0, 0.796), (128.0, 0.502), (192.0, 0.204)]),
+            (three, &[0.5, 0.5], 1.0, Method::Classic, &[(32.0, 0.557), (64.0, 0.200), (160.0, 0.502)]),
+            (three, &[0.5, 0.5], 1.0, Method::Perceptual, &[(32.0, 0.392), (64.0, 0.106), (160.0, 0.341)]),
+            (three, &[0.5, 0.5], 0.0, Method::Linear, &[(32.0, 0.647), (64.0, 0.106), (160.0, 0.557)]),
+        ];
+        for (stops, mids, smooth, m, samples) in cases {
+            let baked = bake_opacity(stops.to_vec(), mids, smooth, m);
+            for (x, want) in samples {
+                let got = opacity_at(&baked, (x + 0.5) / 256.0);
+                assert!((got - want).abs() < 0.015, "{m:?} smooth {smooth} mids {mids:?} x {x}: {got} vs Photoshop {want}");
+            }
+        }
+        // A flat 60 % renders as 47 % in Linear and Perceptual, 60 % in Classic.
+        for (m, want) in [(Method::Linear, 0.471), (Method::Perceptual, 0.471)] {
+            let baked = bake_opacity(vec![(0.0, 0.6), (1.0, 0.6)], &[0.5], 0.0, m);
+            assert!(baked.iter().all(|o| (o.1 - want).abs() < 0.01), "{m:?}: {baked:?}");
+        }
+    }
+
+    #[test]
+    fn plain_classic_and_smooth_opacity_stay_as_stored() {
+        let stops = vec![(1.0, 0.0), (0.0, 1.0)];
+        assert_eq!(bake_opacity(stops.clone(), &[0.5], 0.0, Method::Classic), stops);
+        assert_eq!(bake_opacity(stops.clone(), &[0.5], 0.0, Method::Smooth), stops);
+        assert_eq!(bake_opacity(vec![(0.5, 0.3)], &[], 1.0, Method::Linear), vec![(0.5, 0.3)]);
+    }
+
+    #[test]
+    fn opacity_bake_survives_hostile_values() {
+        for m in [Method::Classic, Method::Perceptual, Method::Linear, Method::Smooth] {
+            let baked = bake_opacity(vec![(f32::NAN, f32::INFINITY), (1.0, f32::NAN), (0.5, -3.0)], &[f32::NAN, 2.0], f32::NAN, m);
+            assert!(baked.iter().all(|o| (0.0..=1.0).contains(&o.1)), "{m:?}: {baked:?}");
+        }
+    }
 
     fn at(stops: &[(f32, Color)], t: f32) -> [f32; 3] {
         let i = stops.windows(2).position(|w| t >= w[0].0 && t <= w[1].0).unwrap();

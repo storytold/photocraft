@@ -1,5 +1,6 @@
-//! #2061: the scroll wheel over the options bar's Mode dropdown (Brush, Pencil, Gradient) steps
-//! through the blend modes, as over the Layers panel's (#1747) and as in Photoshop.
+//! #2061: the scroll wheel over the options bar's Mode dropdown (Brush, Pencil, Gradient, Paint
+//! Bucket, the stamps, History Brush, Healing) steps through the blend modes, as over the Layers
+//! panel's (#1747) and as in Photoshop.
 
 use egui::accesskit::Role;
 use egui::{Pos2, Rect, vec2};
@@ -34,6 +35,7 @@ fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, lines: f32) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: vec2(0.0, lines),
         phase: egui::TouchPhase::Move,
@@ -54,11 +56,14 @@ fn the_wheel_over_the_brush_mode_dropdown_steps_the_painting_mode() {
     wheel(&mut h, at, -1.0);
     assert_eq!(brush_mode(&h), BlendMode::Dissolve);
     wheel(&mut h, at, -1.0);
-    assert!(h.state().ui.tool_options.brush_clear, "Clear follows Dissolve, as in Photoshop");
+    assert!(h.state().session.tools.brush.behind, "Behind follows Dissolve");
+    wheel(&mut h, at, -1.0);
+    assert!(h.state().ui.tool_options.brush_clear, "Clear follows Behind");
+    assert!(!h.state().session.tools.brush.behind);
     wheel(&mut h, at, -1.0);
     assert!(!h.state().ui.tool_options.brush_clear);
     assert_eq!(brush_mode(&h), BlendMode::Darken);
-    wheel(&mut h, at, 3.0);
+    wheel(&mut h, at, 4.0);
     assert_eq!(brush_mode(&h), BlendMode::Normal, "up steps back and stops at the first mode");
 }
 
@@ -75,9 +80,63 @@ fn the_wheel_over_the_pencil_mode_dropdown_steps_the_painting_mode() {
 #[test]
 fn the_wheel_over_the_gradient_mode_dropdown_steps_its_blend_mode() {
     let mut h = harness(Tool::Gradient);
+    // Only the Classic gradient has a blend Mode (#12007).
+    h.state_mut().ui.tool_options.gradient_classic = true;
+    h.run_steps(4);
     let at = mode_dropdown(&h).center();
     wheel(&mut h, at, -2.0);
     assert_eq!(h.state().ui.tool_options.gradient_blend_mode, BlendMode::Darken);
     wheel(&mut h, at, 1.0);
     assert_eq!(h.state().ui.tool_options.gradient_blend_mode, BlendMode::Dissolve);
+}
+
+/// The stamps, the History Brush and the Healing Brush have a Mode dropdown of their own brush's
+/// mode; the Healing Brush's skips the modes it doesn't have, and the Pattern Stamp's has Behind
+/// after Dissolve (#12879).
+#[test]
+fn retouch_tools_have_a_mode_dropdown() {
+    for (tool, after_two) in [(Tool::CloneStamp, BlendMode::Darken), (Tool::HistoryBrush, BlendMode::Darken), (Tool::Healing, BlendMode::Screen)] {
+        let mut h = harness(tool);
+        let at = mode_dropdown(&h).center();
+        wheel(&mut h, at, -2.0);
+        assert_eq!(brush_mode(&h), after_two, "{tool:?}");
+        assert_eq!(h.state().ui.tool, tool);
+    }
+}
+
+/// The Pattern Stamp's Mode dropdown has Behind after Dissolve and no Clear (#12879): the wheel
+/// steps Normal, Dissolve, Behind, Darken, and stepping on leaves Behind. On a pixel layer: on the
+/// Background Behind is greyed and the wheel passes it.
+#[test]
+fn the_pattern_stamp_mode_dropdown_has_behind() {
+    let mut h = harness(Tool::PatternStamp);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(4);
+    let at = mode_dropdown(&h).center();
+    wheel(&mut h, at, -1.0);
+    assert_eq!(brush_mode(&h), BlendMode::Dissolve);
+    assert!(!h.state().session.tools.brush.behind);
+    wheel(&mut h, at, -1.0);
+    assert!(h.state().session.tools.brush.behind, "Behind follows Dissolve");
+    assert_eq!(brush_mode(&h), BlendMode::Normal);
+    wheel(&mut h, at, -1.0);
+    assert!(!h.state().session.tools.brush.behind, "Darken follows Behind: no Clear");
+    assert_eq!(brush_mode(&h), BlendMode::Darken);
+    wheel(&mut h, at, 1.0);
+    assert!(h.state().session.tools.brush.behind, "and back");
+    assert_eq!(h.state().ui.tool, Tool::PatternStamp);
+}
+
+/// The Paint Bucket's Mode dropdown has Clear after Dissolve, as the Brush's does.
+#[test]
+fn the_paint_bucket_mode_dropdown_has_clear() {
+    let mut h = harness(Tool::PaintBucket);
+    let at = mode_dropdown(&h).center();
+    wheel(&mut h, at, -1.0);
+    assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Dissolve);
+    wheel(&mut h, at, -1.0);
+    assert!(h.state().ui.tool_options.bucket_clear);
+    wheel(&mut h, at, -1.0);
+    assert!(!h.state().ui.tool_options.bucket_clear);
+    assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Darken);
 }

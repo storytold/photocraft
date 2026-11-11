@@ -18,13 +18,19 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod art_history;
 mod artistic;
 mod artistic_fx;
+pub mod average;
 mod blur;
 mod blur2;
 pub mod camera_raw;
+pub mod channel_noise;
 pub mod color_to_alpha;
 pub mod content_aware;
+pub mod convolution;
+pub mod coverage;
+mod cutout;
 mod denoise;
 pub mod dff;
 pub mod direct;
@@ -41,6 +47,8 @@ pub mod histogram;
 mod image;
 pub mod inpaint;
 pub mod lens;
+mod lens_flare;
+mod lens_flare_data;
 pub mod liquify;
 pub mod magnetic;
 pub mod matting;
@@ -59,6 +67,7 @@ pub mod poisson;
 pub mod puppet;
 pub mod pyramid;
 pub mod quantize;
+pub mod rank;
 pub mod redeye;
 mod relight;
 pub mod remove;
@@ -71,8 +80,10 @@ pub mod seam;
 pub mod segment;
 pub mod selection;
 mod selection_blur;
+pub mod separable;
 mod shape_blur;
 mod sharpen;
+mod square_dilate;
 pub mod stack;
 mod stylize;
 mod stylize2;
@@ -86,6 +97,7 @@ pub mod warp;
 pub mod wideangle;
 
 pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryParam, GalleryParamKind};
+pub use distort::MAX_WAVE_GENERATORS;
 pub use image::{Edge, Image};
 pub use params_ext::*;
 
@@ -201,6 +213,8 @@ pub enum PolarMode {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "filter", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FilterParams {
+    /// Mean colour over the selected area, retaining each pixel's alpha.
+    Average,
     /// Radius = Gaussian standard deviation in pixels (0.1–1000).
     GaussianBlur {
         radius: f32,
@@ -411,6 +425,14 @@ pub enum FilterParams {
     },
 
     // ---- Render ----
+    /// Clouds (or Difference Clouds, which subtracts them from the pixels) between two straight
+    /// sRGB RGBA colours; the cloud size follows the bounds.
+    Clouds {
+        seed: u32,
+        difference: bool,
+        foreground: [f32; 4],
+        background: [f32; 4],
+    },
     /// Variance 1–64, strength 1–64; colours straight sRGB RGBA.
     Fibers {
         variance: f32,
@@ -482,7 +504,8 @@ pub enum FilterParams {
         distribution: Distribution,
         monochromatic: bool,
         seed: u32,
-        /// Depth for [`DepthSource::LayerMask`] (channel 0, document coordinates), supplied by the caller.
+        /// Depth for [`DepthSource::LayerMask`] and [`DepthSource::Channel`] (channel 0, document
+        /// coordinates), supplied by the caller.
         #[serde(skip)]
         depth_map: Option<std::sync::Arc<Image>>,
     },
@@ -490,6 +513,12 @@ pub enum FilterParams {
     ShapeBlur {
         radius: f32,
         shape: BlurShape,
+    },
+    /// A custom shape's coverage kernel, resolved by the caller before rendering.
+    CustomShapeBlur {
+        radius: f32,
+        #[serde(skip)]
+        kernel: Option<std::sync::Arc<Image>>,
     },
 
     // ---- Blur Gallery ----
@@ -535,6 +564,38 @@ pub enum FilterParams {
         opacity_threshold: f32,
     },
 
+    /// Whole-owner native HDR local adaptation; existing document adjustment remains separate.
+    HdrToning(tone::HdrToning),
+    /// Independent native color/coverage order statistics.
+    Percentile(rank::Params),
+    /// Native channel-wise additive or signal-relative deterministic noise.
+    ChannelNoise(channel_noise::Params),
+    Convolution(convolution::Params),
+    /// Coverage onto model-native neutral axes, producing opaque native pixels.
+    AlphaToColor,
+    /// Bounded native256-sample alpha transfer, piecewise-linear between samples.
+    AlphaCurve {
+        values: Vec<f32>,
+    },
+    /// Replace native coverage while preserving every native color channel, including HDR.
+    SetAlpha {
+        value: f32,
+    },
+    /// Clamp existing native alpha; colors remain unchanged.
+    ClampAlpha {
+        low: f32,
+        high: f32,
+    },
+    /// Native strict > threshold on alpha; colors remain unchanged.
+    ThresholdAlpha {
+        value: f32,
+    },
+    /// Boundary-connected grayscale hole filling on each native channel or alpha only.
+    FillHoles {
+        connectivity: u8,
+        alpha_only: bool,
+    },
+
     // ---- Video ----
     /// Removes the even (or odd) lines and rebuilds them by interpolation (or duplication).
     DeInterlace {
@@ -551,8 +612,11 @@ pub enum FilterParams {
 impl FilterParams {
     /// Pixels read outside an output tile.
     pub fn halo(&self) -> Halo {
-        let g = |sigma: f32| Halo::Radius((sigma.max(0.0) * 3.0).ceil() as i32 + 1);
+        let g = |sigma: f32| Halo::Radius(((sigma.max(0.0) * 3.0).ceil() as i32).saturating_add(1));
         match self {
+            // Small Gaussian radii use the calibrated seven-tap kernel as well: its reach is
+            // three pixels even when ceil(3 * radius) + 1 would be smaller.
+            FilterParams::GaussianBlur { radius } | FilterParams::HighPass { radius } if (0.05..1.0).contains(radius) => Halo::Radius(3),
             FilterParams::GaussianBlur { radius } | FilterParams::HighPass { radius } => g(*radius),
             FilterParams::UnsharpMask { radius, .. } => Halo::Radius(sharpen::exact::halo(*radius)),
             FilterParams::SmartSharpen { radius, .. } => g(*radius),
@@ -561,20 +625,31 @@ impl FilterParams {
             | FilterParams::Median { radius }
             | FilterParams::DustAndScratches { radius, .. }
             | FilterParams::Minimum { radius, .. }
-            | FilterParams::Maximum { radius, .. } => Halo::Radius(radius.max(0.0).ceil() as i32 + 1),
+            | FilterParams::Maximum { radius, .. } => Halo::Radius((radius.max(0.0).ceil() as i32).saturating_add(1)),
             FilterParams::MotionBlur { distance, .. } => Halo::Radius((distance.abs() / 2.0).ceil() as i32 + 2),
-            FilterParams::Mosaic { cell_size } => Halo::Radius(cell_size.max(1.0).ceil() as i32 + 1),
+            FilterParams::Mosaic { cell_size } => Halo::Radius((cell_size.max(1.0).ceil() as i32).saturating_add(1)),
             FilterParams::Emboss { height, .. } => Halo::Radius(height.abs().ceil() as i32 + 2),
             FilterParams::FindEdges => Halo::Radius(1),
             FilterParams::AddNoise { .. } | FilterParams::Solarize | FilterParams::Invert | FilterParams::Desaturate => Halo::Radius(0),
-            FilterParams::RadialBlur { .. }
+            FilterParams::Average
+            | FilterParams::RadialBlur { .. }
             | FilterParams::Offset { .. }
             | FilterParams::Twirl { .. }
             | FilterParams::Pinch { .. }
             | FilterParams::Spherize { .. }
             | FilterParams::Wave { .. }
             | FilterParams::Ripple { .. }
-            | FilterParams::PolarCoordinates { .. } => Halo::Bounds,
+            | FilterParams::PolarCoordinates { .. }
+            | FilterParams::SetAlpha { .. }
+            | FilterParams::AlphaCurve { .. }
+            | FilterParams::AlphaToColor
+            | FilterParams::ClampAlpha { .. }
+            | FilterParams::ThresholdAlpha { .. }
+            | FilterParams::FillHoles { .. }
+            | FilterParams::HdrToning(_)
+            | FilterParams::Percentile(_) => Halo::Bounds,
+            FilterParams::ChannelNoise(_) => Halo::Bounds,
+            FilterParams::Convolution(_) => Halo::Bounds,
             other => halo_ext(other),
         }
     }
@@ -588,11 +663,29 @@ impl FilterParams {
         }
     }
 
-    /// Whether the filter's job is to make pixels transparent (Color to Alpha): it needs a layer
+    /// Whether the filter explicitly changes alpha coverage: it needs a layer
     /// that can hold transparency, so callers turn the Background into a normal layer first and
     /// refuse a layer whose transparency is locked instead of putting the old alpha back.
     pub fn makes_transparency(&self) -> bool {
-        matches!(self, FilterParams::ColorToAlpha { .. })
+        if let Self::ChannelNoise(params) = self {
+            return params.amounts.last().is_some_and(|amount| *amount > 0.);
+        }
+        if let Self::Convolution(params) = self {
+            return params.channels.last().copied().unwrap_or(false);
+        }
+        if let Self::Percentile(params) = self {
+            return params.channels.as_ref().is_none_or(|channels| channels.last().copied().unwrap_or(false));
+        }
+        matches!(
+            self,
+            FilterParams::ColorToAlpha { .. }
+                | FilterParams::SetAlpha { .. }
+                | FilterParams::AlphaCurve { .. }
+                | FilterParams::AlphaToColor
+                | FilterParams::ClampAlpha { .. }
+                | FilterParams::ThresholdAlpha { .. }
+                | FilterParams::FillHoles { .. }
+        )
     }
 
     /// Whether the filter moves pixels around the reference bounds (its
@@ -605,12 +698,35 @@ impl FilterParams {
     /// the reference bounds even where the layer is transparent, as Photoshop's does on an
     /// empty layer, while still reading no neighbourhood.
     pub fn renders_from_nothing(&self) -> bool {
-        matches!(self, FilterParams::Fibers { .. })
+        matches!(self, FilterParams::Fibers { .. } | FilterParams::Clouds { difference: false, .. })
+    }
+
+    /// Whether the filter places and sizes its pattern by the canvas even with a selection
+    /// (Clouds, Fibers), or limits its working area to the canvas (Average). The output
+    /// area is still clipped to the selection; Average also weights its mean by that coverage.
+    pub fn sizes_by_canvas(&self) -> bool {
+        matches!(
+            self,
+            FilterParams::Clouds { .. }
+                | FilterParams::Fibers { .. }
+                | FilterParams::SetAlpha { .. }
+                | FilterParams::AlphaCurve { .. }
+                | FilterParams::AlphaToColor
+                | FilterParams::ClampAlpha { .. }
+                | FilterParams::ThresholdAlpha { .. }
+                | FilterParams::FillHoles { .. }
+                | FilterParams::HdrToning(_)
+                | FilterParams::Percentile(_)
+                | FilterParams::ChannelNoise(_)
+                | FilterParams::Convolution(_)
+                | FilterParams::Average
+        )
     }
 
     /// Human-readable name.
     pub fn label(&self) -> &'static str {
         match self {
+            FilterParams::Average => "Average",
             FilterParams::GaussianBlur { .. } => "Gaussian Blur",
             FilterParams::BoxBlur { .. } => "Box Blur",
             FilterParams::MotionBlur { .. } => "Motion Blur",
@@ -652,6 +768,8 @@ impl FilterParams {
             FilterParams::Displace { .. } => "Displace",
             FilterParams::Shear { .. } => "Shear",
             FilterParams::ZigZag { .. } => "ZigZag",
+            FilterParams::Clouds { difference: false, .. } => "Clouds",
+            FilterParams::Clouds { difference: true, .. } => "Difference Clouds",
             FilterParams::Fibers { .. } => "Fibers",
             FilterParams::LensFlare { .. } => "Lens Flare",
             FilterParams::LightingEffects { .. } => "Lighting Effects",
@@ -659,7 +777,7 @@ impl FilterParams {
             FilterParams::ReduceNoise { .. } => "Reduce Noise",
             FilterParams::SmartBlur { .. } => "Smart Blur",
             FilterParams::LensBlur { .. } => "Lens Blur",
-            FilterParams::ShapeBlur { .. } => "Shape Blur",
+            FilterParams::ShapeBlur { .. } | FilterParams::CustomShapeBlur { .. } => "Shape Blur",
             FilterParams::TiltShift { .. } => "Tilt-Shift",
             FilterParams::IrisBlur { .. } => "Iris Blur",
             FilterParams::FieldBlur { .. } => "Field Blur",
@@ -668,6 +786,16 @@ impl FilterParams {
             FilterParams::Custom { .. } => "Custom",
             FilterParams::HsbHsl { .. } => "HSB/HSL",
             FilterParams::ColorToAlpha { .. } => "Color to Alpha",
+            FilterParams::HdrToning(_) => "HDR Toning",
+            FilterParams::Percentile(_) => "Percentile",
+            FilterParams::ChannelNoise(_) => "Channel Noise",
+            FilterParams::Convolution(_) => "Convolution",
+            FilterParams::AlphaToColor => "Alpha to Color",
+            FilterParams::AlphaCurve { .. } => "Alpha Curve",
+            FilterParams::SetAlpha { .. } => "Set Alpha",
+            FilterParams::ClampAlpha { .. } => "Clamp Alpha",
+            FilterParams::ThresholdAlpha { .. } => "Threshold Alpha",
+            FilterParams::FillHoles { .. } => "Fill Holes",
             FilterParams::DeInterlace { .. } => "De-Interlace",
             FilterParams::NtscColors => "NTSC Colors",
             FilterParams::FilterGallery { effects } => match effects.as_slice() {
@@ -680,7 +808,7 @@ impl FilterParams {
 
 /// Halos of the second filter batch.
 fn halo_ext(p: &FilterParams) -> Halo {
-    let r = |v: f32| Halo::Radius(v.max(0.0).ceil() as i32 + 1);
+    let r = |v: f32| Halo::Radius((v.max(0.0).ceil() as i32).saturating_add(1));
     match p {
         FilterParams::ColorHalftone { max_radius, .. } => r(max_radius * 3.0),
         FilterParams::Crystallize { cell_size, .. } => r(cell_size.max(1.0) * 3.0),
@@ -696,24 +824,36 @@ fn halo_ext(p: &FilterParams) -> Halo {
         FilterParams::Wind { method, .. } => r(stylize2::wind_reach(*method)),
         FilterParams::Displace { .. } | FilterParams::Shear { .. } | FilterParams::ZigZag { .. } | FilterParams::SpinBlur { .. } => Halo::Bounds,
         // Generators and per-pixel renders only need the bounds geometry (always in the context).
-        FilterParams::Fibers { .. } | FilterParams::LensFlare { .. } => Halo::Radius(0),
+        FilterParams::Fibers { .. } | FilterParams::LensFlare { .. } | FilterParams::Clouds { .. } => Halo::Radius(0),
         FilterParams::LightingEffects { .. } => r(1.0),
         FilterParams::Relight { intensity, .. } if *intensity == 0.0 => Halo::Radius(0),
         FilterParams::Relight { .. } => Halo::Radius(relight::halo_radius_max()),
         FilterParams::ReduceNoise { .. } => r(denoise::reach()),
-        FilterParams::SmartBlur { radius, .. } => r(*radius),
-        FilterParams::LensBlur { radius, .. } => r(*radius),
-        FilterParams::ShapeBlur { radius, .. } => r(shape_blur::radius(*radius)),
+        // The kernels clamp the radius to 100 px: size the source window by what they use.
+        FilterParams::SmartBlur { radius, .. } => r(radius.min(100.0)),
+        FilterParams::LensBlur { radius, .. } => r(radius.min(100.0)),
+        FilterParams::ShapeBlur { radius, .. } | FilterParams::CustomShapeBlur { radius, .. } => r(shape_blur::radius(*radius)),
         FilterParams::TiltShift { blur, .. } => r(gallery::reach(*blur)),
         FilterParams::IrisBlur { pins } => r(gallery::reach(pins.iter().map(|p| p.blur).fold(0.0, f32::max))),
         FilterParams::FieldBlur { pins } => r(gallery::reach(pins.iter().map(|p| p.blur).fold(0.0, f32::max))),
         FilterParams::PathBlur { paths } => r(paths.iter().map(|p| p.speed.abs()).fold(0.0, f32::max) / 2.0 + 1.0),
         FilterParams::Custom { .. } => r(2.0),
         FilterParams::DeInterlace { .. } => r(1.0),
+        FilterParams::FilterGallery { effects } if artistic_fx::is_global(effects) => Halo::Bounds,
         FilterParams::FilterGallery { effects } => Halo::Radius(artistic_fx::reach(effects)),
         _ => Halo::Radius(0),
     }
 }
+
+/// Number of workers the current native filter pool can use (one on WebAssembly).
+/// Callers admitting temporary filter work can bound live tile buffers with the same pool.
+pub fn filter_worker_count() -> usize {
+    par::threads()
+}
+
+/// Target byte allowance for retained native tile results in one filter group.
+/// A group also holds at least one tile per worker; callers must account for that minimum.
+pub const FILTER_RESULT_BUDGET: usize = RESULT_BUDGET;
 
 /// Context a filter runs in.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -731,6 +871,7 @@ pub struct Ctx {
 /// the halo, or the bounds for global filters). Returns interleaved samples.
 pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
     match params {
+        FilterParams::Average => average::kernel(src, out, ctx),
         FilterParams::GaussianBlur { radius } => blur::gaussian(src, out, ctx, *radius),
         FilterParams::BoxBlur { radius } => blur::boxed(src, out, ctx, *radius),
         FilterParams::MotionBlur { angle, distance } => blur::motion(src, out, ctx, *angle, *distance),
@@ -744,8 +885,8 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::AddNoise { amount, distribution, monochromatic, seed } => noise::add(src, out, ctx, *amount, *distribution, *monochromatic, *seed),
         FilterParams::Median { radius } => noise::median(src, out, *radius, None),
         FilterParams::DustAndScratches { radius, threshold } => noise::median(src, out, *radius, Some(*threshold)),
-        FilterParams::Minimum { radius, preserve } => other::min_max_preserve(src, out, *radius, false, *preserve),
-        FilterParams::Maximum { radius, preserve } => other::min_max_preserve(src, out, *radius, true, *preserve),
+        FilterParams::Minimum { radius, preserve } => min_max_ink(src, out, ctx, *radius, false, *preserve),
+        FilterParams::Maximum { radius, preserve } => min_max_ink(src, out, ctx, *radius, true, *preserve),
         FilterParams::Offset { horizontal, vertical, undefined } => other::offset(src, out, ctx, *horizontal, *vertical, *undefined),
         FilterParams::Mosaic { cell_size } => stylize::mosaic(src, out, ctx, *cell_size),
         FilterParams::Emboss { angle, height, amount } => stylize::emboss(src, out, ctx, *angle, *height, *amount),
@@ -816,10 +957,11 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         }
         FilterParams::Shear { points, undefined } => distort2::shear(src, out, ctx, points, *undefined),
         FilterParams::ZigZag { amount, ridges, style } => distort2::zigzag(src, out, ctx, *amount, *ridges, *style),
+        FilterParams::Clouds { seed, difference, foreground, background } => render::clouds(src, out, ctx, *seed, *difference, (*foreground, *background)),
         FilterParams::Fibers { variance, strength, seed, foreground, background } => {
             render::fibers(src, out, ctx, *variance, *strength, *seed, (*foreground, *background))
         }
-        FilterParams::LensFlare { brightness, center_x, center_y, lens } => render::lens_flare(src, out, ctx, *brightness, (*center_x, *center_y), *lens),
+        FilterParams::LensFlare { brightness, center_x, center_y, lens } => lens_flare::lens_flare(src, out, ctx, *brightness, (*center_x, *center_y), *lens),
         FilterParams::LightingEffects { lights, gloss, metallic, exposure, ambience, texture, height, white_is_high } => render::lighting(
             src,
             out,
@@ -891,6 +1033,10 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
             },
         ),
         FilterParams::ShapeBlur { radius, shape } => blur2::shape_blur(src, out, ctx, *radius, *shape),
+        FilterParams::CustomShapeBlur { radius, kernel } => kernel
+            .as_ref()
+            .and_then(|mask| shape_blur::Prepared::custom(*radius, mask, &photocraft_raster::Interrupt::NONE))
+            .map_or_else(Vec::new, |prepared| prepared.run(src, out, ctx)),
         FilterParams::TiltShift { blur, center_x, center_y, angle, focus, transition } => {
             gallery::tilt_shift(src, out, ctx, *blur, (*center_x, *center_y), *angle, *focus, *transition)
         }
@@ -900,6 +1046,18 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::PathBlur { paths } => gallery::path(src, out, ctx, paths),
         FilterParams::Custom { kernel, scale, offset } => other2::custom(src, out, ctx, kernel, *scale, *offset),
         FilterParams::HsbHsl { input, output } => other2::hsb_hsl(src, out, ctx, *input, *output),
+        FilterParams::HdrToning(options) => tone::checked_hdr::run_image(src, out, ctx, options),
+        FilterParams::Percentile(options) => rank::run_image(src, out, ctx, options),
+        FilterParams::ChannelNoise(options) => channel_noise::run_image(src, out, ctx, options),
+        FilterParams::Convolution(options) => convolution::run_image(src, out, ctx, options),
+        FilterParams::AlphaToColor => coverage::run_image(src, out, ctx, coverage::Operation::AlphaToColor),
+        FilterParams::AlphaCurve { values } => coverage::run_image(src, out, ctx, coverage::Operation::AlphaCurve(values)),
+        FilterParams::SetAlpha { value } => coverage::run_image(src, out, ctx, coverage::Operation::SetAlpha(*value)),
+        FilterParams::ClampAlpha { low, high } => coverage::run_image(src, out, ctx, coverage::Operation::ClampAlpha { low: *low, high: *high }),
+        FilterParams::ThresholdAlpha { value } => coverage::run_image(src, out, ctx, coverage::Operation::ThresholdAlpha(*value)),
+        FilterParams::FillHoles { connectivity, alpha_only } => {
+            coverage::run_image(src, out, ctx, coverage::Operation::FillHoles { connectivity: *connectivity, alpha_only: *alpha_only })
+        }
         FilterParams::ColorToAlpha { color, transparency_threshold, opacity_threshold } => {
             color_to_alpha::color_to_alpha(src, out, ctx, *color, *transparency_threshold, *opacity_threshold)
         }
@@ -907,6 +1065,23 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::NtscColors => video::ntsc(src, out, ctx),
         FilterParams::FilterGallery { effects } => artistic_fx::run(effects, src, out, ctx),
     }
+}
+
+/// Minimum / Maximum in the document's polarity. CMYK samples are ink, so there Maximum spreads
+/// paper white and Minimum spreads ink (as Photoshop does): the colour channels run inverted,
+/// alpha keeps its usual polarity.
+fn min_max_ink(src: &Image, out: Rect, ctx: &Ctx, radius: f32, max: bool, preserve: Preserve) -> Vec<f32> {
+    if !fxutil::subtractive(ctx) {
+        return other::min_max_preserve(src, out, radius, max, preserve);
+    }
+    let n = src.ch.max(1);
+    let cc = if ctx.alpha { n - 1 } else { n };
+    let flip = |data: &mut [f32]| data.chunks_exact_mut(n).for_each(|px| px.iter_mut().take(cc).for_each(|v| *v = 1.0 - *v));
+    let mut inv = src.clone();
+    flip(&mut inv.data);
+    let mut res = other::min_max_preserve(&inv, out, radius, max, preserve);
+    flip(&mut res);
+    res
 }
 
 /// Output tile size used by [`apply`].
@@ -959,19 +1134,146 @@ pub fn apply_in_with(
     extent: Rect,
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
-    apply_tiled_with(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent), ctl)
+    try_apply_in_with(surface, params, area, bounds, selection, extent, ctl).ok()
+}
+
+/// A checked native kernel's original failure, or failure of a legacy tiled kernel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyError {
+    Cancelled,
+    Native(coverage::Error),
+    Hdr(tone::checked_hdr::Error),
+    WorkingData,
+}
+
+impl std::fmt::Display for ApplyError {
+    /// Preserve the checked kernel's diagnostic instead of guessing why it produced no output.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("filter cancelled"),
+            Self::Native(error) => error.fmt(f),
+            Self::Hdr(error) => error.fmt(f),
+            Self::WorkingData => f.write_str("the filter could not prepare its working data (not enough memory, or an unusable kernel)"),
+        }
+    }
+}
+impl std::error::Error for ApplyError {}
+
+impl ApplyError {
+    /// Classify cancellation independently of the selected native kernel's error type.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled | Self::Native(coverage::Error::Cancelled) | Self::Hdr(tone::checked_hdr::Error::Cancelled))
+    }
+}
+
+/// [`apply_in_with`] with specific checked-kernel diagnostics; compatibility APIs retain their optional result.
+pub fn try_apply_in_with(
+    surface: &Surface,
+    params: &FilterParams,
+    area: Rect,
+    bounds: Rect,
+    selection: Option<&Surface>,
+    extent: Rect,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Surface, ApplyError> {
+    if ctl.cancelled() {
+        return Err(ApplyError::Cancelled);
+    }
+    let area = area.intersect(&extent);
+    if let Some(result) = checked_native_filter(surface, params, area, bounds, selection, Some(extent), ctl) {
+        return result;
+    }
+    apply_tiled_with(surface, params, area, bounds, selection, auto_tile(params, bounds), Some(extent), ctl)
+        .ok_or_else(|| if ctl.cancelled() { ApplyError::Cancelled } else { ApplyError::WorkingData })
+}
+
+/// Keep native error dispatch shared by diagnostic and legacy optional entry points.
+fn checked_native_filter(
+    surface: &Surface,
+    params: &FilterParams,
+    area: Rect,
+    bounds: Rect,
+    selection: Option<&Surface>,
+    extent: Option<Rect>,
+    ctl: &photocraft_raster::Interrupt,
+) -> Option<Result<Surface, ApplyError>> {
+    let domain = extent.unwrap_or(bounds);
+    Some(match params {
+        FilterParams::HdrToning(options) => tone::checked_hdr::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Hdr),
+        FilterParams::Percentile(options) => rank::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::ChannelNoise(options) => channel_noise::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::Convolution(options) => convolution::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::Average => {
+            // Without an owner extent, Average's whole-operation domain is the requested area.
+            average::apply_preserving_alpha_with(surface, area, extent.unwrap_or(area), selection, ctl).map_err(ApplyError::Native)
+        }
+        _ => coverage::apply_with(surface, coverage_operation(params)?, area, domain, selection, ctl).map_err(ApplyError::Native),
+    })
 }
 
 /// Results do not depend on the tiling, so wide-halo filters use bigger tiles to keep the
-/// re-read margin (and its cost) below ~2× the tile area.
+/// re-read margin (and its cost) below ~2× the tile area. The radius is input-derived, so the
+/// halo arithmetic is done in `i64` and the result capped: an `i32::MAX` radius must not
+/// overflow in debug builds, and must not produce a tile bigger than the hard cap.
 fn auto_tile(params: &FilterParams, bounds: Rect) -> i32 {
     match params.halo_for(bounds) {
-        Halo::Radius(r) => TILE.max((2 * r + 63) / 64 * 64).min(2048),
+        // The radius is input-derived: widen to i64 before the arithmetic and cap the
+        // conversion, so an i32::MAX radius cannot overflow (debug panic) and cannot make a
+        // tile bigger than the hard cap below (131_072 = 2048 * 64, one tile row).
+        Halo::Radius(r) => {
+            let halo = ((2 * i64::from(r) + 63) / 64 * 64).min(131_072);
+            TILE.max(halo as i32).min(2048)
+        }
         Halo::Bounds => TILE,
     }
 }
 
+/// Conservative transient allocation estimate for filter admission. Output tiles remain in
+/// the paged store; whole-image kernels must admit their float input before reading it.
+pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: usize) -> u64 {
+    if area.is_empty() {
+        return 0;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let threads = rayon::current_num_threads().max(1) as u64;
+    #[cfg(target_arch = "wasm32")]
+    let threads = 1u64;
+    let tile = auto_tile(params, bounds).max(1) as u64;
+    // Each worker holds one tile's windows at a time, so no more workers than tiles hold them
+    // at once (a 24 MP image at a 1024 px tile has 24 tiles, fewer than 32 threads).
+    let tiles = u64::from(area.width()).div_ceil(tile).saturating_mul(u64::from(area.height()).div_ceil(tile)).max(1);
+    let threads = threads.min(tiles);
+    let floats = (channels as u64).saturating_mul(4);
+    // Result groups hold at most RESULT_BUDGET bytes of floats, and never more than the area.
+    let base = area.size().area().saturating_mul(floats).min(RESULT_BUDGET as u64).saturating_mul(3);
+    let windows = match params.halo_for(bounds) {
+        Halo::Bounds => base.saturating_add(bounds.union(&area).size().area().saturating_mul(floats)),
+        Halo::Radius(r) => {
+            let side = tile.saturating_add((r.max(0) as u64).saturating_mul(2));
+            base.saturating_add(
+                side.saturating_mul(side).saturating_add(tile.saturating_mul(tile).saturating_mul(3)).saturating_mul(floats).saturating_mul(threads),
+            )
+        }
+    };
+    windows.saturating_add(shape_blur_bytes(params, bounds, tile, channels as u64, threads))
+}
+
+/// What Shape Blur holds beyond the float windows: each worker's f64 prefix sums over its
+/// halo-expanded tile, and for a custom shape the kernel mask kept for the whole run plus its
+/// prepared coverage runs (at most [`shape_blur::max_spans`], 20 bytes each).
+fn shape_blur_bytes(params: &FilterParams, bounds: Rect, tile: u64, channels: u64, threads: u64) -> u64 {
+    let (FilterParams::ShapeBlur { .. } | FilterParams::CustomShapeBlur { .. }) = params else { return 0 };
+    let Halo::Radius(r) = params.halo_for(bounds) else { return 0 };
+    let side = tile.min(2048).saturating_add((r.max(0) as u64).saturating_mul(2)).saturating_add(1);
+    let prefix = side.saturating_mul(side).saturating_mul(channels).saturating_mul(8).saturating_mul(threads);
+    let FilterParams::CustomShapeBlur { kernel: Some(mask), .. } = params else { return prefix };
+    let size = (mask.rect.width() as usize).max(mask.rect.height() as usize);
+    let spans = (shape_blur::max_spans(size) as u64).saturating_mul(20);
+    prefix.saturating_add((mask.data.len() as u64).saturating_mul(4)).saturating_add(spans)
+}
+
 /// [`apply`] / [`apply_in`] with an explicit tile size (tests use it to check tile independence).
+/// Nonpositive tile sizes are treated as one pixel.
 pub fn apply_tiled(
     surface: &Surface,
     params: &FilterParams,
@@ -1002,7 +1304,22 @@ pub fn apply_tiled_with(
     apply_tiled_with_impl(surface, params, area, bounds, selection, tile, extent, ctl, true)
 }
 
+/// Map native coverage filters once so the tiled dispatcher only handles their execution.
+fn coverage_operation(params: &FilterParams) -> Option<coverage::Operation<'_>> {
+    match params {
+        FilterParams::AlphaToColor => Some(coverage::Operation::AlphaToColor),
+        FilterParams::AlphaCurve { values } => Some(coverage::Operation::AlphaCurve(values)),
+        FilterParams::SetAlpha { value } => Some(coverage::Operation::SetAlpha(*value)),
+        FilterParams::ClampAlpha { low, high } => Some(coverage::Operation::ClampAlpha { low: *low, high: *high }),
+        FilterParams::ThresholdAlpha { value } => Some(coverage::Operation::ThresholdAlpha(*value)),
+        FilterParams::FillHoles { connectivity, alpha_only } => Some(coverage::Operation::FillHoles { connectivity: *connectivity, alpha_only: *alpha_only }),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
+/// Dispatch checked whole-domain filters or bounded native tiles, publishing a result only after successful processing
+/// and cancellation checks.
 fn apply_tiled_with_impl(
     surface: &Surface,
     params: &FilterParams,
@@ -1014,6 +1331,8 @@ fn apply_tiled_with_impl(
     ctl: &photocraft_raster::Interrupt,
     prepare_fast_paths: bool,
 ) -> Option<Surface> {
+    // Every dispatch path needs a positive step, including Motion Blur's fallback.
+    let tile = tile.max(1);
     if ctl.cancelled() {
         return None;
     }
@@ -1025,9 +1344,15 @@ fn apply_tiled_with_impl(
     {
         return None;
     }
+    if let Some(result) = checked_native_filter(surface, params, area, bounds, selection, extent, ctl) {
+        return result.ok();
+    }
     let mut out = surface.clone();
     if area.is_empty() {
         return Some(out);
+    }
+    if matches!(params, FilterParams::Average) {
+        return average::apply(surface, extent.map_or(area, |e| area.intersect(&e)), selection, ctl);
     }
     #[cfg(not(target_arch = "wasm32"))]
     if prepare_fast_paths && let Some(result) = sharpen::fft::apply(surface, params, area, selection, extent, ctl) {
@@ -1041,7 +1366,11 @@ fn apply_tiled_with_impl(
     }
     // The public tile override must not create a zero-step loop or an
     // unbounded scratch buffer for these checked filters. Automatic tiles are unchanged.
-    let tile = if matches!(params, FilterParams::ShapeBlur { .. } | FilterParams::UnsharpMask { .. }) { tile.clamp(1, 2048) } else { tile };
+    let tile = if matches!(params, FilterParams::ShapeBlur { .. } | FilterParams::CustomShapeBlur { .. } | FilterParams::UnsharpMask { .. }) {
+        tile.clamp(1, 2048)
+    } else {
+        tile
+    };
     let fmt = surface.format();
     let ctx = Ctx { bounds, mode: fmt.mode, alpha: fmt.alpha };
     // Prepare the immutable sample transforms once for all output tiles. If the
@@ -1057,20 +1386,37 @@ fn apply_tiled_with_impl(
         return None;
     }
     let halo = params.halo_for(bounds);
-    if matches!(params, FilterParams::UnsharpMask { .. }) {
-        let Halo::Radius(reach) = halo else { return None };
+    // Every windowed filter: a Filter Gallery stack sums its effects' reach, and a radius is
+    // caller-supplied, so a short parameter set can ask for a huge source window per tile.
+    if let Halo::Radius(reach) = halo {
         let (w, h) = (area.width().min(tile as u32) as usize, area.height().min(tile as u32) as usize);
         let read_samples = w.checked_add(2 * reach as usize)?.checked_mul(h.checked_add(2 * reach as usize)?)?.checked_mul(fmt.channels())?;
         let tile_count = u64::from(area.width()).div_ceil(tile as u64).checked_mul(u64::from(area.height()).div_ceil(tile as u64))?;
         // Reject hostile source-window sizes before Image::read allocates them.
         // Ordinary filter parameters and automatic tiles fit these bounds.
-        if read_samples > 512 * 1024 * 1024 || read_samples.checked_mul(std::mem::size_of::<f32>())? > isize::MAX as usize || tile_count > 1_048_576 {
+        let too_many_tiles = matches!(params, FilterParams::UnsharpMask { .. }) && tile_count > 1_048_576;
+        if read_samples > 512 * 1024 * 1024 || read_samples.checked_mul(std::mem::size_of::<f32>())? > isize::MAX as usize || too_many_tiles {
             return None;
         }
     }
     let shared = (halo == Halo::Bounds).then(|| Image::read(surface, bounds.union(&area)));
+    // A Filter Gallery stack with a Cutout traces the whole image once; tiles only fill it in.
+    let gallery = match (params, &shared) {
+        (FilterParams::FilterGallery { effects }, Some(src)) => artistic_fx::Prepared::new(effects, src, &ctx),
+        _ => None,
+    };
+    if ctl.cancelled() {
+        return None;
+    }
     // Shape rasterization depends only on params, not on a tile's pixels.
     let shape = match params {
+        FilterParams::CustomShapeBlur { radius, kernel } => {
+            if ctl.cancelled() {
+                return None;
+            }
+            let prepared = shape_blur::Prepared::custom(*radius, kernel.as_ref()?, ctl)?;
+            Some(prepared)
+        }
         FilterParams::ShapeBlur { radius, shape } => {
             if ctl.cancelled() {
                 return None;
@@ -1092,16 +1438,43 @@ fn apply_tiled_with_impl(
     // Tiles finished so far, for progress reported per tile (from any worker thread).
     let finished = std::sync::atomic::AtomicUsize::new(0);
     let total = tiles.len().max(1);
-    let run = |t: &Rect| -> (Rect, Vec<f32>) {
+    enum TileData {
+        Samples(Vec<f32>),
+        Encoded(Vec<u8>),
+    }
+    // Cell filters become writeback-bound once their geometry is reused. Encode
+    // on the tile workers; committing the group then only copies native bytes.
+    let finish = |data: Vec<f32>| {
+        if matches!(params, FilterParams::Crystallize { .. } | FilterParams::Pointillize { .. })
+            && let Some(bytes) = pixelate::cells::encode(fmt, &data)
+        {
+            TileData::Encoded(bytes)
+        } else {
+            TileData::Samples(data)
+        }
+    };
+    let run = |t: &Rect| -> (Rect, TileData) {
         // Cancelled: skip the remaining tiles of the group (the result is discarded).
         if ctl.cancelled() {
-            return (*t, Vec::new());
+            return (*t, TileData::Samples(Vec::new()));
         }
         let tick = || {
             let n = finished.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             // The last few percent are the writes after each group.
             ctl.progress(0.98 * n as f32 / total as f32);
         };
+        let sparse = match *params {
+            FilterParams::Crystallize { cell_size, seed } => pixelate::cells::tile(surface, *t, &ctx, cell_size, seed, None, extent),
+            FilterParams::Pointillize { cell_size, seed, background } => pixelate::cells::tile(surface, *t, &ctx, cell_size, seed, Some(background), extent),
+            _ => None,
+        };
+        if let Some((src, mut data)) = sparse {
+            if let Some(sel) = selection {
+                mix_selection(&mut data, *t, sel, &src, fmt.alpha);
+            }
+            tick();
+            return (*t, finish(data));
+        }
         let owned;
         let src = match (&shared, halo) {
             (Some(s), _) => s,
@@ -1119,7 +1492,8 @@ fn apply_tiled_with_impl(
             }
         };
         let Some(mut data) = (match (&shape, &radial) {
-            (Some(shape), _) => shape.checked_run(src, *t, &ctx),
+            _ if gallery.is_some() => gallery.as_ref().map(|g| g.run(src, *t, &ctx)),
+            (Some(shape), _) => shape.checked_run(src, *t, &ctx, ctl),
             (None, Some(plan)) => match plan.filter(src, *t, &ctx, ctl) {
                 Some(data) => Some(data),
                 None if ctl.cancelled() => None,
@@ -1130,13 +1504,13 @@ fn apply_tiled_with_impl(
                 _ => Some(kernel(params, src, *t, &ctx)),
             },
         }) else {
-            return (*t, Vec::new());
+            return (*t, TileData::Samples(Vec::new()));
         };
         if let Some(sel) = selection {
             mix_selection(&mut data, *t, sel, src, fmt.alpha);
         }
         tick();
-        (*t, data)
+        (*t, finish(data))
     };
     // Tiles are filtered in groups of about RESULT_BUDGET bytes (at least one per core) and each
     // group is written before the next starts, so a huge layer never holds all its results as
@@ -1152,24 +1526,36 @@ fn apply_tiled_with_impl(
             return None;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let results: Vec<(Rect, Vec<f32>)> = {
+        let results: Vec<(Rect, TileData)> = {
             use rayon::prelude::*;
             chunk.par_iter().map(run).collect()
         };
         #[cfg(target_arch = "wasm32")]
-        let results: Vec<(Rect, Vec<f32>)> = chunk.iter().map(run).collect();
+        let results: Vec<(Rect, TileData)> = chunk.iter().map(run).collect();
         if ctl.cancelled() {
             return None;
         }
         // Checked filters can reject malformed geometry or an allocation failure.
         // Do not hand an incomplete tile to Surface::write_region.
         if (shape.is_some() || matches!(params, FilterParams::UnsharpMask { .. }))
-            && results.iter().any(|(t, data)| data.len() != t.width() as usize * t.height() as usize * fmt.channels())
+            && results.iter().any(|(t, data)| {
+                let pixels = t.width() as usize * t.height() as usize;
+                match data {
+                    TileData::Samples(v) => v.len() != pixels * fmt.channels(),
+                    TileData::Encoded(v) => v.len() != pixels * fmt.bytes_per_pixel(),
+                }
+            })
         {
             return None;
         }
         for (t, data) in results {
-            out.write_region(t, &data);
+            match data {
+                TileData::Samples(data) => {
+                    out.write_region(t, &data);
+                    photocraft_raster::scratch::give(data);
+                }
+                TileData::Encoded(data) => out.write_interleaved(t, &data),
+            }
         }
     }
     out.prune();
@@ -1222,6 +1608,7 @@ fn apply_box_blur(
                     mix_selection(data, *t, sel, &Image::read(surface, *t), fmt.alpha);
                 }
                 s.write_region(*t, data);
+                photocraft_raster::scratch::give(std::mem::take(data));
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -1266,11 +1653,28 @@ fn mix_selection(data: &mut [f32], t: Rect, sel: &Surface, orig: &Image, alpha: 
             let original_alpha = orig.get(x, y, a);
             let filtered_alpha = px[a];
             if original_alpha != filtered_alpha {
-                let mixed_alpha = original_alpha + (filtered_alpha - original_alpha) * k;
+                let mut mixed_alpha = original_alpha + (filtered_alpha - original_alpha) * k;
+                if !mixed_alpha.is_finite() && original_alpha.is_finite() && filtered_alpha.is_finite() && k.is_finite() {
+                    let precise = f64::from(original_alpha) + (f64::from(filtered_alpha) - f64::from(original_alpha)) * f64::from(k);
+                    if precise.is_finite() && precise.abs() <= f64::from(f32::MAX) {
+                        mixed_alpha = precise as f32;
+                    }
+                }
                 let original_weight = original_alpha * (1.0 - k);
                 let filtered_weight = filtered_alpha * k;
                 for (c, v) in px[..a].iter_mut().enumerate() {
-                    *v = if mixed_alpha > 0.0 { (orig.get(x, y, c) * original_weight + *v * filtered_weight) / mixed_alpha } else { 0.0 };
+                    let original = orig.get(x, y, c);
+                    let filtered = *v;
+                    *v = if mixed_alpha > 0.0 { (original * original_weight + filtered * filtered_weight) / mixed_alpha } else { 0.0 };
+                    if !v.is_finite() && [original, filtered, original_alpha, filtered_alpha, k].into_iter().all(f32::is_finite) {
+                        let ow = f64::from(original_alpha) * (1. - f64::from(k));
+                        let fw = f64::from(filtered_alpha) * f64::from(k);
+                        let alpha = ow + fw;
+                        let precise = if alpha > 0. { f64::from(original) + (f64::from(filtered) - f64::from(original)) * (fw / alpha) } else { 0. };
+                        if precise.is_finite() && precise.abs() <= f64::from(f32::MAX) {
+                            *v = precise as f32;
+                        }
+                    }
                 }
                 px[a] = mixed_alpha;
                 continue;
@@ -1278,7 +1682,14 @@ fn mix_selection(data: &mut [f32], t: Rect, sel: &Surface, orig: &Image, alpha: 
         }
         for (c, v) in px.iter_mut().enumerate() {
             let o = orig.get(x, y, c);
-            *v = o + (*v - o) * k;
+            let filtered = *v;
+            *v = o + (filtered - o) * k;
+            if !v.is_finite() && [o, filtered, k].into_iter().all(f32::is_finite) {
+                let precise = f64::from(o) + (f64::from(filtered) - f64::from(o)) * f64::from(k);
+                if precise.is_finite() && precise.abs() <= f64::from(f32::MAX) {
+                    *v = precise as f32;
+                }
+            }
         }
     }
 }
@@ -1288,15 +1699,6 @@ const RESULT_BUDGET: usize = 256 << 20;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_ext;
-
-#[cfg(test)]
-mod tests_mosaic;
-
-#[cfg(test)]
-mod tests_selection_mix;
-
 /// The current upstream sampler through the identical source/selection/tile pipeline.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
@@ -1310,4 +1712,62 @@ fn apply_radial_reference(
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
     apply_tiled_with_impl(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent), ctl, false)
+}
+
+#[cfg(test)]
+mod selected_alpha_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+
+    #[test]
+    /// Compare declared alpha capability to actual channel-selective noise/convolution pixels across native models and
+    /// depths.
+    fn selective_filters_declare_transparency_only_for_selected_alpha() {
+        let bounds = Rect::new(0, 0, 4, 3);
+        for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk] {
+            for depth in SampleType::ALL {
+                let format = PixelFormat::new(mode, depth, true);
+                let mut source = Surface::new(format);
+                let mut pixel = vec![0.4; format.channels()];
+                *pixel.last_mut().unwrap() = 0.6;
+                source.fill_rect(bounds, &pixel);
+                for alpha in [false, true] {
+                    let mut amounts = vec![30.; format.channels()];
+                    *amounts.last_mut().unwrap() = if alpha { 100. } else { 0. };
+                    let noise = FilterParams::ChannelNoise(channel_noise::Params {
+                        amounts,
+                        distribution: Distribution::Uniform,
+                        monochromatic: false,
+                        relative: false,
+                        seed: 71,
+                    });
+                    let mut channels = vec![true; format.channels()];
+                    *channels.last_mut().unwrap() = alpha;
+                    let mut kernel = vec![0.; 25];
+                    kernel[12] = 0.5;
+                    let convolution = FilterParams::Convolution(convolution::Params {
+                        kernel,
+                        scale: 1.,
+                        offset: 0.,
+                        channels,
+                        alpha_weighted: false,
+                        edge: convolution::Edge::Repeat,
+                    });
+                    for filter in [noise, convolution] {
+                        assert_eq!(filter.makes_transparency(), alpha, "{mode:?} {depth:?}");
+                        let out = apply_in_with(&source, &filter, bounds, bounds, None, bounds, &photocraft_raster::Interrupt::NONE).unwrap();
+                        if alpha {
+                            assert_ne!(out.pixel(1, 1).last(), source.pixel(1, 1).last());
+                        } else {
+                            for y in 0..3 {
+                                for x in 0..4 {
+                                    assert_eq!(out.pixel(x, y).last(), source.pixel(x, y).last());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
