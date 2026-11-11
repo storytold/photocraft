@@ -414,15 +414,15 @@ fn custom_pattern_thresholds_match_photoshop() {
     // Photoshop (Image › Mode › Bitmap, Custom Pattern) on a 0..255 ramp: the first white
     // level per pattern pixel, measured against defined patterns.
     let l = |v: &[u8]| v.iter().map(|v| f32::from(*v) / 255.0).collect::<Vec<_>>();
-    let ramp7 = custom_pattern_thresholds(&l(&[0, 40, 80, 120, 160, 200, 240]));
+    let ramp7 = custom_pattern_thresholds(&l(&[0, 40, 80, 120, 160, 200, 240])).unwrap();
     assert_eq!(ramp7.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [237, 201, 164, 128, 92, 55, 19]);
-    let five = custom_pattern_thresholds(&l(&[10, 200, 90, 250, 150]));
+    let five = custom_pattern_thresholds(&l(&[10, 200, 90, 250, 150])).unwrap();
     assert_eq!(five.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [230, 77, 179, 26, 128]);
     // Equal pixels share their rank: 100, 100 both sit at 50%.
-    let ties = custom_pattern_thresholds(&l(&[100, 100, 200, 50]));
+    let ties = custom_pattern_thresholds(&l(&[100, 100, 200, 50])).unwrap();
     assert_eq!(ties.iter().map(|t| first_white(*t)).collect::<Vec<_>>(), [128, 128, 32, 224]);
-    assert!(custom_pattern_thresholds(&[]).is_empty());
-    assert_eq!(custom_pattern_thresholds(&[f32::NAN, 0.3]).len(), 2);
+    assert!(custom_pattern_thresholds(&[]).unwrap().is_empty());
+    assert_eq!(custom_pattern_thresholds(&[f32::NAN, 0.3]).unwrap().len(), 2);
 }
 
 #[test]
@@ -439,4 +439,121 @@ fn custom_pattern_tiles_from_the_top_left() {
     let mut g = vec![0.6];
     to_bitmap_custom(&mut g, 0, &map, 2, 1);
     assert_eq!(g, [1.0]);
+}
+
+/// `gray` converted by `conv` in strips of `rows` rows each, cycling through `rows`.
+fn in_strips(gray: &[f32], w: usize, rows: &[usize], mut conv: BitmapStrips<'_>) -> Vec<f32> {
+    let mut out = gray.to_vec();
+    let mut rest = out.as_mut_slice();
+    for r in rows.iter().cycle() {
+        if rest.is_empty() {
+            break;
+        }
+        let (strip, tail) = rest.split_at_mut((r * w).min(rest.len()));
+        conv.convert(strip);
+        rest = tail;
+    }
+    out
+}
+
+#[test]
+fn bitmap_strips_match_the_whole_image_however_it_is_cut() {
+    // #8477: strip boundaries must preserve diffusion state and keep patterns/screens anchored.
+    let (w, h) = (37, 29);
+    let gray: Vec<f32> = (0..w * h).map(|i| ((i % w) as f32 / w as f32 * 0.7 + (i / w) as f32 / h as f32 * 0.3).fract()).collect();
+    let map = custom_pattern_thresholds(&[0.1, 0.9, 0.4, 0.6, 0.2, 0.8]).unwrap();
+    let methods = [
+        BitmapMethod::Threshold,
+        BitmapMethod::Pattern,
+        BitmapMethod::Diffusion,
+        BitmapMethod::Halftone { cell: 5.5, angle: 30.0, shape: HalftoneShape::Ellipse },
+    ];
+    for rows in [&[1][..], &[3], &[5, 2, 7], &[h]] {
+        for method in methods {
+            let mut whole = gray.clone();
+            to_bitmap(&mut whole, w, method);
+            assert!(whole.iter().all(|v| *v == 0.0 || *v == 1.0), "{method:?}");
+            assert_eq!(in_strips(&gray, w, rows, BitmapStrips::new(w, method)), whole, "{method:?} in strips of {rows:?}");
+        }
+        let mut whole = gray.clone();
+        to_bitmap_custom(&mut whole, w, &map, 3, 2);
+        assert_eq!(in_strips(&gray, w, rows, BitmapStrips::custom(w, &map, 3, 2)), whole, "custom in strips of {rows:?}");
+    }
+}
+
+#[test]
+fn bitmap_strips_match_the_whole_image_with_a_ragged_last_row() {
+    // A short final row still receives the error from the row above, including in its own strip.
+    let w = 37;
+    let gray: Vec<f32> = (0..w * 5 + 11).map(|i| ((i % w) as f32 / w as f32 * 0.7 + (i / w) as f32 * 0.13).fract()).collect();
+    for method in [BitmapMethod::Diffusion, BitmapMethod::Threshold, BitmapMethod::Pattern] {
+        let mut whole = gray.clone();
+        to_bitmap(&mut whole, w, method);
+        for rows in [&[1][..], &[5], &[2, 3], &[5, 1]] {
+            assert_eq!(in_strips(&gray, w, rows, BitmapStrips::new(w, method)), whole, "{method:?} in strips of {rows:?}");
+        }
+    }
+}
+
+/// Floyd–Steinberg over the whole image as `to_bitmap` did before strips (#8477).
+fn diffusion_reference(gray: &mut [f32], w: usize) {
+    let h = gray.len() / w;
+    let mut buf = gray.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let old = buf[i];
+            let new = if old >= 0.5 { 1.0 } else { 0.0 };
+            let error = old - new;
+            gray[i] = new;
+            if x + 1 < w {
+                buf[i + 1] += error * 7.0 / 16.0;
+            }
+            if y + 1 < h {
+                if x > 0 {
+                    buf[i + w - 1] += error * 3.0 / 16.0;
+                }
+                buf[i + w] += error * 5.0 / 16.0;
+                if x + 1 < w {
+                    buf[i + w + 1] += error / 16.0;
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bitmap_diffusion_in_strips_is_bit_identical_to_one_pass() {
+    // Keep error accumulation order identical; one rounding change can flip many later pixels.
+    let (w, h) = (173, 61);
+    let gray: Vec<f32> = (0..w * h).map(|i| ((i % w) as f32 * 0.013 + (i / w) as f32 * 0.007 + ((i * 7919) % 101) as f32 * 0.001).fract()).collect();
+    let mut expected = gray.clone();
+    diffusion_reference(&mut expected, w);
+    for rows in [&[1][..], &[4, 9], &[h]] {
+        assert_eq!(in_strips(&gray, w, rows, BitmapStrips::new(w, BitmapMethod::Diffusion)), expected, "strips of {rows:?}");
+    }
+}
+
+#[test]
+fn bitmap_strips_handle_empty_and_ragged_input() {
+    // A zero width thresholds at 50%, and a short final row is converted too.
+    for method in [BitmapMethod::Pattern, BitmapMethod::Diffusion, BitmapMethod::Halftone { cell: 4.0, angle: 0.0, shape: HalftoneShape::Round }] {
+        let mut gray = vec![0.4, 0.6];
+        to_bitmap(&mut gray, 0, method);
+        assert_eq!(gray, [0.0, 1.0], "{method:?}");
+        let mut gray = vec![0.3; 7];
+        to_bitmap(&mut gray, 3, method);
+        assert!(gray.iter().all(|v| *v == 0.0 || *v == 1.0), "{method:?}: {gray:?}");
+        to_bitmap(&mut [], 3, method);
+    }
+}
+
+/// Threshold workspace is bounded before allocations, including multiplication overflow.
+#[test]
+fn custom_pattern_workspace_is_preflighted() {
+    let limit = (256 << 20) / 12;
+    assert_eq!(custom_pattern_working_bytes(limit).unwrap(), limit * 12);
+    assert!(custom_pattern_working_bytes(limit + 1).is_err());
+    assert!(custom_pattern_working_bytes(usize::MAX).is_err());
+    assert!(custom_pattern_working_bytes(4097 * 4096).is_ok());
 }

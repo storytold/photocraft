@@ -88,12 +88,40 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, pts: &[[f32; 2]], alt_from: Opt
     h.run_steps(1);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, p: [f32; 2]) {
+pub(super) fn click(h: &mut Harness<'static, PhotocraftApp>, p: [f32; 2]) {
     drag(h, &[p], None);
 }
 
 fn near(a: [f64; 2], b: [f64; 2]) -> bool {
     (a[0] - b[0]).abs() < 0.05 && (a[1] - b[1]).abs() < 0.05
+}
+
+#[test]
+fn space_repositions_a_pen_anchor_and_keeps_its_handles() {
+    let mut h = harness();
+    h.state_mut().ui.extras.snap = false;
+    click(&mut h, [20.0, 20.0]);
+    let center = h.state().ui.views[0].center;
+    let p = screen(&h, [80.0, 50.0]);
+    h.event(egui::Event::PointerMoved(p));
+    button(&mut h, p, true, Modifiers::NONE);
+    move_to(&mut h, [80.0, 50.0], [100.0, 60.0]);
+    h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    move_to(&mut h, [100.0, 60.0], [120.0, 90.0]);
+    let k = h.state().ui.pen.as_ref().unwrap().knots[1];
+    assert!(near(k[0], [100.0, 80.0]) && near(k[1], [80.0, 70.0]) && near(k[2], [120.0, 90.0]), "anchor and handles moved together: {k:?}");
+    assert_eq!(h.state().ui.views[0].center, center, "the canvas never pans");
+    h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    move_to(&mut h, [120.0, 90.0], [130.0, 80.0]);
+    let p = screen(&h, [130.0, 80.0]);
+    button(&mut h, p, false, Modifiers::NONE);
+    let k = h.state().ui.pen.as_ref().unwrap().knots[1];
+    assert!(near(k[0], [100.0, 80.0]) && near(k[1], [70.0, 80.0]) && near(k[2], [130.0, 80.0]), "releasing Space resumes handle shaping: {k:?}");
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.work_path.is_some());
 }
 
 #[test]
@@ -217,7 +245,8 @@ fn delete_with_the_pen_deletes_the_finished_work_path_not_the_pixels() {
     for p in [[20.0, 20.0], [120.0, 20.0], [120.0, 100.0]] {
         click(&mut h, p);
     }
-    h.key_press(Key::Enter);
+    // Esc keeps the finished Work Path selected; ↩ would deselect it (#12892).
+    h.key_press(Key::Escape);
     h.run_steps(2);
     let work = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().doc.work_path.is_some();
     let red = |h: &Harness<'static, PhotocraftApp>| {

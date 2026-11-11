@@ -98,12 +98,17 @@ pub fn above_parent_ui(parent: egui::LayerId, popup_ui: &egui::Ui) {
 /// Shows `button`'s menu (an `egui::Popup::menu`) with press-drag-release; `content` chooses its
 /// items with [`PressMenu::item`].
 pub fn show<R>(button: &Response, content: impl FnOnce(&mut Ui, &PressMenu) -> R) -> Option<R> {
+    show_with_close_behavior(button, PopupCloseBehavior::CloseOnClick, content)
+}
+
+/// A press menu whose content owns its close behavior (e.g. a scrollable font list).
+pub fn show_with_close_behavior<R>(button: &Response, close_behavior: PopupCloseBehavior, content: impl FnOnce(&mut Ui, &PressMenu) -> R) -> Option<R> {
     let ctx = button.ctx.clone();
     let menu = PressMenu { popup: Popup::default_response_id(button) };
     let open = open_command(button, menu.popup);
     // The release ending the press that opened the menu is a click outside the popup: it must not
     // close it again.
-    let close = if button.clicked() && menu.owns_gesture(&ctx) { PopupCloseBehavior::IgnoreClicks } else { PopupCloseBehavior::CloseOnClick };
+    let close = if button.clicked() && menu.owns_gesture(&ctx) { PopupCloseBehavior::IgnoreClicks } else { close_behavior };
     let shown = Popup::menu(button).open_memory(open).close_behavior(close).show(|ui| content(ui, &menu)).map(|r| r.inner);
     if shown.is_some() || Popup::is_id_open(&ctx, menu.popup) {
         above_parent(&ctx, button.layer_id, egui::LayerId::new(egui::Order::Foreground, menu.popup));
@@ -149,7 +154,13 @@ impl PressCombo {
     /// Was option `item` (in the open list `ui`) chosen this frame: clicked, or the press-drag
     /// gesture that opened the list released on it? The list closes when it was.
     pub fn chosen(&self, ui: &Ui, item: &Response) -> bool {
-        let released_on = item.enabled() && item.contains_pointer() && ui.input(|i| i.pointer.primary_released()) && self.owns_gesture(ui.ctx());
+        // A release back on the box chooses nothing, also where a list covers the box.
+        let on_box = |ctx: &egui::Context| {
+            let at = ctx.input(|i| i.pointer.interact_pos());
+            ctx.data(|d| d.get_temp::<egui::Rect>(gesture_id().with(self.popup))).zip(at).is_some_and(|(b, p)| b.contains(p))
+        };
+        let released_on =
+            item.enabled() && item.contains_pointer() && ui.input(|i| i.pointer.primary_released()) && self.owns_gesture(ui.ctx()) && !on_box(ui.ctx());
         if released_on {
             ui.close();
         }
@@ -164,7 +175,10 @@ impl PressCombo {
         if pressed && !Popup::is_id_open(ctx, self.popup) {
             // Opened now, the list counts as open this frame and egui shows it from the next.
             Popup::open_id(ctx, self.popup);
-            ctx.data_mut(|d| d.insert_temp(gesture_id(), self.popup));
+            ctx.data_mut(|d| {
+                d.insert_temp(gesture_id(), self.popup);
+                d.insert_temp(gesture_id().with(self.popup), button.rect);
+            });
             ctx.request_repaint();
         } else if self.owns_gesture(ctx) && ctx.input(|i| i.pointer.primary_released() || !i.pointer.primary_down()) {
             ctx.data_mut(|d| d.remove::<egui::Id>(gesture_id()));
