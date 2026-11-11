@@ -634,18 +634,23 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
 /// masks and Smart Filter mask follow, and type, shapes and smart objects re-render. The document
 /// selection is left alone.
 pub(crate) fn transform_by(doc: &mut Document, id: LayerId, affine: Affine, interp: Interp) -> Result<()> {
-    let h = crate::smart_cmds::affine_homography(&affine);
+    transform_by_map(doc, id, &crate::smart_cmds::affine_homography(&affine), Some(affine), interp)
+}
+
+/// [`transform_by`] with the map already built, and `affine` only when it is affine (Distort and
+/// Perspective results aren't: their smart object keeps the full projective placement).
+pub(crate) fn transform_by_map(doc: &mut Document, id: LayerId, h: &Homography, affine: Option<Affine>, interp: Interp) -> Result<()> {
     let group = group_locks(doc, id);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     // Price the smart object caches before they are taken: the fallback warp below isn't budgeted.
-    check_layer_budget(None, l, &h)?;
+    check_layer_budget(None, l, h)?;
     let taken = crate::smart_cmds::take_caches(std::slice::from_mut(l));
-    apply_transform(None, group, l, &h, Some(affine), interp, &Interrupt::NONE)?;
+    apply_transform(None, group, l, h, affine, interp, &Interrupt::NONE)?;
     let snapshot = doc.clone();
     if let Some(l) = doc.layer_mut(id) {
         refresh_text(&snapshot, l);
     }
-    crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), &h, interp))?;
+    crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
     Ok(())
 }
 
