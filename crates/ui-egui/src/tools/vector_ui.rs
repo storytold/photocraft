@@ -50,6 +50,7 @@ pub(crate) use path_ops::{
 };
 #[cfg(test)]
 use paths_panel::path_context_actions;
+pub(crate) use paths_panel::path_renaming;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_footer, paths_panel};
 #[cfg(test)]
 pub(crate) use pen::over_first_anchor;
@@ -214,6 +215,9 @@ mod pen_draw_tests;
 
 #[cfg(test)]
 mod pen_path_ops_tests;
+
+#[cfg(test)]
+mod pen_rubber_band_tests;
 
 #[cfg(test)]
 mod paint_tests;
