@@ -1401,6 +1401,39 @@ mod tests {
         assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "patch");
     }
 
+    /// The stacked fold keeps the whole rect of a non-clear default too: opaque, half-translucent and alpha-less.
+    #[test]
+    fn a_stacked_fold_keeps_a_non_clear_defaults_rect_whole() {
+        let identity = |x: f64, y: f64| (x, y);
+        let rgb = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
+        let cases = [
+            (opaque_default_surface(), 1.0),
+            (
+                {
+                    let mut s = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.5]);
+                    s.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+                    s
+                },
+                0.5,
+            ),
+            (
+                {
+                    let mut s = Surface::with_default(rgb, &[0.0, 0.0, 0.0]);
+                    s.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0]);
+                    s
+                },
+                1.0,
+            ),
+        ];
+        for (src, alpha) in &cases {
+            for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+                let out = warp_mesh_surface_with(src, Rect::new(0, 0, 32, 32), &identity, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+                assert!((out.sample_channel(2, 2, 3) - alpha).abs() < 0.01, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
+                assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
+            }
+        }
+    }
+
     /// Tiles are drawn on the thread pool, and the first one that meets a fold works out the
     /// fold's order while the others that need it wait. That must never hand the working thread
     /// another folded tile (it would wait on itself, and every tile after it for ever): a warp

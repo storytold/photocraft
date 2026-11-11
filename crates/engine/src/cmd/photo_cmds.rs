@@ -472,7 +472,8 @@ pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &P
     if let Some(h) = plane_matrix(&pl, origin) {
         return Ok(warp_surface(surf, rect, &h, interp)?);
     }
-    Ok(warp_mesh_surface(surf, rect, &|x, y| pl.forward(x - origin.0, y - origin.1), interp))
+    // Row order keeps the rect it is given; narrow it as the homography warp above does.
+    Ok(warp_mesh_surface(surf, photocraft_algo::transform::warp_source_rect(surf, rect), &|x, y| pl.forward(x - origin.0, y - origin.1), interp))
 }
 
 /// The projective matrix of a planar, distortion-free placement (surface px → panorama px).
