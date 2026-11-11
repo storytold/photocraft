@@ -575,7 +575,7 @@ fn a_channel_mixer_smart_filter_turned_off_monochrome_keeps_its_red_row() {
     let sm = recorded(h.state(), id);
     assert_eq!(sm.smart_filters.len(), 1, "no filter was stacked");
     let adjustment = photocraft_engine::adjust_params::from_params("channelMixer", &sm.smart_filters[0].params, None, photocraft_doc::ColorMode::Rgb).unwrap();
-    let photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome } = adjustment else { panic!("Channel Mixer params") };
+    let photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome, .. } = adjustment else { panic!("Channel Mixer params") };
     assert!(!monochrome);
     assert!(matrix[0].iter().zip([0.7, 0.3, 0.0, 0.0]).all(|(a, b)| (a - b).abs() < 1e-5), "the edited Red row renders: {:?}", matrix[0]);
 }
