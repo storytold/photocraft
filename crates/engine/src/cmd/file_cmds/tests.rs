@@ -1155,7 +1155,7 @@ fn placing_refuses_a_scale_that_would_exceed_the_pixel_limit() {
     let dir = tmp("place-huge-scale");
     let small = png(&dir, "small.png", 200, 100, "#ff0000");
     let mut s = session(100, 100, 8);
-    for scale in [1e9, 1e300, 1e308] {
+    for scale in [1e9, 1e300, 1e308, 23170.25] {
         assert!(matches!(s.execute("file.placeEmbedded", json!({"path": small, "scale": scale})), Err(EngineError::BadParams { .. })), "{scale}");
     }
     assert!(s.execute("file.placeEmbedded", json!({"path": small, "scale": 50})).is_ok());

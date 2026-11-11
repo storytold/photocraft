@@ -280,7 +280,9 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         _ => (cw / 2.0, ch / 2.0),
     };
     // `scale` is the caller's: bound the resampled size before allocating it.
-    let scaled = w * scale * h * scale;
+    // Resampling rounds the far output edges outward; an unresampled placement keeps its size.
+    let (ow, oh) = if (scale - 1.0).abs() > 1e-9 { ((w * scale).ceil(), (h * scale).ceil()) } else { (w, h) };
+    let scaled = ow * oh;
     if scaled.is_nan() || scaled > photocraft_compose::MAX_RENDER_PIXELS as f64 {
         return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: format!("scaling {w}×{h} by {scale} makes an image too large to place") });
     }
