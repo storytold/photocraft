@@ -117,8 +117,12 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
     if area.is_empty() {
         return Some(s);
     }
-    let edge_tiles = polygon_edge_tiles(points, clip, MAX_PAINTED_TILES)?;
     const SUB: usize = 4;
+    // The cheap sum of edge samples first: an outline past it is refused before any tile discovery.
+    if polygon_edge_samples(points, clip, SUB as u64) > MAX_EDGE_SAMPLES {
+        return None;
+    }
+    let edge_tiles = polygon_edge_tiles(points, clip, MAX_PAINTED_TILES)?;
     // Sample rows as `polygon` over `clip` takes them, so the bytes match.
     let sample_y = |y: i32, k: usize| clip.y0 as f32 + (y - clip.y0) as f32 + (k as f32 + 0.5) / SUB as f32;
     let mut edges: Vec<Edge> = points
@@ -135,9 +139,6 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
         })
         .collect();
     edges.sort_by(|p, q| p.top.total_cmp(&q.top));
-    if polygon_edge_samples(points, clip, SUB as u64) > MAX_EDGE_SAMPLES {
-        return None;
-    }
     let crossings = |e: &[&Edge], y: f32, xs: &mut Vec<f32>| {
         xs.clear();
         xs.extend(e.iter().map(|&&Edge { a, b, .. }| a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0)));
