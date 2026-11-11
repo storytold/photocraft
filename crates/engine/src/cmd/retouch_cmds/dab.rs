@@ -30,30 +30,59 @@ fn protect_detail_share(moved: Option<f32>, radius: f32) -> f32 {
     moved.map_or(1.0, |m| (m / (2.0 * radius.max(0.5) * PROTECT_DETAIL_SPACING)).clamp(0.0, 1.0))
 }
 
-/// Tracks the previous dab of a Protect Detail stroke for [`protect_detail_share`].
+/// Tracks a Protect Detail stroke's dabs for [`protect_detail_share`].
 #[derive(Default)]
-struct ProtectDetailShares {
-    prev: Option<(photocraft_paint::Dab, f32)>,
+pub(super) struct ProtectDetailShares {
+    /// The previous dab's centre and share.
+    prev: Option<(photocraft_geom::Point, f32)>,
+    /// The most coverage the dabs on the current centre have applied at each pixel of the rect.
+    covered: Option<(Rect, Vec<f32>)>,
 }
 
 impl ProtectDetailShares {
-    /// The share of a full dab that `d` applies. A dab at the previous one's centre but with
-    /// another shape is another stamp of the same step (Scattering's Count with Scatter 0 and
-    /// size, angle or roundness jitter), so it applies that step's share; an exact repeat
-    /// (airbrush build-up while held still) adds nothing.
-    fn next(&mut self, d: &photocraft_paint::Dab) -> f32 {
+    /// The share of a full dab that `fp` applies, and the coverage over `fp.rect` to apply it with.
+    ///
+    /// Dabs on one centre (the stamps of Scattering's Count with Scatter 0, or airbrush build-up
+    /// while the pointer is held still) apply the share of their step once at each pixel: a dab
+    /// adds only where its coverage exceeds what the dabs before it on that centre applied, so a
+    /// larger jittered stamp sharpens the ring only it covers, and repeats never compound.
+    pub(super) fn next(&mut self, fp: &Footprint) -> (f32, Vec<f32>) {
+        let c = fp.dab.center;
         let share = match self.prev {
-            Some((p, s)) if p.center == d.center => {
-                let same_stamp = p.radius == d.radius && p.angle == d.angle && p.roundness == d.roundness && p.flip_x == d.flip_x && p.flip_y == d.flip_y;
-                if same_stamp { 0.0 } else { s }
+            Some((p, s)) if p == c => s,
+            Some((p, _)) => {
+                self.covered = None;
+                protect_detail_share(Some((c.x - p.x).hypot(c.y - p.y) as f32), fp.dab.radius)
             }
-            Some((p, _)) => protect_detail_share(Some((d.center.x - p.center.x).hypot(d.center.y - p.center.y) as f32), d.radius),
-            None => protect_detail_share(None, d.radius),
+            None => protect_detail_share(None, fp.dab.radius),
         };
-        // A repeat keeps the step's share for the stamps after it.
-        let kept = if share == 0.0 { self.prev.map_or(share, |(_, s)| s) } else { share };
-        self.prev = Some((*d, kept));
-        share
+        self.prev = Some((c, share));
+        let (rect, cov) = match self.covered.take() {
+            Some((rect, cov)) if rect.contains_rect(&fp.rect) => (rect, cov),
+            Some((old, old_cov)) => {
+                let rect = old.union(&fp.rect);
+                let mut cov = vec![0.0; rect.width() as usize * rect.height() as usize];
+                for y in old.y0..old.y1 {
+                    let (from, to) =
+                        (((y - old.y0) as usize) * old.width() as usize, ((y - rect.y0) as usize) * rect.width() as usize + (old.x0 - rect.x0) as usize);
+                    cov[to..to + old.width() as usize].copy_from_slice(&old_cov[from..from + old.width() as usize]);
+                }
+                (rect, cov)
+            }
+            None => (fp.rect, vec![0.0; fp.cov.len()]),
+        };
+        let mut cov = cov;
+        let (fw, rw) = (fp.rect.width() as usize, rect.width() as usize);
+        let mut fresh = vec![0.0; fp.cov.len()];
+        for y in fp.rect.y0..fp.rect.y1 {
+            let (from, to) = (((y - fp.rect.y0) as usize) * fw, ((y - rect.y0) as usize) * rw + (fp.rect.x0 - rect.x0) as usize);
+            for ((f, &a), done) in fresh[from..from + fw].iter_mut().zip(&fp.cov[from..from + fw]).zip(&mut cov[to..to + fw]) {
+                *f = (a - *done).max(0.0);
+                *done = done.max(a);
+            }
+        }
+        self.covered = Some((rect, cov));
+        (share, fresh)
     }
 }
 
@@ -281,11 +310,12 @@ impl DabTool {
                 let a = alpha_index(&fmt);
                 let mut shares = ProtectDetailShares::default();
                 Box::new(move |work, fp| {
-                    let share = shares.next(&fp.dab);
                     let r = fp.rect.intersect(&work.rect);
-                    if r.is_empty() || (sharpen && protect && share <= 0.0) {
+                    let (share, fresh) = if sharpen && protect { shares.next(fp) } else { (1.0, Vec::new()) };
+                    if r.is_empty() || (sharpen && protect && (share <= 0.0 || fresh.iter().all(|&f| f <= 0.0))) {
                         return;
                     }
+                    let fresh_at = |x: i32, y: i32| fresh[(y - fp.rect.y0) as usize * fp.rect.width() as usize + (x - fp.rect.x0) as usize];
                     let (w, h, n) = (work.width(), work.height(), work.ch);
                     let win = ((r.x0 - work.rect.x0) as usize, (r.y0 - work.rect.y0) as usize, (r.x1 - work.rect.x0) as usize, (r.y1 - work.rect.y0) as usize);
                     let out = if sharpen { local_sharpen(&work.data, w, h, n, a, win, 1.0, protect) } else { local_blur(&work.data, w, h, n, a, win, sigma) };
@@ -302,7 +332,7 @@ impl DabTool {
                             // a drag over a point adds up to the reference's 4 dabs (#12938).
                             // Spread over `1/spacing` dabs (`per_dab`), a click did 7 % of it at
                             // the default 10 % spacing.
-                            let k = if sharpen && protect { fp.at(x, y) * strength * share } else { per_dab(fp.at(x, y) * strength, sp) };
+                            let k = if sharpen && protect { fresh_at(x, y) * strength * share } else { per_dab(fp.at(x, y) * strength, sp) };
                             if k <= 0.0 {
                                 continue;
                             }

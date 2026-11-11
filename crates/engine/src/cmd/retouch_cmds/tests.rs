@@ -539,33 +539,124 @@ fn protect_detail_drags_at_the_default_spacing_widen_the_halo_without_banding() 
 #[test]
 fn protect_detail_sharpens_with_every_stamp_of_a_count_but_not_with_airbrush_repeats() {
     // Scattering's Count with Scatter 0 lays several stamps on the same centre; with size jitter
-    // each has its own footprint, and each must sharpen (the stamps after the first used to get no
-    // share at all). An airbrush click repeats the same stamp, which still adds nothing, so the
-    // measured click is kept.
+    // each has its own footprint, and a larger one must sharpen the ring only it covers (the
+    // stamps after the first used to get no share at all). An airbrush click repeats the same
+    // stamp, which adds nothing, so the measured click is kept.
     let click = |set: &dyn Fn(&mut photocraft_paint::BrushSettings)| {
         let mut s = session(80, 40, 8, "rgb");
         paint_layer(&mut s, |x, _| if x < 40 { [96.0 / 255.0, 96.0 / 255.0, 96.0 / 255.0, 1.0] } else { [160.0 / 255.0, 160.0 / 255.0, 160.0 / 255.0, 1.0] });
         set(&mut s.tools.brush);
         s.execute("paint.sharpen", json!({"points": [[40, 20]], "size": 40, "hardness": 100, "strength": 100})).unwrap();
-        (0..80).map(|x| (rgba(&s, x, 20)[0] * 255.0).round() as i32).collect::<Vec<i32>>()
+        // The whole image, row by row: a larger stamp's ring meets the step above and below the click.
+        (0..40).flat_map(|y| (0..80).map(move |x| (x, y))).map(|(x, y)| (rgba(&s, x, y)[0] * 255.0).round() as i32).collect::<Vec<i32>>()
     };
     let jitter = |b: &mut photocraft_paint::BrushSettings| {
         b.shape_dynamics.enabled = true;
         b.shape_dynamics.size.jitter = 1.0;
         b.shape_dynamics.size.minimum = 0.0;
     };
-    let one = click(&|b| jitter(b));
-    let four = click(&|b| {
+    let count = |b: &mut photocraft_paint::BrushSettings| {
         jitter(b);
         b.scattering.enabled = true;
         b.scattering.count = 4;
+    };
+    // A seed whose click lays a later stamp clearly larger than the first, as the stroke's own
+    // dab builder sees it (size jitter only shrinks, so a later stamp may also fall inside).
+    let seed = (0..256)
+        .find(|&seed| {
+            let mut b = session(8, 8, 8, "rgb").tools.brush.clone();
+            b.size = 40.0;
+            count(&mut b);
+            b.seed = seed;
+            let mut dabs = Vec::new();
+            let step = photocraft_paint::dynamics::StepInput {
+                point: photocraft_paint::StrokePoint::new(40.0, 20.0, 1.0),
+                direction: 0.0,
+                initial_direction: 0.0,
+                step: 0,
+            };
+            photocraft_paint::dynamics::DabBuilder::new(&b).build(&step, &mut dabs);
+            dabs.len() == 4 && dabs[1..].iter().any(|d| d.radius > dabs[0].radius + 3.0)
+        })
+        .expect("a seed with a larger later stamp");
+    let one = click(&|b| {
+        jitter(b);
+        b.seed = seed;
     });
-    let moved = |row: &[i32]| row.iter().enumerate().map(|(x, v)| (v - if x < 40 { 96 } else { 160 }).abs()).sum::<i32>();
-    assert!(moved(&four) > moved(&one), "Count 4 sharpens more than its first stamp alone: {four:?} vs {one:?}");
-    assert!(four.iter().all(|v| (1..=254).contains(v)), "no black and white bands: {four:?}");
+    let four = click(&|b| {
+        count(b);
+        b.seed = seed;
+    });
+    let moved = |img: &[i32]| img.iter().enumerate().map(|(i, v)| (v - if i % 80 < 40 { 96 } else { 160 }).abs()).sum::<i32>();
+    assert!(moved(&four) > moved(&one), "seed {seed}: Count 4 sharpens the ring its larger stamp adds ({} vs {})", moved(&four), moved(&one));
+    assert!(four.iter().all(|v| (1..=254).contains(v)), "no black and white bands");
     let plain = click(&|_| {});
     let airbrush = click(&|b| b.build_up = true);
     assert_eq!(airbrush, plain, "an airbrush click repeats its stamp, which adds nothing");
+    // With size jitter the airbrush click's two dabs differ in size; the second still doesn't
+    // sharpen what the first already did.
+    let airbrush_jitter = click(&|b| {
+        jitter(b);
+        b.seed = seed;
+        b.build_up = true;
+    });
+    let centre = 20 * 80 + 39..=20 * 80 + 40;
+    assert_eq!(airbrush_jitter[centre.clone()], one[centre], "a jittered airbrush repeat doesn't sharpen the centre again");
+}
+
+#[test]
+fn protect_detail_dabs_on_one_centre_apply_at_most_one_dab_at_each_pixel() {
+    // Airbrush build-up held still with shape jitter lays dabs of changing size on one centre.
+    // Together they apply each pixel's largest coverage once, so a held stroke stays bounded,
+    // while a larger stamp still reaches the ring the smaller ones missed.
+    let dab = |x: f64, radius: f32| photocraft_paint::Dab {
+        center: photocraft_geom::Point { x, y: 50.0 },
+        radius,
+        alpha: 1.0,
+        angle: 0.0,
+        roundness: 1.0,
+        flip_x: false,
+        flip_y: false,
+        opacity: 1.0,
+        color: [0.0; 4],
+        depth: 0.0,
+        index: 0,
+        proj_angle: 0.0,
+        proj_scale: 1.0,
+        wet: 1.0,
+        mix: 1.0,
+    };
+    let mut shares = super::dab::ProtectDetailShares::default();
+    let (mut applied, mut largest) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+    for (i, radius) in [10.0, 20.0, 15.0, 20.0, 5.0].into_iter().enumerate() {
+        let fp = photocraft_paint::retouch::footprint(&dab(50.0, radius), i, 1.0);
+        let (share, fresh) = shares.next(&fp);
+        assert_eq!(share, 1.0, "dab {i}: the click's share");
+        let w = fp.rect.width() as usize;
+        let at = |v: &[f32], x: i32, y: i32| v[(y - fp.rect.y0) as usize * w + (x - fp.rect.x0) as usize];
+        if i == 1 {
+            assert!(at(&fresh, 65, 50) > 0.9, "the larger stamp sharpens the ring the first missed");
+            assert_eq!(at(&fresh, 50, 50), 0.0, "but not the centre again");
+        }
+        if i >= 2 {
+            assert!(fresh.iter().all(|&f| f == 0.0), "dab {i} (radius {radius}) adds nothing the run hasn't applied");
+        }
+        for y in fp.rect.y0..fp.rect.y1 {
+            for x in fp.rect.x0..fp.rect.x1 {
+                *applied.entry((x, y)).or_insert(0.0) += at(&fresh, x, y);
+                let l = largest.entry((x, y)).or_insert(0.0f32);
+                *l = l.max(at(&fp.cov, x, y));
+            }
+        }
+    }
+    for (p, a) in &applied {
+        assert!((a - largest[p]).abs() < 1e-6 && *a <= 1.0, "pixel {p:?}: applied {a}, largest coverage {}", largest[p]);
+    }
+    // A dab on a new centre starts a new run: its full coverage at the share for 5 px moved.
+    let fp = photocraft_paint::retouch::footprint(&dab(55.0, 20.0), 5, 1.0);
+    let (share, fresh) = shares.next(&fp);
+    assert!((share - 0.5).abs() < 1e-6, "5 px over a quarter of 40 px: {share}");
+    assert_eq!(fresh, fp.cov);
 }
 
 #[test]
