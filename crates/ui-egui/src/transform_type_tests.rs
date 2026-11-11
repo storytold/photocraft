@@ -60,6 +60,7 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         crop: None,
         sampler: None,
         sampler_at: None,
+        notes: None,
         color: None,
         inside_selection: false,
     };

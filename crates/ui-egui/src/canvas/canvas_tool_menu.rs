@@ -63,6 +63,9 @@ pub struct CanvasToolMenu {
     /// becomes active, the index may name a different sampler, so the menu closes and Delete greys.
     #[serde(default)]
     pub sampler_at: Option<(usize, [f64; 2])>,
+    /// Opened with the Note tool, or on a note with the Move tool: the notes menu (#11789).
+    #[serde(default)]
+    pub notes: Option<NotesMenu>,
     /// The Eyedropper's menu (#11747): the composite colour under the right-click, averaged with
     /// the Sample Size, which its Copy Color rows put on the clipboard. `None` over transparency.
     #[serde(default)]
@@ -70,6 +73,23 @@ pub struct CanvasToolMenu {
     /// Opened with the Content-Aware Move tool inside the active selection (#12194).
     #[serde(default)]
     pub inside_selection: bool,
+}
+
+/// What the notes menu (#11789) was opened on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NotesMenu {
+    /// The note right-clicked, if the click was on one.
+    pub note: Option<usize>,
+    /// The document point right-clicked: where New Note puts the note.
+    pub at: [f64; 2],
+    /// Opened with the Note tool (the Move tool gets the menu only on a note).
+    pub note_tool: bool,
+    /// The document, and the note right-clicked, as they were when the menu opened: once either
+    /// changes, Open, Close and Delete Note grey, so a shifted index never reaches another note.
+    #[serde(default)]
+    pub document: u64,
+    #[serde(default)]
+    pub was: Option<photocraft_doc::Note>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -380,6 +400,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         crop: Some(users),
         sampler: None,
         sampler_at: None,
+        notes: None,
         color: None,
         inside_selection: false,
     });
@@ -497,6 +518,82 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     None,
     Some(("Load Selection…", "select.loadSelection")),
 ];
+
+/// The notes menu's rows (#11789).
+pub const NOTE_NEW: &str = "canvasMenu.notes.new";
+pub const NOTE_OPEN: &str = "canvasMenu.notes.open";
+pub const NOTE_CLOSE: &str = "canvasMenu.notes.close";
+pub const NOTE_DELETE: &str = "canvasMenu.notes.delete";
+pub const NOTE_DELETE_ALL: &str = "canvasMenu.notes.deleteAll";
+
+/// The notes menu, in Photoshop's order (#11789): the same rows on a note or off one, greyed
+/// by [`notes_enabled`].
+pub const NOTES_MENU: &[Row] = &[
+    Some(("New Note", NOTE_NEW)),
+    Some(("Import Notes…", "file.import.notes")),
+    None,
+    Some(("Open Note", NOTE_OPEN)),
+    Some(("Close Note", NOTE_CLOSE)),
+    Some(("Delete Note", NOTE_DELETE)),
+    Some(("Delete All Notes", NOTE_DELETE_ALL)),
+];
+
+/// Which notes-menu rows are live, as measured: off a note only New Note, Import Notes… and Delete
+/// All Notes; on a note Open, Delete and Delete All. With another tool on the note open in the
+/// Notes panel, Open Note greys and Close Note comes alive (with the Note tool it stays grey).
+/// Once another document is in front every row greys: none acts on a document it wasn't opened on.
+fn notes_enabled(app: &PhotocraftApp, n: &NotesMenu, command: &str) -> bool {
+    if !app.session.active().is_some_and(|d| d.doc.id.0 == n.document) {
+        return false;
+    }
+    let any = app.session.active().is_some_and(|d| !d.doc.notes.is_empty());
+    let note = menu_note(app, n);
+    let open = note.is_some_and(|i| crate::analysis_ui::note_open(app, i));
+    match command {
+        NOTE_NEW | "file.import.notes" => n.note.is_none(),
+        NOTE_OPEN => note.is_some() && (n.note_tool || !open),
+        NOTE_CLOSE => note.is_some() && !n.note_tool && open,
+        NOTE_DELETE => note.is_some(),
+        NOTE_DELETE_ALL => any,
+        _ => false,
+    }
+}
+
+/// The right-clicked note's index while it is still that note, in the same document.
+fn menu_note(app: &PhotocraftApp, n: &NotesMenu) -> Option<usize> {
+    let i = n.note?;
+    let st = app.session.active()?;
+    (st.doc.id.0 == n.document && st.doc.notes.get(i) == n.was.as_ref()).then_some(i)
+}
+
+/// A notes-menu row: New Note at the right-clicked point (history "New Note"), Import Notes… as
+/// File › Import › Notes…, Open / Close Note in the Notes panel (no history step), Delete Note with
+/// its "Delete this note?" alert (#11788), Delete All Notes.
+fn choose_notes(app: &mut PhotocraftApp, ctx: &Context, n: &NotesMenu, command: &str) -> Result<(), String> {
+    match (command, n.note) {
+        (NOTE_NEW, _) => crate::analysis_ui::create_note(app, n.at[0], n.at[1]).map(|_| ()),
+        ("file.import.notes", _) => crate::menus::invoke(app, ctx, command, json!({})).map(|_| ()),
+        (NOTE_OPEN, Some(i)) => {
+            crate::analysis_ui::open_note(app, i);
+            Ok(())
+        }
+        (NOTE_CLOSE, _) => {
+            crate::analysis_ui::close_notes_panel(app);
+            Ok(())
+        }
+        (NOTE_DELETE, Some(i)) => {
+            crate::analysis_ui::ask_delete_note(app, i);
+            Ok(())
+        }
+        (NOTE_DELETE_ALL, _) => {
+            // Deselect only once the notes went: a refused delete keeps the Notes panel's note.
+            app.run("notes.delete", json!({"all": true}))?;
+            app.ui.analysis.note_selected = None;
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
 
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
@@ -669,6 +766,8 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
             | Tool::ColorSampler
+            // The notes menu (#11789).
+            | Tool::Note
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
@@ -707,6 +806,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     if menu.crop.is_some() {
         // Built per menu: [`crop_rows`].
         &[]
+    } else if menu.notes.is_some() {
+        NOTES_MENU
     } else if menu.guide {
         GUIDE_MENU
     } else if menu.pasteboard {
@@ -901,6 +1002,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         crop: None,
         sampler: None,
         sampler_at: None,
+        notes: None,
         color: None,
         inside_selection: false,
     });
@@ -960,7 +1062,13 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
+    // The Note tool's own menu also opens on the pasteboard (#11789).
+    outside
+        && !path_menu(tool)
+        && tool != Tool::Note
+        && !crate::paint_mouse::has_brush_picker(tool)
+        && !crate::paint_mouse::right_erases(app, tool)
+        && !editing_text(app, tool)
 }
 
 /// Right-click on the pasteboard: its colour menu at screen point `pos`.
@@ -988,6 +1096,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         crop: None,
         sampler: None,
         sampler_at: None,
+        notes: None,
         color: None,
         inside_selection: false,
     });
@@ -1025,6 +1134,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         crop: None,
         sampler: None,
         sampler_at: None,
+        notes: None,
         color: None,
         inside_selection: false,
     });
@@ -1049,6 +1159,9 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if let Some(n) = &menu.notes {
+        return notes_enabled(app, n, command);
+    }
     if menu.crop.is_some() {
         return crop_enabled(app, menu, command);
     }
@@ -1157,6 +1270,40 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
             type_shape = Some(active_type_shape(app));
             true
         });
+    // The notes menu (#11789), as measured: with the Note tool anywhere, and on a note with the
+    // Move tool. Other tools on a note were not measured and keep their own right-click.
+    let note = if matches!(tool, Tool::Note | Tool::Move) { doc.and_then(|d| crate::analysis_ui::note_at(app, d)) } else { None };
+    if tool == Tool::Note || note.is_some() {
+        // No document: no menu, as before (its New Note and Import Notes… would have nothing to add to).
+        let Some((at, st)) = doc.zip(app.session.active()) else { return false };
+        let (document, was) = (st.doc.id.0, note.and_then(|i| st.doc.notes.get(i).cloned()));
+        app.ui.brush_picker = None;
+        app.ui.layer_menu = None;
+        app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+            pos,
+            tool,
+            has_selection: false,
+            has_path: false,
+            path_name: None,
+            transform: false,
+            pasteboard: false,
+            anchor: None,
+            under: None,
+            text: false,
+            type_layer: false,
+            type_shape: None,
+            guide: false,
+            spelling: None,
+            crop: None,
+            sampler: None,
+            sampler_at: None,
+            color: None,
+            inside_selection: false,
+            notes: Some(NotesMenu { note, at, note_tool: tool == Tool::Note, document, was }),
+        });
+        crate::canvas_popup::mark_open(ctx, menu_id());
+        return true;
+    }
     if !(applies(tool) || text || type_layer) {
         return false;
     }
@@ -1206,6 +1353,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         crop: None,
         sampler,
         sampler_at,
+        notes: None,
         color,
         inside_selection,
     });
@@ -1240,6 +1388,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         crop: None,
         sampler: None,
         sampler_at: None,
+        notes: None,
         color: None,
         inside_selection: false,
     });
@@ -1284,7 +1433,9 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     if !available(app, &menu, command) {
         return;
     }
-    let result = if menu.crop.is_some() {
+    let result = if let Some(n) = &menu.notes {
+        choose_notes(app, ctx, n, command)
+    } else if menu.crop.is_some() {
         choose_crop(app, &menu, command)
     } else if menu.guide {
         choose_guide(app, ctx, command)
@@ -1677,6 +1828,9 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
 mod cam_menu_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod note_menu_tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
