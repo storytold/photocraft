@@ -214,7 +214,8 @@ pub fn pen_up(app: &mut PhotocraftApp) {
 }
 
 /// ⌥/Alt during a Pen drag breaks the pair of handles being pulled out: from then on only the
-/// outgoing handle follows the pointer. The first incoming handle collapses; later ones freeze.
+/// outgoing handle follows the pointer (#3306). The first incoming handle collapses (#12895);
+/// later ones freeze.
 pub fn pen_break_handle(app: &mut PhotocraftApp) {
     cancel_stale_pen(app);
     let Some(pen) = app.ui.pen.as_mut().filter(|p| p.dragging && !p.adjusting_last) else { return };
