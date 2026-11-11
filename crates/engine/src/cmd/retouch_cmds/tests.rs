@@ -2119,7 +2119,7 @@ fn live_dab_batches_match_the_accumulating_renderer() {
         });
         let id = s.active().unwrap().active_layer.unwrap();
         let pre = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
-        for case in ["soft", "hard", "sampled", "dynamics", "smoothing"] {
+        for case in ["soft", "hard", "sampled", "dynamics", "smoothing", "smoothing_catch_up"] {
             s.tools.brush = BrushSettings::default();
             match case {
                 "sampled" => s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(9, 7, |x, y| ((x * 3 + y) % 11) as f32 / 10.0)),
@@ -2140,6 +2140,10 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                     b.texture.pattern = photocraft_paint::Pattern::Tile(GrayTile::from_fn(3, 3, |x, y| (x + y) as f32 / 4.0));
                 }
                 "smoothing" => s.tools.brush.smoothing.amount = 0.65,
+                "smoothing_catch_up" => {
+                    s.tools.brush.smoothing.amount = 0.65;
+                    s.tools.brush.smoothing.catch_up_on_end = true;
+                }
                 _ => {}
             }
             let points = [

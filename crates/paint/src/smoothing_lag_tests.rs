@@ -61,3 +61,14 @@ fn the_pull_grows_with_less_smoothing_and_stays_a_fraction() {
     assert_eq!(smoothing_pull(0.0), 1.0, "no time constant: straight to the pointer");
     assert_eq!(smoothing_pull(f64::NAN), 1.0, "a bad amount never makes a NaN position");
 }
+
+/// Input without timestamps (a control-client stroke, a script, an old file) was never measured,
+/// so each point keeps the pull it always had: `1 - amount` of the way to the pointer. At the
+/// default 10 % a two-point stroke still ends 90 % of the way, not a third of it.
+#[test]
+fn strokes_without_timestamps_keep_their_per_point_pull() {
+    let cfg = Smoothing { amount: 0.1, catch_up_on_end: false, ..Default::default() };
+    let out = smooth_points(&cfg, 1.0, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0)]);
+    let x = out.last().map_or(f64::NAN, |p| p.x);
+    assert!((x - 90.0).abs() < 1e-4, "a 10 % untimed step reached {x}, want 90");
+}
