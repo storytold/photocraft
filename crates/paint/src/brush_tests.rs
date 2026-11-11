@@ -609,7 +609,8 @@ fn build_up_accumulates_over_time() {
     let (n0, a0) = hold(0.0);
     let (n1, a1) = hold(500.0);
     let (n2, a2) = hold(2000.0);
-    assert_eq!((n0, n1, n2), (1, 11, 41));
+    // A click lays two dabs with the airbrush on (#11886), then one per 50 ms at this rate.
+    assert_eq!((n0, n1, n2), (2, 12, 42));
     assert!(a0 < a1 && a1 < a2, "{a0} {a1} {a2}");
     // Without build-up, lingering adds nothing.
     let nb = BrushSettings { build_up: false, ..b };
@@ -624,15 +625,15 @@ fn huge_airbrush_time_gap_emits_bounded_catch_up() {
     let b = BrushSettings { build_up: true, build_up_rate: 1000.0, ..brush() };
     let a = StrokePoint { time: 0.0, ..StrokePoint::new(20.0, 20.0, 1.0) };
     let brief_pause = StrokePoint { time: 200.0, ..a };
-    assert_eq!(dabs_of(&b, &[a, brief_pause]).len(), 201, "a 200 ms pause should retain its airbrush build-up");
+    assert_eq!(dabs_of(&b, &[a, brief_pause]).len(), 202, "a 200 ms pause should retain its airbrush build-up (after the click's two dabs)");
 
     let z = StrokePoint { time: f64::MAX, ..a };
     let d = dabs_of(&b, &[a, z]);
-    assert!(d.len() <= 2, "a huge pause should resume with one dab, not replay its time backlog: {}", d.len());
+    assert!(d.len() <= 3, "a huge pause should resume with one dab, not replay its time backlog: {}", d.len());
     assert_eq!(d.last().map(|dab| dab.center), Some(Point::new(20.0, 20.0)));
 
     let infinite = StrokePoint { time: f64::INFINITY, ..a };
-    assert!(dabs_of(&b, &[a, infinite]).len() <= 1);
+    assert!(dabs_of(&b, &[a, infinite]).len() <= 2, "the click's two dabs, no backlog");
 }
 
 #[test]
