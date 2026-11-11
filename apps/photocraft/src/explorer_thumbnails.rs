@@ -4,6 +4,10 @@
 //!
 //! The thumbnail provider itself is `photocraft_shell.dll` (the `photocraft-shell` crate), shipped
 //! next to `photocraft.exe`. Registering it only touches the current user's registry.
+//!
+//! Only a *change* of the preference is an explicit choice. Every other preferences save leaves the
+//! registry alone, so it can neither take `.psd` over from another program nor wait for the
+//! registration lock; the registry work for a real change runs on its own thread.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -12,18 +16,29 @@ use std::sync::{Mutex, PoisonError};
 use photocraft_engine::prefs::ExplorerThumbnails;
 use serde_json::Value;
 
-/// What the registry was last set to by this process (0 = not yet).
-static APPLIED: AtomicU8 = AtomicU8::new(0);
-/// Serializes asynchronous startup registration with preference saves.
+/// The preference value this process last saw: read at launch, then updated by every save
+/// (0 = launch has not run). A save that leaves it unchanged is not a request to change anything.
+static SEEN: AtomicU8 = AtomicU8::new(0);
+/// Serializes this process's registration threads (startup and preference changes).
 static REGISTRATION_LOCK: Mutex<()> = Mutex::new(());
 
-/// A stable number for each mode, used to remember what was last applied.
+/// A stable number for each mode, used to remember what was last seen.
 fn code(mode: ExplorerThumbnails) -> u8 {
     match mode {
         ExplorerThumbnails::Off => 1,
         ExplorerThumbnails::WithLogo => 2,
         ExplorerThumbnails::NoLogo => 3,
     }
+}
+
+/// The mode a [`code`] stands for; `None` for 0 (not seen yet) or an unknown number.
+fn mode_from(code: u8) -> Option<ExplorerThumbnails> {
+    [ExplorerThumbnails::Off, ExplorerThumbnails::WithLogo, ExplorerThumbnails::NoLogo].into_iter().find(|&mode| self::code(mode) == code)
+}
+
+/// Records `mode` as the preference now in force; true when it differs from the one seen before.
+fn note(seen: &AtomicU8, mode: ExplorerThumbnails) -> bool {
+    seen.swap(code(mode), Ordering::SeqCst) != code(mode)
 }
 
 /// The preference in the preferences text; the default when the file or the value is missing.
@@ -39,56 +54,69 @@ fn applies() -> bool {
     cfg!(target_pointer_width = "64") && crate::app_dirs::current().mode == crate::app_dirs::Mode::Platform
 }
 
-/// At launch: unless the preference is Off, register the thumbnails, except where another program
-/// (Photoshop) already provides them. Turning them off is only ever done from the preferences.
-/// Runs on its own thread: writing the registry and telling the shell must not delay the window.
-pub fn startup(prefs_file: Option<&Path>) {
-    if !applies() {
-        return;
-    }
-    let prefs_file = prefs_file.map(Path::to_path_buf);
-    let work = move || {
-        let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-        photocraft_shell::with_registration_lock(|| {
-            let mode = wanted(&prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default());
-            if mode == ExplorerThumbnails::Off {
-                match photocraft_shell::enable_explorer_thumbnails(false, true) {
-                    Ok(()) => APPLIED.store(code(mode), Ordering::Relaxed),
-                    Err(e) => log::debug!("Explorer thumbnails: {e}"),
-                }
-            } else if let Err(e) = photocraft_shell::ensure_explorer_thumbnails(mode == ExplorerThumbnails::WithLogo) {
-                // Typically the DLL is not beside the executable (a development build).
-                log::debug!("Explorer thumbnails: {e}");
-            } else {
-                APPLIED.store(code(mode), Ordering::Relaxed);
-            }
-        });
-    };
+/// Runs `work` on its own thread: writing the registry, waiting for another process's registration
+/// lock and telling the shell must never delay the window or a preferences save.
+fn in_background(work: impl FnOnce() + Send + 'static) {
     if let Err(e) = std::thread::Builder::new().name("explorer-thumbnails".into()).spawn(work) {
         log::debug!("Explorer thumbnails: {e}");
     }
 }
 
-/// After the preferences were written: apply a change of the setting. The user's explicit choice
-/// takes `.psd` over from other programs, and Off removes only PhotoCraft's own registration. A
-/// change that failed is tried again with the next save.
-pub fn after_save(text: &str) {
+/// At launch: unless the preference is Off, register the thumbnails, except where another program
+/// (Photoshop) already provides them. Turning them off is only ever done from the preferences.
+///
+/// The preference is read here, before any save can happen, so that [`after_save`] can tell a
+/// changed setting from an unrelated save.
+pub fn startup(prefs_file: Option<&Path>) {
     if !applies() {
         return;
     }
-    let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-    photocraft_shell::with_registration_lock(|| {
-        let mode = wanted(text);
-        // The cache avoids taking `.psd` over from another program on every unrelated save, so it
-        // is trusted only for On. Off is always applied: removing is idempotent, touches only our
-        // own registration, and another instance may have registered the provider since.
-        if mode != ExplorerThumbnails::Off && APPLIED.load(Ordering::Relaxed) == code(mode) {
-            return;
-        }
-        match photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo) {
-            Ok(()) => APPLIED.store(code(mode), Ordering::Relaxed),
-            Err(e) => log::debug!("Explorer thumbnails: {e}"),
-        }
+    let text = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    SEEN.store(code(wanted(&text)), Ordering::SeqCst);
+    in_background(|| {
+        let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        photocraft_shell::with_registration_lock(|| {
+            // The newest value: the user may have changed the setting while this was waiting.
+            let Some(mode) = mode_from(SEEN.load(Ordering::SeqCst)) else {
+                return;
+            };
+            let result = if mode == ExplorerThumbnails::Off {
+                photocraft_shell::enable_explorer_thumbnails(false, true)
+            } else {
+                // Typically fails because the DLL is not beside the executable (a development build).
+                photocraft_shell::ensure_explorer_thumbnails(mode == ExplorerThumbnails::WithLogo)
+            };
+            if let Err(e) = result {
+                log::debug!("Explorer thumbnails: {e}");
+            }
+        });
+    });
+}
+
+/// After the preferences were written: apply a change of the setting, and only a change. The
+/// user's explicit choice takes `.psd` over from other programs, and Off removes only PhotoCraft's
+/// own registration. Any other save returns at once, without the registry or the lock, so it cannot
+/// overwrite another program's handler or stall the window.
+///
+/// A change that failed is tried again with the next save.
+pub fn after_save(text: &str) {
+    if !applies() || !note(&SEEN, wanted(text)) {
+        return;
+    }
+    in_background(|| {
+        let _guard = REGISTRATION_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        photocraft_shell::with_registration_lock(|| {
+            // The newest value, in case the setting changed again while this was waiting.
+            let Some(mode) = mode_from(SEEN.load(Ordering::SeqCst)) else {
+                return;
+            };
+            if let Err(e) = photocraft_shell::enable_explorer_thumbnails(mode != ExplorerThumbnails::Off, mode == ExplorerThumbnails::WithLogo) {
+                log::debug!("Explorer thumbnails: {e}");
+                // Forget that this value was seen, so the next save tries again (unless the
+                // setting has moved on, which that save handles).
+                let _ = SEEN.compare_exchange(code(mode), 0, Ordering::SeqCst, Ordering::SeqCst);
+            }
+        });
     });
 }
 
@@ -107,5 +135,29 @@ mod tests {
         // The earlier boolean form and unknown values fall back to the default.
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": false}}"#), ExplorerThumbnails::WithLogo);
         assert_eq!(wanted(r#"{"fileHandling": {"explorerThumbnails": "sometimes"}}"#), ExplorerThumbnails::WithLogo);
+    }
+
+    #[test]
+    fn codes_round_trip_and_zero_means_not_seen() {
+        for mode in [ExplorerThumbnails::Off, ExplorerThumbnails::WithLogo, ExplorerThumbnails::NoLogo] {
+            assert_eq!(mode_from(code(mode)), Some(mode));
+        }
+        assert_eq!(mode_from(0), None);
+        assert_eq!(mode_from(200), None);
+    }
+
+    #[test]
+    fn only_a_changed_preference_counts_as_a_choice() {
+        let seen = AtomicU8::new(code(ExplorerThumbnails::WithLogo));
+        // Unrelated saves repeat the value in force: never a request to touch the registry.
+        assert!(!note(&seen, ExplorerThumbnails::WithLogo));
+        assert!(!note(&seen, ExplorerThumbnails::WithLogo));
+        // A real change is, once.
+        assert!(note(&seen, ExplorerThumbnails::Off));
+        assert!(!note(&seen, ExplorerThumbnails::Off));
+        assert!(note(&seen, ExplorerThumbnails::NoLogo));
+        // After a failed apply the value is forgotten, so the next save retries it.
+        seen.store(0, Ordering::SeqCst);
+        assert!(note(&seen, ExplorerThumbnails::NoLogo));
     }
 }

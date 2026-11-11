@@ -828,6 +828,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         save_prefs: Some(Box::new(|text: &str| {
             write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes())?;
+            // Returns at once unless the Explorer Thumbnails setting changed; a change is
+            // applied on a worker thread, so this never waits on the registration lock.
             #[cfg(target_os = "windows")]
             crate::explorer_thumbnails::after_save(text);
             Ok(())
