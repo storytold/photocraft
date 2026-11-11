@@ -260,6 +260,10 @@ pub struct ToolOptions {
     /// `paint.pencil`), as in Photoshop's options bar (#2662).
     #[serde(default = "default_eraser_mode")]
     pub eraser_mode: String,
+    /// Eraser › Erase to History: the Eraser paints the History panel's source state back
+    /// instead of erasing, as in Photoshop.
+    #[serde(default)]
+    pub erase_to_history: bool,
     /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
     /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
     pub mixer_combination: usize,
@@ -546,6 +550,7 @@ impl Default for ToolOptions {
             brush_clear: false,
             pencil_clear: false,
             eraser_mode: default_eraser_mode(),
+            erase_to_history: false,
             mixer_combination: 0,
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
