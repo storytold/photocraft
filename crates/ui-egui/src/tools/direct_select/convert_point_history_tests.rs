@@ -29,7 +29,7 @@ fn with_path(app: &mut PhotocraftApp) {
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
 }
 
-fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
+pub(super) fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
