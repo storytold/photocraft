@@ -129,7 +129,12 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
                 None,
             ),
         };
-        let Ok(mut buf) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap) else {
+        let preview = if tool == Tool::Healing {
+            photocraft_engine::retouch_cmds::healing_preview(&app.session, rect, &map, &app.ui.tool_options.clone_sample)
+        } else {
+            photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap)
+        };
+        let Ok(mut buf) = preview else {
             return;
         };
         if overlay.invert {

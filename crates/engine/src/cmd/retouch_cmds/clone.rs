@@ -65,13 +65,25 @@ pub fn clone_preview_periodic(
     sample_layer: &str,
     wrap: bool,
 ) -> Result<photocraft_compose::Buffer> {
-    preview_periodic(s, rect, map, sample_layer, wrap, true)
+    preview_periodic(s, rect, map, sample_layer, wrap, PreviewSource::Clone)
+}
+
+/// Healing Brush's source overlay, including its documented cross-document Grayscale exception.
+pub fn healing_preview(s: &Session, rect: Rect, map: &crate::presets::clone_source::Mapping, sample_layer: &str) -> Result<photocraft_compose::Buffer> {
+    preview_periodic(s, rect, map, sample_layer, false, PreviewSource::Healing)
 }
 
 /// The image beneath a clone overlay, always from the document being painted.
 pub fn clone_destination_preview(s: &Session, rect: Rect, wrap: bool) -> Result<photocraft_compose::Buffer> {
     let map = crate::presets::clone_source::Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
-    preview_periodic(s, rect, &map, "all", wrap, false)
+    preview_periodic(s, rect, &map, "all", wrap, PreviewSource::Destination)
+}
+
+#[derive(Clone, Copy)]
+enum PreviewSource {
+    Clone,
+    Healing,
+    Destination,
 }
 
 /// Sample a bounded overlay region from either the picked source or the destination composite.
@@ -81,7 +93,7 @@ fn preview_periodic(
     map: &crate::presets::clone_source::Mapping,
     sample_layer: &str,
     wrap: bool,
-    picked: bool,
+    kind: PreviewSource,
 ) -> Result<photocraft_compose::Buffer> {
     if ![map.source.0, map.source.1, map.anchor.0, map.anchor.1].into_iter().chain(map.m).all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
         return Err(bad("clone.preview", "invalid preview mapping"));
@@ -102,7 +114,13 @@ fn preview_periodic(
     let id = d.active_layer.ok_or_else(|| bad("clone.preview", "no active layer"))?;
     let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("clone.preview", "no pixel surface"))?;
     let which = sample_layers(&json!({"sampleLayer": sample_layer}), "clone.preview")?;
-    let source = if picked { clone_sampling::resolve(s, &json!({"sampleLayer": sample_layer}), "clone.preview")? } else { CloneFrom::default() };
+    let source = match kind {
+        PreviewSource::Destination => CloneFrom::default(),
+        PreviewSource::Clone | PreviewSource::Healing => {
+            let cmd = if matches!(kind, PreviewSource::Healing) { "healing.preview" } else { "clone.preview" };
+            clone_sampling::resolve(s, &json!({"sampleLayer": sample_layer}), cmd)?
+        }
+    };
     let region = clone_sample(&d.doc, Some(id), surf, which, &source, rect, map, wrap, "clone.preview")?;
     let px = region.data.chunks_exact(surf.format().channels()).map(|p| to_rgba(&surf.format(), p)).collect();
     Ok(photocraft_compose::Buffer { rect, px })

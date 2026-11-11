@@ -175,9 +175,9 @@ fn clone_sources_work_between_documents_with_preview_live_commit_and_undo() {
 }
 
 #[test]
-fn clone_cross_document_color_profiles_and_modes_use_cms() {
+fn clone_cross_document_matching_color_modes_and_profiles_use_cms() {
     use photocraft_cms::{Builtin, TransformOptions};
-    for (from, to) in [("rgb", "rgb"), ("gray", "rgb"), ("rgb", "cmyk"), ("lab", "rgb")] {
+    for (from, to) in [("rgb", "rgb"), ("gray", "gray"), ("cmyk", "cmyk"), ("lab", "lab")] {
         let (mut s, source, _) = setup(32, from);
         if from == "rgb" {
             s.edit("profile", |doc, _| {
@@ -190,19 +190,53 @@ fn clone_cross_document_color_profiles_and_modes_use_cms() {
         let native = doc.layer(source).unwrap().surface().unwrap().read_region(Rect::new(16, 16, 17, 17));
         s.execute("file.new", json!({"width": 64, "height": 64, "mode": to, "depth": 16})).unwrap();
         let dst = s.active().unwrap().doc.clone();
-        let transform = photocraft_cms::transform::cached(
-            &crate::color_cmds::document_profile(&doc),
-            &crate::color_cmds::document_profile(&dst),
-            TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() },
-        )
-        .unwrap();
+        let (from_profile, to_profile) = (crate::color_cmds::document_profile(&doc), crate::color_cmds::document_profile(&dst));
         let mut want = [0.0; 16];
-        transform.eval(&native, &mut want);
+        if from_profile.same_bytes(&to_profile) {
+            // Identical profiles preserve native ink values; a CMYK PCS round trip is lossy.
+            want[..native.len()].copy_from_slice(&native);
+        } else {
+            let transform = photocraft_cms::transform::cached(
+                &from_profile,
+                &to_profile,
+                TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() },
+            )
+            .unwrap();
+            transform.eval(&native, &mut want);
+        }
         s.execute("paint.cloneStamp", json!({"points": [[48,48]], "size": 8, "hardness": 100})).unwrap();
         let st = s.active().unwrap();
         let got = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(Rect::new(48, 48, 49, 49));
         for (got, want) in got.iter().zip(want).take(dst.mode.color_channels()) {
             assert!((got - want).abs() < 0.005, "{from} -> {to}: {got} vs {want}");
+        }
+    }
+}
+
+#[test]
+fn clone_and_heal_cross_document_mode_compatibility_matches_preview_live_and_commit() {
+    for from in ["rgb", "gray", "cmyk", "lab"] {
+        for to in ["rgb", "gray", "cmyk", "lab"] {
+            for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+                let (mut s, _, _) = setup(16, from);
+                s.execute("file.new", json!({"width": 64, "height": 64, "mode": to, "depth": 16})).unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let slots = s.presets.clone.clone();
+                let allowed = from == to || (cmd == "paint.healingBrush" && (from == "gray" || to == "gray"));
+                let p = json!({"points": [[48,48]], "size": 8, "hardness": 100});
+                let (map, _) = crate::presets::clone_source::resolve(&s, &p, (48.0, 48.0), cmd).unwrap();
+                let rect = Rect::new(44, 44, 52, 52);
+                let preview = if cmd == "paint.healingBrush" { healing_preview(&s, rect, &map, "current") } else { clone_preview(&s, rect, &map, "current") };
+                assert_eq!(preview.is_ok(), allowed, "preview: {from} -> {to}, {cmd}: {preview:?}");
+                assert_eq!(LiveRetouch::begin(&s, cmd, &p).is_ok(), allowed, "live: {from} -> {to}, {cmd}");
+                assert_eq!(s.presets.clone, slots, "preview and live construction are read-only");
+                let result = s.execute(cmd, p);
+                assert_eq!(result.is_ok(), allowed, "commit: {from} -> {to}, {cmd}: {result:?}");
+                if !allowed {
+                    assert_eq!(s.active().unwrap().doc, before);
+                    assert_eq!(s.presets.clone, slots);
+                }
+            }
         }
     }
 }

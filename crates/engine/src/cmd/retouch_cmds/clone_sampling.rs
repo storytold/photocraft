@@ -121,6 +121,12 @@ pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
     let doc_id = picked.then_some(slot.document).flatten().unwrap_or(active.doc.id);
     let st = s.documents().iter().find(|st| st.doc.id == doc_id).ok_or_else(|| bad(cmd, "the clone source document was closed; pick a new source"))?;
     let external = st.doc.id != active.doc.id;
+    // Adobe documents matching document modes for Clone Stamp; Healing Brush additionally
+    // permits Grayscale on either side. Profile conversion still applies to compatible pairs.
+    let healing_gray = matches!(cmd, "paint.healingBrush" | "healing.preview") && [st.doc.mode, active.doc.mode].contains(&ColorMode::Grayscale);
+    if external && st.doc.mode != active.doc.mode && !healing_gray {
+        return Err(bad(cmd, "the source and destination color modes are incompatible with this tool; convert a document before sampling"));
+    }
     let mut layer = None;
     if which == SampleLayers::Current || (external && which == SampleLayers::CurrentAndBelow) {
         let id = match p.get("sourceLayer") {

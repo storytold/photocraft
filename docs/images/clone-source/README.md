@@ -34,3 +34,9 @@ and [Photoshop reference](https://help.adobe.com/archive/en/photoshop/cs6/photos
 from the sampling point, five sources are independent, and X/Y specify pixel offsets. Adobe's
 text does not specify every pre-stroke readout or mode-toggle detail; no native-Photoshop
 measurement of those undocumented details is claimed.
+
+The archived reference also requires matching document color modes for cross-document Clone
+Stamp; Healing Brush additionally permits Grayscale on either side. The sampler and both
+previews enforce those rules while converting compatible source/destination ICC profiles.
+The current 2026 help omits that compatibility detail; this follows the explicit reference
+rather than claiming a measurement of current Photoshop.
