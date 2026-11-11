@@ -4,12 +4,13 @@
 //! count, so a few-KB file can expand into gigabytes before any pixel check runs. Before the file
 //! reaches it, every `brob` box is inflated here under [`BROB_CAP`] and rewritten as the plain box
 //! it wraps; a box that would pass the cap is dropped (metadata is a courtesy, the pixels still
-//! decode). A file without a `brob` box is not copied at all.
+//! decode). The cap is one budget for the whole file, spent box by box. A file without a `brob` box is not copied at all.
 
 use std::io::Read;
 
-/// Most bytes one compressed metadata box may expand to: real Exif and XMP packets are a few KB
-/// to a few hundred KB.
+/// Most bytes all the compressed metadata boxes of one file may expand to together: real Exif and
+/// XMP packets are a few KB to a few hundred KB, and a file of many small boxes that each inflate
+/// to just under a per-box cap would otherwise hold N times the cap.
 pub(crate) const BROB_CAP: usize = 8 << 20;
 
 const SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
@@ -83,17 +84,20 @@ pub(crate) fn plain_box(kind: &[u8], data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The plain box a `brob` box wraps, or `None` when it must be dropped.
-fn unwrap_brob(span: &BoxSpan, bytes: &[u8], cap: usize) -> Option<Vec<u8>> {
+/// The plain box a `brob` box wraps, or `None` when it must be dropped. A kept box is charged to
+/// `budget`, so the boxes of one file never inflate past the cap together.
+fn unwrap_brob(span: &BoxSpan, bytes: &[u8], budget: &mut usize) -> Option<Vec<u8>> {
     let payload = span.payload(bytes);
     let (inner, compressed) = (payload.get(..4)?, payload.get(4..)?);
     if inner == BROB {
         return None;
     }
-    Some(plain_box(inner, &inflate_capped(compressed, cap)?))
+    let inflated = inflate_capped(compressed, *budget)?;
+    *budget -= inflated.len();
+    Some(plain_box(inner, &inflated))
 }
 
-/// `bytes` with every `brob` box inflated under `cap` (or removed), or `None` when the file is
+/// `bytes` with every `brob` box inflated, `cap` bytes in all (or removed), or `None` when the file is
 /// not a container or has no `brob` box and can be used as it is.
 pub(crate) fn sanitize(bytes: &[u8], cap: usize) -> Option<Vec<u8>> {
     if !bytes.starts_with(SIGNATURE) {
@@ -103,10 +107,11 @@ pub(crate) fn sanitize(bytes: &[u8], cap: usize) -> Option<Vec<u8>> {
     if !spans.iter().any(|s| s.kind(bytes) == BROB) {
         return None;
     }
+    let mut budget = cap;
     let mut out = Vec::with_capacity(bytes.len());
     for span in &spans {
         match (span.kind(bytes) == BROB, bytes.get(span.start..span.end)) {
-            (true, _) => out.extend(unwrap_brob(span, bytes, cap).unwrap_or_default()),
+            (true, _) => out.extend(unwrap_brob(span, bytes, &mut budget).unwrap_or_default()),
             (false, Some(whole)) => out.extend_from_slice(whole),
             (false, None) => {}
         }
@@ -174,6 +179,16 @@ pub(crate) mod tests {
         let nested = brob_of(BROB, &EXIF_BR);
         let empty = plain_box(BROB, b"");
         assert_eq!(sanitize(&container(&[nested, empty]), BROB_CAP).unwrap(), container(&[]));
+    }
+
+    #[test]
+    fn many_small_boxes_share_one_budget() {
+        let exif = b"II*\0\x08\0\0\0hello exif".len();
+        let boxes: Vec<Vec<u8>> = (0..4).map(|_| brob_of(b"Exif", &EXIF_BR)).collect();
+        let out = sanitize(&container(&boxes), exif * 2 + 1).unwrap();
+        let kept = out.windows(4).filter(|w| *w == b"Exif").count();
+        assert_eq!(kept, 2, "the boxes past the file's budget are dropped");
+        assert!(out.len() < SIGNATURE.len() + 2 * (exif + 8) + 1);
     }
 
     #[test]
