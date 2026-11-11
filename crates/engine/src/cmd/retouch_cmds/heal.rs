@@ -298,3 +298,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
     let dmg = run_stroke(s, "Spot Healing Brush", id, p, |pre, surf, sel, lock| spot_heal_surface(surf, pre, &stroke, kind, all, sel, lock))?;
     Ok(json!({ "damage": damage_json(dmg) }))
 }
+
+#[cfg(test)]
+#[path = "heal_indexed_tests.rs"]
+mod heal_indexed_tests;

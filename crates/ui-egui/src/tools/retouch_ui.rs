@@ -1203,3 +1203,7 @@ mod smudge_mode_bar_tests;
 #[cfg(test)]
 #[path = "../sponge_flow_field_tests.rs"]
 mod sponge_flow_field_tests;
+
+#[cfg(test)]
+#[path = "../healing_indexed_alert_tests.rs"]
+mod healing_indexed_alert_tests;
