@@ -1,5 +1,5 @@
 use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
-use super::dynamic_text::{dynamic_text_toggle, is_fitted};
+use super::dynamic_text::{dynamic_text_toggle, formats_fitted};
 use super::editing::{cancel, commit_with};
 use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
@@ -458,8 +458,9 @@ fn font_size(app: &mut PhotocraftApp, ui: &mut egui::Ui, size: f32) {
     let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
     icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
-    // Dynamic Text sets the size from the box: the field and its scrub are greyed out.
-    let fitted = is_fitted(app);
+    // Dynamic Text sets the size from the box: the field and its scrub are greyed out while the
+    // edit would reach a fitted layer.
+    let fitted = formats_fitted(app);
     // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
     if !fitted {
         crate::widgets::scrub_option_icon(ui, &icon, tl!("Set font size"));

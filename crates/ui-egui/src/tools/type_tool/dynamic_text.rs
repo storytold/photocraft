@@ -9,6 +9,19 @@ pub(super) fn is_fitted(app: &PhotocraftApp) -> bool {
     target_text(app).is_some_and(|t| t.fit.is_some())
 }
 
+/// Whether a size or leading edit would reach Dynamic Text: the layer of an inline edit, else any
+/// selected type layer (a size edit formats every one of them, not only the one shown).
+pub(super) fn formats_fitted(app: &PhotocraftApp) -> bool {
+    if app.ui.text_edit.is_some() {
+        return is_fitted(app);
+    }
+    app.session.active().is_some_and(|st| {
+        st.selected_layers()
+            .into_iter()
+            .any(|id| matches!(st.doc.layer(id).map(|l| &l.content), Some(photocraft_doc::LayerContent::Text(t)) if t.fit.is_some()))
+    })
+}
+
 /// The Dynamic Text toggle: a "T" struck by a lightning bolt, highlighted while the layer is fitted.
 fn dynamic_text_button(ui: &mut egui::Ui, on: bool, unavailable: Option<&str>) -> egui::Response {
     let tip = tl!("Dynamic Text");

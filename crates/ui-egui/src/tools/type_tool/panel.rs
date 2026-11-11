@@ -1,5 +1,5 @@
 use super::defaults::{apply, apply_defaults, default_styles, formatting_params, open_color_picker, shown_scale, target, type_unit};
-use super::dynamic_text::{dynamic_text_gaps, dynamic_text_toggle, is_fitted};
+use super::dynamic_text::{dynamic_text_gaps, dynamic_text_toggle, formats_fitted};
 use super::fonts::{axis_sliders, font_picker, fonts_ready, selected_style, style_label, styles};
 use super::options_bar::{
     align_glyph, apply_kerning, direction_glyph, direction_items, icon_label, kerning_at, kerning_field, kerning_label, num_field, shown_family, styles_at,
@@ -287,7 +287,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         });
         axis_sliders(app, ui, &c);
         // Dynamic Text sets the size from the box and the leading from its Line Gap.
-        let fitted = is_fitted(app);
+        let fitted = formats_fitted(app);
         row(ui, &mut |ui| {
             let k = shown_scale(app);
             // Hover tips stay English until wired through `tl!` in a multi-locale change

@@ -3571,6 +3571,22 @@ mod dynamic_text_ui {
     }
 
     #[test]
+    fn size_field_disabled_when_any_formatted_layer_is_fitted() {
+        // The layer shown is ordinary type; another selected one is Dynamic Text. A size edit
+        // formats both, so the field is off.
+        let (mut app, plain) = app_with_box_text("Hello", 12.0);
+        let r = app.run("type.create", json!({"x": 0, "y": 0, "text": "World", "size": 12, "color": "#000000", "box": [100, 400, 400, 200]})).unwrap();
+        let fit = LayerId(r["layer"].as_u64().unwrap());
+        app.run("type.convertToDynamicText", json!({"layer": fit.0})).unwrap();
+        app.run("layer.select", json!({"layer": plain.0, "mode": "replace"})).unwrap();
+        app.run("layer.select", json!({"layer": fit.0, "mode": "add"})).unwrap();
+        app.session.active_mut().unwrap().active_layer = Some(plain);
+        let mut h = bar(app, false);
+        assert!(!fitted(&h, plain) && fitted(&h, fit));
+        assert!(h.get_all_by_role(Role::SpinButton).next().expect("size field").accesskit_node().is_disabled());
+    }
+
+    #[test]
     fn properties_grey_size_and_leading_and_show_gap_sliders_only_while_fitted() {
         let (app, _) = app_with_box_text("Hello", 12.0);
         let mut h = bar(app, true);
