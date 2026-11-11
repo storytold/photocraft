@@ -580,6 +580,8 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         && let Some(r) = damage
     {
         damage = Some(crate::canvas::board_cache::apply(app, &gpu, id, &doc, display_key, r));
+        // `apply` can put a picture's follow off: make sure a frame comes to finish it.
+        crate::canvas::board_cache::schedule(app, ctx);
     }
     let mut partial = present && damage.is_some();
     if let Some((region, everything)) = sweep_region(app, &gpu, id, &doc, damage, present) {

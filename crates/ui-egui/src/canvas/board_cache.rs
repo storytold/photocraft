@@ -224,7 +224,7 @@ fn follow(app: &mut PhotocraftApp, id: DocId, doc: &Document, toggled: &[LayerId
 
 /// Follow the pictures [`Kept::follow`] put off, once their interval is over, even if no edit
 /// or redraw comes after: otherwise the last edits of a burst left a picture holding tiles that
-/// History then let go. Called every frame; asks for a frame until none is due.
+/// History then let go. Called every frame; asks for a frame until none is due ([`schedule`]).
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut due: Vec<DocId> = app.board_cache.shots.iter().filter(|(_, s)| s.kept.due).map(|(&(d, _), _)| d).collect();
     if due.is_empty() {
@@ -236,6 +236,12 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let Some(doc) = app.session.documents().iter().find(|st| st.doc.id == id).map(|st| st.doc.clone()) else { continue };
         follow(app, id, &doc, &[]);
     }
+    schedule(app, ctx);
+}
+
+/// Ask for a frame in time for [`tick`] to follow the pictures that are due. Called after
+/// [`apply`] too, which can make one due after this frame's `tick` found none.
+pub(crate) fn schedule(app: &PhotocraftApp, ctx: &egui::Context) {
     if app.board_cache.shots.values().any(|s| s.kept.due) {
         ctx.request_repaint_after(std::time::Duration::from_millis(FOLLOW_MS as u64));
     }
