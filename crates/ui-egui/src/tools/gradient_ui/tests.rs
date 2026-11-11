@@ -714,11 +714,16 @@ fn a_canvas_menu_takes_escape_before_the_pending_mask_gradient() {
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
         guide: false,
         spelling: None,
         crop: None,
+        sampler: None,
+        sampler_at: None,
+        color: None,
+        inside_selection: false,
     });
     let escape = |app: &mut PhotocraftApp| {
         let ctx = egui::Context::default();
