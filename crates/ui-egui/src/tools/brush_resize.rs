@@ -22,6 +22,9 @@ use crate::state::Tool;
 /// Screen points of vertical drag that take the hardness from 0 % to 100 %: Photoshop's rate,
 /// where 50 points down from 0 % give 13 % (#11891).
 pub const HARDNESS_TRAVEL: f32 = 385.0;
+/// Screen points of vertical drag that take the opacity from 0 % to 100 % when "Vary Round Brush
+/// Hardness on HUD" is off: the rate it had before the hardness rate was measured (#11891).
+pub const OPACITY_TRAVEL: f32 = 200.0;
 /// The brush size range (`tools.setBrush` accepts the same).
 const SIZE: std::ops::RangeInclusive<f32> = 1.0..=MAX_BRUSH_SIZE;
 
@@ -123,10 +126,11 @@ fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
         // No view: document axes, mirrored by View › Flip Horizontal.
         _ => ((x - r.anchor[0]) * if app.ui.view.flip_horizontal { -1.0 } else { 1.0 }, y - r.anchor[1], app.point_zoom()),
     };
-    let (size, v) = resized(r.start, dx, dy, zoom);
     // "Vary Round Brush Hardness on HUD" (Preferences ▸ Tools, on by default): off, the vertical
-    // movement takes the opacity instead of the hardness, as in Photoshop.
+    // movement takes the opacity instead of the hardness, as in Photoshop, at its own rate.
     let vary = app.session.prefs().tools.vary_round_brush_hardness_on_hud;
+    let dy = if vary { dy } else { dy * f64::from(HARDNESS_TRAVEL / OPACITY_TRAVEL) };
+    let (size, v) = resized(r.start, dx, dy, zoom);
     let b = &app.session.tools.brush;
     if b.size == size && if vary { b.hardness == v } else { b.opacity == v } {
         return;

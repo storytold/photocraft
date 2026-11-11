@@ -297,9 +297,11 @@ fn vary_round_brush_hardness_on_hud_switches_the_vertical_target() {
             app.run("prefs.set", json!({"path": "tools.varyRoundBrushHardnessOnHud", "value": false})).unwrap();
         }
         let (h0, o0) = (app.session.tools.brush.hardness, app.session.tools.brush.opacity);
+        // 20 % of each travel: 77 points for the hardness, 40 for the opacity, which keeps its rate.
+        let y = if vary { 177.0 } else { 140.0 };
         tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, CTRL_ALT);
-        tool_event(&mut app, ToolEvent::Move { x: 100.0, y: 177.0, pressure: 1.0 }, CTRL_ALT);
-        tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 177.0 }, CTRL_ALT);
+        tool_event(&mut app, ToolEvent::Move { x: 100.0, y, pressure: 1.0 }, CTRL_ALT);
+        tool_event(&mut app, ToolEvent::Up { x: 100.0, y }, CTRL_ALT);
         let b = &app.session.tools.brush;
         if vary {
             assert_eq!((b.hardness, b.opacity), (h0 + 0.2, o0), "hardness moves with the drag");
