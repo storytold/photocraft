@@ -680,10 +680,15 @@ fn artboard_edit_descriptor(background: i32, change_sizes: i32) -> Descriptor {
 fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
     for (kind, expected) in [(1, [1.0; 4]), (2, [0.0, 0.0, 0.0, 1.0]), (3, [0.0; 4]), (4, [0.25, 0.5, 0.75, 1.0])] {
         let mut s = artboard_fixture();
-        s.execute("layer.new.artboardFromGroup", json!({})).unwrap();
+        let initial_background = if kind == 1 { "black" } else { "white" };
+        s.execute("layer.new.artboardFromGroup", json!({"background":initial_background})).unwrap();
         Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
         let before = s.active().unwrap().doc.clone();
         let id = s.active().unwrap().active_layer.unwrap();
+        assert_eq!(
+            before.layer(id).unwrap().artboard().unwrap().background,
+            if kind == 1 { photocraft_doc::ArtboardBackground::Black } else { photocraft_doc::ArtboardBackground::White }
+        );
         let history = s.active().unwrap().history.past_len();
         let d = artboard_edit_descriptor(kind, 8);
         assert_eq!(load(&mut s, &file("editArtboardEvent", d.clone()))["unsupported"], json!([]));
@@ -1010,7 +1015,7 @@ fn shape_blur_radius_boundaries_keep_their_value_without_running_large_kernels()
 }
 
 #[test]
-fn shape_blur_keeps_custom_assets_and_invalid_radius_forms_whole() {
+fn shape_blur_keeps_unrepresented_assets_and_invalid_radius_forms_whole() {
     let custom = Descriptor::new("customShape").with("Nm  ", D::Text(UnicodeString::new_nul("Star"))).with("Idnt", D::Text(UnicodeString::new_nul("asset-id")));
     for descriptor in [
         radius_descriptor(4.0),
@@ -1018,7 +1023,8 @@ fn shape_blur_keeps_custom_assets_and_invalid_radius_forms_whole() {
         radius_descriptor(f64::NAN),
         radius_descriptor(f64::INFINITY),
         Descriptor::new("shapeBlur").with("Rds ", D::UnitFloat { unit: *b"#Prc", value: 10.0 }),
-        radius_descriptor(10.0).with("customShape", D::Descriptor(custom)).with("keyOriginType", D::Integer(9)),
+        // Origin 9 is supported by ID; other origin forms must remain whole.
+        radius_descriptor(10.0).with("customShape", D::Descriptor(custom)).with("keyOriginType", D::Integer(8)),
         radius_descriptor(10.0).with("extra", D::Boolean(true)),
     ] {
         let mut s = Session::new();
