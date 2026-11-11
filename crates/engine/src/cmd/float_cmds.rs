@@ -128,13 +128,15 @@ impl CutParts {
         } else {
             l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?
         };
+        // An all-clear piece composites to nothing: the early return is about visible pixels.
         if self.piece_bounds.is_empty() {
             *surf = self.rest.clone();
             return Ok(());
         }
         let mut out = self.rest.clone();
-        // Every stored tile moves, not only the visible box: the colour under the piece's clear
-        // pixels is part of what was cut (#9824).
+        // Every stored tile moves, not just the visible box, so the shift drops nothing before the
+        // composite. The composite below blends by alpha, so the colour under the piece's clear
+        // pixels is not put down at the drop: same as before #9824, and invisible either way.
         let piece = self.piece.translated(dx, dy, self.piece.tile_bounds());
         if self.mask {
             crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
