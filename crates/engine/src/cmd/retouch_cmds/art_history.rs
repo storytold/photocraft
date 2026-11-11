@@ -163,6 +163,27 @@ fn stamp_region(
     }
 }
 
+/// A source of another colour mode, then any document but an 8-bit one, refused with the reference
+/// application's alert texts (#12637). The 16-bit text was seen with one layer only; two layers,
+/// or a depth change after the source, showed "not directly editable", so that text covers every
+/// other 16-bit case.
+fn refuse_format(doc: &photocraft_doc::Document, source: &photocraft_doc::Document) -> Result<()> {
+    use photocraft_color::SampleType;
+    let why = if source.mode != doc.mode {
+        "the current color mode does not match that of the history state."
+    } else {
+        match doc.depth {
+            SampleType::U8 => return Ok(()),
+            SampleType::F32 => "it does not work with 32 bit per channel images (convert image to 8 or 16 bit per channel to edit).",
+            SampleType::U16 if source.depth == doc.depth && doc.layer_count() == 1 => {
+                "it does not work with 16 bit per channel images (convert image to 8 bit per channel to edit)."
+            }
+            SampleType::U16 => "the pixel data for this layer is not directly editable.",
+        }
+    };
+    Err(EngineError::Other(format!("Could not use the art history brush because {why}")))
+}
+
 /// Run `paint.artHistoryBrush`.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = object(p)?;
@@ -195,15 +216,11 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, CMD)?;
     let _ = stroke;
     // The same source as the History Brush: the `state` or `snapshot` passed, else the History
-    // panel's source, refused after a canvas size change, then after a colour mode change, as
-    // Photoshop does (#12826), before a layer missing from it. Compare document modes: the pixel
-    // format reads Indexed and Multichannel as RGB.
+    // panel's source, refused after a canvas size change, then after a colour mode change (#12826)
+    // or at a depth other than 8 bits, as Photoshop does, before a layer missing from it. Compare
+    // document modes: the pixel format reads Indexed and Multichannel as RGB.
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    if crate::history_source_cmds::paint_source(st, p, CMD)?.mode != st.doc.mode {
-        return Err(EngineError::Other(
-            "the current color mode does not match that of the History Brush source: set a source of this color mode in the History panel".into(),
-        ));
-    }
+    refuse_format(&st.doc, &*crate::history_source_cmds::paint_source(st, p, CMD)?)?;
     let src_surface = super::history_source(s, id, p, CMD)?;
     // Truncating a huge row index only changes the seed.
     let seed = RNG_SEED ^ p.get("state").and_then(Value::as_u64).map_or(0, |i| i as u32);
@@ -302,9 +319,10 @@ mod tests {
         s.execute("paint.artHistoryBrush", p)
     }
 
+    /// 8-bit only: other depths are refused (#12637).
     #[test]
-    fn restores_open_state_at_every_depth_and_undoes() {
-        for (depth, mode) in [(8u64, "rgb"), (16, "rgb"), (32, "rgb"), (16, "gray")] {
+    fn restores_open_state_in_8_bit_modes_and_undoes() {
+        for (depth, mode) in [(8u64, "rgb"), (8, "gray")] {
             let mut s = session(48, 32, depth, mode);
             paint_layer(&mut s, |_, _| [0.1, 0.8, 0.2, 1.0]);
             s.execute("edit.fill", json!({"color": "#2030c0"})).unwrap();
@@ -449,31 +467,29 @@ mod tests {
         before.iter().enumerate().map(|(i, b)| (0..4).map(|c| (rgba(s, 8 + i as i32, 16)[c] - b[c]).abs()).sum::<f32>()).sum()
     }
 
-    /// The stroke's Opacity scales how far it restores the source, at every depth; omitted = 100.
+    /// The stroke's Opacity scales how far it restores the source; omitted = 100.
     #[test]
-    fn opacity_scales_the_stroke_at_every_depth() {
-        for depth in [8u64, 16, 32] {
-            let setup = || {
-                let mut s = session(48, 32, depth, "rgb");
-                s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-                s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-                s
-            };
-            let row = |s: &Session| (8..41).map(|x| rgba(s, x, 16)).collect::<Vec<_>>();
-            let diff = |extra: Value| {
-                let mut s = setup();
-                let before = row(&s);
-                stroke(&mut s, extra).unwrap();
-                row_diff(&s, &before)
-            };
-            let none = diff(json!({"state": 1, "opacity": 0}));
-            let half = diff(json!({"state": 1, "opacity": 50}));
-            let full = diff(json!({"state": 1, "opacity": 100}));
-            let omitted = diff(json!({"state": 1}));
-            assert_eq!(none, 0.0, "opacity 0 leaves the pixels alone at depth {depth}");
-            assert!(half > 0.0 && half < full, "depth {depth}: half {half} full {full}");
-            assert_eq!(omitted, full, "omitted opacity is 100 at depth {depth}");
-        }
+    fn opacity_scales_the_stroke() {
+        let setup = || {
+            let mut s = session(48, 32, 8, "rgb");
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+            s
+        };
+        let row = |s: &Session| (8..41).map(|x| rgba(s, x, 16)).collect::<Vec<_>>();
+        let diff = |extra: Value| {
+            let mut s = setup();
+            let before = row(&s);
+            stroke(&mut s, extra).unwrap();
+            row_diff(&s, &before)
+        };
+        let none = diff(json!({"state": 1, "opacity": 0}));
+        let half = diff(json!({"state": 1, "opacity": 50}));
+        let full = diff(json!({"state": 1, "opacity": 100}));
+        let omitted = diff(json!({"state": 1}));
+        assert_eq!(none, 0.0, "opacity 0 leaves the pixels alone");
+        assert!(half > 0.0 && half < full, "half {half} full {full}");
+        assert_eq!(omitted, full, "omitted opacity is 100");
     }
 
     #[test]
@@ -547,3 +563,7 @@ mod art_history_noop_state_tests;
 #[cfg(test)]
 #[path = "art_history_mode_mismatch_tests.rs"]
 mod art_history_mode_mismatch_tests;
+
+#[cfg(test)]
+#[path = "art_history_depth_tests.rs"]
+mod art_history_depth_tests;

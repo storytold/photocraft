@@ -4,7 +4,7 @@ use super::drag::{
     size_readout,
 };
 use super::gesture::constrained_polygon_point;
-use super::strokes::{EngineStroke, SPOT_HEALING_TRAIL, draw_smoothing_string, strokes_live};
+use super::strokes::{SPOT_HEALING_TRAIL, draw_smoothing_string, strokes_live};
 use super::textures::texture_side;
 use super::view_xform::ViewXform;
 use super::{Color32, DRect, Document, Mesh, PhotocraftApp, Pos2, Rect, Stroke, TextureOptions, Tool, json, pos2, vec2};
@@ -578,8 +578,6 @@ pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: 
     }
 }
 
-/// Draw the drag in progress over the canvas: a live stroke's smoothing string, a stroke's
-/// trail, a marquee and the like.
 pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     draw_tool_state(app, painter, xf, painter.ctx().input(|i| i.pointer.hover_pos()));
     // Remove strokes waiting for ↩ stay tinted between drags.
@@ -607,12 +605,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
         // (Sample All Layers, say) keeps the trail.
         t if strokes_live(t) && app.live_stroke.is_some() => {
             // Smoothing holds the brush back from the pointer: draw the string between them.
-            let string = match app.live_stroke.as_ref().map(|l| &l.stroke) {
-                Some(EngineStroke::Brush(l)) => l.smoothing_string(),
-                Some(EngineStroke::Busy(b)) => b.smoothing_string(),
-                _ => None,
-            };
-            if let Some(s) = string {
+            if let Some(s) = app.live_stroke.as_ref().and_then(|l| l.smoothing_string()) {
                 draw_smoothing_string(painter, xf, s);
             }
         }
@@ -748,7 +741,7 @@ mod clip_segment_tests {
             assert!(!starts.is_empty(), "the view at {left} shows dashes");
             for d in starts {
                 let off = d % (2.0 * DASH);
-                assert!(off < 0.01 || off > 2.0 * DASH - 0.01, "view at {left}: a dash starts {d} from the corner, off the pattern by {off}");
+                assert!(!(0.01..=2.0 * DASH - 0.01).contains(&off), "view at {left}: a dash starts {d} from the corner, off the pattern by {off}");
             }
         }
     }

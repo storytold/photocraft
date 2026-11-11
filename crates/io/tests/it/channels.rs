@@ -23,7 +23,7 @@ fn channel_options_spot_and_quick_mask_roundtrip() {
         d.channels.push(a);
         d.channels.push(AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 1.0), 0.25)), ..AlphaChannel::new("PANTONE X", channel(depth, 8)) });
         d.quick_mask = Some(AlphaChannel::new("Quick Mask", channel(depth, 12)));
-        let (back, warnings) = psd_to_document(&document_to_psd(&d));
+        let (back, warnings) = psd_to_document(&document_to_psd(&d).unwrap());
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(back.channels.len(), 2, "{depth:?}");
         let (a, s) = (&back.channels[0], &back.channels[1]);
@@ -37,7 +37,7 @@ fn channel_options_spot_and_quick_mask_roundtrip() {
         assert_eq!(q.surface.sample_channel(10, 2, 0), 1.0);
         assert_eq!(q.surface.sample_channel(14, 2, 0), 0.0);
         // Re-exporting doesn't duplicate the display-info resources.
-        let f2 = document_to_psd(&back);
+        let f2 = document_to_psd(&back).unwrap();
         assert_eq!(f2.resources.iter().filter(|r| r.id == 1077).count(), 1);
         assert_eq!(f2.resources.iter().filter(|r| r.id == 1022).count(), 1);
     }

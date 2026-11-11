@@ -57,7 +57,7 @@ pub mod screenshot;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
-pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
+pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, MIN_WINDOW_SIZE, RenderIconFn};
 pub(crate) mod tool_memory;
 pub mod updates_ui;
 pub mod widgets;
@@ -264,9 +264,10 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable,
-    RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn,
+    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
+pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;
@@ -345,8 +346,8 @@ use widgets::tab_strip;
 pub use widgets::text_field_menu;
 pub use widgets::tone;
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
+type InfoSampleKey = (i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -385,10 +386,11 @@ pub struct PhotocraftApp {
     pub(crate) tool_override: Option<state::Tool>,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
-    /// A released Brush/Pencil/Eraser drag whose live stroke is still catching up: it commits
-    /// once caught up, or at once before the next press or command (`canvas::flush_finishing_stroke`).
-    finishing_stroke: Option<canvas::Drag>,
-    /// Commands made while `finishing_stroke` was still on its worker: they run, in order, once
+    /// A released Brush, Pencil or Eraser stroke still finishing on its thread, or having its
+    /// commit prepared: it commits once done, or before the next press or command
+    /// (`canvas::flush_finishing_stroke`).
+    finishing_stroke: Option<canvas::FinishingStroke>,
+    /// Commands made while `finishing_stroke` was still finishing: they run, in order, once
     /// it has committed (`canvas::run_queued_commands`).
     queued_commands: Vec<(String, Value)>,
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
@@ -597,6 +599,10 @@ pub struct PhotocraftApp {
     pub(crate) hist_job: Option<histogram_panel::HistJob>,
     /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
     pub(crate) hist_uncached: Option<(DocId, u64)>,
+    /// Memoized `tone::selection_key` of the active document's current revision
+    /// (`histogram_panel::update` refreshes it once per frame; the hash walks every tile of the
+    /// selection mask, while any change to the selection arrives as a new document revision).
+    pub(crate) hist_sel_key: Option<(DocId, u64, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
@@ -845,6 +851,8 @@ mod pen_variants_tests;
 #[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
+mod home_recent_gate_tests;
+#[cfg(test)]
 mod layer_shortcut_tests;
 #[cfg(test)]
 mod live_retouch_tests;
@@ -923,6 +931,9 @@ mod move_shift_click_tests;
 mod move_target_default_tests;
 
 #[cfg(test)]
+mod wand_press_inside_selection_tests;
+
+#[cfg(test)]
 mod move_history_names_tests;
 #[cfg(test)]
 mod move_shift_diagonal_tests;
@@ -986,6 +997,9 @@ mod options_bar_mode_wheel_tests;
 
 #[cfg(test)]
 mod field_wheel_app_tests;
+
+#[cfg(test)]
+mod brush_shift_drag_axis_tests;
 
 #[cfg(test)]
 mod dropdown_press_tests;
@@ -1057,6 +1071,10 @@ mod artboard_options_bar_tests;
 #[cfg(test)]
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
+mod brush_alt_digit_smoothing_tests;
+#[cfg(test)]
+mod brush_hud_rate_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod burn_default_tip_tests;
@@ -1066,6 +1084,8 @@ mod pencil_shift_digit_opacity_tests;
 
 #[cfg(test)]
 mod doc_tab_menu_tests;
+#[cfg(test)]
+mod dodge_default_tip_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
 #[cfg(test)]
@@ -1082,3 +1102,5 @@ mod background_eraser_digit_keys_tests;
 
 #[cfg(test)]
 mod clone_stamp_reset_tip_tests;
+#[cfg(test)]
+mod sponge_default_tip_tests;

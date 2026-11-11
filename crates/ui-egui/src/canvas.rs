@@ -24,6 +24,8 @@ mod cursors;
 mod display;
 mod drag;
 mod filter_preview;
+#[cfg(test)]
+mod finishing_stroke_tests;
 mod gesture;
 pub mod gpu_canvas;
 pub mod guide_select;
@@ -33,6 +35,9 @@ mod navigator;
 pub mod outline;
 mod paint;
 pub mod paint_mouse;
+mod paint_thread;
+#[cfg(test)]
+mod paint_thread_tests;
 pub mod patch_preview;
 pub mod pattern_preview;
 pub mod pixel_grid;
@@ -64,7 +69,8 @@ pub mod zoom_window_fit;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{
-    alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor, precise_other_cursor,
+    alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
+    precise_other_cursor, sampler_hover_cursor,
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
@@ -101,11 +107,11 @@ pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{
-    ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, flush_finishing_stroke, freehand_tool, runs_while_a_stroke_finishes,
-    spread_ms, still_finishing, strokes_live, unsmoothed_line,
+    ClonePreviewCache, CommittedStroke, FinishingStroke, LiveStroke, cancel_mixer_on_context_change, flush_finishing_stroke, freehand_tool,
+    runs_while_a_stroke_finishes, spread_ms, still_finishing, strokes_live, unsmoothed_line,
 };
 use strokes::{
-    HOLD_REPEAT_MS, continue_finishing_stroke, draw_clone_preview, feed_live_stroke, live_stroke_behind, pointer_button_modifiers, pointer_moves,
+    HOLD_REPEAT_MS, continue_finishing_stroke, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves,
     stroke_wants_time, tap_at_peak_pressure,
 };
 #[cfg(test)]
@@ -797,6 +803,10 @@ fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'
     owns
 }
 
+/// Pointer input on the image while a dialog or panel owns it, before the tools see it: an armed
+/// eyedropper (a colour picker's, Curves, Replace Color, Color Range), Select and Mask's Refine
+/// Edge Brush, Field Blur's pins, a Layer Style shadow drag, a ⌘/Ctrl-click adding a Curves point,
+/// and the zoom and pan that stay available throughout. It also sets the cursor these show.
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
     let sticky_alt = app.ui.shell.sticky_alt;
     let zoom_out = |alt: bool| match input.temporary {
@@ -806,8 +816,8 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     };
 
     // With a colour dialog picker armed the image is its eyedropper, whatever the tool; Space
-    // and the middle button still pan. Curves and Replace Color use the same merged-composite
-    // sampler as the Color Picker, never the reduced adjustment preview.
+    // and the middle button still pan. Pickers sample committed data (the colour composite
+    // or Curves/Levels' targeted gray plane), never the reduced adjustment preview.
     let curves_picking = crate::adjust_dialog::picker_armed(app);
     let replace_picking = crate::filter_dialog::color_eyedropper_armed(app);
     let picking = input.primary && (crate::color_picker_ui::top(app).is_some() || curves_picking || replace_picking);
@@ -923,7 +933,9 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             input.ctx.set_cursor_icon(egui::CursorIcon::Move);
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
-        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+        // The dialogs' eyedroppers (Levels, Curves, a colour picker's) swap the pipette for the
+        // precise crosshair with caps lock too, as the Eyedropper tool does (#9836).
+        if precise_other_cursor(app) {
             input.ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             input.ctx.set_cursor_icon(pipette_cursor(input.ctx, p));
@@ -987,6 +999,8 @@ struct CanvasToolInput<'a> {
     primary: bool,
     transform_owns_pointer: bool,
     hand_pan: bool,
+    /// Space holds the Hand over the selected tool.
+    space_hand: bool,
     ppp: f32,
     under_dialog: bool,
     menu_dismiss_press: bool,
@@ -1033,7 +1047,10 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     let capture_press =
         tool.is_type() || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
     let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
+    // Read from the raw events, so a dialog's modal layer doesn't block it: gated here, or a ⌘-press
+    // under a dialog would start a type transform (#12896).
     if capture_press
+        && !under_dialog
         && !input.menu_dismiss_press
         && let Some((p, press_mods)) = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
@@ -1139,7 +1156,8 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     {
         // A pending crop: its menu, also outside the image, where the frame can reach (#6561).
         // Outside the image: the pasteboard colour menu (#2462), else the tool's own. The view
-        // menu belongs to the selected Zoom or Hand, not to Space or a held zoom key. A crop
+        // menu belongs to the selected Zoom or Hand, and to the Hand Space holds over another
+        // tool, as in Photoshop (#11271), but not to a held zoom key. A crop
         // frame or Straighten line still dragged by the left button gets no menu over it: the
         // gesture and the held button both, as either alone can outlive a lost release. A
         // finger held still (egui's press-and-hold right-click) is down too, but drags nothing.
@@ -1151,7 +1169,7 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
         } else if crate::canvas_tool_menu::pasteboard_at(app, tool, xf.to_doc(p)) {
             crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
         } else if crate::canvas_tool_menu::is_view_tool(tool) {
-            if tool == app.ui.tool {
+            if tool == app.ui.tool || input.space_hand {
                 crate::canvas_tool_menu::open_view(app, ctx, tool, [p.x, p.y], xf.to_doc(p));
             }
         } else {
@@ -1206,8 +1224,7 @@ fn handle_canvas_tool_navigation(
     }
 }
 
-/// One frame of the canvas's tool input: a released stroke still catching up, then presses,
-/// drags and releases.
+/// Routes continuous stroke dragging events for active painting and vector tools to tool handlers with view context.
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1223,11 +1240,6 @@ fn handle_canvas_tool_stroke(
     let rect = input.rect;
     let full = input.full;
     let tool = input.tool;
-    // A released stroke still catching up renders its next share now (a new press commits it
-    // first: `tool_event`).
-    if continue_finishing_stroke(app) {
-        ctx.request_repaint();
-    }
     // A drag is only recognised once the pointer has moved past egui's click distance: the
     // gesture starts where the button went down, not where it is now (#123).
     let gesture_active_before = app.drag.is_some();
@@ -1235,6 +1247,11 @@ fn handle_canvas_tool_stroke(
     // the moves below are spread between the previous point and this frame (`spread_ms`).
     let now_ms = ui.input(|i| i.time) * 1000.0;
     app.stylus.clock_ms = now_ms;
+    // A released stroke still finishing shows its new steps and commits once done (a new press
+    // commits it first: `tool_event`).
+    if continue_finishing_stroke(app) {
+        ctx.request_repaint();
+    }
     // Live painting tools start on the press, not once the pointer passes egui's click
     // distance: the first dab shows at once. The drag recognised later continues that stroke,
     // and a click (or a long press that never moved) just ends it.
@@ -1341,15 +1358,16 @@ fn handle_canvas_tool_stroke(
         }
         app.stylus.clear_selection();
         app.stylus.clock_ms = now_ms;
-        // A held pen keeps the clock running for airbrush build-up and smoothing catch-up.
+        app.defer_live_stroke = false;
+        // One live-stroke update for the whole frame, not one per recovered sample.
+        feed_live_stroke(app);
+        // A held pen keeps the clock running for airbrush build-up and smoothing catch-up (asked
+        // after the feed, which brings in what the stroke's thread last painted).
         if app.drag.is_some() && stroke_wants_time(app) {
             ctx.request_repaint_after(std::time::Duration::from_millis(HOLD_REPEAT_MS as u64));
         }
-        app.defer_live_stroke = false;
-        // One live-stroke update for the whole frame, not one per recovered sample. What its
-        // budget leaves for later renders on the next frames, moved or not.
-        feed_live_stroke(app);
-        if live_stroke_behind(app) {
+        // The stroke is still painting what it was given: show its steps as they finish.
+        if live_stroke_busy(app) {
             ctx.request_repaint();
         }
         crate::magnetic_lasso_ui::flush(app);
@@ -1594,6 +1612,9 @@ struct CanvasOverlayInput<'a> {
     response: &'a egui::Response,
     doc: &'a std::sync::Arc<Document>,
     tool: Tool,
+    /// `tool` is lent by a held key or the middle button (the Hand, the Zoom, the Move with ⌘),
+    /// even when it is the selected tool too: it shows its own cursor.
+    lent: bool,
     idx: usize,
     output: Option<u32>,
     border: photocraft_engine::prefs::CanvasBorder,
@@ -1698,7 +1719,20 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     draw_canvas_tool_cursor(app, ui, input, resizing);
 }
 
-/// Renders custom canvas cursor overlays, including brush silhouettes and type path placement directional arrows.
+/// An eyedropper owns the image: a dialog's (Levels, Curves, Replace Color, a colour picker's)
+/// or a Properties Levels/Curves one. It sets the cursor itself.
+fn eyedropper_owns_image(app: &PhotocraftApp) -> bool {
+    crate::adjust_dialog::picker_armed(app)
+        || crate::filter_dialog::color_eyedropper_armed(app)
+        || crate::color_picker_ui::top(app).is_some()
+        || crate::layer_picker::armed(app).is_some()
+}
+
+/// Set the cursor for the tool over the image, and paint the ones PhotoCraft draws itself (the
+/// brush tip outline, the crosshair, a tool's own icon). The first case that applies wins: a pan
+/// keeps the fist it set, an eyedropper that owns the image keeps the cursor it set, a stale
+/// pointer position over another window paints nothing, then a guide under the pointer, then the
+/// tool's own cursor.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
     let ctx = input.ctx;
     let xf = input.xf;
@@ -1715,6 +1749,10 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     });
     if panning {
         // The fist set with the pan above stays (#2196).
+    } else if !input.lent && eyedropper_owns_image(app) {
+        // The eyedropper set its own cursor; the tool's isn't drawn over it (#9836). A held
+        // Space or zoom key, or the middle button, still shows the tool it lends, even when
+        // that is the selected tool as well.
     } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
         // The pointer is over a floating panel's own window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.
@@ -1811,6 +1849,29 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     }
 }
 
+/// The Pencil's cursor (and the Eraser's in Pencil or Block mode): the outline of the whole pixels
+/// its dab fills, on the pixel grid. A round tip is a disc, a square or Block one its square. The
+/// hotspot is drawn as well when `crosshair` asks for it or the outline is too small to see.
+fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size: f32, block: bool, crosshair: bool) -> egui::CursorIcon {
+    let ppp = painter.ctx().pixels_per_point();
+    let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
+    let px = 1.0 / ppp;
+    let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+    if !block && pencil_tip_is_round(size) {
+        let r = sq.width() / 2.0;
+        painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+        painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+    } else {
+        painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+        painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+    }
+    // Too small to see where it is: the hotspot as well.
+    if crosshair || sq.width() < 6.0 {
+        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+    }
+    egui::CursorIcon::None
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -1843,15 +1904,10 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 && !app.services.right_button_down.as_ref().is_some_and(|f| f())
                 && alt_picks(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
         {
-            // While it samples (button held), the comparison ring replaces the cursor (#213).
-            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
-                icon
-            } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-                egui::CursorIcon::Crosshair
-            } else {
-                pipette_cursor(ui.ctx(), p)
-            }
+            cursors::alt_pick_cursor(app, painter, xf, p, response.is_pointer_button_down_on(), t)
         }
+        // Over a layer it can't paint (Lock All), the Mixer Brush shows a no-entry sign (#11957).
+        Tool::MixerBrush if cursors::mixer_target_locked(app) => cursors::no_entry_cursor(painter, p),
         t if t.is_brushlike() || t == Tool::QuickSelection => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
@@ -1875,23 +1931,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
                         let block = crate::eraser_ui::block_mode(app, tool);
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                        let ppp = painter.ctx().pixels_per_point();
-                        let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
-                        let px = 1.0 / ppp;
-                        let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                        if !block && pencil_tip_is_round(size) {
-                            let r = sq.width() / 2.0;
-                            painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                            painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                        } else {
-                            painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                        }
-                        // Too small to see where it is: the hotspot as well.
-                        if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                            crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
-                        }
-                        egui::CursorIcon::None
+                        pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
                     }
                     // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                     // traces its outline, turned and flipped with the view; a plain round
@@ -1915,12 +1955,25 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
-        // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
+        // The Count tool (#11773): an arrow with "1+", "1" over a marker (the click's own hit
+        // test) or "1−" with ⌥ there. Precise Other Cursors keeps today's crosshair.
+        Tool::Count if !precise_other_cursor(app) => {
+            let alt = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).alt;
+            let over = crate::analysis_ui::count_marker_at(app, xf.to_doc(p)).is_some();
+            crate::tool_cursor::count(ui.ctx(), p, crate::tool_cursor::CountCursor::pick(over, alt))
+        }
+        // The Color Sampler (#11744):
+        // - Over a sampler: arrow with the sampler target, or with Alt the arrow with scissors.
+        // - Off a sampler: eyedropper with the sampler target at its top-left, or the crosshair
+        //   for precise Other Cursors.
         Tool::ColorSampler => {
-            if precise_other_cursor(app) {
+            let [x, y] = xf.to_doc(p);
+            if crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
+                sampler_hover_cursor(ui.ctx(), p, alt || app.ui.shell.sticky_alt)
+            } else if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
             } else {
-                pipette_cursor(ui.ctx(), p)
+                color_sampler_cursor(ui.ctx(), p)
             }
         }
         // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
@@ -2063,7 +2116,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", ui.layer_id(), idx)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -2111,7 +2164,8 @@ fn layer_picker_eyedropper(app: &mut PhotocraftApp, ui: &egui::Ui, ctx: &egui::C
     if response.hovered()
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
     {
-        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+        // Caps lock swaps the pipette and the precise crosshair, as everywhere (#9836).
+        if precise_other_cursor(app) {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             ctx.set_cursor_icon(pipette_cursor(ctx, p));
@@ -2456,6 +2510,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             primary,
             transform_owns_pointer,
             hand_pan,
+            space_hand: space_pan,
             ppp,
             under_dialog,
             menu_dismiss_press,
@@ -2500,6 +2555,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             response: &response,
             doc: &doc,
             tool,
+            lent: temporary.is_some() || middle,
             idx,
             output,
             border,
@@ -2573,6 +2629,9 @@ mod pattern_drag_tests;
 mod tabs_tests;
 
 #[cfg(test)]
+mod doc_window_dialog_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -2586,6 +2645,9 @@ mod guide_ants_tests;
 
 #[cfg(test)]
 mod live_frame_tests;
+
+#[cfg(test)]
+mod sampler_cursor_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {

@@ -6,8 +6,8 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        // A released stroke still catching up lands first: Undo right after a release undoes the
-        // stroke, and nothing runs on a document it hasn't reached yet. Still on its worker, the
+        // A released stroke still finishing lands first: Undo right after a release undoes the
+        // stroke, and nothing runs on a document it hasn't reached yet. Still not done, the
         // window doesn't wait for it: a command made by hand runs once the stroke has committed,
         // as if made after it. Automation gets an error to retry instead: queued, its command
         // would run after the request returned, its result lost and outside its authorization.
@@ -112,6 +112,18 @@ impl PhotocraftApp {
         }
         if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
+        }
+        // Document exports read committed pixels, not the pending Free Transform preview.
+        // Check on execution (also dialog OK and automation), leaving Folder processing usable.
+        if id == "file.scripts.imageProcessor"
+            && self.ui.transform.is_some()
+            && match params.get("source").and_then(Value::as_str) {
+                Some("open") => true,
+                Some("current") => self.transform_preview.as_ref().is_none_or(|preview| self.session.active().is_some_and(|st| st.doc.id == preview.doc.id)),
+                _ => false,
+            }
+        {
+            return Err("Commit or cancel the transform first".into());
         }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
