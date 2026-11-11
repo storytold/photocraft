@@ -1419,7 +1419,7 @@ fn handle_canvas_tool_stroke(
 
 /// Marks a Free Transform drag started on the press (`transform_press_moves`).
 fn transform_press_id(ctx: &egui::Context) -> egui::Id {
-    egui::Id::new("free-transform-press").with(ctx.viewport_id())
+    egui::Id::unique(("free-transform-press", ctx.viewport_id()))
 }
 
 /// An open Free Transform box follows the pointer from the press (#11103): the press goes to the
