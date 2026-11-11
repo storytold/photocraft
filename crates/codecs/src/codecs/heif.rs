@@ -1,6 +1,6 @@
 //! HEIF / HEIC (the iPhone and Mac photo format), read-only: see [`crate::ASYMMETRIC_EXCEPTIONS`].
 //!
-//! Decoding lives in the optional `photocraft-heif` crate (heic-rs, a pure-Rust HEVC
+//! Decoding lives in the optional `craft-heif` crate from craft-libs (heic-rs, a pure-Rust HEVC
 //! still-picture decoder), enabled by this crate's `heif` feature. Without it, HEIF files are
 //! still detected and opening one is an [`CodecError::Unsupported`] error, never a panic.
 //!
@@ -26,11 +26,11 @@ pub(crate) fn decode(_bytes: &[u8], _limits: &Limits, _keep_orientation: bool) -
 }
 
 #[cfg(feature = "heif")]
-fn err(e: photocraft_heif::Error) -> CodecError {
+fn err(e: craft_heif::Error) -> CodecError {
     match e {
-        photocraft_heif::Error::Unsupported(what) => CodecError::unsupported(F, what),
-        photocraft_heif::Error::Limit(what) => CodecError::LimitExceeded(what),
-        photocraft_heif::Error::Malformed(what) => CodecError::malformed(F, what),
+        craft_heif::Error::Unsupported(what) => CodecError::unsupported(F, what),
+        craft_heif::Error::Limit(what) => CodecError::LimitExceeded(what),
+        craft_heif::Error::Malformed(what) => CodecError::malformed(F, what),
     }
 }
 
@@ -40,9 +40,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     use crate::image::{ChannelLayout, Metadata, SampleType};
 
     // The container alone: the declared size is checked before any pixel is decoded.
-    let info = photocraft_heif::probe(bytes).map_err(err)?;
+    let info = craft_heif::probe(bytes).map_err(err)?;
     let layout = if info.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
-    let sample = if info.sixteen_bit { SampleType::U16 } else { SampleType::U8 };
+    let sample = if info.bit_depth > 8 { SampleType::U16 } else { SampleType::U8 };
     let (w, h) = if keep_orientation { (info.coded_width, info.coded_height) } else { (info.width, info.height) };
     limits.check(w, h, layout, sample)?;
     // The delegated decoder allocates the full coded image before applying any clean-aperture
@@ -52,14 +52,23 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     if !keep_orientation && (info.coded_width, info.coded_height) != (w, h) {
         limits.check(info.coded_width, info.coded_height, layout, sample)?;
     }
-    let options = photocraft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation };
-    let decoded = photocraft_heif::decode(bytes, &options).map_err(err)?;
+    let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation };
+    let decoded = craft_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.
     let layout = if decoded.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
-    let sample = if decoded.sixteen_bit { SampleType::U16 } else { SampleType::U8 };
-    let mut img = Image::from_raw(decoded.width, decoded.height, layout, sample, decoded.data)?;
+    // The decoder returns full-scale 16-bit samples at any coded depth; an 8-bit file stays 8-bit.
+    let (sample, data) = if decoded.bit_depth > 8 {
+        (SampleType::U16, decoded.data.iter().flat_map(|v| v.to_ne_bytes()).collect())
+    } else {
+        (SampleType::U8, decoded.data.iter().map(|&v| ((u32::from(v) * 255 + 32767) / 65535) as u8).collect())
+    };
+    let mut img = Image::from_raw(decoded.width, decoded.height, layout, sample, data)?;
     img.icc = decoded.icc;
-    img.cicp = decoded.nclx.map(|n| Cicp { primaries: n.primaries, transfer: n.transfer, matrix: n.matrix, full_range: n.full_range });
+    // `colour` is always filled in (nclx, else the HEVC VUI, else H.273's "unspecified" 2s); only a
+    // specified one tags the image, so a file that says nothing still opens untagged.
+    let c = decoded.colour;
+    img.cicp =
+        (c.primaries != 2 || c.transfer != 2).then_some(Cicp { primaries: c.primaries, transfer: c.transfer, matrix: c.matrix, full_range: c.full_range });
     img.meta = Metadata {
         exif: decoded.exif.map(|e| if keep_orientation { e } else { crate::orientation::upright_exif(&e).into_owned() }),
         xmp: decoded.xmp.map(|x| if keep_orientation { x } else { crate::orientation::upright_xmp(&x).into_owned() }),
