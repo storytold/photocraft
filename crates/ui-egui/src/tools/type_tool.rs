@@ -162,3 +162,6 @@ mod locked_layer_alert_tests;
 mod ime_tests;
 #[cfg(test)]
 mod mask_escape_tests;
+
+#[cfg(test)]
+mod mask_active_layer_tests;
