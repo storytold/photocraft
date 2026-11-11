@@ -1414,6 +1414,15 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 
 [[package]]
+name = "craft-heif"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=081078bb1b44aeedfa5bef3d4f13d978dc77510a#081078bb1b44aeedfa5bef3d4f13d978dc77510a"
+dependencies = [
+ "heic-rs",
+ "rayon",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
@@ -1736,6 +1745,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -3075,6 +3085,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "http"
@@ -5390,6 +5409,7 @@ dependencies = [
  "cap-std",
  "clap",
  "getrandom 0.3.4",
+ "hmac",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",
@@ -5408,6 +5428,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "tokio",
  "wgpu",
@@ -5451,6 +5472,7 @@ dependencies = [
 name = "photocraft-codecs"
 version = "0.20.1"
 dependencies = [
+ "craft-heif",
  "craft-jpeg",
  "exr",
  "flate2",
@@ -5459,7 +5481,6 @@ dependencies = [
  "image-webp",
  "jpeg-encoder",
  "jxl-oxide",
- "photocraft-heif",
  "png 0.18.1",
  "proptest",
  "rayon",
@@ -5599,13 +5620,6 @@ dependencies = [
  "rayon",
  "thiserror 2.0.21",
  "wgpu",
-]
-
-[[package]]
-name = "photocraft-heif"
-version = "0.20.1"
-dependencies = [
- "heic-rs",
 ]
 
 [[package]]
