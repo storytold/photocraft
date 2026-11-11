@@ -147,3 +147,19 @@ fn other_number_fields_keep_their_precision() {
     let x = f["centerX"].as_f64().unwrap();
     assert!((x - 0.12).abs() < 1e-5, "the Radial Blur centre {x} keeps its two decimals");
 }
+
+/// The pre-fill is rounded before any frame draws: `ui.dialog.open` then `ui.dialog.confirm`
+/// can run without a draw between them, and the 43x27 ruler's raw 32.1249984 must not reach
+/// the command, after opening or after Alt+Reset.
+#[test]
+fn the_ruler_angle_is_rounded_before_the_first_frame() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 318, "height": 318})).unwrap();
+    app.run("image.analysis.rulerTool", json!({"start": [100, 100], "end": [143, 127]})).unwrap();
+    let id = open(&mut app, "image.rotation.arbitrary").unwrap();
+    let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    assert_eq!(params_of(&f)["angle"].as_f64(), Some(32.12), "undrawn, OK sends the rounded angle");
+    f.insert("angle".into(), json!(5.0));
+    reset_fields(&app, &mut f);
+    assert_eq!(params_of(&f)["angle"].as_f64(), Some(32.12), "undrawn after Alt+Reset, OK sends the rounded angle");
+}

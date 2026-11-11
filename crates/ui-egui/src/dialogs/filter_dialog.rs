@@ -693,7 +693,10 @@ fn straighten_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     if !rot.is_finite() {
         return;
     }
-    fields.insert("angle".into(), json!(rot.abs()));
+    // Rounded here, in f64, to the field's two decimals: `ui.dialog.open` then `ui.dialog.confirm`
+    // can run with no frame drawn between them, and only a drawn frame rounds (#13067).
+    let scale = 10f64.powi(wide_field_decimals("image.rotation.arbitrary", "angle").unwrap_or(2).min(6) as i32);
+    fields.insert("angle".into(), json!((rot.abs() * scale).round() / scale));
     fields.insert("direction".into(), json!(if rot < 0.0 { "ccw" } else { "cw" }));
 }
 
