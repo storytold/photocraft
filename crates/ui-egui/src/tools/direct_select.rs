@@ -10,8 +10,9 @@
 //!   The arrow keys nudge the selected anchors 1 px (⇧ 10 px), one history step per press.
 //! * Convert Point (the tool, or Pen + ⌥): click an anchor to make it a corner, drag from it to
 //!   pull out smooth handles, drag a handle to move it alone. The tool selects the anchor it
-//!   converts, so its handles show; a press on empty canvas or a segment does nothing, and ⌘/Ctrl
-//!   is Direct Selection, as with the Pen.
+//!   converts, so its handles show; a press on empty canvas does nothing, and ⌘/Ctrl is Direct
+//!   Selection, as with the Pen. The tool drags a straight segment with nothing selected, or the
+//!   whole path when all of it is selected, as Direct Selection would (#12741).
 //! * While a Pen path is being drawn, ⌘/Ctrl edits it in place (its anchors, handles and
 //!   segments) and the Pen carries on drawing from its last anchor once ⌘/Ctrl is let go; a
 //!   ⌘/Ctrl-press anywhere else ends it, as in Photoshop (#4022).
@@ -263,6 +264,8 @@ pub enum Edit {
     /// A handle, where it was at the press, and whether it moves alone (⌥).
     Handle([usize; 2], Handle, Point, bool),
     Segment([usize; 2], f64),
+    /// The Convert Point tool dragging a whole selected path by a segment: its anchors, all of them.
+    Path(Vec<[usize; 2]>),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
 }
@@ -283,6 +286,7 @@ impl Edit {
                 ("path.moveHandle", json!({"subpath": s, "knot": k, "handle": h.name(), "to": [from.x + d[0], from.y + d[1]], "independent": independent}))
             }
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
+            Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
         }
     }
@@ -292,7 +296,7 @@ impl Edit {
         let d = [end[0] - start[0], end[1] - start[1]];
         let mut p = base.clone();
         match self {
-            Edit::Anchors(a) => edit::move_anchors(&mut p, a, d),
+            Edit::Anchors(a) | Edit::Path(a) => edit::move_anchors(&mut p, a, d),
             Edit::Curvature(a) => edit::move_anchors_curvature(&mut p, a, d),
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
@@ -650,8 +654,21 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
             }
             Edit::Convert(k)
         }
-        // Pen + ⌥ on a segment does nothing.
-        Hit::Segment(..) if convert => return true,
+        // Pen + ⌥ on a segment does nothing; so does the tool where the reference was not
+        // measured: with ⇧ or ⌥, on a curve, or with part of the path selected.
+        Hit::Segment(k, t) if convert => {
+            if !own_tool || mods.alt || mods.shift || !straight(&base, k) {
+                return true;
+            }
+            let all: Vec<[usize; 2]> = (0..base.subpaths.len()).flat_map(|s| edit::subpath_anchors(&base, s)).collect();
+            if ds.anchors.is_empty() {
+                Edit::Segment(k, t)
+            } else if all.iter().all(|a| ds.anchors.contains(a)) {
+                Edit::Path(all)
+            } else {
+                return true;
+            }
+        }
         Hit::Anchor(k) => {
             ds.segment = None;
             if mods.alt {
@@ -681,6 +698,18 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
     };
     ds.drag = Some(Drag::Edit { target, base, edit, start: p, end: p, preview: None });
     true
+}
+
+/// Is the segment leaving knot `k` straight: both of its handles retracted? The distance test is
+/// the one `edit::bend_segment` uses, so a segment counted straight here moves as straight there.
+fn straight(path: &Path, [s, k]: [usize; 2]) -> bool {
+    let Some(sub) = path.subpaths.get(s) else { return false };
+    let next = if k + 1 < sub.knots.len() { k + 1 } else { 0 };
+    let near = |c: Point, a: Point| (c.x - a.x).hypot(c.y - a.y) < 1e-9;
+    match (sub.knots.get(k), sub.knots.get(next)) {
+        (Some(a), Some(b)) => near(a.out_ctrl, a.anchor) && near(b.in_ctrl, b.anchor),
+        _ => false,
+    }
 }
 
 /// What the idle Curvature Pen has under document point `p` on the active paths: an anchor or a
