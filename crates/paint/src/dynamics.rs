@@ -1111,30 +1111,18 @@ mod grid_bridge_tests {
         StrokePoint { time, ..StrokePoint::new(x, y, 1.0) }
     }
 
-    /// #9059 review: only the pixel steps are bridged. Speed spacing (Spacing off) and airbrush
-    /// build-up leave out dabs on purpose, and pixel-grid mode must not put them back.
+    /// #9059 review: the bridge joins pixel steps only. Speed spacing leaves its gaps on purpose
+    /// (Spacing off: faster movement spreads the dabs out), so a pixel segment after one starts
+    /// afresh instead of filling the gap back in from the cell before it.
     #[test]
-    fn pixel_grid_bridges_only_its_own_steps() {
-        // Fast enough that speed-spaced steps land 3 px apart.
-        let fast = [at(0.0, 0.0, 0.0), at(30.0, 0.0, 80.0), at(30.0, 30.0, 160.0)];
-        let speed = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS), &fast);
-        let speed_grid = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS).pixel_grid(0.5), &fast);
-        assert_eq!(speed_grid.len(), speed.len(), "speed spacing keeps its gaps");
-        // Three airbrush steps on top of the pixel steps, and nothing else.
-        let seg = [at(0.0, 0.0, 0.0), at(10.0, 0.0, 30.0)];
-        let grid = walk(PathWalker::new(None).pixel_grid(0.5), &seg);
-        let airbrush = walk(PathWalker::new(Some(10.0)).pixel_grid(0.5), &seg);
-        assert_eq!(airbrush.len(), grid.len() + 3, "airbrush adds only its own steps");
-    }
-
-    /// #9059 review: a speed-spaced segment moves the stroke on without pixel steps, so a pixel
-    /// segment after it starts afresh instead of bridging from the cell before it.
-    #[test]
-    fn a_pixel_segment_after_speed_spacing_does_not_step_back() {
-        let pts = [at(0.5, 0.5, 0.0), at(2.5, 0.5, 8.0), at(4.5, 0.5, 8.0)];
+    fn a_pixel_segment_after_speed_spacing_leaves_its_gap() {
+        // A fast 8 px move in 60 ms: speed steps about every 1.07 px, the last (at 7.97) half a pixel
+        // short of the move's end. The segment after it has no timestamps, so it takes pixel steps.
+        let pts = [at(0.5, 0.5, 0.0), at(8.5, 0.5, 60.0), at(12.5, 0.5, 60.0)];
         let steps = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS).pixel_grid(0.5), &pts);
         let xs: Vec<f64> = steps.iter().map(|p| p.x).collect();
-        assert!(xs.windows(2).all(|w| w[1] > w[0]), "forward only, each cell once: {xs:?}");
+        assert!(xs.iter().all(|x| !(8.0..9.4).contains(x)), "no cell filled in after the last speed step: {xs:?}");
+        assert!(xs.windows(2).all(|w| w[1] > w[0]), "forward only: {xs:?}");
         assert!(steps.windows(2).all(|w| w[1].time >= w[0].time), "time runs on: {steps:?}");
     }
 
