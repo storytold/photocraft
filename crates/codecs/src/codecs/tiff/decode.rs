@@ -932,21 +932,11 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         4 => cw.clamp(4096, 65_535),
         _ => 4096,
     };
-    let len = f.b.len() as u64;
     let (offsets, sizes) = (
         dir.get(offsets_tag).ok_or_else(|| err("missing strip or tile offsets"))?,
         dir.get(counts_tag).ok_or_else(|| err("missing strip or tile byte counts"))?,
     );
-    let mut held = 0u64;
-    for i in 0..expected {
-        if held >= len {
-            break;
-        }
-        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
-            held = held.saturating_add(n.min(len.saturating_sub(at)));
-        }
-    }
-    let held = held.min(len);
+    let held = held_chunk_bytes(f, offsets, sizes, expected);
     if stored > held.saturating_mul(ratio).saturating_add(1 << 20) {
         return Err(err(format!("the strips or tiles in this file hold {held} bytes, too few for a {w}x{h} image")));
     }
@@ -1070,6 +1060,21 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         scratch_bytes,
         per_worker,
     })
+}
+
+/// Bytes held by strip or tile ranges inside the file, capped at the file length.
+fn held_chunk_bytes(f: &File<'_>, offsets: &ifd::Entry, sizes: &ifd::Entry, expected: u64) -> u64 {
+    let len = f.b.len() as u64;
+    let mut held = 0u64;
+    for i in 0..expected {
+        if held >= len {
+            break;
+        }
+        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
+            held = held.saturating_add(n.min(len.saturating_sub(at)));
+        }
+    }
+    held.min(len)
 }
 
 /// The JPEGTables tag: quantization and Huffman tables shared by every JPEG strip or tile.
