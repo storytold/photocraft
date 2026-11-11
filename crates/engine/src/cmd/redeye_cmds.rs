@@ -16,6 +16,9 @@ use crate::{EngineError, Result, Session};
 const CMD: &str = "paint.redEye";
 const MISS: &str = "no red-eye pixels near the click";
 
+/// The reference's alert for a Red Eye click in a CMYK, Grayscale or Indexed Color document (#12575).
+pub const MODE_REFUSAL: &str = "Could not use the red eye removal tool because it only works in full color modes.";
+
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: msg.into() }
 }
@@ -226,7 +229,17 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// By the document's mode, not its pixel format: Indexed Color pixels are stored as RGB. Bitmap,
+/// Duotone and Multichannel were not measured and keep running.
+fn mode_refusal(s: &Session) -> Result<()> {
+    match s.active().map(|d| d.doc.mode) {
+        Some(ColorMode::Cmyk | ColorMode::Grayscale | ColorMode::Indexed) => Err(EngineError::Other(MODE_REFUSAL.into())),
+        _ => Ok(()),
+    }
+}
+
 fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
+    mode_refusal(s)?;
     let pts = clicks(p)?;
     let pupil_raw = num(p, "pupilSize", 50.0)?;
     let darken = num(p, "darken", 50.0)?;
@@ -407,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_document_keeps_untouched_pixels_bit_exact() {
+    fn cmyk_document_is_refused_and_keeps_its_pixels_bit_exact() {
         let mut s = session(64, 64, 8, "cmyk");
         assert_eq!(s.active().unwrap().doc.pixel_format().mode, ColorMode::Cmyk);
         // Rich black (all four inks) around the eye: a naive RGBA round trip regenerates K.
@@ -438,25 +451,31 @@ mod tests {
             let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
             surf.read_region(Rect::new(x, y, x + 1, y + 1))
         };
-        let probes = [(32, 18), (2, 2), (50, 40)];
+        let probes = [(32, 26), (32, 18), (2, 2), (50, 40)];
         let before: Vec<Vec<f32>> = probes.iter().map(|&(x, y)| raw(&s, x, y)).collect();
-        let r = s.execute("paint.redEye", json!({"x": 32, "y": 32})).unwrap();
-        assert!(r["pixels"].as_u64().unwrap() > 0, "{r}");
+        let past = s.active().unwrap().history.past_len();
+        let err = s.execute("paint.redEye", json!({"x": 32, "y": 32})).unwrap_err().to_string();
+        assert_eq!(err, MODE_REFUSAL);
         for (&(x, y), b) in probes.iter().zip(&before) {
-            assert_eq!(&raw(&s, x, y), b, "untouched CMYK pixel ({x},{y}) inside the window changed");
+            assert_eq!(&raw(&s, x, y), b, "CMYK pixel ({x},{y}) changed");
         }
-        assert!(rgba(&s, 32, 26)[0] < 0.7, "pupil corrected");
+        assert_eq!(s.active().unwrap().history.past_len(), past, "no history state");
     }
 
     #[test]
-    fn gray_document_misses() {
+    fn gray_document_is_refused() {
         let mut s = session(24, 24, 16, "gray");
         paint_layer(&mut s, |_, _| [0.5, 0.5, 0.5, 1.0]);
         assert_eq!(s.active().unwrap().doc.pixel_format().mode, ColorMode::Grayscale);
-        assert!(s.execute("paint.redEye", json!({"x": 12, "y": 12})).is_err());
+        let err = s.execute("paint.redEye", json!({"x": 12, "y": 12})).unwrap_err().to_string();
+        assert_eq!(err, MODE_REFUSAL);
     }
 }
 
 #[cfg(test)]
 #[path = "redeye_history_state_tests.rs"]
 mod redeye_history_state_tests;
+
+#[cfg(test)]
+#[path = "redeye_color_mode_tests.rs"]
+mod redeye_color_mode_tests;

@@ -84,6 +84,52 @@ impl egui::plugin::Plugin for CursorLifecycle {
     }
 }
 
+/// The Count tool's cursor (#11773): an arrow with "1+" (a click adds a marker), "1" (over a
+/// marker: a click or drag moves it) or "1−" (⌥ over a marker: a click deletes it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CountCursor {
+    Add,
+    Move,
+    Delete,
+}
+
+impl CountCursor {
+    /// The cursor for a pointer `over` a marker or not, with ⌥ held or not. Shift changes nothing,
+    /// and ⌥ off a marker is still "1+" (an ⌥-click there does nothing).
+    pub(crate) fn pick(over: bool, alt: bool) -> Self {
+        match (over, alt) {
+            (false, _) => Self::Add,
+            (true, false) => Self::Move,
+            (true, true) => Self::Delete,
+        }
+    }
+
+    /// The badge drawn below right of the arrow.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Add => "1+",
+            Self::Move => "1",
+            Self::Delete => "1\u{2212}",
+        }
+    }
+}
+
+/// Draw the Count cursor `kind` at `at`: the OS arrow (hotspot at its tip) with its badge below right
+/// of it, dark digits on a light halo so they read on any pixel. PhotoCraft's own artwork.
+pub(crate) fn count(ctx: &egui::Context, at: Pos2, kind: CountCursor) -> CursorIcon {
+    let pos = at + vec2(12.0, 16.0);
+    // Painted straight onto a tooltip-order layer, above the canvas and its overlays: an Area
+    // would be invisible on the frame it first appears.
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-count-cursor")));
+    let font = egui::FontId::proportional(11.0);
+    // The halo: a white copy one point off on every side, diagonals too.
+    for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+        painter.text(pos + vec2(dx, dy), egui::Align2::LEFT_TOP, kind.label(), font.clone(), egui::Color32::WHITE);
+    }
+    painter.text(pos, egui::Align2::LEFT_TOP, kind.label(), font, egui::Color32::BLACK);
+    CursorIcon::Default
+}
+
 /// The bucket artwork and its exact fill crosshair move as one native cursor or painted image.
 pub(crate) fn bucket(painter: &Painter, at: Pos2) -> Result<CursorIcon, String> {
     bucket::show(painter, at)
@@ -676,3 +722,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod count_tests;

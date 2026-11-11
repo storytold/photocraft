@@ -416,6 +416,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             Some(app.pick_file_bytes(move |app, path, _bytes| {
                 app.with_document(doc, |app| {
                     let r = app.run(&cmd, json!({"path": path}));
+                    if let Ok(v) = &r {
+                        // #11113: footage salvaged from a truncated GIF or WebP must say so.
+                        let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                        crate::notices::footage_warnings(app, v, &what);
+                    }
                     if r.is_ok() && app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
                         app.ui.timeline.open = true;
                     }
@@ -691,7 +696,9 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
             return Ok(json!({"path": path, "warnings": []}));
         }
         let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
-        app.session.journal.push(("file.saveACopy".into(), json!({"path": path})));
+        let step = json!({"path": path});
+        photocraft_engine::actions_cmds::note_automation_step(&mut app.session, "file.saveACopy", &step);
+        app.session.journal.push(("file.saveACopy".into(), step));
         Ok(r)
     })
 }
