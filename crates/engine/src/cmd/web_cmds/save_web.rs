@@ -178,9 +178,33 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     }
     // Settings are checked first, so a refused export leaves a floating selection where it is.
     let st = WebSettings::from_params(p, cmd)?;
-    // Direct platform calls must export the moved selection as it appears on the canvas,
-    // just as Session::execute does before dispatching the native command.
+    // The export shows the moved selection as it appears on the canvas, so it is dropped here
+    // (`before_command` leaves it floating for this command). A refused export puts the whole
+    // editing state back: no history step, the piece floating again.
+    let before = s.active().filter(|d| d.floating.is_some()).cloned();
     crate::float_cmds::before_command(s, cmd)?;
+    crate::float_cmds::drop_floating(s)?;
+    let result = export_dropped(s, p, write, native_paths, &st);
+    if let (Err(_), Some(before)) = (&result, before)
+        && let Some(now) = s.active_mut()
+    {
+        let revision = now.revision + 1;
+        let clean = before.saved_revision == before.revision;
+        *now = before;
+        now.revision = revision;
+        if let Some(f) = now.floating.as_mut() {
+            f.revision = revision;
+        }
+        if clean {
+            now.saved_revision = revision;
+        }
+    }
+    result
+}
+
+fn export_dropped(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool, st: &WebSettings) -> Result<Value> {
+    let cmd = "file.export.saveForWebLegacy";
+    let st = st.clone();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;
