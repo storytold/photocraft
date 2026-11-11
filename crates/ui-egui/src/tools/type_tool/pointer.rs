@@ -351,6 +351,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     }
     let key = session_key(app);
     p["coalesce"] = json!(key);
+    let before = app.session.active().filter(|_| mask).map(|st| (st.active_layer, st.selected_layers.clone(), st.layer_anchor));
     if let Ok(v) = app.run("type.create", p)
         && let Some(id) = v.get("layer").and_then(serde_json::Value::as_u64)
     {
@@ -370,9 +371,14 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
         }
         // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
-        // instead, and committing turns it into the selection.
+        // instead, and committing turns it into the selection. The layer active before the click
+        // stays active, as in the reference application (#12078).
         if mask {
             let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
+            if let Some((active, selected, anchor)) = &before {
+                let _ = app.session.restore_layer_selection(*active, selected, *anchor);
+            }
+            app.ui.type_mask_layer_changes = Some(app.session.active_layer_changes());
         }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();

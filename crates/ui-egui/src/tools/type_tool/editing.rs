@@ -433,6 +433,7 @@ pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
             crate::type_transform::reset(app);
             app.ui.text_edit = None;
             app.ui.text_edit_return_tool = None;
+            app.ui.type_mask_layer_changes = None;
             app.type_ime.clear_preedit();
         }
     }
@@ -453,6 +454,7 @@ fn commit_here(app: &mut PhotocraftApp) {
     }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    app.ui.type_mask_layer_changes = None;
     app.type_ime.clear_preedit();
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
@@ -522,7 +524,10 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
         return commit(app);
     }
     let Some(st) = app.session.active() else { return };
-    if st.active_layer == Some(layer) {
+    // A Type Mask's working layer is never the active one (#12078): the layer active before it
+    // stays active until something else is chosen.
+    let mask_kept = ed.mask && st.doc.layer(layer).is_some() && app.ui.type_mask_layer_changes == Some(app.session.active_layer_changes());
+    if st.active_layer == Some(layer) || mask_kept {
         return;
     }
     // The selection just made stands: ending an empty Type Mask undoes its session, and undo
@@ -542,6 +547,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_box_preview::discard(app);
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    app.ui.type_mask_layer_changes = None;
     app.type_ime.clear_preedit();
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
@@ -549,6 +555,13 @@ pub fn cancel(app: &mut PhotocraftApp) {
         app.ui.tool = tool;
     }
     undo_session(app, &ed);
+    // An edit to the layer kept active (Properties) ends the mask's history run, so the undo above
+    // skips it: remove the hidden working layer alone and keep that edit. Only in the mask's own
+    // document: an opened file can reuse the layer's id.
+    let home = edit_home(app, &ed).is_some_and(|h| Some(h) == app.session.active_index());
+    if ed.mask && home && app.session.active().is_some_and(|st| st.doc.layer(LayerId(ed.layer)).is_some()) {
+        let _ = app.run("layer.delete", json!({"layer": ed.layer}));
+    }
 }
 
 /// Undo the session's history step, if it is still the latest.

@@ -109,6 +109,10 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
 pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
+    // The reference application greys the panel while a Type Mask is edited (#12078).
+    if app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask) {
+        ui.disable();
+    }
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No document"));
         return;

@@ -645,25 +645,15 @@ fn invoke_type_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
                 app.run(id, target)
             })())
         }
-        command
-            if (command.starts_with("type.antiAlias.")
-                || command.starts_with("type.orientation.")
-                || command.starts_with("type.openType.")
-                || matches!(command, "type.warpText" | "type.loadDefaultTypeStyles"))
-                && params.get("layer").is_none()
-                && params.get("layers").is_none()
-                && params.get("range").is_none() =>
-        {
-            Some((|| {
-                let Some(mut target) = crate::type_tool::formatting_params(app) else { return app.run(id, params.clone()) };
-                if let Some(properties) = params.as_object() {
-                    for (key, value) in properties {
-                        target[key] = value.clone();
-                    }
+        command if formats_type(command) && ["layer", "layers", "range"].iter().all(|key| params.get(key).is_none()) => Some((|| {
+            let Some(mut target) = crate::type_tool::formatting_params(app) else { return app.run(id, params.clone()) };
+            if let Some(properties) = params.as_object() {
+                for (key, value) in properties {
+                    target[key] = value.clone();
                 }
-                app.run(id, target)
-            })())
-        }
+            }
+            app.run(id, target)
+        })()),
         "type.editText" => Some((|| {
             crate::type_tool::edit_active(app)?;
             if let Some(focus) = ctx.memory(|memory| memory.focused()) {
@@ -690,6 +680,15 @@ fn invoke_type_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         }
         _ => None,
     }
+}
+
+/// Type commands that format the edited text, or else the selected type layers
+/// (`type_tool::formatting_params`), when called without a target of their own.
+pub(super) fn formats_type(id: &str) -> bool {
+    id.starts_with("type.antiAlias.")
+        || id.starts_with("type.orientation.")
+        || id.starts_with("type.openType.")
+        || matches!(id, "type.warpText" | "type.loadDefaultTypeStyles")
 }
 
 fn type_command_target(app: &PhotocraftApp) -> Option<Value> {

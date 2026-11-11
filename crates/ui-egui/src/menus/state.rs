@@ -25,6 +25,13 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::crop_ui::blocks(app, id) {
         return false;
     }
+    // While type is edited these run on its layer (`invoke_type_command`), which a Type Mask's
+    // edit leaves inactive (#12078): their engine check, a selected type layer, is judged on it.
+    if app.ui.text_edit.is_some() && super::invoke::formats_type(id) {
+        return crate::type_tool::target_text(app).is_some()
+            && app.session.active_job().is_none()
+            && (id != "type.loadDefaultTypeStyles" || app.session.type_defaults.is_some());
+    }
     // Filters stay live on a type layer: choosing one asks to rasterize it (#4303).
     if crate::rasterize_prompt::filter_needs(app, id).is_some() {
         return true;
