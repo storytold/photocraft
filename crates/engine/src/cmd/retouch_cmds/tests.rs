@@ -2890,13 +2890,9 @@ fn a_live_history_stroke_from_another_format_converts_as_it_grows() {
 /// converted, and it paints what converting the whole source paints, bit for bit.
 #[test]
 fn art_history_brush_from_another_format_paints_as_a_full_conversion() {
-    let mut cases: Vec<(u64, String)> = Vec::new();
-    for src in DEPTHS {
-        for dst in DEPTHS.into_iter().filter(|d| *d != src) {
-            cases.push((src, format!("image.mode.bits{dst}")));
-        }
-    }
-    // A colour-mode change is refused (#12826): only a depth change converts.
+    // A colour-mode change is refused (#12826), and so is any document but an 8-bit one (#12637):
+    // only a 16- or 32-bit source painted into a document converted to 8 bits converts.
+    let cases: Vec<(u64, String)> = DEPTHS.into_iter().filter(|d| *d != 8).map(|src| (src, "image.mode.bits8".to_string())).collect();
     for (src, change) in &cases {
         let flat = active_pixels(&history_after_mode_change(*src, change));
         for pts in [&[[100.0, 100.0], [280.0, 140.0]][..], &[[-6.0, 290.0], [30.0, 299.0]][..]] {
