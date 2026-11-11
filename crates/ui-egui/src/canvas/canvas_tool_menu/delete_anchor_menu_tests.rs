@@ -64,12 +64,22 @@ pub(super) fn assert_top_entry(h: &Harness<'static, PhotocraftApp>, tool: Tool, 
     assert!(h.get_by_label(label).rect().top() < h.get_by_label("Create Vector Mask").rect().top(), "{label} heads the menu");
 }
 
+/// The context-menu contract after a menu edit: undo restores the whole original path and redo
+/// replays the edit (the path as it was right after the menu choice, `edited`).
+fn assert_undo_redo(h: &mut Harness<'static, PhotocraftApp>, original: &Path, edited: &Path) {
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(&saved(h.state()), original, "undo restores the whole path");
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    assert_eq!(&saved(h.state()), edited, "redo replays the menu edit");
+}
+
 /// Right-click the corner (300,300), choose Delete Anchor Point: the square stays closed with
 /// three anchors and the history gains one step by that name.
 pub(super) fn delete_the_corner(tool: Tool) {
     let mut h = right_clicked(tool, [300.0, 300.0]);
     assert_top_entry(&h, tool, "Delete Anchor Point");
     let before = steps(h.state());
+    let original = saved(h.state());
     h.get_by_label("Delete Anchor Point").click();
     h.run_steps(2);
     let path = saved(h.state());
@@ -78,6 +88,7 @@ pub(super) fn delete_the_corner(tool: Tool) {
     assert!(path.subpaths[0].knots.iter().all(|k| (k.anchor.x, k.anchor.y) != (300.0, 300.0)), "(300,300) is gone");
     assert_eq!(steps(h.state()), before + 1);
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
+    assert_undo_redo(&mut h, &original, &path);
 }
 
 /// Right-click the top edge (200,300): Add Anchor Point heads the menu and adds one there.
@@ -85,6 +96,7 @@ pub(super) fn add_on_the_edge(tool: Tool) {
     let mut h = right_clicked(tool, [200.0, 300.0]);
     assert_top_entry(&h, tool, "Add Anchor Point");
     let before = steps(h.state());
+    let original = saved(h.state());
     h.get_by_label("Add Anchor Point").click();
     h.run_steps(2);
     let path = saved(h.state());
@@ -93,6 +105,7 @@ pub(super) fn add_on_the_edge(tool: Tool) {
     assert!((added.x - 200.0).abs() < 3.0 && (added.y - 300.0).abs() < 3.0, "the anchor lands where it was clicked: {added:?}");
     assert_eq!(steps(h.state()), before + 1);
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
+    assert_undo_redo(&mut h, &original, &path);
 }
 
 /// Right-click empty canvas with the path targeted: the path menu with no top entry.
@@ -147,6 +160,22 @@ fn right_click_on_empty_canvas_opens_the_path_menu_without_a_top_entry() {
 #[test]
 fn opening_the_menu_adds_no_history_step_and_keeps_the_anchor_selection() {
     opening_changes_nothing(Tool::DeleteAnchorPoint);
+}
+
+/// The entry is about the path as it was when the menu opened: an edit meanwhile (a control call
+/// inserting an anchor before the corner) shifts the knots, so choosing it deletes nothing.
+#[test]
+fn a_point_entry_expires_once_the_path_is_edited() {
+    let mut h = right_clicked(Tool::DeleteAnchorPoint, [300.0, 300.0]);
+    assert_top_entry(&h, Tool::DeleteAnchorPoint, "Delete Anchor Point");
+    h.state_mut().run("path.addAnchor", json!({"name": "Path 1", "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    let after_add = saved(h.state());
+    assert_eq!(after_add.subpaths[0].knots.len(), 5, "the anchor went in");
+    let n = steps(h.state());
+    let ctx = h.ctx.clone();
+    super::choose(h.state_mut(), &ctx, "path.deleteAnchor");
+    assert_eq!(saved(h.state()), after_add, "the stale entry deleted nothing");
+    assert_eq!(steps(h.state()), n, "and added no history step");
 }
 
 /// A shape with only its own position lock is ignored by the anchor tools' click (#12730, #12825),

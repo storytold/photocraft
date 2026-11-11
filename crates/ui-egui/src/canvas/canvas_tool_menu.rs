@@ -74,9 +74,10 @@ pub struct CanvasToolMenu {
     pub inside_selection: bool,
     /// Opened with the Delete Anchor Point or Convert Point tool over an anchor or a segment of the
     /// targeted path (#12771, #12744): the engine command that entry runs and its params. It heads
-    /// the path menu, above a separator.
+    /// the path menu, above a separator. The third part is the document id and revision it was read
+    /// from: the knot index means something only there, so the entry expires once either moves on.
     #[serde(default)]
-    pub point: Option<(String, Value)>,
+    pub point: Option<(String, Value, (u64, u64))>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -735,7 +736,7 @@ fn point_menu(tool: Tool) -> bool {
 /// it (`direct_select::hit_active`): Delete Anchor Point on an anchor, Add Anchor Point on a
 /// segment, at the clicked point. `None` on empty canvas, a handle, or the Pen draft, which the
 /// engine doesn't edit.
-fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value)> {
+fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value, (u64, u64))> {
     let (target, _, hit) = crate::direct_select::hit_active(app, doc)?;
     let (command, mut params) = match hit {
         Hit::Anchor([subpath, knot]) => (POINT_DELETE, json!({"subpath": subpath, "knot": knot})),
@@ -748,7 +749,8 @@ fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value)> {
     if let (Some(o), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
         o.extend(t.clone());
     }
-    Some((command.to_string(), params))
+    let stamp = app.session.active().map(|st| (st.doc.id.0, st.revision))?;
+    Some((command.to_string(), params, stamp))
 }
 
 const POINT_DELETE: &str = "path.deleteAnchor";
@@ -761,7 +763,14 @@ fn point_label(command: &str) -> String {
 
 /// Is `command` the open menu's top point entry?
 fn is_point(menu: &CanvasToolMenu, command: &str) -> bool {
-    menu.point.as_ref().is_some_and(|(c, _)| c == command)
+    menu.point.as_ref().is_some_and(|(c, ..)| c == command)
+}
+
+/// Is the open menu's point entry still about the path as it is? The document and its revision are
+/// the ones the entry was read from; an edit meanwhile (say a control-channel `path.addAnchor`)
+/// shifts the knot indexes, so a stale entry runs nothing.
+fn point_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    menu.point.as_ref().is_some_and(|(.., stamp)| app.session.active().map(|st| (st.doc.id.0, st.revision)) == Some(*stamp))
 }
 
 /// Tools whose plain canvas right-click offers the view menu.
@@ -808,7 +817,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
 
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    is_point(menu, command)
+    (is_point(menu, command) && point_current(app, menu))
         || ((rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command))
             && entry_enabled(app, menu, command))
 }
@@ -1367,7 +1376,7 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         return;
     }
     let result = if is_point(&menu, command) {
-        menu.point.as_ref().map_or(Ok(()), |(id, params)| app.run(id, params.clone()).map(|_| ()))
+        menu.point.as_ref().map_or(Ok(()), |(id, params, _)| app.run(id, params.clone()).map(|_| ()))
     } else if menu.crop.is_some() {
         choose_crop(app, &menu, command)
     } else if menu.guide {
@@ -1716,7 +1725,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         selected = Some(command);
                     }
                 }
-                if let Some((command, _)) = &menu.point {
+                if let Some((command, ..)) = &menu.point {
                     let item = egui::Button::new(point_label(command)).min_size(egui::vec2(200.0, 20.0));
                     if ui.add(item).clicked() {
                         selected = Some(command.clone());
