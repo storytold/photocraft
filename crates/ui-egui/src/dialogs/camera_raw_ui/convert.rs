@@ -79,6 +79,32 @@ fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[
     proxy
 }
 
+/// What the preview develops, and its size: the engine filter domain, including pixels outside the
+/// canvas, since spatial Camera Raw stages (vignette, grain, local contrast) must agree with the
+/// committed result.
+pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> Result<(Rect, usize, usize), String> {
+    let area = canvas.union(&surf.content_bounds());
+    let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
+    let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
+    let (Some(w), Some(h)) = (width, height) else {
+        return Err("RAW Develop preview bounds are too large".into());
+    };
+    let (w, h) = (w as usize, h as usize);
+    if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
+        return Err("RAW Develop preview bounds are too large".into());
+    }
+    Ok((area, w, h))
+}
+
+/// `area` of `surf` (`w`×`h`) box-averaged down to at most [`PROXY_SIDE`] pixels on its long side:
+/// the proxy, its size, and the side of the blocks averaged.
+pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize, usize) {
+    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
+    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+    let proxy = box_average(surf, area, k);
+    (proxy, pw, ph, k)
+}
+
 pub(super) fn open_pixels(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
@@ -95,21 +121,8 @@ pub(super) fn open_pixels(
     if params.encoding_gamma == 0.0 {
         params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
     }
-    // Use the engine filter domain, including pixels outside the canvas: spatial Camera Raw
-    // stages (vignette, grain, local contrast) must agree with the committed result.
-    let area = canvas.union(&surf.content_bounds());
-    let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
-    let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
-    let (Some(w), Some(h)) = (width, height) else {
-        return Err("Camera Raw preview bounds are too large".into());
-    };
-    let (w, h) = (w as usize, h as usize);
-    if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
-        return Err("Camera Raw preview bounds are too large".into());
-    }
-    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
-    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let proxy = box_average(&surf, area, k);
+    let (area, w, h) = preview_area(canvas, &surf)?;
+    let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
     // Coverage at the centre of each proxy block.
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
         (0..ph)
