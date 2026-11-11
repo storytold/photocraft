@@ -71,3 +71,6 @@ mod crop_options_labels_tests;
 mod gradient_options_bar_mode_tests;
 #[cfg(test)]
 mod gradient_refusal_messages_tests;
+
+#[cfg(test)]
+mod remove_default_size_tests;

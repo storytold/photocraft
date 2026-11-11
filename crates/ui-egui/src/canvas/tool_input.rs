@@ -554,7 +554,12 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             if !sets_source && press_refused(app, tool) {
                 return;
             }
-            if !sets_source && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure) || refuse_group(app, tool)) {
+            // The Clone Stamp's no-source alert opens at the press, after any rasterize prompt.
+            if !sets_source
+                && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure)
+                    || refuse_group(app, tool)
+                    || crate::retouch_ui::clone_stamp_without_source(app, tool))
+            {
                 return;
             }
             // ⌘ with a selection tool is the Move tool for the drag: outside the selection (or
@@ -826,9 +831,10 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     photocraft_engine::hidden_target::refusal(&app.session, cmd, &json!({}))
 }
 
-/// The press-time refusals: a hidden target layer (#571), and for the Brush a locked layer or a
-/// group's pixels. The Brush says why in an alert, as in Photoshop (#11898); the other tools say
-/// a hidden target in the status bar. True when the press is refused.
+/// The press-time refusals: a hidden target layer (#571), and for the tools with an alert in
+/// `brush_refusal` (the Brush, #11898, and others) a locked layer or a group's pixels. Those tools
+/// say why in an alert, as in Photoshop; the other tools say a hidden target in the status bar.
+/// True when the press is refused.
 fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
     let hidden = hidden_target(app, tool);
     if let Some(message) = crate::brush_refusal::alert(app, tool, hidden.is_some()) {

@@ -1965,12 +1965,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         }
         // The Color Sampler (#11744):
         // - Over a sampler: arrow with the sampler target, or with Alt the arrow with scissors.
+        //   Dragging one keeps the arrow with the sampler target until release, though the stored
+        //   point stays behind, and without scissors: Alt removes only on the press (#13063).
         // - Off a sampler: eyedropper with the sampler target at its top-left, or the crosshair
         //   for precise Other Cursors.
         Tool::ColorSampler => {
             let [x, y] = xf.to_doc(p);
-            if crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
-                sampler_hover_cursor(ui.ctx(), p, alt || app.ui.shell.sticky_alt)
+            let dragging = matches!(app.ui.analysis.drag, Some(crate::analysis_ui::Drag::Sampler(..)));
+            if dragging || crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
+                sampler_hover_cursor(ui.ctx(), p, !dragging && (alt || app.ui.shell.sticky_alt))
             } else if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
             } else {

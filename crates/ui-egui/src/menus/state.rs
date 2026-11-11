@@ -17,9 +17,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if matches!(id, "edit.undo" | "edit.toggleLastState") && app.finishing_stroke.is_some() {
         return true;
     }
-    // Draft Pen points can be undone even when the document has no History entries.
-    if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
-        return true;
+    // Draft Pen points can be undone even when the document has no History entries; Redo would
+    // put a finished Pen path back beside its own edited draft. Step Backward/Forward alike.
+    if let Some(on) = crate::vector_ui::pen_history_enabled(app, id) {
+        return on;
     }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
