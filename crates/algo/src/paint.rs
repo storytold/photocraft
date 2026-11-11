@@ -309,13 +309,17 @@ fn fill_region(
     // one-pixel ring around the flood).
     let b = region.bbox;
     let strength = |x: i32, y: i32| opacity * selection.map_or(1.0, |m| m.sample_channel(x, y, 0));
-    let ring = if rim { rim_ring(region) } else { Vec::new() };
+    // The ring is only ever read for an unlocked Blend fill (see composite_area), and it is
+    // empty when the region covers every pixel, so do not build it in those cases: on a large
+    // canvas it is a bool per pixel plus a full scan of the mask.
+    let use_rim = rim && !lock_transparency && matches!(mode, FillMode::Blend(_)) && region.mask.contains(&0);
+    let ring = if use_rim { rim_ring(region) } else { Vec::new() };
     let on_ring = |x: i32, y: i32| {
         let at = usize::try_from(y - b.y0).ok().zip(usize::try_from(x - b.x0).ok()).filter(|_| b.contains(x, y));
         let hit = at.and_then(|(yy, xx)| yy.checked_mul(b.width() as usize)?.checked_add(xx)).and_then(|i| ring.get(i));
         if hit == Some(&true) { strength(x, y) } else { 0.0 }
     };
-    let rim: Option<&(dyn Fn(i32, i32) -> f32 + Sync)> = if rim { Some(&on_ring) } else { None };
+    let rim: Option<&(dyn Fn(i32, i32) -> f32 + Sync)> = if use_rim { Some(&on_ring) } else { None };
     composite_area(s, b, mode, |x, y| region.at(x, y) * strength(x, y), src, lock_transparency, inks, rim);
 }
 
