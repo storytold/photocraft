@@ -509,13 +509,44 @@ const MAX_RAW_REREAD_BYTES: u64 = 4 << 30;
 fn read_raw_file(path: &str) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind, Read};
     let file = std::fs::File::open(path)?;
-    if !file.metadata()?.is_file() {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
     }
+    if metadata.len() > MAX_RAW_REREAD_BYTES {
+        return Err(Error::new(ErrorKind::InvalidData, "file is too large"));
+    }
+    let expected = usize::try_from(metadata.len()).map_err(|_| Error::new(ErrorKind::InvalidData, "file is too large"))?;
     let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected).map_err(|_| Error::new(ErrorKind::OutOfMemory, "cannot reserve RAW read buffer"))?;
     file.take(MAX_RAW_REREAD_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_RAW_REREAD_BYTES {
         return Err(Error::new(ErrorKind::InvalidData, "file is too large"));
     }
     Ok(bytes)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod read_tests {
+    use super::*;
+
+    #[test]
+    fn an_oversized_raw_file_is_refused_from_its_length_without_reading_it() {
+        let path = std::env::temp_dir().join(format!("pc-raw-reread-{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        // Sparse: one byte past the cap, never stored or read.
+        file.set_len(MAX_RAW_REREAD_BYTES + 1).unwrap();
+        let e = read_raw_file(path.to_str().unwrap()).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_small_raw_file_reads_back() {
+        let path = std::env::temp_dir().join(format!("pc-raw-reread-small-{}", std::process::id()));
+        std::fs::write(&path, [5u8; 6]).unwrap();
+        let bytes = read_raw_file(path.to_str().unwrap());
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(bytes.unwrap(), vec![5u8; 6]);
+    }
 }
