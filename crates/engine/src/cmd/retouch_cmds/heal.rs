@@ -44,8 +44,15 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
     out
 }
 
+/// The reference's alert for the Healing Brush in an Indexed Color document (#12112). Bitmap,
+/// Duotone and Multichannel weren't measured and heal as before.
+const INDEXED_REFUSAL: &str = "Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+
 pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.healingBrush";
+    if s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed) {
+        return Err(EngineError::Other(INDEXED_REFUSAL.into()));
+    }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     let which = sample_layers(p, CMD)?;
