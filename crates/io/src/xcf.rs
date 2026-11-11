@@ -27,6 +27,8 @@ mod wire;
 #[allow(dead_code)]
 mod effects;
 #[cfg(test)]
+mod floating_gray_review_tests;
+#[cfg(test)]
 mod historical_precision_tests;
 mod metadata;
 mod metadata_packets;
@@ -1067,7 +1069,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
     let mut ordinal = 0usize;
     for pending in std::mem::take(&mut image.pending_effects) {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let original = document.layer(pending.layer).cloned().ok_or_else(|| invalid("native effect owner is missing"))?;
+        let original = document.layer(pending.layer).ok_or_else(|| invalid("native effect owner is missing"))?;
         let mut omitted = false;
         // GIMP's serialized list is top-first; its last stored filter is the first
         // operation on the drawable. Independently saved stack evidence verifies this.

@@ -444,7 +444,6 @@ impl<'a> Image<'a> {
 
     /// Decode a layer's declared sample layout and restore the image model even when decoding fails or is cancelled.
     pub(super) fn layer_hierarchy(&mut self, hptr: usize, kind: u32, alpha: bool, floating: bool, name: &str, ctl: &Interrupt<'_>) -> Result<Pixels> {
-        let gray_floating = floating && matches!(kind, 2 | 3) && self.base_type != 1;
         let source_base_type = if floating {
             match kind {
                 0 | 1 => 0,
@@ -464,7 +463,9 @@ impl<'a> Image<'a> {
         };
         let saved_base_type = self.base_type;
         self.base_type = source_base_type;
-        let decoded = self.hierarchy(hptr, source_channels, gray_floating, ctl);
+        // Gray samples remain color even for a floating selection attached to a
+        // channel or mask. The hierarchy validates its alpha plane as coverage.
+        let decoded = self.hierarchy(hptr, source_channels, false, ctl);
         self.base_type = saved_base_type;
         decoded.map_err(|error| match error {
             IoError::Cancelled => IoError::Cancelled,
