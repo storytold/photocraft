@@ -270,6 +270,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
     let stale = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -324,6 +325,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -564,6 +566,68 @@ fn cross_scale_indexed_matte_preview_rejects_old_tool_colors_from_cached_and_wor
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn match_color_preview_rejects_cached_and_late_frames_from_an_old_source_layer_or_revision() {
+    use crate::dialogs::filter_preview_worker::Computed;
+
+    let command = "image.adjustments.matchColor";
+    for change_layer in [true, false] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        let red = app.session.active().unwrap().active_layer.unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#cc4422"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Blue"})).unwrap();
+        let blue = app.session.active().unwrap().active_layer.unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#2266cc"})).unwrap();
+        assert!(app.session.set_active(0));
+        crate::filter_dialog::open(&mut app, command).unwrap();
+        app.ui.dialogs[0].fields.extend([("source".into(), json!(1)), ("sourceLayer".into(), json!(red))]);
+        let ctx = egui::Context::default();
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_some(), "the first source preview reaches the canvas");
+        let preview = app.filter_preview.as_ref().unwrap();
+        let old = preview.key.clone();
+        let doc = preview.result.as_ref().unwrap().clone();
+        let mut slider = old.clone();
+        slider.params["fade"] = json!(25.0);
+        assert!(old.same_target(&slider), "a slider on the same source layer keeps the last frame");
+
+        app.background_jobs = true;
+        let (release, wait) = std::sync::mpsc::channel();
+        assert!(
+            app.filter_preview_worker
+                .start(old.clone(), ctx.clone(), move |_| {
+                    wait.recv_timeout(std::time::Duration::from_secs(60)).expect("the test releases the job");
+                    let buffer = photocraft_compose::flatten(&doc);
+                    Computed { result: Some((doc, buffer)), ms: 0.0 }
+                })
+                .unwrap()
+        );
+        let current_layer = if change_layer {
+            app.ui.dialogs[0].fields.insert("sourceLayer".into(), json!(blue));
+            blue
+        } else {
+            assert!(app.session.set_active(1));
+            app.session.select_layer(red).unwrap();
+            app.session.execute("edit.fill", json!({"contents": "color", "color": "#448822"})).unwrap();
+            assert!(app.session.set_active(0));
+            red
+        };
+        let source = &app.session.documents()[1];
+        let sources = vec![(source.doc.id, source.revision)];
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "the cached old preview is not displayed");
+        app.filter_preview = None;
+        release.send(()).unwrap();
+        drive_until(&mut app, &ctx, "a current Match Color preview", |app| {
+            let Some(preview) = &app.filter_preview else { return false };
+            assert_eq!(preview.key.params["sourceLayer"], json!(current_layer), "a late worker published the wrong layer");
+            assert_eq!(preview.key.sources, sources, "a late worker published the wrong source revision");
+            preview.result.is_some() && !app.filter_preview_worker.busy()
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn a_preview_computed_mid_drag_reaches_the_canvas_and_then_converges() {
     // A drag used to paint nothing at all: every completion was dropped for carrying stale
     // parameters, so the canvas only ever showed an effect once the pointer had come to rest.
@@ -662,6 +726,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -1057,7 +1122,21 @@ fn gpu_display_luts_are_per_display() {
     assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
     assert!(gpu.has_display_lut(key, 4));
     // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref()), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref()));
+    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+}
+
+/// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
+/// key carries the ink preview (Color Settings › Spot) like the CPU canvas key does.
+#[test]
+fn gpu_texture_key_follows_the_ink_preview() {
+    use super::display::ink_preview_key;
+    use photocraft_color::{ColorMode, SampleType};
+    let size = photocraft_doc::Size::new(2, 2);
+    let inks = Document::new("m", size, ColorMode::Multichannel, SampleType::U8);
+    let rgb = Document::new("r", size, ColorMode::Rgb, SampleType::U8);
+    assert_ne!(ink_preview_key(&inks), 0);
+    assert_eq!(texture_key(None, &inks), ink_preview_key(&inks));
+    assert_eq!(texture_key(None, &rgb), 0);
 }
 
 /// The navigator's update after an edit (its image with the edit's damage, grown by the
@@ -1816,6 +1895,72 @@ fn eyedropper_drag_updates_the_sampled_colour() {
 
     tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
     assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
+}
+
+/// #10074: painting a group looked as if it worked (the stroke's trail followed the pointer) and
+/// vanished on release with only a status-bar note. Photoshop refuses at the press with a
+/// message; so does PhotoCraft, and nothing is painted or drawn.
+#[test]
+fn painting_a_group_is_refused_at_the_press_with_a_message() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.groupLayers", json!({})).unwrap();
+    let group = app.session.active().unwrap().active_layer.unwrap();
+    assert!(app.session.active().unwrap().doc.layer(group).unwrap().is_group());
+    let errors = |app: &PhotocraftApp| -> Vec<String> {
+        app.ui
+            .dialogs
+            .iter()
+            .filter(|d| d.kind == crate::state::DialogKind::Error)
+            .map(|d| d.fields.get("message").and_then(|m| m.as_str()).unwrap_or_default().to_string())
+            .collect()
+    };
+    app.ui.tool_options.gradient_classic = true;
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser, Tool::CloneStamp, Tool::PaintBucket, Tool::MagicEraser, Tool::RedEye, Tool::Gradient] {
+        app.ui.dialogs.clear();
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        // Brush and Classic gradient use the measured alerts (#11898, #12017).
+        let want = match tool {
+            Tool::Brush => "Could not use the brush tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            Tool::Gradient => "Could not use the gradient tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            _ => format!("Could not use the {} because the target layer is a group.", tool.label()),
+        };
+        assert_eq!(errors(&app), [want], "{tool:?}");
+        assert!(app.drag.is_none() && app.live_stroke.is_none(), "{tool:?} starts no stroke");
+        tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+        assert!(app.trail.is_none(), "{tool:?} draws no trail");
+    }
+    // Tools that don't paint the group's pixels are unaffected.
+    app.ui.dialogs.clear();
+    app.ui.tool = Tool::RectMarquee;
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(errors(&app).is_empty());
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 15.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 15.0 }, egui::Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_some(), "a marquee still selects with a group active");
+    app.run("select.deselect", json!({})).unwrap();
+    // A group's mask can be painted: targeting it paints, without the message.
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert_eq!(paint_target(&app), json!("mask"));
+    let mask_at = |app: &PhotocraftApp, x: i32| {
+        let st = app.session.active().unwrap();
+        st.doc.layer(group).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, 10, 0)
+    };
+    let before = mask_at(&app, 15);
+    // Black on a reveal-all mask hides: a stroke that paints shows.
+    app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]})).unwrap();
+    app.ui.tool = Tool::Brush;
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(errors(&app).is_empty(), "the mask is paintable");
+    assert!(app.drag.is_some(), "the stroke starts on the mask");
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+    assert_ne!(mask_at(&app, 15), before, "the stroke painted the group's mask");
 }
 
 /// #4298: an adjustment layer has no pixels, so after its icon thumbnail is clicked (the
@@ -2996,8 +3141,9 @@ fn retouch_drags_show_the_footprint_without_wedges() {
         let ctx = egui::Context::default();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
-        app.run("tools.setBrush", json!({"brush": {"size": 30, "hardness": hardness}})).unwrap();
         app.ui.tool = Tool::Remove;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 30, "hardness": hardness}})).unwrap();
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         for i in 1..80 {
             let t = f64::from(i) * 0.5;
@@ -3343,6 +3489,154 @@ fn fade_dialog_previews_the_faded_layer_and_cancel_keeps_the_document() {
     }
 }
 
+/// #11276: Float All in Windows leaves a document that already floats in its one window; a
+/// second floating window would share the document's view and overwrite its centre.
+#[test]
+fn float_all_keeps_one_window_per_floating_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300, "name": "one"})).unwrap();
+    app.run("file.new", json!({"width": 400, "height": 300, "name": "two"})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    let first = crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap()["window"].as_u64();
+    for _ in 0..2 {
+        let all = crate::menus::invoke(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+        assert_eq!(all["windows"][0].as_u64(), first, "the floating document keeps its window");
+        for doc in 0..2 {
+            let n = app.ui.windows.iter().filter(|w| w.open && w.floating && w.document == doc).count();
+            assert_eq!(n, 1, "document {doc}: one floating window");
+        }
+    }
+}
+
+/// #11276: the zoom a floating document took (its window draws the document's own view) stays
+/// when the windows are consolidated back into tabs.
+#[test]
+fn consolidating_keeps_the_zoom_set_while_floating() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300, "name": "floating"})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    crate::zoom_levels::set_from_field(&mut app.ui.views[0], false, 200.0, false);
+    crate::menus::invoke(&mut app, &ctx, "window.arrange.consolidateAllToTabs", json!({})).unwrap();
+    assert!(app.ui.windows.is_empty());
+    assert!((app.ui.views[0].zoom - 2.0).abs() < 1e-3, "the tab shows the floating zoom: {}", app.ui.views[0].zoom);
+}
+
+/// #11276: a New Window for Document (not floating) keeps a view of its own beside the main
+/// canvas: zooming either leaves the other as it was.
+#[test]
+fn a_new_window_for_document_keeps_its_own_view() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300, "name": "doc"})).unwrap();
+    app.sync_views();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.newWindowForDocument", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            if *ready {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                extra_windows(app, ui.ctx());
+            }
+        },
+        (app, false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.state_mut().1 = true;
+    h.run_steps(4);
+    assert!(h.state().0.ui.windows.iter().any(|w| w.open && !w.floating), "the extra window is open");
+    let window_zoom = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| h.state().0.ui.windows[0].view.zoom;
+    let before = window_zoom(&h);
+    crate::zoom_levels::set_from_field(&mut h.state_mut().0.ui.views[0], false, 300.0, false);
+    h.run_steps(3);
+    assert!((h.state().0.ui.views[0].zoom - 3.0).abs() < 1e-3, "the main canvas keeps its zoom");
+    assert!((window_zoom(&h) - before).abs() < 1e-3, "the extra window keeps its own: {}", window_zoom(&h));
+    let main = h.state().0.ui.views[0].zoom;
+    crate::zoom_levels::set_from_field(&mut h.state_mut().0.ui.windows[0].view, false, 50.0, false);
+    h.run_steps(3);
+    assert!((window_zoom(&h) - 0.5).abs() < 1e-3, "the extra window keeps its zoom");
+    assert!((h.state().0.ui.views[0].zoom - main).abs() < 1e-3, "the main canvas is not written over");
+}
+
+/// #11276: in a tiled arrangement the active document's cell zooms from the Navigator and the
+/// status bar too.
+#[test]
+fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
+    for layout in ["twoUpVertical", "tileAllVertically", "fourUp"] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for name in ["one", "two", "three"] {
+            app.run("file.new", json!({"width": 400, "height": 300, "name": name})).unwrap();
+        }
+        app.sync_views();
+        crate::menus::invoke(&mut app, &egui::Context::default(), &format!("window.arrange.{layout}"), json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.state_mut().1 = true;
+        h.run_steps(4);
+        let active = h.state().0.session.active_index().unwrap();
+        for pct in [200.0, 50.0] {
+            crate::zoom_levels::set_from_field(&mut h.state_mut().0.ui.views[active], false, pct, false);
+            h.run_steps(3);
+            let zoom = h.state().0.ui.views[active].zoom;
+            assert!((zoom - pct / 100.0).abs() < 1e-3, "{layout} {pct}%: {zoom}");
+        }
+    }
+}
+
+/// #11276: a document floating in its own window zooms from the zoom typed into the status bar
+/// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
+/// copy of the view. Only the typed zoom fields are driven here, not the Navigator's slider or
+/// zoom buttons.
+#[test]
+fn a_floating_document_follows_navigator_and_status_bar_zoom() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300, "name": "floating"})).unwrap();
+        app.run("file.new", json!({"width": 400, "height": 300, "name": "docked"})).unwrap();
+        crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.panel.navigator", json!({})).unwrap();
+    h.run_steps(6);
+    assert_eq!(h.state().session.active_index(), Some(0), "the floating document is active");
+    // The status bar's zoom field (bottom left) and the Navigator's.
+    let fields = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let mut f: Vec<egui::Rect> = h
+            .query_all_by_role(egui::accesskit::Role::SpinButton)
+            .filter(|n| n.accesskit_node().label().as_deref() == Some("Zoom"))
+            .map(|n| n.rect())
+            .collect();
+        f.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        f
+    };
+    assert_eq!(fields(&h).len(), 2, "the status bar's and the Navigator's zoom fields");
+    for (field, typed, want) in [(0, "200", 2.0), (1, "50", 0.5), (0, "300", 3.0), (1, "100", 1.0)] {
+        let at = fields(&h)[field].center();
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(typed.into()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(60);
+        let window = h.state().ui.windows[0].view.zoom;
+        assert!((window - want).abs() < 1e-3, "field {field}, typed {typed}: the window shows {window}");
+        assert!((h.state().ui.views[0].zoom - want).abs() < 1e-3, "field {field}, typed {typed}: not written back over by the window");
+    }
+}
+
 #[test]
 fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() {
     // Opening the box swapped the canvas to a preview document with no damage for it, so a
@@ -3371,4 +3665,39 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
+}
+
+/// tanish2k09 on #10406: an armed eyedropper owns the image of the primary canvas only, the one
+/// its picks come from and its pipette is drawn on. A secondary canvas (a Window › Arrange › New
+/// Window view) is never left without a cursor for it.
+#[test]
+fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Move;
+    let id = crate::adjust_dialog::open(&mut app, "image.adjustments.curves").unwrap();
+    let base = app.ui.dialog_mut(id).map(|d| crate::filter_dialog::params_of(&d.fields)).unwrap();
+    let dialog = app.ui.dialog_mut(id).unwrap();
+    dialog.fields.insert("__curvePicker".into(), json!("black"));
+    dialog.fields.insert("__curvePickerBase".into(), base);
+    assert!(crate::adjust_dialog::picker_armed(&app), "the black-point eyedropper is armed");
+    let view = app.ui.views[0].clone();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let cursor = |app: &mut PhotocraftApp, primary: bool| {
+        let mut icon = egui::CursorIcon::Default;
+        for _ in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::PointerMoved(Pos2::new(200.0, 150.0)));
+            let mut out = ctx.run_ui(input, |ui| {
+                canvas_view(app, ui, 0, rect, view.clone(), primary);
+            });
+            out.textures_delta.clear();
+            icon = out.platform_output.cursor_icon;
+        }
+        icon
+    };
+    assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
+    assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
 }
