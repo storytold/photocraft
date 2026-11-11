@@ -11,13 +11,16 @@ use serde_json::json;
 
 const INVERT: &[u8] = include_bytes!("fixtures/invert.wasm");
 
-/// A directory this test creates itself: `create_dir` fails on an existing entry, so a directory or
+/// A directory (owner-only on Unix) this test creates itself: `create` fails on an existing entry, so a directory or
 /// symlink another user planted at the predictable name is refused, not written through.
 fn fresh_dir(tag: &str) -> std::path::PathBuf {
     let base = std::env::temp_dir();
     for n in 0.. {
         let dir = base.join(format!("{tag}-{}-{n}", std::process::id()));
-        match std::fs::create_dir(&dir) {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        match builder.create(&dir) {
             Ok(()) => return dir,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => panic!("{}: {e}", dir.display()),

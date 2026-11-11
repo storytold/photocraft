@@ -19,9 +19,18 @@ fn main() -> std::io::Result<()> {
             std::path::PathBuf::from(dir)
         }
         None => {
-            let dir = std::env::temp_dir().join(format!("photocraft-big-psb-{}", std::process::id()));
-            std::fs::create_dir(&dir)?;
-            dir
+            let mut n = 0u32;
+            loop {
+                let dir = std::env::temp_dir().join(format!("photocraft-big-psb-{}-{n}", std::process::id()));
+                let mut builder = std::fs::DirBuilder::new();
+                #[cfg(unix)]
+                std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+                match builder.create(&dir) {
+                    Ok(()) => break dir,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 1000 => n += 1,
+                    Err(e) => return Err(e),
+                }
+            }
         }
     };
     let wanted = args.get(1..).unwrap_or(&[]);
