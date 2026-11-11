@@ -96,8 +96,16 @@ fn later_document() -> crate::open_prompt::Held {
 fn historical_resume_keeps_its_position_before_later_file_and_profile_prompt() {
     for background in [false, true] {
         let mut app = app();
-        app.session.color.settings.ask_on_missing = true;
-        app.open_bytes("first.xcf", &fixture::historical_pixel(true)).unwrap();
+        // XCF's implicit nonlinear RGB encoding has a native sRGB profile, so a missing-profile
+        // preference would never hold this fixture. Deliberately create a real mismatch.
+        app.run("edit.colorSettings", json!({"workingRgb":"adobe-rgb-compat","policyRgb":"preserve","askOnMismatch":true})).unwrap();
+        let bytes = fixture::historical_pixel(true);
+        let options =
+            photocraft_io::ImportOptions { historical_xcf_sample_order: Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian), ..Default::default() };
+        let imported = photocraft_io::import_with_options("first.xcf", &bytes, &options).unwrap();
+        let question = app.session.color.open_question(&imported.document).expect("the fixture must require the profile prompt this test orders");
+        assert_eq!(question["mismatch"], true);
+        app.open_bytes("first.xcf", &bytes).unwrap();
         crate::open_prompt::arrive(&mut app, later_document());
         app.background_jobs = background;
         choose(&mut app, "little-endian");
