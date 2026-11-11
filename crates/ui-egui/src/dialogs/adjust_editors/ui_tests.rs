@@ -824,7 +824,8 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
 /// off, and RGB mixers keep it.
 #[test]
 fn channel_mixer_monochrome_is_disabled_for_cmyk_mixers() {
-    let cmyk = photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for("channelMixer", photocraft_doc::ColorMode::Cmyk).unwrap());
+    let cmyk =
+        photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for("channelMixer", photocraft_doc::ColorMode::Cmyk).unwrap());
     let mut h = editor_harness("channelMixer", cmyk.clone());
     assert!(h.get_by_label("Monochrome").accesskit_node().is_disabled(), "CMYK: disabled");
     h.get_by_label("Monochrome").click();

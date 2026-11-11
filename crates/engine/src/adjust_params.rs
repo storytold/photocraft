@@ -384,8 +384,7 @@ pub const MIXER_INKS: [&str; 4] = ["cyan", "magenta", "yellow", "black"];
 
 /// Why a CMYK Channel Mixer refuses `monochrome: true` (#8047); the UI shows it on the disabled
 /// Monochrome checkbox.
-pub const MONOCHROME_CMYK_UNSUPPORTED: &str =
-    "unsupported: Monochrome is not available for a CMYK Channel Mixer yet (no Photoshop sample to match)";
+pub const MONOCHROME_CMYK_UNSUPPORTED: &str = "unsupported: Monochrome is not available for a CMYK Channel Mixer yet (no Photoshop sample to match)";
 
 /// Channel Mixer: RGB outputs (`red`, `green`, `blue`, each `[red, green, blue, constant]` %) or,
 /// in CMYK documents or with CMYK keys, Photoshop's four ink outputs ([`MIXER_INKS`]); `gray` is
