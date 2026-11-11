@@ -15,6 +15,28 @@ pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str,
     !chosen.is_empty()
 }
 
+/// [`dropdown`] whose open list greys the options `enabled` refuses: drawn disabled and never
+/// picked, by the pointer or the keys (#12906, the Pen's Pixels mode).
+pub fn dropdown_enabled<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    enabled: impl Fn(&T) -> bool,
+) -> bool {
+    let before = current.clone();
+    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false, &enabled);
+    // The arrow keys and type-ahead step onto greyed rows too; landing there keeps the value.
+    if !enabled(current) {
+        *current = before;
+        ui.ctx().request_repaint();
+        return false;
+    }
+    !chosen.is_empty()
+}
+
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
     let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false, &|_| true);
