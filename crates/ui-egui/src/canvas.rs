@@ -1993,6 +1993,16 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         {
             crate::tool_cursor::continue_path(painter, p)
         }
+        // Add Anchor Point: the pen with "+" only over a segment a click would split, else the
+        // black arrow (#12729); ⌘ is Direct Selection's arrow. ⌥ and Precise stay as they were.
+        Tool::AddAnchorPoint
+            if !precise_other_cursor(app) && {
+                let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+                !mods.alt && (mods.command || !crate::anchor_tools::adds_anchor_at(app, tool, xf.to_doc(p)))
+            } =>
+        {
+            crate::tool_cursor::arrow(ui.ctx(), p)
+        }
         // The pen tools: their own icon with its nib on the point, or the crosshair for
         // precise Other Cursors (#4639).
         Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
