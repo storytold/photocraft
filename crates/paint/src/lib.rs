@@ -407,4 +407,9 @@ mod tests {
 }
 
 #[cfg(test)]
+mod airbrush_rate_tests;
+#[cfg(test)]
 mod brush_tests;
+
+#[cfg(test)]
+mod smoothing_catch_up_default_tests;
