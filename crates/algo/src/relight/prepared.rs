@@ -176,7 +176,9 @@ fn apply_stream(
         par::chunks_mut(values, row_len, parallel_rows, |_, row| {
             let mut scratch = Vec::new();
             for r in radii {
-                fxutil::box_rows_n(row, field.width() as usize, 2, r, &mut scratch);
+                if r != 0 {
+                    fxutil::box_line_n(row, field.width() as usize, 2, r, &mut scratch);
+                }
             }
         });
         // Reuse the row storage while the vertical pipeline retains only its live windows.
