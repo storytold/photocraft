@@ -35,6 +35,7 @@ mod files;
 mod menu_item;
 
 mod steps_artboard;
+mod steps_artboard_section;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -50,6 +51,7 @@ mod steps_layer;
 mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
+mod steps_measurement;
 mod steps_path;
 mod steps_perspective_warp;
 mod steps_type_path;
@@ -185,7 +187,13 @@ mod tests;
 mod layer_props_tests;
 
 #[cfg(test)]
+mod layer_list_tests;
+
+#[cfg(test)]
 mod stylize_tests;
+
+#[cfg(test)]
+mod measurement_tests;
 
 #[cfg(test)]
 mod selection_tests;
@@ -195,3 +203,6 @@ mod render_tests;
 
 #[cfg(test)]
 mod recorded_tools_tests;
+
+#[cfg(test)]
+mod artboard_section_tests;

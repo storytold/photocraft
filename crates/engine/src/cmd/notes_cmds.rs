@@ -152,7 +152,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("all").and_then(Value::as_bool) == Some(true) {
         let n = s.active().map_or(0, |d| d.doc.notes.len());
-        s.edit("Delete All Notes", |d, _| {
+        // Photoshop's name for the step, with a lower-case "all" (#11791).
+        s.edit("Delete all Notes", |d, _| {
             d.notes.clear();
             Ok(())
         })?;
