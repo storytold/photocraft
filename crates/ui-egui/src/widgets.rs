@@ -26,6 +26,7 @@ mod scrub;
 mod slider;
 pub mod swap_arrow;
 pub(super) mod tab_strip;
+pub mod task_bar;
 mod text_field;
 pub mod text_field_menu;
 pub mod tone;
@@ -42,12 +43,16 @@ pub use color::{
 };
 #[cfg(test)]
 use color::{checker_tile_id, checker_uv};
-pub use dropdown::{dropdown, dropdown_hovered, dropdown_literal, dropdown_wheel_hovered, dropdown_with_tooltips, menu_scroll, swatch_popup};
+pub use dropdown::{
+    combo_list, dropdown, dropdown_hovered, dropdown_literal, dropdown_wheel_grouped, dropdown_wheel_grouped_enabled, dropdown_wheel_hovered,
+    dropdown_with_tooltips, menu_scroll, swatch_popup,
+};
 pub(crate) use fields::compact_wrapping_value_field;
 #[cfg(test)]
 use fields::{FieldOpts, NUMERIC_INPUT_LIMIT, value_field_in};
 pub use fields::{
-    POPUP_ARROW_W, PopupFieldResponse, VALUE_FIELD_H, compact_value_field, elided_label, elided_label_sensed, popup_value_field, value_field, value_field_named,
+    POPUP_ARROW_W, PopupFieldResponse, VALUE_FIELD_H, compact_value_field, elided_label, elided_label_sensed, popup_value_field, typed_text_parses,
+    value_field, value_field_named, value_field_whole_alerting, value_field_with_trailing,
 };
 pub(crate) use panel::body_margin;
 pub use panel::{
@@ -56,6 +61,7 @@ pub use panel::{
 };
 #[cfg(test)]
 pub(crate) use scrub::scrub_acceleration_on;
+pub(crate) use scrub::scrub_label_within;
 pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label, set_scrub_acceleration};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
@@ -67,8 +73,8 @@ pub use text_field::{
     INPUT_EVENT_LIMIT, TEXT_FIELD_H, TEXT_FIELD_LIMIT, cap_text_events, focus_first_field, text_field, text_field_ex, text_field_with_trailing,
 };
 pub use units::{
-    FieldUnits, fmt_num, fmt_num_prec, fmt_num2, parse_num, set_field_resolution, unit_decimals, unit_of_key, value_field_extent, value_field_prec,
-    value_field_units,
+    FieldUnits, fmt_num, fmt_num_prec, fmt_num2, parse_num, set_field_resolution, unit_decimals, unit_of_key, value_field_extent, value_field_len,
+    value_field_prec, value_field_prec_blank, value_field_units,
 };
 
 #[cfg(test)]
