@@ -316,3 +316,9 @@ fn a_huge_default_composite_is_an_error_not_an_allocation() {
     assert!(PsdBuilder::new(u32::MAX, u32::MAX).build().is_err());
     assert!(PsdBuilder::new(0, 5).build().is_err());
 }
+
+#[test]
+fn the_default_composite_follows_the_decoded_size_limit() {
+    // 40000 x 40000 CMYK at 16-bit is 12.8 GB: over the encoder's limit, refused before the buffer.
+    assert!(PsdBuilder::new(40_000, 40_000).color_mode(ColorMode::Cmyk).depth(16).build().is_err());
+}

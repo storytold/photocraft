@@ -15,10 +15,6 @@ use crate::layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask
 use crate::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
 use crate::tagged::{SectionType, TaggedBlock};
 
-/// Largest all-white composite [`PsdBuilder`] makes when no pixels were given (a 30000 x 30000
-/// 32-bit RGB document is 10.8 GB, so no document Photoshop can save is refused).
-const MAX_PLACEHOLDER_BYTES: usize = 16 << 30;
-
 /// Interleaved pixel data with alpha. CMYK values are *ink amounts*
 /// (0 = no ink); the builder stores them inverted as Photoshop does.
 #[derive(Debug, Clone, PartialEq)]
@@ -441,8 +437,8 @@ impl PsdBuilder {
                 let len = n
                     .checked_mul(bps)
                     .and_then(|v| v.checked_mul(cc))
-                    .filter(|&v| v <= MAX_PLACEHOLDER_BYTES)
-                    .ok_or(PsdError::LimitExceeded("default composite exceeds 16 GiB"))?;
+                    .filter(|&v| v as u64 <= crate::compression::MAX_DECODED_BYTES)
+                    .ok_or(PsdError::LimitExceeded("default composite exceeds MAX_DECODED_BYTES"))?;
                 let mut plane = Vec::new();
                 plane.try_reserve_exact(len).map_err(|_| PsdError::LimitExceeded("default composite allocation"))?;
                 // White: 0xff in RGB/gray; no ink (stored inverted as 0xff) in CMYK.
