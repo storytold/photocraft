@@ -552,3 +552,24 @@ fn a_brush_dropped_on_a_rows_upper_right_lands_by_the_lines_rule() {
         assert_eq!(order, want.map(String::as_str), "{scale}");
     }
 }
+
+/// A narrow column cuts a long brush name short; hovering its row then shows the name in full, as
+/// the grid and the picker's cards do. A row whose name fits shows no tooltip.
+#[test]
+fn a_list_row_whose_name_is_cut_shows_it_in_full_on_hover() {
+    for (width, scale, cut) in [(300, 0.5, true), (900, 2.0, false)] {
+        let mut name = String::new();
+        let mut h = floating_brushes(width, 600, |app| {
+            app.ui.brushes_panel.view = BrushesView::List;
+            app.ui.brushes_panel.scale = scale;
+            name = app.session.tools.presets.iter().take(12).map(|p| p.name.clone()).max_by_key(String::len).unwrap_or_default();
+        });
+        h.run_steps(4);
+        let row = h.get_by_role_and_label(Role::Button, &name).rect();
+        let shown = |h: &Harness<'_, PhotocraftApp>| h.query_all_by_label(&name).count();
+        let before = shown(&h);
+        h.hover_at(row.center());
+        h.run_steps(90);
+        assert_eq!(shown(&h) > before, cut, "{width} pt at {scale}: `{name}` in {row:?}");
+    }
+}

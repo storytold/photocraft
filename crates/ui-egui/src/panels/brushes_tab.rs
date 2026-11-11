@@ -415,7 +415,11 @@ fn list_row(
     let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke-{w}:{}", p.name), pb, w as u32, 36, t.text);
     let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0 * k), vec2(w, 36.0 * k));
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
-    crate::layer_row_ui::label(ui.painter(), sr.right() + 12.0, r.center().y, r.right() - 4.0, &p.name, egui::FontId::proportional(12.0), t.text_dim);
+    let (name_x, font) = (sr.right() + 12.0, egui::FontId::proportional(12.0));
+    crate::layer_row_ui::label(ui.painter(), name_x, r.center().y, r.right() - 4.0, &p.name, font.clone(), t.text_dim);
+    // A name cut short by a narrow column shows in full on hover, as in the grid.
+    let cut = ui.painter().layout_no_wrap(p.name.clone(), font, t.text_dim).size().x > r.right() - 4.0 - name_x;
+    let resp = if cut { resp.on_hover_text(&p.name) } else { resp };
     preset_interactions(ui, &resp, r, p, presets, columns, acts);
 }
 
