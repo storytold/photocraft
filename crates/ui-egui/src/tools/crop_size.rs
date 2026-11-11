@@ -15,7 +15,7 @@
 //!   with the Crop tool, [`keys`]) fills them with the active document's size in px and its
 //!   resolution; Clear empties them; ⇄ and X swap W and H.
 
-use egui::{Modifiers, Stroke, StrokeKind, vec2};
+use egui::{Stroke, StrokeKind, vec2};
 use photocraft_engine::prefs::Unit;
 use serde_json::{Value, json};
 
@@ -232,6 +232,8 @@ pub fn clear_ratio(o: &mut ToolOptions) {
         clear(o);
     } else {
         o.crop_ratio.clear();
+        o.crop_custom_ratio_width = 0.0;
+        o.crop_custom_ratio_height = 0.0;
     }
 }
 
@@ -269,12 +271,12 @@ pub fn chosen(app: &mut PhotocraftApp) {
 }
 
 /// I with the Crop tool (no text field focused, which the caller checks): Front Image. Returns
-/// true when the key was used; otherwise I stays the Eyedropper tool key.
+/// true when the key was used; otherwise I (and always ⇧I) stays the Eyedropper tool key.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.tool != Tool::Crop || app.crop.drag.is_some() || app.session.active().is_none() {
         return false;
     }
-    if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, egui::Key::I)) {
+    if ctx.input_mut(|i| crate::crop_shield::consume_unshifted(i, egui::Key::I)) {
         front_image(app);
         crate::crop_ui::apply_ratio(app);
         return true;
@@ -313,11 +315,15 @@ fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width
 }
 
 /// The W x H x Resolution fields of the options bar: W, ⇄, H, the resolution and its unit.
-pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
+/// Returns true when ⇄ swapped W and H, so the Crop tool turns its frame with them.
+pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) -> bool {
     text_field(ui, "crop-width", &mut o.crop_width, tl!("Width"), 64.0, normalize_length);
-    if crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() {
+    // Always swaps (Perspective Crop shows the fields without the mode); true in W x H x Resolution
+    // mode, where the Crop tool turns its frame with W and H.
+    let swapped = crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() && {
         swap_fields(o);
-    }
+        o.crop_ratio == WHR
+    };
     text_field(ui, "crop-height", &mut o.crop_height, tl!("Height"), 64.0, normalize_length);
     text_field(ui, "crop-resolution", &mut o.crop_resolution, tl!("Resolution"), 64.0, normalize_resolution);
     let units = [(PX_PER_IN.to_string(), "px/in"), (PX_PER_CM.to_string(), "px/cm")];
@@ -329,11 +335,13 @@ pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
             o.crop_resolution = crate::widgets::fmt_num2(v);
         }
     }
+    swapped
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Modifiers;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
 
     #[test]
@@ -383,6 +391,26 @@ mod tests {
         assert_eq!(custom_ratio_fields(&options, (0.0, 0.0)), (4.0, 3.0));
         let (width, height) = crate::chrome_ui::crop_ratio(&options.crop_ratio, 0.0, 0.0).unwrap_or_default();
         assert_eq!(width / height, 4.0 / 3.0);
+    }
+
+    #[test]
+    fn clear_ratio_discards_complete_and_partial_ratio_fields() {
+        for (width, height) in [(16.0, 9.0), (4.0, 0.0), (0.0, 3.0)] {
+            let mut options = ToolOptions::default();
+            set_custom_ratio_fields(&mut options, width, height);
+            clear_ratio(&mut options);
+            assert!(options.crop_ratio.is_empty());
+            assert_eq!(custom_ratio_fields(&options, (300.0, 200.0)), (0.0, 0.0));
+            set_custom_ratio_fields(&mut options, 5.0, 0.0);
+            assert!(options.crop_ratio.is_empty(), "entering a new width must not reuse the old height");
+            assert_eq!(custom_ratio_fields(&options, (300.0, 200.0)), (5.0, 0.0));
+        }
+        let mut options = whr("4 in", "6 in", "300", PX_PER_IN);
+        clear_ratio(&mut options);
+        assert_eq!(
+            (options.crop_ratio.as_str(), options.crop_width.as_str(), options.crop_height.as_str(), options.crop_resolution.as_str()),
+            (WHR, "", "", "")
+        );
     }
 
     #[test]
@@ -507,6 +535,32 @@ mod tests {
         app2.ui.tool = Tool::Brush;
         ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::I, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }));
         assert!(!keys(&mut app2, &ctx));
+    }
+
+    /// ⇧I is the Eyedropper group's key even with the Crop tool, not Front Image: with no frame
+    /// yet, over the untouched default frame and with a crop in progress.
+    #[test]
+    fn shift_i_with_the_crop_tool_switches_to_the_eyedropper() {
+        for frame in ["none", "default", "in progress"] {
+            let mut app = app(SampleType::U8);
+            if frame != "none" {
+                crate::crop_ui::ensure_frame(&mut app);
+                assert!(app.ui.crop_rect.is_some() && app.crop.default_frame, "{frame}");
+            }
+            if frame == "in progress" {
+                app.ui.crop_rect = Some([20.0, 10.0, 120.0, 90.0]);
+                app.crop.default_frame = false;
+            }
+            let ratio = app.ui.tool_options.crop_ratio.clone();
+            let ctx = egui::Context::default();
+            ctx.input_mut(|i| {
+                // Only the event holds ⇧, as with a control-channel `ui.key` (the frame's state lags).
+                i.events.push(egui::Event::Key { key: egui::Key::I, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+            });
+            crate::shortcuts::handle(&mut app, &ctx);
+            assert_eq!(app.ui.tool, Tool::Eyedropper, "{frame}");
+            assert_eq!(app.ui.tool_options.crop_ratio, ratio, "{frame}");
+        }
     }
 
     /// Committing a W x H x Resolution crop resamples the frame's area to exactly W x H px and sets
