@@ -503,12 +503,20 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // An open menu owns the keyboard (arrows, ↩, Esc), like a native menu; so does the menu bar
     // once Alt or F10 put the keyboard on it (#4988), and an open dropdown list, whose letters
     // pick an option rather than a tool (#1481). A command shortcut (⌘D, F7…) takes the keyboard
-    // off the bar first and runs, as with a native menu bar (#6573).
+    // off the bar first and runs, as with a native menu bar (#6573), and closes an open menu or
+    // list (or a panel's options menu, any popup) and runs, as Photoshop's menus do (#9065).
     crate::menu_keys::leave_for_shortcut(ctx);
     if app.ui.dialogs.is_empty() && app.discard.is_none() && crate::type_tool::commit_shortcut(app, ctx) {
         return false;
     }
+    crate::menu_keys::close_for_shortcut(ctx);
     if crate::menu_nav::is_open(ctx) || crate::menu_keys::is_focused(ctx) || crate::widgets::dropdown_list_open(ctx) {
+        return false;
+    }
+    // A Keyboard Shortcuts field waiting for keys records the key pressed, whatever it is: no
+    // shortcut runs first, not even the view keys that work under dialogs (#8965: ⌘0, ⌘+ zoomed
+    // instead of being recorded).
+    if crate::prefs_ui::capturing_shortcut(app) {
         return false;
     }
     // ⌘Z in a filter or adjustment dialog steps the dialog's settings, not the document (#4697).
@@ -685,9 +693,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     // Backspace/Delete. Once the last anchor is removed, regular Undo works again.
     if app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         let mods = ctx.input(|i| i.modifiers);
-        let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
-            .and_then(|shortcut| parse(&shortcut))
-            .is_some_and(|shortcut| consume(ctx, &shortcut));
+        // Not while a Free Transform or Crop box owns Undo: Edit › Undo steps the box.
+        let command_undo = !crate::vector_ui::box_steps(app, "edit.undo")
+            && effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+                .and_then(|shortcut| parse(&shortcut))
+                .is_some_and(|shortcut| consume(ctx, &shortcut));
         let remove = !mods.command
             && !mods.ctrl
             && !mods.shift

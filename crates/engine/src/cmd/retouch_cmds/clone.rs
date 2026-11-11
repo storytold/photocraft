@@ -14,6 +14,9 @@ pub(super) fn clone_mapping(s: &Session, p: &Value, stroke: &Stroke, cmd: &str) 
     crate::presets::clone_source::resolve(s, p, (f.x, f.y), cmd).map(|(map, _)| map)
 }
 
+/// Most source pixels one clone sample may read (a 8192 x 8192 window); real strokes stay far below.
+const MAX_CLONE_SOURCE_PIXELS: u64 = 1 << 26;
+
 /// Source pixels for destination `rect`: a translated read, or a bilinear resample when the
 /// clone source is scaled, rotated or flipped.
 #[allow(clippy::too_many_arguments)]
@@ -41,13 +44,13 @@ pub(super) fn clone_sample(
         r.rect = rect;
         return Ok(r);
     }
-    let source_rect = map.source_rect(rect);
-    // A small destination can request an enormous source when scaled down. The stroke's
-    // coverage budget alone does not bound that read; reject it before allocating native pixels.
-    if u64::from(source_rect.width()).saturating_mul(u64::from(source_rect.height())) > super::MAX_STROKE_PIXELS {
-        return Err(bad(cmd, "transformed clone source exceeds the sampling budget; increase source scale or reduce the brush"));
+    // A small W/H scale makes the source window enormous for a bounded destination: refuse it
+    // before the dense read allocates width x height x channels floats.
+    let sr = map.source_rect(rect);
+    if u64::from(sr.width()) * u64::from(sr.height()) > MAX_CLONE_SOURCE_PIXELS {
+        return Err(bad(cmd, "the scaled clone source covers too large an area; raise the clone source's W/H or use a smaller brush"));
     }
-    let src = read(source_rect)?;
+    let src = read(sr)?;
     Ok(crate::presets::clone_source::resample(&src, rect, map, alpha_index(&source.sample_format(surf))))
 }
 
