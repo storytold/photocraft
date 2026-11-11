@@ -10,6 +10,7 @@ mod color_count;
 pub use angle_dial::{angle_dial_line, angle_dial_row};
 pub use color_count::color_count_row;
 mod type_ahead;
+pub use type_ahead::close_list as close_dropdown_list;
 pub use type_ahead::list_open as dropdown_list_open;
 
 mod buttons;
