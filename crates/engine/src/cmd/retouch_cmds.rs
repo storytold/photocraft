@@ -268,7 +268,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","pattern":id|name?=Patterns panel current,"scale":1..1000 %=100,"angle":deg=0,"aligned":bool=true,"impressionist":bool=false,"mode":"normal|multiply|…"="normal","phase":[px,py]? → {"damage","phase","aligned","pattern"}"#
+                r#","pattern":id|name?=Patterns panel current,"scale":1..1000 %=100,"angle":deg=0,"aligned":bool=true,"impressionist":bool=false,"mode":"normal|multiply|…|behind (paints beneath existing pixels)"="normal","phase":[px,py]? → {"damage","phase","aligned","pattern"}"#
             ),
             enabled: pattern_stamp::enabled,
             run: pattern_stamp::run,
@@ -383,7 +383,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Smudge",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","strength":1..100=50,"fingerPainting":bool=false (starts with the foreground colour),"sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","strength":1..100=50,"fingerPainting":bool=false (starts with the foreground colour),"sampleAllLayers":bool=false,"mode":"normal|darken|lighten|hue|saturation|color|luminosity"="normal" (how the smudged colour replaces the pixel; 8-bit RGB, else Normal)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.smudge"),
             journal: true,
@@ -406,7 +408,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightMedium","area":0..100=50,"tolerance":0..100=0,"opacity":0..100=100 (overrides the common 1..100: how strongly the history state is painted; 0 changes nothing; no flow, mode is Normal)"#
+                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size or colour mode is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightMedium","area":0..100=50,"tolerance":0..100=0,"opacity":0..100=100 (overrides the common 1..100: how strongly the history state is painted; 0 changes nothing; no flow, mode is Normal)"#
             ),
             enabled: has_pixel_layer,
             run: art_history::run,
