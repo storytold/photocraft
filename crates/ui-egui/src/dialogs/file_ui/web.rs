@@ -177,6 +177,10 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         let l1 = if ratio > 1.001 { format!("{l1}  ·  Proxy preview") } else { l1 };
         ui.add(egui::Label::new(egui::RichText::new(l1).color(t.text).size(11.5)).truncate());
         ui.add(egui::Label::new(egui::RichText::new(l2).color(t.text_dim).size(11.0)).truncate());
+        // Before anything is written: slices past the resolve limit are left out of the export.
+        if let Some(w) = photocraft_doc::slices::overflow_warning(&doc) {
+            ui.add(egui::Label::new(egui::RichText::new(w).color(t.warning).size(11.0)).truncate());
+        }
     });
 }
 
