@@ -69,7 +69,7 @@ fn a_pixel_layer_or_non_rectangle_shape_leaves_the_dialog_available() {
         if other_shape {
             shape(&mut app, "ellipse", 0.0);
         } else {
-            app.run("layer.new", json!({"name": "Pixels"})).unwrap();
+            app.run("layer.new.layer", json!({"name": "Pixels"})).unwrap();
         }
         let before = state(&app);
         gesture(&mut app, point, point);
