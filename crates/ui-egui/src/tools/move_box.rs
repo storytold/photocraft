@@ -2,11 +2,11 @@
 //! that starts where no layer would be picked (an empty, transparent spot, or the pasteboard
 //! outside the canvas) draws a box instead of moving anything. Releasing selects every layer whose
 //! content touches the box (`layer.selectInRect`; Auto-Select: Group selects their outermost
-//! groups), ⇧ adds them to the layers already selected. A click on an empty spot deselects every
-//! layer on the pasteboard (`select.deselectLayers`), so nothing is left to move; ⇧-click keeps
-//! the selection. A click on transparent pixels inside the canvas does not deselect. A click on a
-//! locked layer (position-locked, fully locked or the Background) selects it, as in Photoshop,
-//! and moves nothing.
+//! groups), ⇧ adds them to the layers already selected. A click on the pasteboard deselects every
+//! layer (`select.deselectLayers`, one undoable step), so nothing is left to move; ⇧-click keeps
+//! the selection, and a click on transparent pixels inside the canvas does not deselect. A release
+//! within a few screen points of the press is still a click. Locked-only hits follow
+//! `tool_input.rs` (Move Auto-Select clicks through Position and All locks).
 
 use serde_json::json;
 
@@ -20,15 +20,18 @@ pub(crate) struct LayerBox {
     end: [f64; 2],
     /// ⇧ at the press: add to the layer selection.
     add: bool,
-    /// The press picked a locked layer: a click keeps that selection.
-    picked: bool,
+    /// The actual Move tool skips Position locks. Temporary Move keeps ordinary rectangle picks.
+    move_auto_select: bool,
+    /// An empty plain marquee from a locked-only hit clears the selection.
+    clear_on_empty: bool,
 }
 
-/// A Move-tool press that Auto-Select found nothing movable under: start the marquee at `p`.
-/// `picked`: the press selected the locked layer under it. The press started a Move gesture's
-/// snapping and ⇧/⌥ handling, which a marquee has none of.
-pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, picked: bool) {
-    app.layer_box = Some(LayerBox { start: p, end: p, add, picked });
+/// Start the marquee at `p` after an empty or locked-only hit. With `move_auto_select`, the
+/// real Move tool skips effective Position as well as All locks. Set `clear_on_empty` for its
+/// locked-only press so an empty replacement marquee clears the selection.
+/// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
+pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
+    app.layer_box = Some(LayerBox { start: p, end: p, add, move_auto_select, clear_on_empty });
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
     app.move_mods = Default::default();
@@ -57,13 +60,10 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
             let b = LayerBox { end: [x, y], ..*b };
             app.layer_box = None;
             let (w, h) = (b.end[0] - b.start[0], b.end[1] - b.start[1]);
-            // A click (released within a few screen points of the press): on a locked layer it
-            // keeps the layer the press selected; on an empty spot it deselects every layer,
-            // unless ⇧ (adding), nothing is selected, or the click is inside the canvas.
+            // A click (released within a few screen points of the press) on the pasteboard
+            // deselects every layer, unless ⇧ (adding) or nothing is selected. A click inside the
+            // canvas changes nothing here: a locked-only press already cleared the selection.
             if w.hypot(h) * f64::from(app.point_zoom()) < 3.0 {
-                if b.picked {
-                    return true;
-                }
                 let selected = app.session.active().is_some_and(|st| st.active_layer.is_some() || !st.selected_layers.is_empty());
                 let outside = app.session.active().is_some_and(|st| {
                     let rect = st.doc.bounds();
@@ -85,7 +85,10 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
             }
             let target = app.ui.tool_options.move_target.clone();
             let mode = if b.add { "add" } else { "replace" };
-            let p = json!({"x": b.start[0], "y": b.start[1], "width": w, "height": h, "target": target, "mode": mode});
+            let p = json!({
+                "x": b.start[0], "y": b.start[1], "width": w, "height": h, "target": target, "mode": mode,
+                "moveAutoSelect": b.move_auto_select, "clearOnEmpty": b.clear_on_empty,
+            });
             if let Err(e) = app.run("layer.selectInRect", p) {
                 app.ui.status = e;
                 app.ui.status_error = true;
@@ -98,8 +101,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
 /// The marquee as marching ants.
 pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(b) = app.layer_box else { return };
-    let r = egui::Rect::from_two_pos(xf.to_screen(b.start[0] as f32, b.start[1] as f32), xf.to_screen(b.end[0] as f32, b.end[1] as f32));
-    crate::tool_feedback::draw_ants(painter, &[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true);
+    crate::tool_feedback::draw_ants(painter, &crate::canvas::doc_box_corners(xf, b.start, b.end), true);
 }
 
 #[cfg(test)]
@@ -180,71 +182,8 @@ mod tests {
         assert_eq!(app.session.active().unwrap().selected_layers(), vec![ids[1]]);
         app.session.execute("select.deselectLayers", json!({})).unwrap();
         let n = app.session.active().unwrap().history.entries().len();
-        drag(&mut app, [32.0, 50.0], [32.0, 50.0], egui::Modifiers::NONE);
+        drag(&mut app, [-10.0, -10.0], [-10.0, -10.0], egui::Modifiers::NONE);
         assert_eq!(app.session.active().unwrap().history.entries().len(), n);
-    }
-
-    /// A click on the locked Background selects it, as in Photoshop; nothing moves and no lock
-    /// dialog opens.
-    #[test]
-    fn a_click_on_the_locked_background_selects_it() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
-        app.sync_views();
-        app.run("layer.new.layer", json!({})).unwrap();
-        app.run("select.rect", json!({"x": 40, "y": 8, "width": 16, "height": 16})).unwrap();
-        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        app.run("select.deselect", json!({})).unwrap();
-        let paint = app.session.active().unwrap().active_layer.unwrap();
-        let bg = app.session.active().unwrap().doc.layers[0].id;
-        app.ui.tool = Tool::Move;
-        app.ui.tool_options.move_auto_select = true;
-        drag(&mut app, [8.0, 8.0], [8.0, 8.0], egui::Modifiers::NONE);
-        let st = app.session.active().unwrap();
-        assert_eq!(st.active_layer, Some(bg), "the Background was picked");
-        assert_eq!(st.selected_layers(), vec![bg]);
-        assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
-        assert_eq!(st.doc.layer(paint).unwrap().surface().unwrap().content_bounds().x0, 40, "nothing moved");
-        assert!(app.layer_box.is_none());
-        // A fully locked top hit must not click through to the unlocked layer underneath.
-        app.run("layer.setProps", json!({"layer": paint, "locks": {"all": true}})).unwrap();
-        drag(&mut app, [48.0, 16.0], [48.0, 16.0], egui::Modifiers::NONE);
-        assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint]);
-        assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
-    }
-
-    /// A click, or a drag, on a position-locked layer selects it, as in Photoshop, and does not
-    /// move it.
-    #[test]
-    fn a_click_on_a_position_locked_layer_selects_it_without_moving_it() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
-        app.sync_views();
-        let mut ids = Vec::new();
-        for x in [8, 40] {
-            app.run("layer.new.layer", json!({})).unwrap();
-            app.run("select.rect", json!({"x": x, "y": 8, "width": 16, "height": 16})).unwrap();
-            app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-            ids.push(app.session.active().unwrap().active_layer.unwrap());
-        }
-        app.run("select.deselect", json!({})).unwrap();
-        let (locked, other) = (ids[0], ids[1]);
-        app.run("layer.select", json!({"layer": locked.0})).unwrap();
-        app.run("layer.lockLayers", json!({"position": true})).unwrap();
-        assert!(app.session.active().unwrap().doc.effective_locks(locked).position);
-        app.run("layer.select", json!({"layer": other.0})).unwrap();
-        app.ui.tool = Tool::Move;
-        app.ui.tool_options.move_auto_select = true;
-        let x0 = |app: &PhotocraftApp| app.session.active().unwrap().doc.layer(locked).unwrap().surface().unwrap().content_bounds().x0;
-        drag(&mut app, [16.0, 16.0], [16.0, 16.0], egui::Modifiers::NONE);
-        let st = app.session.active().unwrap();
-        assert_eq!(st.active_layer, Some(locked), "the position-locked layer was picked");
-        assert_eq!(st.selected_layers(), vec![locked]);
-        assert_eq!(x0(&app), 8, "the click moved nothing");
-        assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
-        // A drag from it still moves nothing.
-        drag(&mut app, [16.0, 16.0], [30.0, 16.0], egui::Modifiers::NONE);
-        assert_eq!(x0(&app), 8, "the drag moved nothing");
     }
 
     /// #10665: a fill layer, or pixels hanging past the canvas edge, aren't drawn on the
