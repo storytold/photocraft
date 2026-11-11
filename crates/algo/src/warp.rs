@@ -161,7 +161,8 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
     // part of the rect is warped. An opaque default keeps the whole rect (see `warp_source_rect`).
     // Only a stacked fold narrows: its clear parts composite to nothing, so leaving them out never
     // changes what is drawn. In row order the last cell drawn replaces what is under it, so a clear
-    // cell still counts there (lens corrections and distortions warp as before).
+    // cell still counts there (lens corrections and distortions warp as before). Callers that size a
+    // row-order rect by their content narrow it themselves (Perspective Warp, panorama and Auto-Align).
     let src_rect = match fold {
         Fold::Stack(_) => crate::transform::warp_source_rect(src, src_rect),
         Fold::Rows => src_rect,

@@ -197,7 +197,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
     let (layer, surface, _) = crate::distort_ui::active_pixels(app)?;
     let st = app.session.active().ok_or("no document")?;
     let l = st.doc.layer(layer).ok_or("no layer")?;
-    let bounds = surface.content_bounds();
+    // Sized as the command sizes it: by what is covered (#10639).
+    let bounds = surface.covered_bounds();
     if bounds.is_empty() {
         return Err("Could not use Puppet Warp: the layer is empty".into());
     }

@@ -591,3 +591,23 @@ fn puppet_warps_white_and_black_clear_pixels_alike() {
         assert_alike(&a, &b, &format!("{interp:?}"));
     }
 }
+
+#[test]
+fn puppet_command_warps_white_and_black_clear_pixels_alike() {
+    let pins = json!({"pins": [{"src": [16, 16], "dst": [20, 12]}, {"src": [12, 12], "dst": [12, 12]}], "density": "more"});
+    let run = |clear: f32| {
+        let mut s = session(8);
+        s.edit("paint", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let surf = l.surface_mut().unwrap();
+            surf.fill_rect(Rect::new(0, 0, 32, 32), &[clear, clear, clear, 0.0]);
+            surf.fill_rect(Rect::new(12, 12, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let r = s.execute(PUPPET, pins.clone()).unwrap();
+        assert_eq!(r["changed"], true);
+        active_surface(&s)
+    };
+    assert_alike(&run(1.0), &run(0.0), "puppet command");
+}
