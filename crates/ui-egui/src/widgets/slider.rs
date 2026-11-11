@@ -1,6 +1,7 @@
 use super::fields::{FieldOpts, VALUE_FIELD_H, value_field_in};
 use super::panel::surface;
 use super::scrub::scrub_label_within;
+use super::text_field::TEXT_FIELD_H;
 use super::{Color32, Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, vec2};
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
@@ -142,7 +143,7 @@ pub fn second_click(ui: &Ui, resp: &Response) -> bool {
 fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, TEXT_FIELD_H), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
     if let Some(p) = resp.interact_pointer_pos()
