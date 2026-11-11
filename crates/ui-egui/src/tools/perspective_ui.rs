@@ -474,19 +474,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     } else {
         ui.label(crate::i18n::trn(crate::i18n::current(), s.planes.len() as u64, "{n} plane", "{n} planes"));
-        if ui.button(tl!("Link Edges")).on_hover_text(tl!("Join matching neighbouring edges within 8 document pixels; preserves other planes")).clicked() {
-            match weld_adjacent_edges(&mut s.planes, 8.0) {
-                Ok(count) => {
-                    s.drag = None;
-                    s.update_grid();
-                    let count = count.to_string();
-                    app.ui.status = crate::i18n::fmt(tl!("Edges linked: {count}"), &[("count", &count)]);
-                }
-                Err(error) => app.ui.status = crate::i18n::fmt(tl!("Perspective Warp: {error}"), &[("error", error)]),
-            }
-        }
-        let linked = linked_edge_count(&s.planes).to_string();
-        ui.label(crate::i18n::fmt(tl!("Edges linked: {count}"), &[("count", &linked)]));
         if ui.button(tl!("Remove Planes")).clicked() {
             s.planes.clear();
             s.update_grid();
@@ -863,10 +850,4 @@ mod agent_control_tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), history);
     }
 
-    #[test]
-    fn linked_edge_count_status_uses_formatted_localized_template() {
-        let label = crate::i18n::fmt(tl!("Edges linked: {count}"), &[("count", "2")]);
-        assert!(label.contains('2'));
-        assert!(!label.contains("{count}"));
-    }
 }

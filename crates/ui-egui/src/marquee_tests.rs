@@ -803,7 +803,7 @@ fn shift_constrains_a_floating_selection_drag() {
 }
 
 /// ⌘-drag cuts the selected pixels into a floating piece (`select.float`): shown at the pointer
-/// while dragging, moved again by plain drags, put back by Undo, dropped by Deselect.
+/// while dragging, moved again by ⌘-drags, put back by Undo, dropped by Deselect.
 #[test]
 fn cmd_drag_floats_the_selected_pixels() {
     use crate::canvas::{ToolEvent, tool_event};
@@ -819,8 +819,8 @@ fn cmd_drag_floats_the_selected_pixels() {
     tool_event(&mut app, ToolEvent::Up { x: 35.0, y: 20.0 }, Modifiers::COMMAND);
     assert_eq!(offset(&app), Some((15, 0)));
     assert_eq!(alpha(&doc(&app), 12, 20), 1.0, "the document waits for the drop");
-    // A plain drag on the piece moves it again.
-    drag(&mut app, [30.0, 20.0], [30.0, 30.0], Modifiers::NONE);
+    // A ⌘-drag on the piece moves it again.
+    drag(&mut app, [30.0, 20.0], [30.0, 30.0], Modifiers::COMMAND);
     assert_eq!(offset(&app), Some((15, 10)));
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     // Undo puts it back.
@@ -834,6 +834,29 @@ fn cmd_drag_floats_the_selected_pixels() {
     assert!(alpha(&d, 12, 12) == 0.0 && alpha(&d, 26, 21) == 1.0 && alpha(&d, 44, 39) == 1.0);
     let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
     assert_eq!(labels.first().map(String::as_str), Some("Move"), "{labels:?}");
+}
+
+/// #11368: after the Move tool moves the selected pixels, a plain marquee drag inside the
+/// selection moves only the outline, as in Photoshop: the pixels are dropped where they are (one
+/// Move step), then the outline moves on its own (one Move Selection step).
+#[test]
+fn a_marquee_drag_after_moving_pixels_moves_only_the_outline() {
+    let (mut app, layer) = painted();
+    let alpha = |app: &PhotocraftApp, x, y| app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().rgba(x, y)[3];
+    let sel = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
+    let floating = |app: &PhotocraftApp| photocraft_engine::float_cmds::floating(app.session.active().unwrap()).is_some();
+    let steps = app.session.active().unwrap().history.past_len();
+    app.ui.tool = Tool::Move;
+    drag(&mut app, [20.0, 20.0], [35.0, 20.0], Modifiers::NONE);
+    assert!(floating(&app), "the Move tool leaves the moved pixels floating");
+    app.ui.tool = Tool::RectMarquee;
+    drag(&mut app, [30.0, 20.0], [30.0, 30.0], Modifiers::NONE);
+    assert!(!floating(&app), "the press dropped the piece");
+    assert_eq!(sel(&app), Some(Rect::new(25, 20, 45, 40)), "the outline moved down");
+    assert!(alpha(&app, 40, 15) == 1.0 && alpha(&app, 40, 35) == 0.0, "the pixels stay where the Move tool left them");
+    assert_eq!(alpha(&app, 12, 20), 0.0, "the cut stays cut");
+    let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
+    assert_eq!(labels, ["Move", "Move Selection"]);
 }
 
 /// Through the real canvas (mouse events): a drag inside the ants moves the selection.
@@ -1070,7 +1093,8 @@ fn selected_pixels_move_off_the_background_but_not_off_a_fully_locked_layer() {
 
 /// Photoshop's cursor over a selection: the move cursor where a marquee press moves the outline,
 /// scissors where ⌘ (or the Move tool) cuts the selected pixels, a double arrow where ⌥ copies
-/// them, a hollow arrowhead while they are dragged, and a plain arrow over the floating piece.
+/// them, a hollow arrowhead while they are dragged, and a plain arrow over the floating piece where
+/// a press would drag it (the Move tool, ⌘).
 #[test]
 fn selection_cursor_follows_the_modifiers_and_the_floating_piece() {
     use crate::canvas::{SelCursor, selection_cursor};
@@ -1094,7 +1118,8 @@ fn selection_cursor_follows_the_modifiers_and_the_floating_piece() {
     tool_event(&mut app, ToolEvent::Move { x: 35.0, y: 20.0, pressure: 1.0 }, Modifiers::COMMAND);
     assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], Modifiers::COMMAND), Some(SelCursor::Dragging));
     tool_event(&mut app, ToolEvent::Up { x: 35.0, y: 20.0 }, Modifiers::COMMAND);
-    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], none), Some(SelCursor::Piece));
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], none), Some(SelCursor::Outline), "a plain drag moves the outline (#11368)");
+    assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], Modifiers::COMMAND), Some(SelCursor::Piece));
     assert_eq!(selection_cursor(&app, Tool::Move, [35.0, 20.0], none), Some(SelCursor::Piece));
     assert_eq!(selection_cursor(&app, Tool::RectMarquee, [35.0, 20.0], cmd_alt), Some(SelCursor::Copy), "a copy of the piece");
     assert_eq!(selection_cursor(&app, Tool::RectMarquee, inside, none), None, "where it was cut from");

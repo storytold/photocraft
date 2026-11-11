@@ -127,8 +127,9 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     if transform && (target.is_object() || target == "quickMask") {
         return false;
     }
-    // Several layers selected: one box moves them all, the Background left out (#6501). It doesn't
-    // warp, and doesn't distort while editable type is among them.
+    // Several layers selected: one box moves them all (#6501); with the Background among them it
+    // refuses as locked when it opens (#11101). It doesn't warp, and doesn't distort while
+    // editable type is among them.
     if transform {
         let targets = photocraft_engine::transform_cmds::selection_targets(st);
         // Judged on the layers the box moves, linked ones included (#11217): one linked layer
