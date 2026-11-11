@@ -1167,7 +1167,10 @@ fn convert_to_layers_draws_a_grouped_pixel_layer_as_an_ungrouped_one() {
         convert_to_layers(&mut s);
         flat(&s)
     };
-    assert_eq!(max_diff(&unpacked(true), &unpacked(false)), 0.0);
+    // The group composites its layer in float: a rounding apart, where a different sampling
+    // is whole levels apart.
+    let d = max_diff(&unpacked(true), &unpacked(false));
+    assert!(d < 1e-6, "{d}");
 }
 
 #[test]
