@@ -35,7 +35,7 @@ pub enum Pick {
     Mode(BlendMode),
     /// Painting tools only: paint transparency.
     Clear,
-    /// Brush and Pencil: paint behind the layer's pixels.
+    /// Brush, Pencil and Pattern Stamp: paint behind the layer's pixels.
     Behind,
 }
 
@@ -211,10 +211,19 @@ fn set_tool_mode(app: &mut PhotocraftApp, mode: Option<BlendMode>) {
         _ => {}
     }
     crate::paint_mouse::sync_tool_brush(app);
+    // Behind is one of the painting modes in the reference application: picking any other mode
+    // (Clear too) leaves it, in the same one command (#11896). With Behind off, as before.
+    let mut brush = serde_json::Map::new();
     if let Some(m) = mode
         && let Ok(m) = serde_json::to_value(m)
     {
-        let _ = app.run("tools.setBrush", json!({ "brush": { "mode": m } }));
+        brush.insert("mode".into(), m);
+    }
+    if app.session.tools.brush.behind {
+        brush.insert("behind".into(), json!(false));
+    }
+    if !brush.is_empty() {
+        let _ = app.run("tools.setBrush", json!({ "brush": brush }));
     }
 }
 
@@ -319,3 +328,7 @@ mod brush_behind_key_tests;
 #[cfg(test)]
 #[path = "../color_replacement_blend_keys_tests.rs"]
 mod color_replacement_blend_keys_tests;
+
+#[cfg(test)]
+#[path = "../brush_blend_keys_behind_tests.rs"]
+mod brush_blend_keys_behind_tests;

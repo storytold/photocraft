@@ -91,6 +91,55 @@ fn closing_the_camera_raw_window_cancels() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
+/// Coming back to PhotoCraft (⌘Tab, the Dock) can put the main window over Camera Raw's, or
+/// leave Camera Raw minimized: the main window gaining focus, or a click on its dimmed surface,
+/// restores Camera Raw's window and focuses it, once per activation.
+#[test]
+fn the_main_window_gaining_focus_or_a_click_raises_the_camera_raw_window() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    ctx.set_embed_viewports(false);
+    // A multi-window backend for this thread: Camera Raw gets a window of its own, as on a desktop,
+    // and the commands its window receives are recorded.
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = sent.clone();
+    egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
+        let id = immediate.ids.this;
+        let mut callback = immediate.viewport_ui_cb;
+        let input = egui::RawInput { viewport_id: id, viewports: std::iter::once((id, egui::ViewportInfo::default())).collect(), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| callback(ui));
+        out.textures_delta.clear();
+        if let Some(v) = out.viewport_output.get(&id) {
+            record.lock().unwrap().extend(v.commands.iter().cloned());
+        }
+    });
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+    let raised = [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus];
+    let frame = |app: &mut PhotocraftApp, focused: bool, events: Vec<egui::Event>| {
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(focused);
+        let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
+        let mut commands: Vec<_> = std::mem::take(&mut *sent.lock().unwrap());
+        commands.extend(out.viewport_output.get(&window).map(|v| v.commands.clone()).unwrap_or_default());
+        // Only the raising commands: the window also gets its own setup (title, size) from egui.
+        commands.retain(|c| matches!(c, egui::ViewportCommand::Minimized(_) | egui::ViewportCommand::Focus));
+        commands
+    };
+    assert!(frame(&mut app, false, Vec::new()).is_empty(), "Camera Raw's window is in front");
+    assert_eq!(frame(&mut app, true, Vec::new()), raised, "the main window came forward");
+    assert!(frame(&mut app, true, Vec::new()).is_empty(), "once per activation, so Camera Raw's own focus isn't fought");
+    let at = egui::pos2(400.0, 300.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    frame(&mut app, true, vec![egui::Event::PointerMoved(at), button(true)]);
+    let after_click = frame(&mut app, true, vec![button(false)]);
+    assert_eq!(after_click, raised, "a click on the dimmed main window");
+}
+
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
 fn worker_app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -111,7 +160,7 @@ fn finish_worker(d: &mut CameraRawDialog, ctx: &egui::Context) {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    panic!("the Camera Raw preview worker never finished");
+    panic!("the RAW Develop preview worker never finished");
 }
 
 /// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
@@ -200,7 +249,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
     };
     let fail = |app: &mut PhotocraftApp| {
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(Err("Camera Raw preview failed".to_string())).unwrap();
+        tx.send(Err("RAW Develop preview failed".to_string())).unwrap();
         let d = app.camera_raw.as_mut().unwrap();
         d.pending = Some(rx);
         d.dirty = false;
@@ -213,7 +262,7 @@ fn a_worker_failure_is_reported_until_the_next_frame() {
     frame(&mut app);
     fail(&mut app);
     frame(&mut app);
-    assert!(app.ui.status_error && app.ui.status == "Camera Raw preview failed", "{}", app.ui.status);
+    assert!(app.ui.status_error && app.ui.status == "RAW Develop preview failed", "{}", app.ui.status);
     // No new frame yet: the error stays.
     frame(&mut app);
     assert!(app.ui.status_error);
@@ -372,7 +421,7 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
-    assert!(r.get("filter").is_some(), "contrast is applied as a Camera Raw step: {r}");
+    assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
     assert!(app.camera_raw.is_none());
     assert_eq!(app.session.documents().len(), 1);
     let st = app.session.active().unwrap();
@@ -705,7 +754,7 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method };
+    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
@@ -729,7 +778,7 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!((r["document"].as_u64(), r["redeveloped"].as_bool(), r.get("filter")), (Some(0), Some(false), None), "{r}");
-    assert_eq!(r.get("defaults"), None, "ProPhoto, 16-bit: no Camera Raw Default to apply: {r}");
+    assert_eq!(r.get("defaults"), None, "ProPhoto, 16-bit: no RAW Develop Default to apply: {r}");
     // Preference off: raws open straight away.
     app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
     app.open_bytes("c.dng", &dng).unwrap();
@@ -745,7 +794,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 path: None,
                 bytes: None,
                 developed_with: Default::default(),
-                demosaic: Default::default()
+                demosaic: Default::default(),
+                crop: None
             }
         )
         .is_err()
@@ -891,7 +941,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["defaults"], json!(["sharpenFor", "colorSpace"]), "{r}");
-    assert!(r.get("filter").is_some(), "Sharpen For is a Camera Raw step: {r}");
+    assert!(r.get("filter").is_some(), "Sharpen For is a RAW Develop step: {r}");
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
     assert_eq!(st.saved_revision, st.revision);
@@ -985,6 +1035,74 @@ fn a_rating_only_sidecar_is_left_alone() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 10}, "commit": true}})).unwrap().unwrap();
     assert!(written.lock().unwrap().is_empty(), "nor with a change");
     assert_eq!(std::fs::read_to_string(sidecar_path(&raw_path)).unwrap(), bridge);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #9985: the crop of a Lightroom sidecar crops the opened raw (with the dialog's Open and
+/// without the dialog), and neither its edges nor the raw's file name are named as unsupported.
+/// A straightened crop isn't applied and is named. PhotoCraft's own sidecar keeps the crop.
+#[test]
+fn a_sidecar_crop_crops_the_opened_raw() {
+    let lightroom = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:RawFileName="IMG_0100.cr2" crs:HasCrop="True" crs:CropTop="0.25" crs:CropLeft="0.125" crs:CropBottom="0.75" crs:CropRight="0.625" crs:CropAngle="0"/></rdf:RDF></x:xmpmeta>"#;
+    let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("crop", Some(lightroom));
+    let ctx = egui::Context::default();
+    let size = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.size.width, st.doc.size.height));
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    assert!(app.ui.status.contains("IMG_0100.xmp") && !app.ui.status.contains("not supported"), "{}", app.ui.status);
+    assert_eq!(size(&app), Some((48, 32)), "the dialog previews the whole frame");
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(size(&app), Some((24, 16)), "Open crops the 48x32 frame to x 6..30, y 8..24");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.saved_revision, st.revision, "the crop is part of opening: unmodified");
+    assert!(written.lock().unwrap().is_empty(), "Lightroom's sidecar is kept");
+    app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
+    app.open_file(&raw_path, &dng).unwrap();
+    assert_eq!(size(&app), Some((24, 16)), "without the dialog too");
+    app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": true})).unwrap();
+    // Straightened: the rectangle is measured on the turned frame, so nothing is cropped.
+    std::fs::write(sidecar_path(&raw_path), lightroom.replace(r#"crs:CropAngle="0""#, r#"crs:CropAngle="1.38""#)).unwrap();
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    assert!(app.ui.status.contains("CropAngle") && !app.ui.status.contains("RawFileName"), "{}", app.ui.status);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(size(&app), Some((48, 32)));
+    // PhotoCraft's own sidecar: a changed setting rewrites it, with the crop it was opened with.
+    let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
+    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop))).unwrap();
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
+    assert_eq!(size(&app), Some((24, 16)));
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 1);
+    let mut back = CameraRaw::default();
+    let r = photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
+    assert_eq!((back.contrast, r.crop), (15.0, Some(crop)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #9985 with the filmstrip: raws opened together each open with their own sidecar's crop, also
+/// the one that is never shown and the one that was shown and left.
+#[test]
+fn filmstrip_raws_open_with_their_sidecar_crops() {
+    let lightroom = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True" crs:CropTop="0.25" crs:CropLeft="0.125" crs:CropBottom="0.75" crs:CropRight="0.625" crs:CropAngle="0"/></rdf:RDF></x:xmpmeta>"#;
+    let (mut app, dng, dir, raw_path, _) = raw_with_sidecar("filmcrop", Some(lightroom));
+    let paths: Vec<String> = (1..3).map(|i| dir.join(format!("IMG_010{i}.cr2")).to_string_lossy().into_owned()).collect();
+    for p in &paths {
+        std::fs::write(p, &dng).unwrap();
+        std::fs::write(sidecar_path(p), lightroom).unwrap();
+    }
+    let ctx = egui::Context::default();
+    app.open_file(&raw_path, &dng).unwrap();
+    for p in &paths {
+        app.open_file(p, &dng).unwrap();
+    }
+    assert_eq!(app.raw_shelf.len(), 3);
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
+    let sizes: Vec<_> = app.session.documents().iter().map(|st| (st.doc.size.width, st.doc.size.height)).collect();
+    assert_eq!(sizes, vec![(24, 16); 3], "shown, shown and left, and never shown: all cropped");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

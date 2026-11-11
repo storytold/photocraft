@@ -468,7 +468,7 @@ fn every_size_change_scales_the_dual_tip_and_keeps_its_proportion() {
     s.execute("tools.setBrush", json!({"brush": {"size": 100, "dualBrush": {"enabled": true, "size": 20}}})).unwrap();
     let sizes = |s: &Session| (s.tools.brush.size, s.tools.brush.dual_brush.size);
     s.execute("tools.decreaseBrushSize", json!({})).unwrap();
-    assert_eq!(sizes(&s), (80.0, 16.0));
+    assert_eq!(sizes(&s), (90.0, 18.0));
     s.execute("tools.increaseBrushSize", json!({})).unwrap();
     assert_eq!(sizes(&s), (100.0, 20.0));
     // A coalesced drag (options bar slider, Alt+right-drag) is a run of size-only patches.
@@ -985,7 +985,11 @@ fn mixer_brush_uses_the_brush_mixer_settings() {
     let mut s = session(200, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     // No wet/load params: the brush's Mixer settings (a dry brush with 0 % Load) apply.
-    s.execute("tools.setBrush", json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}}})).unwrap();
+    s.execute(
+        "tools.setBrush",
+        json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}, "smoothing": {"catchUpOnEnd": true}}}),
+    )
+    .unwrap();
     s.execute("paint.mixerBrush", json!({"points": [[5, 15], [195, 15]], "size": 8})).unwrap();
     assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "the brush's 0 % Load dries out");
     // A param still overrides the brush.
