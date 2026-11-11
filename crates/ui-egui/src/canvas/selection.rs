@@ -45,7 +45,7 @@ pub fn selection_cursor(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui
     }
     // ⌥ (⌘⌥ with a selection tool) floats a copy, of the layer's pixels or of the piece.
     let copy = mods.alt && (tool == Tool::Move || mods.command);
-    if copy && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1) {
+    if copy && crate::move_ui::native_copy_unsupported(app) {
         return None;
     }
     Some(match (floating, copy) {

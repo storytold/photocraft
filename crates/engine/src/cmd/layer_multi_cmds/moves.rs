@@ -513,6 +513,23 @@ fn wrap_axis(delta: i32, period: i32) -> i32 {
     i64::from(delta).rem_euclid(i64::from(period)) as i32
 }
 
+/// A nonzero selection default covers the canvas, not just its stored exceptions.
+/// Give Move finite coverage before it lifts samples or translates the outline.
+pub(crate) fn bounded_move_selection(selection: &photocraft_raster::Surface, canvas: photocraft_geom::Rect) -> Result<photocraft_raster::Surface> {
+    if selection.default_pixel().first().is_none_or(|v| *v == 0.0) {
+        return Ok(selection.clone());
+    }
+    crate::channel_cmds::color_move_destination(canvas, 0, 0)?;
+    let mut bounded = photocraft_raster::Surface::new(selection.format());
+    for coord in canvas.tiles() {
+        let r = coord.rect().intersect(&canvas);
+        let bytes = selection.try_to_interleaved(r)?;
+        bounded.try_tile_mut(coord)?;
+        bounded.write_interleaved(r, &bytes);
+    }
+    Ok(bounded)
+}
+
 /// Pattern Preview's selected coverage, shared by commit and the live marching ants.
 /// Validate the work before copying tiles, and never publish a failed scratch read.
 pub fn wrapped_selection(selection: &photocraft_raster::Surface, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> Result<photocraft_raster::Surface> {
@@ -521,8 +538,9 @@ pub fn wrapped_selection(selection: &photocraft_raster::Surface, dx: i32, dy: i3
     }
     crate::channel_cmds::color_move_destination(tile, 0, 0)?;
     let generation = photocraft_raster::spill::read_error_generation();
-    crate::channel_transform::validate_area(selection.content_bounds())?;
-    let moved = wrap_surface(selection, dx, dy, tile);
+    let coverage = bounded_move_selection(selection, tile)?;
+    crate::channel_transform::validate_area(coverage.content_bounds())?;
+    let moved = wrap_surface(&coverage, dx, dy, tile);
     photocraft_raster::spill::check_since(generation).map_err(EngineError::Other)?;
     selection.scratch_health().map_err(EngineError::Other)?;
     moved.scratch_health().map_err(EngineError::Other)?;

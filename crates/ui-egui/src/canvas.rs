@@ -312,7 +312,10 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             )
         };
         let bounds_key = if k > 1 { u64::MAX / 2 - input.doc.id.0 } else { u64::MAX - input.doc.id.0 };
-        let carried_bounds = carried.then(|| app.cached_bounds(bounds_key, sel).intersect(&vis));
+        // Stored exceptions do not bound a selection whose default covers the canvas.
+        // The sampler already treats pixels outside its tracing bounds as unselected.
+        let implicit_bounds = (refined.is_none() && floated.is_none() && sel.default_pixel().first().is_some_and(|v| *v != 0.0)).then(|| input.doc.bounds());
+        let carried_bounds = carried.then(|| implicit_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key, sel)).intersect(&vis));
         let step = carried_bounds.map_or(step, |b| crate::outline::bounded_step(b, step));
         let key = crate::surface_fingerprint(sel)
             ^ u64::from(step).rotate_left(56)
@@ -322,13 +325,9 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             ^ (vis.x1 as u64) << 36
             ^ (vis.y1 as u64) << 48
             ^ u64::from(k).rotate_left(5)
-            ^ wrapped_move.map_or(0, |(dx, dy)| {
-                (1 << 63)
-                    ^ (dx as u64).rotate_left(7)
-                    ^ (dy as u64).rotate_left(39)
-                    ^ u64::from(input.doc.size.width).rotate_left(19)
-                    ^ u64::from(input.doc.size.height).rotate_left(51)
-            });
+            ^ u64::from(input.doc.size.width).rotate_left(19)
+            ^ u64::from(input.doc.size.height).rotate_left(51)
+            ^ wrapped_move.map_or(0, |(dx, dy)| (1 << 63) ^ (dx as u64).rotate_left(7) ^ (dy as u64).rotate_left(39));
         let fresh = matches!(&app.outline_cache, Some((d, k, _)) if *d == input.doc.id && *k == key);
         if !fresh {
             let t0 = crate::gpu_canvas::now_ms();
@@ -340,7 +339,12 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
                 None => None,
             };
             let traced = wrapped.as_ref().unwrap_or(sel);
-            let b = carried_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key ^ if wrapped.is_some() { 1 << 62 } else { 0 }, traced).intersect(&vis));
+            // Projected masks live for this trace only: their tile addresses can be reused
+            // for different offsets. The outline cache already reuses idle projections.
+            let b = carried_bounds.unwrap_or_else(|| match &wrapped {
+                Some(_) => traced.content_bounds().intersect(&vis),
+                None => implicit_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key, traced)).intersect(&vis),
+            });
             // Filters can occupy every worker in Rayon's global pool. A parallel scan here would
             // block the UI thread waiting for those workers, preventing job cancellation (#1554).
             let mut segs =

@@ -1158,7 +1158,9 @@ fn colour_set_filter_mask_view_keeps_its_target_when_alt_drag_duplicates() {
 #[test]
 fn colour_set_command_drags_from_selection_tools_use_native_selected_move() {
     for colors in [vec![0], vec![0, 2]] {
-        for tool in [Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagicWand] {
+        for tool in
+            [Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagicWand]
+        {
             for start in [[16.0, 16.0], [30.0, 30.0]] {
                 let (mut app, id) = selected_pixels(16);
                 app.run("channel.target", json!({"colors": colors})).unwrap();
@@ -1558,13 +1560,23 @@ fn pattern_preview_keeps_native_channel_move_preview_and_commit_equal() {
 
 #[test]
 fn selected_single_channel_copy_gestures_refuse_before_cutting_or_duplicating_rgba() {
-    for tool in [Tool::Move, Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagicWand] {
+    for tool in [
+        Tool::Move,
+        Tool::RectMarquee,
+        Tool::EllipseMarquee,
+        Tool::SingleRowMarquee,
+        Tool::SingleColumnMarquee,
+        Tool::Lasso,
+        Tool::PolygonLasso,
+        Tool::MagicWand,
+    ] {
         let (mut app, _) = selected_pixels(16);
         app.run("channel.target", json!({"channel":"red"})).unwrap();
         app.ui.tool = tool;
         let before = app.session.active().unwrap().doc.clone();
         let history = app.session.active().unwrap().history.past_len();
         let modifiers = egui::Modifiers { alt: true, command: tool != Tool::Move, mac_cmd: tool != Tool::Move, ..Default::default() };
+        assert_eq!(crate::canvas::selection_cursor(&app, tool, [16.0, 16.0], modifiers), None, "{tool:?}: do not offer an unsupported copy");
         drag(&mut app, [16.0, 16.0], [26.0, 21.0], modifiers);
         assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "{tool:?}");
         assert!(app.ui.status_error, "{tool:?}: explain the unsupported copy gesture");

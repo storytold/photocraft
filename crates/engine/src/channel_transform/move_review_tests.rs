@@ -345,3 +345,79 @@ fn floating_a_single_colour_is_refused_for_automation_before_it_can_move_rgba() 
     s.execute("select.float", json!({"target":"pixels","dx":2})).unwrap();
     assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
 }
+
+#[test]
+fn implicit_canvas_selection_matches_bounded_coverage_for_native_move() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for colors in [vec![0], vec![0, 2]] {
+            for coverage in [0.25, 1.0] {
+                for hole in [false, true] {
+                    for wrap in [false, true] {
+                        let mut implicit = session(ColorMode::Rgb, depth);
+                        let mut bounded = session(ColorMode::Rgb, depth);
+                        for (s, default) in [(&mut implicit, true), (&mut bounded, false)] {
+                            s.edit("equivalent coverage", |doc, _| {
+                                let fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
+                                let mut mask = if default { Surface::with_default(fmt, &[coverage]) } else { Surface::new(fmt) };
+                                if !default {
+                                    mask.fill_rect(doc.bounds(), &[coverage]);
+                                }
+                                if hole {
+                                    mask.fill_rect(Rect::new(3, 2, 6, 4), &[0.0]);
+                                }
+                                doc.selection = Some(mask);
+                                Ok(())
+                            })
+                            .unwrap();
+                            let before = s.active().unwrap().doc.clone();
+                            s.execute("layer.translate", json!({"target":{"colors":colors},"dx":2,"dy":1,"wrap":wrap})).unwrap();
+                            let moved = s.active().unwrap().doc.clone();
+                            assert!(s.undo());
+                            assert_eq!(s.active().unwrap().doc.layers, before.layers);
+                            assert_eq!(s.active().unwrap().doc.selection, before.selection);
+                            assert!(s.redo());
+                            assert_eq!(s.active().unwrap().doc.layers, moved.layers);
+                            assert_eq!(s.active().unwrap().doc.selection, moved.selection);
+                        }
+                        let area = Rect::new(-2, -2, 16, 12);
+                        assert_eq!(
+                            surface(&implicit).try_to_interleaved(area).unwrap(),
+                            surface(&bounded).try_to_interleaved(area).unwrap(),
+                            "{depth:?}/{colors:?}/{coverage}/{hole}/{wrap}"
+                        );
+                        assert_eq!(
+                            implicit.active().unwrap().doc.selection,
+                            bounded.active().unwrap().doc.selection,
+                            "the same coverage moves its outline once"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn wrapped_selected_noop_matches_commit_without_materializing_over_budget_sources() {
+    let mut s = session(ColorMode::Rgb, SampleType::F32);
+    s.edit("sparse large canvas", |doc, _| {
+        doc.size = photocraft_geom::Size::new(2048, 2048);
+        doc.selection = Some(Surface::with_default(PixelFormat::GRAY8, &[1.0]));
+        Ok(())
+    })
+    .unwrap();
+    let st = s.active().unwrap();
+    let before = st.doc.clone();
+    let history = st.history.past_len();
+    let id = st.active_layer.unwrap();
+    let colors = crate::color_channels::ColorChannels::from_indices([0, 2], 3).unwrap();
+    // The fixture exceeds the test's 20 MiB Memory Usage limit, without allocating those planes.
+    assert!(retained_source_bytes(&before, Some(id), &json!({"target":colors.params()})).unwrap_err().to_string().contains("Memory Usage"));
+    let mut preview = (*before).clone();
+    crate::channel_cmds::move_color_channels_wrapping(&mut preview, id, colors, 2048, 0, s.tools.background, Some(before.bounds())).unwrap();
+    assert_eq!(preview.layers, before.layers);
+    assert_eq!(preview.selection, before.selection);
+    s.execute("layer.translate", json!({"target":colors.params(),"dx":2048,"wrap":true})).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}

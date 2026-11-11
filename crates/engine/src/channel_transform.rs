@@ -266,13 +266,19 @@ pub(crate) fn move_selected_colors(
 ) -> Result<()> {
     let params = json!({"target": colors.params()});
     check_locks(doc, Some(layer), &params)?;
-    let selection = doc.selection.clone().ok_or_else(|| bad("no selected pixels"))?;
-    let bounds = selection.content_bounds();
-    validate_area(bounds)?;
+    let selected = doc.selection.as_ref().ok_or_else(|| bad("no selected pixels"))?;
     let (dx, dy) = wrap.map_or((dx, dy), |tile| crate::layer_multi_cmds::wrapped_delta(dx, dy, tile));
     if dx == 0 && dy == 0 {
         return Ok(());
     }
+    // Only implicit coverage allocates here; ordinary masks are cheap COW clones.
+    // Price those sources before materialization, without repeating the normal capture's check.
+    if selected.default_pixel().first().is_some_and(|v| *v != 0.0) {
+        source_budget(doc, Some(layer), colors)?;
+    }
+    let selection = crate::layer_multi_cmds::bounded_move_selection(selected, doc.bounds())?;
+    let bounds = selection.content_bounds();
+    validate_area(bounds)?;
     if wrap.is_none()
         && [
             f64::from(bounds.x0) + f64::from(dx),
@@ -285,6 +291,8 @@ pub(crate) fn move_selected_colors(
     {
         return Err(bad("selected channel move coordinates are out of range"));
     }
+    // Capture (and price) the native planes before allocating clipped wrapping coverage.
+    let planes = planes(doc, Some(layer), &params, background)?.ok_or_else(|| bad("no selected colour channels"))?;
     // Wrapping leaves samples already outside the canvas untouched. Limit the lifted
     // coverage too, otherwise stationary feathered samples there would be blended twice.
     let inside = if let Some(tile) = wrap {
@@ -302,7 +310,7 @@ pub(crate) fn move_selected_colors(
     };
     let coverage = inside.as_ref().unwrap_or(&selection);
     let h = photocraft_algo::transform::Homography([1.0, 0.0, f64::from(dx), 0.0, 1.0, f64::from(dy), 0.0, 0.0, 1.0]);
-    for plane in planes(doc, Some(layer), &params, background)?.ok_or_else(|| bad("no selected colour channels"))? {
+    for plane in planes {
         let moved = if let Some(tile) = wrap {
             let shift = |s: &Surface, _| Ok(crate::layer_multi_cmds::wrap_surface(s, dx, dy, tile));
             let whole = |s: &Surface| Ok(crate::layer_multi_cmds::wrap_surface(s, dx, dy, tile));
