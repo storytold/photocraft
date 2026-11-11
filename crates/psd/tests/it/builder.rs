@@ -320,5 +320,7 @@ fn a_huge_default_composite_is_an_error_not_an_allocation() {
 #[test]
 fn the_default_composite_follows_the_decoded_size_limit() {
     // 40000 x 40000 CMYK at 16-bit is 12.8 GB: over the encoder's limit, refused before the buffer.
-    assert!(PsdBuilder::new(40_000, 40_000).color_mode(ColorMode::Cmyk).depth(16).build().is_err());
+    let e = PsdBuilder::new(40_000, 40_000).color_mode(ColorMode::Cmyk).depth(16).build().unwrap_err();
+    // The early refusal, not the encoder's later one.
+    assert!(matches!(e, PsdError::LimitExceeded("default composite exceeds MAX_DECODED_BYTES")), "{e:?}");
 }
