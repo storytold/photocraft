@@ -1055,3 +1055,170 @@ fn cancelled_row_write_stops_during_tile_and_preserves_surface() {
     assert_eq!(surface.to_interleaved(r), before.to_interleaved(r));
     assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
 }
+
+/// Pre-fast-path `decode_tile_row_rgba` fallback (`read_samples` + `to_rgba`), retained as the
+/// bitwise reference oracle across the full 16-bit (`0..=65535`) sample range and release bench.
+fn legacy_read_rgba_into(surface: &Surface, r: Rect, out: &mut [[f32; 4]]) {
+    let w = r.width() as usize;
+    let h = r.height() as usize;
+    assert_eq!(out.len(), w * h);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let fmt = &surface.format;
+    let n = fmt.channels();
+    let dp_rgba = to_rgba(fmt, &surface.default_pixel());
+    let mut row = Vec::new();
+    for tc in r.tiles() {
+        let tr = tc.rect().intersect(&r);
+        let span = tr.width() as usize;
+        let guard = surface.tiles.get(&tc).map(|t| t.bytes());
+        match guard.as_deref() {
+            Some(t) => {
+                for y in tr.y0..tr.y1 {
+                    let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
+                    let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
+                    let dst = &mut out[o..o + span];
+                    row.resize(dst.len() * n, 0.0);
+                    read_samples(t, fmt.sample, base, &mut row);
+                    let a = |s: &[f32], i: usize| if fmt.alpha { s[i] } else { 1.0 };
+                    let pixels = dst.iter_mut().zip(row.chunks_exact(n));
+                    match fmt.mode {
+                        ColorMode::Rgb => pixels.for_each(|(d, s)| *d = [s[0], s[1], s[2], a(s, 3)]),
+                        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => pixels.for_each(|(d, s)| *d = [s[0], s[0], s[0], a(s, 1)]),
+                        _ => pixels.for_each(|(d, s)| *d = to_rgba(fmt, s)),
+                    }
+                }
+            }
+            None => {
+                for y in tr.y0..tr.y1 {
+                    let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
+                    out[o..o + span].fill(dp_rgba);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn u16_rgba_and_graya_row_decode_is_bit_identical_over_full_range() {
+    // 256 x 256 = 65,536 pixels: exercises every 16-bit integer value `0u16..=65535u16` on every
+    // channel via odd-multiplier bijections modulo 2^16.
+    let tile_rect = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
+    let cross_rect = Rect::new(13, 7, TILE_SIZE + 14, TILE_SIZE + 4);
+
+    // 1. RGBA16 fast path: all 4 channels independently cover all 65,536 `u16` values.
+    let mut rgba16_bytes = Vec::with_capacity(65_536 * 8);
+    for i in 0u32..=65_535 {
+        let r = i as u16;
+        let g = (65_535 - i) as u16;
+        let b = (i.wrapping_mul(40_503)) as u16;
+        let a = (i.wrapping_mul(257).wrapping_add(17)) as u16;
+        for ch in [r, g, b, a] {
+            rgba16_bytes.extend_from_slice(&ch.to_ne_bytes());
+        }
+    }
+    let mut s_rgba16 = Surface::with_default(PixelFormat::RGBA16, &[0.125, 0.375, 0.625, 0.875]);
+    s_rgba16.try_write_interleaved(tile_rect, &rgba16_bytes).unwrap();
+
+    for rect in [tile_rect, cross_rect] {
+        let len = (rect.width() * rect.height()) as usize;
+        let mut got = vec![[0.0f32; 4]; len];
+        let mut want = vec![[0.0f32; 4]; len];
+        s_rgba16.read_rgba_into(rect, &mut got);
+        legacy_read_rgba_into(&s_rgba16, rect, &mut want);
+        for (idx, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(g.map(f32::to_bits), w.map(f32::to_bits), "RGBA16 {rect:?} idx {idx}: {g:?} vs {w:?}");
+            let x = rect.x0 + (idx as u32 % rect.width()) as i32;
+            let y = rect.y0 + (idx as u32 / rect.width()) as i32;
+            assert_eq!(g.map(f32::to_bits), s_rgba16.rgba(x, y).map(f32::to_bits), "RGBA16 scalar ({x},{y})");
+        }
+    }
+
+    // 2. GRAYA16 fast path: gray and alpha channels both cover all 65,536 `u16` values.
+    let graya16 = PixelFormat::new(ColorMode::Grayscale, SampleType::U16, true);
+    let mut graya16_bytes = Vec::with_capacity(65_536 * 4);
+    for i in 0u32..=65_535 {
+        let g = i as u16;
+        let a = (65_535 - i) as u16;
+        graya16_bytes.extend_from_slice(&g.to_ne_bytes());
+        graya16_bytes.extend_from_slice(&a.to_ne_bytes());
+    }
+    let mut s_graya16 = Surface::with_default(graya16, &[0.25, 0.75]);
+    s_graya16.try_write_interleaved(tile_rect, &graya16_bytes).unwrap();
+
+    for rect in [tile_rect, cross_rect] {
+        let len = (rect.width() * rect.height()) as usize;
+        let mut got = vec![[0.0f32; 4]; len];
+        let mut want = vec![[0.0f32; 4]; len];
+        s_graya16.read_rgba_into(rect, &mut got);
+        legacy_read_rgba_into(&s_graya16, rect, &mut want);
+        for (idx, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(g.map(f32::to_bits), w.map(f32::to_bits), "GRAYA16 {rect:?} idx {idx}: {g:?} vs {w:?}");
+            let x = rect.x0 + (idx as u32 % rect.width()) as i32;
+            let y = rect.y0 + (idx as u32 / rect.width()) as i32;
+            assert_eq!(g.map(f32::to_bits), s_graya16.rgba(x, y).map(f32::to_bits), "GRAYA16 scalar ({x},{y})");
+        }
+    }
+}
+
+/// Manually compare 16-bit RGBA/GRAYA `read_rgba_into` (whole-region and scanline-per-call as in
+/// `composite_pixel_layer`) against the previous `read_samples` + `to_rgba` fallback.
+#[test]
+#[ignore = "manual 24 MP release benchmark"]
+fn benchmark_u16_rgba_reads() {
+    use std::{hint::black_box, time::Instant};
+    type ReadRgbaFn = fn(&Surface, Rect, &mut [[f32; 4]]);
+    let (w, h) = (6000i32, 4000i32);
+    let rect = Rect::new(0, 0, w, h);
+    let graya16 = PixelFormat::new(ColorMode::Grayscale, SampleType::U16, true);
+
+    for (label, fmt) in [("RGBA16", PixelFormat::RGBA16), ("GRAYA16", graya16)] {
+        let mut s = Surface::new(fmt);
+        let fill: Vec<f32> = (0..fmt.channels()).map(|i| (i as f32 + 1.0) / (fmt.channels() as f32 + 1.0)).collect();
+        s.fill_rect(rect, &fill);
+        // Unshare a checkerboard of tiles so reads hit distinct tile allocations as well.
+        for ty in (0..h).step_by((TILE_SIZE * 2) as usize) {
+            for tx in (0..w).step_by((TILE_SIZE * 2) as usize) {
+                s.write_pixel(tx, ty, &fill);
+            }
+        }
+
+        let mut out_a = vec![[0.0f32; 4]; (w * h) as usize];
+        let mut out_b = vec![[0.0f32; 4]; (w * h) as usize];
+        legacy_read_rgba_into(&s, rect, &mut out_a);
+        s.read_rgba_into(rect, &mut out_b);
+        assert_eq!(out_a, out_b);
+
+        for trial in 0..7 {
+            let mut region_paths: [(&str, ReadRgbaFn); 2] = [("before", legacy_read_rgba_into), ("after", Surface::read_rgba_into)];
+            if trial % 2 == 1 {
+                region_paths.reverse();
+            }
+            for (name, path) in region_paths {
+                let t = Instant::now();
+                black_box(path)(&s, rect, black_box(&mut out_a));
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                black_box(&out_a);
+                println!("region_24mp,{label},{trial},{name},{ms:.3}");
+            }
+        }
+
+        let mut row_buf = vec![[0.0f32; 4]; w as usize];
+        for trial in 0..7 {
+            let mut row_paths: [(&str, ReadRgbaFn); 2] = [("before", legacy_read_rgba_into), ("after", Surface::read_rgba_into)];
+            if trial % 2 == 1 {
+                row_paths.reverse();
+            }
+            for (name, path) in row_paths {
+                let t = Instant::now();
+                for y in 0..h {
+                    black_box(path)(&s, Rect::new(0, y, w, y + 1), black_box(&mut row_buf));
+                }
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                black_box(&row_buf);
+                println!("scanline_24mp,{label},{trial},{name},{ms:.3}");
+            }
+        }
+    }
+}
