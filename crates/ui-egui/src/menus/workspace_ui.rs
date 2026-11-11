@@ -323,7 +323,7 @@ fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
 
 /// The Show Extras Options… checkboxes as (field, label). The fields are the serialized
 /// [`crate::view_cmds::Show`] names, the keys the dialog is seeded with and its command accepts.
-fn extras_options() -> [(&'static str, &'static str); 13] {
+fn extras_options() -> [(&'static str, &'static str); 14] {
     [
         ("layer_edges", tl!("Layer Edges")),
         ("selection_edges", tl!("Selection Edges")),
@@ -338,6 +338,7 @@ fn extras_options() -> [(&'static str, &'static str); 13] {
         ("edit_pins", tl!("Edit Pins")),
         ("canvas_guides", tl!("Canvas Guides")),
         ("artboard_guides", tl!("Artboard Guides")),
+        ("revision_markers", tl!("Revision Markers")),
     ]
 }
 

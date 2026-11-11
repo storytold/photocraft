@@ -383,11 +383,23 @@ fn legacy_workspace(app: &PhotocraftApp) -> Workspace {
 }
 
 /// A workspace saved before a panel existed (e.g. the revision panel) has no place for it.
-/// Each missing native member joins its group's first tab group on draw, and its hidden-tab
-/// record (written by [`sync_visibility`] when the panel was absent) is cleared, so new panels
+/// Each missing native member joins the group that holds its siblings on draw, so new panels
 /// appear in saved workspaces too (#revision).
+///
+/// Only a panel the workspace has never seen is added: one that is docked, floating, or closed
+/// by the user already has a place, and adding it back would float it twice (craft-ui rejects a
+/// duplicate) or reopen a panel the user closed.
 fn with_native_members(app: &mut PhotocraftApp, mut layout: Layout<String>) -> Layout<String> {
     let pro = app.ui.theme.is_pro();
+    let mut placed: Vec<String> = layout.panels().into_iter().cloned().collect();
+    for window in &layout.floating {
+        for group in tree_groups(&window.root) {
+            placed.extend(group.panels.iter().cloned());
+        }
+    }
+    if let Some(workspace) = &app.ui.docking {
+        placed.extend(workspace.hidden.iter().map(|(id, _)| id.clone()));
+    }
     let mut pending: Vec<&mut Node<String>> = Vec::new();
     if let Some(root) = layout.root.as_mut() {
         pending.push(root);
@@ -404,10 +416,11 @@ fn with_native_members(app: &mut PhotocraftApp, mut layout: Layout<String>) -> L
                         }
                         for (index, label) in native.tabs(pro).iter().enumerate() {
                             let Some(id) = normalize(label) else { continue };
-                            if group.panels.iter().any(|p| p == id) {
+                            if placed.iter().any(|p| p == id) || group.panels.iter().any(|p| p == id) {
                                 continue;
                             }
                             group.panels.push(id.to_owned());
+                            placed.push(id.to_owned());
                             app.ui.dock.show_tab(native, index, pro);
                         }
                     }

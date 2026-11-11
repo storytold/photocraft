@@ -85,8 +85,9 @@ mod tests {
     use super::*;
 
     /// A 64×48 PNG with a red square in its top-left quarter: bytes, plus a copy written to the
-    /// temp directory (the two ways `edit.placeImage` can take the image).
-    fn shot_png() -> (Vec<u8>, std::path::PathBuf) {
+    /// temp directory (the two ways `edit.placeImage` can take the image). `tag` keeps the two
+    /// tests' files apart: they run in parallel threads of one process, so the pid is the same.
+    fn shot_png(tag: &str) -> (Vec<u8>, std::path::PathBuf) {
         let (w, h) = (64u32, 48u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
@@ -101,7 +102,7 @@ mod tests {
         }
         let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgba, rgba).unwrap();
         let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default()).unwrap();
-        let path = std::env::temp_dir().join(format!("photocraft-place-test-{}.png", std::process::id()));
+        let path = std::env::temp_dir().join(format!("photocraft-place-test-{}-{tag}.png", std::process::id()));
         std::fs::write(&path, &png).unwrap();
         (png, path)
     }
@@ -111,7 +112,7 @@ mod tests {
     fn places_the_shot_inside_the_selection_as_a_smart_object() {
         use base64::Engine as _;
         // The preview hands the capture over in memory: no file is involved at all.
-        let (png, path) = shot_png();
+        let (png, path) = shot_png("selection");
         let data = base64::engine::general_purpose::STANDARD.encode(&png);
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 200, "height": 160})).unwrap();
@@ -139,7 +140,7 @@ mod tests {
     #[test]
     fn without_a_selection_the_shot_lands_in_the_middle() {
         // A path still works, for anything that places a file rather than live capture bytes.
-        let (_, path) = shot_png();
+        let (_, path) = shot_png("middle");
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 120, "height": 90})).unwrap();
         let before = s.active().unwrap().doc.layers.len();

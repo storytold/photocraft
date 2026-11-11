@@ -745,6 +745,75 @@ fn turning_the_shift_tool_switch_off_is_saved_over_another_instances_migration()
 }
 
 #[test]
+fn an_old_files_font_name_migration_is_saved_with_the_new_version() {
+    // Version 3: a file that kept Show Font Names in English on loads with it off, so font menus
+    // list localized family names. Saving must write that and the current version: keeping the
+    // file's `true` under version 3 would skip the migration on the next launch and bring the
+    // English names back.
+    let ctx = egui::Context::default();
+    for saved in [
+        json!({"version": 2, "type": {"showFontNamesInEnglish": true}, "futureSection": {"kept": true}}),
+        json!({"type": {"showFontNamesInEnglish": true}, "futureSection": {"kept": true}}),
+    ] {
+        let (mut app, store) = app_with_saved(Some(saved.to_string()));
+        tick(&mut app, &ctx);
+        assert!(!app.session.prefs().type_.show_font_names_in_english, "{saved}");
+        app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut app, &ctx);
+        let v = stored(&store);
+        assert_eq!(v["version"], json!(prefs::PREFS_VERSION), "{saved}");
+        assert_eq!(v["type"]["showFontNamesInEnglish"], false, "{saved}");
+        assert_eq!(v["futureSection"]["kept"], true, "keys this version doesn't know survive");
+        // Turning it back on is a choice, and the next launch keeps it.
+        app.run("prefs.set", json!({"values": {"type.showFontNamesInEnglish": true}})).unwrap();
+        tick(&mut app, &ctx);
+        let (mut next, _) = app_with_saved(store.lock().unwrap().clone());
+        tick(&mut next, &ctx);
+        assert!(next.session.prefs().type_.show_font_names_in_english, "{saved}: turned on, it stays on");
+    }
+}
+
+#[test]
+fn another_instances_font_name_choice_beats_this_ones_migration() {
+    // Two instances migrate the same version 2 file. One turns Show Font Names in English back
+    // on and saves version 3; the other's unrelated save must not write its migrated "off" over
+    // that choice.
+    let saved = json!({"version": 2, "type": {"showFontNamesInEnglish": true}});
+    let store = Arc::new(Mutex::new(Some(saved.to_string())));
+    let ctx = egui::Context::default();
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+    tick(&mut a, &ctx);
+    tick(&mut b, &ctx);
+    b.run("prefs.set", json!({"values": {"type.showFontNamesInEnglish": true}})).unwrap();
+    tick(&mut b, &ctx);
+    assert_eq!(stored(&store)["type"]["showFontNamesInEnglish"], true);
+    a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+    tick(&mut a, &ctx);
+    let v = stored(&store);
+    assert_eq!((v["type"]["showFontNamesInEnglish"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(true), Some(12)));
+    assert_eq!(v["version"], json!(prefs::PREFS_VERSION));
+}
+
+#[test]
+fn turning_font_names_back_on_is_saved_over_another_instances_migration() {
+    // Two instances migrate the same version 2 file. B saves version 3 with the migrated "off";
+    // the user then turns Show Font Names in English on in A, which must be written.
+    let saved = json!({"version": 2, "type": {"showFontNamesInEnglish": true}});
+    let store = Arc::new(Mutex::new(Some(saved.to_string())));
+    let ctx = egui::Context::default();
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+    tick(&mut a, &ctx);
+    tick(&mut b, &ctx);
+    b.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+    tick(&mut b, &ctx);
+    assert_eq!(stored(&store)["type"]["showFontNamesInEnglish"], false);
+    a.run("prefs.set", json!({"values": {"type.showFontNamesInEnglish": true}})).unwrap();
+    tick(&mut a, &ctx);
+    let v = stored(&store);
+    assert_eq!((v["type"]["showFontNamesInEnglish"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(true), Some(12)));
+}
+
+#[test]
 fn a_newer_files_version_is_kept_on_save() {
     let saved = json!({"version": prefs::PREFS_VERSION + 1, "tools": {"useShiftKeyForToolSwitch": false}});
     let (mut app, store) = app_with_saved(Some(saved.to_string()));

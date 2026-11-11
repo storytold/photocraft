@@ -55,6 +55,12 @@ craft-update = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
+# The preview's own OS window (`web_preview.rs`): the window handle and its WebView2 child live in
+# this crate, which is allowed the two `unsafe` calls they need (`this crate forbids unsafe`).
+# Declared for every desktop target rather than only Windows: `web_preview` names `Page`
+# unconditionally, and the crate's non-Windows build answers every call with "not supported", so
+# Linux and macOS still compile.
+photocraft-webwin = { path = "../webwin" }
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`) and the user's decimal
 # symbol (`i18n::decimal_separator`, a registry read): the safe binding the desktop app already
@@ -64,9 +70,6 @@ winsafe = { version = "=0.0.29", default-features = false, features = ["kernel",
 # Screenshots of that preview (`web_capture.rs`): `wry` has no capture API, so the page is taken
 # from the screen.
 xcap = "=0.9.8"
-# The preview's own OS window (`web_preview.rs`): the window handle and its WebView2 child live in
-# this crate, which is allowed the two `unsafe` calls they need (`this crate forbids unsafe`).
-photocraft-webwin = { path = "../webwin" }
 
 [dev-dependencies]
 photocraft-io = { workspace = true, features = ["testgen"] }

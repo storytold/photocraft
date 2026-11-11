@@ -23,10 +23,7 @@ pub fn capture_screen(x: i32, y: i32, w: u32, h: u32) -> Result<Shot, String> {
     let (iw, ih) = (img.width(), img.height());
     // Crop to the window and clamp to the monitor: a window hanging over the edge loses only the
     // sliver that is off-screen.
-    let cx = (x - mx).clamp(0, iw as i32) as u32;
-    let cy = (y - my).clamp(0, ih as i32) as u32;
-    let cw = w.min(iw - cx).max(1);
-    let ch = h.min(ih - cy).max(1);
+    let (cx, cy, cw, ch) = crop_bounds(iw, ih, x - mx, y - my, w, h);
     let raw = img.as_raw();
     let mut rgba = Vec::with_capacity((cw * ch * 4) as usize);
     for row in 0..ch {
@@ -41,6 +38,20 @@ pub fn capture_screen(x: i32, y: i32, w: u32, h: u32) -> Result<Shot, String> {
 #[cfg(not(windows))]
 pub fn capture_screen(_x: i32, _y: i32, _w: u32, _h: u32) -> Result<Shot, String> {
     Err("screen capture is only supported on Windows".into())
+}
+
+/// The crop a capture of `w` × `h` at `(cx, cy)` inside an `iw` × `ih` monitor image needs:
+/// the origin clamped into the image and the size clamped to what is left.
+///
+/// The origin is clamped to the last *pixel*, not to the edge: a monitor whose reported origin and
+/// captured pixels disagree (DPI scaling) must not leave the crop starting one past the buffer,
+/// which the caller's row copy would turn into an out-of-bounds panic.
+pub fn crop_bounds(iw: u32, ih: u32, cx: i32, cy: i32, w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let ox = cx.clamp(0, iw.saturating_sub(1) as i32) as u32;
+    let oy = cy.clamp(0, ih.saturating_sub(1) as i32) as u32;
+    let cw = w.min(iw.saturating_sub(ox)).max(1);
+    let ch = h.min(ih.saturating_sub(oy)).max(1);
+    (ox, oy, cw, ch)
 }
 
 /// A screenshot of the preview as PNG bytes, handed to `edit.placeImage` in memory: nothing is
@@ -199,6 +210,17 @@ mod tests {
     fn paint(shot: &mut Shot, x: u32, y: u32, rgb: [u8; 3]) {
         let o = ((y * shot.width + x) * 4) as usize;
         shot.rgba[o..o + 3].copy_from_slice(&rgb);
+    }
+
+    /// A crop that starts exactly at the monitor's edge still stays inside the image: clamping the
+    /// origin to the last pixel keeps the caller's row copy from reading past the buffer.
+    #[test]
+    fn a_crop_at_the_images_edge_stays_inside_it() {
+        assert_eq!(crop_bounds(100, 80, 100, 80, 40, 30), (99, 79, 1, 1), "one past the end is the last pixel");
+        assert_eq!(crop_bounds(100, 80, 200, 300, 40, 30), (99, 79, 1, 1), "far outside still lands on the last pixel");
+        assert_eq!(crop_bounds(100, 80, -30, -20, 40, 30), (0, 0, 40, 30), "a window hanging off the left keeps its box");
+        assert_eq!(crop_bounds(100, 80, 60, 50, 40, 30), (60, 50, 40, 30), "inside the image, nothing is clamped");
+        assert_eq!(crop_bounds(100, 80, 90, 70, 40, 30), (90, 70, 10, 10), "a box crossing the edge is cut there");
     }
 
     /// A long blue axis crossing most of the shot is painted out with the surface behind it.

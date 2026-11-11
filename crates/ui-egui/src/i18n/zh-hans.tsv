@@ -3322,6 +3322,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shrinkwrap Canvas on Save	保存时将画布缩至内容大小
 # Revision markers (red/green boxes over content that must be changed in a manual / 说明书).
 	Revision	修订
+	Revision Markers	修订标记
 	Add from Selection	从选区添加
 	Check All	全部检测
 	Re-snapshot All	全部重新快照
