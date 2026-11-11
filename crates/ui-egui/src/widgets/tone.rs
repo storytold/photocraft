@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Rect};
 use photocraft_doc::adjust::ToneSpace;
-use photocraft_doc::{Document, Layer, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
@@ -166,6 +166,15 @@ pub fn compute_histograms_at(doc: &Document, source: HistSource, space: ToneSpac
                 && let Some(bin) = h.first_mut()
             {
                 *bin = gray_bins(s, doc.bounds());
+            } else if surface == photocraft_engine::channel_cmds::GraySurface::FilterMask
+                && doc.layer(layer).is_some_and(|l| matches!(&l.content, LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
+                && let Some(white) = h.first_mut().and_then(|bin| bin.get_mut(255))
+            {
+                // An uncreated filter mask is Reveal All. Count its samples without scanning pixels.
+                let area = doc.bounds();
+                let step = gray_sample_step(area);
+                let count = u64::from(area.width().div_ceil(step)) * u64::from(area.height().div_ceil(step));
+                *white = count.min(u64::from(u32::MAX)) as u32;
             }
         }
         HistSource::BelowLayer(_) | HistSource::Layer(_) | HistSource::UpTo(_) => {
@@ -321,6 +330,11 @@ fn count_pixels(px: &[[f32; 4]], space: ToneSpace, h: &mut [[u32; 256]]) {
     }
 }
 
+/// Sampling interval shared by stored gray planes and implicit constant filter masks.
+fn gray_sample_step(area: photocraft_geom::Rect) -> u32 {
+    ((u64::from(area.width()) * u64::from(area.height())) / 1_000_000).max(1).isqrt().max(1) as u32
+}
+
 /// 256-bin histogram of a gray plane: its levels in 0–255, sampled like the engine's auto-tone
 /// histograms so a big canvas costs no more than about a megapixel here (#5335).
 fn component_bins(surface: &photocraft_raster::Surface, area: photocraft_geom::Rect, component: usize) -> [u32; 256] {
@@ -348,7 +362,7 @@ fn component_bins(surface: &photocraft_raster::Surface, area: photocraft_geom::R
 
 fn gray_bins(surf: &photocraft_raster::Surface, area: photocraft_geom::Rect) -> [u32; 256] {
     let mut h = [0u32; 256];
-    let step = ((u64::from(area.width()) * u64::from(area.height())) / 1_000_000).max(1).isqrt().max(1) as i32;
+    let step = gray_sample_step(area) as i32;
     let mut y = area.y0;
     while y < area.y1 {
         let mut x = area.x0;
@@ -374,11 +388,10 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
         HistSource::BelowLayer(l) | HistSource::Layer(l) | HistSource::UpTo(l) => l,
         HistSource::Channel { layer, .. } | HistSource::Colors { layer, .. } => layer,
     };
-    let pixels_kept = view_only(st);
     if let Some((d, l, r, h)) = app.tone_hist.as_mut()
         && *d == doc_id
         && *l == layer
-        && (*r == rev || (*r + 1 == rev && pixels_kept))
+        && (*r == rev || pixels_kept_since(st, *r))
         && h.tag == want
     {
         *r = rev;
@@ -391,10 +404,10 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
     h
 }
 
-/// Whether the latest revision changed no pixels (selecting a layer, say): cached histograms of
-/// the previous revision still hold (#125).
-pub(crate) fn view_only(st: &photocraft_engine::DocState) -> bool {
-    st.last_damage.is_some_and(|r| r.is_empty())
+/// Whether no pixels changed since revision `seen` (selecting a layer, say): cached histograms of
+/// that revision still hold (#125).
+pub(crate) fn pixels_kept_since(st: &photocraft_engine::DocState, seen: u64) -> bool {
+    seen >= st.damage_from() && seen < st.revision && st.last_damage.is_some_and(|r| r.is_empty())
 }
 
 /// After an editor commits its own adjustment layer, the image below it is unchanged: keep the
