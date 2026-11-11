@@ -25,9 +25,9 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
-    pointer(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 });
-    pointer(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 });
-    pointer(app, ToolEvent::Up { x: to[0], y: to[1] });
+    pointer(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(app, ToolEvent::Up { x: to[0], y: to[1] }, egui::Modifiers::NONE);
 }
 
 #[test]
