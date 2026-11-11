@@ -116,6 +116,25 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     }
 }
 
+/// The Serbian interface language was saved as `sr` before the catalogs moved to craft-i18n,
+/// where it is `sr-latn`: a saved `sr` (any case) loads as `sr-latn` and is saved as `sr-latn`.
+/// Other codes, and `auto`, load as saved.
+#[test]
+fn a_saved_serbian_language_migrates_to_sr_latn() {
+    for saved in ["sr", "SR"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": saved}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, "sr-latn", "{saved}");
+        let resaved: Value = serde_json::from_str(&s.prefs_to_json()).unwrap();
+        assert_eq!(resaved["interface"]["language"], "sr-latn", "saved under the new code");
+    }
+    for kept in ["sr-latn", "bs", "auto", "en"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": kept}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, kept);
+    }
+}
+
 #[test]
 fn legacy_theme_migration_preserves_saved_theme_slots() {
     for (legacy, slot, saved) in [("proMedium", "darkTheme", "solarizedDark"), ("studioLight", "lightTheme", "adwaita")] {
@@ -1113,6 +1132,19 @@ fn the_web_build_caps_memory_usage() {
         assert_eq!(honoured_memory_usage_mb(stored, true), honoured, "web, {stored} MB");
         assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
     }
+}
+
+#[test]
+fn paths_with_empty_segments_cannot_skip_the_alternate_shortcut_limit() {
+    let mut prefs = Preferences::default();
+    let many: Vec<String> = (1..=100).map(|n| format!("F{n}")).collect();
+    for path in [".alternateShortcuts", "alternateShortcuts..", ".alternateShortcuts.file.save", "interface..systemTitleBar"] {
+        assert!(prefs.set(path, json!({"file.save": many})).is_err(), "{path}");
+    }
+    assert!(prefs.set("alternateShortcuts.file.save", json!(many)).is_err());
+    assert!(prefs.alternate_shortcuts.is_empty());
+    prefs.alternate_shortcuts.insert("file.save".into(), (1..=100).map(|n| format!("F{n}")).collect());
+    assert!(prefs.alternates("file.save", None).len() <= MAX_ALTERNATES);
 }
 
 /// The effect cache budget is the stored MB in bytes, at least 16 MB (a hand-edited 0 included),
