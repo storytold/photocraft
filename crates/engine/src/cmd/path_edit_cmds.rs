@@ -192,6 +192,14 @@ fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
         };
         Ok(())
     })?;
+    // Delete / Backspace (`segments`) that takes a whole subpath is Delete Selection, as in
+    // Photoshop (#12761); the tool's click on a lone anchor stays Delete Anchor Point.
+    if removed
+        && segments
+        && let Some(st) = s.active_mut()
+    {
+        st.history.set_current_label("Delete Selection");
+    }
     if let Some(o) = r.as_object_mut() {
         o.insert("subpathRemoved".into(), json!(removed));
     }
