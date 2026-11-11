@@ -151,7 +151,7 @@ fn every_blend_mode_single_layer_oracle() {
 #[test]
 fn hidden_and_clipped_affect_composite() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     let merged = merged_composite(&f).unwrap();
     let mut d2 = d.clone();
     for l in &mut d2.layers {
@@ -166,7 +166,7 @@ fn merged_alpha_written_when_transparent() {
     let mut d = photocraft_doc::Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
     let fmt = d.pixel_format();
     d.layers.push(raster("half", fmt, photocraft_geom::Rect::new(0, 0, 2, 4), 3, true));
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     assert_eq!(f.header.channels, 4);
     assert!(f.merged_has_alpha());
     let merged = merged_composite(&f).unwrap();
