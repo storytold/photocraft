@@ -116,6 +116,7 @@ mod refs;
 mod selection;
 mod spot;
 mod targeting;
+mod tone_target;
 mod view;
 
 use calc::{apply_image, calculations};
@@ -124,7 +125,7 @@ use planes::edit_mode;
 pub(crate) use planes::tone;
 pub use planes::{
     GraySurface, IsolatedCurveChannel, channel_format, color_count, curve_channel_for_colors, filter_mask_curve_channel, isolated_curve_channel,
-    isolated_curve_channel_for, layer_mask_curve_channel, next_alpha_name,
+    isolated_curve_channel_for, isolated_curve_channel_with_params, layer_mask_curve_channel, next_alpha_name,
 };
 pub(crate) use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
@@ -136,8 +137,10 @@ pub(crate) use targeting::{
     is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface, targeted_channel,
 };
 pub use targeting::{
-    color_move_destination, follows_filter_mask, follows_target, follows_vector_mask_target, move_color_channel, move_color_channels, read_target_surface,
+    color_move_destination, follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, move_color_channel, move_color_channels,
+    read_target_surface,
 };
+pub use tone_target::{ToneTarget, resolve_tone_target};
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 

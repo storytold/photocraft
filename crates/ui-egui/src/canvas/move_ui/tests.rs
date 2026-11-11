@@ -1469,3 +1469,85 @@ fn channel_drag_across_artboards_keeps_the_layer_on_its_board() {
         assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
     }
 }
+
+/// View › Pattern Preview: dragging a block off the right edge shows it coming in on the left,
+/// and the release commits that wrap (#10293).
+#[test]
+fn pattern_preview_drag_wraps_pixels_across_the_canvas_edge() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 32, "height": 16, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(28, 4, 32, 12), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.view.pattern_preview = true;
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 8.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 8.0, pressure: 1.0 }, m);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let blue = |d: &photocraft_doc::Document, x: i32| d.layer(id).and_then(|l| l.surface()).is_some_and(|s| s.pixel(x, 6)[2] > 0.9);
+    let (shown, wrapped_key) = super::display_doc(&mut app, 0).expect("a wrapped preview");
+    let st = app.session.active().unwrap();
+    let damage = super::damage(&app, st.doc.id, st.revision, 0, wrapped_key);
+    assert!(damage.is_none_or(|r| r.contains(2, 6) && r.contains(30, 6)), "damage covers both changed edges");
+    assert!(blue(&shown, 2), "the preview brings the block in on the left");
+    assert!(!blue(&shown, 30), "the preview clears where the block was");
+    app.ui.view.pattern_preview = false;
+    let (shown, raw_key) = super::display_doc(&mut app, 0).expect("a rebuilt preview");
+    assert_ne!(wrapped_key, raw_key, "the rebuilt preview does not reuse the wrapped cache key");
+    let st = app.session.active().unwrap();
+    assert!(super::damage(&app, st.doc.id, st.revision, wrapped_key, raw_key).is_none(), "old-mode keys force a full redraw");
+    assert!(!blue(&shown, 2), "turning Pattern Preview off mid-drag stops wrapping");
+    assert!(blue(&shown, 34), "the block sits at the raw offset");
+    app.ui.view.pattern_preview = true;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, m);
+    let committed = &app.session.active().unwrap().doc;
+    assert!(blue(committed, 2) && !blue(committed, 30), "release commits the wrap");
+}
+
+#[test]
+fn pattern_preview_keeps_native_channel_move_preview_and_commit_equal() {
+    for colors in [vec![0], vec![0, 2]] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("opaque colour samples", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                surface.fill_rect(Rect::new(0, 0, 32, 16), &[0.2, 0.4, 0.6, 1.0]);
+                surface.fill_rect(Rect::new(28, 4, 32, 12), &[0.8, 0.5, 0.1, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("channel.target", json!({"colors": colors})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.view.pattern_preview = true;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let mut expected = photocraft_engine::Session::new();
+        expected.tools.background = app.session.tools.background;
+        expected.add_document((*before).clone(), None);
+        expected.execute("layer.translate", json!({"layer": id.0, "target": {"colors": colors}, "dx": 6, "dy": 0})).unwrap();
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 8.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 8.0, pressure: 1.0 }, m);
+        let (shown, _) = super::display_doc(&mut app, 0).unwrap();
+        assert_eq!(shown.layer(id), expected.active().unwrap().doc.layer(id));
+        app.ui.view.pattern_preview = false;
+        assert_eq!(super::display_doc(&mut app, 0).unwrap().0.layer(id), shown.layer(id));
+        app.ui.view.pattern_preview = true;
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, m);
+        assert_eq!(app.session.active().unwrap().doc.layer(id), shown.layer(id));
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+    }
+}

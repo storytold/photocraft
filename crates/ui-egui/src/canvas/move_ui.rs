@@ -185,7 +185,10 @@ fn exceeds(doc: &Document, ids: &[LayerId], limit: u64, mask_target: bool) -> bo
 }
 
 /// Preview keys of move drags: `BASE + n`, one per offset shown (see `canvas::display_doc`).
+/// [`PATTERN_BIT`] marks a wrapped preview so a mid-drag Pattern Preview toggle cannot reuse
+/// the other mode's cached pixels (`is_preview_key` still holds: `BASE + bit + n < BASE << 1`).
 const BASE: u64 = 1 << 39;
+const PATTERN_BIT: u64 = 1 << 20;
 
 pub(crate) struct MovePreview {
     doc: DocId,
@@ -202,7 +205,7 @@ pub(crate) struct MovePreview {
     stationary: bool,
     background: [f32; 4],
     canvas: Rect,
-    /// Offsets shown so far, by preview key (`BASE + index`).
+    /// Offsets shown so far, by preview key (`BASE + index`, with [`PATTERN_BIT`] when wrapping).
     offsets: Vec<(i32, i32)>,
     /// The document at the latest offset.
     shown: Option<Arc<Document>>,
@@ -211,6 +214,8 @@ pub(crate) struct MovePreview {
     /// The moving layers hold more pixels than [`LIVE_LIMIT`]: they aren't copied for every frame
     /// of the drag, which shows its outline and arrow alone (#6114, #6163).
     too_big: bool,
+    /// View › Pattern Preview: pixels wrap, so a partial damage rect would leave the far edge stale.
+    pattern: bool,
 }
 
 /// An immutable, reduced source for a Move drag on a native colour set. The per-frame offset
@@ -352,16 +357,22 @@ pub(crate) fn cancel_stale_gpu(app: &mut PhotocraftApp) {
 
 impl MovePreview {
     fn key(&self) -> u64 {
-        BASE + self.offsets.len() as u64
+        BASE + self.offsets.len() as u64 + if self.pattern { PATTERN_BIT } else { 0 }
     }
     fn offset_of(&self, key: u64) -> Option<(i32, i32)> {
         if key == 0 {
             return Some((0, 0));
         }
-        let i = usize::try_from(key.checked_sub(BASE + 1)?).ok()?;
+        if (key & PATTERN_BIT != 0) != self.pattern {
+            return None;
+        }
+        let i = usize::try_from((key & !PATTERN_BIT).checked_sub(BASE + 1)?).ok()?;
         self.offsets.get(i).copied()
     }
     fn area(&self, d: (i32, i32)) -> Option<Rect> {
+        if self.pattern {
+            return Some(self.canvas);
+        }
         let b = self.bounds?;
         if b.is_empty() {
             return Some(b);
@@ -369,6 +380,16 @@ impl MovePreview {
         let shifted = b.translate(d.0, d.1);
         Some(if self.stationary { b.union(&shifted) } else { shifted }.inflate(1).intersect(&self.canvas))
     }
+}
+
+/// `layer.translate` params, plus `"wrap": true` while View › Pattern Preview is on.
+pub(crate) fn pattern_wrap(app: &PhotocraftApp, mut args: serde_json::Value) -> serde_json::Value {
+    if app.ui.view.pattern_preview
+        && let Some(obj) = args.as_object_mut()
+    {
+        obj.insert("wrap".into(), json!(true));
+    }
+    args
 }
 
 /// The whole-pixel offset of the current Move drag on document `idx`, if one is under way.
@@ -417,6 +438,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if channel.is_some() {
         photocraft_engine::channel_transform::retry_capture(&doc).ok()?;
     }
+    let pattern = app.ui.view.pattern_preview && channel.is_none();
+    // A toggle of Pattern Preview mid-drag drops the old keys; `damage` is then `None` and the
+    // canvas recomposites, so preview pixels and the release share the live mode.
+    if app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.pattern != pattern) {
+        app.move_preview = None;
+    }
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
         let generation = photocraft_raster::spill::read_error_generation();
@@ -450,6 +477,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
             shown: None,
             floating: false,
             too_big,
+            pattern,
         });
     }
     let p = app.move_preview.as_mut()?;
@@ -462,12 +490,13 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if p.shown.is_none() || p.offsets.last() != Some(&offset) || (channel.is_some() && p.background != background) {
         let generation = photocraft_raster::spill::read_error_generation();
         let t0 = crate::gpu_canvas::now_ms();
+        let wrap = pattern.then_some(doc.bounds());
         let moved = match channel {
             Some((id, colors)) => {
                 let mut d = (*doc).clone();
                 photocraft_engine::channel_cmds::move_color_channels(&mut d, id, colors, offset.0, offset.1, background).map(|()| d)
             }
-            None => photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target),
+            None => photocraft_engine::layer_multi_cmds::moved_wrapping(&doc, &p.ids, offset.0, offset.1, mask_target, wrap),
         };
         match moved {
             Ok(d) => {
@@ -552,6 +581,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             shown: None,
             floating: true,
             too_big: false,
+            pattern: false,
         });
     }
     if offset == (0, 0) && app.move_preview.as_ref().is_none_or(|p| p.offsets.is_empty()) {
@@ -616,15 +646,16 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     app.move_gpu_preview = None;
     // Only when the canvas shows this very offset (else it recomposites everything once).
     let at = (dx as i32, dy as i32);
-    let shown = app
-        .move_preview
-        .take()
-        .filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at) && (!p.stationary || p.background == app.session.tools.background));
+    let pattern = app.ui.view.pattern_preview && color_target(app).is_none();
+    let shown = app.move_preview.take().filter(|p| {
+        p.shown.is_some() && p.offsets.last() == Some(&at) && p.pattern == pattern && (!p.stationary || p.background == app.session.tools.background)
+    });
     if dx == 0.0 && dy == 0.0 {
         return;
     }
     // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
-    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest}))
+    let Ok(result) =
+        app.run("layer.translate", pattern_wrap(app, json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest})))
     else {
         return;
     };
