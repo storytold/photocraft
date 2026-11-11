@@ -207,3 +207,24 @@ fn object_finder_off_dab_subtracts_with_alt_and_in_subtract_mode() {
         assert!(selected(&app, [20.0, 20.0]), "bar mode {bar}, {mods:?} keeps the rest");
     }
 }
+
+#[test]
+fn indexed_color_alerts_instead_of_deselecting_or_moving_the_outline() {
+    let mut app = app();
+    click(&mut app, RED, Modifiers::NONE);
+    app.run("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    assert!(selected(&app, RED));
+    let steps = app.session.active().unwrap().history.past_len();
+    let errors = |app: &PhotocraftApp| app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).count();
+    for gesture in 0..2 {
+        if gesture == 0 {
+            click(&mut app, RED, Modifiers::NONE);
+        } else {
+            drag(&mut app, RED, [250.0, 220.0], Modifiers::NONE);
+        }
+        assert_eq!(errors(&app), 1, "gesture {gesture}: the tool's alert");
+        assert!(selected(&app, RED) && !selected(&app, [340.0, 300.0]), "gesture {gesture}: the selection stays");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps, "gesture {gesture}: no history step");
+        app.ui.dialogs.clear();
+    }
+}
