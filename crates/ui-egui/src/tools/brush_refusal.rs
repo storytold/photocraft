@@ -113,3 +113,7 @@ mod sponge_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../bucket_bitmap_alert_tests.rs"]
 mod bucket_bitmap_alert_tests;
+
+#[cfg(test)]
+#[path = "remove_locked_alert_tests.rs"]
+mod remove_locked_alert_tests;
