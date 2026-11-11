@@ -1123,6 +1123,7 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A continuation belongs to the dialog that paused it, even when another
         // action has a valid token. Replacing it would resume or cancel that action.
         Some(_) if field == crate::actions::RESUME => err("the paused action token is read-only"),
+        Some(_) if field == crate::filter_dialog::MATCH_COLOR_DESTINATION => err("the Match Color destination is read-only"),
         Some(_) if previewed => err("confirm or cancel the color picker first"),
         // A Color Picker's target is fixed when it opens: OK must set the field it previewed in.
         Some(d) if matches!(field, "__colorPicker" | "__dialog" | "__field") && crate::color_picker_ui::owns(&d.fields) => {
@@ -1131,6 +1132,14 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A marker picks the handler OK runs: a dialog keeps the ones it was opened with.
         Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => err(format!("`{field}` is set only by the dialog it belongs to")),
         Some(d) => {
+            // Reconcile old choices before interpreting a new explicit source index.
+            crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
+            if field == "source"
+                && d.fields.get("__command").and_then(Value::as_str) == Some("image.adjustments.matchColor")
+                && d.fields.get("source") != Some(&value)
+            {
+                d.fields.remove("sourceLayer");
+            }
             d.fields.insert(field.to_string(), value);
             // A Color Picker's colour shows in its target dialog at once, as a drag would.
             crate::color_picker_ui::live_preview::sync(app);

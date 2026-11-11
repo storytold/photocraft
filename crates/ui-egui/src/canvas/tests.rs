@@ -270,6 +270,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
     let stale = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -324,6 +325,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -564,6 +566,68 @@ fn cross_scale_indexed_matte_preview_rejects_old_tool_colors_from_cached_and_wor
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn match_color_preview_rejects_cached_and_late_frames_from_an_old_source_layer_or_revision() {
+    use crate::dialogs::filter_preview_worker::Computed;
+
+    let command = "image.adjustments.matchColor";
+    for change_layer in [true, false] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+        let red = app.session.active().unwrap().active_layer.unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#cc4422"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Blue"})).unwrap();
+        let blue = app.session.active().unwrap().active_layer.unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#2266cc"})).unwrap();
+        assert!(app.session.set_active(0));
+        crate::filter_dialog::open(&mut app, command).unwrap();
+        app.ui.dialogs[0].fields.extend([("source".into(), json!(1)), ("sourceLayer".into(), json!(red))]);
+        let ctx = egui::Context::default();
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_some(), "the first source preview reaches the canvas");
+        let preview = app.filter_preview.as_ref().unwrap();
+        let old = preview.key.clone();
+        let doc = preview.result.as_ref().unwrap().clone();
+        let mut slider = old.clone();
+        slider.params["fade"] = json!(25.0);
+        assert!(old.same_target(&slider), "a slider on the same source layer keeps the last frame");
+
+        app.background_jobs = true;
+        let (release, wait) = std::sync::mpsc::channel();
+        assert!(
+            app.filter_preview_worker
+                .start(old.clone(), ctx.clone(), move |_| {
+                    wait.recv_timeout(std::time::Duration::from_secs(60)).expect("the test releases the job");
+                    let buffer = photocraft_compose::flatten(&doc);
+                    Computed { result: Some((doc, buffer)), ms: 0.0 }
+                })
+                .unwrap()
+        );
+        let current_layer = if change_layer {
+            app.ui.dialogs[0].fields.insert("sourceLayer".into(), json!(blue));
+            blue
+        } else {
+            assert!(app.session.set_active(1));
+            app.session.select_layer(red).unwrap();
+            app.session.execute("edit.fill", json!({"contents": "color", "color": "#448822"})).unwrap();
+            assert!(app.session.set_active(0));
+            red
+        };
+        let source = &app.session.documents()[1];
+        let sources = vec![(source.doc.id, source.revision)];
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "the cached old preview is not displayed");
+        app.filter_preview = None;
+        release.send(()).unwrap();
+        drive_until(&mut app, &ctx, "a current Match Color preview", |app| {
+            let Some(preview) = &app.filter_preview else { return false };
+            assert_eq!(preview.key.params["sourceLayer"], json!(current_layer), "a late worker published the wrong layer");
+            assert_eq!(preview.key.sources, sources, "a late worker published the wrong source revision");
+            preview.result.is_some() && !app.filter_preview_worker.busy()
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn a_preview_computed_mid_drag_reaches_the_canvas_and_then_converges() {
     // A drag used to paint nothing at all: every completion was dropped for carrying stale
     // parameters, so the canvas only ever showed an effect once the pointer had come to rest.
@@ -662,6 +726,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
