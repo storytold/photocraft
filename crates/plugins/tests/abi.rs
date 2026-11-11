@@ -17,6 +17,7 @@ fn fresh_dir(tag: &str) -> std::path::PathBuf {
     let base = std::env::temp_dir();
     for n in 0.. {
         let dir = base.join(format!("{tag}-{}-{n}", std::process::id()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);

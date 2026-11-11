@@ -338,6 +338,7 @@ fn to_bytes_reserves_the_whole_output_up_front() {
 fn tempfile_dir(tag: &str) -> std::path::PathBuf {
     for n in 0.. {
         let dir = std::env::temp_dir().join(format!("{tag}-{}-{n}", std::process::id()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);

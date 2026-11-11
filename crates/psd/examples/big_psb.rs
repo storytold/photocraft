@@ -22,11 +22,16 @@ fn main() -> std::io::Result<()> {
             let mut n = 0u32;
             loop {
                 let dir = std::env::temp_dir().join(format!("photocraft-big-psb-{}-{n}", std::process::id()));
+                #[cfg_attr(not(unix), allow(unused_mut))]
                 let mut builder = std::fs::DirBuilder::new();
                 #[cfg(unix)]
                 std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
                 match builder.create(&dir) {
-                    Ok(()) => break dir,
+                    Ok(()) => {
+                        // Kept after the run (the fixtures are the point): remove it when done.
+                        eprintln!("writing fixtures to {} (remove it when done)", dir.display());
+                        break dir;
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 1000 => n += 1,
                     Err(e) => return Err(e),
                 }
@@ -37,7 +42,9 @@ fn main() -> std::io::Result<()> {
     for case in PSB_CASES.iter().chain([&PSD_2GB]).filter(|c| wanted.is_empty() || wanted.iter().any(|w| w == c.name)) {
         let path = out.join(case.file_name());
         let t = std::time::Instant::now();
-        let len = case.write_file(&path)?;
+        let len = case.write_file(&path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&path); // no half-written fixture left behind
+        })?;
         println!("{}: {:.2} GB in {:.1} s", path.display(), len as f64 / 1e9, t.elapsed().as_secs_f64());
     }
     Ok(())
