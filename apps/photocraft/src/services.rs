@@ -55,6 +55,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("HEIF", &["heic", "heif", "hif"]),
     ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
+    ("JPEG XL", &["jxl"]),
     ("Krita", &["kra", "krz"]),
     ("OpenEXR", &["exr"]),
     ("OpenRaster", &["ora"]),
