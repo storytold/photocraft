@@ -1181,9 +1181,13 @@ fn csv_field(v: &Value) -> String {
     let s = match v {
         // A text cell a spreadsheet would read as a formula gets a leading apostrophe (OWASP CSV
         // injection); plain numbers in text keep their sign.
+        // Leading spaces do not hide it: a spreadsheet that trims them still reads a formula.
         Value::String(s)
-            if s.starts_with(['=', '@', '\t', '\r', '\n', '\u{ff1d}', '\u{ff20}'])
-                || (s.starts_with(['+', '-', '\u{ff0b}', '\u{ff0d}']) && s.parse::<f64>().is_err()) =>
+            if {
+                let t = s.trim_start_matches(' ');
+                t.starts_with(['=', '@', '\t', '\r', '\n', '\u{ff1d}', '\u{ff20}'])
+                    || (t.starts_with(['+', '-', '\u{ff0b}', '\u{ff0d}']) && t.parse::<f64>().is_err())
+            } =>
         {
             format!("'{s}")
         }

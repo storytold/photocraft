@@ -569,6 +569,9 @@ fn csv_text_cells_that_read_as_formulas_are_neutralised() {
         ("\u{ff1d}1+1", "'\u{ff1d}1+1"),
         ("\u{ff0b}1", "'\u{ff0b}1"),
         ("\u{ff20}SUM(A1)", "'\u{ff20}SUM(A1)"),
+        (" =1+1", "' =1+1"),
+        ("  -2+3", "'  -2+3"),
+        (" -5.5", " -5.5"),
     ] {
         assert_eq!(csv_field(&json!(cell)), want, "{cell}");
     }
