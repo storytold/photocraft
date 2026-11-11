@@ -359,6 +359,33 @@ fn edited_text_layer_takes_its_own_style_runs() {
     assert!(t.char_runs().iter().all(|r| r.style.features.iter().all(|f| f.tag == "calt")), "the old text's salt came back");
 }
 
+/// Stylistic Sets (#10285) on a type layer of an opened file save into its `Txt2` object as the
+/// set mask and come back on reopen: Set 1 and Set 5 on "Il", none on "36".
+#[test]
+fn edited_text_layer_keeps_its_stylistic_sets() {
+    let mut doc = Document::new("k", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut t = layer("Il36", &[(2, Kerning::Metrics, 0.0), (2, Kerning::Metrics, 0.0)]);
+    if let Some(run) = t.runs.first_mut() {
+        run.style.features = ["ss01", "ss05"].iter().map(|tag| photocraft_doc::text::FontFeature { tag: (*tag).into(), value: 1 }).collect();
+    }
+    t.sync_summary();
+    photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
+    let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
+    t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
+    doc.layers.push(Layer::new("sets", LayerContent::Text(t)));
+    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(photoshop_txt2(&[("Il36", "")])))];
+    let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
+    let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
+    let LayerContent::Text(t) = &back.layers[0].content else { panic!("not text") };
+    assert_eq!(t.text, "Il36");
+    let on = |r: &TextRun, tag: &str| r.style.features.iter().any(|f| f.tag == tag && f.value > 0);
+    let runs = t.char_runs();
+    let first = runs.first().unwrap();
+    assert!(on(first, "ss01") && on(first, "ss05") && !on(first, "ss02"), "{runs:?}");
+    assert_eq!(first.len, 2, "{runs:?}");
+    assert!(runs.iter().skip(1).all(|r| !on(r, "ss01") && !on(r, "ss05")), "{runs:?}");
+}
+
 /// A file-controlled `TextIndex` must not size the save: `i32::MAX` is ignored (the regenerated
 /// `Txt2` is sized by real text objects, never by a file's numbers) and the document still saves
 /// and reopens with its text.
@@ -525,4 +552,27 @@ fn photoshop_kerning_oracles() {
         eprintln!("{name}: advance error vs Photoshop: mean {mean:.3} px, worst {worst:.3} px");
         assert!(worst <= worst_max && mean <= mean_max, "{name}: mean {mean}, worst {worst}");
     }
+}
+
+/// A type layer's range on its path (a moved start and an end limit) survives a PSD save and
+/// open, without an export warning.
+#[test]
+fn psd_keeps_a_text_path_range() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_doc::vector::Subpath;
+
+    let mut doc = Document::new("range", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut text = layer("hello", &[]);
+    text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (60.0, 0.0)]), start: 5.0, end: Some(20.0), flip: false };
+    doc.layers.push(Layer::new("limited", LayerContent::Text(text)));
+    let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
+    assert!(!result.warnings.iter().any(|w| w.contains("limited")), "{:?}", result.warnings);
+    let back = photocraft_io::import("range.psd", &result.bytes).unwrap().document;
+    let shape = back.layers.iter().find_map(|l| match &l.content {
+        LayerContent::Text(t) => Some(t.shape.clone()),
+        _ => None,
+    });
+    let Some(TextShape::Path { path, start, end: Some(end), flip: false }) = shape else { panic!("{shape:?}") };
+    assert!(!path.closed && path.knots.len() == 2, "the whole path is saved: {path:?}");
+    assert!((start - 5.0).abs() < 0.01 && (end - 20.0).abs() < 0.01, "{start} {end}");
 }
