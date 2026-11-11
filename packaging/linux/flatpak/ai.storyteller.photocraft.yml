@@ -97,6 +97,9 @@ modules:
       env:
         CARGO_HOME: /run/build/photocraft/cargo
         CARGO_NET_OFFLINE: 'true'
+        # The interface translations (the craft-i18n source below), embedded by build.rs.
+        CRAFT_I18N_DIR: /run/build/photocraft/craft-i18n
+        CRAFT_I18N_REQUIRED: '1'
     build-commands:
       - cargo --offline build --release --locked -p photocraft --features heif
       - install -Dm755 target/release/photocraft /app/bin/photocraft
@@ -119,4 +122,10 @@ modules:
           - corpus
           - build-flatpak
           - .flatpak-builder
+          - craft-i18n
       - cargo-sources.json
+      # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: e02939ef009218e81c44e8ec001fbb7603461de4
+        dest: craft-i18n

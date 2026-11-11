@@ -178,9 +178,18 @@ fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
     // A saved path may lose its last anchor and stay listed, empty; the Work Path, a shape's path,
     // a vector mask and a Type Path keep refusing it.
     let saved = p.get("name").and_then(Value::as_str).is_some_and(|n| n != "layer" && !crate::vector_cmds::is_work(Some(n)));
+    let segments = p.get("segments").and_then(Value::as_bool).unwrap_or(false);
     let mut removed = false;
     let mut r = edit_path(s, CMD, p, "Delete Anchor Point", |path| {
-        removed = if saved { edit::delete_anchor_allow_empty(path, k)? } else { edit::delete_anchor(path, k)? };
+        // The path's only anchor has no segments: it goes, or is refused, as without `segments`.
+        let only = path.subpaths.iter().map(|sp| sp.knots.len()).fold(0, usize::saturating_add) <= 1;
+        removed = if segments && !only {
+            edit::delete_anchor_and_segments(path, k)?
+        } else if saved {
+            edit::delete_anchor_allow_empty(path, k)?
+        } else {
+            edit::delete_anchor(path, k)?
+        };
         Ok(())
     })?;
     if let Some(o) = r.as_object_mut() {
@@ -294,7 +303,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.deleteAnchor",
             "Delete Anchor Point",
-            r#""subpath":i,"knot":j (its neighbours are joined, keeping their handles; a subpath's last anchor removes the subpath; the path's only anchor empties a saved path and is refused elsewhere) (the result also has subpathRemoved:bool)"#.into(),
+            r#""subpath":i,"knot":j,"segments":bool=false (its neighbours are joined, keeping their handles; segments = ⌫/Delete on a selected anchor: its two segments go too, so a closed subpath opens there and an open one splits; a subpath's last anchor removes the subpath; the path's only anchor empties a saved path and is refused elsewhere) (the result also has subpathRemoved:bool)"#.into(),
             delete_anchor,
         ),
         spec(
@@ -468,6 +477,22 @@ mod tests {
         s.execute("path.deleteAnchor", json!({"subpath": 0, "knot": 1})).unwrap();
         let k = &work(&s).subpaths[0].knots;
         assert_eq!((k.len(), k[0].out_ctrl, k[1].in_ctrl), (2, before.subpaths[0].knots[0].out_ctrl, before.subpaths[0].knots[2].in_ctrl));
+    }
+
+    #[test]
+    fn deleting_an_anchor_with_its_segments_opens_the_subpath_in_one_step() {
+        let mut s = session();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let (before, steps) = (work(&s), s.active().unwrap().history.entries().len());
+        let r = s.execute("path.deleteAnchor", json!({"subpath": 0, "knot": 1, "segments": true})).unwrap();
+        assert_eq!(r["subpathRemoved"], json!(false));
+        let sp = &work(&s).subpaths[0];
+        assert_eq!((sp.knots.len(), sp.closed), (3, false));
+        assert_eq!(sp.knots[0].anchor, before.subpaths[0].knots[2].anchor, "it starts after the deleted anchor");
+        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
+        assert!(s.undo());
+        assert_eq!(work(&s), before);
     }
 
     #[test]
