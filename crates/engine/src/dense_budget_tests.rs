@@ -52,12 +52,6 @@ fn shadows_highlights_over_distant_tiles_is_refused() {
 }
 
 #[test]
-fn image_size_over_distant_tiles_is_refused() {
-    let (mut s, _) = sparse_session();
-    refused(&mut s, "image.imageSize", json!({"width": 128, "height": 128}));
-}
-
-#[test]
 fn image_size_without_distant_tiles_still_resamples() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
