@@ -79,7 +79,13 @@ pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::Brus
 /// the same tip angle as the Brush Settings panel. A typed fraction is cut off (45.5 → 45).
 pub(super) fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    ui.add(icons::image("rotate-cw", 15.0, t.text_dim)).on_hover_text(tl!("Set the brush angle"));
+    let (rect, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
+    icons::paint(ui, rect, "rotate-cw", 15.0, t.text_dim);
+    // The field's scrub names it by the icon, so the icon needs an accessible node of its own.
+    icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Angle")));
+    // Dragging the icon scrubs the field beside it, like the other options-bar icons; the drag
+    // area laid over the icon shows its tooltip.
+    widgets::scrub_option_icon(ui, &icon, tl!("Set the brush angle"));
     let mut a = b.angle;
     let r = widgets::value_field_named(ui, tl!("Angle"), &mut a, -180.0..=180.0, "°", 52.0);
     if r.changed() && a.is_finite() {

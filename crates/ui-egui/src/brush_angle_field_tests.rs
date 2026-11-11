@@ -69,3 +69,23 @@ fn it_edits_the_brush_settings_panels_angle() {
 fn the_eraser_has_no_angle_field() {
     assert!(angle_field(&bar(Tool::Eraser)).is_none());
 }
+
+#[test]
+fn dragging_the_angle_icon_scrubs_the_field() {
+    let mut h = bar(Tool::Brush);
+    let field = angle_field(&h).expect("the Angle field").accesskit_node().bounding_box().unwrap();
+    // The icon is the 18 px right before the field.
+    let at = egui::pos2(field.x0 as f32 - 9.0, ((field.y0 + field.y1) / 2.0) as f32);
+    h.hover_at(at);
+    h.run();
+    h.drag_at(at);
+    h.run();
+    for i in 1..=4 {
+        h.hover_at(at + vec2(3.0 * i as f32, 0.0));
+        h.run();
+    }
+    h.drop_at(at + vec2(12.0, 0.0));
+    h.run_steps(2);
+    let angle = h.state().session.tools.brush.angle;
+    assert!(angle > 0.0 && angle.fract() == 0.0, "a right drag turns the angle in whole degrees: {angle}");
+}
