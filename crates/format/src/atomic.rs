@@ -207,7 +207,18 @@ pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, byt
 
 /// [`atomic_write_with`] reporting write progress (see [`atomic_write_progress`]).
 pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
-    let target = resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))?;
+    write_resolved(fs, retry, path, bytes, progress, true)
+}
+
+/// [`atomic_write`] that never follows a symlink at `path`: a link there is replaced by the new
+/// file (the rename swaps the directory entry), so a link planted between a caller's own check
+/// and this write cannot carry it outside the folder (a store managing its own entries).
+pub fn atomic_write_no_follow(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_resolved(&RealFs, RenameRetry::platform(), path, bytes, &|_| {}, false)
+}
+
+fn write_resolved(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32), follow: bool) -> io::Result<()> {
+    let target = if follow { resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))? } else { path.to_path_buf() };
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
     let dir = match target.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),

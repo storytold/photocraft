@@ -356,6 +356,20 @@ fn writes_through_a_symlink() {
     assert_eq!(std::fs::read(&real).unwrap(), b"new");
 }
 
+#[cfg(unix)]
+#[test]
+fn no_follow_replaces_a_symlink_and_leaves_its_target() {
+    let d = TempDir::new("nofollow");
+    let real = d.0.join("real.psd");
+    let link = d.0.join("link.psd");
+    std::fs::write(&real, ORIGINAL).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    crate::atomic::atomic_write_no_follow(&link, b"new").unwrap();
+    assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&link).unwrap(), b"new");
+    assert_eq!(std::fs::read(&real).unwrap(), ORIGINAL);
+}
+
 /// #6605: saving onto a dangling symlink writes through to its target instead of replacing the
 /// link with a regular file, even when a folder on the way to the target doesn't exist yet.
 #[cfg(unix)]
