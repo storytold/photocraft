@@ -468,3 +468,22 @@ fn the_write_probe_never_follows_an_entry_already_at_its_name() {
     assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_copied_recovery_tree_keeps_its_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp("copy-private");
+    let from = root.join("bundle");
+    std::fs::create_dir_all(from.join("inner")).unwrap();
+    std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(from.join("inner/blob"), b"secret").unwrap();
+    std::fs::set_permissions(from.join("inner/blob"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let to = root.join("copy");
+    copy_tree(&from, &to, 0).unwrap();
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&to) & 0o077, 0, "folder");
+    assert_eq!(mode(&to.join("inner/blob")) & 0o077, 0, "file");
+    assert_eq!(std::fs::read(to.join("inner/blob")).unwrap(), b"secret");
+    let _ = std::fs::remove_dir_all(&root);
+}
