@@ -98,6 +98,10 @@ fn resize_box(app: &mut PhotocraftApp, ed: &TextEdit, r: BoxResize, x: f64, y: f
     }
     // type.edit places the box's top-left at the given document point.
     let o = r.aff.apply(Point::new(f64::from(x0), f64::from(y0)));
+    // Rendered in the background where that is on; the release applies the box.
+    if crate::type_box_preview::want(app, LayerId(ed.layer), [o.x, o.y, f64::from(x1 - x0), f64::from(y1 - y0)]) {
+        return;
+    }
     let _ = app.run("type.edit", json!({"layer": ed.layer, "box": [o.x, o.y, x1 - x0, y1 - y0], "coalesce": ed.session}));
 }
 
@@ -121,6 +125,9 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
             let snap = box_shape(app, id).zip(layout(app, id)).map(|((bx, by, w, h), (_, aff, _))| BoxResize { handle: i, shape: [bx, by, w, h], aff });
             if let (Some(snap), Some(e)) = (snap, app.ui.text_edit.as_mut()) {
                 e.resize = Some(snap);
+            }
+            if app.ui.text_edit.as_ref().is_some_and(|e| e.resize.is_some()) {
+                crate::type_box_preview::begin(app, id, ed.session.clone());
             }
             return true;
         }
@@ -152,6 +159,13 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     }
     if let Some(id) = hit_layer(app, x, y) {
         let _ = app.session.select_layer(id);
+        // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
+        // would refuse the first keystroke; the reference application says so in an alert (#12040).
+        if app.session.active().is_some_and(|st| st.doc.effective_locks(id).all) {
+            let message = json!({"message": tl!("Could not use the type tool because the layer is locked.")});
+            app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
+            return true;
+        }
         let key = session_key(app);
         if begin_edit(app, id, &key).is_err() {
             return true;
@@ -297,6 +311,7 @@ fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
 
 /// Pointer up. `rect` is the dragged box (document px) when no edit session consumed the press.
 pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+    crate::type_box_preview::flush(app);
     if let Some(e) = app.ui.text_edit.as_mut() {
         e.dragging = false;
         e.resize = None;
@@ -310,9 +325,11 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
     // on the path on its outline. The Type Mask tools ignore paths.
     let target = if !mask && !makes_box(app, start, end) { path_target(app, start[0], start[1]) } else { None };
-    // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The Type
-    // Mask tools start empty, as Photoshop's do.
-    let text = if !mask && app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
+    // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
+    // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
+    // vertical mask's placeholder is not measured yet, so it keeps starting empty.
+    let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
+    let text = if placeholder { PLACEHOLDER } else { "" };
     let mut p = default_style_params(app);
     p["text"] = json!(text);
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
@@ -460,3 +477,7 @@ pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
         (e.anchor, e.caret) = (a, b);
     }
 }
+
+#[cfg(test)]
+#[path = "mask_placeholder_tests.rs"]
+mod mask_placeholder_tests;
