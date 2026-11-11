@@ -454,12 +454,13 @@ fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let mut mode = src.metadata()?.permissions().mode() & 0o777;
-        // A file in a private folder was private because of the folder: keep that when it is copied alone.
-        if let Some(parent) = from.parent().filter(|p| !p.as_os_str().is_empty())
-            && std::fs::metadata(parent)?.permissions().mode() & 0o077 == 0
-        {
-            mode &= !0o077;
+        // A file in a restricted folder was only as open as the folder: keep that when it is copied
+        // alone (each of group and other can read the copy only if the folder let them in).
+        if let Some(parent) = from.parent().filter(|p| !p.as_os_str().is_empty()) {
+            mode &= 0o700 | (std::fs::metadata(parent)?.permissions().mode() & 0o077);
         }
+        // The new owner can always read and write its own copy (a 0044 source, say).
+        mode |= 0o600;
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
     }
     let mut dst = options.open(to)?;

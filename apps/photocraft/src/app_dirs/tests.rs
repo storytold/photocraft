@@ -504,3 +504,28 @@ fn a_sidecar_from_a_private_folder_is_copied_private() {
     assert_eq!(std::fs::metadata(&to).unwrap().permissions().mode() & 0o077, 0);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_copied_sidecar_is_no_more_open_than_its_folder_and_stays_readable_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp("copy-partial");
+    let legacy = root.join("legacy");
+    std::fs::create_dir_all(&legacy).unwrap();
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let set = |p: &Path, m: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
+    let from = legacy.join("a.meta");
+    std::fs::write(&from, b"x").unwrap();
+    // A folder shut to others: the copy is too, though the file allowed them.
+    set(&from, 0o644);
+    set(&legacy, 0o750);
+    copy_file(&from, &root.join("one")).unwrap();
+    assert_eq!(mode(&root.join("one")) & 0o030, 0, "the group gets no more than the file had");
+    assert_eq!(mode(&root.join("one")) & 0o007, 0, "others shut out");
+    // A read-only source: the copy is still readable and writable by its owner.
+    set(&from, 0o444);
+    set(&legacy, 0o755);
+    copy_file(&from, &root.join("two")).unwrap();
+    assert_eq!(mode(&root.join("two")) & 0o600, 0o600);
+    let _ = std::fs::remove_dir_all(&root);
+}
