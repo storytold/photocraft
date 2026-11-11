@@ -104,7 +104,7 @@ fn completion_identity_applies_remaining_settings_after_tab_reordering() {
     let state = app.session.active().unwrap();
     assert_eq!(state.doc.id, replacement);
     assert!(!state.is_dirty(), "development finishes opening only the replacement");
-    assert!(state.history.past_len() > 0, "remaining Camera Raw settings were applied");
+    assert!(state.history.past_len() > 0, "remaining RAW Develop settings were applied");
     assert!(!app.view_docs.contains(&raw.document));
     assert!(app.view_docs.contains(&replacement));
 }

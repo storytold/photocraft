@@ -35,7 +35,7 @@ fn zoom_menu_steps_keep_the_view_centre_and_history() {
 }
 
 #[test]
-fn clicked_point_preference_and_hand_menu_keep_their_existing_anchors() {
+fn clicked_point_zoom_keeps_its_anchor_and_hand_menu_rejects_step_commands() {
     for (tool, center_on_point) in [(Tool::Zoom, true), (Tool::Hand, true), (Tool::Hand, false)] {
         for (command, direction) in [("view.zoomIn", 1), ("view.zoomOut", -1)] {
             let mut app = zoom_app(400, 300);
@@ -47,6 +47,14 @@ fn clicked_point_preference_and_hand_menu_keep_their_existing_anchors() {
             right_click(&mut h, p, Modifiers::NONE);
             let doc = h.state().ui.canvas_tool_menu.as_ref().unwrap().anchor.unwrap().map(|n| n as f32);
             let ctx = h.ctx.clone();
+            if tool == Tool::Hand {
+                // #12022 gives Hand only fixed zoom rows. An injected step command must not run.
+                assert!(!available(h.state(), h.state().ui.canvas_tool_menu.as_ref().unwrap(), command));
+                choose(h.state_mut(), &ctx, command);
+                let v = &h.state().ui.views[0];
+                assert_eq!((v.zoom, v.center), (before.zoom, before.center), "Hand must reject {command}");
+                continue;
+            }
             choose(h.state_mut(), &ctx, command);
             let v = &h.state().ui.views[0];
             assert_eq!(v.zoom, crate::zoom_levels::step(before.zoom, direction, [400, 300]));
