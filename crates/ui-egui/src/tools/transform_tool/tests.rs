@@ -879,11 +879,11 @@ fn split_tool_places_the_line_where_the_pointer_releases() {
     warp_pointer(&mut app, ToolEvent::Up { x: 14.0, y: 20.0 }, 2.0, mods);
     let us = knots(&app);
     let has = |ks: &[f64], u: f64| ks.iter().any(|k| (k - u).abs() < 0.02);
-    // The default grid's thirds stay; the release cuts the section that contains it.
-    assert!(has(&us, 0.25) && has(&us, 1.0 / 3.0) && has(&us, 2.0 / 3.0), "{us:?}");
+    // The release cuts the default grid where it is, in place of its vertical thirds.
+    assert!(us.len() == 3 && has(&us, 0.25), "{us:?}");
     let vs = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap().vs.clone();
     assert!(has(&vs, 1.0 / 3.0) && has(&vs, 2.0 / 3.0), "horizontal sections stay: {vs:?}");
-    assert!(app.transform_preview.as_ref().unwrap().split_tool.is_some(), "the tool stays armed");
+    assert!(app.transform_preview.as_ref().unwrap().split_tool.is_none(), "one split ends the mode");
     // Option-click in the open places both lines, without a button armed.
     app.transform_preview.as_mut().unwrap().split_tool = None;
     let alt = egui::Modifiers::ALT;
@@ -2147,7 +2147,7 @@ fn right_click_menu_offers_warp_for_a_path() {
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
 }
 
-fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
+pub(super) fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();
     app.sync_views();
