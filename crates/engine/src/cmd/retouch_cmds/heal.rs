@@ -44,7 +44,6 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
     out
 }
 
-/// Fit the sampled texture to the destination using matching native channels and source coverage.
 pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.healingBrush";
     let (stroke, id) = parse_brush(s, p, CMD)?;
