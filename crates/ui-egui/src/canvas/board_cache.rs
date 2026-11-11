@@ -242,7 +242,12 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Ask for a frame in time for [`tick`] to follow the pictures that are due. Called after
 /// [`apply`] too, which can make one due after this frame's `tick` found none.
 pub(crate) fn schedule(app: &PhotocraftApp, ctx: &egui::Context) {
-    if app.board_cache.shots.values().any(|s| s.kept.due) {
+    request_follow(app.board_cache.shots.values().map(|s| &s.kept), ctx);
+}
+
+/// [`schedule`] for these pictures: a frame within [`FOLLOW_MS`] if any of them is due.
+fn request_follow<'a>(kept: impl IntoIterator<Item = &'a Kept>, ctx: &egui::Context) {
+    if kept.into_iter().any(|k| k.due) {
         ctx.request_repaint_after(std::time::Duration::from_millis(FOLLOW_MS as u64));
     }
 }
@@ -377,5 +382,26 @@ mod tests {
         assert!(old.upgrade().is_none(), "the old document is gone");
         set_visible(&mut s, true);
         assert!(still_exact(&kept.doc, &s.active().unwrap().doc, rect), "showing the board can put the picture back");
+    }
+
+    /// A picture whose follow was put off asks for a frame within the interval, so it is followed
+    /// even if nothing else redraws; with none due, no frame is asked for.
+    #[test]
+    fn a_put_off_picture_asks_for_a_frame() {
+        let (s, left) = halves();
+        let doc = s.active().unwrap().doc.clone();
+        let rect = reach(&doc, doc.layer(left).unwrap()).unwrap();
+        let mut kept = Kept { doc: doc.clone(), rect, followed: 0.0, due: false };
+        let ctx = egui::Context::default();
+        let asked = Arc::new(std::sync::Mutex::new(None));
+        let seen = asked.clone();
+        ctx.set_request_repaint_callback(move |info| *seen.lock().unwrap() = Some(info.delay));
+        request_follow([&kept], &ctx);
+        assert_eq!(*asked.lock().unwrap(), None, "nothing due, no frame");
+        assert!(kept.follow(left, &doc, 500.0));
+        assert!(kept.due);
+        request_follow([&kept], &ctx);
+        let delay = asked.lock().unwrap().expect("a frame for the put-off follow");
+        assert!(delay <= std::time::Duration::from_millis(FOLLOW_MS as u64), "within the interval: {delay:?}");
     }
 }
