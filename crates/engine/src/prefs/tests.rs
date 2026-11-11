@@ -1153,6 +1153,19 @@ fn lenient_prefs_reading_is_bounded_on_a_wide_map_with_a_bad_entry() {
     assert!(invalid.len() > 1_900, "the keys past the budget are reported, not silently dropped");
 }
 
+#[test]
+fn paths_with_empty_segments_cannot_skip_the_alternate_shortcut_limit() {
+    let mut prefs = Preferences::default();
+    let many: Vec<String> = (1..=100).map(|n| format!("F{n}")).collect();
+    for path in [".alternateShortcuts", "alternateShortcuts..", ".alternateShortcuts.file.save", "interface..systemTitleBar"] {
+        assert!(prefs.set(path, json!({"file.save": many})).is_err(), "{path}");
+    }
+    assert!(prefs.set("alternateShortcuts.file.save", json!(many)).is_err());
+    assert!(prefs.alternate_shortcuts.is_empty());
+    prefs.alternate_shortcuts.insert("file.save".into(), (1..=100).map(|n| format!("F{n}")).collect());
+    assert!(prefs.alternates("file.save", None).len() <= MAX_ALTERNATES);
+}
+
 /// The effect cache budget is the stored MB in bytes, at least 16 MB (a hand-edited 0 included),
 /// at most 1536 MB on a 32-bit address space (the web, 32-bit Windows) and 65536 MB elsewhere,
 /// and never wraps: on wasm32 an uncapped 4096 MB shifted into `usize` was 0. Both kinds of
