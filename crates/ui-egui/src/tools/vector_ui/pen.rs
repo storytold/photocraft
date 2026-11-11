@@ -154,6 +154,10 @@ pub(super) fn shift_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
 /// clicking the first anchor commits the path. Therefore Cmd/Ctrl+Z must consume one
 /// knot rather than undoing an unrelated, already committed document operation.
 pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
+    // Backspace/Delete use this same primitive: a modal box must keep both draft and future.
+    if super::pen_resume::box_steps(app, "edit.undo") || crate::crop_ui::pending(app) {
+        return false;
+    }
     if !pen_can_redo(app) {
         app.ui.pen_redo.clear();
     }
@@ -186,6 +190,11 @@ pub fn pen_can_redo(app: &PhotocraftApp) -> bool {
     if super::pen_resume::box_steps(app, "edit.redo") || crate::crop_ui::pending(app) {
         return false;
     }
+    pen_future_valid(app)
+}
+
+/// The saved draft context, independent of which modal box temporarily owns the command.
+pub(super) fn pen_future_valid(app: &PhotocraftApp) -> bool {
     app.ui.pen_redo.last().is_some_and(|step| {
         step.before.drawn_with(app.ui.tool)
             && step.before.owner.as_ref().is_some_and(|owner| owner.valid(app))

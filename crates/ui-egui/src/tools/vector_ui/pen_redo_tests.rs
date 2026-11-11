@@ -49,9 +49,11 @@ fn draft_anchor_redo_is_discarded_by_new_drawing_and_commit() {
     assert!(pen_undo_last_point(&mut app));
     pen_down(&mut app, 120., 120., false);
     pen_up(&mut app);
+    assert!(app.ui.pen_redo.is_empty(), "new drawing clears the stored future immediately");
     assert!(!pen_redo_last_point(&mut app));
     assert!(pen_undo_last_point(&mut app));
     assert!(pen_commit(&mut app, false));
+    assert!(app.ui.pen_redo.is_empty(), "commit clears the stored future immediately");
     assert!(!pen_redo_last_point(&mut app));
     assert!(app.ui.pen.is_none());
 }
@@ -76,6 +78,7 @@ fn draft_anchor_redo_refuses_changed_document_or_draft() {
         let doc = app.session.active().unwrap().doc.clone();
         let pen = app.ui.pen.clone();
         assert!(!pen_redo_last_point(&mut app));
+        assert!(app.ui.pen_redo.is_empty(), "refusal discards stale stored entries");
         assert_eq!(app.ui.pen, pen);
         assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
     }
@@ -165,6 +168,7 @@ fn draft_anchor_redo_refuses_a_changed_path_target() {
     let pen = app.ui.pen.clone();
     let doc = app.session.active().unwrap().doc.clone();
     assert!(!pen_redo_last_point(&mut app));
+    assert!(app.ui.pen_redo.is_empty(), "changed-target refusal clears the stored future");
     assert_eq!(app.ui.pen, pen);
     assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
 }
@@ -191,4 +195,21 @@ fn modal_redo_does_not_discard_the_draft_anchor_future() {
     crate::transform_tool::cancel(&mut app);
     assert!(pen_redo_last_point(&mut app), "the box did not consume the anchor future");
     assert_eq!(app.ui.pen, pen);
+}
+
+#[test]
+fn leaving_the_drawing_tool_clears_a_future_even_without_a_live_draft() {
+    for curvature in [false, true] {
+        let mut app = draft(curvature);
+        for _ in 0..3 {
+            assert!(pen_undo_last_point(&mut app));
+        }
+        assert!(app.ui.pen.is_none());
+        assert_eq!(app.ui.pen_redo.len(), 3);
+        app.ui.tool = Tool::Move;
+        finish_pen_if_left(&mut app);
+        assert!(app.ui.pen_redo.is_empty(), "leaving must clear even when there is no draft to commit");
+        app.ui.tool = if curvature { Tool::CurvaturePen } else { Tool::Pen };
+        assert!(!pen_can_redo(&app));
+    }
 }
