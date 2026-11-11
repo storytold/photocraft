@@ -76,15 +76,18 @@ pub(crate) fn post_persistent(app: &mut PhotocraftApp, title: &str, lines: Vec<S
     cap_notices(app);
 }
 
-/// Bound the notice stack, preferentially evicting temporary unpinned messages.
+/// Bound the notice stack, preferentially evicting older unpinned messages before newer ones.
 fn cap_notices(app: &mut PhotocraftApp) {
     while app.ui.notices.len() > MAX_NOTICES {
-        let candidate = app
-            .ui
-            .notices
+        let older = &app.ui.notices[..app.ui.notices.len() - 1];
+        let candidate = older
             .iter()
             .position(|notice| notice.dismiss_pref.is_none() && !notice.sticky && !notice.persistent)
-            .or_else(|| app.ui.notices.iter().position(|notice| !notice.sticky && !notice.persistent));
+            .or_else(|| older.iter().position(|notice| !notice.sticky && !notice.persistent))
+            .or_else(|| {
+                let last = app.ui.notices.last()?;
+                (!last.sticky && !last.persistent).then_some(app.ui.notices.len() - 1)
+            });
         if let Some(idx) = candidate {
             app.ui.notices.remove(idx);
         } else {
@@ -550,5 +553,31 @@ mod tests {
         assert!(app.ui.notices.iter().any(|n| n.persistent));
         crate::menus::apply_workspace(&mut app);
         assert!(!app.ui.notices.iter().any(|n| n.persistent));
+    }
+
+    #[test]
+    /// An incoming temporary warning evicts an older dismissible notice rather than being dropped itself.
+    fn incoming_temporary_warning_evicts_older_dismissible_notice_after_restore_notice() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        let mut saved = crate::dock::snapshot(&app);
+        saved["docking"] = serde_json::json!({"version":2,"layout":{"kind":"unreadable"}});
+        crate::dock::apply(&mut app, &saved);
+        let restore_id = app.ui.notices.iter().find(|n| n.persistent).unwrap().id;
+
+        // Post two notices with dismiss preferences (filling the stack to MAX_NOTICES = 3):
+        let pref1 = post(&mut app, "Dismissible 1", vec![], false, Some("ui.pref1"));
+        let pref2 = post(&mut app, "Dismissible 2", vec![], false, Some("ui.pref2"));
+        assert_eq!(app.ui.notices.len(), MAX_NOTICES);
+
+        // Now post a new temporary notice without preference (such as low-memory warning):
+        let memory_warning_id = post(&mut app, "Low memory warning", vec![], true, None);
+
+        // The new warning must be present, the restore notice must be preserved,
+        // and the older dismissible notice (pref1) should have been evicted.
+        assert_eq!(app.ui.notices.len(), MAX_NOTICES);
+        assert!(app.ui.notices.iter().any(|n| n.id == restore_id && n.persistent));
+        assert!(app.ui.notices.iter().any(|n| n.id == memory_warning_id));
+        assert!(!app.ui.notices.iter().any(|n| n.id == pref1));
+        assert!(app.ui.notices.iter().any(|n| n.id == pref2));
     }
 }
