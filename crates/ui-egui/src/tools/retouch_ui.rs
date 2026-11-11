@@ -602,7 +602,7 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
 /// rectangle: with Object Finder on it selects the object under the pointer, the one hovering
 /// highlighted (#4087). With it off it falls back to a Quick Selection dab at the brush size
-/// instead of looking dead (it subtracts in Subtract mode, otherwise it adds). Larger drags
+/// instead of looking dead (⌥ or Subtract mode subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut. Both combine as the options bar's New / Add / Subtract /
 /// Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥ intersecting (#12853).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
@@ -625,7 +625,7 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     }
     if w < 2.0 || h < 2.0 {
         let size = app.session.tools.brush.size;
-        let mode = if mode == "subtract" { "subtract" } else { "add" };
+        let mode = if mods.alt || mode == "subtract" { "subtract" } else { "add" };
         let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
         report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;

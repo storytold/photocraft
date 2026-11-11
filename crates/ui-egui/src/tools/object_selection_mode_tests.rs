@@ -178,3 +178,32 @@ fn reset_tool_sets_the_mode_back_to_new() {
     crate::menus::invoke(&mut app, &ctx, "tool.reset", json!({})).unwrap();
     assert_eq!(app.ui.selection_mode, 0);
 }
+
+#[test]
+fn object_finder_off_keeps_quick_selection_and_the_rectangle_inside_the_selection() {
+    let mut app = app();
+    click(&mut app, RED, Modifiers::NONE);
+    app.ui.tool_options.object_finder = false;
+    // A New-mode click inside the selection is still a Quick Selection dab, not Deselect.
+    click(&mut app, RED, Modifiers::NONE);
+    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.quick"));
+    assert!(selected(&app, RED));
+    // A drag inside it is still a rectangle Object Selection, not Move Selection.
+    drag(&mut app, [100.0, 100.0], [300.0, 260.0], Modifiers::NONE);
+    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("select.object"));
+    assert_ne!(last_step(&app).as_deref(), Some("Move Selection"));
+}
+
+#[test]
+fn object_finder_off_dab_subtracts_with_alt_and_in_subtract_mode() {
+    let mut app = app();
+    app.ui.tool_options.object_finder = false;
+    let shift_alt = Modifiers { shift: true, alt: true, ..Default::default() };
+    for (bar, mods) in [(0, Modifiers::ALT), (0, shift_alt), (2, Modifiers::NONE)] {
+        app.run("select.all", json!({})).unwrap();
+        app.ui.selection_mode = bar;
+        click(&mut app, RED, mods);
+        assert!(!selected(&app, RED), "bar mode {bar}, {mods:?} subtracts");
+        assert!(selected(&app, [20.0, 20.0]), "bar mode {bar}, {mods:?} keeps the rest");
+    }
+}
