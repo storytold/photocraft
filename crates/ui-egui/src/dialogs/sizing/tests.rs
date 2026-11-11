@@ -32,6 +32,48 @@ fn points_and_picas_use_the_points_per_inch() {
     assert_eq!(pt_per_in(&f), 72.27);
 }
 
+/// A translated label wider than the English column ("Dimensione immagine:" in Italian) widens
+/// the column instead of running out of the dialog on the left; one too long for the widest
+/// column elides, and the fields the wider column pushes right (Resample's list, in Georgian)
+/// still fit the dialog's 440 px maximum width.
+#[test]
+fn translated_labels_stay_inside_the_dialog() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let mut failures = Vec::new();
+    for command in ["image.imageSize", "image.canvasSize"] {
+        let id = open(&mut app, command).unwrap();
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        for lang in crate::i18n::Lang::all() {
+            let _language = crate::i18n::language_scope(lang);
+            // The test fonts have no CJK, Indic or Arabic faces: tofu boxes stand in for
+            // those glyphs, laid out and measured like any other.
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(440.0, 400.0)).allow_missing_glyphs().build_ui_state(
+                |ui, (f, room): &mut (Map<String, Value>, Rect)| {
+                    *room = ui.max_rect();
+                    body(ui, f);
+                },
+                (fields.clone(), Rect::NOTHING),
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(2);
+            let room = h.state().1;
+            let shapes = &h.output().shapes;
+            let texts: Vec<Rect> = shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Text(_))).map(|s| s.shape.visual_bounding_rect()).collect();
+            assert!(!texts.is_empty(), "{command} {}: draws its labels", lang.code());
+            if let Some(r) = texts.iter().find(|r| r.left() < room.left() - 0.5) {
+                failures.push(format!("{command} {}: text at {r:?} starts left of the dialog's {room:?}", lang.code()));
+            }
+            // Every field, list and label ends inside the dialog's right edge.
+            if let Some(r) = shapes.iter().map(|s| s.shape.visual_bounding_rect()).find(|r| r.is_finite() && r.right() > room.right() + 0.5) {
+                failures.push(format!("{command} {}: shape at {r:?} ends right of the dialog's {room:?}", lang.code()));
+            }
+        }
+        app.ui.close_dialog(id);
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// #6214: `n` columns are `n × width + (n − 1) × gutter` points. Photoshop's default Column
 /// Size (180 pt, 12 pt gutter) at 300 ppi: 1 column is 2.5 in (750 px), 2 are 372 pt
 /// (1550 px), 3 are 564 pt (2350 px).
