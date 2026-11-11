@@ -229,7 +229,12 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if let Some(ws) = workspace_name(id) {
         // Reset re-applies the current workspace; Essentials is the default layout.
         match (ws, id) {
-            (_, "window.workspace.resetWorkspace") => {}
+            // Resetting a built-in workspace brings the toolbar back to one column (#13045).
+            (_, "window.workspace.resetWorkspace") => {
+                if !app.session.prefs().workspaces.contains_key(&app.ui.workspace) {
+                    app.ui.panels.toolbar_double = false;
+                }
+            }
             ("", _) => app.ui.workspace = "Essentials".into(),
             (name, _) => app.ui.workspace = name.into(),
         }

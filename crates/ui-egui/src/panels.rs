@@ -1144,6 +1144,9 @@ mod fx_drag_tests;
 mod unsupported_marker_tests;
 
 #[cfg(test)]
+mod toolbar_reset_columns_tests;
+
+#[cfg(test)]
 mod lock_tests {
     use super::*;
     use crate::canvas::{ToolEvent, tool_event};
