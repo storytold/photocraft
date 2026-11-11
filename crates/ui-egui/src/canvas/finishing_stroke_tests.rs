@@ -131,3 +131,41 @@ fn a_finishing_stroke_whose_thread_fails_is_rendered_from_the_drag() {
     assert!(app.committed_stroke.is_none(), "rendered again, not taken from the lost live stroke");
     assert_commit_replays(&mut app);
 }
+
+/// While it finishes, the canvas keeps drawing the live stroke. Dropping it there redrew the whole
+/// document without the stroke (2 s on a 1.1-gigapixel storyboard), and a press meanwhile made it
+/// do so frame after frame until Wayland dropped the window.
+#[test]
+fn the_canvas_keeps_drawing_a_released_stroke_while_it_finishes() {
+    let mut app = app();
+    let release = release_while_the_thread_is_busy(&mut app);
+    let idx = app.session.active_index().unwrap();
+    assert!(super::strokes::live_stroke(&app, idx).is_some(), "the canvas draws the live stroke, not the document without it");
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, M);
+    assert!(super::strokes::live_stroke(&app, idx).is_some(), "a press turned away changes nothing");
+    release();
+    finish(&mut app);
+    assert!(super::strokes::live_stroke(&app, idx).is_none(), "committed: the document shows it");
+}
+
+/// Ctrl+Z right after the release is offered even on a document with nothing to undo before the
+/// stroke, waits for the stroke and undoes it.
+#[test]
+fn undo_right_after_a_release_undoes_the_stroke() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 160, "height": 60, "background": "#00ff00"})).unwrap();
+    app.run("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 12, "pressureSize": false}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    app.background_jobs = true;
+    assert!(!crate::menus::is_enabled(&app, "edit.undo"), "nothing to undo before the stroke");
+    let before = app.session.active().unwrap().doc.clone();
+    let steps = app.session.active().unwrap().history.past_len();
+    let release = release_while_the_thread_is_busy(&mut app);
+    assert!(crate::menus::is_enabled(&app, "edit.undo"), "Undo is offered while the stroke finishes");
+    assert_eq!(app.run("edit.undo", json!({})).unwrap()["queued"], json!(true));
+    release();
+    finish(&mut app);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "the stroke was undone");
+    assert_eq!(*app.session.active().unwrap().doc, *before, "back to the document before the stroke");
+}

@@ -308,7 +308,11 @@ impl CommittedStroke {
 /// The live stroke on document `idx`, while it is current.
 pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
     let st = app.session.documents().get(idx)?;
-    app.live_stroke.as_ref().filter(|l| app.drag.is_some() && l.doc == st.doc.id && l.revision == st.revision)
+    // A released stroke still finishing stays on the canvas until it commits: dropping it there
+    // redrew the whole document without the stroke (2 s on a 1.1-gigapixel storyboard), then the
+    // stroke's area again at the commit.
+    let current = app.drag.is_some() || app.finishing_stroke.is_some();
+    app.live_stroke.as_ref().filter(|l| current && l.doc == st.doc.id && l.revision == st.revision)
 }
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
