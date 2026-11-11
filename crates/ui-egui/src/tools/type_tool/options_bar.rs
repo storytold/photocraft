@@ -107,12 +107,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         None => o.type_align.as_str(),
     };
     // Vertical text shows Top / Center / Bottom for the same left / center / right values, after the
-    // targeted layer's orientation, or with no text targeted the Vertical Type tool's (#12059). The
-    // Type Mask tools keep the horizontal buttons (not measured).
-    let vertical = !app.ui.tool.is_type_mask()
+    // targeted layer's orientation, or with no text targeted the vertical tools' (#12059, #12088).
+    // The Horizontal Type Mask tool keeps the horizontal buttons (not measured).
+    let vertical = app.ui.tool != crate::state::Tool::HorizontalTypeMask
         && match super::defaults::target_text(app) {
             Some(t) => t.orientation == photocraft_doc::text::Orientation::Vertical,
-            None => app.ui.tool == crate::state::Tool::VerticalType,
+            None => app.ui.tool.is_vertical_type(),
         };
     let buttons = if vertical {
         [
@@ -495,3 +495,7 @@ fn size_field(ui: &mut egui::Ui, display: &mut f32, unit: f32, label: &str) -> O
 #[cfg(test)]
 #[path = "size_presets_tests.rs"]
 mod size_presets_tests;
+
+#[cfg(test)]
+#[path = "vertical_mask_align_buttons_tests.rs"]
+mod vertical_mask_align_buttons_tests;
