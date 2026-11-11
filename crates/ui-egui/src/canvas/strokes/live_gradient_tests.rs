@@ -139,16 +139,8 @@ fn actual_history_retouch_frame_growth_covers_gradient_damage() {
             assert!(first.paint.peek(|stroke| matches!(stroke, super::EngineStroke::Retouch(_))).expect("real Alt Down retains its engine stroke"));
             assert_eq!(first.damage.len(), 1, "the real Down publishes one damage step");
             if pushed {
-                assert_eq!(
-                    effects_frame(first.doc().layer(id).unwrap(), source.bounds()).x1,
-                    768,
-                    "the first Retouch remains inside the existing frame"
-                );
-                assert_eq!(
-                    first.doc().layer(id).unwrap().surface().unwrap().rgba(896, 32),
-                    [0.0; 4],
-                    "the later target is still transparent before Move"
-                );
+                assert_eq!(effects_frame(first.doc().layer(id).unwrap(), source.bounds()).x1, 768, "the first Retouch remains inside the existing frame");
+                assert_eq!(first.doc().layer(id).unwrap().surface().unwrap().rgba(896, 32), [0.0; 4], "the later target is still transparent before Move");
                 shown = render(first.doc(), first.doc().bounds());
                 first.display_key()
             } else {
@@ -186,7 +178,10 @@ fn actual_history_retouch_frame_growth_covers_gradient_damage() {
 
         if overlay {
             if pushed {
-                assert!(!live.paint.peek(|stroke| stroke.bounds()).expect("live Retouch retains its raw bounds").contains_rect(&Rect::new(256, 32, 257, 33)), "raw live stroke bounds exclude the distant gradient pixel");
+                assert!(
+                    !live.paint.peek(|stroke| stroke.bounds()).expect("live Retouch retains its raw bounds").contains_rect(&Rect::new(256, 32, 257, 33)),
+                    "raw live stroke bounds exclude the distant gradient pixel"
+                );
             }
             assert!(damage.contains_rect(&Rect::new(256, 32, 257, 33)), "overlay damage includes the distant gradient pixel");
         } else {
