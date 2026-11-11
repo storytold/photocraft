@@ -812,9 +812,13 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some([x, y]) = w.position {
             builder = builder.with_position([x, y]);
         }
-        // Read the window's view from `app.ui.windows`, not from `wins`: a Scroll All Windows drag in a
-        // window drawn earlier in this loop may have moved it since `wins` was taken.
-        let mut view = app.ui.windows.iter().find(|x| x.id == w.id).map_or_else(|| w.view.clone(), |x| x.view.clone());
+        // A window that owns its document (`floating`: it has no tab) draws the document's stored
+        // view, the one View › Zoom In/Out, Fit on Screen, the zoom field and the Navigator
+        // change; a second view (New Window for Document) keeps a view of its own. Either is read
+        // as it is now, not from `wins`: a Scroll All Windows drag in a window drawn earlier in this
+        // loop may have moved it since `wins` was taken.
+        let own = app.ui.windows.iter().find(|x| x.id == w.id).map_or_else(|| w.view.clone(), |x| x.view.clone());
+        let mut view = if w.floating { app.ui.views.get(w.document).cloned().unwrap_or(own) } else { own };
         let mut close = false;
         let mut focused = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
@@ -832,8 +836,16 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 app.drawing_window = None;
                 // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
+                // What view commands that fit to the canvas (Fit Layer(s) on Screen) fit to.
+                let ppp = ui.ctx().pixels_per_point();
+                ui.ctx().data_mut(|d| d.insert_temp(window_canvas_id(w.id), (rect.size(), ppp)));
             });
         });
+        if w.floating
+            && let Some(stored) = app.ui.views.get_mut(w.document)
+        {
+            *stored = view.clone();
+        }
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
             win.focused = focused;
@@ -843,6 +855,17 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+fn window_canvas_id(window: u64) -> egui::Id {
+    egui::Id::unique(("pc-docwin-canvas", window))
+}
+
+/// The canvas size (points) and pixels per point of the window that owns document `doc` (it
+/// floats, without a tab), as last drawn; `None` when the document is in the main window.
+pub(crate) fn floating_canvas(app: &PhotocraftApp, ctx: &egui::Context, doc: usize) -> Option<(egui::Vec2, f32)> {
+    let window = app.ui.windows.iter().find(|w| w.open && w.floating && w.document == doc)?;
+    ctx.data(|d| d.get_temp::<(egui::Vec2, f32)>(window_canvas_id(window.id)))
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
