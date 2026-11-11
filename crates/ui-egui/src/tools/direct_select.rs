@@ -928,6 +928,9 @@ mod convert_point_history_tests;
 mod convert_point_targeted_path_tests;
 
 #[cfg(test)]
+mod delete_key_tests;
+
+#[cfg(test)]
 mod freeform_command_tests {
     use super::*;
 

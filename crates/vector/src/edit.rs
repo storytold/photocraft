@@ -295,6 +295,25 @@ pub fn delete_anchor_and_segments(path: &mut Path, [s, k]: [usize; 2]) -> Result
     Ok(false)
 }
 
+/// ⌫ / Delete on a segment selected with Direct Selection: removes the segment that leaves
+/// `[s, k]` and keeps every anchor. A closed subpath opens there, starting at the segment's end
+/// and ending at `k`; an open subpath splits in two. The knots keep their handles.
+pub fn delete_segment(path: &mut Path, [s, k]: [usize; 2]) -> Result<(), String> {
+    let [_, end] = segment_end(path, [s, k])?;
+    let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
+    if sp.closed {
+        // `end` is `k + 1`, or 0 when the closing segment goes.
+        sp.knots.rotate_left(end);
+        sp.closed = false;
+        return Ok(());
+    }
+    // Open: `end` = `k + 1` < len.
+    let rest = Subpath { closed: false, knots: sp.knots.split_off(end), op: sp.op };
+    let at = s.checked_add(1).ok_or_else(|| format!("no subpath after {s}"))?;
+    path.subpaths.insert(at, rest);
+    Ok(())
+}
+
 /// Every anchor of subpath `s` (⌥-click with Direct Selection selects the whole subpath).
 pub fn subpath_anchors(path: &Path, s: usize) -> Vec<[usize; 2]> {
     path.subpaths.get(s).map_or_else(Vec::new, |sp| (0..sp.knots.len()).map(|k| [s, k]).collect())
@@ -698,6 +717,37 @@ mod tests {
             assert!(!delete_anchor_and_segments(&mut p, [0, k]).unwrap());
             assert_eq!(p, Path::new(vec![Subpath { closed: false, knots: vec![kept], op: PathOp::Subtract }]), "k={k}");
         }
+    }
+
+    #[test]
+    fn deleting_a_segment_opens_a_closed_subpath_or_splits_an_open_one() {
+        let square = || Path::new(vec![Subpath::polygon(&[(100.0, 300.0), (300.0, 300.0), (300.0, 500.0), (100.0, 500.0)])]);
+        // The left edge (the closing segment): all four anchors, from (100,300) to (100,500).
+        let mut p = square();
+        delete_segment(&mut p, [0, 3]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(100.0, 300.0), (300.0, 300.0), (300.0, 500.0), (100.0, 500.0)])]));
+        let mut p = square();
+        delete_segment(&mut p, [0, 1]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(300.0, 500.0), (100.0, 500.0), (100.0, 300.0), (300.0, 300.0)])]));
+        let line = || Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)])]);
+        let mut p = line();
+        delete_segment(&mut p, [0, 0]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(0.0, 0.0)]), Subpath::polyline(&[(10.0, 0.0), (20.0, 0.0)])]));
+        let mut p = line();
+        delete_segment(&mut p, [0, 1]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0)]), Subpath::polyline(&[(20.0, 0.0)])]));
+    }
+
+    #[test]
+    fn deleting_a_segment_refuses_one_that_does_not_exist() {
+        for k in [[0, 2], [0, 3], [1, 0], [usize::MAX, usize::MAX]] {
+            let mut p = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)])]);
+            let before = p.clone();
+            assert!(delete_segment(&mut p, k).is_err(), "{k:?}");
+            assert_eq!(p, before, "{k:?}: unchanged");
+        }
+        let mut lone = Path::new(vec![Subpath { closed: true, knots: vec![Knot::corner(1.0, 1.0)], op: PathOp::Combine }]);
+        assert!(delete_segment(&mut lone, [0, 0]).is_err(), "a closed single anchor has no segment");
     }
 
     #[test]
