@@ -119,7 +119,10 @@ fn start_segment_drag(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) -> 
     let Some((r, path, Hit::Segment(k, t))) = crate::direct_select::hit_active(app, p) else { return false };
     let Some(sp) = path.subpaths.get(k[0]) else { return false };
     let end = if k[1] + 1 < sp.knots.len() { k[1] + 1 } else { 0 };
-    let straight = sp.knots.get(k[1]).zip(sp.knots.get(end)).is_some_and(|(a, b)| a.out_ctrl == a.anchor && b.in_ctrl == b.anchor);
+    // Straight as `edit::straight` (and so `bend_segment`) has it: both facing handles within 1e-9
+    // of their anchors.
+    let retracted = |h: Point, a: Point| (h.x - a.x).hypot(h.y - a.y) < 1e-9;
+    let straight = sp.knots.get(k[1]).zip(sp.knots.get(end)).is_some_and(|(a, b)| retracted(a.out_ctrl, a.anchor) && retracted(b.in_ctrl, b.anchor));
     let ds = &app.ui.direct_selection;
     let all_selected = ds.target == Some(r) && (0..path.subpaths.len()).all(|s| edit::subpath_anchors(&path, s).iter().all(|a| ds.anchors.contains(a)));
     if r == PathRef::Pen || all_selected || !straight {
