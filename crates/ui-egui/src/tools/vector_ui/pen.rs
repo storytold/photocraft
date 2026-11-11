@@ -214,11 +214,17 @@ pub fn pen_up(app: &mut PhotocraftApp) {
 }
 
 /// ⌥/Alt during a Pen drag breaks the pair of handles being pulled out: from then on only the
-/// outgoing handle follows the pointer and the incoming curve stays as it is (#3306).
+/// outgoing handle follows the pointer. The first incoming handle collapses; later ones freeze.
 pub fn pen_break_handle(app: &mut PhotocraftApp) {
     cancel_stale_pen(app);
     let Some(pen) = app.ui.pen.as_mut().filter(|p| p.dragging && !p.adjusting_last) else { return };
     let Some(i) = pen.knots.len().checked_sub(1) else { return };
+    // The first anchor has no incoming segment: Alt drops that handle onto the anchor (#12895).
+    if i == 0
+        && let Some(k) = pen.knots.first_mut()
+    {
+        k[1] = k[0];
+    }
     if !pen.unlinked.contains(&i) {
         pen.unlinked.push(i);
     }
@@ -978,3 +984,7 @@ mod freeform_history_name_tests;
 #[cfg(test)]
 #[path = "pen_alt_drag_segment_tests.rs"]
 mod pen_alt_drag_segment_tests;
+
+#[cfg(test)]
+#[path = "pen_alt_first_anchor_tests.rs"]
+mod pen_alt_first_anchor_tests;
