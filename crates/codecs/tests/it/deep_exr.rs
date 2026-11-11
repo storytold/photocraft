@@ -658,9 +658,11 @@ fn deep_tile_count_table_is_admitted_against_max_alloc() {
         if compression != 0 {
             assert!(big.len() < 1 << 20, "compression {compression}: the file is {} bytes", big.len());
         }
-        // The table and its scratch copy are admitted together: 8 MiB.
-        assert_eq!(decode_deep_exr(&big, &budget(2 * table)).expect("room for the table and its copy"), scan, "compression {compression}");
-        let got = decode_deep_exr(&big, &budget(2 * table - 1));
+        // The table and its scratch copy are admitted together, 8 MiB, on top of the 4x4
+        // image's sample-count index (17 u64).
+        let index = 17 * 8;
+        assert_eq!(decode_deep_exr(&big, &budget(2 * table + index)).expect("room for the table and its copy"), scan, "compression {compression}");
+        let got = decode_deep_exr(&big, &budget(2 * table + index - 1));
         assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "compression {compression}: one byte short gave {:?}", got.map(|d| d.total_samples()));
     }
     // Ordinary tiles: full-size edge tables decode under the small budget, like clipped ones.
@@ -726,14 +728,54 @@ fn clipped_count_tables_include_scratch_in_the_budget() {
             let bytes = gen_deep(64, 1, &channels, compression, tile, &counts, &sample);
             let what = format!("tile {tile:?}, compression {compression}");
             let want = decode_deep_exr(&bytes, &Limits::none()).expect("unlimited decode");
-            let required = if compression == 0 { 256 } else { 512 };
+            // The table and any scratch, on top of the sample-count index (65 u64).
+            let index = 65 * 8;
+            let required = index + if compression == 0 { 256 } else { 512 };
             assert_eq!(decode_deep_exr(&bytes, &budget(required)).expect("table and any scratch fit exactly"), want, "{what}");
             assert!(matches!(decode_deep_exr(&bytes, &budget(required - 1)), Err(CodecError::LimitExceeded(_))), "{what}");
             let flat = photocraft_codecs::decode_with(&bytes, &photocraft_codecs::DecodeOptions { limits: budget(required - 1), ..Default::default() });
             assert!(matches!(flat, Err(CodecError::LimitExceeded(_))), "{what}");
             if compression == 0 {
-                assert_eq!(decode_deep_exr(&bytes, &budget(511)).expect("raw table needs no scratch"), want, "{what}");
+                assert_eq!(decode_deep_exr(&bytes, &budget(index + 511)).expect("raw table needs no scratch"), want, "{what}");
             }
+        }
+    }
+}
+
+/// The per-pixel bookkeeping of a deep decode (the cumulative sample-count index that
+/// [`photocraft_codecs::DeepImage::counts`] returns, eight bytes a pixel plus one entry) is
+/// charged against `max_alloc`, and the count tables are admitted on top of it. A one-channel
+/// image without samples passed the data-window check (four bytes a pixel) and decoded while
+/// holding 24 bytes a pixel of bookkeeping: a 4096x4096 file of 65-300 KB held 384 MiB under a
+/// 64 or 128 MiB budget. Under that four-byte budget it is now refused; it decodes with room
+/// for the index plus the largest count table and its scratch copy, and not one byte less.
+#[test]
+fn deep_bookkeeping_is_charged_against_max_alloc() {
+    let (w, h) = (256usize, 256usize);
+    let n = w * h;
+    let channels = [Chan { name: "Y", ty: 2 }];
+    let counts = vec![0u32; n];
+    let sample = |_: usize, _: usize| Vec::new();
+    let budget = |max_alloc: u64| Limits { max_alloc, ..Limits::none() };
+    let index = (n as u64 + 1) * 8;
+    for tile in [None, Some((w, h))] {
+        for compression in [0u8, 1, 2] {
+            let bytes = gen_deep(w, h, &channels, compression, tile, &counts, &sample);
+            let what = format!("tile {tile:?}, compression {compression}");
+            let want = decode_deep_exr(&bytes, &Limits::none()).expect("unlimited decode");
+            assert_eq!(want.counts.len(), n + 1, "{what}");
+            let pixel_budget = budget(4 * n as u64);
+            let got = decode_deep_exr(&bytes, &pixel_budget);
+            assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "{what}: a four-byte-a-pixel budget gave {:?}", got.map(|d| d.counts.len()));
+            let flat = photocraft_codecs::decode_with(&bytes, &photocraft_codecs::DecodeOptions { limits: pixel_budget, ..Default::default() });
+            assert!(matches!(flat, Err(CodecError::LimitExceeded(_))), "{what}: the flat decode gave {:?}", flat.map(|i| i.width()));
+            // One block's count table (a scan line, or the single tile), with the scratch copy
+            // that undoes the byte split when it is stored compressed.
+            let table = 4 * if tile.is_some() { n } else { w } as u64;
+            let required = index + table * if compression == 0 { 1 } else { 2 };
+            assert_eq!(decode_deep_exr(&bytes, &budget(required)).expect("index and table fit exactly"), want, "{what}");
+            let got = decode_deep_exr(&bytes, &budget(required - 1));
+            assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "{what}: one byte short gave {:?}", got.map(|d| d.counts.len()));
         }
     }
 }
@@ -743,7 +785,8 @@ fn clipped_count_tables_include_scratch_in_the_budget() {
 #[test]
 fn raw_count_tables_need_no_scratch_even_with_compression() {
     let channels = [Chan { name: "Y", ty: 2 }];
-    let limits = Limits { max_alloc: 4, ..Limits::none() };
+    // The four-byte table on top of the one-pixel sample-count index (two u64).
+    let limits = Limits { max_alloc: 16 + 4, ..Limits::none() };
     for tile in [None, Some((1, 1)), Some((2, 2))] {
         for compression in [0u8, 1, 2] {
             let bytes = gen_deep(1, 1, &channels, compression, tile, &[0], &|_, _| Vec::new());
