@@ -104,6 +104,20 @@ fn yes_after_another_document_became_active_deletes_nothing() {
     assert_eq!(corners(&mut app, shape), 4, "the first document's shape keeps its corner");
 }
 
+/// The question's knot index belongs to the path as it was asked: an anchor added before the
+/// corner meanwhile (through the control channel; the question is modal on screen) shifts it, so Yes
+/// is refused instead of deleting another anchor.
+#[test]
+fn yes_after_the_path_changed_deletes_nothing() {
+    let (mut app, shape) = live(Tool::DeleteAnchorPoint);
+    click(&mut app, CORNER);
+    let id = question(&app).expect("the question");
+    app.run("path.addAnchor", json!({"name": "layer", "layer": shape, "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    let (before, n) = (shape_path(&mut app, shape), steps(&app));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!((shape_path(&mut app, shape), steps(&app)), (before, n));
+}
+
 #[test]
 fn no_leaves_the_shape_its_parameters_and_history_unchanged() {
     let (mut app, shape) = live(Tool::DeleteAnchorPoint);

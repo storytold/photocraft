@@ -32,7 +32,7 @@ fn is_live(app: &PhotocraftApp, r: PathRef) -> bool {
 /// or "Don't show again" was ticked.
 pub fn ask(app: &mut PhotocraftApp, r: PathRef, params: &Value) -> bool {
     let PathRef::Layer(layer) = r else { return false };
-    let Some(document) = app.session.active().map(|st| st.doc.id.0) else { return false };
+    let Some((document, revision)) = app.session.active().map(|st| (st.doc.id.0, st.revision)) else { return false };
     if !is_live(app, r) || dont_show_again::dismissed(app, PREF) {
         return false;
     }
@@ -44,8 +44,10 @@ pub fn ask(app: &mut PhotocraftApp, r: PathRef, params: &Value) -> bool {
     f.insert("__command".into(), json!("path.deleteAnchor"));
     f.insert("__label".into(), json!(tl!("Delete Anchor Point")));
     f.insert("layer".into(), json!(layer));
-    // The layer id means something only in this document (another may become active meanwhile).
+    // The layer id means something only in this document (another may become active meanwhile),
+    // and the knot index only in this revision of it (an edit meanwhile can shift the anchors).
     f.insert("__document".into(), json!(document));
+    f.insert("__revision".into(), json!(revision));
     f.insert("params".into(), params.clone());
     f.insert("__dontShowAgain".into(), json!(PREF));
     f.insert("skip".into(), json!(false));
@@ -62,8 +64,8 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let layer = fields.get("layer").and_then(Value::as_u64).ok_or(tl!("No anchor to delete"))?;
     let params = fields.get("params").cloned().ok_or(tl!("No anchor to delete"))?;
-    let document = fields.get("__document").and_then(Value::as_u64);
-    if document.is_none() || app.session.active().map(|st| st.doc.id.0) != document {
+    let asked = fields.get("__document").and_then(Value::as_u64).zip(fields.get("__revision").and_then(Value::as_u64));
+    if asked.is_none() || app.session.active().map(|st| (st.doc.id.0, st.revision)) != asked {
         return Err(tl!("No anchor to delete").into());
     }
     let result = app.run("path.deleteAnchor", params)?;
