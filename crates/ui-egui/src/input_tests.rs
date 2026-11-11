@@ -1113,15 +1113,15 @@ fn paint_bucket_shows_a_bucket_cursor() {
         let cursor = output.platform_output.cursor_image.as_ref().expect("native root viewport uses the unified bucket bitmap");
         let [hot_x, hot_y] = cursor.hotspot;
         let hot_pixel = (usize::from(hot_y) * usize::from(cursor.size[0]) + usize::from(hot_x)) * 4 + 3;
-        assert_eq!(cursor.rgba[hot_pixel], 0, "the Gradient-style crosshair leaves its exact bitmap hotspot open");
+        assert!(cursor.rgba[hot_pixel] > 128, "the arrow tip is drawn on the exact bitmap hotspot");
         let side = usize::from(cursor.size[0]);
         assert!(
             cursor.rgba.as_chunks::<4>().0.iter().enumerate().any(|(i, pixel)| {
                 let x = (i % side) as u16;
                 let y = (i / side) as u16;
-                pixel[3] > 200 && x + 2 < hot_x && y + 2 < hot_y
+                pixel[3] > 200 && x > hot_x + 2 && y > hot_y + 2
             }),
-            "the bucket artwork is opaque above-left of the same hotspot"
+            "the bucket artwork is opaque below-right of the same hotspot"
         );
         assert!(!cursor_area_visible(&h, "pc-icon-cursor"), "native cursor has no frame-painted icon overlay");
         assert!(!cursor_area_visible(&h, "pc-tool-cursor"), "native cursor does not create a painted cursor Area");
