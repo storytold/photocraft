@@ -304,3 +304,7 @@ mod tests;
 #[cfg(test)]
 #[path = "background_eraser_transparency_lock_tests.rs"]
 mod transparency_lock_tests;
+
+#[cfg(test)]
+#[path = "background_eraser_channel_target_tests.rs"]
+mod channel_target_tests;
