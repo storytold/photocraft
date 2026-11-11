@@ -659,6 +659,35 @@ fn video_frames_to_layers_takes_every_gif_frame() {
     let mut s = session();
     let r = s.execute("file.import.videoFramesToLayers", json!({"path": path})).unwrap();
     assert_eq!(r["layers"], 4);
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 0, "a whole file stays quiet");
+}
+
+#[test]
+fn a_truncated_gif_import_is_reported_as_salvaged() {
+    // #11113: the codecs keep the frames before the damage; the command must still disclose
+    // that the animation arrived shortened, not report a plain success.
+    let dir = tmpdir("gifcut");
+    let path = format!("{dir}/anim.gif");
+    write_gif(&path, 8, 8, &[([255, 0, 0], 5), ([0, 255, 0], 5), ([0, 0, 255], 5)]);
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Cut the tail, as the issue's witness did: the last frame's payload is gone.
+    bytes.truncate(bytes.len() - 4);
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = session();
+    let r = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    let frames = r["frames"].as_u64().unwrap();
+    assert!((1..3).contains(&frames), "some but not all frames survived: {frames}");
+    let w = r["warnings"].as_array().unwrap();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].as_str().unwrap().contains("ends early"), "{w:?}");
+    let r = s.execute("layer.videoLayers.replaceFootage", json!({"path": &path})).unwrap();
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
+    let r = s.execute("layer.videoLayers.reloadFrame", json!({})).unwrap();
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
+    // The other shared-loader callers disclose it too.
+    let mut t = session();
+    let r = t.execute("file.import.videoFramesToLayers", json!({"path": &path})).unwrap();
+    assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "{r}");
 }
 
 // ------------------------------------------------------------------ animated WebP footage (#1198)
@@ -692,6 +721,24 @@ fn write_webp(path: &str, w: u32, h: u32, frames: &[([u8; 3], u32)]) {
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend(body);
     std::fs::write(path, out).unwrap();
+}
+
+#[test]
+fn a_damaged_webp_import_reports_salvaged_frames() {
+    let dir = tmpdir("webpcut");
+    let path = format!("{dir}/anim.webp");
+    write_webp(&path, 8, 8, &[([255, 0, 0], 50), ([0, 255, 0], 50), ([0, 0, 255], 50)]);
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Keep the container intact but damage the final frame, as in the codec regression.
+    let last = bytes.windows(4).rposition(|w| w == b"VP8L").unwrap();
+    bytes[last + 8] = 0;
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = session();
+    let r = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    assert_eq!(r["frames"], 2);
+    let warnings = r["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].as_str().unwrap().contains("ends early"));
 }
 
 #[test]
@@ -914,6 +961,33 @@ fn render_video_rejects_gif_frames_too_large_to_stage() {
     s.execute("file.new", json!({"width": 9000, "height": 8000})).unwrap();
     let err = s.execute("file.export.renderVideo", json!({"dir": tmpdir("large-gif"), "format": "gif"})).unwrap_err();
     assert!(err.to_string().contains("too large"), "{err}");
+}
+
+#[test]
+fn render_video_rejects_a_gif_whose_frames_together_are_too_large() {
+    // Each 4000 x 4000 frame is under the per-frame cap, but 100,000 of them keep ~1.6 TB staged.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4000, "height": 4000})).unwrap();
+    s.execute("timeline.create", json!({"duration": 100_000, "fps": 30})).unwrap();
+    let err = s.execute("file.export.renderVideo", json!({"dir": tmpdir("many-gif"), "format": "gif"})).unwrap_err();
+    assert!(err.to_string().contains("staged in total"), "{err}");
+}
+
+#[test]
+fn gif_budget_boundaries() {
+    // Sane work is untouched: a minute of 1080p at 30 fps, and the existing small cases.
+    assert!(check_gif_budget(1920, 1080, 1000).is_ok());
+    assert!(check_gif_budget(16, 12, 1).is_ok());
+    // Exactly at the limit passes, one frame more fails.
+    let per_frame = 1000 * 1000 + 768;
+    let n = MAX_GIF_STAGED_BYTES / per_frame;
+    assert!(check_gif_budget(1000, 1000, n).is_ok());
+    assert!(check_gif_budget(1000, 1000, n + 1).is_err());
+    // The per-frame cap and the 16-bit GIF side still apply, and nothing overflows.
+    assert!(check_gif_budget(9000, 8000, 1).is_err());
+    assert!(check_gif_budget(65_536, 1, 1).is_err());
+    assert!(check_gif_budget(65_535, 65_535, u64::MAX).is_err());
+    assert!(check_gif_budget(1, 1, u64::MAX).is_err());
 }
 
 #[test]
