@@ -1057,7 +1057,21 @@ fn gpu_display_luts_are_per_display() {
     assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
     assert!(gpu.has_display_lut(key, 4));
     // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref()), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref()));
+    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+}
+
+/// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
+/// key carries the ink preview (Color Settings › Spot) like the CPU canvas key does.
+#[test]
+fn gpu_texture_key_follows_the_ink_preview() {
+    use super::display::ink_preview_key;
+    use photocraft_color::{ColorMode, SampleType};
+    let size = photocraft_doc::Size::new(2, 2);
+    let inks = Document::new("m", size, ColorMode::Multichannel, SampleType::U8);
+    let rgb = Document::new("r", size, ColorMode::Rgb, SampleType::U8);
+    assert_ne!(ink_preview_key(&inks), 0);
+    assert_eq!(texture_key(None, &inks), ink_preview_key(&inks));
+    assert_eq!(texture_key(None, &rgb), 0);
 }
 
 /// The navigator's update after an edit (its image with the edit's damage, grown by the
@@ -1816,6 +1830,72 @@ fn eyedropper_drag_updates_the_sampled_colour() {
 
     tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
     assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
+}
+
+/// #10074: painting a group looked as if it worked (the stroke's trail followed the pointer) and
+/// vanished on release with only a status-bar note. Photoshop refuses at the press with a
+/// message; so does PhotoCraft, and nothing is painted or drawn.
+#[test]
+fn painting_a_group_is_refused_at_the_press_with_a_message() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.groupLayers", json!({})).unwrap();
+    let group = app.session.active().unwrap().active_layer.unwrap();
+    assert!(app.session.active().unwrap().doc.layer(group).unwrap().is_group());
+    let errors = |app: &PhotocraftApp| -> Vec<String> {
+        app.ui
+            .dialogs
+            .iter()
+            .filter(|d| d.kind == crate::state::DialogKind::Error)
+            .map(|d| d.fields.get("message").and_then(|m| m.as_str()).unwrap_or_default().to_string())
+            .collect()
+    };
+    app.ui.tool_options.gradient_classic = true;
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser, Tool::CloneStamp, Tool::PaintBucket, Tool::MagicEraser, Tool::RedEye, Tool::Gradient] {
+        app.ui.dialogs.clear();
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        // The Brush has its own measured alert, tested in `brush_refusal_alert_tests` (#11898).
+        let want = if tool == Tool::Brush {
+            "Could not use the brush tool because the pixels in a group cannot be edited without merging the group.".to_string()
+        } else {
+            format!("Could not use the {} because the target layer is a group.", tool.label())
+        };
+        assert_eq!(errors(&app), [want], "{tool:?}");
+        assert!(app.drag.is_none() && app.live_stroke.is_none(), "{tool:?} starts no stroke");
+        tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+        assert!(app.trail.is_none(), "{tool:?} draws no trail");
+    }
+    // Tools that don't paint the group's pixels are unaffected.
+    app.ui.dialogs.clear();
+    app.ui.tool = Tool::RectMarquee;
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(errors(&app).is_empty());
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 15.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 15.0 }, egui::Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_some(), "a marquee still selects with a group active");
+    app.run("select.deselect", json!({})).unwrap();
+    // A group's mask can be painted: targeting it paints, without the message.
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert_eq!(paint_target(&app), json!("mask"));
+    let mask_at = |app: &PhotocraftApp, x: i32| {
+        let st = app.session.active().unwrap();
+        st.doc.layer(group).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, 10, 0)
+    };
+    let before = mask_at(&app, 15);
+    // Black on a reveal-all mask hides: a stroke that paints shows.
+    app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]})).unwrap();
+    app.ui.tool = Tool::Brush;
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(errors(&app).is_empty(), "the mask is paintable");
+    assert!(app.drag.is_some(), "the stroke starts on the mask");
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+    assert_ne!(mask_at(&app, 15), before, "the stroke painted the group's mask");
 }
 
 /// #4298: an adjustment layer has no pixels, so after its icon thumbnail is clicked (the
@@ -3371,4 +3451,39 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
+}
+
+/// tanish2k09 on #10406: an armed eyedropper owns the image of the primary canvas only, the one
+/// its picks come from and its pipette is drawn on. A secondary canvas (a Window › Arrange › New
+/// Window view) is never left without a cursor for it.
+#[test]
+fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Move;
+    let id = crate::adjust_dialog::open(&mut app, "image.adjustments.curves").unwrap();
+    let base = app.ui.dialog_mut(id).map(|d| crate::filter_dialog::params_of(&d.fields)).unwrap();
+    let dialog = app.ui.dialog_mut(id).unwrap();
+    dialog.fields.insert("__curvePicker".into(), json!("black"));
+    dialog.fields.insert("__curvePickerBase".into(), base);
+    assert!(crate::adjust_dialog::picker_armed(&app), "the black-point eyedropper is armed");
+    let view = app.ui.views[0].clone();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let cursor = |app: &mut PhotocraftApp, primary: bool| {
+        let mut icon = egui::CursorIcon::Default;
+        for _ in 0..3 {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::PointerMoved(Pos2::new(200.0, 150.0)));
+            let mut out = ctx.run_ui(input, |ui| {
+                canvas_view(app, ui, 0, rect, view.clone(), primary);
+            });
+            out.textures_delta.clear();
+            icon = out.platform_output.cursor_icon;
+        }
+        icon
+    };
+    assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
+    assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
 }

@@ -117,16 +117,22 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // A press on a border grip drags the border (`drag_borders`); it activates no document.
         // The grips are laid out after the canvases, so egui gives them the press (#10101).
         let grips: Vec<Rect> = border_grips(app, rect).into_iter().map(|(_, grip)| grip).collect();
+        // Where the frame's last press landed: the pointer may have moved on since, in the same frame.
+        let press = ui.input(|i| {
+            i.events.iter().rev().find_map(|e| match e {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+        });
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();
             let v = canvas_view(app, ui, d, cell, view, d == active_doc);
             if d != active_doc {
                 app.ui.views[d] = v;
+                // Only a press that reaches the tile: not one on a dialog or panel over it (#10069).
                 if main_focused
-                    && ui.input(|i| {
-                        i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p) && !grips.iter().any(|g| g.contains(p)))
-                    })
+                    && press.is_some_and(|p| cell.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id()) && !grips.iter().any(|g| g.contains(p)))
                 {
                     app.session.set_active(d);
                 }
