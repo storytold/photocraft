@@ -800,3 +800,6 @@ mod object_mode_refusal_tests;
 mod quick_drop_transparent_tests;
 #[cfg(test)]
 mod quick_group_target_tests;
+
+#[cfg(test)]
+mod quick_mode_refusal_tests;
