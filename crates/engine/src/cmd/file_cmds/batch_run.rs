@@ -239,10 +239,13 @@ fn process_outputs<'a>(
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
     let raw_ppi = s.prefs().raw_defaults.resolution;
     let action_prefs = s.prefs().actions.clone();
+    let authorize = s.authorize;
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
     let run = |scratch: &mut Session, out: &str| {
+        // Nested commands answer to the initiating session's authorization hook.
+        scratch.authorize = authorize;
         scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
         f(scratch, out).map_err(FileFailure::from)
     };
@@ -1027,6 +1030,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         // A recorded Save is a step too: Batch writes the output for it.
                         charge_script_step(scratch)?;
                         if batch_save_point(id) {
+                            // The scratch session never executes a save point, so the gate would not see it.
+                            if let Some(gate) = scratch.authorize {
+                                gate(id, params)?;
+                            }
                             let st = scratch.active_mut().ok_or(EngineError::NoDocument)?;
                             saved = Some(st.doc.clone());
                             // Batch performs the action's Save / Save As (to its destination), so the
