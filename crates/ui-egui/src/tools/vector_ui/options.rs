@@ -67,8 +67,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
-        let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0);
+        // Photoshop's Pen lists Shape, Path and a greyed Pixels (#12906); the other pens keep theirs.
+        let opts = if tool == Tool::Pen {
+            vec![("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path")), ("pixels".to_string(), tl!("Pixels"))]
+        } else {
+            vec![("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))]
+        };
+        crate::widgets::dropdown_enabled(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0, |m| m != "pixels");
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
             crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
