@@ -1831,17 +1831,31 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        // From here the edit is committed: a panic in the bookkeeping is logged and doesn't turn
+        // the command into an error (#8604). The damage it would have noted falls back to
+        // redrawing the whole document.
         if pending.is_none()
             && let Some((doc, revision)) = &before
+            && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                panic_at("damage");
+                self.note_command_damage(id, doc, *revision);
+            }))
+            .is_err()
+            && let Some(st) = self.active_mut()
         {
-            self.note_command_damage(id, doc, *revision);
+            st.last_damage = None;
         }
         // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
         // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
         // replays where that shape is not installed. The run resolved it already, so it can't fail.
         let mut params = params;
         if r.is_ok() {
-            let _ = crate::filters_ext::resolve_shape_path(self, id, &mut params);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                panic_at("shape path");
+                crate::filters_ext::resolve_shape_path(self, id, &mut params)
+            }));
         }
         let out = match (r, pending) {
             (Err(e), Some(job)) => {
@@ -1966,9 +1980,7 @@ impl Session {
         // still journaled so an action recorded from it can replay the committed edit (#8604).
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             #[cfg(test)]
-            if PANIC_AFTER_COMMAND.get() {
-                panic!("bookkeeping after `{id}` panics");
-            }
+            panic_at("after_command");
             // A layer-mask view ends when another layer becomes active (#196).
             if let Some(st) = self.active_mut() {
                 crate::mask_view_cmds::fix(st);
@@ -2216,8 +2228,17 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 
 #[cfg(test)]
 thread_local! {
-    /// Tests: make [`Session::after_command`] panic, as a bug in the bookkeeping after a command would.
-    pub(crate) static PANIC_AFTER_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Tests: the step of the bookkeeping after a committed command to make panic, as a bug there
+    /// would: "damage", "shape path" or "after_command".
+    pub(crate) static PANIC_AFTER_COMMAND: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: panic if [`PANIC_AFTER_COMMAND`] names `step`.
+#[cfg(test)]
+fn panic_at(step: &str) {
+    if PANIC_AFTER_COMMAND.get() == Some(step) {
+        panic!("bookkeeping step `{step}` panics");
+    }
 }
 
 #[cfg(test)]

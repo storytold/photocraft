@@ -215,21 +215,27 @@ fn a_panic_before_a_command_runs_becomes_an_error_and_the_document_is_unchanged(
 
 #[test]
 fn a_panic_after_a_command_ran_still_reports_its_committed_edit() {
-    // #8604: once `run` has committed its edit, a panic in the bookkeeping after it doesn't turn
-    // the command into an error, which would invite a caller to apply the edit again, and the step
-    // is still journaled.
-    let mut s = session(64, 64);
-    let (rev, journaled) = (s.active().unwrap().revision, s.journal.len());
-    super::PANIC_AFTER_COMMAND.set(true);
-    let r = s.execute("filter.blur.gaussianBlur", json!({"radius": 1}));
-    super::PANIC_AFTER_COMMAND.set(false);
-    assert!(r.is_ok(), "{r:?}");
-    assert_ne!(s.active().unwrap().revision, rev, "the blur was applied");
-    // The step is journaled, so an action recorded from the journal replays it.
-    assert_eq!(s.journal.len(), journaled + 1);
-    assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("filter.blur.gaussianBlur"));
-    // The session still works.
-    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+    // #8604: once `run` has committed its edit, a panic in any step of the bookkeeping after it
+    // (the damage it notes, the shape path it records, `after_command`) doesn't turn the command
+    // into an error, which would invite a caller to apply the edit again, and the step is still
+    // journaled.
+    for step in ["damage", "shape path", "after_command"] {
+        let mut s = session(64, 64);
+        let (rev, journaled) = (s.active().unwrap().revision, s.journal.len());
+        super::PANIC_AFTER_COMMAND.set(Some(step));
+        let r = s.execute("filter.blur.gaussianBlur", json!({"radius": 1}));
+        super::PANIC_AFTER_COMMAND.set(None);
+        assert!(r.is_ok(), "{step}: {r:?}");
+        assert_ne!(s.active().unwrap().revision, rev, "{step}: the blur was applied");
+        // The step is journaled, so an action recorded from the journal replays it.
+        assert_eq!(s.journal.len(), journaled + 1, "{step}");
+        assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("filter.blur.gaussianBlur"), "{step}");
+        if step == "damage" {
+            assert!(s.active().unwrap().last_damage.is_none(), "a lost damage note redraws the whole document");
+        }
+        // The session still works.
+        s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+    }
 }
 
 #[test]
