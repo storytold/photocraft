@@ -458,7 +458,6 @@ mod tests {
         assert!((at(&s, 0.25)[0] - 0.5).abs() < 0.01);
     }
 
-    /// `eval` guards its own stops instead of relying on `bake`'s two-stop check.
     #[test]
     fn smooth_opacity_clamps_constant_stops() {
         let flat = vec![(0.0, 0.4), (1.0, 0.4)];
@@ -467,6 +466,7 @@ mod tests {
         assert_eq!(bake_smooth_opacity(vec![(0.5, f32::NAN)], &[]), vec![(0.5, 1.0)]);
     }
 
+    /// `eval` guards its own stops instead of relying on `bake`'s two-stop check.
     #[test]
     fn eval_with_fewer_than_two_stops_does_not_index_out_of_range() {
         assert_eq!(eval(&[], &[], 1.0, 0.5, Method::Smooth), [0.0; 3]);
