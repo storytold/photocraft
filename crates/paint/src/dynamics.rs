@@ -163,7 +163,7 @@ impl Smoother {
         }
         // Exponential: every SMOOTHING_STEP_MS of stroke time moves `a` of the way towards the
         // pointer, so the feel doesn't depend on how often the device reports. Input without
-        // timestamps takes one step per point.
+        // timestamps was never measured: it takes one step per point with the pull it always had.
         let a = smoothing_pull(amount);
         let dt = prev_input.map_or(0.0, |q| p.time - q.time);
         let still = prev_input.is_some_and(|q| q.x == p.x && q.y == p.y);
@@ -177,7 +177,7 @@ impl Smoother {
             // Each of `iters` moves covers `steps / iters` steps' worth of pull.
             (iters as usize, 1.0 - (1.0 - a).powf(steps.min(64.0) / iters))
         } else {
-            (1, a)
+            (1, 1.0 - amount.min(0.95))
         };
         let mut cur = pos;
         for _ in 0..iters {

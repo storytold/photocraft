@@ -993,7 +993,7 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
     for x in [0.0, 100.0] {
         s.push(StrokePoint::new(x, 0.0, 1.0), &mut out);
     }
-    assert!((out.last().map_or(0.0, |p| p.x) - 100.0 * a).abs() < 1e-4);
+    assert!((out.last().map_or(0.0, |p| p.x) - 20.0).abs() < 1e-4);
 }
 
 #[test]
