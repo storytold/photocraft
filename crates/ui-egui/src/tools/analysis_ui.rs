@@ -1202,7 +1202,7 @@ pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // Escape during a Ruler drag (a new ruler or an end) ends it and keeps the ruler where it is:
     // no cancel, and the later moves and the release change nothing (#11986).
     if app.ui.tool == Tool::Ruler
-        && matches!(app.ui.analysis.drag, Some(Drag::RulerNew | Drag::RulerHandle(0 | 1)))
+        && matches!(app.ui.analysis.drag, Some(Drag::RulerNew(_) | Drag::RulerHandle(0 | 1)))
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         app.ui.analysis.drag = None;
