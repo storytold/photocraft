@@ -215,7 +215,9 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
         Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
         None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
         Some(mode) if photocraft_io::vectorcraft::is_vectorcraft(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA8, mode)?, doc)?,
-        None if photocraft_io::vectorcraft::is_vectorcraft(bytes) => vectorcraft_source_image_in(name, bytes, doc, 1.0, |_| Ok(()))?,
+        None if photocraft_io::vectorcraft::is_vectorcraft(bytes) => vectorcraft_source_image_in(name, bytes, doc, 1.0, |bounds| {
+            crate::transform_cmds::check_budget(bounds, &Homography::IDENTITY, "smart object", fmt)
+        })?,
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
         None => source_image(name, bytes, fmt)?,
     };

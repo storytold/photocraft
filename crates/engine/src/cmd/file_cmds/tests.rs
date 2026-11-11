@@ -2143,6 +2143,23 @@ fn vectorcraft_smart_render_checks_the_drawn_artboard_of_a_stretched_placement()
     assert_eq!(draws(), before, "the artboard was drawn before the refusal");
 }
 
+/// A warped VectorCraft smart object whose artboard is past Memory Usage is refused before the
+/// artboard is drawn at its own size.
+#[test]
+fn vectorcraft_smart_render_checks_memory_before_drawing_a_warped_artboard() {
+    let s = session(40, 40, 8);
+    let doc = (*s.active().unwrap().doc).clone();
+    let bytes = Arc::new(vectorcraft_file(3_000, 3_000, "0 0 1"));
+    let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "Large.vectorcraft".into(), bytes }, Affine::IDENTITY, None);
+    let bounds = [0.0, 0.0, 3_000.0, 3_000.0];
+    smart.warp = Some(photocraft_geom::warp::Warp::custom(photocraft_geom::warp::BezierMesh::identity(bounds, 1, 1), bounds));
+    let draws = || crate::smart_cmds::VECTORCRAFT_DRAWS.with(std::cell::Cell::get);
+    let before = draws();
+    let e = crate::smart_cmds::render(&doc, &smart).unwrap_err();
+    assert!(e.to_string().contains("too large to transform"), "{e}");
+    assert_eq!(draws(), before, "the artboard was drawn before the refusal");
+}
+
 #[test]
 fn vectorcraft_raster_place_converts_before_resampling_at_every_depth() {
     for depth in [8, 16, 32] {
