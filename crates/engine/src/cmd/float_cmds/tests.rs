@@ -551,3 +551,37 @@ fn nudging_away_and_back_keeps_the_moved_pixels_selection() {
     assert_eq!(st.doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(2, 2, 42, 42)), "a click keeps the marquee");
     assert_eq!(st.history.past_len(), steps, "and adds no step");
 }
+
+/// #9332: each frame of a floating-mask drag reads the moved piece a tile at a time, with the
+/// same result as reading its whole area into one buffer first.
+#[test]
+fn floating_mask_drag_frame_matches_the_area_buffer() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 700, "height": 520, "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let bounds = Rect::new(0, 0, 700, 520);
+    s.edit("mask", |doc, _| {
+        let mut m = photocraft_doc::LayerMask::reveal_all();
+        let px: Vec<f32> = (0..bounds.size().area() as u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 7) as f32 % 1001.0 / 1000.0).collect();
+        m.surface.write_region(bounds, &px);
+        doc.layer_mut(id).unwrap().mask = Some(m);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.rect", json!({"x": 45, "y": 30, "width": 500, "height": 400, "feather": 6})).unwrap();
+    s.execute("select.float", json!({"dx": 0, "dy": 0, "target": "mask"})).unwrap();
+    let st = s.active().unwrap();
+    let f = floating(st).unwrap();
+    let parts = &f.parts;
+    assert!(parts.mask && !parts.piece_bounds.is_empty());
+    for (dx, dy) in [(13, 7), (-261, 3), (300, -140)] {
+        let shown = displayed(st, (dx, dy)).unwrap();
+        let (ox, oy) = (f.offset.0 + dx, f.offset.1 + dy);
+        let mut expected = parts.rest.clone();
+        let piece = parts.piece.translated(ox, oy, parts.piece_bounds);
+        crate::fill_cmds::composite_over_area_buffer(&mut expected, &piece, parts.piece_bounds.translate(ox, oy), None).unwrap();
+        let got = &shown.layer(id).unwrap().mask.as_ref().unwrap().surface;
+        assert_eq!(got.read_region(bounds), expected.read_region(bounds), "drag by ({dx}, {dy})");
+    }
+}
