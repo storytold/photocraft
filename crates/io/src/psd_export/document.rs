@@ -71,7 +71,9 @@ fn document_to_psd_sized_with_patterns(
     let smart_type = crate::type_smart::with_smart_type(doc, &mut type_warnings);
     let doc = smart_type.as_ref().unwrap_or(doc);
     let fmt = doc.pixel_format();
-    export_supported_document(doc, opts, depth, ctl, fmt, size_limit, patterns, type_warnings)
+    let (file, warnings) = export_supported_document(doc, opts, depth, ctl, fmt, size_limit, patterns);
+    type_warnings.extend(warnings);
+    (file, type_warnings)
 }
 
 fn export_supported_document(
@@ -82,7 +84,6 @@ fn export_supported_document(
     fmt: PixelFormat,
     size_limit: u64,
     patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
-    type_warnings: Vec<String>,
 ) -> (PsdFile, Vec<String>) {
     // A Duotone is written over its grey plate with its inks: the block it was imported with,
     // verbatim, while the inks are unedited, else one made from them (`duotone_map`). Photoshop
@@ -124,7 +125,6 @@ fn export_supported_document(
             super::stage::Stage::for_document(raw, opts.stage_on_scratch_from)
         },
     };
-    ex.warnings.extend(type_warnings);
     add_format_warnings(doc, opts, fmt, big, duotone_inks.is_some(), &mut ex.warnings);
     index_layer_ids_and_text(doc, &mut ex);
     // Progress: one unit per layer record, then the merged composite (#3389).
