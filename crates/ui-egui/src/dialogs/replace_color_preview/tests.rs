@@ -79,13 +79,51 @@ fn clicking_the_thumbnail_samples() {
     let mut app = app_with_doc();
     open(&mut app, REPLACE_COLOR).unwrap();
     let mut f = fields(&app);
-    assert!(crate::filter_dialog::sample_into(&mut app, &mut f, 25.0, 5.0, egui::Modifiers::NONE));
+    assert!(click(&mut app, &mut f, 25.0, 5.0, egui::Modifiers::NONE));
     assert_eq!(f["color"], json!("#0000ff"));
     assert_eq!(f["points"], json!([[25.0, 5.0]]));
     // Off the image nothing changes.
     let kept = f.clone();
-    assert!(!crate::filter_dialog::sample_into(&mut app, &mut f, -3.0, 5.0, egui::Modifiers::NONE));
+    assert!(!click(&mut app, &mut f, -3.0, 5.0, egui::Modifiers::NONE));
     assert_eq!(f, kept);
+}
+
+/// With no eyedropper armed, a plain click on the thumbnail samples, even when Add to Sample was
+/// the last one armed; Shift still adds.
+#[test]
+fn a_plain_click_samples_when_no_eyedropper_is_armed() {
+    let mut app = app_with_doc();
+    open(&mut app, REPLACE_COLOR).unwrap();
+    let mut f = fields(&app);
+    f.insert(crate::filter_dialog::COLOR_EYEDROPPER.into(), json!(false));
+    f.insert("__tool".into(), json!("add"));
+    assert!(click(&mut app, &mut f, 5.0, 5.0, egui::Modifiers::NONE));
+    assert!(click(&mut app, &mut f, 25.0, 5.0, egui::Modifiers::NONE));
+    assert_eq!(f["color"], json!("#0000ff"), "the second plain click replaced the sample");
+    assert_eq!(f["points"], json!([[25.0, 5.0]]));
+    assert!(click(&mut app, &mut f, 5.0, 5.0, egui::Modifiers::SHIFT));
+    assert_eq!(f["color"], json!("#0000ff"), "Shift added rather than replaced");
+    // Armed, the armed eyedropper decides.
+    f.insert(crate::filter_dialog::COLOR_EYEDROPPER.into(), json!(true));
+    f.insert("__tool".into(), json!("add"));
+    let before = f["points"].as_array().map_or(0, Vec::len);
+    assert!(click(&mut app, &mut f, 5.0, 20.0, egui::Modifiers::NONE));
+    assert_eq!(f["color"], json!("#0000ff"));
+    assert_eq!(f["points"].as_array().map_or(0, Vec::len), before + 1, "the armed Add to Sample added");
+}
+
+/// The thumbnail's error (Localized Color Clusters before any sample) is cleared by clicking it.
+#[test]
+fn clicking_clears_the_no_sample_error() {
+    let mut app = app_with_doc();
+    open(&mut app, REPLACE_COLOR).unwrap();
+    let mut f = fields(&app);
+    f.insert("localized".into(), json!(true));
+    f.remove("points");
+    assert!(mask_values(&app, &f).is_err());
+    assert!(click(&mut app, &mut f, 5.0, 5.0, egui::Modifiers::NONE));
+    let (mask, [w, _]) = mask_values(&app, &f).unwrap();
+    assert!(mask[5 * w + 5] > 0.9);
 }
 
 /// A big document is judged on a reduced copy, and the view is a dialog-only field.

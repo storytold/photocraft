@@ -812,7 +812,7 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
 const REPLACE_COLOR: &str = "image.adjustments.replaceColor";
 /// What OK on an edited smart filter runs (`smart_ui::confirm_command`).
 const SMART_FILTER_SET_PARAMS: &str = "layer.smartFilter.setParams";
-const COLOR_EYEDROPPER: &str = "__colorEyedropper";
+pub(crate) const COLOR_EYEDROPPER: &str = "__colorEyedropper";
 
 fn color_eyedropper_owns(f: &Map<String, Value>) -> bool {
     f.get("__filter").and_then(Value::as_bool) == Some(true)

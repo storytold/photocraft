@@ -147,18 +147,25 @@ pub(crate) fn thumbnail(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
     ui.painter().rect_filled(frame, 0.0, t.canvas);
     let cache = refresh(app, ui.ctx(), f, image);
     let doc_size = app.session.active().map(|st| [f64::from(st.doc.size.width.max(1)), f64::from(st.doc.size.height.max(1))]);
-    if let Some((tex, [w, h])) = cache.as_ref().and_then(|c| c.shown.clone()) {
-        let scale = (THUMB.x / w.max(1) as f32).min(THUMB.y / h.max(1) as f32);
-        let img = Rect::from_center_size(frame.center(), vec2(w as f32 * scale, h as f32 * scale));
+    // Where the image sits in the frame: from the texture, or the document's shape when the
+    // Selection view can't be drawn, so a click can still sample and clear the error.
+    let shown = cache.as_ref().and_then(|c| c.shown.clone());
+    let [w, h] = match (&shown, doc_size) {
+        (Some((_, size)), _) => size.map(|v| v.max(1) as f32),
+        (None, Some(size)) => size.map(|v| v as f32),
+        (None, None) => [1.0, 1.0],
+    };
+    let scale = (THUMB.x / w).min(THUMB.y / h);
+    let img = Rect::from_center_size(frame.center(), vec2(w * scale, h * scale));
+    if let Some((tex, _)) = &shown {
         ui.painter().image(tex.id(), img, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        // Response::clicked may take an accessibility input lock: ask before reading the pointer.
-        let clicked = resp.clicked();
-        if let (Some(p), Some([dw, dh])) = (resp.interact_pointer_pos().filter(|p| clicked && img.contains(*p)), doc_size) {
-            let x = (f64::from((p.x - img.left()) / img.width()) * dw).floor().clamp(0.0, dw - 1.0);
-            let y = (f64::from((p.y - img.top()) / img.height()) * dh).floor().clamp(0.0, dh - 1.0);
-            let mods = ui.input(|i| i.modifiers);
-            crate::filter_dialog::sample_into(app, f, x, y, mods);
-        }
+    }
+    // Response::clicked may take an accessibility input lock: ask before reading the pointer.
+    let clicked = resp.clicked();
+    if let (Some(p), Some([dw, dh])) = (resp.interact_pointer_pos().filter(|p| clicked && img.contains(*p)), doc_size) {
+        let x = (f64::from((p.x - img.left()) / img.width()) * dw).floor().clamp(0.0, dw - 1.0);
+        let y = (f64::from((p.y - img.top()) / img.height()) * dh).floor().clamp(0.0, dh - 1.0);
+        click(app, f, x, y, ui.input(|i| i.modifiers));
     }
     if let Some(e) = cache.as_ref().and_then(|c| c.error.as_deref()) {
         let g = ui.painter().layout(e.to_string(), egui::FontId::proportional(11.0), t.text_faint, frame.width() - 16.0);
@@ -178,6 +185,16 @@ pub(crate) fn thumbnail(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
         }
     });
     ui.add_space(4.0);
+}
+
+/// A click on the thumbnail at document point (x, y). The Add / Subtract eyedropper it uses is the
+/// armed one; with none armed a plain click samples, as the canvas does, whatever tool was armed
+/// last.
+fn click(app: &mut PhotocraftApp, f: &mut Map<String, Value>, x: f64, y: f64, mods: egui::Modifiers) -> bool {
+    if f.get(crate::filter_dialog::COLOR_EYEDROPPER).and_then(Value::as_bool) != Some(true) {
+        f.insert("__tool".into(), json!("sample"));
+    }
+    crate::filter_dialog::sample_into(app, f, x, y, mods)
 }
 
 #[cfg(test)]
