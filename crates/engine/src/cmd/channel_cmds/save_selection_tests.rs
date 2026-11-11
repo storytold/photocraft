@@ -58,11 +58,14 @@ fn save_to_a_new_document_makes_a_multichannel_image_of_the_selection() {
         for (k, (a, b)) in ink.iter().zip(&selection).enumerate() {
             assert!((a - (1.0 - b)).abs() <= tol, "{depth}-bit pixel {k}: ink {a} for selection {b}");
         }
-        // The image shows the selection: white where selected, black where not, grays between.
+        // The image shows the selection: white where selected, black where not, grays between,
+        // with the Spot dot gain the ink preview adds.
         let shown = photocraft_compose::flatten(d);
         assert_eq!(shown.px.len(), selection.len());
-        for (k, (p, v)) in shown.px.iter().zip(&selection).enumerate() {
-            assert!(p[..3].iter().all(|c| (c - v).abs() <= 1.5 / 255.0) && (p[3] - 1.0).abs() < 1e-6, "{depth}-bit pixel {k}: shown {p:?} for selection {v}");
+        let gain = photocraft_compose::multichannel::spot_dot_gain();
+        for (k, ((p, v), a)) in shown.px.iter().zip(&selection).zip(&ink).enumerate() {
+            let paper = 1.0 - photocraft_compose::multichannel::dot_gain(*a, gain);
+            assert!(p[..3].iter().all(|c| (c - paper).abs() <= 1e-4) && (p[3] - 1.0).abs() < 1e-6, "{depth}-bit pixel {k}: shown {p:?} for selection {v}");
         }
         assert!(selection[8 * 24 + 10] > 0.9 && selection[0] == 0.0, "the middle is selected, the corner is not");
         // The source keeps its selection and gets no channel or history step.
