@@ -994,6 +994,8 @@ struct CanvasToolInput<'a> {
     primary: bool,
     transform_owns_pointer: bool,
     hand_pan: bool,
+    /// Space holds the Hand over the selected tool.
+    space_hand: bool,
     ppp: f32,
     under_dialog: bool,
     menu_dismiss_press: bool,
@@ -1146,7 +1148,8 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     {
         // A pending crop: its menu, also outside the image, where the frame can reach (#6561).
         // Outside the image: the pasteboard colour menu (#2462), else the tool's own. The view
-        // menu belongs to the selected Zoom or Hand, not to Space or a held zoom key. A crop
+        // menu belongs to the selected Zoom or Hand, and to the Hand Space holds over another
+        // tool, as in Photoshop (#11271), but not to a held zoom key. A crop
         // frame or Straighten line still dragged by the left button gets no menu over it: the
         // gesture and the held button both, as either alone can outlive a lost release. A
         // finger held still (egui's press-and-hold right-click) is down too, but drags nothing.
@@ -1158,7 +1161,7 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
         } else if crate::canvas_tool_menu::pasteboard_at(app, tool, xf.to_doc(p)) {
             crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
         } else if crate::canvas_tool_menu::is_view_tool(tool) {
-            if tool == app.ui.tool {
+            if tool == app.ui.tool || input.space_hand {
                 crate::canvas_tool_menu::open_view(app, ctx, tool, [p.x, p.y], xf.to_doc(p));
             }
         } else {
@@ -2099,7 +2102,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", ui.layer_id(), idx)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -2493,6 +2496,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             primary,
             transform_owns_pointer,
             hand_pan,
+            space_hand: space_pan,
             ppp,
             under_dialog,
             menu_dismiss_press,

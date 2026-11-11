@@ -818,9 +818,15 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some([x, y]) = w.position {
             builder = builder.with_position([x, y]);
         }
-        // Read the window's view from `app.ui.windows`, not from `wins`: a Scroll All Windows drag in a
-        // window drawn earlier in this loop may have moved it since `wins` was taken.
-        let mut view = app.ui.windows.iter().find(|x| x.id == w.id).map_or_else(|| w.view.clone(), |x| x.view.clone());
+        // A floating window owns its document's view, as the main canvas no longer shows it: it
+        // draws `app.ui.views[doc]`, which the Navigator, the status bar's zoom and the View
+        // commands edit, rather than a copy of its own that would ignore them (#11276). A New
+        // Window for Document keeps its own view beside the main canvas's, read from
+        // `app.ui.windows` rather than `wins`: a Scroll All Windows drag in a window drawn earlier
+        // in this loop may have moved it since `wins` was taken.
+        let owned = w.floating.then(|| app.ui.views.get(w.document).cloned()).flatten();
+        let shares = owned.is_some();
+        let mut view = owned.unwrap_or_else(|| app.ui.windows.iter().find(|x| x.id == w.id).map_or_else(|| w.view.clone(), |x| x.view.clone()));
         let mut close = false;
         let mut focused = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
@@ -840,6 +846,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });
         });
+        if shares && let Some(v) = app.ui.views.get_mut(w.document) {
+            *v = view.clone();
+        }
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
             win.focused = focused;
