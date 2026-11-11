@@ -528,8 +528,8 @@ pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{
-    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates, normalize_shortcut,
-    reserved_shortcut,
+    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates,
+    normalize_shortcut, reserved_shortcut,
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
@@ -1657,7 +1657,15 @@ impl Session {
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
+            // A number outside 0..MAX reads, but `validate_settings` would then refuse every
+            // later Color Settings edit: reset it like an unreadable value.
+            let gain = self.color.settings.spot_dot_gain;
+            if !(gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&gain)) {
+                invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "spotDotGain".into()], value: json!(gain) });
+                self.color.settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
+            }
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
+            photocraft_compose::multichannel::set_spot_dot_gain(self.color.settings.spot_dot_gain);
         }
         self.prefs.edit(|p| *p = prefs);
         if let Some(v) = presets {
