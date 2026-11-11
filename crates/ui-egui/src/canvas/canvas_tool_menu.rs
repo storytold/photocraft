@@ -72,7 +72,7 @@ pub struct CanvasToolMenu {
     /// targeted path (#12771, #12744): the engine command that entry runs and its params. It heads
     /// the path menu, above a separator.
     #[serde(default)]
-    pub point: Option<(String, Value)>,
+    pub point: Option<(String, Value, PathRef)>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -656,7 +656,7 @@ fn point_menu(tool: Tool) -> bool {
 /// it (`direct_select::hit_active`): Delete Anchor Point on an anchor, Add Anchor Point on a
 /// segment, at the clicked point. `None` on empty canvas, a handle, or the Pen draft, which the
 /// engine doesn't edit.
-fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value)> {
+fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value, PathRef)> {
     let (target, _, hit) = crate::direct_select::hit_active(app, doc)?;
     let (command, mut params) = match hit {
         Hit::Anchor([subpath, knot]) => (POINT_DELETE, json!({"subpath": subpath, "knot": knot})),
@@ -669,7 +669,7 @@ fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value)> {
     if let (Some(o), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
         o.extend(t.clone());
     }
-    Some((command.to_string(), params))
+    Some((command.to_string(), params, target))
 }
 
 const POINT_DELETE: &str = "path.deleteAnchor";
@@ -682,7 +682,7 @@ fn point_label(command: &str) -> String {
 
 /// Is `command` the open menu's top point entry?
 fn is_point(menu: &CanvasToolMenu, command: &str) -> bool {
-    menu.point.as_ref().is_some_and(|(c, _)| c == command)
+    menu.point.as_ref().is_some_and(|(c, ..)| c == command)
 }
 
 /// Tools whose plain canvas right-click offers the view menu.
@@ -1238,7 +1238,11 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         return;
     }
     let result = if is_point(&menu, command) {
-        menu.point.as_ref().map_or(Ok(()), |(id, params)| app.run(id, params.clone()).map(|_| ()))
+        menu.point.as_ref().map_or(Ok(()), |(id, params, target)| {
+            app.run(id, params.clone())?;
+            crate::anchor_tools::reset_shifted_selection(app, *target);
+            Ok(())
+        })
     } else if menu.crop.is_some() {
         choose_crop(app, &menu, command)
     } else if menu.guide {
@@ -1571,7 +1575,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         selected = Some(command);
                     }
                 }
-                if let Some((command, _)) = &menu.point {
+                if let Some((command, ..)) = &menu.point {
                     let item = egui::Button::new(point_label(command)).min_size(egui::vec2(200.0, 20.0));
                     if ui.add(item).clicked() {
                         selected = Some(command.clone());
