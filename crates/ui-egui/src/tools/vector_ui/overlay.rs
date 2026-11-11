@@ -129,6 +129,12 @@ pub(crate) fn selected_saved_path_index(app: &PhotocraftApp) -> Option<(usize, P
 
 /// Work path / active shape path / selected saved path outlines, anchors, and the pen path in
 /// progress.
+/// Whether the path being drawn previews its next segment up to the pointer. The Pen only does
+/// with its gear's Rubber Band on (#12900); the other pens' paths keep their preview.
+fn rubber_band_shown(app: &PhotocraftApp, tool: Tool, pen: &super::PenPath) -> bool {
+    tool != Tool::Pen || pen.curvature || app.ui.tool_options.pen_rubber_band
+}
+
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
     let accent = Tokens::get(painter.ctx()).accent;
@@ -144,6 +150,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
     // Free Transform Path draws the path through its box instead (transform_tool).
     let paths = app.ui.view.shows(app.ui.view.show.target_path) && app.ui.transform.as_ref().is_none_or(|t| t.path.is_none());
+    if paths && app.session.active().is_some_and(|st| st.doc.id == doc.id) {
+        crate::type_path_placement::draw(app, painter, xf);
+    }
     if app.session.active().is_some_and(|st| st.doc.id == doc.id) && crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
@@ -234,6 +243,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             && !pen.dragging
             && pen.moving.is_none()
             && !auto
+            && rubber_band_shown(app, tool, pen)
         {
             if pen.curvature && pen.knots.len() >= 2 {
                 // The Curvature Pen previews the curve the next click makes through the pointer.

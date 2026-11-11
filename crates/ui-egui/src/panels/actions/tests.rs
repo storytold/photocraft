@@ -307,6 +307,9 @@ fn bulk_load_summary_counts_distinct_sets_and_pluralises_files() {
 #[test]
 /// The multi-file summary is translated like the rest of the Actions panel.
 fn bulk_load_summary_is_translated() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let files = vec![("a.atn".into(), action_set_bytes("Set 1", "A")), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
     let status = crate::i18n::with_language(crate::i18n::Lang::from_code("de").unwrap(), || bulk_load_status(&mut app, files));

@@ -560,6 +560,36 @@ pub fn document_profile(doc: &Document) -> Arc<Profile> {
         .unwrap_or_else(|| working_profile(doc.mode))
 }
 
+/// A swatch colour (straight RGB in the RGB working space, as the foreground and background hold
+/// it) as the active document takes it. In a Grayscale document that is the colour's gray with the
+/// sRGB tone curve (sGray), through `photocraft-cms` (relative colorimetric with black point
+/// compensation), returned as equal R, G and B so the pixel conversion keeps it: RGB 0,200,0
+/// becomes gray 172, as the reference paints it (173, measured), not its Rec.601 luma 117 (#11940).
+/// The reference's swatch conversion doesn't follow the document's Dot Gain curve (that gives 153),
+/// so pixel conversions such as Image › Mode › Grayscale keep using the document's profile. Other
+/// modes, and a failed conversion, keep the colour. So do Grayscale documents outside the default
+/// gray working space, which #11940 did not measure: a Working Gray other than Dot Gain 20 %, or a
+/// document tagged with a gray profile other than that one.
+pub fn swatch_in_doc(s: &Session, c: [f32; 4]) -> [f32; 4] {
+    let Some(st) = s.active().filter(|st| st.doc.mode == ColorMode::Grayscale) else { return c };
+    let default_gray = Builtin::DotGain20Compat;
+    if s.color.settings.working_gray != default_gray.id() || document_profile(&st.doc).content_hash() != default_gray.profile().content_hash() {
+        return c;
+    }
+    let opts = photocraft_cms::TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let sgray = Arc::new(Builtin::SGray.profile().clone());
+    let Ok(t) = photocraft_cms::cached(&working_profile(ColorMode::Rgb), &sgray, opts) else { return c };
+    let mut out = [0.0f32; 16];
+    t.eval(&[c[0], c[1], c[2]], &mut out);
+    let g = out[0];
+    if g.is_finite() {
+        let g = g.clamp(0.0, 1.0);
+        [g, g, g, c[3]]
+    } else {
+        c
+    }
+}
+
 /// Profile describing the compositor's RGB output for this document (see the module docs).
 pub fn composite_profile(doc: &Document) -> Arc<Profile> {
     match mode_space(doc.mode) {
@@ -899,7 +929,9 @@ fn ink_surface(s: &Surface, d: &Duotone) -> Surface {
 }
 
 /// Image › Mode › RGB/Grayscale/CMYK/Lab through the CMS. Params: `profile` (destination,
-/// default the mode's working profile), `intent` (default relative), `bpc` (default true).
+/// default the mode's working profile; Indexed→RGB without an explicit profile instead expands
+/// the already-RGB storage without changing its encoded samples or ICC bytes), `intent`
+/// (default relative), `bpc` (default true).
 pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     if doc.mode == ColorMode::Multichannel && mode != ColorMode::Multichannel {
@@ -908,8 +940,13 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     if doc.mode == mode && p.get("profile").is_none() {
         return Ok(Value::Null);
     }
+    let preserve_indexed_rgb = p.get("profile").and_then(Value::as_str).is_none()
+        && doc.mode == ColorMode::Indexed
+        && mode == ColorMode::Rgb
+        && doc.icc_profile.as_ref().is_none_or(|bytes| profile_from_bytes(bytes).ok().is_some_and(|p| p.color_space == ColorSpace::Rgb));
     let dst = match p.get("profile").and_then(Value::as_str) {
         Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
+        None if preserve_indexed_rgb => document_profile(doc),
         None => s.color.working(mode),
     };
     if space_mode(dst.color_space)
@@ -923,7 +960,16 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     }
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
-    s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+    if preserve_indexed_rgb {
+        s.edit("Mode Change", |doc, _| {
+            doc.mode = ColorMode::Rgb;
+            doc.color_table = None;
+            doc.duotone = None;
+            Ok(())
+        })?;
+    } else {
+        s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+    }
     Ok(json!({ "profile": dst.description, "intent": intent.id(), "bpc": bpc }))
 }
 
