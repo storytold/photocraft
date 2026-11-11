@@ -798,6 +798,10 @@ fn pattern_fill_canvas_drag(app: &mut PhotocraftApp, input: &DialogCanvasInput<'
     owns
 }
 
+/// Pointer input on the image while a dialog or panel owns it, before the tools see it: an armed
+/// eyedropper (a colour picker's, Curves, Replace Color, Color Range), Select and Mask's Refine
+/// Edge Brush, Field Blur's pins, a Layer Style shadow drag, a ⌘/Ctrl-click adding a Curves point,
+/// and the zoom and pan that stay available throughout. It also sets the cursor these show.
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
     let sticky_alt = app.ui.shell.sticky_alt;
     let zoom_out = |alt: bool| match input.temporary {
@@ -924,7 +928,9 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             input.ctx.set_cursor_icon(egui::CursorIcon::Move);
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
-        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+        // The dialogs' eyedroppers (Levels, Curves, a colour picker's) swap the pipette for the
+        // precise crosshair with caps lock too, as the Eyedropper tool does (#9836).
+        if precise_other_cursor(app) {
             input.ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             input.ctx.set_cursor_icon(pipette_cursor(input.ctx, p));
@@ -988,6 +994,8 @@ struct CanvasToolInput<'a> {
     primary: bool,
     transform_owns_pointer: bool,
     hand_pan: bool,
+    /// Space holds the Hand over the selected tool.
+    space_hand: bool,
     ppp: f32,
     under_dialog: bool,
     menu_dismiss_press: bool,
@@ -1140,7 +1148,8 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     {
         // A pending crop: its menu, also outside the image, where the frame can reach (#6561).
         // Outside the image: the pasteboard colour menu (#2462), else the tool's own. The view
-        // menu belongs to the selected Zoom or Hand, not to Space or a held zoom key. A crop
+        // menu belongs to the selected Zoom or Hand, and to the Hand Space holds over another
+        // tool, as in Photoshop (#11271), but not to a held zoom key. A crop
         // frame or Straighten line still dragged by the left button gets no menu over it: the
         // gesture and the held button both, as either alone can outlive a lost release. A
         // finger held still (egui's press-and-hold right-click) is down too, but drags nothing.
@@ -1152,7 +1161,7 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
         } else if crate::canvas_tool_menu::pasteboard_at(app, tool, xf.to_doc(p)) {
             crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
         } else if crate::canvas_tool_menu::is_view_tool(tool) {
-            if tool == app.ui.tool {
+            if tool == app.ui.tool || input.space_hand {
                 crate::canvas_tool_menu::open_view(app, ctx, tool, [p.x, p.y], xf.to_doc(p));
             }
         } else {
@@ -1590,6 +1599,9 @@ struct CanvasOverlayInput<'a> {
     response: &'a egui::Response,
     doc: &'a std::sync::Arc<Document>,
     tool: Tool,
+    /// `tool` is lent by a held key or the middle button (the Hand, the Zoom, the Move with ⌘),
+    /// even when it is the selected tool too: it shows its own cursor.
+    lent: bool,
     idx: usize,
     output: Option<u32>,
     border: photocraft_engine::prefs::CanvasBorder,
@@ -1694,7 +1706,20 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     draw_canvas_tool_cursor(app, ui, input, resizing);
 }
 
-/// Renders custom canvas cursor overlays, including brush silhouettes and type path placement directional arrows.
+/// An eyedropper owns the image: a dialog's (Levels, Curves, Replace Color, a colour picker's)
+/// or a Properties Levels/Curves one. It sets the cursor itself.
+fn eyedropper_owns_image(app: &PhotocraftApp) -> bool {
+    crate::adjust_dialog::picker_armed(app)
+        || crate::filter_dialog::color_eyedropper_armed(app)
+        || crate::color_picker_ui::top(app).is_some()
+        || crate::layer_picker::armed(app).is_some()
+}
+
+/// Set the cursor for the tool over the image, and paint the ones PhotoCraft draws itself (the
+/// brush tip outline, the crosshair, a tool's own icon). The first case that applies wins: a pan
+/// keeps the fist it set, an eyedropper that owns the image keeps the cursor it set, a stale
+/// pointer position over another window paints nothing, then a guide under the pointer, then the
+/// tool's own cursor.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
     let ctx = input.ctx;
     let xf = input.xf;
@@ -1711,6 +1736,10 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     });
     if panning {
         // The fist set with the pan above stays (#2196).
+    } else if !input.lent && eyedropper_owns_image(app) {
+        // The eyedropper set its own cursor; the tool's isn't drawn over it (#9836). A held
+        // Space or zoom key, or the middle button, still shows the tool it lends, even when
+        // that is the selected tool as well.
     } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
         // The pointer is over a floating panel's own window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.
@@ -2073,7 +2102,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", ui.layer_id(), idx)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -2121,7 +2150,8 @@ fn layer_picker_eyedropper(app: &mut PhotocraftApp, ui: &egui::Ui, ctx: &egui::C
     if response.hovered()
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
     {
-        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+        // Caps lock swaps the pipette and the precise crosshair, as everywhere (#9836).
+        if precise_other_cursor(app) {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             ctx.set_cursor_icon(pipette_cursor(ctx, p));
@@ -2466,6 +2496,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             primary,
             transform_owns_pointer,
             hand_pan,
+            space_hand: space_pan,
             ppp,
             under_dialog,
             menu_dismiss_press,
@@ -2510,6 +2541,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             response: &response,
             doc: &doc,
             tool,
+            lent: temporary.is_some() || middle,
             idx,
             output,
             border,
