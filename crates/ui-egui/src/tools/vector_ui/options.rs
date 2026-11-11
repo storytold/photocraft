@@ -7,6 +7,16 @@ use super::{GradientChoices, LayerContent, PaintChange, PhotocraftApp, Tokens, T
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
+/// The Pen's gear, before Auto Add/Delete as in Photoshop: a popup with the Rubber Band check
+/// item, off by default and saved with the tool options (#12900).
+fn pen_gear(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
+    let gear = crate::icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Set additional pen and path options"));
+    egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(140.0);
+        ui.checkbox(&mut o.pen_rubber_band, tl!("Rubber Band"));
+    });
+}
+
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !(is_shape_tool(tool)
@@ -57,8 +67,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
-        let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0);
+        // Photoshop's Pen lists Shape, Path and a greyed Pixels (#12906); the other pens keep theirs.
+        let opts = if tool == Tool::Pen {
+            vec![("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path")), ("pixels".to_string(), tl!("Pixels"))]
+        } else {
+            vec![("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))]
+        };
+        crate::widgets::dropdown_enabled(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0, |m| m != "pixels");
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
             crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
@@ -74,6 +89,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let o = &mut app.ui.tool_options;
         if tool == Tool::Pen {
             crate::widgets::vline(ui, 22.0);
+            pen_gear(o, ui);
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
         }
         let enter = crate::shortcuts::pretty("Enter");
