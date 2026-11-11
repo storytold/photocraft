@@ -110,6 +110,8 @@ fn pen_and_shape_options_bars_have_the_path_options_gear() {
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(2);
-        assert!(h.query_by_label("Path Options").is_some(), "{tool:?}");
+        // The Pen's gear also holds Rubber Band and carries Photoshop's name for it (#12900).
+        let gear = if tool == Tool::Pen { "Set additional pen and path options" } else { "Path Options" };
+        assert!(h.query_by_label(gear).is_some(), "{tool:?}");
     }
 }

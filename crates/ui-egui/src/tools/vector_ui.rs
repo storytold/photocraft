@@ -219,6 +219,9 @@ mod path_options_tests;
 mod pen_path_ops_tests;
 
 #[cfg(test)]
+mod pen_rubber_band_tests;
+
+#[cfg(test)]
 mod paint_tests;
 
 #[cfg(test)]

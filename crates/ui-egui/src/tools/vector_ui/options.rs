@@ -72,10 +72,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         crate::widgets::vline(ui, 22.0);
         path_operations_menu(app, ui);
         let o = &mut app.ui.tool_options;
-        path_options(ui, o);
         if tool == Tool::Pen {
+            // The Pen's one gear sits before Auto Add/Delete, as in Photoshop: the Path Options
+            // and the Rubber Band check item (#9713, #12900).
             crate::widgets::vline(ui, 22.0);
+            path_options(ui, o, true);
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
+        } else {
+            path_options(ui, o, false);
         }
         let enter = crate::shortcuts::pretty("Enter");
         match tool {
@@ -151,16 +155,19 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         .on_hover_text(tl!("Arrowhead options"));
     }
     crate::widgets::vline(ui, 22.0);
-    path_options(ui, &mut app.ui.tool_options);
+    path_options(ui, &mut app.ui.tool_options, false);
     true
 }
 
 /// The options-bar gear of the Pen and shape tools: Photoshop's Path Options (the outline's
 /// Thickness and Color), plus the Anchor Size and a start-point highlight, so anchors and the
 /// end a path began at are easy to find on any image (#9713). One setting for every path tool.
-pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions) {
-    let resp = crate::icons::button(ui, "settings", 24.0, false, tl!("Path Options"));
-    let resp = crate::brush_picker::named(resp, "Path Options");
+/// The Pen's gear (`pen`) is Photoshop's "Set additional pen and path options": it also holds the
+/// Rubber Band check item, off by default (#12900).
+pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions, pen: bool) {
+    let name = if pen { "Set additional pen and path options" } else { "Path Options" };
+    let resp = crate::icons::button(ui, "settings", 24.0, false, tl!(name));
+    let resp = crate::brush_picker::named(resp, name);
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         egui::Grid::new("path-options").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(tl!("Thickness:"));
@@ -179,6 +186,9 @@ pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions)
             ui.end_row();
         });
         crate::widgets::checkbox(ui, &mut o.path_mark_start, tl!("Highlight Start Point"));
+        if pen {
+            ui.checkbox(&mut o.pen_rubber_band, tl!("Rubber Band"));
+        }
     });
 }
 

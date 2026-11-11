@@ -142,6 +142,10 @@ pub struct ToolOptions {
     pub anchor_size: u32,
     /// Path Options › Highlight Start Point: ring the first anchor of open subpaths.
     pub path_mark_start: bool,
+    /// Pen › gear › Rubber Band: while drawing, preview the next segment from the last anchor to
+    /// the pointer. Off by default, as in Photoshop (#12900).
+    #[serde(default)]
+    pub pen_rubber_band: bool,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -531,6 +535,7 @@ impl Default for ToolOptions {
             path_thickness: 1.0,
             anchor_size: default_anchor_size(),
             path_mark_start: false,
+            pen_rubber_band: false,
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,

@@ -101,6 +101,6 @@ fn other_tools_keep_the_status_bar() {
     stroke(&mut app);
     assert!(alerts(&app).is_empty());
     assert_eq!(app.ui.status, photocraft_engine::hidden_target::HIDDEN);
-    assert_eq!(tool_name(Tool::Pencil), None);
-    assert_eq!(tool_name(Tool::Brush), Some("brush tool"), "the one place that names the tool");
+    assert_eq!(tool_name(&app, Tool::Pencil), None);
+    assert_eq!(tool_name(&app, Tool::Brush), Some("brush tool"), "the one place that names the tool");
 }
