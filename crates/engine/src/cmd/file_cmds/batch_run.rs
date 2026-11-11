@@ -1,5 +1,5 @@
 use super::open::import_at_raw_ppi;
-use super::paths::{extension, file_name, join, list_files, list_images, read_file, stem, write_file};
+use super::paths::{extension, file_name, join, list_files, list_images, read_file, sanitize, stem, write_file};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
@@ -260,6 +260,59 @@ fn process_outputs<'a>(
 }
 
 type PrepareInput<'a> = &'a dyn Fn(&mut Session, &str) -> Result<()>;
+
+/// Process the current in-memory images in scratch sessions: unsaved edits are included and
+/// resizing never touches the open documents' pixels, selection, history or save state.
+/// Untitled names use the shared filename sanitizer before becoming output stems.
+pub(super) fn process_document_copies(
+    s: &Session,
+    documents: &[&crate::DocState],
+    output: &str,
+    format: &str,
+    save: SaveOpts,
+    f: &dyn Fn(&mut Session, &str) -> Result<bool>,
+) -> Value {
+    let mut files = Vec::new();
+    let mut errors = Vec::new();
+    let mut written = OutputClaims::default();
+    for state in documents {
+        // Export resolves stored links against this source, including non-active documents.
+        let _document = crate::doc_path::scope(state.path.as_deref().map(std::path::Path::new));
+        // An untitled document's name is a label, not a path: keep it as one portable component.
+        let path = state.path.clone().unwrap_or_else(|| format!("{}.psd", sanitize(&state.doc.name)));
+        let ext = if format == "same" { same_format(&path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
+        let out = join(output, &format!("{}.{ext}", stem(&path)));
+        // Copies must not overwrite any open source file, including aliases of its path.
+        if s.documents().iter().filter_map(|doc| doc.path.as_deref()).any(|source| super::paths::same_destination(source, &out)) {
+            errors.push(json!({"file": path, "error": format!("output would replace an open source file: {out}; choose a different output folder")}));
+            continue;
+        }
+        let prepare = |scratch: &mut Session, _: &str| {
+            scratch.authorize = s.authorize;
+            scratch.prefs.edit(|prefs| *prefs = s.prefs().clone());
+            scratch.add_document(state.doc.as_ref().clone(), state.path.clone());
+            // The moved selection belongs to the displayed image; commit it only in the copy.
+            if let Some(floating) = crate::float_cmds::floating(state).cloned() {
+                let copy = scratch.active_mut().ok_or(EngineError::NoDocument)?;
+                copy.floating = Some(crate::float_cmds::Floating { revision: copy.revision, ..floating });
+                crate::float_cmds::drop_floating(scratch)?;
+            }
+            Ok(())
+        };
+        let notices = std::cell::RefCell::new(Vec::new());
+        let input = InputPolicy { prepare: &prepare, notices: &notices };
+        let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
+        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input) };
+        match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
+            Ok(()) => {
+                written.record(&out, &path);
+                files.push(out);
+            }
+            Err(error) => errors.push(error.value("file", &path)),
+        }
+    }
+    json!({"files": files, "errors": errors})
+}
 
 struct InputPolicy<'a> {
     prepare: PrepareInput<'a>,
