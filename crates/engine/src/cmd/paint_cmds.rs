@@ -219,3 +219,6 @@ mod tests;
 
 #[cfg(test)]
 mod bucket_no_op_history_tests;
+
+#[cfg(test)]
+mod bucket_bitmap_tests;

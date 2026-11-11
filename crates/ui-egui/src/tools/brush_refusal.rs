@@ -99,3 +99,7 @@ mod sharpen_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../sponge_refusal_alert_tests.rs"]
 mod sponge_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../bucket_bitmap_alert_tests.rs"]
+mod bucket_bitmap_alert_tests;
