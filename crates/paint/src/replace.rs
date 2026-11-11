@@ -96,6 +96,14 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         ReplaceMode::Luminosity => BlendMode::Luminosity,
     };
     let fg = [rs.color[0], rs.color[1], rs.color[2]];
+    // In a Lab/8 document Color mode keeps the pixel's L and takes the foreground's a and b, as in
+    // the reference application (#11922): the stored a, b channels move straight to its. Lab/16
+    // wasn't measured and keeps the RGB blend.
+    let lab_color = fmt.mode == photocraft_color::ColorMode::Lab && fmt.sample == photocraft_color::SampleType::U8 && rs.mode == ReplaceMode::Color;
+    let fg_ab = {
+        let l = photocraft_color::convert::srgb_to_lab(fg);
+        [(l[1] + 128.0) / 255.0, (l[2] + 128.0) / 255.0]
+    };
     let tol = rs.tolerance.clamp(0.0, 1.0);
     let soft = rs.anti_alias && rs.limits != Limits::FindEdges;
     let mut once: Option<[f32; 3]> = None;
@@ -181,23 +189,61 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 }
             }
         }
+        // A pixel recoloured by `k` (0..1), into `out`.
+        let recolor = |px: &[f32], k: f32, out: &mut [f32; 8]| {
+            out[..n].copy_from_slice(px);
+            if lab_color {
+                out[1] += (fg_ab[0] - px[1]) * k;
+                out[2] += (fg_ab[1] - px[2]) * k;
+                return;
+            }
+            let c = to_rgba(&fmt, px);
+            let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
+            let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
+            from_rgba_into(&fmt, o, out);
+        };
+        // A sample as the document stores it.
+        let stored = |v: f32| match fmt.sample {
+            photocraft_color::SampleType::U8 => (v.clamp(0.0, 1.0) * 255.0).round(),
+            photocraft_color::SampleType::U16 => (v.clamp(0.0, 1.0) * 65535.0).round(),
+            photocraft_color::SampleType::F32 => v,
+        };
         let mut enc = [0.0f32; 8];
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
-                let k = fp.at(x, y) * weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                let wt = weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                let k = fp.at(x, y) * wt;
                 if k <= 0.0 {
                     continue;
                 }
                 let px = work.px_mut(x, y);
-                let c = to_rgba(&fmt, px);
-                let b = blend_rgb(mode, [c[0], c[1], c[2]], fg);
-                let o = [c[0] + (b[0] - c[0]) * k, c[1] + (b[1] - c[1]) * k, c[2] + (b[2] - c[2]) * k, c[3]];
-                from_rgba_into(&fmt, o, &mut enc);
+                // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches takes
+                // the dab's full strength (its flow and pressure), not its partial coverage. A soft
+                // tip too, over the same reach as with Anti-alias on: the pixels its blended edge
+                // would change as stored, not its faint tail past them.
+                let k = if rs.anti_alias {
+                    k
+                } else {
+                    recolor(px, k, &mut enc);
+                    if enc[..n].iter().zip(px.iter()).all(|(a, b)| stored(*a) == stored(*b)) {
+                        continue;
+                    }
+                    fp.dab.alpha * wt
+                };
+                recolor(px, k, &mut enc);
                 px.copy_from_slice(&enc[..n]);
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "replace_anti_alias_tests.rs"]
+mod replace_anti_alias_tests;
+
+#[cfg(test)]
+#[path = "replace_lab_tests.rs"]
+mod replace_lab_tests;
 
 #[cfg(test)]
 mod tests {
