@@ -328,8 +328,9 @@ pub fn convert_target(doc: &Document, active: Option<LayerId>) -> Option<LayerId
 }
 
 /// `new` takes the place of the empty pixel layer `old`: the id, name, label, clipping, link,
-/// effects and blending options stay (the mode and opacity are the Gradient tool's), and the
-/// layer is revealed by a white mask unless the selection already masks it.
+/// effects, blending options, PSD layer id and XMP packet stay (the mode and opacity are the
+/// Gradient tool's), and the layer is revealed by a white mask unless the selection already masks
+/// it.
 pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Result<LayerId> {
     let depth = doc.depth;
     let mask = match new.mask.take() {
@@ -347,6 +348,8 @@ pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Res
     new.excluded_channels = slot.excluded_channels;
     new.blend_if = slot.blend_if.clone();
     new.advanced = slot.advanced;
+    new.psd_id = slot.psd_id;
+    new.xmp = slot.xmp.clone();
     new.mask = Some(mask);
     *slot = new;
     Ok(old)
