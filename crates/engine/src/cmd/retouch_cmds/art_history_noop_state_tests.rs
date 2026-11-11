@@ -23,23 +23,23 @@ fn fill_gray(s: &mut Session, v: f32) {
 }
 
 /// History row 1 is grey 0.5, the layer now grey 0.6: a small change every high tolerance holds back.
-fn held_back_session(depth: u64) -> Session {
+pub(super) fn held_back_session(depth: u64) -> Session {
     let mut s = session(depth);
     fill_gray(&mut s, 0.5);
     fill_gray(&mut s, 0.6);
     s
 }
 
-fn pixels(s: &Session) -> Vec<f32> {
+pub(super) fn pixels(s: &Session) -> Vec<f32> {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(d.doc.bounds())
 }
 
-fn steps(s: &Session) -> usize {
+pub(super) fn steps(s: &Session) -> usize {
     s.active().unwrap().history.past_len()
 }
 
-fn stroke(s: &mut Session, extra: Value) -> Result<Value> {
+pub(super) fn stroke(s: &mut Session, extra: Value) -> Result<Value> {
     let mut p = json!({"points": [[8, 16], [40, 16]], "size": 12, "hardness": 100, "area": 50, "style": "tightMedium", "state": 1, "tolerance": 90});
     if let Some(map) = extra.as_object() {
         for (k, v) in map {
