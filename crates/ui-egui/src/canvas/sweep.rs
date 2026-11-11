@@ -142,9 +142,12 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
         // The blocks the rest of the budget holds go in one render: the document is planned
         // once for all of them (about 2 ms a plan on a storyboard of ~450 passes, per block before).
         let n = if batches { batch_len(app, doc.id, started) } else { 1 };
-        if n > 1 {
-            let batch: Vec<Rect> = app.canvas_states.get(&doc.id).map(|s| s.pending.iter().rev().take(n).copied().collect()).unwrap_or_default();
-            match gpu.refresh_blocks(doc.id.0, doc, &batch, display).filter(|_| batch.len() > 1) {
+        // Checked before rendering: a batch of one (the sweep's last block) goes the one-block way
+        // below, and rendering it here too drew it twice.
+        let batch: Vec<Rect> =
+            if n > 1 { app.canvas_states.get(&doc.id).map(|s| s.pending.iter().rev().take(n).copied().collect()).unwrap_or_default() } else { Vec::new() };
+        if batch.len() > 1 {
+            match gpu.refresh_blocks(doc.id.0, doc, &batch, display) {
                 Some(r) => {
                     app.perf.record_refresh(&r);
                     app.perf.gpu_uploads = r.uploads;
@@ -269,6 +272,7 @@ fn blocks(region: Rect, canvas: Rect, visible: Rect) -> Vec<Rect> {
 mod tests {
     use super::*;
 
+    /// The blocks cover every pixel once, and the ones in view are drawn first.
     #[test]
     fn blocks_cover_the_canvas_once_and_draw_the_view_first() {
         let bounds = Rect::new(0, 0, 10_000, 5_000);
@@ -282,6 +286,7 @@ mod tests {
         assert!(last.intersect(&visible).is_empty(), "far blocks come last: {last:?}");
     }
 
+    /// Overlapping regions split into the same grid blocks, so they can be deduplicated.
     #[test]
     fn blocks_of_overlapping_regions_are_the_same_rectangles() {
         let canvas = Rect::new(0, 0, 10_000, 5_000);
@@ -296,16 +301,19 @@ mod tests {
         assert!(covered.contains(100, 100) && covered.contains(2_999, 1_499), "the region is covered: {covered:?}");
     }
 
+    /// An app with background jobs on, as on the desktop.
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.background_jobs = true;
         app
     }
 
+    /// An empty RGB document of `w` x `h` pixels.
     fn doc(w: u32, h: u32) -> Arc<Document> {
         Arc::new(Document::new("t", photocraft_geom::Size::new(w, h), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8))
     }
 
+    /// Sweeps need a canvas of at least `SWEEP_MIN_PX`, background jobs, and no failed sweep.
     #[test]
     fn only_large_canvases_with_background_jobs_and_no_failed_sweep_are_eligible() {
         let mut app = app();
@@ -319,6 +327,7 @@ mod tests {
         assert!(!eligible(&app, &big), "a failed sweep");
     }
 
+    /// A block the CPU compositor drew ends the sweep until a full refresh lands.
     #[test]
     fn a_block_off_the_gpu_fails_the_sweep_until_a_full_refresh_lands() {
         let mut app = app();
@@ -337,6 +346,7 @@ mod tests {
         assert!(!running(&app, big.id));
     }
 
+    /// A region added twice queues its blocks once, at the front.
     #[test]
     fn adding_a_region_twice_queues_its_blocks_once_and_first() {
         let mut app = app();
@@ -354,6 +364,7 @@ mod tests {
         assert!(!last.intersect(&region).is_empty(), "the region is drawn first: {last:?}");
     }
 
+    /// The safety net keeps a running sweep, and the changed area is drawn before the rest.
     #[test]
     fn the_safety_net_keeps_a_running_sweep_and_draws_the_change_first() {
         let mut app = app();
@@ -399,6 +410,7 @@ mod tests {
         assert_eq!(batch_len(&app, big.id, now), 1, "blocks that cost a frame each go one at a time");
     }
 
+    /// A comparison needs the same document shown with the same display key.
     #[test]
     fn a_comparison_needs_the_same_display() {
         let mut app = app();
