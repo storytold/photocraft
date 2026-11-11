@@ -51,6 +51,8 @@ use view::view_image;
 
 /// Longest side of the document proxy shown in the view (px).
 const PROXY_SIDE: usize = 1600;
+/// The panel's hint while Custom has no sampling area yet (#10621).
+const CUSTOM_HINT: &str = "Paint with the Sampling Brush to add a sampling area.";
 const LEFT_W: f32 = 48.0;
 const BAR_H: f32 = 36.0;
 const PANEL_W: f32 = 300.0;
@@ -249,6 +251,10 @@ pub struct CafWorkspace {
     base_px: Vec<bool>,
     hole_px: Vec<bool>,
     mask: Vec<bool>,
+    /// Whether Custom's sampling area (the strokes over an empty area) has a document pixel
+    /// outside the fill area, at full resolution as the fill samples it: worked out when first
+    /// asked after the strokes change (`None` until then).
+    sampled_any: std::cell::Cell<Option<bool>>,
     /// The pointer is down on the view with a tool: one press is one `Down`, egui's drag (which
     /// starts a few pixels later) continues it.
     pressed: bool,
@@ -285,6 +291,7 @@ impl CafWorkspace {
             "settings": self.opts.to_json(),
             "previewReady": self.preview.tex.is_some() && self.preview.shown == self.preview.want,
             "previewError": self.preview.error,
+            "previewHint": self.awaiting_custom_area().then_some(CUSTOM_HINT),
             "error": self.error,
         })
     }
@@ -305,6 +312,15 @@ impl CafWorkspace {
     /// Paints `s` (a stroke, or one segment of the one being drawn) into the proxy's sampling
     /// area: only the pixels within the brush of its path are visited, whatever came before.
     fn paint(&mut self, s: &SamplingStroke) {
+        // Painted last, an added segment only adds to the area and an erasing one only removes:
+        // the answer so far stands unless this segment can change it.
+        let any = match self.sampled_any.get() {
+            Some(false) if s.add => Some(self.samples_outside_fill(std::slice::from_ref(s))),
+            Some(false) => Some(false),
+            Some(true) if s.add => Some(true),
+            _ => None,
+        };
+        self.sampled_any.set(any);
         let (s, area) = (self.proxy_stroke(s), self.proxy_area());
         paint_strokes(&mut self.mask, area, &[s]);
         self.overlay_dirty = true;
@@ -335,6 +351,7 @@ impl CafWorkspace {
         let strokes: Vec<SamplingStroke> = self.strokes.iter().chain(self.cur.iter()).map(|s| self.proxy_stroke(s)).collect();
         let area = self.proxy_area();
         paint_strokes(&mut self.mask, area, &strokes);
+        self.sampled_any.set(None);
         self.overlay_dirty = true;
     }
 
@@ -343,6 +360,50 @@ impl CafWorkspace {
         let strokes: usize = self.strokes.iter().chain(self.cur.iter()).map(|s| s.points.len()).sum();
         let lassos: usize = self.fill_edits.iter().map(|e| e.get("points").and_then(Value::as_array).map_or(0, Vec::len)).sum();
         strokes + lassos
+    }
+
+    /// Custom sampling with nothing painted yet, or everything painted erased again. Photoshop
+    /// shows the image unfilled and a hint to paint with the Sampling Brush there, not an error,
+    /// and so does the workspace (#10621); Apply and OK say the same instead of running the fill.
+    fn awaiting_custom_area(&self) -> bool {
+        self.opts.sampling == "custom" && !self.sampled_any()
+    }
+
+    /// Custom's sampling area has a pixel outside the fill area (see `sampled_any`).
+    fn sampled_any(&self) -> bool {
+        if let Some(any) = self.sampled_any.get() {
+            return any;
+        }
+        let strokes: Vec<SamplingStroke> = self.strokes.iter().chain(self.cur.iter()).cloned().collect();
+        let any = self.samples_outside_fill(&strokes);
+        self.sampled_any.set(Some(any));
+        any
+    }
+
+    /// `strokes` painted in order over an empty area leave a document pixel outside the fill
+    /// area: the fill's Custom source (`content_aware_plan`, which paints them with the same
+    /// `paint_strokes` over the canvas pixels they add to), not the proxy, which at more than
+    /// one document px per proxy px can see a thin stroke's pixels differently.
+    fn samples_outside_fill(&self, strokes: &[SamplingStroke]) -> bool {
+        let rect = self.sampling_reach(strokes);
+        if rect.is_empty() {
+            return false;
+        }
+        let w = rect.width() as usize;
+        let mut source = vec![false; w * rect.height() as usize];
+        paint_strokes(&mut source, rect, strokes);
+        source.iter().enumerate().any(|(i, s)| {
+            let (x, y) = (rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32);
+            *s && !self.base.index(f64::from(x), f64::from(y)).is_some_and(|j| self.base.hole.get(j).copied().unwrap_or(false))
+        })
+    }
+
+    /// The only pixels `samples_outside_fill` has to paint `strokes` over: the bounds of the
+    /// canvas pixels outside the fill area within reach of their added strokes. Empty when they
+    /// can't reach one, as a stroke kept within the fill area can't, however big its brush.
+    fn sampling_reach(&self, strokes: &[SamplingStroke]) -> Rect {
+        let rect = strokes.iter().filter(|s| s.add).fold(Rect::EMPTY, |r, s| r.union(&s.bounds())).intersect(&self.canvas);
+        self.base.outside_fill_bounds(rect)
     }
 
     /// The preview is out of date.

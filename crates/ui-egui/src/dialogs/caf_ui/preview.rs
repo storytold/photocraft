@@ -7,13 +7,74 @@ pub(super) struct Base {
     pub(super) rect: Rect,
     pub(super) hole: Vec<bool>,
     pub(super) base: Vec<bool>,
+    /// The runs `[x0, x1)` of pixels outside the fill area, row by row of `rect` left to right,
+    /// row `i`'s at `outside[rows[i]..rows[i + 1]]`: `outside_fill_bounds` looks a row up in
+    /// them instead of scanning its pixels.
+    outside: Vec<(i32, i32)>,
+    rows: Vec<usize>,
 }
 
 impl Base {
+    pub(super) fn new(window: Rect, rect: Rect, hole: Vec<bool>, base: Vec<bool>) -> Self {
+        let (w, h) = (rect.width() as usize, rect.height() as usize);
+        let mut outside = Vec::new();
+        let mut rows = Vec::with_capacity(h + 1);
+        rows.push(0);
+        for y in 0..h {
+            let mut run: Option<i32> = None;
+            for x in 0..w {
+                // A pixel `hole` doesn't cover is outside the fill area.
+                let out = !hole.get(y * w + x).copied().unwrap_or(false);
+                let dx = rect.x0 + x as i32;
+                match (out, run) {
+                    (true, None) => run = Some(dx),
+                    (false, Some(a)) => {
+                        outside.push((a, dx));
+                        run = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(a) = run {
+                outside.push((a, rect.x1));
+            }
+            rows.push(outside.len());
+        }
+        Self { window, rect, hole, base, outside, rows }
+    }
+
     /// The index into `hole` and `base` of document point `(x, y)`, when it is inside `rect`.
     pub(super) fn index(&self, x: f64, y: f64) -> Option<usize> {
         let (xi, yi) = (x.floor() as i32, y.floor() as i32);
         self.rect.contains(xi, yi).then(|| (yi - self.rect.y0) as usize * self.rect.width() as usize + (xi - self.rect.x0) as usize)
+    }
+
+    /// Bounds of the pixels of `r` outside the fill area, pixel by pixel (everything beyond
+    /// `rect` is outside it); empty when the fill area covers all of `r`. Each row of `r` within
+    /// `rect` is looked up in its runs outside the fill area, not scanned pixel by pixel.
+    pub(super) fn outside_fill_bounds(&self, r: Rect) -> Rect {
+        let inner = r.intersect(&self.rect);
+        if inner.is_empty() {
+            return if r.is_empty() { Rect::EMPTY } else { r };
+        }
+        let beyond = [
+            Rect::new(r.x0, r.y0, r.x1, inner.y0),
+            Rect::new(r.x0, inner.y1, r.x1, r.y1),
+            Rect::new(r.x0, inner.y0, inner.x0, inner.y1),
+            Rect::new(inner.x1, inner.y0, r.x1, inner.y1),
+        ];
+        let mut out = beyond.iter().filter(|b| !b.is_empty()).fold(Rect::EMPTY, |o, b| o.union(b));
+        for y in inner.y0..inner.y1 {
+            let i = (y - self.rect.y0) as usize;
+            let runs = &self.outside[self.rows[i]..self.rows[i + 1]];
+            // The first run ending past `inner.x0` and the last starting before `inner.x1`.
+            let first = runs.partition_point(|&(_, e)| e <= inner.x0);
+            let last = runs.partition_point(|&(s, _)| s < inner.x1);
+            if first < last {
+                out = out.union(&Rect::new(runs[first].0.max(inner.x0), y, runs[last - 1].1.min(inner.x1), y + 1));
+            }
+        }
+        out
     }
 }
 
@@ -27,7 +88,7 @@ pub(super) struct Preview {
     /// Bumped whenever the state changes; a result for an older generation is dropped.
     pub(super) want: u64,
     #[cfg(not(target_arch = "wasm32"))]
-    running: Option<(u64, std::sync::mpsc::Receiver<PreviewResult>, photocraft_engine::jobs::JobCtx)>,
+    pub(super) running: Option<(u64, std::sync::mpsc::Receiver<PreviewResult>, photocraft_engine::jobs::JobCtx)>,
     pub(super) shown: u64,
     /// A finished preview waiting to be uploaded (on the UI thread, which has the context).
     pub(super) pending_image: Option<(Rect, egui::ColorImage)>,
@@ -39,6 +100,15 @@ pub(super) struct Preview {
 }
 
 impl Preview {
+    /// Nothing to preview for state `generation` (a Custom area not painted yet): the image is
+    /// shown unfilled, with no error.
+    fn clear(&mut self, generation: u64) {
+        self.shown = generation;
+        self.tex = None;
+        self.pending_image = None;
+        self.error = None;
+    }
+
     /// Takes the result of the preview of state `generation`: an image to upload, or the error,
     /// which stands for that state until it changes (the same preview is not started again).
     fn finish(&mut self, generation: u64, r: Result<(Rect, egui::ColorImage), String>) {
@@ -96,7 +166,7 @@ pub(super) fn compute_base(app: &PhotocraftApp, w: &CafWorkspace) -> Result<Base
     }
     let plan = photocraft_engine::edit_menu_cmds::content_aware_plan(&st.doc, w.layer, &p, CMD).map_err(|e| e.to_string())?;
     let base = if custom { vec![false; plan.base.len()] } else { plan.base };
-    Ok(Base { window: plan.window, rect: plan.rect, hole: plan.hole, base })
+    Ok(Base::new(plan.window, plan.rect, plan.hole, base))
 }
 
 /// Unit edges between the fill area and the rest, in document px.
@@ -172,7 +242,11 @@ pub(super) fn refresh(app: &mut PhotocraftApp) {
 /// Computes the preview now, on this thread (tests and the control channel).
 pub(super) fn wait_preview(app: &mut PhotocraftApp) -> Result<(), String> {
     let (doc, layer, p, want, limit) = {
-        let w = app.distort.caf.as_ref().ok_or("Content-Aware Fill is not open")?;
+        let w = app.distort.caf.as_mut().ok_or("Content-Aware Fill is not open")?;
+        if w.awaiting_custom_area() {
+            w.preview.clear(w.preview.want);
+            return Ok(());
+        }
         let st = app.session.active().ok_or("no document")?;
         (st.doc.clone(), w.layer, plan_params(w, true), w.preview.want, w.texture_limit)
     };
@@ -258,6 +332,11 @@ fn compute_preview(
 pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, dragging: bool) {
     let doc = app.session.active().map(|s| s.doc.clone());
     let Some(w) = app.distort.caf.as_mut() else { return };
+    // Custom with nothing to sample shows the image unfilled straight away, also while a
+    // superseded preview winds down (its result is for an older generation and is dropped).
+    if w.awaiting_custom_area() {
+        w.preview.clear(w.preview.want);
+    }
     let pv = &mut w.preview;
     if let Some((generation, rx, _)) = &pv.running {
         match rx.try_recv() {
@@ -308,6 +387,13 @@ pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, draggi
 /// The web build has no threads: the preview is computed when the pointer comes up.
 #[cfg(target_arch = "wasm32")]
 pub(super) fn drive_preview(app: &mut PhotocraftApp, _ctx: &egui::Context, dragging: bool) {
+    // Custom with nothing to sample shows the image unfilled straight away, also while the
+    // pointer is still down on a stroke that erased it all.
+    if let Some(w) = app.distort.caf.as_mut()
+        && w.awaiting_custom_area()
+    {
+        w.preview.clear(w.preview.want);
+    }
     let stale = app.distort.caf.as_ref().is_some_and(|w| w.preview.shown != w.preview.want);
     if stale && !dragging {
         let _ = wait_preview(app);
