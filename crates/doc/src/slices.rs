@@ -173,6 +173,12 @@ pub struct ResolvedSlice {
 /// slice count for nested rectangles, so this keeps a hostile list to well under a second of work.
 pub const MAX_RESOLVED_SLICES: usize = 10_000;
 
+/// A warning naming how many stored slices [`resolve`] leaves out (`None` when it considers all).
+pub fn overflow_warning(doc: &Document) -> Option<String> {
+    let n = doc.slices.list.len().checked_sub(MAX_RESOLVED_SLICES).filter(|n| *n > 0)?;
+    Some(format!("{n} stored slices past the first {MAX_RESOLVED_SLICES} were ignored"))
+}
+
 /// Rectangles that tile `canvas` minus `taken`. The canvas is cut into a grid along every slice
 /// edge; free cells merge into horizontal runs per row band, then runs with identical columns
 /// merge down, which yields the few large auto slices Photoshop shows.
@@ -560,6 +566,9 @@ mod tests {
         let r = resolve(&d);
         let ids: Vec<u32> = r.iter().filter_map(|s| s.id).collect();
         assert_eq!(ids, [MAX_RESOLVED_SLICES as u32], "the topmost considered slice covers the others");
+        assert!(overflow_warning(&d).unwrap().starts_with("5 stored slices"));
+        d.slices.list.truncate(MAX_RESOLVED_SLICES);
+        assert_eq!(overflow_warning(&d), None);
     }
 
     #[test]
