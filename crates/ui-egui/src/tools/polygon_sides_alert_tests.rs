@@ -1,6 +1,6 @@
 //! #13304: the Polygon tool's Sides takes whole numbers 3..100; a value typed past the range becomes
 //! the closest one and, once the field is left, the reference's "Closest value inserted" alert with
-//! OK says so. A scrub or an arrow-key step past either end stops there without one.
+//! OK says so. A scrub, arrow-key or wheel step past either end stops there without one.
 
 use egui::accesskit::Role;
 use egui::vec2;
@@ -17,7 +17,14 @@ fn bar() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = Tool::Polygon;
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(
+        |ui, app| {
+            // As the app's frame does: the wheel goes to the focused field.
+            crate::field_wheel::begin_frame(ui.ctx());
+            crate::panels::options_bar(app, ui);
+        },
+        app,
+    );
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h
@@ -129,5 +136,51 @@ fn a_caption_scrub_past_either_end_does_not_alert() {
         h.run_steps(3);
         assert_eq!(sides(&h), want, "{start}: the scrub reached the end");
         assert!(alerts(&h).is_empty(), "{start}: a scrub stops at the end without an alert");
+    }
+}
+
+fn wheel_event(unit: egui::MouseWheelUnit, dy: f32) -> egui::Event {
+    egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit,
+        delta: vec2(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    }
+}
+
+#[test]
+fn wheel_steps_past_either_end_stop_there_without_an_alert() {
+    for (start, lines, want) in [("99", 1.0, 100), ("4", -1.0, 3)] {
+        let mut h = bar();
+        type_sides(&mut h, start);
+        click_sides(&mut h);
+        for _ in 0..3 {
+            h.event(wheel_event(egui::MouseWheelUnit::Line, lines));
+            h.run_steps(1);
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(sides(&h), want, "{start}: the wheel reached the end");
+        assert!(alerts(&h).is_empty(), "{start}: a wheel step stops at the end without an alert");
+    }
+}
+
+/// A wheel event that steps nothing (a trackpad's zero-delta start, or less than a notch) in the
+/// frame a value is typed leaves it typed: it still alerts on the way out.
+#[test]
+fn a_wheel_event_that_steps_nothing_does_not_hide_a_typed_value() {
+    for (unit, dy) in [(egui::MouseWheelUnit::Point, 0.0), (egui::MouseWheelUnit::Point, 2.0)] {
+        let mut h = bar();
+        click_sides(&mut h);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        // Both in one pass, as a trackpad can deliver them (`event` hands the app one per pass).
+        h.input_mut().events.extend([egui::Event::Text("101".into()), wheel_event(unit, dy)]);
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(sides(&h), 100, "{dy} pt");
+        assert_eq!(alerts(&h), vec![SIDES_RANGE_ALERT.to_string()], "{dy} pt: the typed 101 alerts");
     }
 }
