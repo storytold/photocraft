@@ -10,9 +10,14 @@ use std::sync::Arc;
 use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 
 use crate::canvas::ViewXform;
+use crate::state::Tool;
 
+mod bucket;
 mod hand;
+mod pen;
 mod zoom;
+
+pub use pen::{PenVariant, pen_rasterization_count, reset_pen_rasterization_count};
 
 /// The largest cursor bitmap (physical pixels; points on macOS, see [`native_scale`]); a larger tip
 /// paints its outline instead, with a small OS crosshair at the hotspot, and that outline trails
@@ -35,11 +40,20 @@ enum Shape {
     Outline { rings: Arc<[Vec<Vec2>]>, centre: bool },
 }
 
+/// The visible canvas crosshair used by the Gradient tool and other standard crosshair tools.
+const STANDARD_CROSSHAIR: Shape = Shape::Crosshair { length: 8.0, gap: 2.0 };
+
 #[derive(Clone)]
 struct Cached {
     shape: Shape,
     scale: f32,
     image: CustomCursorImage,
+}
+
+/// Pen variants retain at most one bitmap each; large brush bitmaps stay in the single-entry cache.
+#[derive(Clone, Default)]
+struct PenCache {
+    entries: [Option<(f32, CustomCursorImage)>; 6],
 }
 
 /// The image is sticky in egui's platform output. Clear it every pass, including when a
@@ -70,12 +84,67 @@ impl egui::plugin::Plugin for CursorLifecycle {
     }
 }
 
+/// The Count tool's cursor (#11773): an arrow with "1+" (a click adds a marker), "1" (over a
+/// marker: a click or drag moves it) or "1−" (⌥ over a marker: a click deletes it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CountCursor {
+    Add,
+    Move,
+    Delete,
+}
+
+impl CountCursor {
+    /// The cursor for a pointer `over` a marker or not, with ⌥ held or not. Shift changes nothing,
+    /// and ⌥ off a marker is still "1+" (an ⌥-click there does nothing).
+    pub(crate) fn pick(over: bool, alt: bool) -> Self {
+        match (over, alt) {
+            (false, _) => Self::Add,
+            (true, false) => Self::Move,
+            (true, true) => Self::Delete,
+        }
+    }
+
+    /// The badge drawn below right of the arrow.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Add => "1+",
+            Self::Move => "1",
+            Self::Delete => "1\u{2212}",
+        }
+    }
+}
+
+/// Draw the Count cursor `kind` at `at`: the OS arrow (hotspot at its tip) with its badge below right
+/// of it, dark digits on a light halo so they read on any pixel. PhotoCraft's own artwork.
+pub(crate) fn count(ctx: &egui::Context, at: Pos2, kind: CountCursor) -> CursorIcon {
+    let pos = at + vec2(12.0, 16.0);
+    // Painted straight onto a tooltip-order layer, above the canvas and its overlays: an Area
+    // would be invisible on the frame it first appears.
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-count-cursor")));
+    let font = egui::FontId::proportional(11.0);
+    // The halo: a white copy one point off on every side, diagonals too.
+    for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+        painter.text(pos + vec2(dx, dy), egui::Align2::LEFT_TOP, kind.label(), font.clone(), egui::Color32::WHITE);
+    }
+    painter.text(pos, egui::Align2::LEFT_TOP, kind.label(), font, egui::Color32::BLACK);
+    CursorIcon::Default
+}
+
+/// The bucket artwork and its exact fill crosshair move as one native cursor or painted image.
+pub(crate) fn bucket(painter: &Painter, at: Pos2) -> Result<CursorIcon, String> {
+    bucket::show(painter, at)
+}
+
 pub(crate) fn circle(painter: &Painter, at: Pos2, radius: f32, centre: bool) -> CursorIcon {
     show(painter, at, Shape::Circle { radius, centre })
 }
 
 pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> CursorIcon {
     show(painter, at, Shape::Crosshair { length, gap })
+}
+
+pub(crate) fn standard_crosshair(painter: &Painter, at: Pos2) -> CursorIcon {
+    show(painter, at, STANDARD_CROSSHAIR.clone())
 }
 
 pub(crate) fn outline(painter: &Painter, at: Pos2, rings: Vec<Vec<Vec2>>, centre: bool) -> CursorIcon {
@@ -86,6 +155,16 @@ pub(crate) fn outline(painter: &Painter, at: Pos2, rings: Vec<Vec<Vec2>>, centre
 /// with a small ring below right, as Photoshop's pen shows a small circle there.
 pub(crate) fn close_path(painter: &Painter, at: Pos2) -> CursorIcon {
     outline(painter, at, vec![close_ring()], true)
+}
+
+/// The Pen's pointer over an endpoint a click would carry the path on from (#9356): the centre
+/// cross with a short slash below right, as Photoshop's pen shows one there.
+pub(crate) fn continue_path(painter: &Painter, at: Pos2) -> CursorIcon {
+    outline(painter, at, vec![continue_slash()], true)
+}
+
+fn continue_slash() -> Vec<Vec2> {
+    [(6.5, 12.5), (11.5, 5.5), (12.5, 6.5), (7.5, 13.5)].into_iter().map(|(x, y)| vec2(x, y)).collect()
 }
 
 fn close_ring() -> Vec<Vec2> {
@@ -202,7 +281,7 @@ fn scaled_wayland(ctx: &egui::Context) -> bool {
 /// macOS, so there the bitmap scales only with the UI zoom (the monitor's density would enlarge it
 /// a second time on Retina displays); Windows, X11 and Wayland take physical pixels. (The macOS
 /// sizing is from @jerrykimo's #968.)
-pub(crate) fn native_scale(ctx: &egui::Context) -> f32 {
+pub fn native_scale(ctx: &egui::Context) -> f32 {
     if cfg!(target_os = "macos") { ctx.zoom_factor() } else { ctx.pixels_per_point() }
 }
 
@@ -282,6 +361,48 @@ fn zoom_with(ctx: &egui::Context, out: bool, bitmap: bool) -> CursorIcon {
         return CursorIcon::None;
     }
     if out { CursorIcon::ZoomOut } else { CursorIcon::ZoomIn }
+}
+
+/// Direct rasterization of a Pen tool cursor bitmap, for benchmarks and visual verification.
+pub fn rasterize_pen(variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
+    pen::rasterize(variant, scale)
+}
+
+/// The Pen tool's pointer: its toolbar icon with the nib/apex on the cursor hotspot. Uses an OS
+/// cursor bitmap where supported so its movement tracks hardware input without waiting for canvas
+/// frames (#9122); returns `None` when unsupported or unrasterizable so the caller can paint the fallback.
+pub fn pen(ctx: &egui::Context, tool: Tool) -> Option<CursorIcon> {
+    let variant = PenVariant::from_tool(tool)?;
+    if !native(ctx) {
+        return None;
+    }
+    let scale = native_scale(ctx);
+    let image = cached_pen_image(ctx, variant, scale)?;
+    ctx.set_cursor_image(Some(image));
+    Some(CursorIcon::None)
+}
+
+/// Reuse the latest bitmap per Pen variant and replace only the entry whose scale changed.
+fn cached_pen_image(ctx: &egui::Context, variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
+    let id = egui::Id::unique("photocraft-pen-cursor-cache");
+    let idx = variant as usize;
+    if let Some(image) = ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<PenCache>(id)
+            .entries
+            .get(idx)
+            .and_then(Option::as_ref)
+            .filter(|(cached_scale, _)| *cached_scale == scale)
+            .map(|(_, image)| image.clone())
+    }) {
+        return Some(image);
+    }
+    let image = pen::rasterize(variant, scale)?;
+    ctx.data_mut(|d| {
+        if let Some(slot) = d.get_temp_mut_or_default::<PenCache>(id).entries.get_mut(idx) {
+            *slot = Some((scale, image.clone()));
+        }
+    });
+    Some(image)
 }
 
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
@@ -601,3 +722,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod count_tests;

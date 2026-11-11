@@ -612,6 +612,73 @@ fn tool_presets_save_filter_select() {
     assert!(s.execute("tool.presets.new", json!({"name": "x"})).is_err());
 }
 
+#[test]
+fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
+    let mut invalid = vec![
+        json!(null),
+        json!(true),
+        json!(7),
+        json!("red"),
+        json!({}),
+        json!([]),
+        json!([1]),
+        json!([1, 0]),
+        json!([1, 0, 0, 1, 0]),
+        json!([null, 0.4, 0.6]),
+    ];
+    for channel in 0..4 {
+        for bad_channel in [json!(1e100), json!(-1e100), json!(null), json!("red"), json!(true), json!({}), json!([])] {
+            let mut values = json!([0.2, 0.4, 0.6, 0.8]);
+            values[channel] = bad_channel;
+            invalid.push(values);
+        }
+    }
+    for values in invalid {
+        let mut s = Session::new();
+        s.execute("tools.setColors", json!({"foreground": [0.2, 0.4, 0.6, 0.8]})).unwrap();
+        let color = s.tools.foreground;
+        let brush = s.tools.brush.clone();
+        let brush_rev = s.tools.brush_rev;
+        s.execute(
+            "tool.presets.new",
+            json!({
+                "name": "Invalid", "tool": "brush", "options": {"brush": {"size": 77}, "foreground": values}
+            }),
+        )
+        .unwrap();
+        assert!(s.execute("tool.presets.select", json!({"preset": "Invalid"})).is_err(), "{values}");
+        assert_eq!(s.tools.foreground, color, "{values}");
+        assert_eq!(s.tools.brush, brush, "{values}");
+        assert_eq!(s.tools.brush_rev, brush_rev, "{values}");
+    }
+}
+
+#[test]
+fn tool_presets_keep_finite_hdr_colors_and_leave_absent_colors_unchanged() {
+    let mut s = Session::new();
+    for (options, expected) in [
+        (json!({"foreground": [1.5, -0.1, 0.6, 0.8]}), [1.5, -0.1, 0.6, 0.8]),
+        (json!({"foreground": [0.2, 0.4, 0.6]}), [0.2, 0.4, 0.6, 1.0]),
+        (json!({}), [0.2, 0.4, 0.6, 1.0]),
+    ] {
+        let preset = s.execute("tool.presets.new", json!({"tool": "move", "options": options})).unwrap();
+        s.execute("tool.presets.select", json!({"preset": preset["name"]})).unwrap();
+        assert_eq!(s.tools.foreground, expected);
+    }
+}
+
+/// An Art History Brush preset captures the brush's opacity and selecting it restores it.
+#[test]
+fn art_history_brush_preset_carries_the_opacity() {
+    let mut s = Session::new();
+    s.execute("tools.setBrush", json!({"brush": {"opacity": 0.4}})).unwrap();
+    s.execute("tool.presets.new", json!({"name": "Faint History", "tool": "artHistoryBrush"})).unwrap();
+    s.execute("tools.setBrush", json!({"brush": {"opacity": 1.0}})).unwrap();
+    let r = s.execute("tool.presets.select", json!({"preset": "Faint History"})).unwrap();
+    assert_eq!(r["tool"], "artHistoryBrush");
+    assert!((s.tools.brush.opacity - 0.4).abs() < 1e-6, "{}", s.tools.brush.opacity);
+}
+
 /// Crop presets are `crop` tool presets: saved, listed, persisted and deleted like the others.
 #[test]
 fn crop_presets_are_tool_presets_that_persist() {
@@ -877,6 +944,37 @@ fn a_damaged_preset_set_keeps_the_other_sets() {
     assert_eq!(next.presets.gradients.len(), Session::new().presets.gradients.len());
     assert_eq!(next.presets.documents, s.presets.documents);
     assert_eq!(next.presets.export_presets, s.presets.export_presets);
+}
+
+#[test]
+fn restoring_duplicate_gradient_names_preserves_addressable_presets() {
+    use crate::presets::Group;
+    use crate::presets::gradients::GradientPreset;
+
+    let mut s = Session::new();
+    let presets = vec![
+        Group::new("First", vec![GradientPreset::new("Foo", &["#ff0000", "#000000"]), GradientPreset::new("Foo", &["#00ff00", "#000000"])]),
+        Group::new("Second", vec![GradientPreset::new("Foo 2", &["#0000ff", "#000000"]), GradientPreset::new("FOO", &["#ffff00", "#000000"])]),
+    ];
+    s.presets.gradient = presets[0].items[1].clone();
+    s.presets.gradients = presets;
+    let saved = s.presets.to_json(&s);
+    let mut restored = Session::new();
+    restored.load_presets_json(saved.clone());
+    let names: Vec<String> = restored.presets.gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
+    assert_eq!(names, ["Foo", "Foo 3", "Foo 2", "FOO"]);
+    assert_eq!(restored.presets.gradient.name, "Foo 3");
+    assert_eq!(restored.presets.gradient.stops, GradientPreset::new("", &["#00ff00", "#000000"]).stops);
+    for (name, color) in [("Foo 2", "#0000ff"), ("FOO", "#ffff00")] {
+        restored.execute("gradient.presets.select", json!({"preset": name})).unwrap();
+        assert_eq!(restored.presets.gradient.stops, GradientPreset::new("", &[color, "#000000"]).stops);
+    }
+    let current = restored.presets.gradient.clone();
+    let once = restored.presets.to_json(&restored);
+    restored.load_presets_json(once);
+    assert_eq!(restored.presets.gradient, current);
+    let names: Vec<String> = restored.presets.gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
+    assert_eq!(names, ["Foo", "Foo 3", "Foo 2", "FOO"]);
 }
 
 // ------------------------------------------------------------------ export presets
