@@ -5,14 +5,12 @@
 //! `ui.dialog.set`) and shown in the ruler unit, or each in one picked from its right-click menu
 //! (`widthUnit`, `heightUnit`; not remembered, as in Photoshop).
 
-use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use photocraft_engine::prefs::Unit;
 
 use crate::PhotocraftApp;
 use crate::state::{DialogKind, Tool};
-use crate::theme::Tokens;
 
 const MARK: &str = "__createShape";
 /// Largest side the dialog accepts, in pixels (Photoshop's document limit).
@@ -154,15 +152,21 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     result
 }
 
-fn label(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(96.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
-}
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.
+const LABEL_MIN_W: f32 = 96.0;
+const LABEL_MAX_W: f32 = 200.0;
+/// Every label in the column, measured in the current language.
+const LABELS: [&str; 5] = ["Width:", "Height:", "Radius:", "Sides:", "Star Ratio:"];
 
+/// The dialog's rows (Width and Height, then Radius, or Sides and Star Ratio for a polygon),
+/// their labels in one column measured over [`LABELS`] so a longer translation never overruns.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let kind = f.get(MARK).and_then(Value::as_str).unwrap_or("").to_string();
+    let label_w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
+    let label = |ui: &mut egui::Ui, text: &str| {
+        crate::widgets::column_label(ui, text, label_w);
+    };
     // Width and height each in its own unit (percent of the document's side): the ruler unit, or
     // the one picked from that field's right-click menu, as in Photoshop (#7786).
     let ur = &app.session.prefs().units_and_rulers;

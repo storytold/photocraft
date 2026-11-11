@@ -257,7 +257,9 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
             let candidate = {
                 let mut candidate = candidate;
                 let mut suffix = 1u64;
-                while candidate.exists() {
+                // A name any entry occupies is taken, a symlink (even a dangling one) included: the writer
+                // follows links, so one planted here would redirect the export.
+                while candidate.symlink_metadata().is_ok() {
                     candidate = parent.join(format!("{stem}-{}-{name}-{suffix}.{ext}", i + 1));
                     suffix = suffix.saturating_add(1);
                 }
@@ -1057,7 +1059,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         if !f.contains_key("__layer") {
             let mut step = settings_of(&f);
             step.insert("path".into(), json!(path));
-            app.session.journal.push((COMMAND.into(), Value::Object(step)));
+            let step = Value::Object(step);
+            photocraft_engine::actions_cmds::note_automation_step(&mut app.session, COMMAND, &step);
+            app.session.journal.push((COMMAND.into(), step));
         }
         Ok(r)
     })
@@ -1173,3 +1177,23 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod batch_name_tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, SampleType, Size};
+
+    #[test]
+    fn a_planted_symlink_makes_a_batch_name_taken() {
+        let dir = std::env::temp_dir().join(format!("pc-batch-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Dangling: `exists()` follows it and reports the name free; the writer would follow it too.
+        let planted = dir.join("x-2-a.png");
+        let _ = std::fs::remove_file(&planted);
+        std::os::unix::fs::symlink(dir.join("victim"), &planted).unwrap();
+        let doc = Document::new("a", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        let paths = batch_paths(dir.join("x.png").to_str().unwrap(), &[doc.clone(), doc]);
+        assert_ne!(paths[1], planted.to_str().unwrap());
+        std::fs::remove_file(&planted).unwrap();
+    }
+}

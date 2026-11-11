@@ -147,7 +147,7 @@ row; the action still adds only one Undo entry.
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
-| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath` |
+| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath`, `layer.new.artboard` (Layer › New › Artboard), `layer.new.artboardFromLayers` (Layer › New › Artboard from Layers) |
 | (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
 | (string ID only) | matchColor | Match Color | `image.adjustments.matchColor` |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
@@ -190,7 +190,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
 | `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
-| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
+| `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `gradient.fill.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions`, `image.analysis.setMeasurementScale` (Set Measurement Scale › Custom) |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
 | `ShrE` | sharpenEdges | Sharpen Edges | `filter.sharpen.sharpenEdges` |
@@ -307,6 +307,21 @@ Custom-shape playback requires the asset selected by its ID to be installed.
 Other unsupported dialog fields or origin values remain kept. Native explicit
 shape choices cannot be saved as radius-only descriptors.
 
+Layer › New › Artboard and Layer › New › Artboard from Layers are a Make with
+`null` = the class `artboardSection`. With `artboardRect` (`Top `, `Left`,
+`Btom`, `Rght`: doubles holding whole pixels, a board of positive size in the
+32-bit range) the step plays as `layer.new.artboard` with that `rect`; with `From`
+= the target layer it plays as `layer.new.artboardFromLayers` on the selected
+layers, at their bounds. `Nm  ` is the board's name. `layerSectionStart` and
+`layerSectionEnd` are ids of the recording session: a loaded step saves back its
+recorded descriptor, session ids included, while it still makes the same board,
+and a step recorded in PhotoCraft writes the other keys without them (`Nm  ` only
+for a name of its own). Both or neither of `artboardRect` and `From`, another
+`From` target, a repeated or extra key, or a value of another type stays a kept
+step. The step records no background, preset or size of the dialog's own, so a
+native step that sets one of those, takes the Background into the first board, or
+(New Artboard) has no position of its own refuses export.
+
 Crop and Straighten Photos executes the native scan operation once, creating one
 document per photo found inside the selection and leaving the source unchanged.
 It requires a selected, visible layer with no pixel or full lock, including
@@ -314,6 +329,18 @@ inherited group state, and remains unavailable for Indexed Color documents.
 The separate `CropPhotos0001` helper remains a complete kept Photoshop step.
 Playback stops at that enabled helper before subsequent duplicate/crop steps can
 run. This covers the parent event, not complete recordings with generated helpers.
+
+Set Measurement Scale › Custom is a Set of the target document's `measurementScale`
+property. `T   ` holds `pixelLength` (a long above 0), `logicalLength` (a double
+above 0) and `logicalUnits` (text that isn't blank), and the step plays as
+`image.analysis.setMeasurementScale` with preset `custom`. A loaded step saves back
+its recorded descriptor while it still sets the same scale. A step recorded in
+PhotoCraft writes `T   ` with class `measurementScale`, since the recordings don't
+pin that class down. Another target, another value type, a missing or extra key, or
+a value the native command refuses stays a kept step. A native step that reads the
+scale, resets it to the default, leaves a value to the current scale or has a
+fractional pixel length refuses export. Place Scale Marker (a script step) stays a
+kept step.
 
 ### Perspective Warp recordings
 
@@ -982,7 +1009,7 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 |---|---|---|
 | Custom (`Cstm`) | `Scl ` long 1..9999, `Ofst` long -9999..9999, `Mtrx` list of 25 longs -999..999 | Without the dialog the step needs all 25 cells, or the application fails. |
 | Fibers (`Fbrs`) | `Vrnc` long 1..64, `Strg` long 1..64, `RndS` long (seed) | |
-| Displace (`Dspl`) | `HrzS`, `VrtS` long -999..999; `DspM` (`StrF` stretch to fit, or tile); `UndA` (`RptE` repeat edge pixels, or wrap around); `DspF` alias: path of the displacement map (.psd) | The map file is chosen after OK. |
+| Displace (recorded `displace`) | `HrzS` and `VrtS` long -999..999, `DspM.StrF` (stretch to fit), `UndA.RptE` (repeat edge pixels), and `DspF` as `Pth ` | A later Windows recording measured the `txtu` path to the PSD map chosen after OK. |
 | Color Lookup (`colorLookup`) | `lookupType` (`colorLookupType`: `3DLUT`, abstract, device link); `Nm  ` text: the file's path; `Dthr` bool; `profile` raw data (ICC); `LUTFormat` (`LUTFormatType`, e.g. `LUTFormatLOOK`); `LUT3DFileData` raw data: the LUT file itself; `LUT3DFileName` text | The LUT travels inside the step. |
 | Shape Blur (`shapeBlur`) | `Rds ` pixels 5..1000; `customShape` object (`Nm  ` text, `Idnt` text: the shape's id); `keyOriginType` long (9) | |
 | Lighting Effects (`lightFilterLightingEffects`) | `k3DLights` list of lights (`Nm  `, colour `Rd  `/`Grn `/`Bl  ` 0..1, `hots`, `FlOf`, `shdw`, attenuation keys, `Type`, `ison`, `key3DMatrix` raw + floats, `X   `/`Y   `/`Z   `, target `tarx`/`tary`/`tarz`, `key3DPosition`), `key3DCurrentCameraPosition`, `Glos`, `Mtrl`, `Exps`, `AmbB`, `AmbC` RGB, `BmpA`, `BmpC` (texture channel by name, localised: "Ohne" = none), `Wdth`, `Hght` | A dialog-less run returns nothing; only a recording shows the keys. |
@@ -1840,7 +1867,7 @@ Nested values as recorded (defaults):
 
 ### Group C: The Distort filters (Pinch, Polar Coordinates, Shear, Spherize, Twirl, Wave, ZigZag)
 
-The seven Distort events below map to PhotoCraft's `filter.distort.*` commands for their documented supported forms, including complete Shear curves. Displace needs a displacement map file and is listed separately at the end.
+The Distort events below map to PhotoCraft's `filter.distort.*` commands for their documented supported forms, including complete Shear curves and the recorded Windows Displace form.
 
 #### Pinch
 
@@ -1947,7 +1974,11 @@ Nested values as recorded (defaults):
 
 #### Displace
 
-Displace reads a displacement map from a file chosen in a dialog; record one step and add its keys (file path form) before implementing.
+The TEXT event `displace` with descriptor class `null` maps to `filter.distort.displace`.
+
+The measured Windows recording uses `HrzS` and `VrtS` (32-bit integers, −999 to 999), `DspM.StrF` (stretch to fit), `UndA.RptE` (repeat edge pixels), and `DspF` (`Pth `, a `txtu` header with little-endian length and a NUL-terminated UTF-16LE path). Import preserves the map path as text. Playback opens the map through the native Displace command.
+
+Alias paths, other enum values, and malformed or incomplete descriptors stay as kept Photoshop steps. So does a map path a document may not name (a network share, a device, a URL or a relative path): playing a shared action file never opens it. Export supports the measured path and settings for a pixel target.
 
 ### Group D: The Stylize and Pixelate filters
 
