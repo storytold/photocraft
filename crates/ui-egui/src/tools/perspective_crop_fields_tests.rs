@@ -161,7 +161,7 @@ fn the_resolution_never_rounds_past_the_limit() {
     // The px/cm limit is 11811.0232…: just below it keeps 11811.023, just above it is out of range.
     assert_eq!(resolution("11811.0232", "100", true), ("11811.023".to_string(), None));
     assert_eq!(resolution("11811.0236", "100", true).0, "11811.023");
-    assert_eq!(crate::crop_size::fit_resolution(29_999.9995, false), "29999.999");
+    assert_eq!(crate::crop_size::fit_resolution(29_999.999_5, false), "29999.999");
     assert_eq!(crate::crop_size::fit_resolution(118.110_236, true), "118.11");
 }
 
