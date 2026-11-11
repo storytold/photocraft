@@ -179,9 +179,10 @@ fn a_double_click_on_the_box_still_commits() {
     let mut h = harness();
     let before = steps(&h);
     press(&mut h, 200.0, 200.0);
-    button(&mut h, screen(&h, 200.0, 200.0), false);
-    button(&mut h, screen(&h, 200.0, 200.0), true);
-    button(&mut h, screen(&h, 200.0, 200.0), false);
+    let p = screen(&h, 200.0, 200.0);
+    button(&mut h, p, false);
+    button(&mut h, p, true);
+    button(&mut h, p, false);
     h.run_steps(2);
     assert!(h.state().ui.transform.is_none(), "committed");
     assert_eq!(steps(&h), before + 1);
