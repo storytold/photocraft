@@ -40,3 +40,23 @@ fn txt2_describes_the_baked_text() {
     assert_ne!(txt2(&doc_with(unfitted)), txt2(&doc_with(baked.clone())), "baking changes what Txt2 holds");
     assert_eq!(txt2(&doc_with(t)), txt2(&doc_with(baked)));
 }
+
+#[test]
+fn unsolved_dynamic_text_is_solved_for_the_file() {
+    let text = "Hello dynamic world of text";
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, kerning: Kerning::Metrics, ..Default::default() };
+    let mut t = TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() };
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 150.0 };
+    t.sync_summary();
+    // Dynamic Text on, its lines never solved (as a file can hold it).
+    t.fit = Some(TextFit::default());
+    assert!(!photocraft_text::fit::is_fitted_lines(&t));
+    let mut eng = photocraft_text::TextEngine::new();
+    let mut solved = t.clone();
+    photocraft_text::fit::refit(&mut eng, &mut solved, 72.0);
+    let baked = photocraft_text::fit::bake(&mut eng, &solved, 72.0).unwrap_or_else(|e| panic!("{e:?}"));
+    let doc = doc_with(t);
+    assert_eq!(txt2(&doc), txt2(&doc_with(baked)), "saved as the solved, baked look");
+    let LayerContent::Text(kept) = &doc.layers[0].content else { panic!("text layer") };
+    assert!(kept.fit.as_ref().is_some_and(|f| f.lines.is_empty()), "the document is left alone");
+}
