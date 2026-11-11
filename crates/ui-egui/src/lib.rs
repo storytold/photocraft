@@ -1056,13 +1056,13 @@ mod menu_item_labels_tests;
 mod pen_path_ownership_tests;
 
 #[cfg(test)]
-mod brush_hud_rate_tests;
-#[cfg(test)]
 mod artboard_options_bar_tests;
 #[cfg(test)]
 mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_alt_digit_smoothing_tests;
+#[cfg(test)]
+mod brush_hud_rate_tests;
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
