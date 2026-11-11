@@ -1323,6 +1323,40 @@ fn a_press_too_short_to_paint_shows_its_first_dab_and_commits_exactly_that() {
 }
 
 #[test]
+fn a_stroke_pressed_on_the_symmetry_axis_takes_back_its_first_dab_preview() {
+    // Pressed on the axis, the mirror is the stroke itself, so the press shows its first dab on its
+    // own. The next point makes the mirror distinct and turns a direction-following tip, so that
+    // dab is redrawn in a new shape by the union path; nothing of the preview may be left.
+    let new = || {
+        let mut s = session(168, 100);
+        s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+        s
+    };
+    let mut s = new();
+    let brush = json!({"size": 40, "hardness": 1, "roundness": 0.15, "spacing": 0.25, "shapeDynamics": {"enabled": true, "angle": {"control": "direction"}}});
+    let mut p = json!({"points": [[84.0, 50.0, 1.0]], "brush": brush, "target": "pixels", "smoothing": 0});
+    let mut live = LiveStroke::begin(&s, &p).unwrap();
+    assert!(!live.first_dab.is_empty() && !live.mirror_distinct.iter().any(|d| *d), "the press shows its first dab alone");
+    let pts = [[84.0, 50.0, 1.0], [92.0, 80.0, 1.0], [96.0, 95.0, 1.0]];
+    for q in &pts[1..] {
+        live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+    }
+    assert!(live.mirror_distinct.iter().any(|d| *d), "a distinct mirror");
+    live.finish().unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let shown = live.doc.layer(layer).unwrap().surface().unwrap().clone();
+    p["points"] = json!(pts);
+    p["seed"] = json!(live.seed);
+    let mut fresh = new();
+    fresh.execute("paint.stroke", p.clone()).unwrap();
+    let bounds = Rect::new(0, 0, 168, 100);
+    assert!(same_pixels(&shown, &surface(&fresh), bounds), "the live view is a fresh render of the stroke");
+    s.offer_live_stroke(live).unwrap();
+    assert_eq!(s.execute("paint.stroke", p).unwrap()["fromLive"], true);
+    assert!(same_pixels(&surface(&s), &surface(&fresh), bounds), "and so is the commit");
+}
+
+#[test]
 fn a_commit_takes_the_live_strokes_pixels_and_they_equal_a_fresh_render() {
     let pts = [[10.0, 50.0, 1.0], [60.0, 30.0, 0.7], [120.0, 60.0, 0.9], [180.0, 40.0, 0.4], [150.0, 80.0, 1.0]];
     for (cmd, base) in [

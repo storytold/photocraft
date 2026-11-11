@@ -772,6 +772,12 @@ impl LiveStroke {
             }
             return Ok(dmg);
         }
+        // A press on the symmetry axis showed its first dab above; take it back before the union
+        // draws, as the real dab can have another shape (a tip that follows the direction).
+        let shown = std::mem::replace(&mut self.first_dab, Rect::EMPTY);
+        if !shown.is_empty() {
+            surf.write_region(shown, &self.pre.read_region(shown));
+        }
         // The stroke and its distinct mirrors composite as one stroke, as the commit merges
         // them; only the tiles that changed are redrawn.
         let passes = 1 + self.mirror_distinct.iter().filter(|d| **d).count();
@@ -781,7 +787,7 @@ impl LiveStroke {
         };
         let mut renderers: Vec<&mut StrokeRenderer> =
             std::iter::once(&mut self.renderer).chain(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, d)| **d).map(|(r, _)| r)).collect();
-        let dmg = StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock);
+        let dmg = StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock).union(&shown);
         self.union_live = Some((live, passes));
         if let Some(colors) = self.colors {
             crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
