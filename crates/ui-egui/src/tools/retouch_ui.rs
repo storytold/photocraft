@@ -274,6 +274,11 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
             None => return false,
         },
         Tool::QuickSelection => {
+            // Indexed Color and Bitmap: the reference application's alert with OK (#12934), and nothing runs.
+            if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::quick_mode_refusal(st.doc.mode)) {
+                crate::brush_refusal::prompt(app, tl!(why));
+                return true;
+            }
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();

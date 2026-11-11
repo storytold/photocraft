@@ -120,8 +120,24 @@ fn points(p: &Value) -> Vec<(f32, f32)> {
 /// edges and removes blockiness.
 const ENHANCE: RefineParams = RefineParams { radius: 4.0, smart_radius: true, smooth: 15.0, feather: 0.0, contrast: 25.0, shift_edge: 0.0 };
 
+/// The reference application's Quick Selection alert in the modes it refuses (#12934).
+/// Multichannel and Duotone weren't measured and keep selecting.
+pub fn quick_mode_refusal(mode: photocraft_color::ColorMode) -> Option<&'static str> {
+    use photocraft_color::ColorMode;
+    match mode {
+        ColorMode::Indexed => {
+            Some("Could not use the Quick Selection because it does not work with Indexed Color images (convert image to RGB Color mode to edit).")
+        }
+        ColorMode::Bitmap => Some("Could not use the Quick Selection because it does not work with Bitmap images (convert image to Grayscale mode to edit)."),
+        _ => None,
+    }
+}
+
 /// Expands a selection around sampled points using image gradients, optionally enhancing edges.
 fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(why) = s.active().and_then(|d| quick_mode_refusal(d.doc.mode)) {
+        return Err(EngineError::Other(why.into()));
+    }
     let pts = points(p);
     if pts.is_empty() {
         return Err(bad("select.quick", "needs at least one point"));
