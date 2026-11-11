@@ -28,6 +28,11 @@ pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// canvas and the dock. The canvas is drawn separately afterwards. Keeping the rail inside this
 /// panel means the toolbox cannot cover it when it is one column wide.
 pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if let Err(error) = crate::panel_docking::compat::initialize(app) {
+        app.ui.panel_presentation.migrated = true;
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
     // Lets the frame tick expire a drag start if this panel stops rendering (dock hidden).
     let frame = ui.ctx().cumulative_frame_nr();
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("dock-edge-rendered-frame"), frame));

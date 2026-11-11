@@ -541,3 +541,22 @@ fn preset_reset_rebuilds_launcher_and_preserves_visibility() {
     assert!(!app.ui.panels.color);
     assert!(app.ui.panels.layers);
 }
+
+#[test]
+fn dock_panel_initializes_launcher_on_dock_edge_route() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.ui.panels.rail = true;
+    assert!(!app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_none());
+
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ProMedium);
+    ctx.run_ui(Default::default(), |ui| {
+        crate::panels::dock_panel(&mut app, ui);
+    })
+    .textures_delta
+    .clear();
+
+    assert!(app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_some());
+}
