@@ -866,8 +866,8 @@ pub fn parse_plld_warp(data: &[u8]) -> PlldWarp {
 
 /// The projective placement of a `SoLd` / `SoLE` block whose corners aren't a parallelogram
 /// (Distort, Perspective): source pixels → document pixels, row-major 3×3. Read from
-/// `nonAffineTransform` (the placed corners), else `Trnf`. `None` for affine placements, which
-/// [`parse_smart`]'s affine holds exactly.
+/// `nonAffineTransform` (the placed corners), else `Trnf`, with sides a hair off an axis put on it
+/// ([`on_axis`]). `None` for affine placements, which [`parse_smart`]'s affine holds exactly.
 pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
     if key != b"SoLd" && key != b"SoLE" {
         return None;
@@ -880,10 +880,27 @@ pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
         let p: Vec<f64> = pts.iter().filter_map(|v| num(Some(v))).collect();
         (p.len() == 8 && p.iter().all(|v| v.is_finite())).then(|| [[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]])
     };
-    let q = quad("nonAffineTransform").or_else(|| quad("Trnf"))?;
+    let q = on_axis(quad("nonAffineTransform").or_else(|| quad("Trnf"))?);
     // The warp `parse_placed_warp` reads: a split warp's `quiltWarp` comes first.
     let warp = get_desc(&d, "quiltWarp").or_else(|| get_desc(&d, "warp")).and_then(warp_of).flatten();
     corners_perspective_in(q, perspective_frame(warp.as_ref(), w, h))
+}
+
+/// Placed corners `q` (top-left, top-right, bottom-right, bottom-left) with every side that is
+/// less than a pixel off an axis put on that axis, at the mean of its two ends: the reference
+/// application draws such a side straight (measured on placements sheared by a fraction of a
+/// pixel, where the slanted side cost a row of pixels along the whole edge).
+fn on_axis(mut q: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
+    // The left and right sides hold an `x`, the top and bottom ones a `y`.
+    for (i, j, ax) in [(0usize, 3usize, 0usize), (1, 2, 0), (0, 1, 1), (3, 2, 1)] {
+        let off = (q[i][ax] - q[j][ax]).abs();
+        if off > 1e-9 && off < 1.0 && (q[i][1 - ax] - q[j][1 - ax]).abs() > off {
+            let mean = (q[i][ax] + q[j][ax]) / 2.0;
+            q[i][ax] = mean;
+            q[j][ax] = mean;
+        }
+    }
+    q
 }
 
 /// The projective placement of a `w` × `h` source onto corners `q` that aren't a parallelogram;

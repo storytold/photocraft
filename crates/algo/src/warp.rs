@@ -74,8 +74,7 @@ pub fn place_source(
         // A fold's layers are ordered by how far the warp moved them, not the placement.
         let rest = |x: f64, y: f64| (a * x + c * y + e, b * x + d * y + f);
         let (cu, cv) = patch_cuts(w, src_rect);
-        let sampling = Sampling::for_scale((a * d - b * c).abs().sqrt());
-        return Ok(warp_patches_surface(src, src_rect, &map, [&cu, &cv], Fold::Stack(&rest), sampling, facets_of(w)));
+        return Ok(warp_patches_surface(src, src_rect, &map, [&cu, &cv], Fold::Stack(&rest), Sampling::Single, facets_of(w)));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
@@ -165,12 +164,8 @@ pub fn place_source_projective(
             h.apply(u, v)
         };
         let (cu, cv) = patch_cuts(w, src_rect);
-        // The placement's scale where the source's middle lands.
-        let (cx, cy) = (f64::from(src_rect.x0 + src_rect.x1) / 2.0, f64::from(src_rect.y0 + src_rect.y1) / 2.0);
-        let ((x0, y0), (x1, y1), (x2, y2)) = (h.apply(cx, cy), h.apply(cx + 1.0, cy), h.apply(cx, cy + 1.0));
-        let scale = ((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)).abs().sqrt();
         let rest = |x: f64, y: f64| h.apply(x, y);
-        return Ok(warp_patches_surface(src, src_rect, &map, [&cu, &cv], Fold::Stack(&rest), Sampling::for_scale(scale), facets_of(w)));
+        return Ok(warp_patches_surface(src, src_rect, &map, [&cu, &cv], Fold::Stack(&rest), Sampling::Single, facets_of(w)));
     }
     // A one-way perspective: as the reference application draws it.
     let corner = crate::smart_perspective::from_corner(h.0, f64::from(src_rect.x0), f64::from(src_rect.y0));
@@ -328,21 +323,13 @@ pub fn facets_of(warp: &photocraft_geom::warp::Warp) -> Facets {
 /// How [`warp_patches_surface`] samples the source (bilinearly either way).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sampling {
-    /// One bilinear sample per pixel, as the reference application's renders of its warps show;
-    /// where the warp squeezes the source 2× or more along a destination row, from a box mip
-    /// level (see `mip_level`).
+    /// One bilinear sample per pixel, as the reference application's renders of its warps show at
+    /// every placed size measured (down to a fifth of the source's height); where the warp
+    /// squeezes the source 2× or more, from a box mip level (see `mip_level` and `column_level`).
+    /// A placed smart object's warp is drawn this way.
     Single,
     /// The pixel's source footprint averaged, so a strong reduction doesn't alias.
     Footprint,
-}
-
-impl Sampling {
-    /// [`Sampling::Single`] for a smart object placed at least half its size (linear `scale`),
-    /// else [`Sampling::Footprint`] (as the reference prefilters a plain downscale; no render of a
-    /// warp placed that small has been measured).
-    pub fn for_scale(scale: f64) -> Sampling {
-        if scale.is_finite() && scale >= 0.5 { Sampling::Single } else { Sampling::Footprint }
-    }
 }
 
 /// Most cells one [`warp_patches_surface`] tessellation makes; past it, cells stay as they are.
@@ -815,14 +802,44 @@ const FRINGE: f64 = 0.5;
 /// pixels) never read a coarser one.
 const MAX_MIP_LEVEL: u32 = 3;
 
-/// The mip level a single-sample warp reads where one destination pixel to the right steps `jx`
-/// through the source: `floor(log2 |jx|)`, 0 below a 2× reduction. The reference application's
-/// warp probes pick it from that step alone: a strong vertical squeeze (a top or bottom fold)
-/// stays at full resolution.
-fn mip_level(jx: [f64; 2]) -> u32 {
-    let l = jx[0].hypot(jx[1]);
-    if l.is_finite() && l >= 2.0 { (l.log2().floor() as u32).min(MAX_MIP_LEVEL) } else { 0 }
+/// The mip level a source step of length `t` asks for: `floor(log2 t)`, 0 below a 2× reduction,
+/// at most [`MAX_MIP_LEVEL`].
+fn step_level(t: f64) -> u32 {
+    if t.is_finite() && t >= 2.0 { (t.log2().floor() as u32).min(MAX_MIP_LEVEL) } else { 0 }
 }
+
+/// The mip level a single-sample warp reads where one destination pixel to the right steps `jx`
+/// through the source: [`step_level`] of that step. A step down a column raises it only as
+/// [`column_level`] and [`strip`] tell.
+fn mip_level(jx: [f64; 2]) -> u32 {
+    step_level(jx[0].hypot(jx[1]))
+}
+
+/// The mip level the step down a column asks for in a triangle with corners `p` in the
+/// destination and `s` in the source: [`step_level`] of that step, but of no more than the
+/// diagonal of the triangle's source box over the width of its destination box. So a squeeze down
+/// the columns reads a coarser level only in cells much taller in the source than they are wide in
+/// the picture, and a plain top or bottom fold stays at full resolution. Measured on the reference
+/// application's renders of coordinate images squeezed to between a fifth and all of their height
+/// (123 probes).
+fn column_level(p: [[f64; 2]; 3], s: [[f64; 2]; 3]) -> u32 {
+    let [p0, p1, p2] = p;
+    let [s0, s1, s2] = s;
+    let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+    if det.is_nan() || det.abs() < 1e-12 {
+        return 0;
+    }
+    let (d1, d2) = ([s1[0] - s0[0], s1[1] - s0[1]], [s2[0] - s0[0], s2[1] - s0[1]]);
+    let (l1y, l2y) = ((p0[0] - p2[0]) / det, (p1[0] - p0[0]) / det);
+    let jy = [l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]];
+    let span = |a: f64, b: f64, c: f64| a.max(b).max(c) - a.min(b).min(c);
+    let diagonal = span(s0[0], s1[0], s2[0]).hypot(span(s0[1], s1[1], s2[1]));
+    step_level(jy[0].hypot(jy[1]).min(diagonal / span(p0[0], p1[0], p2[0])))
+}
+
+/// The share of a pixel to the right that the step of a left or right side's [`strip`] down a
+/// column may also take (measured: between 0.45 and 0.47).
+const SIDE_SHARE: f64 = 0.46;
 
 /// Box-filtered premultiplied levels `1..` of a window whose origin lies on the level grid of the
 /// whole source: level `k`'s texel `(i, j)` averages the texels of level `k - 1` below it, as one
@@ -886,10 +903,13 @@ type BorderEdge = ([f64; 2], [f64; 2], [f64; 2], [f64; 2], (usize, f64, f64));
 /// across that side, not along the edge's normal: `p = a + τ·(b − a) + out·g`, `g` the unit vector
 /// of that image, pointing out. It reads the side's point at `τ` moved out of the source at one
 /// source pixel per destination pixel, or at the triangle's own rate where the triangle squeezes
-/// the source along `g`. Its level is [`mip_level`] of that map's own step along a row, and it
-/// ends where the tap's alpha does, half a texel of that level out; beside the edge's ends
-/// (`τ` outside 0..1) there is none. Measured on the reference application's renders of sheared
-/// and scaled coordinate images (150 probes, every outline pixel's source point and level).
+/// the source along `g`. Its level is [`mip_level`] of that map's own step along a row, or the
+/// [`step_level`] of its step along the side down a column where that is coarser; a strip past a
+/// left or right side takes the smaller of that step and the step for [`SIDE_SHARE`] of a pixel
+/// right and one down. It ends where the tap's alpha does, half a texel of that level out; beside
+/// the edge's ends (`τ` outside 0..1) there is none. Measured on the reference application's
+/// renders of sheared, scaled and squeezed coordinate images (273 probes, every outline pixel's
+/// source point and level).
 fn strip(p: [f64; 2], &(a, b, sa, sb, (ax, sign, lim)): &BorderEdge, fwd: &[[f64; 2]; 2]) -> Option<(f64, [f64; 2], u32)> {
     let col = fwd.get(ax)?;
     let n = col[0].hypot(col[1]);
@@ -915,7 +935,10 @@ fn strip(p: [f64; 2], &(a, b, sa, sb, (ax, sign, lim)): &BorderEdge, fwd: &[[f64
     let (tau_x, along_x) = (g[1] / den, -ab[1] / den);
     let mut jx = [tau_x * (sb[0] - sa[0]), tau_x * (sb[1] - sa[1])];
     *jx.get_mut(ax)? += along_x * rate * sign;
-    let level = mip_level(jx);
+    // Down a column the strip moves along its side by `τ`'s share alone.
+    let tau_y = -g[0] / den;
+    let down = if ax == 0 { tau_y.abs().min((tau_y + SIDE_SHARE * tau_x).abs()) } else { tau_y.abs() };
+    let level = mip_level(jx).max(step_level(down * (sb[0] - sa[0]).hypot(sb[1] - sa[1])));
     let out = along * rate;
     if out >= 0.5 * f64::from(1u32 << level) {
         return None;
@@ -935,6 +958,9 @@ struct Fringe {
     cover: Vec<f64>,
     /// The mip level a strip pixel reads (none elsewhere: its triangle's own).
     level: Vec<Option<u32>>,
+    /// The mip level a strip that went under another reads, per node of the fold layers (none for
+    /// a node that isn't such a strip).
+    under_level: Vec<Option<u32>>,
 }
 
 /// The fringe of [`Draw::fringe`] in tile `t` (`w` px wide): fills the uncovered pixels of `uv` and
@@ -944,7 +970,9 @@ struct Fringe {
 /// carried past it, with an alpha cap. With `flaps` (a warp that folds) a strip also lies over a
 /// covered pixel whose top triangle ranks below its own, as a flap folded back over the picture
 /// shows in the reference application: the nearest such triangle's strip becomes the pixel's top
-/// and what it covers goes on the pixel's list of fold layers.
+/// and what it covers goes on the pixel's list of fold layers. Past such a warp's outline the
+/// strip of a turned-over triangle and the strip of one lying face up can reach the same pixel:
+/// both are drawn, the lower-ranked one on the list of fold layers with its own mip level.
 #[allow(clippy::too_many_arguments)]
 fn fringe(
     tris: &[[usize; 3]],
@@ -979,6 +1007,10 @@ fn fringe(
     };
     let pad = fringe_reach(strips).ceil();
     let mut near = vec![(if strips { f64::INFINITY } else { FRINGE }, [f64::NAN; 2], 0u32); uv.len()];
+    // Per uncovered pixel, the nearest strip of a turned-over triangle of a warp that folds (as
+    // `over`), kept apart from the nearest strip of a triangle lying face up (`near`).
+    let two = strips && flaps.is_some();
+    let mut back: Vec<(f64, [f64; 2], u32, u32)> = Vec::new();
     for (k, tri) in tris.iter().enumerate() {
         let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
         let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
@@ -1039,6 +1071,22 @@ fn fringe(
                     }
                     continue;
                 }
+                if two && det * sdet < 0.0 {
+                    if d.is_nan() || back.get(o).is_some_and(|s| d >= s.0) {
+                        continue;
+                    }
+                    if let Some(fwd) = &fwd
+                        && let Some((_, q, l)) = border.iter().filter_map(|e| strip([px, py], e, fwd)).min_by(|a, b| a.0.total_cmp(&b.0))
+                    {
+                        if back.is_empty() {
+                            back.resize(uv.len(), (f64::INFINITY, [f64::NAN; 2], 0, 0));
+                        }
+                        if let Some(slot) = back.get_mut(o) {
+                            *slot = (d, q, k as u32, l);
+                        }
+                    }
+                    continue;
+                }
                 let Some(slot) = near.get_mut(o) else { continue };
                 if d >= slot.0 || d.is_nan() {
                     continue;
@@ -1070,7 +1118,9 @@ fn fringe(
             }
         }
     }
-    if let Some(fl) = flaps {
+    let mut under_level: Vec<Option<u32>> = Vec::new();
+    if let Some(mut fl) = flaps {
+        stack_back_strips(back, uv, owner, &mut level, &mut fl, &mut under_level);
         for (o, (_, q, k, l)) in over.into_iter().enumerate() {
             if q[0].is_nan() {
                 continue;
@@ -1086,7 +1136,53 @@ fn fringe(
             }
         }
     }
-    Fringe { cover, level }
+    Fringe { cover, level, under_level }
+}
+
+/// Lays the strips of a fold's turned-over triangles (`back`, per pixel of the tile: distance,
+/// source point, triangle, mip level; none where the point is NaN) past the warp's outline for
+/// [`fringe`]: alone where no face-up strip reached the pixel, else the higher-ranked of the two on
+/// top and the other on the list of fold layers, its mip level in `under_level` at its node.
+fn stack_back_strips(
+    back: Vec<(f64, [f64; 2], u32, u32)>,
+    uv: &mut [[f64; 2]],
+    owner: &mut [u32],
+    level: &mut [Option<u32>],
+    fl: &mut Flaps,
+    under_level: &mut Vec<Option<u32>>,
+) {
+    let cells = uv.len();
+    for (o, (_, q, k, l)) in back.into_iter().enumerate() {
+        if q[0].is_nan() {
+            continue;
+        }
+        let (Some(u), Some(ow), Some(lv)) = (uv.get_mut(o), owner.get_mut(o), level.get_mut(o)) else { continue };
+        if u[0].is_nan() {
+            *u = q;
+            *ow = k;
+            *lv = Some(l);
+            continue;
+        }
+        if fl.under_at.is_empty() {
+            *fl.under_at = vec![u32::MAX; cells];
+        }
+        let Some(head) = fl.under_at.get_mut(o) else { continue };
+        // The lower-ranked strip goes under.
+        let (low, low_level) = if (fl.rank)(k) > (fl.rank)(*ow) {
+            let was = ((*u, *ow), *lv);
+            *u = q;
+            *ow = k;
+            *lv = Some(l);
+            was
+        } else {
+            ((q, k), Some(l))
+        };
+        stack_layer(fl.under, head, low, &|_| false);
+        under_level.resize(fl.under.len(), None);
+        if let Some(e) = under_level.last_mut() {
+            *e = low_level;
+        }
+    }
 }
 
 /// What [`fringe`] lays a flap's strip over the layer under it with: the rank of a triangle of
@@ -1314,7 +1410,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         x1 = x1.max(v.0[0]);
         y1 = y1.max(v.0[1]);
     }
-    let dst = Rect::new(x0.max(-lim).floor() as i32 - 1, y0.max(-lim).floor() as i32 - 1, x1.min(lim).ceil() as i32 + 1, y1.min(lim).ceil() as i32 + 1);
+    // A strip reaches half a texel of the coarsest level past its edge (see `fringe_reach`).
+    let reach = if draw.fringe { (fringe_reach(single && interp == Interp::Bilinear).ceil() as i32).max(1) } else { 1 };
+    let dst = Rect::new(
+        x0.max(-lim).floor() as i32 - reach,
+        y0.max(-lim).floor() as i32 - reach,
+        x1.min(lim).ceil() as i32 + reach,
+        y1.min(lim).ceil() as i32 + reach,
+    );
     // Bookkeeping is kept per destination tile, so a mesh flung across the whole coordinate range
     // would ask for millions of entries before drawing anything: draw nothing instead.
     let ts_px = photocraft_geom::TILE_SIZE as u64;
@@ -1402,6 +1505,8 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let mut jac: Vec<([f64; 4], usize, usize)> = Vec::with_capacity(order.len());
         // A single-sample warp's mip level per triangle (see `mip_level`).
         let mut lev: Vec<u32> = Vec::with_capacity(order.len());
+        // The level a pixel reads within half a texel of a source edge across x / across y.
+        let mut elev: Vec<[u32; 2]> = Vec::with_capacity(order.len());
         'pass: loop {
             for (k, tri) in order.iter().enumerate() {
                 let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
@@ -1409,6 +1514,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 if det.abs() < 1e-12 {
                     jac.push(([0.0; 4], 1, 1));
                     lev.push(0);
+                    elev.push([0; 2]);
                     continue;
                 }
                 let (d1, d2) = ([s1[0] - s0[0], s1[1] - s0[1]], [s2[0] - s0[0], s2[1] - s0[1]]);
@@ -1419,9 +1525,11 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     if l > MAX_SS { [j[0] * MAX_SS / l, j[1] * MAX_SS / l] } else { j }
                 };
                 let raw_jx = [l1x * d1[0] + l2x * d2[0], l1x * d1[1] + l2x * d2[1]];
-                lev.push(if single && interp == Interp::Bilinear { mip_level(raw_jx) } else { 0 });
+                let raw_jy = [l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]];
+                lev.push(if single && interp == Interp::Bilinear { mip_level(raw_jx).max(column_level([p0, p1, p2], [s0, s1, s2])) } else { 0 });
+                elev.push([mip_level(raw_jx).max(step_level(raw_jy[1].abs())), mip_level(raw_jx).max(step_level(raw_jy[0].abs()))]);
                 let jx = cap(raw_jx);
-                let jy = cap([l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]]);
+                let jy = cap(raw_jy);
                 let (nx, ny) = (count(jx), count(jy));
                 jac.push(if nx * ny == 1 { ([0.0; 4], 1, 1) } else { ([jx[0], jx[1], jy[0], jy[1]], nx, ny) });
                 let bx0 = (p0[0].min(p1[0]).min(p2[0]) - 0.5).floor().max(f64::from(t.x0)) as i32;
@@ -1460,6 +1568,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             under_at = vec![u32::MAX; w * h];
                             jac.clear();
                             lev.clear();
+                            elev.clear();
                             continue 'pass;
                         }
                         if stacked
@@ -1480,7 +1589,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         }
         // The fringe (see `Draw::fringe`): per uncovered pixel past a border edge, the source
         // position it reads, with its alpha cap or, in a strip, its own mip level.
-        let Fringe { cover, level: strip_level } = if draw.fringe {
+        let Fringe { cover, level: strip_level, under_level } = if draw.fringe {
             // The rank of a triangle of `order`.
             let rank_at = |i: u32| if stacked { order_rank.get(i as usize).copied() } else { bin.get(i as usize).map(|&k| rank_of(k)) }.unwrap_or(u32::MAX);
             let flaps = folds.then_some(Flaps { rank: &rank_at, under: &mut under, under_at: &mut under_at });
@@ -1489,6 +1598,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             Fringe::default()
         };
         let strip_level = |o: usize| strip_level.get(o).copied().flatten();
+        let under_level = |node: usize| under_level.get(node).copied().flatten();
         // Where the covered pixels sample the source, with the spread of their subsamples (a mip
         // level's taps reach up to 1.5 texels of 2^level pixels from the sample), in regions read
         // apart ([`Regions`]): the top layer's and, apart, those of the fold layers under it. A
@@ -1560,11 +1670,11 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let top: Vec<Option<Win>> = top_regions.rects.iter().map(|&r| window((r, top_level))).collect();
         // Fold layers whose source can't be read in windows of their own, within the one cap for
         // both, are left out (the top one stays).
-        let below_level = under.iter().filter(|e| !e.0[0].is_nan()).map(|e| lev.get(e.1 as usize).copied().unwrap_or(0)).max().unwrap_or(0);
+        let below_level = under.iter().enumerate().filter(|(_, e)| !e.0[0].is_nan()).map(|(i, e)| level_of(e.1, under_level(i))).max().unwrap_or(0);
         let mut below_regions = Regions::new(
             &|f| {
-                for &(q, k, _) in under.iter().filter(|e| !e.0[0].is_nan()) {
-                    let (q, e) = spread((q, k), None);
+                for (i, &(q, k, _)) in under.iter().enumerate().filter(|(_, e)| !e.0[0].is_nan()) {
+                    let (q, e) = spread((q, k), under_level(i));
                     f(q, e);
                 }
             },
@@ -1737,7 +1847,17 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         // where the warp shrinks the source.
         let sample = |win: &Win, q: [f64; 2], k: u32, strip: Option<u32>, acc: &mut [f64; 8], one: &mut [f64; 8]| {
             let (j, nx, ny) = jac[k as usize];
-            let l = level_of(k, strip);
+            let mut l = level_of(k, strip);
+            if l > 0 && strip.is_none() {
+                let r = 0.5 * f64::from(1u32 << l);
+                let e = elev.get(k as usize).copied().unwrap_or([l; 2]);
+                if q[0] < f64::from(src_rect.x0) + r || q[0] > f64::from(src_rect.x1) - r {
+                    l = l.min(e[0]);
+                }
+                if q[1] < f64::from(src_rect.y0) + r || q[1] > f64::from(src_rect.y1) - r {
+                    l = l.min(e[1]);
+                }
+            }
             if l > 0 {
                 mip_tap(win, l, q, acc);
                 return;
@@ -1778,9 +1898,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 let mut under_top = [0.0f64; 8];
                 let mut at = first;
                 while let Some(&(q, k, next)) = under.get(at as usize) {
+                    let node = at as usize;
                     at = next;
                     match below_win(q) {
-                        Some(bw) => sample(bw, q, k, None, &mut layer, &mut one),
+                        Some(bw) => sample(bw, q, k, under_level(node), &mut layer, &mut one),
                         None => layer[..n].fill(0.0),
                     }
                     let keep = 1.0 - layer[a].clamp(0.0, 1.0);
@@ -2029,12 +2150,31 @@ mod tests {
         assert!(c.y0 < r.y0 - 2 && c.x0 < r.x0 && c.x1 > r.x1, "the top rises and spreads past the box: {c:?}");
     }
 
+    /// A warp placed small still samples once per pixel, from the mip level its squeeze picks, as
+    /// the reference application draws one down to a fifth of its size (not an average of many
+    /// samples over each pixel's footprint).
     #[test]
-    fn a_warp_samples_once_unless_placed_small() {
-        assert_eq!(Sampling::for_scale(1.0), Sampling::Single);
-        assert_eq!(Sampling::for_scale(0.5), Sampling::Single);
-        assert_eq!(Sampling::for_scale(0.49), Sampling::Footprint);
-        assert_eq!(Sampling::for_scale(f64::NAN), Sampling::Footprint);
+    fn a_warp_placed_small_still_samples_once() {
+        let (w, h) = (96, 80);
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        let px: Vec<f32> = (0..h).flat_map(|y| (0..w).map(move |x| ((x * 7 + y * 13) % 17) as f32 / 16.0)).flat_map(|v| [v, 1.0 - v, v * v, 1.0]).collect();
+        let r = Rect::new(0, 0, w, h);
+        src.write_region(r, &px);
+        let warp = Warp::preset(WarpStyle::Arc, 15.0, [0.0, 0.0, f64::from(w), f64::from(h)]);
+        let rest = |x: f64, y: f64| (0.2 * x + 7.0, 0.2 * y + 5.0);
+        let map = |x: f64, y: f64| {
+            let (u, v) = warp.map(x, y);
+            rest(u, v)
+        };
+        let (cu, cv) = patch_cuts(&warp, r);
+        let drawn = |sampling| warp_patches_surface(&src, r, &map, [&cu, &cv], Fold::Stack(&rest), sampling, facets_of(&warp));
+        let once = drawn(Sampling::Single);
+        let out = place_source(&src, r, &photocraft_geom::Affine { m: [0.2, 0.0, 0.0, 0.2, 7.0, 5.0] }, Some(&warp)).unwrap();
+        let b = once.content_bounds();
+        assert!(b.width() > 15 && b.height() > 12, "{b:?}");
+        assert_eq!(out.content_bounds(), b);
+        assert_eq!(out.read_region(b), once.read_region(b));
+        assert_ne!(once.read_region(b), drawn(Sampling::Footprint).read_region(b), "the two samplings differ here");
     }
 
     #[test]
@@ -2211,8 +2351,8 @@ mod tests {
     #[test]
     fn a_shrinking_mesh_warp_is_prefiltered() {
         // A warped smart object placed at ~1/5 size: a grid of 1 px lines every 4 px must come
-        // out its area average (9/16 white) everywhere, not point-sampled moiré (crinkled,
-        // doubled or missing lines), like the affine path's `large_downscale_is_prefiltered`.
+        // out near its area average (9/16 white), not point-sampled moiré (crinkled, doubled or
+        // missing lines), like the affine path's `large_downscale_is_prefiltered`.
         for s in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let (w, h) = (400, 320);
             let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, s, true));
@@ -2228,9 +2368,13 @@ mod tests {
             let opaque: Vec<f32> = o.as_chunks::<4>().0.iter().filter(|p| p[3] >= 0.999).map(|p| p[0]).collect();
             assert!(opaque.len() > 2000, "{s:?}: {} opaque pixels", opaque.len());
             let worst = opaque.iter().map(|v| (v - 0.5625).abs()).fold(0.0f32, f32::max);
-            // An area average over the ~5 px footprint still covers one or two lines per axis
-            // (up to 0.2 off); point sampling lands wholly on or off a line (up to 0.56 off).
-            assert!(worst < 0.25, "{s:?}: worst deviation from the area average {worst}");
+            let mean = opaque.iter().sum::<f32>() / opaque.len() as f32;
+            // Every pixel reads a mip level: the quarter-size one where it steps 4 px or more
+            // (9/16 exactly), the half-size one where the arc stretches a row to a shorter step
+            // (a 2 px box holds a quarter, a half or all white: up to 0.32 off). Point sampling
+            // lands wholly on or off a line (up to 0.56 off).
+            assert!(worst < 0.35, "{s:?}: worst deviation from the area average {worst}");
+            assert!((mean - 0.5625).abs() < 0.02, "{s:?}: mean {mean}");
         }
     }
 
@@ -2548,6 +2692,111 @@ mod tests {
         assert!((f64::from(px[1]) - cover).abs() < 1e-5, "coverage {}", px[1]);
         assert!((f64::from(px[0]) - 0.3).abs() < 1e-5, "colour {}", px[0]);
     }
+    /// A strip's level follows its step along its side down a column too, not only along a row.
+    #[test]
+    fn a_strips_level_follows_its_step_down_a_column() {
+        let level = |p: [f64; 2], edge: BorderEdge, fwd: [[f64; 2]; 2]| strip(p, &edge, &fwd).map(|s| s.2);
+        // A right side squeezed four times down: a row steps one pixel out, a column four along it.
+        let right = |a, b| (a, b, [16.0, 0.0], [16.0, 16.0], (0, 1.0, 16.0));
+        assert_eq!(strip([10.5, 2.0], &right([10.0, 0.0], [10.0, 4.0]), &[[1.0, 0.0], [0.0, 0.25]]), Some((0.5, [16.5, 8.0], 2)));
+        // The picture's rows tilted down to the right: one pixel right moves the strip back up its
+        // side, and the smaller step for one down and `SIDE_SHARE` right counts (3.08 px, not 4).
+        assert_eq!(level([10.447, 2.2236], right([10.0, 0.0], [10.0, 4.0]), [[1.0, 0.5], [0.0, 0.25]]), Some(1));
+        // Tilted up, one right moves it further down the side: the step straight down counts.
+        assert_eq!(level([10.447, 1.7764], right([10.0, 0.0], [10.0, 4.0]), [[1.0, -0.5], [0.0, 0.25]]), Some(2));
+        // A bottom side turned upright (the picture on its side) and squeezed four times.
+        let bottom: BorderEdge = ([10.0, 4.0], [10.0, 0.0], [0.0, 16.0], [16.0, 16.0], (1, 1.0, 16.0));
+        assert_eq!(level([10.5, 2.0], bottom, [[0.0, -0.25], [1.0, 0.0]]), Some(2));
+        // Not squeezed: full resolution.
+        assert_eq!(level([10.25, 8.0], right([10.0, 0.0], [10.0, 16.0]), [[1.0, 0.0], [0.0, 1.0]]), Some(0));
+    }
+
+    /// Inside the picture a triangle squeezed down its columns reads a mip level as well, no
+    /// coarser than its own shape allows: the diagonal of its source box per pixel of its width.
+    #[test]
+    fn a_triangles_level_follows_its_step_down_a_column() {
+        // Four source pixels per pixel down, as tall as wide in the picture.
+        assert_eq!(column_level([[0.0, 0.0], [8.0, 0.0], [8.0, 8.0]], [[0.0, 0.0], [8.0, 0.0], [8.0, 32.0]]), 2);
+        // The same squeeze in a triangle four times as wide as tall: 1.4 source pixels of diagonal per pixel of width.
+        assert_eq!(column_level([[0.0, 0.0], [32.0, 0.0], [32.0, 8.0]], [[0.0, 0.0], [32.0, 0.0], [32.0, 32.0]]), 0);
+        assert_eq!(column_level([[0.0, 0.0], [8.0, 0.0], [8.0, 8.0]], [[0.0, 0.0], [8.0, 0.0], [8.0, 8.0]]), 0);
+        // No area, or no numbers: full resolution.
+        assert_eq!(column_level([[0.0, 0.0], [8.0, 0.0], [16.0, 0.0]], [[0.0, 0.0], [8.0, 0.0], [8.0, 32.0]]), 0);
+        assert_eq!(column_level([[f64::NAN, 0.0], [8.0, 0.0], [8.0, 8.0]], [[0.0, 0.0], [8.0, 0.0], [8.0, 32.0]]), 0);
+    }
+
+    /// A picture squeezed four times down: its rows come out averaged (the quarter-size level), its
+    /// side strips read that level and so reach two pixels out, and a row whose tap lies within
+    /// half a texel of the picture's top reads full resolution (a squeeze down doesn't blur across
+    /// the top and bottom sides).
+    #[test]
+    fn a_picture_squeezed_down_reads_a_mip_level_and_wider_strips() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true);
+        let mut src = Surface::new(fmt);
+        let px: Vec<f32> = (0..64).flat_map(|y| (0..16).map(move |_| if y % 2 == 0 { 0.2 } else { 0.8 })).flat_map(|v| [v, 1.0]).collect();
+        let r = Rect::new(0, 0, 16, 64);
+        src.write_region(r, &px);
+        let squeezed = |top: f64| {
+            let verts = [([20.0, top], [0.0, 0.0]), ([36.0, top], [16.0, 0.0]), ([36.0, top + 16.0], [16.0, 64.0]), ([20.0, top + 16.0], [0.0, 64.0])];
+            triangles(&src, r, &verts, &[[0, 1, 2], [0, 2, 3]], Interp::Bilinear, &Interrupt::NONE, Draw { single: true, fringe: true, stack: None })
+        };
+        // Taps are weighed in steps of 1/256.
+        let near = |got: f32, want: f32| (got - want).abs() < 0.005;
+        let out = squeezed(20.0);
+        let row = out.read_region(Rect::new(17, 28, 39, 29));
+        let (grey, alpha): (Vec<f32>, Vec<f32>) = row.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).unzip();
+        assert!(grey[3..19].iter().all(|&v| near(v, 0.5)), "inside, rows average: {grey:?}");
+        // The strips' taps lie 0.5 and 1.5 px outside, between a 4 px texel's centre and the next.
+        assert!(near(alpha[19], 0.375) && near(alpha[20], 0.125) && alpha[21] == 0.0, "right strip: {alpha:?}");
+        assert!(near(alpha[2], 0.375) && near(alpha[1], 0.125) && alpha[0] == 0.0, "left strip: {alpha:?}");
+        assert_eq!(out.content_bounds(), Rect::new(18, 20, 38, 36), "two columns of strip each side");
+        // Moved down 3/8 px, the first row's tap is the centre of the picture's first row.
+        let out = squeezed(20.375);
+        let col = out.read_region(Rect::new(28, 20, 29, 22));
+        assert!(near(col[0], 0.2) && near(col[1], 1.0), "the row at the top side: {col:?}");
+        assert!(near(col[2], 0.5) && near(col[3], 1.0), "the row under it: {col:?}");
+    }
+
+    /// Where a fold's turned-over part and the part lying face up both end at the same side, each
+    /// draws its strip there: the higher one over the lower, not the nearer one alone.
+    #[test]
+    fn a_folds_two_strips_past_one_side_are_both_drawn() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true);
+        let mut src = Surface::new(fmt);
+        src.fill_rect(Rect::new(0, 0, 92, 16), &[0.2, 1.0]);
+        src.fill_rect(Rect::new(92, 0, 100, 16), &[1.0, 1.0]);
+        // The picture folds back at 60.35, its white right end lying over columns 21 to 28.
+        let (w, edge, fold) = (100.0, 20.7, 60.35);
+        // Its top side lies a quarter pixel under the centres of row 0.
+        let (top, bottom) = (0.75, 16.75);
+        let verts = [
+            ([0.0, top], [0.0, 0.0]),
+            ([fold, top], [fold, 0.0]),
+            ([fold, bottom], [fold, 16.0]),
+            ([0.0, bottom], [0.0, 16.0]),
+            ([edge, top], [w, 0.0]),
+            ([edge, bottom], [w, 16.0]),
+        ];
+        let tris = [[0, 1, 2], [0, 2, 3], [1, 4, 5], [1, 5, 2]];
+        let rank = || vec![0, 0, 1, 1];
+        let out = triangles(
+            &src,
+            Rect::new(0, 0, 100, 16),
+            &verts,
+            &tris,
+            Interp::Bilinear,
+            &Interrupt::NONE,
+            Draw { single: true, fringe: true, stack: Some(&rank) },
+        );
+        // A quarter pixel out each strip is a quarter there: the white one over the dark one.
+        let both = out.read_region(Rect::new(24, 0, 25, 1));
+        assert!((both[1] - 0.4375).abs() < 0.005, "alpha {}", both[1]);
+        assert!((f64::from(both[0]) - (0.25 + 0.75 * 0.25 * 0.2) / 0.4375).abs() < 0.005, "colour {}", both[0]);
+        // Past the flap's end, the face-up part's strip alone.
+        let alone = out.read_region(Rect::new(10, 0, 11, 1));
+        assert!((alone[1] - 0.25).abs() < 0.005 && (alone[0] - 0.2).abs() < 0.005, "{alone:?}");
+    }
+
     /// A flap folded back over the picture ends in a strip of its own past its edge: the strip
     /// lies over the layer under the flap, which shows through its fade, also where the strip's
     /// column is the last of a tile the flap itself doesn't reach.

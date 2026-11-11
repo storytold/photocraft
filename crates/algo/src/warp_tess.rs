@@ -461,7 +461,8 @@ pub(crate) fn quilt_patch_mesh(at: &dyn Fn(f64, f64) -> P) -> Option<EnvelopeMes
 struct Rules {
     /// Cells per side to start from.
     start: usize,
-    /// A first-level cell split across splits down too (a one-patch full mesh).
+    /// A first-level cell split across twice splits down too: the half of it that splits across
+    /// again (a one-patch full mesh).
     force_down: bool,
     /// A cell split down for its twist splits the other cells cut from its parent down too.
     twist_spreads: bool,
@@ -588,7 +589,8 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             {
                 across = true;
             }
-            if rules.force_down && across && (u1 - u0 - first).abs() < EPS && (v1 - v0 - first).abs() < EPS {
+            // Forced down at the second split across: a cell half as wide as a first cell and as tall as one.
+            if rules.force_down && across && (u1 - u0 - first / 2.0).abs() < EPS && (v1 - v0 - first).abs() < EPS {
                 down = true;
             }
             if across || down {
@@ -1723,7 +1725,9 @@ mod tests {
 
     /// An envelope's first cells split down only where their columns ask for it: Arch 40 is cut
     /// into eighths across and stays in quarters down in the reference (32 cells). A full mesh's
-    /// first cell that splits across always splits down too.
+    /// first cell (a half of the mesh each way) splits down too where it splits across twice: split
+    /// across once it stays whole down (Arch 12, quarters by halves), and the halves of it that split
+    /// across again split down with that (Arch 40, eighths by quarters).
     #[test]
     fn an_envelopes_first_cells_split_down_only_for_their_columns() {
         use photocraft_geom::warp::WarpStyle;
@@ -1734,10 +1738,17 @@ mod tests {
         let (leaves, _) = cells(&net, twisty_net(&net), &rules);
         assert_eq!(leaves.len(), 32);
         assert!(leaves.iter().all(|c| (c[1] - c[0] - 0.125).abs() < EPS && (c[3] - c[2] - 0.25).abs() < EPS), "every cell is an eighth by a quarter");
-        let (forced, _) = cells(&net, twisty_net(&net), &Rules { force_down: true, ..rules });
-        assert_eq!(forced.len(), 64, "forced down they would be eighths both ways");
+        let sized = |cells: &[Cell], w: f64, h: f64| cells.iter().all(|c| (c[1] - c[0] - w).abs() < EPS && (c[3] - c[2] - h).abs() < EPS);
         let full = net_of(&at, true);
-        assert!(one_patch_rules(&full, true).force_down);
+        let rules = one_patch_rules(&full, true);
+        assert!(rules.force_down);
+        let (twice, _) = cells(&full, twisty_net(&full), &rules);
+        assert!(twice.len() == 32 && sized(&twice, 0.125, 0.25), "split across twice: eighths by quarters, {} cells", twice.len());
+        let (unforced, _) = cells(&full, twisty_net(&full), &Rules { force_down: false, ..rules });
+        assert!(unforced.len() == 16 && sized(&unforced, 0.125, 0.5), "left alone they would stay halves down, {} cells", unforced.len());
+        let gentle = net_of(&in_perspective(WarpStyle::Arch, 12.0, 0.0, 0.0), true);
+        let (once, _) = cells(&gentle, twisty_net(&gentle), &one_patch_rules(&gentle, true));
+        assert!(once.len() == 8 && sized(&once, 0.25, 0.5), "split across once: quarters by halves, {} cells", once.len());
     }
 
     /// A first cell's split down carries to the other cells of its quarter of the envelope and no
