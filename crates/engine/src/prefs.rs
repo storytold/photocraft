@@ -528,8 +528,8 @@ pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{
-    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates, normalize_shortcut,
-    reserved_shortcut,
+    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates,
+    normalize_shortcut, reserved_shortcut,
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
@@ -570,6 +570,12 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// PDF import resolution in DPI; the document keeps it so the page's print size is preserved.
+    pub pdf_dpi: f32,
+    /// The first PDF page to import (1-based; 0 imports from the first page).
+    pub pdf_first_page: u32,
+    /// The last PDF page to import (1-based; 0 imports to the last page).
+    pub pdf_last_page: u32,
     /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
     /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
     pub exr_aces_cg: bool,
@@ -607,6 +613,9 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            pdf_dpi: 300.0,
+            pdf_first_page: 0,
+            pdf_last_page: 0,
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
@@ -915,7 +924,10 @@ impl TransparencyAndGamut {
 pub struct UnitsAndRulers {
     pub rulers: Unit,
     pub type_units: TypeUnit,
+    /// Column Size › Width in points: Image Size and Canvas Size's Columns width unit
+    /// (`n` columns are `n × column_width + (n − 1) × gutter`).
     pub column_width: f64,
+    /// Column Size › Gutter in points, the space between columns.
     pub gutter: f64,
     pub print_resolution: f64,
     pub screen_resolution: f64,
@@ -1411,6 +1423,11 @@ impl Preferences {
 
     /// Set a value by dotted path, validating it. Unknown paths and wrong types are errors.
     pub fn set(&mut self, path: &str, value: Value) -> std::result::Result<(), String> {
+        // `set_path` skips empty segments, so `.alternateShortcuts.x` would reach the typed state
+        // below the per-path validators above; refuse such paths instead.
+        if path.split('.').any(str::is_empty) {
+            return Err(format!("invalid preference path `{path}`"));
+        }
         if path == "alternateShortcuts" {
             let obj = value.as_object().ok_or("`alternateShortcuts` maps command ids to lists of shortcuts")?;
             let mut map = BTreeMap::new();
@@ -1505,7 +1522,8 @@ impl Preferences {
     pub fn alternates(&self, id: &str, primary: Option<&str>) -> Vec<String> {
         let main = primary.and_then(normalize_shortcut);
         let keys: Vec<String> = match self.alternate_shortcuts.get(id) {
-            Some(list) => list.iter().filter_map(|s| normalize_shortcut(s)).collect(),
+            // A hand-edited settings file can hold more than `alternate_keys` admits.
+            Some(list) => list.iter().take(MAX_ALTERNATES).filter_map(|s| normalize_shortcut(s)).collect(),
             None => default_alternates(id).filter_map(normalize_shortcut).collect(),
         };
         let mut out: Vec<String> = Vec::with_capacity(keys.len());
@@ -1628,6 +1646,13 @@ impl Session {
             // A partially migrated file may already contain a newer theme selection (#5139).
             interface.entry(slot).or_insert_with(|| json!(theme.name()));
         }
+        // The Serbian interface catalog was `sr`; since the catalogs moved to craft-i18n it is
+        // `sr-latn`, the same Latin text. A saved `sr` loads as `sr-latn` and is saved that way next.
+        if let Some(language) = v.get_mut("interface").and_then(|interface| interface.get_mut("language"))
+            && language.as_str().is_some_and(|code| code.eq_ignore_ascii_case("sr"))
+        {
+            *language = json!("sr-latn");
+        }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let mut invalid = Vec::new();
@@ -1638,7 +1663,15 @@ impl Session {
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
+            // A number outside 0..MAX reads, but `validate_settings` would then refuse every
+            // later Color Settings edit: reset it like an unreadable value.
+            let gain = self.color.settings.spot_dot_gain;
+            if !(gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&gain)) {
+                invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "spotDotGain".into()], value: json!(gain) });
+                self.color.settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
+            }
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
+            photocraft_compose::multichannel::set_spot_dot_gain(self.color.settings.spot_dot_gain);
         }
         self.prefs.edit(|p| *p = prefs);
         if let Some(v) = presets {

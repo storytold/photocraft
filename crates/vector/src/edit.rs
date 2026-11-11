@@ -6,7 +6,7 @@
 //! Knots are addressed as `[subpath, knot]`. Every edit validates its indices and returns an
 //! error message instead of panicking.
 
-use photocraft_doc::{Knot, Path};
+use photocraft_doc::{Knot, Path, Subpath};
 use photocraft_geom::Point;
 
 /// One of a knot's two direction handles.
@@ -244,18 +244,54 @@ pub fn add_anchor(path: &mut Path, knot: [usize; 2], t: f64) -> Result<[usize; 2
 /// previous anchor's out handle and the next anchor's in handle; a closed subpath stays closed.
 /// Removing a subpath's last anchor removes the subpath. Refused (unchanged) when it would leave
 /// the path with no anchors at all. Returns whether the subpath was removed.
-pub fn delete_anchor(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String> {
-    knot_mut(path, [s, k])?;
+pub fn delete_anchor(path: &mut Path, k: [usize; 2]) -> Result<bool, String> {
+    knot_mut(path, k)?;
     let total: usize = path.subpaths.iter().map(|sp| sp.knots.len()).fold(0, usize::saturating_add);
     if total <= 1 {
         return Err("can't delete the path's only anchor point; delete the path instead".into());
     }
+    delete_anchor_allow_empty(path, k)
+}
+
+/// [`delete_anchor`] that also takes the path's only anchor, leaving a path with no subpaths: a
+/// saved path, which Photoshop keeps in the Paths panel empty (#12764).
+pub fn delete_anchor_allow_empty(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String> {
+    knot_mut(path, [s, k])?;
     let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
     if sp.knots.len() <= 1 {
         path.subpaths.remove(s);
         return Ok(true);
     }
     sp.knots.remove(k);
+    Ok(false)
+}
+
+/// ⌫ / Delete on a selected anchor: removes the knot and the two segments that meet at it, where
+/// Delete Anchor Point joins its neighbours. A closed subpath opens there and starts at the next
+/// anchor; an open subpath loses an end segment, or splits in two at an inner anchor. The other
+/// knots keep their handles. A subpath's last anchor and the path's only anchor go as in
+/// [`delete_anchor`]. Returns whether the subpath was removed.
+pub fn delete_anchor_and_segments(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String> {
+    knot_mut(path, [s, k])?;
+    let total: usize = path.subpaths.iter().map(|sp| sp.knots.len()).fold(0, usize::saturating_add);
+    let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
+    if total <= 1 || sp.knots.len() <= 1 {
+        return delete_anchor(path, [s, k]);
+    }
+    // `k` < len: `knot_mut` found it.
+    let after = sp.knots.split_off(k);
+    let after = after.get(1..).unwrap_or_default().to_vec();
+    if sp.closed {
+        // Open at `k`: the knots after it, then those before.
+        sp.knots = after.into_iter().chain(std::mem::take(&mut sp.knots)).collect();
+        sp.closed = false;
+    } else if sp.knots.is_empty() {
+        sp.knots = after;
+    } else if !after.is_empty() {
+        let rest = Subpath { closed: false, knots: after, op: sp.op };
+        let at = s.checked_add(1).ok_or_else(|| format!("no subpath after {s}"))?;
+        path.subpaths.insert(at, rest);
+    }
     Ok(false)
 }
 
@@ -368,7 +404,7 @@ pub fn hit(path: &Path, p: Point, tol: f64, handles: &[([usize; 2], Handle)]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_doc::Subpath;
+    use photocraft_doc::{PathOp, Subpath};
 
     fn tri() -> Path {
         Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)])])
@@ -546,6 +582,55 @@ mod tests {
         }
     }
 
+    /// #8653: on any curve (an S-curve, one with a retracted handle, a closed subpath's wrapping
+    /// segment) the split is exact, the new anchor is smooth with collinear opposite handles, and
+    /// the neighbours' handles are shortened along their own lines to t and 1 − t of their length.
+    #[test]
+    fn a_split_curve_keeps_its_shape_with_a_smooth_anchor_and_shortened_neighbour_handles() {
+        let s_curve = {
+            let mut sp = Subpath::polyline(&[(0.0, 0.0), (90.0, 30.0)]);
+            sp.knots[0].out_ctrl = Point::new(60.0, -50.0);
+            sp.knots[1].in_ctrl = Point::new(10.0, 90.0);
+            (Path::new(vec![sp]), [0, 0])
+        };
+        let half_retracted = {
+            let mut sp = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+            sp.knots[1].in_ctrl = Point::new(100.0, 60.0);
+            (Path::new(vec![sp]), [0, 0])
+        };
+        let closed_wrap = {
+            let mut sp = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)]);
+            sp.knots[2].out_ctrl = Point::new(40.0, 140.0);
+            sp.knots[0].in_ctrl = Point::new(-30.0, 50.0);
+            (Path::new(vec![sp]), [0, 2])
+        };
+        for (name, (path, knot)) in [("s-curve", s_curve), ("half-retracted", half_retracted), ("closed wrap", closed_wrap)] {
+            for t in [0.07, 0.31, 0.5, 0.88] {
+                let seg = path.subpaths[0].segments()[knot[1]];
+                let mut p = path.clone();
+                let r = add_anchor(&mut p, knot, t).unwrap();
+                let k = at(&p, r[0], r[1]);
+                assert!(k.smooth, "{name} t={t}");
+                assert!(dist(k.anchor, eval(&seg, t)) < 1e-9, "{name} t={t}");
+                let (vi, vo) = ((k.in_ctrl.x - k.anchor.x, k.in_ctrl.y - k.anchor.y), (k.out_ctrl.x - k.anchor.x, k.out_ctrl.y - k.anchor.y));
+                let cross = (vi.0 * vo.1 - vi.1 * vo.0) / (vi.0.hypot(vi.1) * vo.0.hypot(vo.1));
+                assert!(cross.abs() < 1e-9 && vi.0 * vo.0 + vi.1 * vo.1 < 0.0, "{name} t={t}: handles collinear and opposite {k:?}");
+                // The neighbours: the previous anchor's out handle is t of its old length, the
+                // next anchor's in handle 1 − t, each on its old line.
+                let halves = p.subpaths[0].segments();
+                let (first, second) = (halves[r[1] - 1], halves[r[1]]);
+                assert!(dist(first[1], lerp(seg[0], seg[1], t)) < 1e-9, "{name} t={t}");
+                assert!(dist(second[2], lerp(seg[3], seg[2], 1.0 - t)) < 1e-9, "{name} t={t}");
+                // Exact: the halves reparametrised cover the old segment.
+                for i in 0..=200 {
+                    let u = f64::from(i) / 200.0;
+                    let q = if u <= t { eval(&first, u / t) } else { eval(&second, (u - t) / (1.0 - t)) };
+                    assert!(dist(q, eval(&seg, u)) < 1e-9, "{name} t={t} u={u}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn adding_to_a_straight_segment_uses_the_hit_position() {
         for (points, closed) in [
@@ -593,6 +678,57 @@ mod tests {
     }
 
     #[test]
+    fn deleting_with_segments_opens_a_closed_subpath_at_the_anchor() {
+        let square = || Path::new(vec![Subpath::polygon(&[(100.0, 300.0), (300.0, 300.0), (300.0, 500.0), (100.0, 500.0)])]);
+        let mut p = square();
+        assert!(!delete_anchor_and_segments(&mut p, [0, 2]).unwrap());
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(100.0, 500.0), (100.0, 300.0), (300.0, 300.0)])]));
+        let mut p = square();
+        delete_anchor_and_segments(&mut p, [0, 1]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(300.0, 500.0), (100.0, 500.0), (100.0, 300.0)])]));
+    }
+
+    #[test]
+    fn deleting_with_segments_leaves_one_open_anchor_of_a_closed_pair() {
+        let a = Knot::smooth(Point::new(0.0, 0.0), Point::new(-5.0, 5.0), Point::new(5.0, -5.0));
+        let b = Knot::smooth(Point::new(10.0, 0.0), Point::new(15.0, 5.0), Point::new(5.0, 5.0));
+        let pair = Subpath { closed: true, knots: vec![a, b], op: PathOp::Subtract };
+        for (k, kept) in [(0, b), (1, a)] {
+            let mut p = Path::new(vec![pair.clone()]);
+            assert!(!delete_anchor_and_segments(&mut p, [0, k]).unwrap());
+            assert_eq!(p, Path::new(vec![Subpath { closed: false, knots: vec![kept], op: PathOp::Subtract }]), "k={k}");
+        }
+    }
+
+    #[test]
+    fn deleting_with_segments_trims_or_splits_an_open_subpath() {
+        let line = || Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)])]);
+        let mut p = line();
+        delete_anchor_and_segments(&mut p, [0, 0]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)])]));
+        let mut p = line();
+        delete_anchor_and_segments(&mut p, [0, 3]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)])]));
+        let mut p = line();
+        delete_anchor_and_segments(&mut p, [0, 1]).unwrap();
+        assert_eq!(p, Path::new(vec![Subpath::polyline(&[(0.0, 0.0)]), Subpath::polyline(&[(20.0, 0.0), (30.0, 0.0)])]));
+    }
+
+    #[test]
+    fn deleting_with_segments_keeps_the_last_anchor_rules_and_bad_indices() {
+        let mut p = tri();
+        p.subpaths.push(Subpath::polyline(&[(5.0, 5.0)]));
+        assert!(delete_anchor_and_segments(&mut p, [1, 0]).unwrap());
+        assert_eq!(p, tri());
+        let mut one = Path::new(vec![Subpath::polyline(&[(5.0, 5.0)])]);
+        assert!(delete_anchor_and_segments(&mut one, [0, 0]).is_err());
+        for k in [[0, 3], [1, 0], [usize::MAX, usize::MAX]] {
+            assert!(delete_anchor_and_segments(&mut p, k).is_err(), "{k:?}");
+        }
+        assert_eq!(p, tri());
+    }
+
+    #[test]
     fn deleting_a_subpaths_last_anchor_removes_it_but_never_the_last_anchor() {
         let mut p = tri();
         p.subpaths.push(Subpath::polyline(&[(5.0, 5.0)]));
@@ -626,3 +762,7 @@ mod tests {
         assert!(subpath_anchors(&p, 4).is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "edit_delete_last_anchor_tests.rs"]
+mod edit_delete_last_anchor_tests;
