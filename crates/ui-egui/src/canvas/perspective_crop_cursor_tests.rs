@@ -25,7 +25,7 @@ fn app() -> PhotocraftApp {
 /// The drag a press at `p` starts, with the quad left as it was.
 fn press(app: &mut PhotocraftApp, p: [f64; 2]) -> Option<Drag> {
     let quad = app.ui.perspective_crop;
-    assert!(pointer(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }));
+    assert!(pointer(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE));
     let drag = app.pcrop.drag.take();
     app.ui.perspective_crop = quad;
     drag
