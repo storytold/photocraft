@@ -756,6 +756,32 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
         None => b.errors.push(("toggle adjustment layer visibility + refresh".into(), "no adjustment layer".into())),
     }
 
+    // A brush dab on a layer with layer styles (#9330): small damage, but the layer's effect maps
+    // depend on its pixels. Each dab is undone untimed, so every rep paints the same tiles.
+    let _ = exec(&mut s, "layer.select", json!({"layer": target}));
+    // The canvas shows the setup, so the warm-up dab's refresh is its own damage, not a full one.
+    let _ = b.refresh(&s, true);
+    let canvas = u64::from(w) * u64::from(h);
+    b.time("brush dab 60 px on a styled layer + refresh", &mut s, reps, true, |b, s, i| {
+        let styled = s.active().and_then(|st| st.doc.layer(photocraft_doc::LayerId(target))).is_some_and(photocraft_compose::effects::has_effects);
+        if !styled {
+            return Err("the target has no effects".into());
+        }
+        // Inside panel 1 (the target), around its centre (`layered_doc`).
+        let (cx, cy) = ((w / 3 + w / 24 + w / 8) as i64, (h / 16 + h / 6) as i64);
+        let (x, y) = (cx + (i as i64 * 13) % 80 - 40, cy + (i as i64 * 29) % 80 - 40);
+        let t = Instant::now();
+        exec(s, "paint.stroke", json!({"points": [[x, y]], "size": 60, "hardness": 0.8, "color": "#c03020"}))?;
+        let v = b.after_cmd(s, t, false)?;
+        let px = b.last_px.get();
+        if px == 0 || px.saturating_mul(100) >= canvas.saturating_mul(5) {
+            return Err(format!("refreshed {px} px, not a small part of the canvas ({canvas} px)"));
+        }
+        exec(s, "edit.undo", json!({}))?;
+        b.refresh(s, false)?;
+        Ok(v)
+    });
+
     // A layer filling the canvas, with a drop shadow (#761) and without (#128): dragged, it
     // overhangs the canvas edge.
     let full = (|| -> Res<u64> {
@@ -1228,6 +1254,47 @@ fn background_job_scenarios(b: &mut Bench, sz: &Sizes) {
     if b.wanted(full) {
         full_refresh_frame_scenario(b, full, w, h);
     }
+    let styled = "app frame after moving a styled layer (CPU canvas)";
+    if b.wanted(styled) {
+        styled_move_frame_scenario(b, styled, sz.layered);
+    }
+}
+
+/// #9330: the whole app (kittest harness, CPU canvas) with the layered 20 MP document; each sample
+/// moves the styled layer 10 px and back and steps one frame. The GPU-less CPU canvas redraws only
+/// the move's damage (`render_reduced_damage`), the app's path after a lost device (#6564). Each
+/// frame checks that it was a CPU damage refresh covering a part of the canvas. Always 10 samples.
+fn styled_move_frame_scenario(b: &mut Bench, name: &str, (w, h): (u32, u32)) {
+    let (s, target) = match layered_doc(w, h) {
+        Ok(v) => v,
+        Err(e) => return b.errors.push((name.into(), e)),
+    };
+    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
+        photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        photocraft_ui_egui::PhotocraftApp::new(s, photocraft_ui_egui::Services::default())
+    });
+    harness.run_steps(6);
+    b.current = Some(name.to_string());
+    b.sampler.reset();
+    let mut samples = Vec::new();
+    let pixels = u64::from(w) * u64::from(h);
+    let run = (|| -> Res<()> {
+        // Each frame moves on to a new place, as a drag does: none is a position cached before.
+        for i in 0..10 {
+            harness.state_mut().run("layer.translate", json!({"layer": target, "dx": 6, "dy": 3}))?;
+            harness.state_mut().perf.last_refresh_px = 0;
+            let t = Instant::now();
+            harness.step();
+            samples.push(ms(t));
+            let perf = &harness.state().perf;
+            if perf.last_refresh != "rect" || perf.last_refresh_px == 0 || perf.last_refresh_px >= pixels / 4 {
+                return Err(format!("frame {i} refreshed {} px ({}), not a damage refresh < 1/4 of {pixels}", perf.last_refresh_px, perf.last_refresh));
+            }
+        }
+        Ok(())
+    })();
+    let st = std::mem::take(&mut harness.state_mut().session);
+    b.record(name, &st, &samples, &[], run);
 }
 
 /// #9328: the whole app (kittest harness, CPU canvas) with a 24 MP document; each sample toggles

@@ -882,3 +882,49 @@ issue = 9329
 bench = "perf_scenarios"
 row = "app frame after Paste Into on 24 MP (CPU canvas)"
 enforce = false  # new; no baseline yet
+
+# ---- #9330: CPU compositor parity (track only) ------------------------------------------------
+#
+# The new rows check they hit the path they claim: the dab touches a styled layer and redraws
+# under 5 % of the canvas; the CPU-canvas app frame is a damage refresh under a quarter of the
+# canvas.
+
+[[scenario]]
+id = "P108"
+title = "Move tool drag frame of a layer with layer styles, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "move tool drag frame, styled layer"
+enforce = false  # tracked only
+
+[[scenario]]
+id = "P109"
+title = "Move tool drag frame of a full-canvas layer with a drop shadow, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "move tool drag frame, full-canvas layer with drop shadow"
+enforce = false  # tracked only
+
+[[scenario]]
+id = "P110"
+title = "Brush dab 60 px on a layer with layer styles"
+issue = 9330
+bench = "perf_scenarios"
+row = "brush dab 60 px on a styled layer + refresh"
+enforce = false  # tracked only: GPU twin of P111
+
+[[scenario]]
+id = "P111"
+title = "Brush dab 60 px on a layer with layer styles, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "brush dab 60 px on a styled layer + refresh"
+enforce = false  # tracked only
+
+[[scenario]]
+id = "P112"
+title = "App frame: move a layer with layer styles on the CPU canvas, 20 MP"
+issue = 9330
+bench = "perf_scenarios"
+row = "app frame after moving a styled layer (CPU canvas)"
+enforce = false  # tracked only
