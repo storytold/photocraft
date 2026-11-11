@@ -648,7 +648,7 @@ fn agent_right_click_with_the_zoom_tool_opens_and_runs_the_view_menu() {
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
     let ids: Vec<_> = entries.iter().filter_map(|row| row.get("id").and_then(Value::as_str)).collect();
-    assert_eq!(ids, ["view.fitOnScreen", "view.fillScreen", "view.actualPixels", "view.twoHundredPercent", "view.printSize", "view.zoomIn", "view.zoomOut"]);
+    assert_eq!(ids, ["view.fitOnScreen", "view.actualPixels", "view.twoHundredPercent", "view.printSize", "view.zoomIn", "view.zoomOut"]);
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"select.all"}))["ok"], false);
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"view.twoHundredPercent"}))["ok"], true);
     assert_eq!(app.ui.views[0].zoom, 2.0);

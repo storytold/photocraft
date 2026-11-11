@@ -503,17 +503,14 @@ fn disabled_selection_rows_do_nothing() {
 }
 
 /// Photoshop's Zoom tool menu is Fit on Screen, 100%, 200%, Print Size, then Zoom In and Zoom
-/// Out after a separator (#6005); Fill Screen (the Hand tool's) keeps its place by Fit on Screen.
+/// Out after a separator (#6005), with no Fill Screen (#12069).
 #[test]
 fn view_menu_follows_photoshop_order() {
-    assert_eq!(
-        labels(VIEW_MENU),
-        vec![Some("Fit on Screen"), Some("Fill Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]
-    );
-    // Every row but Fill Screen (the Hand tool's options-bar button) is a View menu command.
+    assert_eq!(labels(VIEW_MENU), vec![Some("Fit on Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]);
+    // Every row is a View menu command.
     let app = app();
     let items = crate::menus::menu_items(&app);
-    for (label, id) in VIEW_MENU.iter().flatten().filter(|(_, id)| *id != FILL_SCREEN) {
+    for (label, id) in VIEW_MENU.iter().flatten() {
         assert!(items.iter().any(|i| i.id == *id), "{label}: unknown command {id}");
     }
 }
@@ -541,7 +538,7 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
         // The Hand's menu has only the fixed zooms (#12022).
         assert!(rows(&menu) == if tool == Tool::Hand { HAND_MENU } else { VIEW_MENU }, "{tool:?}: the view menu");
         assert_eq!(h.state().ui.views[0].zoom, zoom, "{tool:?}: the right-click alone does not zoom");
-        assert!(entry_enabled(h.state(), &menu, FILL_SCREEN) && entry_enabled(h.state(), &menu, "view.printSize"));
+        assert!(entry_enabled(h.state(), &menu, "view.fitOnScreen") && entry_enabled(h.state(), &menu, "view.printSize"));
         // Outside the image the pasteboard colour menu wins, as for the other tools.
         h.state_mut().ui.canvas_tool_menu = None;
         let outside = h.state().last_canvas_rect.min + vec2(5.0, 5.0);
@@ -715,7 +712,7 @@ fn view_menu_zoom_in_keeps_the_view_centre() {
 
 #[test]
 fn animated_zoom_off_view_menu_keeps_the_centre_without_a_transition() {
-    for command in ["view.zoomIn", "view.zoomOut", FILL_SCREEN] {
+    for command in ["view.zoomIn", "view.zoomOut"] {
         let mut app = zoom_app(400, 300);
         app.ui.tool = Tool::Zoom;
         app.run("prefs.set", json!({"values": {"general.animatedZoom": false, "tools.zoomClickedPointToCenter": false}})).unwrap();
@@ -732,9 +729,7 @@ fn animated_zoom_off_view_menu_keeps_the_centre_without_a_transition() {
         let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
         assert_eq!((xf.zoom, xf.center), (v.zoom, v.center), "{command}");
         assert!(v.zoom_anchor.is_none() && v.zoom_transition.is_none(), "{command}");
-        if command != FILL_SCREEN {
-            assert_eq!(v.center, center, "{command}: preserve the view centre");
-        }
+        assert_eq!(v.center, center, "{command}: preserve the view centre");
     }
 }
 
@@ -778,7 +773,7 @@ fn view_menu_zoom_in_centres_the_clicked_point_with_the_preference() {
 }
 
 #[test]
-fn view_menu_fits_fills_and_sets_fixed_zooms() {
+fn view_menu_fits_and_sets_fixed_zooms() {
     let mut app = zoom_app(400, 300);
     app.ui.tool = Tool::Zoom;
     let mut h = harness(app);
@@ -792,14 +787,9 @@ fn view_menu_fits_fills_and_sets_fixed_zooms() {
         h.state().ui.views[0].zoom
     };
     assert_eq!(pick(&mut h, "200%"), 2.0);
-    // Fill Screen: the image covers the whole canvas (one axis can overflow).
-    let fill = pick(&mut h, "Fill Screen") / ppp;
-    assert!(400.0 * fill >= area.x - 1.0 && 300.0 * fill >= area.y - 1.0, "fill {fill} for {area:?}");
-    assert!(400.0 * fill <= area.x + 1.0 || 300.0 * fill <= area.y + 1.0, "fill {fill} for {area:?}");
-    assert_eq!(h.state().ui.views[0].center, [200.0, 150.0]);
     // Fit on Screen: back to the whole image (capped at 100%, as on open).
     let fit = pick(&mut h, "Fit on Screen") / ppp;
-    assert!(400.0 * fit <= area.x && 300.0 * fit <= area.y && fit < fill, "fit {fit} fill {fill}");
+    assert!(400.0 * fit <= area.x && 300.0 * fit <= area.y && fit < 2.0 / ppp, "fit {fit} for {area:?}");
 }
 
 #[test]
@@ -820,7 +810,6 @@ fn view_menu_needs_finite_points_and_a_view_tool() {
     for (_, id) in VIEW_MENU.iter().flatten() {
         assert!(!entry_enabled(&app, &menu, id), "{id} is greyed out with no document");
     }
-    choose(&mut app, &Context::default(), FILL_SCREEN);
     choose(&mut app, &Context::default(), "view.zoomIn");
 }
 
