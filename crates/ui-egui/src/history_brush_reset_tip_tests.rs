@@ -42,12 +42,13 @@ fn scramble(app: &mut PhotocraftApp) {
     b.pressure_size = true;
     b.pressure_opacity = true;
     b.build_up = true;
+    b.build_up_rate = 17.0;
 }
 
 /// Check #12847's tip and options through both the command response and live brush state.
 fn assert_history_tip(app: &mut PhotocraftApp) {
     let b = app.run("brush.get", json!({})).unwrap();
-    for (key, expected) in [("size", 21.0), ("hardness", 0.0), ("spacing", 0.25), ("angle", 0.0), ("roundness", 1.0), ("opacity", 1.0), ("flow", 1.0)] {
+    for (key, expected) in [("size", 21.0), ("hardness", 0.0), ("spacing", 0.25), ("angle", 0.0), ("roundness", 1.0)] {
         assert_eq!(b[key].as_f64(), Some(expected), "{key}");
     }
     let brush = &app.session.tools.brush;
@@ -60,7 +61,9 @@ fn assert_history_tip(app: &mut PhotocraftApp) {
 fn assert_history_reset(app: &mut PhotocraftApp) {
     assert_history_tip(app);
     let brush = &app.session.tools.brush;
+    assert_eq!((brush.opacity, brush.flow), (1.0, 1.0));
     assert!(!brush.pressure_size && !brush.pressure_opacity && !brush.build_up);
+    assert_eq!(brush.build_up_rate, BrushSettings::default().build_up_rate);
 }
 
 /// Reset Tool restores the History Brush defaults while preserving session colors and seed.
@@ -107,7 +110,7 @@ fn the_options_bar_draws_21_on_the_brush_chip_without_a_smoothing_field() {
     assert!(!text.iter().any(|t| t.contains("Smoothing")), "{text:?}");
 }
 
-/// First use gets its own tip and retains pressure and airbrush settings from the outgoing brush.
+/// First use gets its own tip and retains opacity, flow, pressure and airbrush settings.
 #[test]
 fn first_pick_uses_its_own_tip_instead_of_the_outgoing_brush() {
     let mut app = app();
@@ -116,7 +119,9 @@ fn first_pick_uses_its_own_tip_instead_of_the_outgoing_brush() {
     pick(&mut app, Tool::HistoryBrush);
     assert_history_tip(&mut app);
     let brush = &app.session.tools.brush;
+    assert_eq!((brush.opacity, brush.flow), (0.3, 0.4));
     assert!(brush.pressure_size && brush.pressure_opacity && brush.build_up);
+    assert_eq!(brush.build_up_rate, 17.0);
     pick(&mut app, Tool::Pencil);
     assert_eq!(app.session.tools.brush.size, 57.0);
     assert_eq!(app.session.tools.brush.smoothing.amount, 0.7);
@@ -175,16 +180,15 @@ fn other_tools_keep_their_reset_tips_and_smoothing() {
         pick(&mut app, tool);
         scramble(&mut app);
         invoke(&mut app, "tool.reset", json!({}));
+        let default = BrushSettings::default();
         let expected = match tool {
             Tool::Brush => (13.0, 0.0, 0.25),
             Tool::BackgroundEraser => (13.0, 1.0, 0.25),
             Tool::Healing => (19.0, 1.0, 0.25),
             Tool::Burn | Tool::Dodge | Tool::Sponge => (65.0, 0.0, 0.25),
             Tool::CloneStamp => (21.0, 0.0, 0.25),
-            _ => {
-                let b = BrushSettings::default();
-                (b.size, b.hardness, b.spacing)
-            }
+            Tool::Remove => (19.0, default.hardness, default.spacing),
+            _ => (default.size, default.hardness, default.spacing),
         };
         let b = &app.session.tools.brush;
         assert_eq!((b.size, b.hardness, b.spacing), expected, "{tool:?}");

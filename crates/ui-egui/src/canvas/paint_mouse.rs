@@ -41,12 +41,14 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
-        // History Brush gets its own tip on first use, while pressure and airbrush keep their
-        // previous first-use behavior (#12847).
+        // History Brush starts with its own tip while retaining the current stroke settings (#12847).
         None if tool == Tool::HistoryBrush => BrushSettings {
+            opacity: current.opacity,
+            flow: current.flow,
             pressure_size: current.pressure_size,
             pressure_opacity: current.pressure_opacity,
             build_up: current.build_up,
+            build_up_rate: current.build_up_rate,
             ..fresh_brush(tool, &current)
         },
         // These tools start with their measured Reset Tool tips.
@@ -55,7 +57,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         }
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
-            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
+            // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
+            let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
+            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, size, ..current }
         }
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
@@ -91,13 +95,16 @@ const HEALING_BRUSH_TIP: (f32, f32, f32) = (19.0, 1.0, 0.25);
 const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
 /// Clone Stamp and History Brush reset to a 21 px soft round at 25 % spacing (#12601, #12847).
 const CLONE_STAMP_AND_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
+/// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
+/// measured, so they stay the default brush's.
+const REMOVE_TOOL_SIZE: f32 = 19.0;
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], and the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`]. Clone Stamp
-/// and History Brush use [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. The remaining
-/// tools keep the default tip.
+/// and History Brush use [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. The Remove tool
+/// uses [`REMOVE_TOOL_SIZE`] with the default hardness and spacing.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -109,6 +116,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_AND_HISTORY_BRUSH_TIP;
             brush.smoothing.amount = 0.0;
         }
+        Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
         _ => {}
     }
     session_fields(current, &brush)
