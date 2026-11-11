@@ -424,6 +424,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
 
 /// A filter-style dialog: scrolling parameters with the in-dialog preview window under them.
 fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) {
+    crate::filter_dialog::refresh_match_color_sources(&app.session, fields);
     // Color Settings: the monitor profile in use can change while it is open.
     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
         fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
@@ -929,12 +930,11 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     |f| f.contains_key(crate::actions::RESUME),
 ];
 
-/// Whether `key` is a marker that picks a dialog's handler. Automation may change the values of
-/// a dialog's fields, private ones included, but never add a marker: a dialog it opened would
-/// otherwise confirm through another dialog's handler, one its command was never judged for.
+/// Whether `key` is reserved to its dialog. Automation may change private fields but never
+/// add a route marker: that could select a handler its command was never judged for.
 pub fn is_route_marker(key: &str) -> bool {
     let probe = Fields::from_iter([(key.to_string(), Value::Bool(true))]);
-    ROUTES.iter().any(|owns| owns(&probe))
+    key == crate::filter_dialog::MATCH_COLOR_DESTINATION || ROUTES.iter().any(|owns| owns(&probe))
 }
 
 /// The file command a dialog's handler stands for when it reads or writes files itself, outside
@@ -974,7 +974,8 @@ fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
 
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
-fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
+fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Value, String> {
+    crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
     let Some(cmd) = d.fields.get("__command").and_then(Value::as_str).map(str::to_string) else {
         app.filter_preview = None;
         crate::actions::abandoned(app, &d.fields);
@@ -1055,8 +1056,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
     result
 }
 
-/// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
-/// that touches files itself, a valid guide layout, and Equalize's own document, layer and selection.
+/// Check child pickers, file access and dialog-specific inputs before removing the dialog.
+/// Equalize checks its document, layer and selection. A rejected preset choice leaves the prompt
+/// and its pending import available for retry.
 pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
@@ -1081,11 +1083,17 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
-    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::equalize_ui::owns(&d.fields)) {
-        crate::equalize_ui::validate(app, &d.fields)?;
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id) {
+        if crate::equalize_ui::owns(&d.fields) {
+            crate::equalize_ui::validate(app, &d.fields)?;
+        }
+        crate::filter_dialog::validate_match_color_destination(app, &d.fields)?;
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
+        crate::preset_group_prompt::replace_choice(&d.fields)?;
+    }
     Ok(())
 }
 
@@ -1306,6 +1314,8 @@ pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
 pub mod jpeg_options_ui;
+#[cfg(test)]
+mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
 pub mod liquify_ui;

@@ -283,7 +283,16 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             }
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
-            app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
+            app.ask_folder(|app, path| {
+                let r = app.run("file.import.videoFramesToLayers", json!({"path": &path}));
+                if let Ok(v) = &r {
+                    // #11113: a truncated GIF or WebP in the folder salvages its early frames;
+                    // the command's warning says the animation arrived shortened.
+                    let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                    crate::notices::footage_warnings(app, v, &what);
+                }
+                r.map_err(|e| e.to_string())
+            })
         }
         // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
         "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
@@ -378,6 +387,7 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
     result.map(Some)
 }
 
+/// Dispatch UI actions and dialogs, falling back to the engine for other commands.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
@@ -457,7 +467,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         // Edit › Stroke…: open its full options dialog when called from menus/context
         // menus. Explicit params from Actions, CLI, MCP and control channel execute directly.
         crate::stroke_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
-            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+            // A targeted smart-filter mask can admit Stroke without a raster layer.
+            if let Some(why) = app.session.disabled_reason_with(id, &app.with_mask_target(id, params)) {
                 return Err(why);
             }
             Ok(json!({"dialog": crate::stroke_ui::open(app)}))
@@ -519,7 +530,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         // Edit › Fill… from the menu or its shortcuts: the Fill dialog (with params: the engine).
         crate::fill_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
-            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+            // Admission follows the effective mask/channel target, just like enablement and run.
+            if let Some(why) = app.session.disabled_reason_with(id, &app.with_mask_target(id, params)) {
                 return Err(why);
             }
             Ok(json!({"dialog": crate::fill_ui::open(app)}))
@@ -559,6 +571,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         {
             let kind = &ls["layer.layerStyle.".len()..];
             crate::layer_style::open(app, Some(kind)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
+        }
+        "layer.videoLayers.reloadFrame" => {
+            let r = app.run(id, params)?;
+            // #11113: reloading a clip salvaged from a truncated GIF or WebP discloses the loss,
+            // as the import and replace-footage paths do.
+            crate::notices::footage_warnings(app, &r, crate::i18n::t("Reloaded the footage"));
+            Ok(r)
         }
         _ => app.run(id, params),
     }
