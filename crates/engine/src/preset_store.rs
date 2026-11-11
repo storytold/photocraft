@@ -921,10 +921,14 @@ impl PresetStore {
                 None => order.push((p.group.clone(), vec![i])),
             }
         }
-        // Groups that take presets they don't hold yet are written first, so a preset moved out of
-        // one group is never dropped from its old file before its new group is safely written.
-        order.sort_by_key(|(group, idx)| {
-            let held = self.groups.get(&group_file_name(group)).map(|s| &s.presets);
+        // The index keeps the groups in first-appearance order; they are written with the ones that
+        // take presets they don't hold yet first, so a preset moved out of one group is never dropped
+        // from its old file before its new group is safely written.
+        let files: Vec<String> = order.iter().map(|(group, _)| group_file_name(group)).collect();
+        let mut writes: Vec<usize> = (0..order.len()).collect();
+        writes.sort_by_key(|&k| {
+            let idx = &order[k].1;
+            let held = self.groups.get(&files[k]).map(|s| &s.presets);
             let gains = idx.iter().filter_map(|&i| presets.get(i)).any(|p| !held.is_some_and(|h| h.iter().any(|q| q.name == p.name)));
             !gains
         });
@@ -932,10 +936,9 @@ impl PresetStore {
         // changed on disk: the old files may be the only copy of the presets that failed, and the
         // next sync retries the rest.
         let mut failed = false;
-        let mut files = Vec::with_capacity(order.len());
-        for (group, idx) in &order {
-            let file = group_file_name(group);
-            files.push(file.clone());
+        for k in writes {
+            let (group, idx) = &order[k];
+            let file = files[k].clone();
             let unchanged = self
                 .groups
                 .get(&file)
