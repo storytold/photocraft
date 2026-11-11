@@ -53,6 +53,7 @@ enum Changed {
 }
 
 impl Changed {
+    /// Widen by `r`: `None` (unbounded) makes the whole change unknown.
     fn add(&mut self, r: Option<Rect>) {
         *self = match (*self, r) {
             (Changed::Unknown, _) | (_, None) => Changed::Unknown,
@@ -78,6 +79,7 @@ pub(crate) fn same_pixels(old: &Document, new: &Document) -> bool {
     area == Changed::Nothing
 }
 
+/// Whether everything but the layers and the selection is equal (size, color mode, guides...).
 fn same_outside_layers(old: &Document, new: &Document) -> bool {
     let strip = |d: &Document| Document { layers: Vec::new(), selection: None, ..d.clone() };
     strip(old) == strip(new)
@@ -97,6 +99,8 @@ fn diff_list(old: &[Layer], new: &[Layer], canvas: Rect, area: &mut Changed, vie
     }
 }
 
+/// Add where one layer differs between the two documents to `area`; set `view_only` when
+/// only a group was opened or closed.
 fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed, view_only: &mut bool) {
     if same_props(a, b) {
         if let (LayerContent::Group(ga), LayerContent::Group(gb)) = (&a.content, &b.content)
@@ -124,6 +128,7 @@ fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed, view_only:
 
 /// The layers equal except for a pixel layer's own pixels and a group's children.
 fn same_props(a: &Layer, b: &Layer) -> bool {
+    /// The layer without its pixels or children, and with its group closed.
     fn shell(l: &Layer) -> Layer {
         let mut l = l.clone();
         match &mut l.content {
@@ -174,6 +179,7 @@ mod tests {
     use photocraft_engine::Session;
     use serde_json::json;
 
+    /// A 2000 x 1000 transparent document with two pixel layers.
     fn doc_with_two_layers() -> (Session, photocraft_doc::LayerId, photocraft_doc::LayerId) {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 2000, "height": 1000, "background": "transparent"})).unwrap();
@@ -183,6 +189,7 @@ mod tests {
         (s, a, b)
     }
 
+    /// Fill `r` of layer `id` with red, as one step.
     fn paint(s: &mut Session, id: photocraft_doc::LayerId, r: Rect) {
         s.edit("paint", |doc, _| {
             doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(r, &[1.0, 0.0, 0.0, 1.0]);
@@ -191,6 +198,7 @@ mod tests {
         .unwrap();
     }
 
+    /// Painting claims the tiles it changed, not the untouched ones.
     #[test]
     fn painting_claims_only_the_changed_tiles() {
         let (mut s, a, _) = doc_with_two_layers();
@@ -203,6 +211,7 @@ mod tests {
         assert!(!r.contains(20, 20), "the untouched tile isn't claimed: {r:?}");
     }
 
+    /// Hiding a pixel layer claims its bounds, not the whole canvas.
     #[test]
     fn hiding_a_layer_claims_its_bounds() {
         let (mut s, _, b) = doc_with_two_layers();
@@ -215,6 +224,7 @@ mod tests {
         assert!(r.width() < 2000, "not the whole canvas: {r:?}");
     }
 
+    /// A structure change, no visible difference, or an adjustment layer: nothing bounded.
     #[test]
     fn anything_it_cannot_bound_redraws_everything() {
         let (mut s, a, _) = doc_with_two_layers();
@@ -238,6 +248,7 @@ mod tests {
         assert_eq!(changed_area(&before, &s.active().unwrap().doc.clone()), None);
     }
 
+    /// Expanding a group in the Layers panel claims an empty area: no pixels to redraw.
     #[test]
     fn opening_or_closing_a_group_changes_no_pixels() {
         let (mut s, a, _) = doc_with_two_layers();

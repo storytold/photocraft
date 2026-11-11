@@ -23,11 +23,15 @@ use crate::gpu_canvas::{CanvasSnapshot, GpuCanvas};
 
 /// One kept picture: the board's rectangle as the canvas showed it, and the document it showed.
 struct Shot {
+    /// What the canvas showed, or since [`follow`] the current document with the board shown,
+    /// which composites the same in the picture's rectangle and keeps no older tiles alive.
     doc: Arc<Document>,
     display_key: u64,
     snap: CanvasSnapshot,
     /// For least-recently-used eviction.
     used: u64,
+    /// When [`follow`] last moved `doc` up to the current document (`now_ms`).
+    followed: f64,
 }
 
 /// The kept pictures of every open document's hidden layers.
@@ -37,6 +41,7 @@ pub(crate) struct BoardCache {
     clock: u64,
 }
 
+/// Off with `PHOTOCRAFT_NO_BOARD_CACHE`, read once.
 fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PHOTOCRAFT_NO_BOARD_CACHE").is_none())
@@ -63,6 +68,7 @@ fn reach(doc: &Document, l: &photocraft_doc::Layer) -> Option<Rect> {
     (r.size().area() >= MIN_PX).then_some(r)
 }
 
+/// Whether the two rectangles share a pixel.
 fn meets(a: &Rect, b: &Rect) -> bool {
     !a.intersect(b).is_empty()
 }
@@ -82,6 +88,9 @@ pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, doc: &A
     }
     let pending = super::sweep::pending(app, id);
     let before: HashMap<LayerId, &photocraft_doc::Layer> = shown.walk().into_iter().map(|(_, _, l)| (l.id, l)).collect();
+    let toggled: Vec<LayerId> =
+        doc.walk().into_iter().filter(|(_, _, l)| before.get(&l.id).is_some_and(|was| was.visible != l.visible)).map(|(_, _, l)| l.id).collect();
+    follow(app, id, doc, &toggled);
     let mut restored: Vec<Rect> = Vec::new();
     for (_, _, l) in doc.walk() {
         let Some(was) = before.get(&l.id) else { continue };
@@ -94,9 +103,9 @@ pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, doc: &A
             if pending.iter().any(|b| meets(b, &rect)) {
                 continue;
             }
-            keep(app, gpu, id, l.id, &l.name, rect, &shown, display_key);
+            keep(app, gpu, id, l.id, rect, &shown, display_key);
         } else if let Some(rect) = reach(doc, l).filter(|r| meets(r, &damage))
-            && put_back(app, gpu, id, l.id, &l.name, rect, doc, display_key)
+            && put_back(app, gpu, id, l.id, rect, doc, display_key)
         {
             restored.push(rect);
         }
@@ -104,8 +113,9 @@ pub(crate) fn apply(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, doc: &A
     if restored.iter().any(|r| r.contains_rect(&damage)) { Rect::EMPTY } else { damage }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn keep(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, name: &str, rect: Rect, shown: &Arc<Document>, display_key: u64) {
+/// Keep what the display texture of document `id` shows over `rect` as layer `board`'s picture,
+/// taken when the canvas showed `shown`, evicting the least recently used pictures to fit.
+fn keep(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, rect: Rect, shown: &Arc<Document>, display_key: u64) {
     let Some(snap) = gpu.snapshot_rect(id.0, rect) else { return };
     let limit = budget(gpu);
     if snap.bytes > limit {
@@ -119,18 +129,21 @@ fn keep(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, nam
         cache.shots.remove(&oldest);
     }
     cache.clock += 1;
-    log::info!("storyboard cache: kept \"{name}\" ({}x{}, {} MB; {} kept)", rect.width(), rect.height(), snap.bytes >> 20, cache.shots.len() + 1);
-    cache.shots.insert((id, board), Shot { doc: shown.clone(), display_key, snap, used: cache.clock });
+    // The layer's id, not its name: names are the user's text and stay out of the log.
+    log::info!("storyboard cache: kept layer {} ({}x{}, {} MB; {} kept)", board.0, rect.width(), rect.height(), snap.bytes >> 20, cache.shots.len() + 1);
+    let followed = crate::gpu_canvas::now_ms();
+    cache.shots.insert((id, board), Shot { doc: shown.clone(), display_key, snap, used: cache.clock, followed });
 }
 
-#[allow(clippy::too_many_arguments)]
-fn put_back(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, name: &str, rect: Rect, doc: &Document, display_key: u64) -> bool {
+/// Put layer `board`'s kept picture back over `rect` of document `id`'s display texture, if it is
+/// still exact for `doc`; drops a picture that isn't. Whether it went back.
+fn put_back(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId, rect: Rect, doc: &Document, display_key: u64) -> bool {
     let cache = &mut app.board_cache;
     let Some(shot) = cache.shots.get_mut(&(id, board)) else { return false };
     // Exact only if nothing that composites inside the rectangle changed since it was kept.
     let same = shot.display_key == display_key && shot.snap.rect == rect && still_exact(&shot.doc, doc, rect);
     if !same {
-        log::info!("storyboard cache: \"{name}\" changed since it was kept; redrawing it");
+        log::info!("storyboard cache: layer {} changed since it was kept; redrawing it", board.0);
         cache.shots.remove(&(id, board));
         return false;
     }
@@ -140,20 +153,68 @@ fn put_back(app: &mut PhotocraftApp, gpu: &GpuCanvas, id: DocId, board: LayerId,
     }
     cache.clock += 1;
     shot.used = cache.clock;
-    log::info!("storyboard cache: put back \"{name}\" instead of redrawing {:.0} MP", rect.size().area() as f64 / 1_048_576.0);
+    log::info!("storyboard cache: put back layer {} instead of redrawing {:.0} MP", board.0, rect.size().area() as f64 / 1_048_576.0);
     true
 }
 
 /// Whether a picture of `rect` taken when the canvas showed `kept` is what `now` shows there:
 /// nothing that composites inside it changed since.
+/// A change just outside the rectangle counts when a layer effect (a shadow, a stroke) can carry
+/// it inside.
 fn still_exact(kept: &Document, now: &Document, rect: Rect) -> bool {
-    super::doc_diff::same_pixels(kept, now) || super::doc_diff::changed_area(kept, now).is_some_and(|r| r.is_empty() || !meets(&r, &rect))
+    if super::doc_diff::same_pixels(kept, now) {
+        return true;
+    }
+    let reach = super::textures::effect_reach(&kept.layers).max(super::textures::effect_reach(&now.layers));
+    super::doc_diff::changed_area(kept, now).is_some_and(|r| r.is_empty() || !meets(&r.inflate(reach), &rect))
+}
+
+/// How often (ms) [`follow`] moves a kept picture's document up to the current one.
+const FOLLOW_MS: f64 = 1000.0;
+
+/// Move document `id`'s kept pictures up to `doc`, except those of the `toggled` layers (being
+/// kept or put back now): a picture still exact for `doc` with its board shown now holds that
+/// document (with the board shown) instead of the older one it was taken from, so it keeps no
+/// tiles alive that History has let go, outside Memory Usage; a picture that isn't exact any
+/// more is dropped, as showing its board would redraw it anyway. At most once a second for each
+/// picture, so painting doesn't compare documents every frame.
+fn follow(app: &mut PhotocraftApp, id: DocId, doc: &Arc<Document>, toggled: &[LayerId]) {
+    let now_ms = crate::gpu_canvas::now_ms();
+    let mut stale = Vec::new();
+    for (&(d, board), shot) in &mut app.board_cache.shots {
+        if d != id || toggled.contains(&board) || now_ms - shot.followed < FOLLOW_MS {
+            continue;
+        }
+        let mut now = (**doc).clone();
+        let Some(layer) = now.layer_mut(board) else {
+            stale.push((d, board));
+            continue;
+        };
+        layer.visible = true;
+        if still_exact(&shot.doc, &now, shot.snap.rect) {
+            shot.doc = Arc::new(now);
+            shot.followed = now_ms;
+        } else {
+            stale.push((d, board));
+        }
+    }
+    for k in stale {
+        app.board_cache.shots.remove(&k);
+    }
+}
+
+impl BoardCache {
+    /// Forget the pictures of documents that `live` says are closed: their GPU snapshots and the
+    /// documents they hold.
+    pub(crate) fn retain_docs(&mut self, live: impl Fn(DocId) -> bool) {
+        self.shots.retain(|(doc, _), _| live(*doc));
+    }
 }
 
 /// Forget the pictures of closed documents.
 fn retain(app: &mut PhotocraftApp) {
     let live: Vec<DocId> = app.session.documents().iter().map(|d| d.doc.id).collect();
-    app.board_cache.shots.retain(|(doc, _), _| live.contains(doc));
+    app.board_cache.retain_docs(|doc| live.contains(&doc));
 }
 
 #[cfg(test)]
@@ -184,6 +245,7 @@ mod tests {
         (s, left)
     }
 
+    /// A kept picture is exact only while nothing that composites inside it changed.
     #[test]
     fn a_kept_picture_is_used_only_while_nothing_under_it_changed() {
         let (mut s, left) = halves();
@@ -209,5 +271,33 @@ mod tests {
         })
         .unwrap();
         assert!(!still_exact(&kept, &doc(&s), rect), "something under it changed");
+    }
+
+    /// A change outside the picture counts when a layer effect reaches into it: the right half's
+    /// 150 px stroke covers the left half's edge, so painting just past the edge is a change there.
+    #[test]
+    fn a_change_an_effect_carries_into_the_picture_counts() {
+        let paint = |s: &mut Session| {
+            let right = s.active().unwrap().doc.layers[1].id;
+            s.edit("paint", |doc, _| {
+                doc.layer_mut(right).unwrap().surface_mut().unwrap().fill_rect(Rect::new(3100, 100, 3110, 110), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        };
+        // Without the stroke, a change on the next tile over is elsewhere.
+        let (mut s, left) = halves();
+        let kept = s.active().unwrap().doc.clone();
+        let rect = reach(&kept, kept.layer(left).unwrap()).unwrap();
+        paint(&mut s);
+        assert!(still_exact(&kept, &s.active().unwrap().doc.clone(), rect), "out of reach");
+        // With it, the same change reaches the picture.
+        let (mut s, left) = halves();
+        s.execute("layer.layerStyle.stroke", json!({"size": 150})).unwrap();
+        let kept = s.active().unwrap().doc.clone();
+        assert!(super::super::textures::effect_reach(&kept.layers) >= 150, "the stroke reaches 150 px");
+        let rect = reach(&kept, kept.layer(left).unwrap()).unwrap();
+        paint(&mut s);
+        assert!(!still_exact(&kept, &s.active().unwrap().doc.clone(), rect), "the stroke carries it inside");
     }
 }
