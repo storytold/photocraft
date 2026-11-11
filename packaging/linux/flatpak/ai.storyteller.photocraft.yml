@@ -101,7 +101,7 @@ modules:
         CRAFT_I18N_DIR: /run/build/photocraft/craft-i18n
         CRAFT_I18N_REQUIRED: '1'
     build-commands:
-      - cargo --offline build --release --locked -p photocraft -p photocraft-cli --features heif
+      - cargo --offline build --release --locked -p photocraft -p photocraft-cli --features heif,jxl
       - install -Dm755 target/release/photocraft /app/bin/photocraft
       - install -Dm755 target/release/photocraft-cli /app/bin/photocraft-cli
       - install -Dm644 docs/mcp.md /app/share/doc/photocraft/mcp.md

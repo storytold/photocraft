@@ -40,6 +40,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("psd", Class::Standalone),
     ("codecs", Class::Standalone),
     // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.
+    // Optional JPEG XL decoder (jxl-oxide), used only by `codecs` behind its `jxl` feature.
+    ("jxl", Class::Standalone),
     // IPP client for CUPS printing (pure Rust, no dependencies), used by `engine` on Unix.
     ("ipp", Class::Standalone),
     ("raw", Class::Standalone),
@@ -89,9 +91,10 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 }
 
 /// The only workspace dependencies a standalone crate may have: (from, to), both standalone and
-/// both publishable. None at present: the one there was, `codecs` → `heif`, ended when the HEIF
-/// decoder moved to craft-libs as `craft-heif` (craft-libs#784).
-pub const STANDALONE_EXCEPTIONS: &[(&str, &str)] = &[];
+/// both publishable. `codecs` uses the optional `jxl` decoder crate behind its `jxl` feature, so
+/// distributors can leave JPEG XL decoding out of a build; the decoder crate depends on no workspace
+/// crate.
+pub const STANDALONE_EXCEPTIONS: &[(&str, &str)] = &[("codecs", "jxl")];
 
 fn standalone_exception(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
@@ -322,9 +325,17 @@ mod tests {
     }
 
     #[test]
-    fn standalone_crates_have_no_exceptions() {
-        // Standalone crates may not use each other, in either direction.
-        for (from, to) in [("photocraft-codecs", "photocraft-psd"), ("photocraft-psd", "photocraft-codecs")] {
+    fn standalone_exception_is_exactly_codecs_to_its_jxl_decoder() {
+        assert!(check(&[c("photocraft-codecs", &[("photocraft-jxl", Normal, true)])]).is_empty());
+        assert!(check(&[c("photocraft-codecs", &[("photocraft-jxl", Dev, true)])]).is_empty());
+        // Not the other way round, not for other standalone crates, and the decoder stays dependency-free.
+        for (from, to) in [
+            ("photocraft-jxl", "photocraft-codecs"),
+            ("photocraft-psd", "photocraft-jxl"),
+            ("photocraft-jxl", "photocraft-geom"),
+            ("photocraft-codecs", "photocraft-psd"),
+            ("photocraft-psd", "photocraft-codecs"),
+        ] {
             let v = check(&[c(from, &[(to, Normal, true)])]);
             assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{from} -> {to}");
         }

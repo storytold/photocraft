@@ -13,6 +13,9 @@ default = ["gpu"]
 heif = ["photocraft-codecs/heif"]
 # Optional native GPU rendering backend, enabled by default in native CLI builds.
 gpu = ["photocraft-automation/gpu"]
+# Open JPEG XL images (the optional photocraft-jxl crate); official builds build with
+# `--features heif,jxl`.
+jxl = ["photocraft-codecs/jxl"]
 
 [lints]
 workspace = true
