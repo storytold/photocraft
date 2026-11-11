@@ -775,23 +775,42 @@ fn prepared_warnings(p: &Prepared) -> Vec<DecodeWarning> {
     warnings
 }
 
-/// Checks one directory and lays it out for decoding. `whole`: the image is decoded into one
-/// buffer, which `limits.max_alloc` bounds; otherwise only its size is checked here. Chunk
-/// tables larger than `limits.max_alloc` are refused before the `tiff` crate reads them.
-fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prepared, CodecError> {
-    // The values the `tiff` crate reads must exist: a count past the end of the file is
-    // neither allocated nor read.
+/// The structural tags the `tiff` crate reads must exist (a count past the end of the file is
+/// neither allocated nor read) and appear once: this parser reads the first entry of a tag and
+/// the `tiff` crate the last, so a repeated structural tag (a small SamplesPerPixel first, a
+/// large one last) would be checked here with one value and sized by the crate with another.
+fn check_structural_tags(f: &File<'_>, dir: &Ifd) -> Result<(), CodecError> {
     if let Some(e) = dir.entries.iter().find(|e| ifd::STRUCTURAL_TAGS.contains(&e.tag) && f.data(e).is_none()) {
         return Err(err(format!("tag {} points past the end of the file", e.tag)));
     }
-    // This parser reads the first entry of a tag and the `tiff` crate the last, so a repeated
-    // structural tag (a small SamplesPerPixel first, a large one last) would be checked here with
-    // one value and sized by the crate with another.
     let mut structural: Vec<u16> = dir.entries.iter().map(|e| e.tag).filter(|t| ifd::STRUCTURAL_TAGS.contains(t)).collect();
     structural.sort_unstable();
     if let Some(w) = structural.windows(2).find(|w| w[0] == w[1]) {
         return Err(err(format!("tag {} appears more than once", w[0])));
     }
+    Ok(())
+}
+
+/// The bytes the first `expected` strips or tiles hold inside the file, never more than the file.
+fn held_bytes(f: &File<'_>, (offsets, sizes): (&ifd::Entry, &ifd::Entry), expected: u64) -> u64 {
+    let len = f.b.len() as u64;
+    let mut held = 0u64;
+    for i in 0..expected {
+        if held >= len {
+            break;
+        }
+        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
+            held = held.saturating_add(n.min(len.saturating_sub(at)));
+        }
+    }
+    held.min(len)
+}
+
+/// Checks one directory and lays it out for decoding. `whole`: the image is decoded into one
+/// buffer, which `limits.max_alloc` bounds; otherwise only its size is checked here. Chunk
+/// tables larger than `limits.max_alloc` are refused before the `tiff` crate reads them.
+fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prepared, CodecError> {
+    check_structural_tags(f, dir)?;
     let need = |tag: u16, name: &str| f.tag_uint(dir, tag).ok_or_else(|| err(format!("missing or unreadable {name}")));
     let w = u32::try_from(need(ifd::TAG_WIDTH, "ImageWidth")?).map_err(|_| err("ImageWidth out of range"))?;
     let h = u32::try_from(need(ifd::TAG_HEIGHT, "ImageLength")?).map_err(|_| err("ImageLength out of range"))?;
@@ -934,21 +953,11 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
         4 => cw.clamp(4096, 65_535),
         _ => 4096,
     };
-    let len = f.b.len() as u64;
     let (offsets, sizes) = (
         dir.get(offsets_tag).ok_or_else(|| err("missing strip or tile offsets"))?,
         dir.get(counts_tag).ok_or_else(|| err("missing strip or tile byte counts"))?,
     );
-    let mut held = 0u64;
-    for i in 0..expected {
-        if held >= len {
-            break;
-        }
-        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
-            held = held.saturating_add(n.min(len.saturating_sub(at)));
-        }
-    }
-    let held = held.min(len);
+    let held = held_bytes(f, (offsets, sizes), expected);
     if stored > held.saturating_mul(ratio).saturating_add(1 << 20) {
         return Err(err(format!("the strips or tiles in this file hold {held} bytes, too few for a {w}x{h} image")));
     }
