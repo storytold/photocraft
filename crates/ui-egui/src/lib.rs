@@ -393,6 +393,10 @@ pub struct PhotocraftApp {
     /// Commands made while `finishing_stroke` was still finishing: they run, in order, once
     /// it has committed (`canvas::run_queued_commands`).
     queued_commands: Vec<(String, Value)>,
+    /// A released stroke committed this frame: the canvas shows the commit before anything else
+    /// lands on the document (the queued commands, a new press), so it redraws only the stroke's
+    /// last steps, not the whole canvas (`canvas::land_finished_stroke`).
+    stroke_landed: bool,
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
     /// refresh only what it drew after the step they showed (`canvas::damage_since`).
     committed_stroke: Option<canvas::CommittedStroke>,

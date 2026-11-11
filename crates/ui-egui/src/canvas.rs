@@ -108,7 +108,7 @@ pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{
     ClonePreviewCache, CommittedStroke, FinishingStroke, LiveStroke, cancel_mixer_on_context_change, flush_finishing_stroke, freehand_tool,
-    runs_while_a_stroke_finishes, spread_ms, still_finishing, strokes_live, unsmoothed_line,
+    land_finished_stroke, runs_while_a_stroke_finishes, spread_ms, still_finishing, strokes_live, unsmoothed_line,
 };
 use strokes::{
     HOLD_REPEAT_MS, continue_finishing_stroke, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves,
@@ -1248,8 +1248,9 @@ fn handle_canvas_tool_stroke(
     let now_ms = ui.input(|i| i.time) * 1000.0;
     app.stylus.clock_ms = now_ms;
     // A released stroke still finishing shows its new steps and commits once done (a new press
-    // commits it first: `tool_event`).
-    if continue_finishing_stroke(app) {
+    // commits it first: `tool_event`). Committed, the next frame runs the commands that waited
+    // for it (`PhotocraftApp::logic`).
+    if continue_finishing_stroke(app) || app.stroke_landed {
         ctx.request_repaint();
     }
     // Live painting tools start on the press, not once the pointer passes egui's click

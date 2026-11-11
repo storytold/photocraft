@@ -61,6 +61,7 @@ impl PhotocraftApp {
             live_stroke: None,
             finishing_stroke: None,
             queued_commands: Vec::new(),
+            stroke_landed: false,
             committed_stroke: None,
             retouch_from_live: false,
             trail: None,
@@ -258,6 +259,11 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // The commands that waited for a stroke committed last frame, now that the canvas has
+        // shown it (`canvas::land_finished_stroke`).
+        if canvas::land_finished_stroke(self) {
+            ctx.request_repaint();
+        }
         self.logic_frame(ctx, frame);
         self.finish_type_reset_logic(ctx);
     }

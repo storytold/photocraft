@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::strokes::{continue_finishing_stroke, feed_live_stroke_waiting, live_stroke_busy, still_finishing, stroke_command};
+use super::strokes::{continue_finishing_stroke, feed_live_stroke_waiting, land_finished_stroke, live_stroke_busy, still_finishing, stroke_command};
 use super::{PhotocraftApp, Tool, ToolEvent, tool_event};
 
 const M: egui::Modifiers = egui::Modifiers::NONE;
@@ -41,13 +41,20 @@ fn release_while_the_thread_is_busy(app: &mut PhotocraftApp) -> impl FnOnce() + 
     release
 }
 
-/// Run frames until the released stroke has committed.
-fn finish(app: &mut PhotocraftApp) {
+/// Run frames until the released stroke has committed (`commit`), without the next frame.
+fn commit(app: &mut PhotocraftApp) {
     let start = Instant::now();
     while continue_finishing_stroke(app) {
         assert!(start.elapsed() < Duration::from_secs(10), "the stroke finishes");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Run frames until the released stroke has committed, and the next frame, which runs the
+/// commands that waited for it.
+fn finish(app: &mut PhotocraftApp) {
+    commit(app);
+    land_finished_stroke(app);
 }
 
 /// The command the release ran, undone and run again from its params: the pixels must match.
@@ -168,4 +175,32 @@ fn undo_right_after_a_release_undoes_the_stroke() {
     finish(&mut app);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps, "the stroke was undone");
     assert_eq!(*app.session.active().unwrap().doc, *before, "back to the document before the stroke");
+}
+
+/// Nothing else lands on the document in the frame a released stroke commits, so the canvas shows
+/// the commit first and redraws only the stroke's last steps. Undo queued behind the stroke ran in
+/// that frame and made it redraw the whole canvas (2 s on a 1.1-gigapixel storyboard, long enough
+/// for Wayland to drop the window). A command queued behind it, and a new press, wait a frame.
+#[test]
+fn nothing_else_lands_in_the_frame_a_stroke_commits() {
+    let mut app = app();
+    let (steps, layers) = (app.session.active().unwrap().history.past_len(), app.session.active().unwrap().doc.layers.len());
+    let painted = app.session.active().unwrap().active_layer.unwrap();
+    let release = release_while_the_thread_is_busy(&mut app);
+    assert_eq!(app.run("edit.undo", json!({})).unwrap()["queued"], json!(true));
+    release();
+    commit(&mut app);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "committed; the Undo waits for the next frame");
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, M);
+    assert!(app.drag.is_none(), "a press in the commit's frame is turned away");
+    assert_eq!(app.run("layer.new.layer", json!({})).unwrap()["queued"], json!(true), "a command queues behind the Undo");
+
+    assert!(land_finished_stroke(&mut app), "the next frame runs them");
+    let doc = app.session.active().unwrap().doc.clone();
+    assert_eq!(doc.layer(painted).unwrap().surface().unwrap().rgba(80, 30)[3], 0.0, "the Undo took the stroke back");
+    assert_eq!(doc.layers.len(), layers + 1, "then the new layer");
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, M);
+    assert!(app.drag.is_some(), "a press now paints");
+    tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, M);
+    finish(&mut app);
 }

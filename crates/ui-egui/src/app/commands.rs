@@ -11,7 +11,11 @@ impl PhotocraftApp {
         // window doesn't wait for it: a command made by hand runs once the stroke has committed,
         // as if made after it. Automation gets an error to retry instead: queued, its command
         // would run after the request returned, its result lost and outside its authorization.
-        if self.run_depth == 0 && self.finishing_stroke.is_some() && !canvas::runs_while_a_stroke_finishes(id) && !canvas::flush_finishing_stroke(self) {
+        if self.run_depth == 0
+            && (self.finishing_stroke.is_some() || self.stroke_landed)
+            && !canvas::runs_while_a_stroke_finishes(id)
+            && !canvas::flush_finishing_stroke(self)
+        {
             if self.automation_input || self.session.authorize.is_some() {
                 return Err(canvas::still_finishing().into());
             }

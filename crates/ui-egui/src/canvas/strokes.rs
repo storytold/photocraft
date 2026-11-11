@@ -846,12 +846,12 @@ pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
                 f.commit_now(app);
             }
         }
-        run_queued_commands(app);
+        app.stroke_landed = true;
         return false;
     }
     if !take_finishing_steps(app, std::time::Duration::ZERO) {
         f.commit_now(app);
-        run_queued_commands(app);
+        app.stroke_landed = true;
         return false;
     }
     if app.live_stroke.as_ref().is_some_and(|l| l.paint.busy()) {
@@ -867,7 +867,7 @@ pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
         }
         None => {
             f.commit_now(app);
-            run_queued_commands(app);
+            app.stroke_landed = true;
             false
         }
     }
@@ -925,17 +925,19 @@ fn commit_prepared(app: &mut PhotocraftApp, f: FinishingStroke, prepared: Prepar
     run_brush_commit(app, f.tool, f.params, doc, key, damage);
 }
 
-/// Commit a released stroke that is still finishing, before a new press or a command; true once
-/// it is committed (or there was none). It gets [`FLUSH_WAIT`]: still not done after that, it
-/// stays, and the press or command is turned away rather than the window waiting.
+/// Commit a released stroke that is still finishing, before a new press or a command; true when
+/// there is none left and the canvas has shown the last commit. It gets [`FLUSH_WAIT`]: still not
+/// done after that, it stays, and the press or command is turned away rather than the window
+/// waiting. Committed now, the press or command waits a frame too: landing on the document in the
+/// commit's frame, it made the canvas redraw everything (2 s on a 1.1-gigapixel storyboard).
 pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
     if app.finishing_stroke.is_none() {
-        return true;
+        return !app.stroke_landed;
     }
     let start = web_time::Instant::now();
     loop {
         if !continue_finishing_stroke(app) {
-            return true;
+            return !app.stroke_landed;
         }
         let left = FLUSH_WAIT.saturating_sub(start.elapsed());
         if left.is_zero() {
@@ -946,6 +948,16 @@ pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
             std::thread::sleep(wait);
         }
     }
+}
+
+/// The frame after a released stroke committed (`stroke_landed`): run the commands that waited
+/// for it. Whether it did.
+pub(crate) fn land_finished_stroke(app: &mut PhotocraftApp) -> bool {
+    if !std::mem::take(&mut app.stroke_landed) {
+        return false;
+    }
+    run_queued_commands(app);
+    true
 }
 
 /// Run the commands that waited for a released stroke, in order. A command that failed is
