@@ -95,6 +95,11 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
+    // Here, so the live preview refuses too. Only the History Brush: the Art History Brush and
+    // Erase to History were not measured and keep converting.
+    if cmd == "paint.historyBrush" && !flag(p, "eraseToHistory", false) {
+        crate::history_source_cmds::refuse_other_format(st, &source_doc)?;
+    }
     let missing = || EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into());
     match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
         Ok(surf) => Ok(surf.clone()),
@@ -136,8 +141,9 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     reject_huge_stroke(CMD, &stroke)?;
     let live = s.live_commit.take().filter(|l| l.matches(s, CMD, p, &stroke.points));
     let from_live = live.is_some();
+    let erase = flag(p, "eraseToHistory", false);
     let src_surface = history_source(s, id, p, CMD)?;
-    let label = if flag(p, "eraseToHistory", false) { "History Eraser" } else { "History Brush" };
+    let label = if erase { "History Eraser" } else { "History Brush" };
     let dmg = run_stroke(s, label, id, p, |_, surf, sel, lock| {
         if let Some(l) = live {
             *surf = l.surface;
