@@ -1743,10 +1743,10 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
 #[cfg(test)]
 mod cam_menu_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
-mod count_tests;
+pub(crate) mod count_tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
