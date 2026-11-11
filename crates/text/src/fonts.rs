@@ -78,6 +78,9 @@ pub const LAO_FAMILIES: &[&str] = &["Lao Sangam MN", "Lao MN", "Lao UI", "Noto S
 /// Myanmar/Burmese-capable families: macOS (Myanmar Sangam MN, Myanmar MN), Windows (Myanmar Text)
 /// and Linux (Noto).
 pub const MYANMAR_FAMILIES: &[&str] = &["Myanmar Sangam MN", "Myanmar MN", "Myanmar Text", "Noto Sans Myanmar"];
+/// Georgian-capable families: craft-fonts and Linux (Noto), Windows (Sylfaen), macOS (".SF Georgian",
+/// a hidden system face). Georgian in a font without Mkhedruli glyphs falls back to these.
+pub const GEORGIAN_FAMILIES: &[&str] = &["Noto Sans Georgian", "Noto Serif Georgian", "Sylfaen", ".SF Georgian"];
 /// Indic-script families for document text. Windows has `Nirmala UI` for all nine scripts (from
 /// Windows 8); macOS has the Kohinoor and Sangam MN families; Linux has Noto Sans. Indic text in a
 /// font without these glyphs had no candidate to fall back to and drew .notdef boxes (#218).
@@ -121,6 +124,7 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
     v.extend_from_slice(KHMER_FAMILIES);
     v.extend_from_slice(LAO_FAMILIES);
     v.extend_from_slice(MYANMAR_FAMILIES);
+    v.extend_from_slice(GEORGIAN_FAMILIES);
     for fams in INDIC_FAMILIES {
         for f in *fams {
             // Nirmala UI covers all nine scripts and is listed by each; probe it once.
@@ -196,6 +200,9 @@ pub struct FontDb {
     /// [`Self::fallback_stack`] (#1909). Off, only the default family shapes the text.
     missing_glyph_protection: bool,
     face_cache: HashMap<String, Vec<FaceInfo>>,
+    /// Each family's [`crate::FamilyTraits`] (font menu filters), filled lazily; `None` for a
+    /// family whose fonts can't be read.
+    traits_cache: HashMap<String, Option<crate::FamilyTraits>>,
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
@@ -218,6 +225,7 @@ impl FontDb {
             fallbacks: Vec::new(),
             missing_glyph_protection: true,
             face_cache: HashMap::new(),
+            traits_cache: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
         };
@@ -281,6 +289,7 @@ impl FontDb {
             }
             self.ps_cache.clear();
             self.face_cache.clear();
+            self.traits_cache.clear();
             self.refresh_generics();
         }
     }
@@ -288,6 +297,12 @@ impl FontDb {
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
         self.register_blob(Blob::new(Arc::new(bytes)), None)
+    }
+
+    /// [`Self::register_font_data`] with the family name overridden, so an embedded subset can be
+    /// registered under a name that cannot shadow an installed full family. Returns the names added.
+    pub fn register_font_data_as(&mut self, bytes: Vec<u8>, family: &str) -> Vec<String> {
+        self.register_blob(Blob::new(Arc::new(bytes)), Some(family))
     }
 
     /// Registers embedded font data without copying it.
@@ -316,6 +331,7 @@ impl FontDb {
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
         self.ps_cache.clear();
         self.face_cache.clear();
+        self.traits_cache.clear();
         self.refresh_generics();
         GENERATION.fetch_add(1, Ordering::Relaxed);
         if self.shared {
@@ -473,6 +489,24 @@ impl FontDb {
             .collect();
         self.face_cache.insert(family.to_string(), faces.clone());
         faces
+    }
+
+    /// What the font menu filters and sorts a family by ([`crate::font_class`]), read from its
+    /// regular face (the upright face nearest weight 400). `None` when the family is unknown or
+    /// none of its fonts can be read.
+    pub fn family_traits(&mut self, family: &str) -> Option<crate::FamilyTraits> {
+        if let Some(t) = self.traits_cache.get(family) {
+            return t.clone();
+        }
+        let traits = (|| {
+            let info = self.fcx.collection.family_by_name(family)?;
+            let face = info.fonts().iter().min_by_key(|f| (!matches!(f.style(), FontStyle::Normal), (f.weight().value() - 400.0).abs() as u32))?.clone();
+            let blob = face.load(Some(&mut self.fcx.source_cache))?;
+            let font = skrifa::FontRef::from_index(blob.as_ref(), face.index()).ok()?;
+            Some(crate::font_class::traits_of(family, &font))
+        })();
+        self.traits_cache.insert(family.to_string(), traits.clone());
+        traits
     }
 
     /// Resolve a menu style to its actual metadata instead of guessing from its spelling.
@@ -1147,5 +1181,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "font_names_tests.rs"]
 mod font_names_tests;

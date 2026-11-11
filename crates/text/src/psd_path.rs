@@ -10,8 +10,16 @@
 //! where it started), in the frame's space; `/2 /2` maps the frame's space to the `TySh` text
 //! space. On a closed path Photoshop sets the type from the path's last anchor (the circle's
 //! glyph 0 sits on its fourth anchor and runs on through the first), on an open path from its
-//! first. Neither oracle has a moved start or flipped type, so those are written into the path
-//! itself (see [`frame_path`]).
+//! first.
+//!
+//! The type's range on the path is `/2 /6` (`[start end]`), in curve-segment units: segment `i`
+//! at Bézier parameter `t` is `i + t`, and `-1` is the default (the start described above, the
+//! path's end). Observed in ag-psd's `text-path` (CS6: `[0.0 0.32983]`, the end a third into the
+//! first segment, so only "so" of "some text" is drawn) and `text-path-26`/`-27` (2024:
+//! `[0.07689 2.0]` on a two-segment path, the start moved and the end at the path's end).
+//! `/2 /11 /0` is true for flipped type (ag-psd calls it `reversed`); no reference file has it, so
+//! flipped type is still written into the path itself (see [`frame_path`]) and a file's flag is
+//! read as the same range on the path run backwards.
 
 use photocraft_doc::text::TextShape;
 use photocraft_doc::vector::{Knot, PathOp, Subpath};
@@ -54,10 +62,9 @@ fn knot(in_ctrl: Point, anchor: Point, out_ctrl: Point) -> Knot {
     Knot { anchor, in_ctrl, out_ctrl, smooth: smooth(anchor, in_ctrl, out_ctrl) }
 }
 
-/// The type path of a path frame `frame` (the entry's `/0`), in the `TySh` text space, with the
-/// type starting at its first knot. `Err` says why it can't be read (the caller keeps the box or
-/// point text EngineData describes).
-pub(crate) fn read(frame: &E) -> Result<Subpath, String> {
+/// The cubic segments of a path frame `frame` (the entry's `/0`) in the `TySh` text space, in the
+/// file's order, and whether they close. `Err` says why they can't be read.
+fn segments(frame: &E) -> Result<(Vec<[Point; 4]>, bool), String> {
     let raw = frame.path(&["1", "0"]).ok_or("the frame has no path")?;
     let v = numbers(raw).ok_or("a path coordinate is not a number")?;
     if v.is_empty() || v.len() % 8 != 0 {
@@ -95,6 +102,12 @@ pub(crate) fn read(frame: &E) -> Result<Subpath, String> {
         return Err("its path has no length".into());
     }
     let closed = same(last[3], first[0]);
+    Ok((segs, closed))
+}
+
+/// The knots of the segments `segs` (closing when `closed`), the first knot first.
+fn knots_of(segs: &[[Point; 4]], closed: bool) -> Vec<Knot> {
+    let Some(last) = segs.last() else { return Vec::new() };
     let mut knots: Vec<Knot> = Vec::with_capacity(segs.len() + 1);
     for (i, s) in segs.iter().enumerate() {
         let prev = match i.checked_sub(1).and_then(|j| segs.get(j)) {
@@ -104,13 +117,164 @@ pub(crate) fn read(frame: &E) -> Result<Subpath, String> {
         };
         knots.push(knot(prev, s[0], s[1]));
     }
+    if !closed {
+        knots.push(knot(last[2], last[3], last[3]));
+    }
+    knots
+}
+
+/// The type path of a path frame `frame` (the entry's `/0`), in the `TySh` text space, with the
+/// type's default start at its first knot. `Err` says why it can't be read (the caller keeps the
+/// box or point text EngineData describes).
+pub(crate) fn read(frame: &E) -> Result<Subpath, String> {
+    let (segs, closed) = segments(frame)?;
+    let mut knots = knots_of(&segs, closed);
     if closed {
         // The type starts on the closing segment: from the last anchor.
         knots.rotate_right(1);
-    } else {
-        knots.push(knot(last[2], last[3], last[3]));
     }
     Ok(Subpath { closed, knots, op: PathOp::Combine })
+}
+
+/// The flattening [`crate::warp`] measures type paths with: the cumulative arc length at each of
+/// the `n` equal parameter steps of segment `s`, starting with 0.
+fn flattened(s: &[Point; 4]) -> Vec<f64> {
+    let poly = (s[1].x - s[0].x).hypot(s[1].y - s[0].y) + (s[2].x - s[1].x).hypot(s[2].y - s[1].y) + (s[3].x - s[2].x).hypot(s[3].y - s[2].y);
+    let n = if poly.is_finite() { ((poly / 2.0).ceil() as usize).clamp(4, 128) } else { 4 };
+    let mut cum = Vec::with_capacity(n + 1);
+    let mut acc = 0.0;
+    let mut prev = s[0];
+    cum.push(0.0);
+    for i in 1..=n {
+        let p = cubic(s, i as f64 / n as f64);
+        acc += (p.x - prev.x).hypot(p.y - prev.y);
+        prev = p;
+        cum.push(acc);
+    }
+    cum
+}
+
+/// Arc lengths along a path's segments, as type on it measures them, to convert between arc
+/// length and the `/6` range's segment units.
+struct Measure {
+    /// Per segment, the cumulative lengths of [`flattened`].
+    segs: Vec<Vec<f64>>,
+    /// Arc length at the start of each segment, then the total.
+    at: Vec<f64>,
+}
+
+impl Measure {
+    fn new(segs: &[[Point; 4]]) -> Measure {
+        let segs: Vec<Vec<f64>> = segs.iter().map(flattened).collect();
+        let mut at = Vec::with_capacity(segs.len() + 1);
+        let mut acc = 0.0;
+        at.push(0.0);
+        for s in &segs {
+            acc += s.last().copied().unwrap_or(0.0);
+            at.push(acc);
+        }
+        Measure { segs, at }
+    }
+
+    fn count(&self) -> f64 {
+        self.segs.len() as f64
+    }
+
+    fn length(&self) -> f64 {
+        self.at.last().copied().unwrap_or(0.0)
+    }
+
+    /// The arc length at range position `p` (segment index plus parameter), clamped to the path.
+    fn arc(&self, p: f64) -> f64 {
+        let p = p.clamp(0.0, self.count());
+        let i = (p.floor() as usize).min(self.segs.len().saturating_sub(1));
+        let (Some(cum), Some(base)) = (self.segs.get(i), self.at.get(i)) else { return 0.0 };
+        let steps = cum.len().saturating_sub(1).max(1) as f64;
+        let u = ((p - i as f64) * steps).clamp(0.0, steps);
+        let k = (u.floor() as usize).min(cum.len().saturating_sub(2));
+        let (a, b) = (cum.get(k).copied().unwrap_or(0.0), cum.get(k + 1).copied().unwrap_or(0.0));
+        base + a + (b - a) * (u - k as f64)
+    }
+
+    /// The range position (segment index plus parameter) at arc length `s`, clamped to the path.
+    fn position(&self, s: f64) -> f64 {
+        let s = if s.is_finite() { s.clamp(0.0, self.length()) } else { 0.0 };
+        for (i, cum) in self.segs.iter().enumerate() {
+            let (Some(base), Some(next)) = (self.at.get(i), self.at.get(i + 1)) else { break };
+            if s > *next && i + 1 < self.segs.len() {
+                continue;
+            }
+            let left = s - base;
+            let steps = cum.len().saturating_sub(1).max(1);
+            for (k, w) in cum.windows(2).enumerate() {
+                let [a, b] = [w[0], w[1]];
+                if left <= b || k + 1 == steps {
+                    let f = if b > a { ((left - a) / (b - a)).clamp(0.0, 1.0) } else { 0.0 };
+                    return i as f64 + (k as f64 + f) / steps as f64;
+                }
+            }
+            return i as f64 + 1.0;
+        }
+        self.count()
+    }
+}
+
+/// How close (px) two arc lengths must be to count as the same placement.
+const SAME_ARC: f64 = 1e-3;
+
+/// The `/6` range of `frame`: start and end in segment units, each `None` when it is the default
+/// (`-1`) or not a number on the path (a hostile file gets the default).
+fn range(frame: &E, count: f64) -> [Option<f64>; 2] {
+    let v = frame.path(&["2", "6"]).and_then(numbers).unwrap_or_default();
+    let at = |i: usize| v.get(i).copied().filter(|p| (0.0..=count).contains(p));
+    [at(0), at(1)]
+}
+
+/// Type on a path from a path frame `frame` (the entry's `/0`): its path in the `TySh` text space
+/// and the type's range on it (`/2 /6`, flipped with `/2 /11 /0`). `Err` says why the path can't
+/// be read (the caller keeps the box or point text EngineData describes).
+pub(crate) fn read_shape(frame: &E) -> Result<TextShape, String> {
+    let (segs, closed) = segments(frame)?;
+    let measure = Measure::new(&segs);
+    let count = measure.count();
+    let length = measure.length();
+    let [a, b] = range(frame, count);
+    let flip = frame.path(&["2", "11", "0"]).and_then(E::as_bool).unwrap_or(false);
+    let (path, s, e) = if closed && a.is_none() && b.is_none() {
+        // The default: one lap from the last anchor, the path's first knot (see `read`).
+        (read(frame)?, 0.0, length)
+    } else {
+        let s = measure.arc(a.unwrap_or(if closed { count - 1.0 } else { 0.0 }));
+        let e = match b.map(|b| measure.arc(b)) {
+            // A closed range runs on from its start, past the seam if it must. Equal ends are an
+            // empty range, not a lap: a full lap is written with its end a lap on (`frame_parts`).
+            Some(e) if closed => {
+                s + if e - s >= -SAME_ARC && e - s <= SAME_ARC {
+                    0.0
+                } else if e - s > 0.0 {
+                    e - s
+                } else {
+                    e - s + length
+                }
+            }
+            Some(e) => e.max(s),
+            None if closed => s + length,
+            None => length,
+        };
+        (Subpath { closed, knots: knots_of(&segs, closed), op: PathOp::Combine }, s, e)
+    };
+    // Flipped type is the same stretch of path measured from the other end.
+    let (s, e) = if flip {
+        let s2 = length - e;
+        let s2 = if closed { s2.rem_euclid(length) } else { s2.max(0.0) };
+        (s2, s2 + (e - s))
+    } else {
+        (s, e)
+    };
+    // An explicit end stays explicit even when it reaches the path's end: it aligns center and
+    // right type within the span, where no end aligns it around the start.
+    let explicit = b.is_some();
+    Ok(TextShape::Path { path, start: s as f32, end: explicit.then_some(e as f32), flip })
 }
 
 /// `path` with its knots in the opposite order (the segments run backwards).
@@ -154,7 +318,7 @@ fn starting_at(path: &Subpath, s: f64) -> Subpath {
         return path.clone();
     }
     let s = if path.closed { s.rem_euclid(total) } else { s };
-    if s <= SAME || (!path.closed && s >= total - SAME) || (path.closed && s >= total - SAME) {
+    if s <= SAME || s >= total - SAME {
         return path.clone();
     }
     // The segment and parameter at arc length `s` (linear within a measured piece).
@@ -206,23 +370,60 @@ fn starting_at(path: &Subpath, s: f64) -> Subpath {
     Subpath { closed: path.closed, knots, op: path.op }
 }
 
-/// The path a frame is written with for `TextShape::Path { path, start, flip }`: flipped type is
-/// the path run backwards and a moved start the path from there on (exactly how PhotoCraft lays
-/// type on a path out), so Photoshop, which starts at the path's beginning, sets the same type.
+/// The path a frame is written with for `TextShape::Path { path, start, flip }` with its range
+/// left at the default: flipped type is the path run backwards and a moved start the path from
+/// there on (exactly how PhotoCraft lays type on a path out), so the reference editor, which
+/// starts at the path's beginning, sets the same type.
 pub(crate) fn frame_path(path: &Subpath, start: f32, flip: bool) -> Subpath {
     let path = if flip { reversed(path) } else { path.clone() };
     starting_at(&path, f64::from(start))
+}
+
+/// What a path frame is written with for `shape`: the path, whether its segment list starts at
+/// the second knot (a closed path read from the last anchor, see [`segment_list`]), and the `/6`
+/// range. Flipped type is always the path run backwards (see the module docs). An open path keeps
+/// all of itself and puts a moved start and an end limit in the range, as the reference editor
+/// does. A closed path takes its start into the path (the files only show a closed path's default
+/// range) and, when its end is limited, the range from that start, never past one lap.
+fn frame_parts(path: &Subpath, start: f32, end: Option<f32>, flip: bool) -> (Subpath, bool, [f64; 2]) {
+    const DEFAULT: [f64; 2] = [-1.0, -1.0];
+    let start = if start.is_finite() { start } else { 0.0 };
+    let end = end.map(f64::from).filter(|e| e.is_finite());
+    if path.closed {
+        let path = frame_path(path, start, flip);
+        let start = f64::from(start);
+        let measure = Measure::new(&path.segments());
+        let length = measure.length();
+        return match end.map(|e| (e - start).max(0.0)) {
+            // A lap or more is an explicit end at the seam, apart from the default (no end).
+            Some(span) if span >= length - SAME_ARC => (path, false, [0.0, measure.count()]),
+            Some(span) => (path, false, [0.0, measure.position(span)]),
+            None => (path, true, DEFAULT),
+        };
+    }
+    let base = if flip { reversed(path) } else { path.clone() };
+    let measure = Measure::new(&base.segments());
+    let length = measure.length();
+    let start = f64::from(start).clamp(0.0, length);
+    let end = end.map(|e| e.clamp(start, length));
+    let range = match end {
+        None if start <= SAME_ARC => DEFAULT,
+        // A default end keeps legacy anchor alignment even when the start has moved.
+        None => [measure.position(start), -1.0],
+        Some(e) => [measure.position(start), measure.position(e)],
+    };
+    (base, false, range)
 }
 
 fn real(v: f64) -> E {
     E::Real(v)
 }
 
-/// The segment list (`/1 /0`) Photoshop reads `path` from: on a closed path the type starts at
-/// the last anchor, so the first knot goes last.
-fn segment_list(path: &Subpath) -> Option<Vec<E>> {
+/// The segment list (`/1 /0`) the reference editor reads `path` from: on a closed path with the
+/// default range the type starts at the last anchor, so with `rotate` the first knot goes last.
+fn segment_list(path: &Subpath, rotate: bool) -> Option<Vec<E>> {
     let mut knots = path.knots.clone();
-    if path.closed && !knots.is_empty() {
+    if rotate && path.closed && !knots.is_empty() {
         knots.rotate_left(1);
     }
     let segs = Subpath { closed: path.closed, knots, op: path.op }.segments();
@@ -235,6 +436,25 @@ fn same_path(a: &Subpath, b: &Subpath) -> bool {
     a.closed == b.closed
         && a.knots.len() == b.knots.len()
         && a.knots.iter().zip(&b.knots).all(|(p, q)| same(p.anchor, q.anchor) && same(p.in_ctrl, q.in_ctrl) && same(p.out_ctrl, q.out_ctrl))
+}
+
+/// Whether two type-on-path shapes place the type the same: the same path within [`SAME`] and the
+/// same range within [`SAME_ARC`].
+fn same_shape(a: &TextShape, b: &TextShape) -> bool {
+    let close = |x: f32, y: f32| (f64::from(x) - f64::from(y)).abs() <= SAME_ARC * 10.0;
+    match (a, b) {
+        (TextShape::Path { path: p, start: s, end: e, flip: f }, TextShape::Path { path: q, start: t, end: g, flip: h }) => {
+            f == h
+                && same_path(p, q)
+                && close(*s, *t)
+                && match (e, g) {
+                    (None, None) => true,
+                    (Some(x), Some(y)) => close(*x, *y),
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
 }
 
 /// The point-text frame Photoshop writes (`<< /0 << /2 << /6 [ -1.0 -1.0 ] /11 << /4 -1 /7 false
@@ -264,18 +484,27 @@ pub(crate) fn update_frame(entry: &mut E, shape: &TextShape) {
     let frame = entry.get("0");
     let kind = frame.map_or(0, frame_kind);
     match shape {
-        TextShape::Path { path, start, flip } => {
-            let path = frame_path(path, *start, *flip);
-            if kind == PATH_FRAME && frame.and_then(|f| read(f).ok()).is_some_and(|p| same_path(&p, &path)) {
+        TextShape::Path { path, start, end, flip } => {
+            let (path, rotate, range) = frame_parts(path, *start, *end, *flip);
+            let Some(list) = segment_list(&path, rotate) else { return };
+            let fresh = E::Dict(vec![
+                ("1".into(), E::Dict(vec![("0".into(), E::Array(list.clone()))])),
+                ("2".into(), E::Dict(vec![("0".into(), E::Int(PATH_FRAME)), ("6".into(), E::Array(range.map(real).to_vec()))])),
+            ]);
+            if kind == PATH_FRAME && frame.and_then(|f| read_shape(f).ok()).zip(read_shape(&fresh).ok()).is_some_and(|(a, b)| same_shape(&a, &b)) {
                 return;
             }
-            let Some(list) = segment_list(&path) else { return };
             // Keep the other keys of a path frame; anything else becomes one.
             let mut data = match frame.and_then(|f| f.get("2")) {
                 Some(d @ E::Dict(_)) if kind == PATH_FRAME => d.clone(),
                 _ => E::Dict(vec![("6".into(), E::Array(vec![real(-1.0), real(-1.0)]))]),
             };
             data.set("0", E::Int(PATH_FRAME));
+            data.set("6", E::Array(range.map(real).to_vec()));
+            // The written path is never flipped (see the module docs).
+            if let Some(path_data @ E::Dict(_)) = data.get_mut("11") {
+                path_data.set("0", E::Bool(false));
+            }
             // The path is written in text space.
             data.set("2", E::Array([1.0, 0.0, 0.0, 1.0, 0.0, 0.0].map(real).to_vec()));
             let mut frame = match frame {
@@ -301,341 +530,4 @@ pub(crate) fn update_frame(entry: &mut E, shape: &TextShape) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine_data::parse;
-
-    fn frame(src: &str) -> E {
-        parse(src.as_bytes()).unwrap()
-    }
-
-    /// The frame of `text/path-circle.psd` (Photoshop 2026).
-    const CIRCLE: &str = "<< /1 << /0 [ 32.0 128.0 32.0 74.98067 74.98067 32.0 128.0 32.0 128.0 32.0 181.01933 32.0 224.0 74.98067 224.0 128.0 224.0 128.0 224.0 181.01933 181.01933 224.0 128.0 224.0 128.0 224.0 74.98067 224.0 32.0 181.01933 32.0 128.0 ] >> /2 << /0 2 /2 [ 1.0 0.0 0.0 1.0 -32.0 -32.0 ] /6 [ -1.0 -1.0 ] >> >>";
-    /// The frame of `text/path-wave-open.psd` (Photoshop 2026).
-    const WAVE: &str = "<< /1 << /0 [ 16.0 100.0 46.0 40.0 120.0 40.0 160.0 80.0 160.0 80.0 200.0 120.0 274.0 100.0 304.0 60.0 ] >> /2 << /0 2 /2 [ 1.0 0.0 0.0 1.0 -16.0 -52.12246 ] /6 [ -1.0 -1.0 ] >> >>";
-
-    #[test]
-    fn photoshop_path_frames_read_into_text_space() {
-        let wave = read(&frame(WAVE)).unwrap();
-        assert!(!wave.closed);
-        assert_eq!(wave.knots.len(), 3);
-        let p = |x: f64, y: f64| Point::new(x - 16.0, y - 52.12246);
-        let k = &wave.knots;
-        assert!(same(k[0].anchor, p(16.0, 100.0)) && same(k[0].in_ctrl, p(16.0, 100.0)) && same(k[0].out_ctrl, p(46.0, 40.0)));
-        assert!(same(k[1].in_ctrl, p(120.0, 40.0)) && same(k[1].anchor, p(160.0, 80.0)) && same(k[1].out_ctrl, p(200.0, 120.0)) && k[1].smooth);
-        assert!(same(k[2].in_ctrl, p(274.0, 100.0)) && same(k[2].anchor, p(304.0, 60.0)));
-
-        let circle = read(&frame(CIRCLE)).unwrap();
-        assert!(circle.closed);
-        assert_eq!(circle.knots.len(), 4);
-        // The type starts at the bottom anchor (Photoshop's glyph 0) and runs to the left one.
-        assert!(same(circle.knots[0].anchor, Point::new(96.0, 192.0)));
-        assert!(same(circle.knots[1].anchor, Point::new(0.0, 96.0)));
-        assert!(circle.knots.iter().all(|k| k.smooth));
-    }
-
-    #[test]
-    fn written_frames_read_back() {
-        for src in [CIRCLE, WAVE] {
-            let path = read(&frame(src)).unwrap();
-            let mut entry = E::Dict(vec![("0".into(), frame(src))]);
-            let before = entry.clone();
-            update_frame(&mut entry, &TextShape::Path { path: path.clone(), start: 0.0, flip: false });
-            assert_eq!(entry, before, "an unchanged path keeps Photoshop's frame");
-            let mut moved = path.clone();
-            for k in &mut moved.knots {
-                *k = k.transform(&Affine::translate(5.0, -3.0));
-            }
-            update_frame(&mut entry, &TextShape::Path { path: moved.clone(), start: 0.0, flip: false });
-            let back = read(entry.get("0").unwrap()).unwrap();
-            assert!(same_path(&back, &moved), "{back:?}");
-            assert_eq!(entry.path(&["0", "2", "6"]), before.path(&["0", "2", "6"]), "the frame's other keys stay");
-        }
-    }
-
-    /// Flipped type and a moved start are written into the path, which lays the type out the same.
-    #[test]
-    fn flip_and_start_are_baked_into_the_frame() {
-        use crate::warp::Warp;
-        for src in [CIRCLE, WAVE] {
-            let path = read(&frame(src)).unwrap();
-            for (start, flip) in [(40.0, false), (0.0, true), (25.0, true)] {
-                let shape = TextShape::Path { path: path.clone(), start, flip };
-                let baked = TextShape::Path { path: frame_path(&path, start, flip), start: 0.0, flip: false };
-                let (a, b) = (Warp::on_path(&shape).unwrap(), Warp::on_path(&baked).unwrap());
-                for x in [0.0, 10.0, 50.0, 120.0] {
-                    for y in [-12.0, 0.0, 4.0] {
-                        let (p, q) = (a.apply(x, y), b.apply(x, y));
-                        assert!((p.0 - q.0).hypot(p.1 - q.1) < 0.5, "{src:.10} start {start} flip {flip} at ({x}, {y}): {p:?} vs {q:?}");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn hostile_frames_are_errors() {
-        for src in [
-            "<< /2 << /0 2 >> >>",
-            "<< /1 << /0 [ ] >> /2 << /0 2 >> >>",
-            "<< /1 << /0 [ 1.0 2.0 3.0 ] >> /2 << /0 2 >> >>",
-            "<< /1 << /0 [ 0 0 1 1 2 2 (x) 3 ] >> /2 << /0 2 >> >>",
-            "<< /1 << /0 [ 0 0 1 1 2 2 1e999 3 ] >> /2 << /0 2 >> >>",
-            "<< /1 << /0 [ 0 0 1 1 2 2 3 3 ] >> /2 << /0 2 /2 [ 0 0 0 0 0 0 ] >> >>",
-            "<< /1 << /0 [ 0 0 1 1 2 2 3 3 ] >> /2 << /0 2 /2 [ 1 0 0 ] >> >>",
-            "<< /1 << /0 [ 0 0 1 1 2 2 3 3 ] >> /2 << /0 2 /2 [ 1e300 0 0 1e300 0 0 ] >> >>",
-            "<< /1 << /0 [ 0 0 1 1 2 2 3 3 50 50 60 60 70 70 80 80 ] >> /2 << /0 2 >> >>",
-            "<< /1 << /0 [ 5 5 5 5 5 5 5 5 ] >> /2 << /0 2 >> >>",
-            "<< /1 << /0 (path) >> /2 << /0 2 >> >>",
-        ] {
-            assert!(read(&frame(src)).is_err(), "{src}");
-        }
-        let many = format!("<< /1 << /0 [ {} ] >> /2 << /0 2 >> >>", "0 0 1 1 2 2 0 0 ".repeat(MAX_SEGMENTS + 1));
-        assert!(read(&frame(&many)).is_err());
-    }
-
-    fn d(items: Vec<(&str, E)>) -> E {
-        E::Dict(items.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
-    }
-
-    /// A Photoshop-shaped `Txt2` block with one point-text object for `text` (`\r` breaks, trailing
-    /// `\r`) drawn in frame 0.
-    fn photoshop_txt2(text: &str) -> Vec<u8> {
-        photoshop_txt2_in(text, point_frame())
-    }
-
-    /// [`photoshop_txt2`] with the frame list entry `frame`.
-    fn photoshop_txt2_in(text: &str, frame: E) -> Vec<u8> {
-        photoshop_txt2_of(vec![photoshop_object(text, 0)], vec![frame])
-    }
-
-    /// A Photoshop-shaped `Txt2` block holding `objects` and the frame list `frames`.
-    fn photoshop_txt2_of(objects: Vec<E>, frames: Vec<E>) -> Vec<u8> {
-        crate::engine_data::write_bare(&[
-            ("98".into(), d(vec![("0", E::Int(14))])),
-            ("0".into(), d(vec![("8", d(vec![("0", E::Array(frames))]))])),
-            ("1".into(), d(vec![("1", E::Array(objects))])),
-        ])
-    }
-
-    /// A Photoshop-shaped text object for `text` drawn in frame `at`.
-    fn photoshop_object(text: &str, at: i64) -> E {
-        let len = text.encode_utf16().count() as i64;
-        let run = || {
-            d(vec![("0", d(vec![("0", d(vec![("0", E::String(String::new())), ("6", d(vec![("0", E::Int(0)), ("1", E::Real(12.0))]))]))])), ("1", E::Int(len))])
-        };
-        let model = d(vec![("0", E::String(text.into())), ("5", d(vec![("0", E::Array(vec![run()]))])), ("6", d(vec![("0", E::Array(vec![run()]))]))]);
-        let strike = d(vec![("99", E::Name("PC".into())), ("6", E::Array(vec![d(vec![("99", E::Name("F".into())), ("10", E::Int(at))])]))]);
-        let view = d(vec![
-            ("0", E::Array(vec![d(vec![("0", E::Int(at))])])),
-            ("1", d(vec![("0", E::Array(vec![d(vec![("0", d(vec![("1", E::Int(1))])), ("1", E::Int(len))])]))])),
-            ("2", E::Array(vec![strike])),
-        ]);
-        d(vec![("0", model), ("1", view)])
-    }
-
-    fn layer(text: &str, shape: TextShape) -> photocraft_doc::TextLayer {
-        use photocraft_doc::text::{CharStyle, TextRun};
-        let mut t = photocraft_doc::TextLayer {
-            text: text.into(),
-            runs: vec![TextRun { len: text.len(), style: CharStyle { size_pt: 12.0, ..Default::default() } }],
-            shape,
-            transform: Affine::translate(32.0, 20.0),
-            ..Default::default()
-        };
-        t.sync_summary();
-        t
-    }
-
-    /// A layer read back, with what [`crate::psd::apply_txt2_path`] said.
-    type Opened = (photocraft_doc::TextLayer, Result<bool, String>);
-
-    /// Saves `layers` (object `i` each) into a file whose `Txt2` is `prev`, then reads each back:
-    /// its `TySh` and what [`crate::psd::apply_txt2_path`] makes of the saved `Txt2`.
-    fn save_and_open(layers: &[&photocraft_doc::TextLayer], prev: &[u8]) -> (Vec<u8>, Vec<Opened>) {
-        let objects: Vec<(i32, &photocraft_doc::TextLayer)> = layers.iter().enumerate().map(|(i, l)| (i as i32, *l)).collect();
-        let txt2 = crate::psd::build_txt2(&objects, Some(prev));
-        let parsed = crate::psd::parse_txt2(&txt2).unwrap();
-        let back = objects
-            .iter()
-            .map(|(i, l)| {
-                let tysh = crate::psd::set_text_index(&crate::psd::build_tysh(l, 72.0, None), *i).unwrap();
-                let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
-                crate::psd::apply_txt2(&mut back, &tysh, &parsed);
-                let applied = crate::psd::apply_txt2_path(&mut back, &tysh, &parsed);
-                crate::psd::apply_txt2_frame(&mut back, &tysh, &parsed);
-                (back, applied)
-            })
-            .collect();
-        (txt2, back)
-    }
-
-    /// #7962: type on a path survives a PSD save and open, for the file's own text object and for
-    /// a layer the file had no object for; a moved start and flipped type come back laid out the
-    /// same, in the path; a second save changes nothing.
-    #[test]
-    fn path_text_round_trips_through_tysh_and_txt2() {
-        let circle = read(&frame(CIRCLE)).unwrap();
-        let wave = read(&frame(WAVE)).unwrap();
-        let a = layer("On a circle", TextShape::Path { path: circle.clone(), start: 0.0, flip: false });
-        let b = layer("Along a wave", TextShape::Path { path: wave.clone(), start: 30.0, flip: true });
-        let prev = photoshop_txt2("On a circle\r");
-        let (txt2, back) = save_and_open(&[&a, &b], &prev);
-        for ((l, applied), (want, start, flip)) in back.iter().zip([(&circle, 0.0, false), (&wave, 30.0, true)]) {
-            assert_eq!(applied, &Ok(true), "{}", l.text);
-            let TextShape::Path { path, start: s, flip: f } = &l.shape else { panic!("{}: {:?}", l.text, l.shape) };
-            assert_eq!((*s, *f), (0.0, false));
-            assert!(same_path(path, &frame_path(want, start, flip)), "{}: {path:?}", l.text);
-            assert_eq!(l.transform, Affine::translate(32.0, 20.0), "the frame's matrix is not applied twice");
-        }
-        let (again, _) = save_and_open(&[&back[0].0, &back[1].0], &txt2);
-        assert_eq!(again, txt2, "a re-save of the opened file changes nothing");
-        // Off its path, the layer opens as point text again.
-        let detached = layer("On a circle", TextShape::Point);
-        let (_, back) = save_and_open(&[&detached], &txt2);
-        assert_eq!(back[0].1, Ok(false));
-        assert_eq!(back[0].0.shape, TextShape::Point);
-    }
-
-    /// A malformed path frame leaves the layer as EngineData describes it, with the reason.
-    #[test]
-    fn a_malformed_path_frame_keeps_the_engine_data_shape() {
-        let a = layer("Hostile", TextShape::Box { x: 0.0, y: 0.0, width: 50.0, height: 20.0 });
-        let tysh = crate::psd::set_text_index(&crate::psd::build_tysh(&a, 72.0, None), 0).unwrap();
-        for bad in ["<< /1 << /0 [ 1 2 3 ] >> /2 << /0 2 >> >>", "<< /1 << /0 [ 0 0 1 1 2 2 3 3 ] >> /2 << /0 2 /2 [ 0 0 0 0 0 0 ] >> >>"] {
-            let entry = E::Dict(vec![("0".into(), frame(bad))]);
-            let txt2 = crate::psd::parse_txt2(&photoshop_txt2_in("Hostile\r", entry)).unwrap();
-            let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
-            let before = l.shape.clone();
-            assert!(crate::psd::apply_txt2_path(&mut l, &tysh, &txt2).is_err(), "{bad}");
-            assert_eq!(l.shape, before);
-        }
-    }
-
-    /// A layer taken off its path doesn't keep its path frame (it would reopen on the path).
-    #[test]
-    fn a_layer_off_its_path_loses_the_path_frame() {
-        let mut entry = E::Dict(vec![("0".into(), frame(CIRCLE))]);
-        update_frame(&mut entry, &TextShape::Point);
-        assert_eq!(entry, point_frame());
-        let mut entry = E::Dict(vec![("0".into(), frame(WAVE))]);
-        update_frame(&mut entry, &TextShape::Box { x: 1.0, y: 2.0, width: 30.0, height: 40.0 });
-        assert_eq!(entry.get("0").map(frame_kind), Some(BOX_FRAME));
-        assert_eq!(
-            entry.path(&["0", "1", "0"]).and_then(numbers).unwrap()[..8],
-            [1.0, 2.0, 1.0, 2.0, 31.0, 2.0, 31.0, 2.0],
-            "Photoshop's box outline: corners as straight segments from the top left"
-        );
-        // A point or box frame is left alone.
-        let mut point = point_frame();
-        update_frame(&mut point, &TextShape::Point);
-        assert_eq!(point, point_frame());
-    }
-
-    /// A path frame the import could not read (the layer opened as EngineData's box or point
-    /// text) is saved back as it was, not replaced by a box or point frame.
-    #[test]
-    fn an_unreadable_path_frame_is_kept() {
-        let two_pieces = "<< /1 << /0 [ 0 0 1 1 2 2 3 3 50 50 60 60 70 70 80 80 ] >> /2 << /0 2 >> >>";
-        for shape in [TextShape::Point, TextShape::Box { x: 0.0, y: 0.0, width: 80.0, height: 80.0 }] {
-            let mut entry = E::Dict(vec![("0".into(), frame(two_pieces))]);
-            let before = entry.clone();
-            update_frame(&mut entry, &shape);
-            assert_eq!(entry, before, "{shape:?}");
-        }
-    }
-
-    /// The frame number the object at `index` of the saved `txt2` names, and that frame.
-    fn saved_frame(txt2: &[u8], index: usize) -> (i64, E) {
-        let t = crate::psd::parse_txt2(txt2).unwrap();
-        let object = &t.path(&["1", "1"]).and_then(E::as_array).unwrap()[index];
-        let at = object.path(&["1", "0"]).and_then(E::as_array).unwrap()[0].get("0").and_then(E::as_i64).unwrap();
-        (at, t.path(&["0", "8", "0"]).and_then(E::as_array).unwrap()[at as usize].clone())
-    }
-
-    /// An edited layer whose object the save can't refit keeps drawing in that object's own frame,
-    /// not in the frame its slot number names, which is the path layer's here.
-    #[test]
-    fn an_object_rebuilt_from_a_template_keeps_its_own_frame() {
-        let circle = read(&frame(CIRCLE)).unwrap();
-        let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, flip: false });
-        // Object 1's style run has a length that is no count, so it can't be refitted.
-        let mut broken = photoshop_object("Old\r", 0);
-        let run = d(vec![("0", d(vec![("0", d(vec![("0", E::String(String::new()))]))])), ("1", E::String("x".into()))]);
-        broken.get_mut("0").unwrap().set("6", d(vec![("0", E::Array(vec![run]))]));
-        let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
-        let prev = photoshop_txt2_of(vec![photoshop_object("On a circle\r", 1), broken], vec![point_frame(), path_frame.clone()]);
-        let (txt2, back) = save_and_open(&[&on_path, &layer("New", TextShape::Point)], &prev);
-        assert_eq!(saved_frame(&txt2, 1).0, 0, "the rebuilt object draws in its own frame");
-        assert_eq!(saved_frame(&txt2, 0), (1, path_frame));
-        assert_eq!(back[0].1, Ok(true));
-        assert!(matches!(back[0].0.shape, TextShape::Path { .. }), "{:?}", back[0].0.shape);
-    }
-
-    /// A new layer whose slot number is the frame another object is drawn in gets a frame of its
-    /// own: neither layer takes the other's shape, on this save or the next.
-    #[test]
-    fn a_new_object_gets_a_frame_no_other_object_is_drawn_in() {
-        let circle = read(&frame(CIRCLE)).unwrap();
-        let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, flip: false });
-        let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
-        let prev = photoshop_txt2_of(vec![photoshop_object("On a circle\r", 1)], vec![point_frame(), path_frame.clone()]);
-        let new = layer("New", TextShape::Point);
-        let (txt2, back) = save_and_open(&[&on_path, &new], &prev);
-        assert_eq!(saved_frame(&txt2, 1), (2, point_frame()), "a frame past the file's own");
-        assert_eq!(saved_frame(&txt2, 0), (1, path_frame));
-        assert_eq!(back[0].1, Ok(true));
-        assert_eq!((&back[1].1, &back[1].0.shape), (&Ok(false), &TextShape::Point));
-        // The path layer taken off its path on the next save loses its path frame.
-        let (again, _) = save_and_open(&[&layer("On a circle", TextShape::Point), &new], &txt2);
-        assert_eq!(saved_frame(&again, 0), (1, point_frame()));
-    }
-
-    /// A rebuilt object whose old frame number is past the frame list doesn't name a frame the
-    /// block lacks (Photoshop refuses such files, #7698).
-    #[test]
-    fn a_rebuilt_object_never_names_a_missing_frame() {
-        let mut broken = photoshop_object("Old\r", 70_000);
-        let run = d(vec![("0", d(vec![("0", d(vec![("0", E::String(String::new()))]))])), ("1", E::String("x".into()))]);
-        broken.get_mut("0").unwrap().set("6", d(vec![("0", E::Array(vec![run]))]));
-        let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
-        let prev = photoshop_txt2_of(vec![photoshop_object("On a circle\r", 1), broken], vec![point_frame(), path_frame.clone()]);
-        let on_path = layer("On a circle", TextShape::Path { path: read(&frame(CIRCLE)).unwrap(), start: 0.0, flip: false });
-        let (txt2, _) = save_and_open(&[&on_path, &layer("New", TextShape::Point)], &prev);
-        assert_eq!(saved_frame(&txt2, 1), (2, point_frame()));
-        assert_eq!(saved_frame(&txt2, 0), (1, path_frame));
-    }
-
-    /// An object the file keeps that names a frame past the frame list doesn't grow the list (to
-    /// 65536 point frames here).
-    #[test]
-    fn a_kept_object_naming_a_far_frame_adds_no_frames() {
-        let prev = photoshop_txt2_of(vec![photoshop_object("Far\r", crate::psd::MAX_TEXT_INDEX.into())], vec![point_frame()]);
-        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &layer("Far", TextShape::Point))], Some(&prev))).unwrap();
-        assert_eq!(out.path(&["0", "8", "0"]).and_then(E::as_array).map(<[E]>::len), Some(1));
-    }
-
-    /// A frame the file already has two objects drawn in is left as the file has it, not given
-    /// the shape of whichever layer comes last.
-    #[test]
-    fn a_frame_two_objects_name_is_kept() {
-        let circle = read(&frame(CIRCLE)).unwrap();
-        let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, flip: false });
-        let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
-        let objects = vec![photoshop_object("On a circle\r", 1), photoshop_object("Point\r", 1)];
-        let prev = photoshop_txt2_of(objects, vec![point_frame(), path_frame.clone()]);
-        let (txt2, _) = save_and_open(&[&on_path, &layer("Point", TextShape::Point)], &prev);
-        assert_eq!(saved_frame(&txt2, 0), (1, path_frame));
-        assert_eq!(saved_frame(&txt2, 1).0, 1);
-    }
-
-    /// Area type's frame becomes a text box over its path's bounds, as its EngineData describes it.
-    #[test]
-    fn an_area_layer_gets_a_box_frame() {
-        let square =
-            photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(&[(10.0, 20.0), (50.0, 20.0), (50.0, 80.0), (10.0, 80.0)])]);
-        let mut entry = E::Dict(vec![("0".into(), frame(CIRCLE))]);
-        update_frame(&mut entry, &TextShape::Area { path: square });
-        assert_eq!(entry, box_frame(10.0, 20.0, 40.0, 60.0));
-    }
-}
+mod tests;

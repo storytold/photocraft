@@ -13,6 +13,7 @@ A standalone reader and writer for Adobe Photoshop **PSD** (version 1) and **PSB
 | `PsdFile::from_bytes(b)?.to_bytes()? == b` for unmodified files | Channel data keeps its original encoding. Unknown blocks and resources are stored raw. Exact padding is recorded wherever it can vary: tagged blocks, layer info, section trailers. |
 | `from_bytes(to_bytes(f)) == f` for any model `f` | Canonical defaults: `padding: None` means "zero-pad to even", and the parser yields `None` whenever the file used that default. |
 | Lazy decoding | The parser only copies encoded bytes. Channels are decoded when asked (`ChannelData::decode`, `ImageData::decode`). |
+| Lazy reading | `PsdFile::from_source` reads only the structure. Channel data and the merged image stay in the source as `Stored` ranges and are read when decoded, so opening a 2 GB file doesn't need 2 GB for the file itself. The model equals what `from_bytes` builds, and it writes back the same bytes. |
 | No compositing | `PsdBuilder` takes the merged image from the caller. Without one, it writes a white placeholder and sets `has_real_merged_data = false` in resource 1057. |
 
 ## Public API (overview)
@@ -22,6 +23,8 @@ A standalone reader and writer for Adobe Photoshop **PSD** (version 1) and **PSB
 PsdFile::from_bytes(&[u8]) -> Result<PsdFile>
 PsdFile::from_bytes_and_merged(&[u8], want) -> Result<(PsdFile, Option<Result<Vec<u8>>>)>
                                             // + decode_merged() when want(&file): ZIP inflated once
+PsdFile::from_source(Source) -> Result<PsdFile>   // channel data and merged image left in the source
+PsdFile::from_source_and_merged_recovering(Source, want, recover)
 PsdFile::to_bytes(&self) -> Result<Vec<u8>>
 PsdFile::open(path) / save(path)            // native only
 PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement,
@@ -36,6 +39,11 @@ PsdFile::composite_rgba8() -> Result<RgbaImage>
 PsdFile::resource(id), global_block(key), icc_profile(), resolution(),
         has_real_merged_data(), merged_has_alpha(), validate()
 
+// Sources (lazy reading)
+trait ReadAt { len(), read_at(offset, buf) }   // [u8], Vec<u8>, Arc<T>, FileSource (pread / seek_read)
+Source::new(impl ReadAt) / read_vec(offset, len)   // shared handle; equal when the same source
+Stored { source, offset, len }::read() / read_part(at, len)
+
 // Header
 Header { version: Version::{Psd,Psb}, channels, width, height, depth, color_mode, reserved }
 ColorMode::{Bitmap, Grayscale, Indexed, Rgb, Cmyk, Multichannel, Duotone, Lab, Unknown(u16)}
@@ -47,7 +55,8 @@ LayerRecord { rect, channels: Vec<ChannelData>, blend_mode, opacity, clipping, f
 LayerRecord::name()            // prefers `luni`
 LayerRecord::section_divider(), section_type(), layer_id(), fill_opacity(), is_visible(),
              block(key), block_mut(key), channel(id), channel_rect(id), decode_channel(id, depth, version)
-ChannelData { id, compression: Option<Compression>, data }   // encoded bytes kept verbatim
+ChannelData { id, compression: Option<Compression>, data, stored: Option<Stored> }   // encoded bytes kept verbatim
+ChannelData::new(id, compression, data); encoded() -> Cow<[u8]>; encoded_len(); load()
 ChannelData::encode(id, compression, decoded, w, h, depth, version)
 ChannelData::decode(w, h, depth, version); set_decoded(...)
 MaskData::{None, Mask(LayerMask), Raw(Vec<u8>)}
@@ -69,7 +78,14 @@ LayerInfo::unpadded_len(version), LayerInfo::pad_to(version, 4)   // Photoshop p
 // Image resources
 ImageResource { signature, id, name, data };  ImageResource::parsed() -> Option<Result<ResourceData>>
 ResourceData::{ResolutionInfo, LayerState, LayerGroupInfo, Thumbnail, GlobalAngle, IccProfile,
-               GlobalAltitude, VersionInfo, Exif, Xmp}
+               GlobalAltitude, VersionInfo, Exif, Xmp, TimelineInfo, Animation}
+
+// Legacy animation syntax (no playback/document-model dependency)
+animation::AnimationResource::from_bytes / to_bytes  // maniIRFR; ordered raw records
+animation::AnimationRecord::descriptor()              // AnDs; version-16 descriptor
+animation::{frame_info, frame_sets, layer_frame_states} // borrowed sparse views, opaque ids
+animation::parse_descriptor                          // descriptor + up to 3 zero alignment bytes
+metadata::MetadataItem::animation_descriptor()       // mlst / tmln; leaves other metadata alone
 
 // Compression
 Compression::{Raw, Rle, Zip, ZipPrediction, Unknown(u16)}
@@ -108,6 +124,7 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 | luni lsct lsdk lyid lnsr clbl infx knko lspf lclr iOpa shmd | ✓ | ✓ | ✓ | `TaggedBlock::parsed()` |
 | Layer XMP (`shmd` › `cust` › `layerXMP`) | ✓ | ✓ | ✓ | `metadata::layer_xmp` / `take_layer_xmp` / `put_layer_xmp`, laid out as Photoshop 2026 writes it |
 | ActionDescriptor (all OSTypes) | ✓ | ✓ | ✓ | including references, `ObAr` (best effort), `UnFl`, `Pth `, version-16 wrapper |
+| Legacy frame animation syntax | ✓ | ✓ | partial | `mani` / `AnDs`, `mlst`, `tmln`, resource 1075; raw-preserving descriptor views, not playback or keyframe evaluation |
 | Layer tree (groups) | ✓ | ✓ | ✓ | open/closed folders plus bounding dividers; tolerant of malformed nesting |
 | RGBA8 extraction | ✓ | – | – | RGB / gray / CMYK layers; merged image also supports indexed / bitmap / duotone |
 | Builder | – | ✓ | – | RGB / gray / CMYK at 8/16 bit, masks, groups, blend modes, opacity, fill, visibility, clipping |
@@ -130,6 +147,25 @@ allocations for padded channels return an error on failure.
 * Vector masks and shapes: `vmsk`, `vsms`, `vogk`, `vscg`.
 * Adjustment and fill layers: `curv`, `levl`, `hue2`, `SoCo`, `GdFl`, `PtFl`, …, plus `Patt`, `Txt2`, `FMsk`, 3D and video blocks.
 * Global layer mask info (raw, with accessors), thumbnails (raw), slices, guides, paths, and every other resource id.
+
+## Legacy animation inspection
+
+```sh
+cargo run -p photocraft-psd --example animation_inspect -- /path/to/input.psd
+cargo test -p photocraft-psd --test it animation::
+```
+
+The inspection example accepts an explicit local PSD/PSB (up to 128 MiB), reports frame counts,
+stored delays and descriptor counts, and checks byte-exact raw round-trips without modifying the
+input. It does not print layer names, text or descriptor values. No personal file is bundled;
+committed animation tests construct synthetic payloads and PSD/PSB containers.
+
+`mani` is detected by its payload signature within the plug-in resource range 4000–4999, not by
+assuming that resource 4003 always belongs to animation. Unknown records and unsupported descriptor
+versions stay raw. `FrIn` definitions and `FSts` playback order are separate; ids are opaque stored
+`long` values. Missing frame delays remain absent, and sparse `mlst` properties are not filled with
+guessed defaults. Timeline tracks, loops, inheritance and property evaluation are left to higher
+layers. This parser alone does **not** make PSD animations play in PhotoCraft.
 
 ## Testing
 
