@@ -6,6 +6,7 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -30,6 +31,13 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        // Find Layers sets the Layers panel's Name filter however it runs: the menu, the shortcut,
+        // `engine.execute` or an action step (#10884).
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
         }
         result
     }
@@ -209,6 +217,23 @@ impl PhotocraftApp {
         self.tool_override.unwrap_or(self.ui.tool)
     }
 
+    /// Selects the newly attached type path on composite channel target so the path becomes immediately editable.
+    fn select_attached_type_path(&mut self, command: &str, result: &Result<Value, String>) {
+        if command != "type.attachToPath" {
+            return;
+        }
+        let attached = result.as_ref().ok().and_then(|value| value.get("layer")).and_then(Value::as_u64);
+        let active = self.session.active().and_then(|state| state.active_layer).map(|layer| layer.0);
+        if attached.is_some() && attached == active {
+            // New path text becomes the editable target; its source work path stays intact.
+            let _ = self.session.execute("channel.target.composite", json!({}));
+            self.ui.selected_path = Some("layer".into());
+            self.ui.vector_mask_target = false;
+            self.ui.mask_target = false;
+        }
+    }
+
+    /// Updates secondary UI state following command execution.
     fn sync_command_side_effects(
         &mut self,
         id: &str,
@@ -270,6 +295,7 @@ impl PhotocraftApp {
         {
             self.ui.view.extras = true;
         }
+        self.select_attached_type_path(id, result);
         if result.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
@@ -300,7 +326,9 @@ impl PhotocraftApp {
         }
     }
 
+    /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
+        crate::type_path_placement::cancel_stale(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
