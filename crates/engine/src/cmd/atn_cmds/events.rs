@@ -8,7 +8,7 @@ use super::steps_artboard::{artboard_edit_from, artboard_edit_to, artboard_from,
 use super::steps_channels::{match_color_from, match_color_to, merge_spot_from, merge_spot_to, split_from, split_to, trap_from, trap_to};
 use super::steps_content_aware::{caf_from, caf_to};
 use super::steps_direct_adjustments::{gradient_from, gradient_to, replace_from, replace_to};
-use super::steps_distort::{PINCH, POLAR, SPHERIZE, TWIRL, ZIGZAG, keys_from, keys_to, shear_from, shear_to, wave_from, wave_to};
+use super::steps_distort::{PINCH, POLAR, SPHERIZE, TWIRL, ZIGZAG, displace_from, displace_to, keys_from, keys_to, shear_from, shear_to, wave_from, wave_to};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
     crop_from, crop_to, export_from, export_to, image_size_from, image_size_to, merge_visible_from, merge_visible_to, open_from, open_to, paste_from, paste_to,
@@ -568,6 +568,7 @@ pub(super) const EVENTS: &[Event] = &[
         &[F("Hrzn", "horizontal", Kind::Long), F("Vrtc", "vertical", Kind::Long), F("Fl  ", "undefinedAreas", Kind::Enum("FlMd", OFFSET_FILL))]
     ),
     // Distort (#10605): every key in recorded order, Photoshop's limits and defaults.
+    Event { code: "", name: "displace", label: "Displace", ids: &["filter.distort.displace"], from: displace_from, to: displace_to },
     Event { code: "Shr ", name: "shear", label: "Shear", ids: &["filter.distort.shear"], from: shear_from, to: shear_to },
     Event {
         code: "Pnch",
@@ -859,6 +860,8 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.layerStyle.createLayer",
             "layer.new.group",
             "layer.groupLayers",
+            super::steps_artboard_section::NEW,
+            super::steps_artboard_section::FROM_LAYERS,
             "layer.duplicate",
             "layer.new.layerViaCopy",
             "layer.new.layerViaCut",
@@ -896,6 +899,7 @@ pub(super) const EVENTS: &[Event] = &[
         name: "set",
         label: "Set",
         ids: &[
+            super::steps_measurement::SET_SCALE,
             "select.all",
             "select.deselect",
             "select.reselect",
