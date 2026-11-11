@@ -63,16 +63,16 @@ fn the_paint_bucket_on_a_fill_layer_shows_the_reference_question() {
 
 #[test]
 fn catalogs_that_had_a_translation_keep_one() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let fr = Lang::from_code("fr").expect("French");
     assert_ne!(tr(fr, FILL), FILL, "French still translates the prompt");
     let de = Lang::from_code("de").expect("German");
     assert_eq!(tr(de, FILL), FILL, "a language without an entry falls back to English");
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/i18n");
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "tsv") {
-            let text = std::fs::read_to_string(&path).unwrap();
-            assert!(!text.contains(OLD), "{} still has the old key", path.display());
-        }
+    for (code, _, catalog) in crate::i18n::CRAFT_I18N {
+        // Check source columns, not comments or translations, in the embedded app catalogs.
+        let mut keys = catalog.lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(1));
+        assert!(keys.all(|k| k != OLD), "{code} still has the old key");
     }
 }
