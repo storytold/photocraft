@@ -346,6 +346,11 @@ impl PhotocraftApp {
         let then = std::mem::replace(&mut p.then, Box::new(|_, _| Ok(Value::Null)));
         p.then = Box::new(move |app, answer| {
             let r = then(app, answer);
+            if r.is_ok() && app.file_dialog_open() {
+                // A portal filename retry is still the same save: close/quit must wait.
+                app.after_file_dialog(next);
+                return r;
+            }
             next(app, r)
         });
         true

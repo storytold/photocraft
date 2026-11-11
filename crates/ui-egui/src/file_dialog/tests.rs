@@ -1897,3 +1897,34 @@ fn the_last_export_folder_is_a_preference_that_old_files_lack() {
     let old: photocraft_engine::prefs::Preferences = serde_json::from_value(json).unwrap();
     assert_eq!(old.export.last_folder, "");
 }
+
+/// Inline close/quit saves must wait through portal retries, including cancellation.
+#[test]
+fn sandboxed_save_continuation_waits_for_the_final_outcome() {
+    for outcome in [Ok(json!({"saved": true})), Err(CANCELLED.to_string()), Err("disk full".to_string())] {
+        let (mut app, open, _) = app();
+        app.services.sandboxed = true;
+        let completed = Rc::new(RefCell::new(Vec::new()));
+        let log = completed.clone();
+        let save_result = outcome.clone();
+        app.pick_save("cat.psd", move |_, _| save_result).unwrap();
+        app.after_file_dialog(move |_, result| {
+            log.borrow_mut().push(result.clone());
+            result
+        });
+        let ctx = egui::Context::default();
+        for name in ["cat", "CAT.PSD"] {
+            app.poll_file_dialog(&ctx, None);
+            answer(&open, Some(FileDialogAnswer::SaveTo(name.into())));
+            app.poll_file_dialog(&ctx, None);
+            assert!(app.file_dialog_open());
+            assert!(completed.borrow().is_empty(), "opening a retry must not complete the save");
+        }
+        app.poll_file_dialog(&ctx, None);
+        let final_answer = (outcome != Err(CANCELLED.to_string())).then(|| FileDialogAnswer::SaveTo("cat.psd".into()));
+        answer(&open, final_answer);
+        app.poll_file_dialog(&ctx, None);
+        assert!(!app.file_dialog_open());
+        assert_eq!(*completed.borrow(), [outcome], "the continuation must receive the final result exactly once");
+    }
+}
