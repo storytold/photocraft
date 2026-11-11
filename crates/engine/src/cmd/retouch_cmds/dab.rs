@@ -4,6 +4,8 @@ use super::{
     Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, blend_from_str, damage_json,
     dodge_burn, flag, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
 };
+use photocraft_algo::retouch::sponge_rgb;
+use photocraft_color::{ColorMode, SampleType};
 
 // ---------------------------------------------------------------------------------------------
 // Toning (Dodge / Burn / Sponge) and focus (Blur / Sharpen), Smudge
@@ -232,7 +234,11 @@ impl DabTool {
         let sp = spacing;
         match self.clone() {
             Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
-            // Flow is already in each dab's coverage; a full-flow pass moves colours half-way.
+            // Flow is already in the dab's coverage. The reference RGB response applies to integer
+            // RGB surfaces, including 16-bit. Float RGB and the other models use the legacy curve.
+            Self::Sponge { saturate, vibrance } if fmt.mode == ColorMode::Rgb && fmt.sample != SampleType::F32 => {
+                Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge_rgb(c, k, saturate, vibrance)))
+            }
             Self::Sponge { saturate, vibrance } => Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge(c, k, saturate, vibrance))),
             Self::Focus { sharpen, strength, protect, sigma } => {
                 let a = alpha_index(&fmt);
