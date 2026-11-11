@@ -303,9 +303,12 @@ fn help_search_finds_commands_by_any_word() {
 /// In another UI language both the translated and the English names match.
 #[test]
 fn help_search_matches_the_ui_language_and_english() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let items = menu_items(&app);
-    let Some(fr) = crate::i18n::Lang::from_code("fr") else { return };
+    let fr = crate::i18n::Lang::from_code("fr").expect("fr registered");
     let ids = |q: &str| search_items(&items, q, fr).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
     assert!(!ids(&crate::i18n::tr(fr, "Layer").to_lowercase()).is_empty(), "French menu name");
     assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
@@ -315,6 +318,9 @@ fn help_search_matches_the_ui_language_and_english() {
 /// Azerbaijani menu text and paths keep dotted I distinct; English aliases still work.
 #[test]
 fn azerbaijani_help_search_uses_the_language_of_each_alias() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let az = crate::i18n::Lang::from_code("az").unwrap();
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let items = menu_items(&app);
@@ -574,4 +580,31 @@ fn copy_css_puts_the_layers_css_on_the_clipboard() {
     let css = result.unwrap().unwrap()["css"].as_str().unwrap().to_string();
     assert!(css.starts_with(".Box {\n  background-image: url(\"Box.png\");\n"), "{css}");
     assert_eq!(out.platform_output.commands, [egui::OutputCommand::CopyText(css)]);
+}
+
+/// Edit › Transform › Warp is checked while the active layer is warped, as the reference's is:
+/// a smart object with a stored warp, or a Warp box open (#9798).
+#[test]
+fn transform_warp_is_checked_for_a_warped_layer() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false), "no document");
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(8, 8, 32, 32), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false), "a plain layer");
+    let ctx = egui::Context::default();
+    crate::transform_tool::begin_warp(&mut app, &ctx).unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(true), "a Warp box is open");
+    crate::transform_tool::cancel(&mut app);
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false), "a smart object without a warp");
+    app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(true), "a stored warp");
 }

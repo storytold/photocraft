@@ -7,6 +7,16 @@ use super::{GradientChoices, LayerContent, PaintChange, PhotocraftApp, Tokens, T
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
+/// The Pen's gear, before Auto Add/Delete as in Photoshop: a popup with the Rubber Band check
+/// item, off by default and saved with the tool options (#12900).
+fn pen_gear(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
+    let gear = crate::icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Set additional pen and path options"));
+    egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(140.0);
+        ui.checkbox(&mut o.pen_rubber_band, tl!("Rubber Band"));
+    });
+}
+
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !(is_shape_tool(tool)
@@ -44,13 +54,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         );
         return true;
     }
-    if matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint) {
-        let hint = if tool == Tool::AddAnchorPoint {
-            tl!("Click a segment to add an anchor point · {alt}-click an anchor to delete it")
-        } else {
-            tl!("Click an anchor point to delete it · {alt}-click a segment to add one")
-        };
-        lbl(ui, &crate::i18n::fmt(hint, &[("alt", &crate::shortcuts::pretty("Alt"))]));
+    if tool == Tool::AddAnchorPoint {
+        // Photoshop centres this in the rest of the bar after the preset picker (#12731).
+        let text = egui::RichText::new(tl!("No options for the Add Anchor Point Tool.")).color(t.text_dim).size(12.0);
+        ui.add_sized([ui.available_width(), ui.available_height()], egui::Label::new(text));
+        return true;
+    }
+    if tool == Tool::DeleteAnchorPoint {
+        // Photoshop centres this in the rest of the bar after the preset picker (#12827).
+        let text = egui::RichText::new(tl!("No options for the Delete Anchor Point Tool.")).color(t.text_dim).size(12.0);
+        ui.add_sized([ui.available_width(), ui.available_height()], egui::Label::new(text));
         return true;
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
@@ -71,6 +84,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let o = &mut app.ui.tool_options;
         if tool == Tool::Pen {
             crate::widgets::vline(ui, 22.0);
+            pen_gear(o, ui);
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
         }
         let enter = crate::shortcuts::pretty("Enter");
@@ -97,25 +111,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ),
             ),
         }
-        // Path mode: Make Selection from the path being drawn or the active path, as Photoshop's
-        // options bar's "Make: Selection…" does (#5703).
         if app.ui.tool_options.vector_mode == "path" {
             crate::widgets::vline(ui, 22.0);
-            let has_path = active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-            if ui.add_enabled(has_path, egui::Button::new(tl!("Make Selection"))).clicked()
-                && let Err(e) = crate::canvas_tool_menu::make_selection(app)
-            {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
-            // Make: Shape turns the path into a shape layer with the shape fill and stroke (#10934).
-            let has_shape_path = super::path_ops::shape_source_path(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
-            if ui.add_enabled(has_shape_path, egui::Button::new(tl!("Make Shape"))).clicked()
-                && let Err(e) = super::make_shape(app)
-            {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
+            make_buttons(app, ui);
         }
         return true;
     }
@@ -163,6 +161,48 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         .on_hover_text(tl!("Arrowhead options"));
     }
     true
+}
+
+/// Path mode's "Make:" row, as in Photoshop's options bar: Selection… (#5703), Mask (#12904) and
+/// Shape (#10934), from the path being drawn or the active path; all greyed without one.
+fn make_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(tl!("Make:")).color(t.text_dim).size(12.0));
+    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+    let has_path = pending || active_path_name(app).is_some();
+    // A draft that finishes into the targeted vector mask has no path of its own to make a mask
+    // from, as in the canvas menu's Create Vector Mask.
+    let has_mask_path = has_path && !(pending && super::path_ops::targeted_vector_mask(app).is_some());
+    // Make: Shape turns the path into a shape layer with the shape fill and stroke (#10934).
+    let has_shape_path = pending || super::path_ops::shape_source_path(app).is_some();
+    let selection = ui.add_enabled(has_path, egui::Button::new(tl!("Selection…"))).clicked();
+    let mask = ui.add_enabled(has_mask_path, egui::Button::new(tl!("Mask"))).clicked();
+    let shape = ui.add_enabled(has_shape_path, egui::Button::new(tl!("Shape"))).clicked();
+    let made = if selection {
+        crate::canvas_tool_menu::make_selection(app)
+    } else if mask {
+        make_mask(app)
+    } else if shape {
+        super::make_shape(app).map(|_| ())
+    } else {
+        Ok(())
+    };
+    if let Err(e) = made {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Make: Mask (#12904): a vector mask on the active layer from the path being drawn (finished
+/// first, as the canvas menu's Create Vector Mask does) or the active path. The command records
+/// the History step Add Vector Mask and turns the Background into a normal layer in that edit.
+fn make_mask(app: &mut PhotocraftApp) -> Result<(), String> {
+    if app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) && !super::pen::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
+    }
+    let name =
+        active_path_name(app).ok_or_else(|| tl!("No path to make a mask from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
+    app.run("layer.vectorMask.fromPath", json!({"name": name})).map(|_| ())
 }
 
 /// Whether the Shape tools are in Path mode: a drag adds its outline to the work path.
@@ -476,3 +516,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pen_make_mask_tests.rs"]
+mod pen_make_mask_tests;
