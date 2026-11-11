@@ -474,15 +474,38 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         ));
     }
     let name = desc_text(&desc, "LUT3DFileName").or_else(|| desc_text(&desc, "NM  ")).unwrap_or_default();
+    // Photoshop's defaults are data RGB and table BGR. BGR data swaps the output red and blue, RGB
+    // table order the input axes (Photoshop 27.11, #9126); baked in, so saves write the defaults.
+    let swap_out = desc_enum(&desc, "dataOrder") == Some(b"bgrOrder");
+    let swap_in = desc_enum(&desc, "tableOrder") == Some(b"rgbOrder");
+    let data = if swap_in || swap_out { reorder_lookup(&lut.data, lut.size, swap_in, swap_out) } else { lut.data };
     Ok(Adjustment::ColorLookup {
         name,
         size: lut.size as u32,
-        lut: Some(std::sync::Arc::new(lut.data)),
+        lut: Some(std::sync::Arc::new(data)),
         tetrahedral: false,
         dither: desc_bool(&desc, "Dthr").unwrap_or(false),
         // Kept so a save embeds the file as loaded (Photoshop never converts it).
         source: Some(LutSource { format, bytes: std::sync::Arc::new(bytes.clone()) }),
     })
+}
+
+/// A red-fastest `n`³ table with red and blue swapped on its input axes and/or in its outputs.
+fn reorder_lookup(data: &[f32], n: usize, swap_in: bool, swap_out: bool) -> Vec<f32> {
+    let mut out = Vec::with_capacity(data.len());
+    for b in 0..n {
+        for g in 0..n {
+            for r in 0..n {
+                let at = if swap_in { (r * n + g) * n + b } else { (b * n + g) * n + r } * 3;
+                let mut c: [f32; 3] = data.get(at..at + 3).and_then(|s| s.try_into().ok()).unwrap_or_default();
+                if swap_out {
+                    c.reverse();
+                }
+                out.extend(c);
+            }
+        }
+    }
+    out
 }
 
 /// A LUT file's table, read the way a PSD read does (an XML file tagged `.cube` is sniffed as `.look`).
