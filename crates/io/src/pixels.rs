@@ -199,8 +199,8 @@ fn surface_planes_into_white(surface: &Surface, r: Rect, invert: &[bool], lab16:
                     let out = &mut plane[dst..dst + len * bps];
                     let inv = invert.get(c).copied().unwrap_or(false);
                     match fmt.sample {
-                        SampleType::U8 => gather_channel(out, src, ch, c, |[v]| [if inv { 255 - v } else { v }]),
-                        SampleType::U16 => gather_channel(out, src, ch, c, |v| {
+                        SampleType::U8 => gather_channel(out, src, ch, c, tile.is_none(), |[v]| [if inv { 255 - v } else { v }]),
+                        SampleType::U16 => gather_channel(out, src, ch, c, tile.is_none(), |v| {
                             let v = u16::from_ne_bytes(v);
                             let v = if lab16 && (c == 1 || c == 2) {
                                 (f64::from(v) * (f64::from(LAB16_CHROMA_MAX) / 65535.0)).round().min(65535.0) as u16
@@ -209,17 +209,9 @@ fn surface_planes_into_white(surface: &Surface, r: Rect, invert: &[bool], lab16:
                             };
                             (if inv { 65535 - v } else { v }).to_be_bytes()
                         }),
-                        SampleType::F32 => {
-                            gather_channel(
-                                out,
-                                src,
-                                ch,
-                                c,
-                                |v| {
-                                    if inv { (1.0 - f32::from_ne_bytes(v)).to_be_bytes() } else { u32::from_ne_bytes(v).to_be_bytes() }
-                                },
-                            )
-                        }
+                        SampleType::F32 => gather_channel(out, src, ch, c, tile.is_none(), |v| {
+                            if inv { (1.0 - f32::from_ne_bytes(v)).to_be_bytes() } else { u32::from_ne_bytes(v).to_be_bytes() }
+                        }),
                     }
                 }
             }
@@ -244,8 +236,12 @@ fn whiten_row<'a>(src: &'a [u8], fmt: PixelFormat, white: &[u8], scratch: &'a mu
     scratch
 }
 
-/// Copy one encoded channel from a tile row into a contiguous output plane.
-fn gather_channel<const N: usize>(out: &mut [u8], src: &[u8], ch: usize, c: usize, encode: impl Fn([u8; N]) -> [u8; N]) {
+/// Copy a tile row's channel, encoding a missing tile's uniform sample only once.
+fn gather_channel<const N: usize>(out: &mut [u8], src: &[u8], ch: usize, c: usize, uniform: bool, encode: impl Fn([u8; N]) -> [u8; N]) {
+    if uniform && let Some(&sample) = src.as_chunks::<N>().0.get(c) {
+        out.as_chunks_mut::<N>().0.fill(encode(sample));
+        return;
+    }
     for (dst, src) in out.as_chunks_mut::<N>().0.iter_mut().zip(src.as_chunks::<N>().0.iter().skip(c).step_by(ch)) {
         *dst = encode(*src);
     }
@@ -434,6 +430,60 @@ pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Missing tiles must overwrite dirty planes with the staged default, including whitening.
+    #[test]
+    fn missing_tiles_match_staging_with_nonzero_defaults() {
+        use photocraft_color::ColorMode;
+        let bounds = Rect::new(-3, -2, 258, 3);
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                let fmt = PixelFormat::new(mode, sample, true);
+                let ch = fmt.channels();
+                let invert = vec![mode == ColorMode::Cmyk; ch];
+                let lab16 = mode == ColorMode::Lab && sample == SampleType::U16;
+                let mut white = vec![0; fmt.bytes_per_pixel()];
+                photocraft_raster::encode_pixel(&fmt, &photocraft_raster::from_rgba(&fmt, [1.0; 4]), &mut white);
+                for alpha in [0.0, 1.0, f32::from_bits(0x7fc01234)] {
+                    let mut pixel = vec![0.375; ch];
+                    pixel[0] = -0.0;
+                    pixel[ch - 1] = alpha;
+                    let mut surface = Surface::with_default(fmt, &pixel);
+                    surface.fill_rect(Rect::new(0, 0, 1, 1), &vec![0.25; ch]);
+                    for white in [None, Some(white.as_slice())] {
+                        let mut staged = surface.to_interleaved(bounds);
+                        if let Some(white) = white {
+                            for p in staged.chunks_exact_mut(fmt.bytes_per_pixel()) {
+                                if photocraft_color::read_sample(p, sample, ch - 1) <= 0.0 {
+                                    p[..(ch - 1) * sample.bytes()].copy_from_slice(&white[..(ch - 1) * sample.bytes()]);
+                                }
+                            }
+                        }
+                        if lab16 {
+                            lab16_chroma(&mut staged, ch, false);
+                        }
+                        let expected = deinterleave(&staged, ch, sample, &invert);
+                        let mut got = vec![vec![42; bounds.width() as usize * bounds.height() as usize * sample.bytes()]; ch];
+                        surface_planes_into_white(&surface, bounds, &invert, lab16, &mut got.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(), white);
+                        assert_eq!(got, expected, "{mode:?} {sample:?} {alpha}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Constant fills convert once rather than once per output sample.
+    #[test]
+    fn uniform_channel_converts_only_once() {
+        let calls = std::cell::Cell::new(0);
+        let mut out = [42; 128];
+        gather_channel(&mut out, &[0, 7, 0, 7].repeat(64), 2, 1, true, |[v]| {
+            calls.set(calls.get() + 1);
+            [255 - v]
+        });
+        assert_eq!(out, [248; 128]);
+        assert_eq!(calls.get(), 1);
+    }
 
     /// Whitening preserves sample bits and borrows rows that need no replacement.
     #[test]

@@ -1,7 +1,8 @@
 # PSD export throughput and byte equivalence
 
 Layer, mask, pattern, filter and saved-channel planes gather directly from tiles, including
-large layers exported in bands.
+large layers exported in bands. Missing tiles encode each constant channel sample once per row,
+then fill the output span without repeating conversion.
 Background layers omit unused transparency. Raw merged output owns its completed planes,
 reserves saved-channel capacity and encodes native CMYK into final slices. Native rendering
 uses the full compositor band budget; wasm keeps smaller bands. Imports retain main's decoder
@@ -47,11 +48,11 @@ Non-finite evaluation, alpha, Fill, gamma and Lab behavior stay in callers.
 
 ## Rebased fixed-main release comparison
 
-The table measures final production source `636ef36e6c8d645ca5045b7d1ff954374e7943b9` rebased onto
+The table measures production source `636ef36e6c8d645ca5045b7d1ff954374e7943b9` rebased onto
 `6d99175b18e8b82dd7e7399a330236ffbafb5e73`, including upstream's [#9745](https://github.com/storytold/photocraft/pull/9745).
-Measurements were taken on November 11, 2026, after the rebase and all source fixes. The later
-documentation commit changes no measured production code. Fixed main remains
-`292ce6ab55a3c18636fe599cfbddc20ebc32cea9`; its saved measurements were neither rerun nor changed.
+Measurements were taken on November 11, 2026, after the rebase fixes. The subsequent
+constant-default gathering fast path has byte-oracle coverage but has not been timed.
+Fixed main remains `292ce6ab55a3c18636fe599cfbddc20ebc32cea9`; its saved measurements were neither rerun nor changed.
 
 Both runs use the same harness, immutable fixtures, thin LTO and one codegen unit on arm64
 macOS with 16 logical CPUs. Six 6000 × 4000 photo workflows cover RGB8/16/32f and CMYK16/32f;
@@ -87,12 +88,17 @@ or smart-cache paths.
 
 ## Fidelity and review
 
-Fresh untimed comparisons against the fetched main match all 24 standard/large PSD/PSB
+Before the constant-default follow-up, untimed comparisons against the fetched main matched all 24 standard/large PSD/PSB
 files, seven fixed-input import hashes, three standalone pattern blocks and both complete
 f32 compositor hashes. They also match the preserved canonical bytes. Large fixtures cover
 masked RGB/CMYK compositions, 2048-square patterns at every depth, filtered embedded sources
 and reopened smart objects. The main reference and branch use the duplicate-TIFF-declaration
 build repair from [#13129](https://github.com/storytold/photocraft/pull/13129).
+
+The follow-up matches staged plane bytes across depths, nonzero defaults, inversion, Lab16,
+float bits and whitening, including dirty destinations. All 704 active I/O unit tests,
+191 PSD-related integration tests and six banded-path tests pass. Strict I/O Clippy, wasm,
+layering and formatting checks pass. No further timing comparison was run.
 
 Upstream's 16/32-bit single-pass prediction loops and its complete `unpredict` implementation
 are retained. Prediction workers reuse initialized float scratch; scalar-reference, wrapping,
@@ -119,7 +125,7 @@ for PSD, I/O, raster and compositor. Layering, formatting and all 23 wasm crate 
 Raster/compositor unit and integration checks pass after rerunning the corrected blend oracle
 and the disk-sensitive tests following cache cleanup; the free-space guard stays unchanged.
 
-The local changed-function audit documents 108/108 functions. Successful mask-error tests
+The local changed-function audit documents 110/110 functions. Successful mask-error tests
 retain original error variants across buffered and streaming writes. Banded ZIP retains
 the exact input boundaries and encoded bytes; periodic pattern and whitening oracles remain
 exact. Only the final branch received a fresh timing run; no additional performance-smoke
