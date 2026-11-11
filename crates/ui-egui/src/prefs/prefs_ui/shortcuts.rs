@@ -1,5 +1,5 @@
 use super::dialogs::toolbar_tab;
-use super::*;
+use super::{BTreeMap, Map, PhotocraftApp, RichText, Tokens, Value, default_shortcut, json, prefs, vec2};
 
 /// Every shortcut-bearing command (engine registry plus shell commands): (id, label, menu path,
 /// default shortcut), menu items first in Photoshop order.
@@ -62,6 +62,14 @@ fn conflict_state(overrides: &BTreeMap<String, String>, alternates: &BTreeMap<St
 /// notation, where `Cmd` is Ctrl off the Mac.
 pub fn reserved_shortcut(sc: &str) -> bool {
     prefs::reserved_shortcut(sc)
+}
+
+/// Is a shortcut field in the front dialog (Edit › Keyboard Shortcuts) waiting for keys? Then
+/// the key pressed is the shortcut to record, so nothing else may take it first (#8965): not the
+/// dialog's own ⌘Z (#9487), the view keys that work under dialogs (⌘0, ⌘+…), or the macOS menu
+/// bar, which swallows the key equivalent of a disabled item.
+pub(crate) fn capturing_shortcut(app: &PhotocraftApp) -> bool {
+    app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::Command && d.fields.get("capture").and_then(Value::as_bool) == Some(true))
 }
 
 /// Text of a key press for the shortcut editor (`Cmd+Shift+K`), `None` for bare modifiers.
@@ -324,7 +332,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             }
         }
     }
-    let needle = filter.to_ascii_lowercase();
+    let needle = filter.trim();
     egui::ScrollArea::vertical().max_height(420.0).id_salt("shortcuts-scroll").show(ui, |ui| {
         let mut last_top = String::new();
         egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(true).show(ui, |ui| {
@@ -336,10 +344,12 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 let alts = eff_alts(&alt_overrides, id, cur.as_deref());
                 let (shown_path, shown_label) = shown(id, label, path);
                 // Match what is shown and the English name (commands are documented in English).
-                let hay =
-                    format!("{} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "))
-                        .to_lowercase();
-                if !needle.is_empty() && !hay.contains(&needle) && !id.to_ascii_lowercase().contains(&needle) {
+                let local = format!("{} {}", shown_path.join(" "), shown_label);
+                let english = format!("{} {} {} {} {id}", path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "));
+                if !needle.is_empty()
+                    && !crate::i18n::current().contains_ignore_case(&local, needle)
+                    && !crate::i18n::Lang::EN.contains_ignore_case(&english, needle)
+                {
                     continue;
                 }
                 if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {

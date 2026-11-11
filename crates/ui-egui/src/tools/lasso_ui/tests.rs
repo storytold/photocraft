@@ -170,6 +170,142 @@ fn mouse(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, kind: &str, x: f
     h.run_steps(2);
 }
 
+fn freeform_harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut h = harness();
+    let app = h.state_mut();
+    for name in ["work", "Saved drawing"] {
+        app.run("path.set", json!({"name": name, "path":{"subpaths":[{"knots":[[20,20],[220,20]]}]}})).unwrap();
+    }
+    app.ui.tool = Tool::FreeformPen;
+    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.selected_path = Some("Saved drawing".into());
+    app.ui.extras.snap = false;
+    h.run_steps(2);
+    h
+}
+
+fn freeform_run_and_straight_click(h: &mut egui_kittest::Harness<'static, PhotocraftApp>) {
+    mouse(h, "down", 50.0, 50.0, Modifiers::NONE);
+    mouse(h, "move", 90.0, 40.0, Modifiers::NONE);
+    mouse(h, "move", 120.0, 50.0, Modifiers::NONE);
+    mouse(h, "up", 120.0, 50.0, Modifiers::ALT);
+    assert!(active(h.state()), "Alt-held release keeps the fitted path in progress");
+    mouse(h, "down", 180.0, 100.0, Modifiers::ALT);
+    mouse(h, "up", 180.0, 100.0, Modifiers::ALT);
+    assert!(active(h.state()));
+}
+
+#[test]
+fn real_freeform_freehand_and_alt_straight_segments_append_to_the_owned_saved_path_once() {
+    let mut h = freeform_harness();
+    let original = h.state().session.active().unwrap().doc.clone();
+    let n = h.state().session.active().unwrap().history.past_len();
+    freeform_run_and_straight_click(&mut h);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    let app = h.state();
+    assert!(!active(app) && app.ui.pen.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.work_path, original.work_path);
+    let path = &st.doc.paths[0].path;
+    assert_eq!(path.subpaths.len(), 2);
+    assert_eq!(path.subpaths[0], original.paths[0].path.subpaths[0]);
+    let knots = &path.subpaths[1].knots;
+    assert_eq!(knots.last().unwrap().anchor, photocraft_geom::Point::new(180.0, 100.0));
+    assert_eq!(knots.last().unwrap().in_ctrl, knots.last().unwrap().anchor);
+    assert_eq!(knots[knots.len() - 2].out_ctrl, knots[knots.len() - 2].anchor);
+    assert_eq!(st.history.past_len(), n + 1);
+    assert!(h.state_mut().session.undo());
+    assert_eq!(h.state().session.active().unwrap().doc.paths, original.paths);
+}
+
+#[test]
+fn real_freeform_stale_target_source_revision_and_document_cancel_without_finishing_elsewhere() {
+    for change in ["target", "source", "revision", "document"] {
+        let mut h = freeform_harness();
+        freeform_run_and_straight_click(&mut h);
+        let app = h.state_mut();
+        match change {
+            "target" => app.ui.selected_path = Some("work".into()),
+            "source" => {
+                let st = app.session.active_mut().unwrap();
+                st.doc = std::sync::Arc::new((*st.doc).clone());
+            }
+            "revision" => app.session.active_mut().unwrap().revision += 1,
+            "document" => {
+                app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+            }
+            _ => panic!("unexpected stale-gesture test case: {change}"),
+        }
+        let source = h.state().session.active().unwrap().doc.clone();
+        let n = h.state().session.active().unwrap().history.past_len();
+        mouse(&mut h, "move", 200.0, 120.0, Modifiers::ALT);
+        mouse(&mut h, "up", 200.0, 120.0, Modifiers::NONE);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        let app = h.state();
+        assert!(!active(app) && app.ui.pen.is_none(), "{change}: no stale trace remains");
+        assert!(std::sync::Arc::ptr_eq(&source, &app.session.active().unwrap().doc), "{change}: late input changed document pixels or paths");
+        assert_eq!(app.session.active().unwrap().history.past_len(), n, "{change}");
+    }
+}
+
+#[test]
+fn another_freeform_trace_cannot_replace_a_failed_owned_draft_or_retry_it_automatically() {
+    let mut app = app();
+    app.ui.tool = Tool::FreeformPen;
+    app.ui.extras.snap = false;
+    for [x, y] in [[40.0, 60.0], [1e40, 60.0], [140.0, 80.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+    }
+    modifiers(&mut app, Modifiers::NONE);
+    let failed = app.ui.pen.clone().expect("invalid fitted trace must remain available");
+    assert!(failed.commit_failed && failed.owner.is_some());
+    assert!(!active(&app));
+    let source = app.session.active().unwrap().doc.clone();
+    let n = app.session.active().unwrap().history.past_len();
+    let journal = app.session.journal.len();
+    for middle in [[1e40, 90.0], [220.0, 90.0]] {
+        for [x, y] in [[160.0, 120.0], middle, [260.0, 140.0]] {
+            event(&mut app, "down", x, y, Modifiers::ALT);
+            event(&mut app, "move", x + 10.0, y + 10.0, Modifiers::ALT);
+            event(&mut app, "up", x, y, Modifiers::ALT);
+            assert!(!active(&app), "pending fitted draft owns the next drawing attempt");
+        }
+        modifiers(&mut app, Modifiers::NONE);
+        assert_eq!(app.ui.pen.as_ref(), Some(&failed));
+        assert!(std::sync::Arc::ptr_eq(&source, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.past_len(), n);
+        assert_eq!(app.session.journal.len(), journal, "drawing must not retry the failed engine command");
+    }
+}
+
+#[test]
+fn freeform_alt_release_in_the_next_press_keeps_the_failed_fit() {
+    let mut app = app();
+    app.ui.tool = Tool::FreeformPen;
+    for [x, y] in [[40.0, 60.0], [1e40, 60.0], [140.0, 80.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+    }
+    assert!(active(&app));
+    let source = app.session.active().unwrap().doc.clone();
+    let n = app.session.active().unwrap().history.past_len();
+    // No separate modifier-change event: this press both releases Alt and tries a new trace.
+    event(&mut app, "down", 200.0, 100.0, Modifiers::NONE);
+    let failed = app.ui.pen.clone().expect("failed fit must survive the press that finished it");
+    assert!(failed.commit_failed && failed.owner.is_some());
+    assert!(!active(&app));
+    let journal = app.session.journal.len();
+    event(&mut app, "move", 240.0, 120.0, Modifiers::NONE);
+    event(&mut app, "up", 240.0, 120.0, Modifiers::NONE);
+    assert_eq!(app.ui.pen.as_ref(), Some(&failed));
+    assert_eq!(app.session.journal.len(), journal);
+    assert!(std::sync::Arc::ptr_eq(&source, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.past_len(), n);
+}
+
 #[test]
 fn real_canvas_alt_clicks_enter_escape_and_resume() {
     for finish in ["enter", "escape", "resume", "close"] {
@@ -306,6 +442,28 @@ fn clicking_the_last_point_again_closes_the_outline() {
     assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(150, 100, 0) > 0.9);
 }
 
+/// #6578: Alt-clicking the four corners of a small square leaves the outline open (the last corner
+/// lands within 8 points of the first, but is a new vertex); a click on the first point closes it.
+#[test]
+fn alt_clicking_the_last_corner_of_a_small_shape_does_not_close_it() {
+    let mut app = app();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].fit_pending = false;
+    assert_eq!(app.point_zoom(), 1.0);
+    for [x, y] in [[100.0, 100.0], [106.0, 100.0], [106.0, 106.0], [100.0, 106.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+        assert!(active(&app), "corner ({x}, {y}): the outline stays open");
+    }
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 4, "four corners");
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    event(&mut app, "down", 100.0, 100.0, Modifiers::ALT);
+    assert!(!active(&app), "a click on the first point closes");
+    let b = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    let close_to = |v: i32, want: i32| v.abs_diff(want) <= 1;
+    assert!(close_to(b.x0, 100) && close_to(b.y0, 100) && close_to(b.x1, 106) && close_to(b.y1, 106), "a square, not a triangle: {b:?}");
+}
+
 #[test]
 fn shift_drag_constrains_freeform_pen_to_a_straight_line() {
     let mut app = app();
@@ -346,4 +504,59 @@ fn real_canvas_cmd_drag_outside_the_selection_moves_the_layer() {
     assert!(app.drag.is_none() && !active(app), "no outline in progress");
     assert!(app.session.active().unwrap().doc.selection.is_none(), "no selection was made");
     assert_eq!((alpha(105, 120), alpha(165, 120)), (0.0, 1.0), "the layer moved 30 px to the right");
+}
+
+#[test]
+fn alt_clicking_narrow_and_rotated_polygons_keeps_the_fourth_corner() {
+    for corners in [[[100.0, 100.0], [200.0, 100.0], [200.0, 106.0], [100.0, 106.0]], [[100.0, 100.0], [160.0, 180.0], [155.2, 183.6], [95.2, 103.6]]] {
+        let mut app = app();
+        app.ui.views[0].zoom = 1.0;
+        app.ui.views[0].fit_pending = false;
+        for [x, y] in corners {
+            event(&mut app, "down", x, y, Modifiers::ALT);
+            event(&mut app, "up", x, y, Modifiers::ALT);
+            assert!(active(&app), "{corners:?}");
+        }
+        assert_eq!(app.drag.as_ref().unwrap().points.len(), 4);
+        assert!(app.session.active().unwrap().doc.selection.is_none());
+        event(&mut app, "down", 100.0, 100.0, Modifiers::ALT);
+        assert!(!active(&app));
+        assert!(app.session.active().unwrap().doc.selection.is_some());
+    }
+}
+
+/// #9841: the Lasso reads its own raw pointer events (`lasso_ui::canvas_input`), so the
+/// `Buttons` starvation the other tools get does not reach it. A press that dismisses the
+/// canvas tool menu must not draw a Lasso selection, and the next ordinary drag must work.
+#[test]
+fn a_menu_dismissal_press_never_draws_a_lasso_selection() {
+    let mut h = harness();
+    // Right-click on the canvas: the selection menu opens.
+    let menu_at = crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(300.0, 100.0);
+    h.event(Event::PointerMoved(menu_at));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: menu_at, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: menu_at, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "right-click opens the selection menu");
+    let revision = h.state().session.active().unwrap().revision;
+    // The dismissal press and drag, well clear of the menu.
+    mouse(&mut h, "down", 50.0, 250.0, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "the outside press dismisses the menu");
+    mouse(&mut h, "move", 50.0, 200.0, Modifiers::NONE);
+    mouse(&mut h, "move", 150.0, 200.0, Modifiers::NONE);
+    mouse(&mut h, "move", 150.0, 250.0, Modifiers::NONE);
+    mouse(&mut h, "up", 150.0, 250.0, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().drag.is_none(), "the consumed gesture must not leave a Lasso drag behind");
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "the consumed gesture must draw no selection");
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "and no history step");
+    // The next ordinary drag draws one, so the guard did not stick.
+    mouse(&mut h, "down", 50.0, 50.0, Modifiers::NONE);
+    mouse(&mut h, "move", 90.0, 40.0, Modifiers::NONE);
+    mouse(&mut h, "move", 150.0, 60.0, Modifiers::NONE);
+    mouse(&mut h, "up", 150.0, 60.0, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "an ordinary Lasso drag draws again");
 }

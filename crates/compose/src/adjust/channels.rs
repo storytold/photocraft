@@ -1,6 +1,6 @@
 use super::color::{bayer4, gradient};
 use super::tone::{LUT_SIZE, lut, map_rgb, modern_brightness, modern_contrast, modern_lut, posterize_in, tone_luts_depth};
-use super::*;
+use super::{Adjustment, Buffer, ColorMode, LEGACY_PIVOT, SampleType, ToneSpace, Transfer, apply_depth, lab_to_srgb, rgb_to_gray, srgb_to_lab};
 
 /// Legacy Brightness/Contrast on a 32-bit document's samples: unclipped, with contrast pivoting at
 /// 127 of 255 (photoshop corpus rgb32 and gray32 brightness-contrast-legacy.psd: every pixel
@@ -257,7 +257,7 @@ pub(super) fn apply_lab(adj: &Adjustment, buf: &mut Buffer, depth: Option<Sample
                 std::array::from_fn(|i| (c[i] + after[i] - before[i]).clamp(0.0, 1.0))
             })
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {

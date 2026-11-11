@@ -1,6 +1,9 @@
 //! Compact live-gradient Properties controls, sharing the editor's stop interaction.
 
-use super::*;
+use super::{
+    Color32, Fill, GradientStyle, Layer, LayerId, Marker, PhotocraftApp, Rect, Sense, Sink, Stroke, StrokeKind, Tokens, c32, cmds, edit_stop_color, fill_of,
+    json, preset_stop_color, selection_after_edit, stops_editor_for, strip_key, vec2, widgets,
+};
 use crate::{icons, props_layout, theme};
 
 const STYLES: [(GradientStyle, &str); 5] = [
@@ -67,7 +70,7 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         if widgets::checkbox(ui, &mut value, "Align with layer").changed() {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "align": value}));
         }
-        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
+        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Center the gradient (offset 0, 0)")).clicked() {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "offset": [0, 0]}));
         }
     }
@@ -215,6 +218,7 @@ pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::pos2;
     use egui_kittest::{
         Harness,
         kittest::{NodeT, Queryable},

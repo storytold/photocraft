@@ -1,5 +1,5 @@
 use super::fields::choice_label;
-use super::*;
+use super::{Map, PhotocraftApp, RichText, Tokens, Value, json, prefs};
 
 /// Performance › Graphics: the compositor's GPU memory budget and whether the active document's
 /// layers fit it (the GPU Memory preference sets it).
@@ -136,6 +136,8 @@ pub(super) fn read_at_launch(path: &str) -> bool {
         "interface.systemTitleBar" => cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))),
         // The desktop app decides on the control server before its window opens.
         "integrations.allowAgentControl" | "integrations.controlPort" => cfg!(not(target_arch = "wasm32")),
+        // The WinTab context is opened once, when the window starts.
+        "tools.tabletInput" => cfg!(target_os = "windows"),
         _ => false,
     }
 }

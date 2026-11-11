@@ -63,6 +63,11 @@ fn every_kind_round_trips_through_params() {
 
 #[test]
 fn params_reach_the_model() {
+    basic_params_reach_the_model();
+    color_space_params_reach_the_model();
+}
+
+fn basic_params_reach_the_model() {
     let a = from_params("colorBalance", &json!({"midtones": [50, 0, -200]}), None, ColorMode::Rgb).unwrap();
     assert_eq!(a, Adjustment::ColorBalance { shadows: [0.0; 3], midtones: [50.0, 0.0, -100.0], highlights: [0.0; 3], preserve_luminosity: true });
     let a = from_params("channelMixer", &json!({"monochrome": true}), None, ColorMode::Rgb).unwrap();
@@ -82,6 +87,9 @@ fn params_reach_the_model() {
     assert!(matches!(a, Adjustment::HueSaturation { colorize: true, saturation: 0.0, hue: 120.0, .. }), "{a:?}");
     let a = from_params("gradientMap", &json!({"stops": [[1, "#ffffff"], [0, "#000000"]], "dither": true}), None, ColorMode::Rgb).unwrap();
     assert!(matches!(&a, Adjustment::GradientMap { stops, dither: true, .. } if stops[0].0 == 0.0));
+}
+
+fn color_space_params_reach_the_model() {
     // CMYK curves: ink channels; Lab: lightness without a composite.
     let a = from_params("curves", &json!({"black": [[0, 0], [255, 200]]}), None, ColorMode::Rgb).unwrap();
     assert!(matches!(&a, Adjustment::Curves { space: ToneSpace::Cmyk, black, .. } if black.len() == 2));
@@ -653,5 +661,48 @@ fn destructive_levels_match_independent_signed_hdr_endpoints() {
         if depth == 32 {
             assert!(px[0][0] < 0.0 && px[1][0] > 1.0, "HDR endpoints must remain unclipped");
         }
+    }
+}
+
+/// #8351: a Gradient Map's Photoshop gradient goes through the params: kept (with the stops
+/// already baked) while unchanged, baked again when edited, dropped by plain stops or null,
+/// and refused when malformed.
+#[test]
+fn gradient_map_source_params() {
+    let src = json!({"stops": [[0, "#102030"], [1, "#ffcc33"]], "midpoints": [0.3], "smoothness": 0.8, "method": "perceptual"});
+    let a = from_params("gradientMap", &json!({"source": src}), None, ColorMode::Rgb).unwrap();
+    let Adjustment::GradientMap { stops, source: Some(kept), .. } = &a else { panic!("{a:?}") };
+    assert!(stops.len() > 2 && kept.stops.len() == 2 && kept.method == "perceptual");
+    // The params round trip, and an unchanged source keeps the stops as they were.
+    let p = to_params(&a);
+    assert_eq!(p["source"]["midpoints"], json!([0.30000001192092896]));
+    let mut same = a.clone();
+    if let Adjustment::GradientMap { stops, .. } = &mut same {
+        stops[1].1 = [0.5; 3];
+    }
+    let kept_stops = from_params("gradientMap", &json!({"source": to_params(&same)["source"], "reverse": true}), Some(&same), ColorMode::Rgb).unwrap();
+    assert!(matches!(&kept_stops, Adjustment::GradientMap { stops, reverse: true, .. } if stops[1].1 == [0.5; 3]), "not baked again");
+    // An edited source is baked again.
+    let mut edited = p["source"].clone();
+    edited["stops"][1][1] = json!("#00ff00");
+    let b = from_params("gradientMap", &json!({"source": edited}), Some(&a), ColorMode::Rgb).unwrap();
+    let Adjustment::GradientMap { stops: sb, source: Some(kb), .. } = &b else { panic!() };
+    assert_eq!(kb.stops[1].1, [0.0, 1.0, 0.0]);
+    assert_ne!(sb, stops);
+    // Plain stops or null drop it; untouched, it stays.
+    for p in [json!({"stops": [[0, "#000000"], [1, "#ffffff"]]}), json!({"source": null})] {
+        assert!(matches!(from_params("gradientMap", &p, Some(&a), ColorMode::Rgb).unwrap(), Adjustment::GradientMap { source: None, .. }), "{p}");
+    }
+    assert!(matches!(from_params("gradientMap", &json!({"dither": true}), Some(&a), ColorMode::Rgb).unwrap(), Adjustment::GradientMap { source: Some(_), .. }));
+    // Malformed sources are refused.
+    for bad in [
+        json!({"stops": [[0, "#000000"]]}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [0.5, 0.5]}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [2]}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "smoothness": 7}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "method": "wavy"}),
+        json!(3),
+    ] {
+        assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");
     }
 }

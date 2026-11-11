@@ -11,8 +11,10 @@
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 
 use photocraft_doc::Adjustment;
-use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, LutFormat, LutSource, ToneSpace, curve_map, curve_map_outputs};
+use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, LutFormat, LutSource, ToneSpace, curve_map};
 use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
+
+mod encode;
 
 /// All PSD adjustment keys recognized as adjustment layers.
 pub const ADJUSTMENT_KEYS: [&[u8; 4]; 16] =
@@ -322,10 +324,21 @@ fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
     let mut order: Vec<usize> = (0..stops.len()).collect();
     order.sort_by(|a, b| stops[*a].0.total_cmp(&stops[*b].0));
     let mids: Vec<f32> = order.iter().skip(1).map(|i| mids[*i]).collect();
-    let baked = crate::gradient_bake::bake(stops, &mids, smooth, crate::gradient_bake::Method::from_code(method));
+    let method = crate::gradient_bake::Method::from_code(method);
+    // Kept as Photoshop's editor holds it, so the editor shows these stops (#8351).
+    let source = photocraft_doc::adjust::GradientSource {
+        stops: order.iter().filter_map(|i| stops.get(*i)).map(|(t, c)| (*t, c.to_rgb())).collect(),
+        midpoints: mids.clone(),
+        smoothness: smooth.clamp(0.0, 1.0),
+        method: method.name().to_string(),
+    };
+    let baked = crate::gradient_bake::bake(stops, &mids, smooth, method);
     let mut stops: Vec<(f32, [f32; 3])> = baked.iter().map(|(t, c)| (*t, c.to_rgb())).collect();
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-    Some(Adjustment::GradientMap { stops, reverse, dither })
+    // A plain gradient (Classic, no Smoothness, midpoints halfway) bakes to its own stops: only
+    // one that baking changed needs its source kept.
+    let source = (stops != source.stops).then_some(source);
+    Some(Adjustment::GradientMap { stops, reverse, dither, source })
 }
 
 /// Points an imported `grdm` block at `target` when only Reverse and/or Dither differ (the
@@ -333,7 +346,7 @@ fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
 /// (in whatever colour space it stored them), smoothness and method survive the save. `false`
 /// leaves `data` untouched.
 pub(crate) fn retarget_gradient_map(data: &mut [u8], target: &Adjustment, channels: Channels) -> bool {
-    let Adjustment::GradientMap { stops, reverse, dither } = target else { return false };
+    let Adjustment::GradientMap { stops, reverse, dither, .. } = target else { return false };
     let same_stops = matches!(parse(b"grdm", data, None, channels), Adjustment::GradientMap { stops: s, .. } if s == *stops);
     match (same_stops, data.get_mut(2..4)) {
         (true, Some(flags)) => {
@@ -353,7 +366,7 @@ pub(crate) fn is_unpadded_photocraft_gradient_map(data: &[u8]) -> bool {
         return false;
     }
     match parse_gradient_map(data) {
-        Some(Adjustment::GradientMap { stops, reverse, dither }) => {
+        Some(Adjustment::GradientMap { stops, reverse, dither, .. }) => {
             let padded = write_gradient_map(&stops, reverse, dither);
             padded.len() == data.len() + 2 && padded.starts_with(data)
         }
@@ -364,19 +377,31 @@ pub(crate) fn is_unpadded_photocraft_gradient_map(data: &[u8]) -> bool {
 /// `grdm` version 1 for [`Adjustment::GradientMap`] (Classic interpolation, Smoothness 0, so
 /// the stops are reproduced exactly).
 fn write_gradient_map(stops: &[(f32, [f32; 3])], reverse: bool, dither: bool) -> Vec<u8> {
+    write_grdm(stops, &[], 0.0, crate::gradient_bake::Method::Classic, reverse, dither)
+}
+
+/// `grdm` with Photoshop's gradient settings: the midpoint of segment k (after stop k, in
+/// location order, `0..1`) is stored on stop k + 1, Smoothness in 4096ths, and a method other
+/// than Classic in a version 3 block (#8351).
+fn write_grdm(stops: &[(f32, [f32; 3])], mids: &[f32], smooth: f32, method: crate::gradient_bake::Method, reverse: bool, dither: bool) -> Vec<u8> {
     let mut v = Vec::new();
-    put16(&mut v, 1);
+    let code = method.code();
+    put16(&mut v, if code.is_some() { 3 } else { 1 });
     v.push(u8::from(reverse));
     v.push(u8::from(dither));
+    if let Some(code) = code {
+        v.extend_from_slice(code);
+    }
     let name: Vec<u16> = "Custom".encode_utf16().chain(std::iter::once(0)).collect();
     v.extend_from_slice(&(name.len() as u32).to_be_bytes());
     for u in name {
         put16(&mut v, u);
     }
     put16(&mut v, stops.len().min(usize::from(u16::MAX)) as u16);
-    for (t, c) in stops.iter().take(usize::from(u16::MAX)) {
+    for (k, (t, c)) in stops.iter().take(usize::from(u16::MAX)).enumerate() {
+        let mid = k.checked_sub(1).and_then(|s| mids.get(s)).copied().filter(|m| m.is_finite()).map_or(50, |m| (m.clamp(0.05, 0.95) * 100.0).round() as u32);
         v.extend_from_slice(&((t.clamp(0.0, 1.0) * 4096.0).round() as u32).to_be_bytes());
-        v.extend_from_slice(&50u32.to_be_bytes());
+        v.extend_from_slice(&mid.to_be_bytes());
         put16(&mut v, 0);
         for x in c {
             put16(&mut v, (x.clamp(0.0, 1.0) * 65535.0).round() as u16);
@@ -391,7 +416,7 @@ fn write_gradient_map(stops: &[(f32, [f32; 3])], reverse: bool, dither: bool) ->
         put16(&mut v, 255);
     }
     put16(&mut v, 2); // expansion count
-    put16(&mut v, 0); // smoothness
+    put16(&mut v, (if smooth.is_finite() { smooth.clamp(0.0, 1.0) } else { 0.0 } * 4096.0).round() as u16); // smoothness
     put16(&mut v, 32); // length
     put16(&mut v, 0); // mode
     v.extend_from_slice(&0u32.to_be_bytes()); // random seed
@@ -668,215 +693,44 @@ fn levels_write(v: &mut Vec<u8>, c: &LevelsChannel) {
 /// (Brightness/Contrast also writes a `CgEd` descriptor). Every evaluated kind has an
 /// encoding; the result is empty only for an [`Adjustment::Unsupported`] with a malformed key.
 pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
-    let mut v = Vec::new();
+    let block = |key: &[u8; 4], data: Vec<u8>| vec![(*key, data)];
     match adj {
-        Adjustment::Invert => return vec![(*b"nvrt", Vec::new())],
-        Adjustment::Threshold { level } => {
-            put16(&mut v, q255(*level).max(1));
-            put16(&mut v, 0);
-            return vec![(*b"thrs", v)];
-        }
-        Adjustment::Posterize { levels } => {
-            put16(&mut v, (*levels).clamp(2, 255) as u16);
-            put16(&mut v, 0);
-            return vec![(*b"post", v)];
-        }
-        Adjustment::BrightnessContrast { brightness, contrast, legacy } => {
-            v.extend_from_slice(&clamp_i16(*brightness).to_be_bytes());
-            v.extend_from_slice(&clamp_i16(*contrast).to_be_bytes());
-            put16(&mut v, 127);
-            v.push(0);
-            let d = Descriptor::new("null")
-                .with("Vrsn", Value::Integer(1))
-                .with("Brgh", Value::Integer(brightness.round() as i32))
-                .with("Cntr", Value::Integer(contrast.round() as i32))
-                .with("means", Value::Integer(127))
-                .with("Lab ", Value::Boolean(false))
-                .with("useLegacy", Value::Boolean(*legacy))
-                .with("Auto", Value::Boolean(false));
-            return vec![(*b"brit", v), (*b"CgEd", VersionedDescriptor::new(d).to_bytes())];
-        }
+        Adjustment::Invert => return block(b"nvrt", Vec::new()),
+        Adjustment::Threshold { level } => return block(b"thrs", encode::words(&[q255(*level).max(1), 0])),
+        Adjustment::Posterize { levels } => return block(b"post", encode::words(&[(*levels).clamp(2, 255) as u16, 0])),
+        Adjustment::BrightnessContrast { brightness, contrast, legacy } => return encode::brightness_contrast(*brightness, *contrast, *legacy),
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
-            put16(&mut v, 2);
-            v.push(u8::from(*colorize));
-            v.push(0);
-            // The colorize triplet, then the master triplet. The inactive one gets Photoshop's
-            // defaults; the colorize hue (0..360 in the model) is stored signed, -180..180.
-            let (colorize_hsl, master) = if *colorize {
-                let h = hue.rem_euclid(360.0);
-                ([if h > 180.0 { h - 360.0 } else { h }, *saturation, *lightness], [0.0; 3])
-            } else {
-                ([30.0, 25.0, 0.0], [*hue, *saturation, *lightness])
-            };
-            for x in colorize_hsl.into_iter().chain(master) {
-                v.extend_from_slice(&clamp_i16(x).to_be_bytes());
-            }
-            // Six hue ranges (reds, yellows, greens, cyans, blues, magentas): range values in
-            // 0..360, then the range's hue, saturation and lightness.
-            for r in ranges {
-                for x in r.bounds {
-                    put16(&mut v, x.rem_euclid(360.0).round() as u16 % 360);
-                }
-                for x in [r.hue, r.saturation, r.lightness] {
-                    v.extend_from_slice(&clamp_i16(x).to_be_bytes());
-                }
-            }
-            return vec![(*b"hue2", v)];
+            return block(b"hue2", encode::hue_saturation([*hue, *saturation, *lightness], *colorize, ranges));
         }
-        Adjustment::Exposure { exposure, offset, gamma } => {
-            put16(&mut v, 1);
-            for x in [exposure, offset, gamma] {
-                v.extend_from_slice(&x.to_be_bytes());
-            }
-            v.push(1); // color space flag (spec: "1 byte")
-            return vec![(*b"expA", v)];
-        }
-        Adjustment::Levels { master, per_channel, space, black } => {
-            put16(&mut v, 2);
-            levels_write(&mut v, master);
-            for c in per_channel {
-                levels_write(&mut v, c);
-            }
-            let ident = LevelsChannel::default();
-            levels_write(&mut v, if *space == ToneSpace::Cmyk { black } else { &ident });
-            for _ in 5..29 {
-                levels_write(&mut v, &LevelsChannel::default());
-            }
-            return vec![(*b"levl", v)];
-        }
+        Adjustment::Exposure { exposure, offset, gamma } => return block(b"expA", encode::exposure(*exposure, *offset, *gamma)),
+        Adjustment::Levels { master, per_channel, space, black } => return block(b"levl", encode::levels(master, per_channel, *space, black)),
         Adjustment::Curves { master, per_channel, space, black, pencil } => {
-            v.push(u8::from(*pencil));
-            put16(&mut v, 1);
-            let ink = *space == ToneSpace::Cmyk && black.len() >= 2;
-            v.extend_from_slice(&(if ink { 0b11111u32 } else { 0b1111 }).to_be_bytes());
-            for c in std::iter::once(master).chain(per_channel.iter()).chain(ink.then_some(black)) {
-                if *pencil {
-                    v.extend(curve_map_outputs(c).iter().map(|&o| u8::try_from(q255(o)).unwrap_or(u8::MAX)));
-                    continue;
-                }
-                put16(&mut v, c.len().min(19) as u16);
-                for p in c.iter().take(19) {
-                    put16(&mut v, q255(p.output));
-                    put16(&mut v, q255(p.input));
-                }
-            }
-            return vec![(*b"curv", v)];
+            return block(b"curv", encode::curves(master, per_channel, *space, black, *pencil));
         }
-        Adjustment::SelectiveColor { relative, adjustments } => {
-            put16(&mut v, 1);
-            put16(&mut v, u16::from(!*relative));
-            v.extend_from_slice(&[0; 8]);
-            for rec in adjustments {
-                for x in rec {
-                    v.extend_from_slice(&clamp_i16(x.clamp(-100.0, 100.0)).to_be_bytes());
-                }
-            }
-            return vec![(*b"selc", v)];
-        }
+        Adjustment::SelectiveColor { relative, adjustments } => return block(b"selc", encode::selective_color(*relative, adjustments)),
         Adjustment::ColorLookup { name, lut, size, dither, source, .. } => {
-            // A lookup without a usable table (none chosen yet, or a bad size) renders as the
-            // identity, so it is written as a 2³ identity cube rather than dropped.
-            let n = *size as usize;
-            let cube = lut.as_deref().zip(photocraft_doc::adjust::lut3d_len(*size)).and_then(|(table, len)| table.get(..len)).filter(|_| n <= 256);
-            // Like Photoshop, embed the LUT file as loaded, in its own format; a table made or
-            // changed in PhotoCraft is written as `.cube`, named to match.
-            let (format, data, name, dither) = match cube {
-                Some(cube) => match lut_source_for(source.as_ref(), cube, n) {
-                    Some(src) => (src.format, src.bytes.to_vec(), name.clone(), *dither),
-                    None => {
-                        let file =
-                            photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: [0.0; 3], domain_max: [1.0; 3] };
-                        (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), *dither)
-                    }
-                },
-                _ => {
-                    let file = photocraft_cms::lutfile::LutFile { title: String::new(), ..photocraft_cms::lutfile::LutFile::identity(2) };
-                    (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), false)
-                }
-            };
-            let en =
-                |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
-            let text = |t: &str| Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul(t));
-            let d = Descriptor::new("null")
-                .with("lookupType", en("colorLookupType", "3DLUT"))
-                .with("NM  ", text(&name))
-                .with("Dthr", Value::Boolean(dither))
-                .with("profile", Value::RawData(Vec::new()))
-                .with("LUTFormat", en("LUTFormatType", psd_lut_format(format)))
-                .with("dataOrder", en("colorLookupOrder", "rgbOrder"))
-                .with("tableOrder", en("colorLookupOrder", "bgrOrder"))
-                .with("LUT3DFileData", Value::RawData(data))
-                .with("LUT3DFileName", text(&name));
-            put16(&mut v, 1);
-            v.extend_from_slice(&VersionedDescriptor::new(d).to_bytes());
-            return vec![(*b"clrL", v)];
+            return block(b"clrL", encode::color_lookup(name, lut.as_deref().map(Vec::as_slice), *size, *dither, source.as_ref()));
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
-            // Photoshop needs two stops; fewer are written as the gradient they render as
-            // (none: black to white, i.e. the gray value itself; one: that colour throughout).
-            let stops = match stops.as_slice() {
-                [] => vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])],
-                [(_, c)] => vec![(0.0, *c), (1.0, *c)],
-                s => s.to_vec(),
-            };
-            return vec![(*b"grdm", write_gradient_map(&stops, *reverse, *dither))];
+        Adjustment::GradientMap { source: Some(src), reverse, dither, .. } if src.stops.len() >= 2 => {
+            // Photoshop's own gradient, as its editor holds it, rather than the dense baked stops (#8351).
+            let mut stops = src.stops.clone();
+            stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let method = crate::gradient_bake::Method::from_name(&src.method).unwrap_or(crate::gradient_bake::Method::Classic);
+            return block(b"grdm", write_grdm(&stops, &src.midpoints, src.smoothness, method, *reverse, *dither));
         }
-        Adjustment::Vibrance { vibrance, saturation } => {
-            let d = Descriptor::new("null")
-                .with("vibrance", Value::Integer(i32::from(clamp_i16(vibrance.clamp(-100.0, 100.0)))))
-                .with("Strt", Value::Integer(i32::from(clamp_i16(saturation.clamp(-100.0, 100.0)))));
-            return vec![(*b"vibA", VersionedDescriptor::new(d).to_bytes())];
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
+            return block(b"grdm", write_gradient_map(&encode::gradient_stops(stops), *reverse, *dither));
         }
+        Adjustment::Vibrance { vibrance, saturation } => return block(b"vibA", encode::vibrance(*vibrance, *saturation)),
         Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity } => {
-            for x in shadows.iter().chain(midtones).chain(highlights) {
-                v.extend_from_slice(&clamp_i16(x.clamp(-100.0, 100.0)).to_be_bytes());
-            }
-            v.push(u8::from(*preserve_luminosity));
-            v.push(0);
-            return vec![(*b"blnc", v)];
+            return block(b"blnc", encode::color_balance([shadows, midtones, highlights], *preserve_luminosity));
         }
-        Adjustment::BlackWhite { weights, tint } => {
-            let mut d = Descriptor::new("null");
-            for (w, k) in weights.iter().zip(BW_KEYS) {
-                d = d.with(k, Value::Integer(i32::from(clamp_i16(w.clamp(-200.0, 300.0)))));
-            }
-            let d = d
-                .with("useTint", Value::Boolean(tint.is_some()))
-                .with("tintColor", Value::Descriptor(rgb_desc(tint.unwrap_or(BW_TINT))))
-                .with("bwPresetKind", Value::Integer(1))
-                .with("blackAndWhitePresetFileName", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("")));
-            return vec![(*b"blwh", VersionedDescriptor::new(d).to_bytes())];
-        }
+        Adjustment::BlackWhite { weights, tint } => return block(b"blwh", encode::black_white(weights, *tint)),
         Adjustment::PhotoFilter { color, density, preserve_luminosity } => {
-            // Version 2: an RGB colour structure keeps the colour at 16 bits.
-            put16(&mut v, 2);
-            put16(&mut v, 0);
-            for x in color {
-                put16(&mut v, (x.clamp(0.0, 1.0) * 65535.0).round() as u16);
-            }
-            put16(&mut v, 0);
-            v.extend_from_slice(&((density.clamp(0.0, 1.0) * 100.0).round() as u32).to_be_bytes());
-            v.push(u8::from(*preserve_luminosity));
-            // Photoshop requires the 17-byte Photo Filter payload after the version to be
-            // padded to a 4-byte boundary INSIDE the tagged block's declared length.
-            // A single pad byte made an 18-byte `phfl` block that Photoshop could not open
-            // even though PhotoCraft and other tolerant readers accepted it (#1455).
-            v.extend_from_slice(&[0, 0, 0]);
-            return vec![(*b"phfl", v)];
+            return block(b"phfl", encode::photo_filter(*color, *density, *preserve_luminosity));
         }
         Adjustment::ChannelMixer { matrix, monochrome } => {
-            put16(&mut v, 1);
-            put16(&mut v, u16::from(*monochrome));
-            // Red, green, blue, then the gray record (the first row, which monochrome uses).
-            for row in matrix.iter().chain(std::iter::once(&matrix[0])) {
-                let pct = |x: f32| clamp_i16((x * 100.0).clamp(-200.0, 200.0)).to_be_bytes();
-                for x in &row[..3] {
-                    v.extend_from_slice(&pct(*x));
-                }
-                v.extend_from_slice(&[0, 0]);
-                v.extend_from_slice(&pct(row[3]));
-            }
-            return vec![(*b"mixr", v)];
+            return block(b"mixr", encode::channel_mixer(matrix, *monochrome));
         }
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();
