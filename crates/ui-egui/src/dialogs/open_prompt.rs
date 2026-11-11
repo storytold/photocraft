@@ -21,8 +21,10 @@ const DAMAGE_FIELD: &str = "__psdDamagedOpen";
 /// A file read and decoded, waiting to open.
 pub struct Held {
     pub doc: Document,
-    /// The source is read-only (an Affinity file): Save doesn't write back to it.
+    /// The decoder marks this source read-only: Save does not write back to it.
     pub read_only: bool,
+    /// Applied once, only after this pending document is admitted.
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
     /// Ask whether to continue before adding a damaged PSD or showing its profile prompt.
     /// Discarded after the answer: it does not become a document or save restriction.
     pub damage_pending: bool,
@@ -326,7 +328,11 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
+    let Held { mut doc, read_only, initial_view, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
+    if let Some(view) = &initial_view {
+        view.validate(&doc).map_err(|error| error.to_string())?;
+    }
+    let previous_active = app.session.active_index();
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
@@ -344,6 +350,13 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     } else {
         app.session.open_document(doc, None).0
     };
+    if let Err(error) = app.session.apply_import_initial_view(initial_view) {
+        app.session.close(index);
+        if let Some(previous) = previous_active {
+            app.session.set_active(previous);
+        }
+        return Err(error.to_string());
+    }
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;
     if let Some(st) = app.session.active_mut() {

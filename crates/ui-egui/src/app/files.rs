@@ -96,7 +96,7 @@ impl PhotocraftApp {
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
         // string. Every other format keeps the shell's import service.
         let typed_open = photocraft_io::is_psd(bytes) || photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff);
-        let (mut doc, warnings, damaged) = if typed_open {
+        let (r, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never
             // sets it: its layered import has no damaged-content confirmation.
@@ -108,11 +108,14 @@ impl PhotocraftApp {
                 }
                 Err(error) => return Err(error.to_string()),
             };
-            (r.document, r.warnings, damaged)
+            (r, damaged)
         } else {
-            let (doc, warnings) = import(name, bytes, &opts)?;
-            (doc, warnings, false)
+            (import(name, bytes, &opts)?, false)
         };
+        let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = r;
+        if let Some(view) = &initial_view {
+            view.validate(&doc).map_err(|error| error.to_string())?;
+        }
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -127,7 +130,9 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
+                // Keep preview sources protected even when a host importer omits the flag.
+                read_only: source_read_only || photocraft_io::affinity::is_affinity(bytes),
+                initial_view,
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -173,12 +178,24 @@ impl PhotocraftApp {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
         opts.psd_high_memory_approved = approved;
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
+        if let Some(view) = &initial_view {
+            view.validate(&doc).map_err(|error| error.to_string())?;
+        }
+        let previous_active = self.session.active_index();
         // The caller records the path it read from.
-        self.session.add_document(doc, None);
+        let index = self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
+            // The source signature remains authoritative for preview-only Affinity files.
+            st.source_read_only = source_read_only || photocraft_io::affinity::is_affinity(bytes);
+        }
+        if let Err(error) = self.session.apply_import_initial_view(initial_view) {
+            self.session.close(index);
+            if let Some(previous) = previous_active {
+                self.session.set_active(previous);
+            }
+            return Err(error.to_string());
         }
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);

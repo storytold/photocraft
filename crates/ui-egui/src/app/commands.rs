@@ -352,6 +352,7 @@ impl PhotocraftApp {
             self.ui.selected_path = None;
         }
         self.path_document = document;
+        crate::file_open::apply_initial_path(self);
         // A shape box handle drag belongs to its document, revision and tool.
         crate::shape_bounds_box::cancel_stale(self);
         vector_ui::cancel_stale_pen(self);

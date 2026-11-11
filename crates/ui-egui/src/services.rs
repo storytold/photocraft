@@ -88,8 +88,14 @@ fn maximize_param(params: &Value, cmd: &str) -> Result<Option<bool>, String> {
     photocraft_engine::file_cmds::maximize_compatibility_param(params, cmd).map_err(|e| e.to_string())
 }
 
-/// Decode a file: (document, warnings about anything approximated or dropped).
-pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<(Document, Vec<String>), String>>;
+/// Decode a file, preserving its document, warnings, source policy and one-time native view.
+pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult, String>>;
+
+/// Construct an ordinary decoded document for synthetic import-service fixtures.
+#[cfg(test)]
+pub(crate) fn imported((document, warnings): (Document, Vec<String>)) -> photocraft_io::ImportResult {
+    photocraft_io::ImportResult { document, warnings, source_read_only: false, preview_only: false, initial_view: None }
+}
 
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]

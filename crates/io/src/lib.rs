@@ -196,7 +196,9 @@ impl From<RenderError> for IoError {
 /// Result of [`import`].
 #[derive(Debug, Clone)]
 pub struct ImportResult {
-    /// Optional native view hints, validated before installation and applied once on success.
+    /// Optional native view hints. Hosts validate these against the pending document,
+    /// carry them through open prompts, and apply them once after successful admission.
+    /// Unavailable view affordances must be reported rather than silently discarded.
     pub initial_view: Option<NativeInitialView>,
     /// The imported document.
     pub document: Document,

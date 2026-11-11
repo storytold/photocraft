@@ -206,6 +206,9 @@ pub fn open_bytes_as_with_options(
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
         return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
     }
+    if let Some(view) = &r.initial_view {
+        view.validate(&r.document).map_err(|error| EngineError::Other(error.to_string()))?;
+    }
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
     raw_defaults(s, &r.warnings, &mut doc);
@@ -227,6 +230,7 @@ pub fn open_bytes_as_with_options(
     if let Some(st) = s.active_mut() {
         st.source_read_only = r.source_read_only;
     }
+    s.apply_import_initial_view(r.initial_view)?;
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
     }

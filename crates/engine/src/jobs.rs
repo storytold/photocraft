@@ -1374,21 +1374,30 @@ impl Session {
                 }
                 WorkResult::Decoded(imported) => {
                     let (mut r, damaged) = *imported;
+                    if let Some(view) = &r.initial_view {
+                        view.validate(&r.document).map_err(|error| EngineError::Other(error.to_string()))?;
+                    }
                     crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                     crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
                     let damaged = confirm_damage && damaged;
                     let question = s.color.open_question(&r.document).filter(|_| !raw);
                     if damaged || question.is_some() {
-                        let held = s.hold_open(r.document, r.source_read_only);
+                        let held = s.hold_open_with_view(r.document, r.source_read_only, r.initial_view);
                         return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
                     }
+                    let has_initial_view = r.initial_view.is_some();
+                    // The shell may synchronize another completed job before handling this
+                    // open, consuming the pending path. Keep its exact index for queued opens.
+                    let initial_path_selection = r.initial_view.as_ref().and_then(|view| view.selected_path);
                     let (index, color) = s.open_document(r.document, None);
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
                     if let Some(st) = s.active_mut() {
                         st.source_read_only = r.source_read_only;
                     }
-                    Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
+                    s.apply_import_initial_view(r.initial_view)?;
+                    Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color,
+                        "hasInitialView": has_initial_view, "initialPathSelection": initial_path_selection}))
                 }
             },
         )

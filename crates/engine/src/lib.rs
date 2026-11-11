@@ -23,6 +23,7 @@ pub mod filters_ext;
 mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
+mod import_initial_view;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -319,8 +320,9 @@ pub struct Session {
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
-    /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
-    held_opens: Vec<(u64, Document, bool)>,
+    /// document, source read-only, initial view)`. The shell takes them with
+    /// [`Session::take_held_open_with_view`] so view hints survive interactive questions.
+    held_opens: Vec<(u64, Document, bool, Option<photocraft_io::NativeInitialView>)>,
     next_held_open: u64,
     pub(crate) pending_preflights: Vec<jobs::PendingPsdPreflight>,
     next_pending_preflight: u64,

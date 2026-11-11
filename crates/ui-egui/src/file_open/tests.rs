@@ -23,7 +23,7 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
                 return Err("not an image".into());
             }
             let warnings = if name.contains("warn") { vec!["Adjustment layer \"Curves 1\" was flattened".to_string()] } else { Vec::new() };
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings))
+            Ok(crate::services::imported((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings)))
         })),
         export: Some(Box::new(|_doc: &Document, path: &str, _s: &crate::ExportSettings| {
             let warnings = if path.ends_with(".png") { vec!["Layers were flattened".to_string()] } else { Vec::new() };
@@ -250,9 +250,8 @@ fn a_flat_file_that_keeps_the_document_saves_in_place() {
 #[test]
 fn save_in_place_skips_files_it_would_write_back_with_less() {
     let (mut app, written) = app_with(vec![None, None, None]);
-    app.services.import = Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-        photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-    }));
+    app.services.import =
+        Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| photocraft_io::import(name, bytes).map_err(|e| e.to_string())));
     let ctx = egui::Context::default();
     let save = |app: &mut PhotocraftApp| menus::invoke(app, &ctx, "file.save", json!({})).unwrap();
     // One icon size: written back.
@@ -1687,11 +1686,11 @@ fn opening_type_in_a_missing_font_warns() {
     let already = warning.clone();
     let services = Services {
         import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok(match name {
+            Ok(crate::services::imported(match name {
                 "installed.psd" => (installed.clone(), Vec::new()),
                 "warned.psd" => (with_missing.clone(), vec![already.clone()]),
                 _ => (with_missing.clone(), Vec::new()),
-            })
+            }))
         })),
         ..Default::default()
     };

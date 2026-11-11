@@ -718,9 +718,10 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
+    let held = |doc, read_only, initial_view, question, policy_applied| crate::open_prompt::Held {
         doc,
         read_only,
+        initial_view,
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -734,8 +735,8 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     };
     // Held back for the profile prompt (Ask When Opening).
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
-        let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        let (doc, read_only, initial_view) = app.session.take_held_open_with_view(id).ok_or("the open job's document is gone")?;
+        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, v.get("color").filter(|q| !q.is_null()).cloned(), false));
         return Ok(());
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
@@ -747,8 +748,27 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         && let Some(st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
+        let initial_view = v.get("hasInitialView").and_then(Value::as_bool).unwrap_or(false).then(|| photocraft_io::NativeInitialView {
+            selected_layers: st.selected_layers.clone(),
+            active_layer: st.active_layer,
+            target: match st.channel_view.target {
+                photocraft_engine::channel_cmds::ChannelTarget::LayerMask => photocraft_io::NativeImportTarget::LayerMask,
+                photocraft_engine::channel_cmds::ChannelTarget::Alpha(index) => photocraft_io::NativeImportTarget::AlphaChannel(index),
+                _ => photocraft_io::NativeImportTarget::Composite,
+            },
+            samplers: st.color_samplers.clone(),
+            // A preceding job event may already have synchronized the active UI and consumed
+            // its one-time path hint. The open result retains the exact index, even for duplicate names.
+            selected_path: st.initial_path_selection.or_else(|| v.get("initialPathSelection").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())),
+            visible_alpha_channels: st.channel_view.alpha_visible.iter().enumerate().filter_map(|(i, visible)| visible.then_some(i)).collect(),
+            show_layer_mask: st.channel_view.layer_mask.is_some(),
+        });
+        // Closing a queued import restores the older active document before any UI refresh.
+        // Its channel target, rather than the pending import's mask, owns the tool palette.
+        app.session.sync_tools_mask_target();
+        app.sync_views();
         let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, None, true));
         return Ok(());
     }
     if let Some(slot) = tab_slot(app, slot, order) {

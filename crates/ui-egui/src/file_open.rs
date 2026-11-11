@@ -9,6 +9,34 @@ use crate::{PhotocraftApp, notices};
 use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
+/// Consume the native import's one-time path selection after installing its view.
+/// The Paths UI addresses saved paths by name, so duplicates and its reserved targets
+/// cannot represent an exact imported index without selecting or editing a different path.
+pub(crate) fn apply_initial_path(app: &mut PhotocraftApp) {
+    let selected = app.session.active_mut().and_then(|st| {
+        let index = st.initial_path_selection.take()?;
+        let path = st.doc.paths.get(index)?;
+        let reason = if matches!(path.name.as_str(), "work" | "layer") {
+            Some("the saved path name is reserved by the Paths UI")
+        } else if st.doc.paths.iter().filter(|other| other.name == path.name).take(2).count() != 1 {
+            Some("the saved path name is not unique")
+        } else {
+            None
+        };
+        Some((st.doc.name.clone(), reason.is_none().then(|| path.name.clone()), reason))
+    });
+    let Some((document, name, reason)) = selected else { return };
+    if let Some(reason) = reason {
+        app.ui.selected_path = None;
+        // Names are source-controlled and can be large; diagnostics need no owned name copy.
+        let warning = format!("Imported path selection was not applied: {reason}. The saved path and its geometry are unchanged.");
+        let opened = crate::i18n::fmt(tl!("Opened {name}"), &[("name", document.as_str())]);
+        notices::io_warnings(app, &opened, &[warning]);
+    } else if let Some(name) = name {
+        app.ui.selected_path = Some(name);
+    }
+}
+
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
 #[derive(Clone, Debug, PartialEq, Eq)]
