@@ -76,3 +76,15 @@ fn ruler_straighten_with_crop_moves_count_points_with_the_image() {
     let (c, n) = (count_point(&s), note(&s));
     assert!((c[0] - n[0]).abs() < 1e-6 && (c[1] - n[1]).abs() < 1e-6, "count {c:?} vs note {n:?}");
 }
+
+#[test]
+fn ruler_straighten_with_crop_asks_the_gate_for_its_rotation() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400})).unwrap();
+    s.execute("image.analysis.rulerTool", json!({"start": [0, 0], "end": [100, 10]})).unwrap();
+    let size = s.active().unwrap().doc.size;
+    s.authorize = Some(|id, _| if id == "image.rotation.arbitrary" { Err(crate::EngineError::Other("denied".into())) } else { Ok(()) });
+    assert!(s.execute("image.analysis.straightenLayer", json!({"crop": true})).is_err(), "the nested rotation is denied");
+    s.authorize = None;
+    assert_eq!(s.active().unwrap().doc.size, size, "nothing turned");
+}
