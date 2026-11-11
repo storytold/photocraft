@@ -55,6 +55,81 @@ fn job(r: Started) -> JobId {
 }
 
 #[test]
+fn liquify_lease_blocks_sample_conversions_only_on_the_captured_document() {
+    let mut s = session(8, 8);
+    let original = s.active_index().unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    assert_eq!(doc.mode, ColorMode::Rgb);
+    assert_eq!(doc.depth, SampleType::U8);
+    let lease = s.hold_profile_conversion(doc.id);
+    let history = s.active().unwrap().history.past_len();
+    for (command, params) in [
+        ("image.mode.rgb", json!({"profile": "srgb"})),
+        ("image.mode.grayscale", json!({})),
+        ("image.mode.cmyk", json!({})),
+        ("image.mode.lab", json!({})),
+        ("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})),
+        ("image.mode.multichannel", json!({})),
+        ("image.mode.bits16", json!({})),
+        ("image.mode.bits32", json!({})),
+        ("color.profileMismatch", json!({"action": "convert"})),
+        ("color.profileMismatch", json!({"action": "convertToWorking"})),
+    ] {
+        let error = s.execute(command, params).unwrap_err();
+        assert!(error.to_string().contains("Close Liquify"), "{command}: {error}");
+    }
+    assert_eq!(s.execute("image.mode.rgb", json!({})).unwrap(), Value::Null);
+    assert_eq!(s.execute("image.mode.bits8", json!({})).unwrap(), Value::Null);
+    assert_eq!(s.execute("color.profileMismatch", json!({"action": "preserve"})).unwrap()["action"], "kept");
+    assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": 8})).unwrap();
+    s.execute("image.mode.bits16", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.depth, SampleType::U16);
+    assert!(s.set_active(original));
+    drop(lease);
+    s.execute("image.mode.bits16", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.depth, SampleType::U16);
+
+    let mut indexed = session(8, 8);
+    indexed.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    assert_eq!(indexed.active().unwrap().doc.mode, ColorMode::Indexed);
+    let mut multichannel = session(8, 8);
+    multichannel.execute("image.mode.multichannel", json!({})).unwrap();
+    assert_eq!(multichannel.active().unwrap().doc.mode, ColorMode::Multichannel);
+}
+
+#[test]
+fn liquify_lease_blocks_bitmap_and_initial_duotone_transitions() {
+    let mut s = session(8, 8);
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    assert_eq!(doc.mode, ColorMode::Grayscale);
+    let lease = s.hold_profile_conversion(doc.id);
+    let history = s.active().unwrap().history.past_len();
+    for (command, params) in [("image.mode.bitmap", json!({"method": "threshold"})), ("image.mode.duotone", json!({"type": "duotone"}))] {
+        let error = s.execute(command, params).unwrap_err();
+        assert!(error.to_string().contains("Close Liquify"), "{command}: {error}");
+    }
+    assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
+
+    drop(lease);
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale);
+    s.execute("image.mode.duotone", json!({"type": "duotone"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Duotone);
+
+    let _lease = s.hold_profile_conversion(s.active().unwrap().doc.id);
+    let result = s.execute("image.mode.duotone", json!({"type": "monotone"})).unwrap();
+    assert_eq!(result["inks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn a_job_applies_as_one_undo_step_and_matches_the_inline_result() {
     let mut inline = session(300, 200);
     inline.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();

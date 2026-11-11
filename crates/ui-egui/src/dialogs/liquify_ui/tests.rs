@@ -59,7 +59,7 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
                 let mut field = LiquifyField::new(bounds, 8.0);
                 field.d.fill([2.0, 0.0]);
                 let mut out = vec![[0; 4]; 64 * 48];
-                assert!(render_components(&before, bounds, &field, 1.0, &d.target, bounds, bounds, &mut out));
+                assert!(render_components(&before, bounds, &field, 1.0, &d.target, bounds, bounds, &mut out, None));
                 for y in 0..48 {
                     for x in 0..64 {
                         let mut native = before.pixel(x, y);
@@ -76,7 +76,7 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
                 d.rebuild();
                 d.render_dirty();
                 let mut detail = vec![[0; 4]; 64 * 48];
-                assert!(render_components(&before, bounds, &d.field, 1.0, &d.target, bounds, bounds, &mut detail));
+                assert!(render_components(&before, bounds, &d.field, 1.0, &d.target, bounds, bounds, &mut detail, None));
                 assert_eq!(d.out, detail, "proxy at 100% equals the detail path");
                 app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
                 commit(&mut app).unwrap();
@@ -1024,6 +1024,650 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     let st = app.session.active().unwrap();
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
+}
+
+/// Compare real preview texture uploads with the CPU canvas across profiles, depths and alpha.
+/// Check dirty updates and verify Cancel and an empty commit leave the document unchanged.
+fn managed_preview_texture(path: &str) {
+    use photocraft_cms::Builtin;
+    for profile in [Builtin::Srgb, Builtin::ProPhotoCompat, Builtin::LinearSrgb] {
+        for depth in [8, 16, 32] {
+            for alpha in [1.0, 0.37, 0.01, 0.0] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.session.execute("file.new", json!({"width":120,"height":80,"depth":depth,"background":"transparent"})).unwrap();
+                app.sync_views();
+                app.session
+                    .edit("fixture", |doc, active| {
+                        let id = active.unwrap();
+                        doc.layers.retain(|layer| layer.id == id);
+                        doc.icc_profile = Some(profile.profile().to_bytes());
+                        let bounds = doc.bounds();
+                        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(bounds, &[0.55, 0.35, 0.25, alpha]);
+                        Ok(())
+                    })
+                    .unwrap();
+                if path.starts_with("component") {
+                    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+                }
+                app.session.color.settings.monitor_profile = "srgb".into();
+                let st = app.session.active().unwrap();
+                let before = st.doc.clone();
+                let steps = st.history.past_len();
+                let display = app.session.color.canvas_display(&st.doc).unwrap();
+                let buf = photocraft_compose::flatten(&st.doc);
+                let image = display.to_rgba8(&buf);
+                let expected = Color32::from_rgba_unmultiplied(image.pixels[0], image.pixels[1], image.pixels[2], image.pixels[3]);
+                if profile == Builtin::ProPhotoCompat && alpha == 1.0 {
+                    let raw = buf.to_rgba8();
+                    assert!((0..3).any(|k| raw.pixels[k].abs_diff(image.pixels[k]) >= 4), "fixture must expose missing CMS");
+                }
+                let ctx = egui::Context::default();
+                open(&mut app, &ctx).unwrap();
+                let texture = match path {
+                    "proxy" | "component-proxy" => app.distort.liquify.as_ref().unwrap().tex.as_ref().unwrap().id(),
+                    "detail" | "component-detail" => {
+                        let d = app.distort.liquify.as_mut().unwrap();
+                        d.zoom = 2.0;
+                        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+                        d.view_tex.as_ref().unwrap().id()
+                    }
+                    _ => load_backdrop(&app, &ctx, None, before.bounds()).unwrap().id(),
+                };
+                let check = |partial| {
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let updates = delta.set.get(&texture).expect("preview texture upload");
+                    assert_eq!(updates[0].pos.is_some(), partial);
+                    let egui::ImageData::Color(image) = &updates[0].image;
+                    assert!(
+                        image.pixels.iter().all(|p| p.to_array().iter().zip(expected.to_array()).all(|(a, b)| a.abs_diff(b) <= 2)),
+                        "{path} {profile:?}@{depth} alpha={alpha}: {:?} != {expected:?}",
+                        image.pixels[0]
+                    );
+                    delta.clear();
+                };
+                check(false);
+                if path != "backdrop" {
+                    let d = app.distort.liquify.as_mut().unwrap();
+                    d.mark(Rect::new(50, 35, 55, 40), false);
+                    d.render_dirty();
+                    if path.ends_with("proxy") {
+                        d.upload(&ctx);
+                    } else {
+                        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+                    }
+                    check(true);
+                }
+                cancel(&mut app);
+                assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+                assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+                open(&mut app, &ctx).unwrap();
+                commit(&mut app).unwrap();
+                assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+            }
+        }
+    }
+}
+
+#[test]
+fn managed_preview_proxy_texture_matches_canvas() {
+    managed_preview_texture("proxy");
+}
+#[test]
+fn managed_preview_detail_texture_matches_canvas() {
+    managed_preview_texture("detail");
+}
+#[test]
+fn managed_preview_backdrop_texture_matches_canvas() {
+    managed_preview_texture("backdrop");
+}
+
+#[test]
+fn managed_preview_component_proxy_texture_matches_canvas() {
+    managed_preview_texture("component-proxy");
+}
+#[test]
+fn managed_preview_component_detail_texture_matches_canvas() {
+    managed_preview_texture("component-detail");
+}
+
+#[test]
+fn unavailable_display_transform_keeps_liquify_and_backdrop_visible() {
+    use photocraft_cms::{Builtin, ColorSpace, Profile, ProfileClass};
+    let mut profile = Builtin::ProPhotoCompat.profile().clone();
+    profile.class = ProfileClass::Abstract;
+    let bytes = profile.with_encoded_bytes().to_bytes();
+    let parsed = Profile::parse(&bytes).unwrap();
+    assert_eq!(parsed.class, ProfileClass::Abstract);
+    assert_eq!(parsed.color_space, ColorSpace::Rgb);
+    let mut app = app_with_layer();
+    app.session
+        .edit("Unsupported display source", |doc, active| {
+            doc.layers.retain(|layer| layer.id == active.unwrap());
+            doc.icc_profile = Some(bytes);
+            Ok(())
+        })
+        .unwrap();
+    app.session.color.settings.monitor_profile = "srgb".into();
+    let before = app.session.active().unwrap().doc.clone();
+    assert_eq!(photocraft_engine::color_cmds::composite_profile(&before).class, ProfileClass::Abstract);
+    assert!(app.session.color.canvas_display(&before).is_err(), "the parsed RGB profile must reach the unsupported transform branch");
+    let (display, _) = crate::canvas::canvas_display(&app, &before, None);
+    assert!(display.is_none());
+    let expected = crate::canvas::display_image(display.as_deref(), &photocraft_compose::flatten(&before));
+    let ctx = egui::Context::default();
+    open(&mut app, &ctx).unwrap();
+    let backdrop = load_backdrop(&app, &ctx, None, before.bounds()).expect("same fallback as the canvas");
+    let d = app.distort.liquify.as_mut().unwrap();
+    assert!(d.display.is_none());
+    d.zoom = 2.0;
+    d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+    let mut delta = ctx.tex_manager().write().take_delta();
+    for (texture, bounds) in [(d.tex.as_ref().unwrap().id(), d.canvas), (d.view_tex.as_ref().unwrap().id(), d.view_bounds.unwrap()), (backdrop.id(), d.canvas)]
+    {
+        let egui::ImageData::Color(image) = &delta.set.get(&texture).unwrap()[0].image;
+        for (index, pixel) in image.pixels.iter().enumerate() {
+            let x = bounds.x0 as usize + index % image.size[0];
+            let y = bounds.y0 as usize + index / image.size[0];
+            assert!(pixel.to_array().iter().zip(expected.pixels[y * expected.size[0] + x].to_array()).all(|(a, b)| a.abs_diff(b) <= 2));
+        }
+    }
+    delta.clear();
+    cancel(&mut app);
+    assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+}
+
+#[test]
+fn mapped_previews_encode_float_samples_only_in_the_dirty_region() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let bounds = || Rect::new(0, 0, 96, 64);
+    let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+    source.fill_rect(bounds(), &[4.0, 0.002, 0.25, 0.5]);
+    let field = LiquifyField::new(bounds(), 8.0);
+    let proxy = ProxyImage::new(&source, bounds(), 96);
+    let encode = |samples: &[[f32; 4]], dest: &mut [[u8; 4]]| {
+        assert_eq!(samples.len(), dest.len());
+        for (p, pixel) in samples.iter().zip(dest) {
+            for (value, expected) in p.iter().zip([2.0, 0.001, 0.125, 0.5]) {
+                assert!((value - expected).abs() < 1e-6, "working floats must precede clipping/quantisation");
+            }
+            *pixel = [17, 33, 65, 128];
+        }
+    };
+    let mut out = vec![[0; 4]; 96 * 64];
+    proxy.render_mapped(&field, [10, 10, 12, 12], &mut out, encode);
+    assert_eq!(out.iter().filter(|p| **p != [0; 4]).count(), 4);
+    assert_eq!(out[10 * 96 + 10], [17, 33, 65, 128]);
+    out.fill([0; 4]);
+    assert!(ProxyImage::render_full_resolution_mapped(&source, &field, bounds(), Rect::new(10, 10, 12, 12), &mut out, &mut Vec::new(), encode));
+    assert_eq!(out.iter().filter(|p| **p != [0; 4]).count(), 4);
+    assert_eq!(out[10 * 96 + 10], [17, 33, 65, 128]);
+}
+
+#[test]
+fn premultiplied_preview_samples_match_the_straight_canvas_display() {
+    use photocraft_cms::Builtin;
+    use photocraft_doc::{ColorMode, SampleType, Size};
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.monitor_profile = "srgb".into();
+    for profile in [Builtin::Srgb, Builtin::ProPhotoCompat, Builtin::LinearSrgb] {
+        let mut doc = Document::new("display", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        doc.icc_profile = Some(profile.profile().to_bytes());
+        let display = session.color.canvas_display(&doc).unwrap();
+        let pixels: Vec<[f32; 4]> = (0..517)
+            .map(|i| {
+                let rgb = [[0.55, 0.35, 0.25], [0.002, 0.004, 0.01], [4.0, -0.5, 0.25]][i % 3];
+                let alpha = [0.0, 0.001, 0.01, 0.37, 1.0][i % 5];
+                [rgb[0], rgb[1], rgb[2], alpha]
+            })
+            // Full transparent batches and a short tail, even with nonzero working alpha.
+            .chain(std::iter::repeat_n([4.0, -0.5, 0.25, 0.0001], 512))
+            .chain(std::iter::repeat_n([4.0, -0.5, 0.25, 0.37], 5))
+            .collect();
+        let image = display.to_rgba8(&photocraft_compose::Buffer { rect: Rect::new(0, 0, pixels.len() as i32, 1), px: pixels.clone() });
+        let samples: Vec<_> = pixels.iter().map(|p| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]).collect();
+        let mut out = vec![[0; 4]; samples.len()];
+        display.premultiplied_rgba8(&samples, &mut out);
+        for ((straight, got), pixel) in pixels.iter().zip(out).zip(image.pixels.as_chunks::<4>().0.iter()) {
+            let a = pixel[3];
+            let expected = [0, 1, 2].map(|k| ((u16::from(pixel[k]) * u16::from(a) + 127) / 255) as u8);
+            assert_eq!(got[3], a);
+            assert!(got[..3].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "{profile:?} {straight:?}: {got:?} versus {expected:?}");
+        }
+    }
+}
+
+/// The mapped algorithm contract also supports float output, including HDR values, chunk tails
+/// and dirty edges on the parallel row path. No texture quantisation is forced on its caller.
+#[test]
+fn mapped_preview_batches_preserve_float_output_and_dirty_edges() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let bounds = Rect::new(0, 0, 600, 300);
+    let dirty = Rect::new(7, 5, 592, 295);
+    let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+    source.fill_rect(bounds, &[4.0, -0.5, 0.002, 0.5]);
+    let field = LiquifyField::new(bounds, 8.0);
+    let proxy = ProxyImage::new(&source, bounds, 600);
+    for detail in [false, true] {
+        let mut out = vec![[-99.0; 4]; 600 * 300];
+        let calls = AtomicUsize::new(0);
+        let encode = |samples: &[[f32; 4]], dest: &mut [[f32; 4]]| {
+            assert_eq!(samples.len(), dest.len());
+            assert!(samples.len() > 1 && samples.len() <= 256);
+            calls.fetch_add(1, Ordering::Relaxed);
+            dest.copy_from_slice(samples);
+        };
+        if detail {
+            assert!(ProxyImage::render_full_resolution_mapped(&source, &field, bounds, dirty, &mut out, &mut Vec::new(), encode));
+        } else {
+            proxy.render_mapped(&field, [7, 5, 592, 295], &mut out, encode);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 3 * dirty.height() as usize);
+        for (i, pixel) in out.iter().enumerate() {
+            let (x, y) = ((i % 600) as i32, (i / 600) as i32);
+            let expected = if x >= dirty.x0 && x < dirty.x1 && y >= dirty.y0 && y < dirty.y1 { [2.0, -0.25, 0.001, 0.5] } else { [-99.0; 4] };
+            assert_eq!(*pixel, expected);
+        }
+    }
+}
+
+/// Fractional displacement samples nonuniform working colors before the final ICC conversion.
+#[test]
+fn displaced_nonuniform_managed_previews_interpolate_before_display_encoding() {
+    use photocraft_cms::Builtin;
+    for component in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":300,"height":24,"depth":32,"background":"transparent"})).unwrap();
+        app.session
+            .edit("nonuniform ProPhoto", |doc, active| {
+                doc.layers.retain(|layer| layer.id == active.unwrap());
+                doc.icc_profile = Some(Builtin::ProPhotoCompat.profile().to_bytes());
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for y in 0..24 {
+                    for x in 0..300 {
+                        surface.write_pixel(
+                            x,
+                            y,
+                            &[
+                                if x % 2 == 0 { 0.95 } else { 0.05 },
+                                if y % 2 == 0 { 0.12 } else { 0.78 },
+                                0.2 + (x % 3) as f32 * 0.2,
+                                [1.0, 0.37, 0.01][(x + y) as usize % 3],
+                            ],
+                        );
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        if component {
+            app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        }
+        app.session.color.settings.monitor_profile = "srgb".into();
+        let ctx = egui::Context::default();
+        open(&mut app, &ctx).unwrap();
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.field.d.fill([0.25, 0.5]);
+        let warped = d.field.clone();
+        d.zoom = 2.0;
+        let area = ERect::from_min_size(Pos2::ZERO, vec2(600.0, 48.0));
+        for preview in [false, true] {
+            d.set_preview(preview);
+            d.upload(&ctx);
+            d.update_view_preview(&ctx, area);
+            assert_eq!(d.view_bounds, Some(d.canvas));
+            assert_eq!(d.field, warped, "toggling Preview keeps the live warp");
+            for (x, y) in [(5, 5), (255, 10), (256, 10), (298, 22)] {
+                // Independently sample the identity or the known fractional displacement.
+                // Preserve destination green/opacity for a selected-component edit.
+                let [tl, tr, bl, br] = if preview { [0.375, 0.125, 0.375, 0.125] } else { [1.0, 0.0, 0.0, 0.0] };
+                let taps = [(x, y, tl), (x + 1, y, tr), (x, y + 1, bl), (x + 1, y + 1, br)];
+                let alpha: f32 = taps.iter().map(|(x, y, w)| d.source.pixel(*x, *y)[3] * w).sum();
+                let dest = d.source.pixel(x, y);
+                let mut straight = [0.0; 4];
+                for (k, channel) in straight[..3].iter_mut().enumerate() {
+                    *channel = if component && k == 1 {
+                        dest[k]
+                    } else {
+                        taps.iter()
+                            .map(|(x, y, w)| {
+                                let p = d.source.pixel(*x, *y);
+                                p[k] * p[3] * w
+                            })
+                            .sum::<f32>()
+                            / alpha
+                    };
+                }
+                straight[3] = if component { dest[3] } else { alpha };
+                let image = d.display.as_ref().unwrap().to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), straight));
+                let a = image.pixels[3];
+                let expected = [0, 1, 2].map(|k| ((u16::from(image.pixels[k]) * u16::from(a) + 127) / 255) as u8);
+                for output in [&d.out, &d.view_out] {
+                    let got = output[(y * 300 + x) as usize];
+                    assert_eq!(got[3], a);
+                    assert!(
+                        got[..3].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
+                        "component={component} preview={preview} ({x},{y}): {got:?} != {expected:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Monitor-only keys and unavailable transforms refresh every retained display texture together.
+#[test]
+fn open_liquify_refreshes_proxy_detail_and_backdrop_for_display_changes() {
+    use photocraft_cms::{Builtin, ProfileClass};
+    use photocraft_engine::display_color::Display;
+    use std::sync::Arc;
+    for component in [false, true] {
+        let mut app = app_with_layer();
+        app.session
+            .edit("ProPhoto", |doc, _| {
+                doc.icc_profile = Some(Builtin::ProPhotoCompat.profile().to_bytes());
+                Ok(())
+            })
+            .unwrap();
+        app.session.color.settings.monitor_profile = "auto".into();
+        app.session.color.displays = [Builtin::Srgb, Builtin::DisplayP3]
+            .into_iter()
+            .enumerate()
+            .map(|(i, profile)| Display {
+                id: i as u32 + 1,
+                name: format!("display {i}"),
+                frame: [i as f64 * 1920.0, 0.0, 1920.0, 1080.0],
+                profile_name: None,
+                icc: Some(profile.profile().to_bytes()),
+            })
+            .collect();
+        app.session.color.main_display = Some(1);
+        if component {
+            app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        }
+        let ctx = egui::Context::default();
+        open(&mut app, &ctx).unwrap();
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.opts.show_backdrop = true;
+        d.zoom = 2.0;
+        let field = d.field.clone();
+        let source = d.source.clone();
+        let frame = |app: &mut PhotocraftApp| {
+            ctx.run_ui(egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1100.0, 700.0))), ..Default::default() }, |ui| {
+                show(app, ui.ctx())
+            })
+        };
+        let textures = |app: &PhotocraftApp| {
+            let d = app.distort.liquify.as_ref().unwrap();
+            [d.tex.as_ref().unwrap().id(), d.view_tex.as_ref().unwrap().id(), d.backdrop.as_ref().unwrap().1.id()]
+        };
+        frame(&mut app).textures_delta.clear();
+        let old = textures(&app);
+        let old_out = app.distort.liquify.as_ref().unwrap().out.clone();
+        let old_detail = app.distort.liquify.as_ref().unwrap().view_out.clone();
+        let old_display = app.distort.liquify.as_ref().unwrap().display.clone().unwrap();
+        frame(&mut app).textures_delta.clear();
+        assert_eq!(textures(&app), old, "unchanged keys retain all textures");
+        app.session.color.main_display = Some(2);
+        let mut changed = frame(&mut app);
+        let new = textures(&app);
+        assert!(old.iter().zip(new).all(|(a, b)| *a != b));
+        let d = app.distort.liquify.as_ref().unwrap();
+        let display = d.display.as_ref().unwrap();
+        assert_eq!(display.texture_key, old_display.texture_key, "a monitor-only change keeps the source encoding");
+        assert_ne!(display.key, old_display.key);
+        assert_ne!(d.out, old_out);
+        assert_ne!(d.view_out, old_detail);
+        // The actual uploads for all three retained paths now agree with the current canvas.
+        let expected = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), d.source.pixel(20, 20).try_into().unwrap()));
+        let expected = Color32::from_rgba_unmultiplied(expected.pixels[0], expected.pixels[1], expected.pixels[2], expected.pixels[3]);
+        let delta = &mut changed.textures_delta;
+        for id in new {
+            let egui::ImageData::Color(image) = &delta.set.get(&id).unwrap()[0].image;
+            assert!(image.pixels[20 * image.size[0] + 20].to_array().iter().zip(expected.to_array()).all(|(a, b)| a.abs_diff(b) <= 2));
+        }
+        delta.clear();
+        // A newly unavailable transform must also invalidate all three paths, then recover.
+        let mut unsupported = Builtin::ProPhotoCompat.profile().clone();
+        unsupported.class = ProfileClass::Abstract;
+        for (profile, unavailable) in [(unsupported.with_encoded_bytes().to_bytes(), true), (Builtin::ProPhotoCompat.profile().to_bytes(), false)] {
+            let before = textures(&app);
+            app.session
+                .edit("display source", |doc, _| {
+                    doc.icc_profile = Some(profile);
+                    Ok(())
+                })
+                .unwrap();
+            frame(&mut app).textures_delta.clear();
+            assert!(before.iter().zip(textures(&app)).all(|(a, b)| *a != b));
+            let d = app.distort.liquify.as_ref().unwrap();
+            assert_eq!(d.field, field);
+            assert!(d.source == source);
+            assert_eq!(d.display.is_none(), unavailable);
+            if unavailable {
+                assert_eq!(
+                    d.out[20 * 120 + 20],
+                    source.pixel(20, 20).into_iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect::<Vec<_>>().as_slice()
+                );
+            }
+        }
+        assert!(app.distort.liquify.as_ref().unwrap().display.is_some());
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        cancel(&mut app);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(history, app.session.active().unwrap().history.past_len());
+    }
+}
+
+#[test]
+fn direct_profile_conversion_preserves_the_open_liquify_document_and_stroke() {
+    use photocraft_cms::Builtin;
+    use std::sync::Arc;
+
+    for background_jobs in [false, true] {
+        let mut app = app_with_layer();
+        app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+        app.run("edit.colorSettings", json!({"workingRgb":"linear-srgb","monitorProfile":"srgb"})).unwrap();
+        app.background_jobs = background_jobs;
+        let ctx = egui::Context::default();
+        open(&mut app, &ctx).unwrap();
+        pointer(&mut app, ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 55.0, y: 40.0 }, egui::Modifiers::NONE);
+        let d = app.distort.liquify.as_ref().unwrap();
+        let field = d.field.clone();
+        let source = d.source.clone();
+        assert!(field.max_displacement() > 0.0);
+        let st = app.session.active().unwrap();
+        let doc = st.doc.clone();
+        let history = st.history.past_len();
+
+        app.session.authorize = Some(|id, _| {
+            if id == "edit.convertToProfile" {
+                return Err(photocraft_engine::EngineError::Other("test authorizer denied conversion".into()));
+            }
+            Ok(())
+        });
+        assert!(app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap_err().contains("test authorizer denied conversion"));
+        app.session.authorize = None;
+        assert!(app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap_err().contains("Close Liquify"));
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&doc, &st.doc));
+        assert_eq!(st.history.past_len(), history);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.field, field);
+        assert!(d.source == source);
+
+        app.run("edit.assignProfile", json!({"profile":"display-p3"})).unwrap();
+        refresh_display(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.icc_profile.as_deref().map(Vec::as_slice), Some(Builtin::DisplayP3.profile().to_bytes().as_slice()));
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.field, field);
+        assert!(d.source == source);
+    }
+}
+
+#[test]
+fn shell_action_cannot_convert_the_document_while_liquify_is_open() {
+    use photocraft_engine::actions_cmds::Action;
+    use std::sync::Arc;
+
+    let mut app = app_with_layer();
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    app.session.actions.list.push(Action::new("Convert", vec![("edit.convertToProfile".into(), json!({"profile":"linear-srgb"}))]));
+    open(&mut app, &egui::Context::default()).unwrap();
+    let doc = app.session.active().unwrap().doc.clone();
+
+    let result = app.run("actions.play", json!({"action":"Convert"})).unwrap();
+    assert_eq!(result["ran"], 0);
+    assert_eq!(result["failed"]["id"], "edit.convertToProfile");
+    assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    assert!(app.distort.liquify.is_some());
+}
+
+#[test]
+fn direct_conditional_rejects_conversion_while_liquify_is_open() {
+    use photocraft_engine::actions_cmds::Action;
+    use std::sync::Arc;
+
+    let mut app = app_with_layer();
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    app.session.actions.list.push(Action::new("Convert", vec![("edit.convertToProfile".into(), json!({"profile":"linear-srgb"}))]));
+    open(&mut app, &egui::Context::default()).unwrap();
+    let doc = app.session.active().unwrap().doc.clone();
+
+    let params = json!({"if":"always","then":"Convert"});
+    let blocked = app.run("actions.conditional", params.clone()).unwrap();
+    assert_eq!(blocked["ran"], 0);
+    assert_eq!(blocked["failed"]["id"], "edit.convertToProfile");
+    assert!(blocked["failed"]["error"].as_str().unwrap().contains("Close Liquify"));
+    assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    assert!(app.distort.liquify.is_some());
+
+    let no_branch = app.run("actions.conditional", json!({"if":"always"})).unwrap();
+    assert_eq!(no_branch["holds"], true);
+    assert!(no_branch["played"].is_null());
+
+    cancel(&mut app);
+    let converted = app.run("actions.conditional", params).unwrap();
+    assert_eq!(converted["ran"], 1);
+    assert!(converted.get("failed").is_none());
+    assert_ne!(app.session.active().unwrap().doc.icc_profile, doc.icc_profile);
+}
+
+#[test]
+fn foreign_drop_releases_the_original_profile_and_other_sessions_stay_independent() {
+    let mut app = app_with_layer();
+    let first = app.session.active_index().unwrap();
+    let params = json!({"profile":"linear-srgb"});
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    open(&mut app, &egui::Context::default()).unwrap();
+    crate::distort_ui::drop_foreign(&mut app);
+    let doc = app.session.active().unwrap().doc.clone();
+
+    let mut standalone = photocraft_engine::Session::new();
+    standalone.add_document(doc.as_ref().clone(), None);
+    standalone.execute("edit.convertToProfile", params.clone()).unwrap();
+    assert_ne!(standalone.active().unwrap().doc.icc_profile, doc.icc_profile);
+
+    app.session.execute("file.new", json!({"width":32,"height":32,"depth":8})).unwrap();
+    assert!(app.distort.liquify.is_some());
+    app.session.execute("edit.convertToProfile", params.clone()).unwrap();
+    crate::distort_ui::drop_foreign(&mut app);
+    assert!(app.distort.liquify.is_none());
+
+    assert!(app.session.set_active(first));
+    app.run("edit.convertToProfile", params).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.icc_profile, doc.icc_profile);
+}
+
+#[test]
+fn direct_profile_conversion_runs_after_liquify_closes() {
+    use photocraft_cms::Builtin;
+
+    let mut app = app_with_layer();
+    app.run("edit.assignProfile", json!({"profile":"prophoto-compat"})).unwrap();
+    app.run("edit.colorSettings", json!({"workingRgb":"linear-srgb"})).unwrap();
+    open(&mut app, &egui::Context::default()).unwrap();
+    cancel(&mut app);
+    let st = app.session.active().unwrap();
+    let layer = st.active_layer.unwrap();
+    let before = st.doc.layer(layer).unwrap().surface().unwrap().pixel(20, 20);
+
+    app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.icc_profile.as_deref().map(Vec::as_slice), Some(Builtin::LinearSrgb.profile().to_bytes().as_slice()));
+    assert_ne!(st.doc.layer(layer).unwrap().surface().unwrap().pixel(20, 20), before);
+}
+
+#[test]
+fn reduced_proxy_paths_keep_working_float_precision_until_display_encoding() {
+    use photocraft_cms::Builtin;
+
+    let width = PROXY_SIDE + 2;
+    let left = [1.0 / 1024.0, 2.0 / 1024.0, 3.0 / 1024.0, 1.0];
+    let right = [2.0 / 1024.0, 5.0 / 1024.0, 9.0 / 1024.0, 1.0];
+    let average = std::array::from_fn(|i| (left[i] + right[i]) / 2.0);
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width":width,"height":2,"depth":32,"background":"transparent"})).unwrap();
+    app.sync_views();
+    app.session
+        .edit("Float fixture", |doc, active| {
+            doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(Rect::new(0, 0, 1, 2), &left);
+            surface.fill_rect(Rect::new(1, 0, width as i32, 2), &right);
+            Ok(())
+        })
+        .unwrap();
+    app.session.color.settings.monitor_profile = "srgb".into();
+    let st = app.session.active().unwrap();
+    let bounds = st.doc.bounds();
+    let display = app.session.color.canvas_display(&st.doc).unwrap();
+    let encode = |sample| -> [u8; 4] {
+        let image = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), sample));
+        image.pixels[..4].try_into().unwrap()
+    };
+    let quantize = |sample: [f32; 4]| sample.map(|v| (v * 255.0).round() / 255.0);
+    let rounded_left = quantize(left);
+    let rounded_right = quantize(right);
+    let rounded_average = std::array::from_fn(|i| (rounded_left[i] + rounded_right[i]) / 2.0);
+    let proxy_pixel = encode(average);
+    let backdrop_pixel = encode(left);
+    assert_ne!(proxy_pixel, encode(rounded_average), "8-bit input before reduction must fail");
+    assert_ne!(proxy_pixel, encode(quantize(average)), "8-bit reduced proxy before display must fail");
+    assert_ne!(backdrop_pixel, encode(rounded_left), "8-bit backdrop before display must fail");
+
+    for component in [false, true] {
+        if component {
+            app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        }
+        open(&mut app, &ctx).unwrap();
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!((d.proxy.scale, d.proxy.w, d.proxy.h), (2.0, width / 2, 1));
+        assert_eq!(d.proxy.px[0], average);
+        assert_eq!(d.native_proxy.is_some(), component);
+        if let Some(native) = &d.native_proxy {
+            assert_eq!(native.pixel(0, 0).as_slice(), &average);
+        }
+        let texture = d.tex.as_ref().unwrap().id();
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let egui::ImageData::Color(image) = &delta.set.get(&texture).unwrap()[0].image;
+        assert_eq!(image.size, [width / 2, 1]);
+        assert_eq!(image.pixels[0].to_array(), proxy_pixel);
+        delta.clear();
+        cancel(&mut app);
+    }
+
+    let backdrop = load_backdrop(&app, &ctx, None, bounds).unwrap();
+    let mut delta = ctx.tex_manager().write().take_delta();
+    let egui::ImageData::Color(image) = &delta.set.get(&backdrop.id()).unwrap()[0].image;
+    assert_eq!(image.size, [width / 2, 1]);
+    assert_eq!(image.pixels[0].to_array(), backdrop_pixel);
+    delta.clear();
 }
 
 /// The dialog's field and recorded points after a stroke of `tool` from (40, 40) through
