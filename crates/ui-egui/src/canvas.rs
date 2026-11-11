@@ -67,7 +67,8 @@ pub mod zoom_window_fit;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{
-    alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor, precise_other_cursor,
+    alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
+    precise_other_cursor, sampler_hover_cursor,
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
@@ -1954,12 +1955,18 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             let over = crate::analysis_ui::count_marker_at(app, xf.to_doc(p)).is_some();
             crate::tool_cursor::count(ui.ctx(), p, crate::tool_cursor::CountCursor::pick(over, alt))
         }
-        // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
+        // The Color Sampler (#11744):
+        // - Over a sampler: arrow with the sampler target, or with Alt the arrow with scissors.
+        // - Off a sampler: eyedropper with the sampler target at its top-left, or the crosshair
+        //   for precise Other Cursors.
         Tool::ColorSampler => {
-            if precise_other_cursor(app) {
+            let [x, y] = xf.to_doc(p);
+            if crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
+                sampler_hover_cursor(ui.ctx(), p, alt || app.ui.shell.sticky_alt)
+            } else if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
             } else {
-                pipette_cursor(ui.ctx(), p)
+                color_sampler_cursor(ui.ctx(), p)
             }
         }
         // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
@@ -2650,6 +2657,9 @@ mod guide_ants_tests;
 
 #[cfg(test)]
 mod live_frame_tests;
+
+#[cfg(test)]
+mod sampler_cursor_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {
