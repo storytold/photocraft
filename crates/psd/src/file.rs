@@ -116,7 +116,8 @@ impl PsdFile {
 
     /// Parses like [`Self::from_bytes`] and, when `want` asks for it, decodes the merged image
     /// (as [`Self::decode_merged`] would) in the same pass. `want` sees the file with everything
-    /// but the merged image parsed (its `image_data` is still empty). A ZIP merged image is then
+    /// but the merged image parsed (its `image_data` holds the compression method and no bytes
+    /// yet). A ZIP merged image is then
     /// inflated once for both the parse's check of the stream and the decode, not twice.
     ///
     /// Errors are those of [`Self::from_bytes`]; a merged image that passes the parse's check but
@@ -218,6 +219,11 @@ impl PsdFile {
             image_data,
             write_as_psb: false,
         };
+        // The preflight sees how the merged image is compressed: that decides whether it is
+        // decoded whole or by rows. A missing field is reported by the read below.
+        if let Ok(compression) = r.clone().u16() {
+            file.image_data.compression = Compression::from_u16(compression);
+        }
         let want = want(&file)?;
         let merged = file.read_merged_section(&mut r, want, recover)?;
         Ok((file, merged))

@@ -66,6 +66,70 @@ fn large_off_canvas_layer_is_rejected_without_decoding_its_tiny_data() {
     });
 }
 
+/// A raw or RLE channel is read a band of rows at a time, so a layer the size of a large
+/// document needs a band of workspace, not whole planes. Only a ZIP stream is inflated whole.
+#[test]
+fn a_large_layer_reserves_whole_planes_only_for_zip_channels() {
+    let (w, h) = (40_000u64, 20_000u64);
+    let workspace = |compression| {
+        let mut file = testgen::small(Version::Psb, compression);
+        let layer = &mut file.layers_mut()[0];
+        layer.rect = Rect::from_xywh(0, 0, w as u32, h as u32);
+        layer.mask = photocraft_psd::layer::MaskData::None;
+        // The generator may mix methods within a layer: the estimate reads each channel's own.
+        for channel in &mut layer.channels {
+            channel.compression = Some(compression);
+        }
+        super::estimate(&file).unwrap().workspace_bytes
+    };
+    for compression in [Compression::Raw, Compression::Rle] {
+        assert!(workspace(compression) < 512 << 20, "{compression:?}: {}", workspace(compression));
+    }
+    for compression in [Compression::Zip, Compression::ZipPrediction] {
+        assert!(workspace(compression) >= w * h * 4, "{compression:?}: {}", workspace(compression));
+    }
+}
+
+/// A raw or RLE merged image of a layered mode is read a band of rows at a time: nothing of
+/// its size is reserved but the tiles it becomes. A ZIP one is still inflated whole.
+#[test]
+fn a_large_merged_image_reserves_whole_planes_only_when_it_is_zip() {
+    let (w, h, channels) = (40_000u32, 20_000u32, 6u16);
+    let estimate = |compression| {
+        let mut file = testgen::small(Version::Psb, Compression::Raw);
+        (file.header.width, file.header.height) = (w, h);
+        // More channels than colour and transparency: the merged image holds extra channels.
+        file.header.channels = channels;
+        file.image_data.compression = compression;
+        assert!(super::super::psd_import::merged_needed(&file));
+        super::estimate(&file).unwrap()
+    };
+    // What is retained beside the tiles: the merged planes, when they are decoded whole.
+    let planes = u64::from(w) * u64::from(h) * u64::from(channels);
+    for compression in [Compression::Raw, Compression::Rle] {
+        let est = estimate(compression);
+        assert!(est.retained_bytes - est.tile_bytes < planes, "{compression:?}");
+        assert!(est.workspace_bytes < 512 << 20, "{compression:?}: {}", est.workspace_bytes);
+    }
+    for compression in [Compression::Zip, Compression::ZipPrediction] {
+        let est = estimate(compression);
+        assert!(est.retained_bytes - est.tile_bytes >= planes, "{compression:?}");
+    }
+}
+
+/// A mask is decoded one tile row at a time, whatever its height.
+#[test]
+fn a_large_raw_mask_reserves_a_band_of_workspace() {
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    if let photocraft_psd::layer::MaskData::Mask(mask) = &mut file.layers_mut()[0].mask {
+        mask.rect = Rect::from_xywh(0, 0, 40_000, 20_000);
+    } else {
+        panic!("fixture needs a parsed mask");
+    }
+    let workspace = super::estimate(&file).unwrap().workspace_bytes;
+    assert!(workspace < 512 << 20, "{workspace}");
+}
+
 #[test]
 fn user_mask_bounds_count_even_when_the_layer_is_small() {
     let mut file = testgen::small(Version::Psd, Compression::Raw);
@@ -315,7 +379,8 @@ fn preflight_rejection_and_approval_files_release_gate() {
     let mut file = testgen::small(Version::Psd, Compression::Zip);
     file.header.width = 1;
     file.header.height = 1;
-    file.layers_mut()[0].rect = Rect::from_xywh(0, 0, 30_000, 30_000);
+    // Large enough that its estimate exceeds the 8 GiB automatic allowance.
+    file.layers_mut()[0].rect = Rect::from_xywh(0, 0, 40_000, 40_000);
     let bytes = file.to_bytes().unwrap();
 
     let gb = 1u64 << 30;

@@ -724,7 +724,7 @@ fn import_psd(
                     let guard = psd_gate::acquire_decode_admission(ctl)?;
                     psd_gate::consume_attempt_allowance(est.total_bytes)?;
                     *admission_guard.borrow_mut() = Some(guard);
-                    return Ok(psd_import::merged_needed(file));
+                    return Ok(psd_import::merged_decoded_whole(file));
                 }
 
                 // 1. Initial admission check BEFORE waiting on or acquiring the gate.
@@ -758,7 +758,7 @@ fn import_psd(
 
                 // Retain guard across parse and conversion
                 *admission_guard.borrow_mut() = Some(guard);
-                Ok(psd_import::merged_needed(file))
+                Ok(psd_import::merged_decoded_whole(file))
             })();
 
             match preflight_check {

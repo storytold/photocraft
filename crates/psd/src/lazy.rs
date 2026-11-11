@@ -228,6 +228,10 @@ impl PsdFile {
             image_data: ImageData::new(Compression::Raw, Vec::new()),
             write_as_psb: false,
         };
+        // As `from_bytes_and_merged_preflight`: the preflight sees the merged image's compression.
+        if let [a, b] = c.peek(2)?[..] {
+            file.image_data.compression = Compression::from_u16(u16::from_be_bytes([a, b]));
+        }
         if !want(&file)? {
             let compression = Compression::from_u16(c.u16()?);
             file.image_data = ImageData { compression, data: Vec::new(), stored: Some(c.stored_rest()) };
