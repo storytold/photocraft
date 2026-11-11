@@ -1143,8 +1143,9 @@ fn apply_tiled_with_impl(
         let (w, h) = (area.width().min(tile as u32) as usize, area.height().min(tile as u32) as usize);
         // A Filter Gallery applies every effect to one working window. Beside the source read (`channels`
         // samples per pixel) one effect holds the three-channel window plus its worst temporaries: two more
-        // three-channel copies and a plane or gradient set, 12 samples per pixel however many effects there are.
-        let per_pixel = fmt.channels().checked_add(if matches!(params, FilterParams::FilterGallery { .. }) { 12 } else { 0 })?;
+        // three-channel copies and a plane or gradient set, 12 samples per pixel however many effects there
+        // are. An empty stack makes no working window (it returns the cropped source), so it is not charged.
+        let per_pixel = fmt.channels().checked_add(if matches!(params, FilterParams::FilterGallery { effects } if !effects.is_empty()) { 12 } else { 0 })?;
         let read_samples = w.checked_add(2 * reach as usize)?.checked_mul(h.checked_add(2 * reach as usize)?)?.checked_mul(per_pixel)?;
         let tile_count = u64::from(area.width()).div_ceil(tile as u64).checked_mul(u64::from(area.height()).div_ceil(tile as u64))?;
         // Reject hostile source-window sizes before Image::read allocates them.

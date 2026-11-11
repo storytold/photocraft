@@ -1362,7 +1362,7 @@ mod tests {
         // The check runs before any window is read, so nothing that large is allocated.
         let s = pattern(SampleType::F32);
         let big = Rect::new(0, 0, 6300, 6300);
-        let fp = FilterParams::FilterGallery { effects: vec![] };
+        let fp = FilterParams::FilterGallery { effects: vec![GalleryEffect::new(crate::GalleryFilter::ALL[0])] };
         assert!(crate::apply_tiled_with(&s, &fp, big, big, None, 6300, None, &photocraft_raster::Interrupt::NONE).is_none());
     }
 

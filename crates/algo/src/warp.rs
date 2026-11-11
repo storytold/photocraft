@@ -297,6 +297,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             let by1 = (p0[1].max(p1[1]).max(p2[1]) + 0.5).ceil().min(f64::from(t.y1)) as i32;
             let eps = -1e-9;
             let scan = (bx1 - bx0).max(0) as usize * (by1 - by0).max(0) as usize;
+            // A triangle that no longer fits is skipped, not the end of the tile: later (smaller) ones still draw.
             if scan > scan_left {
                 continue;
             }
