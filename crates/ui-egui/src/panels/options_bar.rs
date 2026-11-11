@@ -138,7 +138,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let before = app.session.tools.brush.clone();
                             let mut brush = before.clone();
                             // Mode is the tool's own brush's, kept per tool like its size.
-                            if let Some(modes) = crate::blend_keys::tool_modes(tool) {
+                            if tool == Tool::PatternStamp {
+                                // Its list has Behind, greyed on the Background (#12879).
+                                opt_label(ui, tl!("Mode"));
+                                let behind = crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind);
+                                super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush, behind);
+                            } else if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                                 opt_label(ui, tl!("Mode"));
                                 if let Some(Some(m)) =
                                     tool_mode_dropdown(ui, "retouch-mode", &modes, Some(crate::blend_keys::brush_tool_mode(tool, brush.mode)))
@@ -523,8 +528,18 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
         }
         Tool::Gradient => {
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels).
-            let mut classic = app.ui.tool_options.gradient_classic;
-            if widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0) {
+            // A gradient fill layer is always edited live: the choice reads "Gradient" and is greyed,
+            // and the stored one comes back for other layers (#12008).
+            let fill = crate::gradient_ui::fill_layer_active(app);
+            let mut classic = app.ui.tool_options.gradient_classic && !fill;
+            if ui
+                .add_enabled_ui(!fill, |ui| {
+                    widgets::dropdown(ui, "gradient-mode", tl!("Mode"), &mut classic, &[(false, "Gradient"), (true, "Classic gradient")], 118.0)
+                })
+                .inner
+                // A list opened before a fill layer became active can still be clicked.
+                && !fill
+            {
                 app.ui.tool_options.gradient_classic = classic;
             }
             // Live "Gradient" (a Gradient Fill layer) or "Classic gradient" (pixels):
@@ -1022,3 +1037,7 @@ mod blur_strength_alert_tests;
 #[cfg(test)]
 #[path = "../sharpen_strength_alert_tests.rs"]
 mod sharpen_strength_alert_tests;
+
+#[cfg(test)]
+#[path = "../smudge_strength_alert_tests.rs"]
+mod smudge_strength_alert_tests;
