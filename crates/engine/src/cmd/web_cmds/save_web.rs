@@ -162,13 +162,64 @@ pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMu
 fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
     let mut m = settings.clone();
     if let Some(o) = m.as_object_mut() {
-        for k in ["path", "dir", "trustedSliceHtml"] {
+        for k in ["path", "dir", "folder", "trustedSliceHtml"] {
             o.remove(k);
         }
     }
     s.prefs.edit(|p| {
         p.dialogs.insert(cmd.to_string(), m);
     });
+}
+
+/// Which slices an export writes.
+enum SlicePick {
+    All,
+    User,
+    Numbers(Vec<u64>),
+}
+
+/// The slices chosen by `slices` (`all|user|selected`) and `numbers`. Photoshop's dialog can
+/// only select slices it shows, so a script naming one that doesn't exist, an unknown mode, or
+/// Selected Slices with nothing selected is refused rather than exporting too few or too many
+/// files. A document without slices is one image whatever the mode, as in the dialog.
+fn slice_pick(p: &Value, cmd: &str, doc: &photocraft_doc::Document) -> Result<SlicePick> {
+    let mode = match p.get("slices") {
+        None | Some(Value::Null) => "all",
+        Some(Value::String(m)) if matches!(m.as_str(), "all" | "user" | "selected") => m.as_str(),
+        Some(v) => return Err(bad(cmd, format!("unknown slices `{}` (all|user|selected)", v.as_str().map_or_else(|| v.to_string(), str::to_string)))),
+    };
+    let Some(numbers) = p.get("numbers").filter(|v| !v.is_null()) else {
+        return match mode {
+            "selected" if !doc.slices.is_empty() => Err(bad(cmd, "no slices are selected: Selected Slices needs `numbers`")),
+            "user" => Ok(SlicePick::User),
+            _ => Ok(SlicePick::All),
+        };
+    };
+    let numbers: Vec<u64> = numbers
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .and_then(|a| a.iter().map(Value::as_u64).collect())
+        .ok_or_else(|| bad(cmd, "numbers must be a list of slice numbers"))?;
+    let count = slices::resolve(doc).len();
+    let mut missing: Vec<u64> = numbers.iter().copied().filter(|n| !(1..=count as u64).contains(n)).collect();
+    missing.sort_unstable();
+    missing.dedup();
+    if !missing.is_empty() {
+        let list = missing.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+        let what = if missing.len() == 1 { "slice" } else { "slices" };
+        return Err(bad(cmd, format!("no {what} numbered {list} (the document's slices are 1–{count})")));
+    }
+    // `path` alone is the whole image in one file (with `slices` too, the slices go next to it):
+    // the chosen slices would be ignored, so a document with slices refuses it.
+    let given = |k: &str| p.get(k).and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+    if given("path") && !given("dir") && matches!(p.get("slices"), None | Some(Value::Null)) && count > 1 {
+        return Err(bad(cmd, "`path` writes the whole image as one file: to export the slices in `numbers`, use `dir`"));
+    }
+    // `folder` alone (#5305) is the whole image too, under the document's name.
+    if given("folder") && !given("path") && !given("dir") && count > 1 {
+        return Err(bad(cmd, "`folder` writes the whole image as one file: to export the slices in `numbers`, use `dir`"));
+    }
+    Ok(SlicePick::Numbers(numbers))
 }
 
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
@@ -178,33 +229,23 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     }
     // Settings are checked first, so a refused export leaves a floating selection where it is.
     let st = WebSettings::from_params(p, cmd)?;
-    // The export shows the moved selection as it appears on the canvas, so it is dropped here
-    // (`before_command` leaves it floating for this command). A refused export puts the whole
-    // editing state back: no history step, the piece floating again.
-    let before = s.active().filter(|d| d.floating.is_some()).cloned();
-    crate::float_cmds::before_command(s, cmd)?;
-    // A drop that fails part-way (a moved mask that cannot be allocated) is rolled back too.
-    let result = crate::float_cmds::drop_floating(s).and_then(|_| export_dropped(s, p, write, native_paths, &st));
-    if let (Err(_), Some(before)) = (&result, before)
-        && let Some(now) = s.active_mut()
-    {
-        let revision = now.revision + 1;
-        let clean = before.saved_revision == before.revision;
-        *now = before;
-        now.revision = revision;
-        if let Some(f) = now.floating.as_mut() {
-            f.revision = revision;
-        }
-        if clean {
-            now.saved_revision = revision;
+    // So are the slices: committing a floating move doesn't change them.
+    let pick = slice_pick(p, cmd, &s.active().ok_or(EngineError::NoDocument)?.doc)?;
+    // So is the HTML table's size, which depends on the slices alone: an oversized one is refused
+    // before the floating move is committed, so the refusal changes nothing.
+    let given = |k: &str| p.get(k).and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+    // (Only the exports that lay out the slices: `dir`, or `path` with `slices`.)
+    if p.get("html").and_then(Value::as_bool).unwrap_or(false) && (given("dir") || (given("path") && p.get("slices").is_some())) {
+        let n = slices::resolve(&s.active().ok_or(EngineError::NoDocument)?.doc).len();
+        if n > MAX_HTML_SLICES {
+            return Err(bad(cmd, format!("{n} slices are more than an HTML table of {MAX_HTML_SLICES} can lay out")));
         }
     }
-    result
-}
-
-fn export_dropped(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool, st: &WebSettings) -> Result<Value> {
-    let cmd = "file.export.saveForWebLegacy";
-    let st = st.clone();
+    // The export shows the moved selection as it appears on the canvas. `Session::execute` leaves
+    // it floating for this command (`keeps_floating`) so the checks above refuse without changing
+    // anything; it is dropped here, for direct platform calls too.
+    crate::float_cmds::before_command(s, cmd)?;
+    crate::float_cmds::drop_floating(s)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;
@@ -219,18 +260,18 @@ fn export_dropped(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8])
     let dpi = wdoc.resolution_dpi;
     let warnings = web_warnings(&st, exif, dpi);
     let all = slices::resolve(&doc);
-    let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
-    let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
-    let chosen: Vec<&ResolvedSlice> = all
-        .iter()
-        .filter(|r| match (&numbers, pick) {
-            (Some(n), _) => n.contains(&(r.number as u64)),
-            (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
-            _ => true,
-        })
-        .collect();
+    let picked = |r: &ResolvedSlice| match &pick {
+        SlicePick::Numbers(n) => n.contains(&(r.number as u64)),
+        SlicePick::User => r.origin != photocraft_doc::SliceOrigin::Auto,
+        SlicePick::All => true,
+    };
+    let chosen: Vec<&ResolvedSlice> = all.iter().filter(|r| picked(r)).collect();
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
+    // `folder` (with no `path` or `dir`): the whole image into that folder under the document's
+    // own name, so an action recorded with the suggested name saves each document it is played
+    // on under that document's name, as in Photoshop (#5305).
+    let folder = p.get("folder").and_then(Value::as_str).filter(|_| single.is_none() && dir.is_none());
     let mut last_web = p.clone();
     // A trusted-markup decision applies to this export only, never to another document opened
     // with the dialog's remembered settings.
@@ -238,11 +279,21 @@ fn export_dropped(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8])
         last.remove("trustedSliceHtml");
     }
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
-    if single.is_none() && dir.is_none() {
+    if single.is_none() && dir.is_none() && folder.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
         return Ok(
             json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index}),
         );
+    }
+    if let Some(folder) = folder {
+        let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let name = format!("{}.{}", portable_generated_stem(slices::base_name(&doc)), o.ext);
+        write(&web_derived_path(folder, &name, native_paths)?, &o.bytes)?;
+        remember_web_settings(s, cmd, &last_web);
+        s.file_menu.last_web = Some(last_web);
+        crate::automate_cmds::fire_event(s, "export");
+        let path = join(folder, &name);
+        return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "warnings": warnings}));
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
@@ -255,11 +306,6 @@ fn export_dropped(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8])
     let dir =
         dir.map(str::to_string).or_else(|| single.and_then(|f| std::path::Path::new(f).parent().map(|d| d.to_string_lossy().into_owned()))).unwrap_or_default();
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
-    // The HTML table is a grid of every distinct slice edge across and down: its cells grow
-    // with the square of the slice count, so a document of many tiny slices is refused here.
-    if html && chosen.len() > MAX_HTML_SLICES {
-        return Err(bad(cmd, format!("{} slices are more than an HTML table of {MAX_HTML_SLICES} can lay out", chosen.len())));
-    }
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
@@ -284,11 +330,18 @@ fn export_dropped(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8])
     };
     // Slices never overlap here: one covered by later slices comes as its visible pieces (see
     // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
-    // text goes into its first piece only.
+    // text goes into its first piece only. In the HTML, a slice that isn't exported stays as an
+    // empty cell, so the exported ones keep their place in the table.
     let mut texted = std::collections::HashSet::new();
-    for r in &chosen {
+    for r in &all {
         let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
         if piece.is_empty() {
+            continue;
+        }
+        if !picked(r) {
+            if html {
+                cells.push((piece, String::new(), String::new()));
+            }
             continue;
         }
         let stored = r.id.and_then(|id| doc.slices.get(id));
