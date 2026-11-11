@@ -136,3 +136,37 @@ was not run locally. Final independent reviews found no actionable issues.
 
 The evidence cleanup changes documentation and data placement only. Application
 code, regression tests, benchmark harnesses and dependencies are unchanged.
+
+## 2026-11-11 — Move correctness follow-up
+
+CPU command timings on a 6000 × 4000 RGB16 raster, with two Rayon workers. Baseline: `30a282996b6d62379acf2cd7200947867b58677a` (this PR with main `58e0a152b`). Candidate: `445a95d470f245e8986cf933f315403efb87ccac`, including main `d0299c417`. The intervening main change only repairs cursor tests/rendering; it does not change the engine measured here. Both builds use the same `multi_channel_bench` source and Rust 1.99.0 release profile.
+
+Three interleaved processes per build and selection case, one warmup and six repeats per target/operation/process: 432 warm samples. Target modes are interleaved inside each process. No compiler or PhotoCraft test process ran during measurement. These are CPU command latencies, not completed UI frame or hardware-GPU measurements.
+
+| Selection | Operation | Target | Baseline p50, ms | Candidate p50, ms | Same work? |
+|---|---|---|---:|---:|---|
+| None | Move | Whole layer | 18.55 | 18.51 | Yes |
+| None | Move | Red | 83.11 | 80.15 | Yes |
+| None | Move | Red + Blue | 132.64 | 133.55 | Yes |
+| None | Wrapped Move | Whole layer | 24.42 | 23.99 | Yes |
+| None | Wrapped Move | Red | 83.56 | 160.80 | No |
+| None | Wrapped Move | Red + Blue | 133.73 | 135.18 | No |
+| 16 × 16 | Move | Whole layer | 18.75 | 18.71 | Yes |
+| 16 × 16 | Move | Red | 84.24 | 101.49 | No |
+| 16 × 16 | Move | Red + Blue | 192.50 | 193.92 | Yes |
+| 16 × 16 | Wrapped Move | Whole layer | 24.41 | 24.32 | Yes |
+| 16 × 16 | Wrapped Move | Red | 84.05 | 102.26 | No |
+| 16 × 16 | Wrapped Move | Red + Blue | 193.17 | 196.69 | No |
+
+The old native-channel path ignored `wrap`; its single-channel selected path also ignored the selection. Those rows compare incorrect work with corrected work. In particular, corrected whole-channel wrapped Red takes 160.80 ms and corrected selected Red about 101–102 ms on this fixture. The selection case still uses the existing scalar extraction/writeback path. These results do not compare against the old floating-selection UI path or establish dragging-speed equivalence for it.
+
+Comparable channel paths: unselected Red 83.11 → 80.15 ms, unselected Red + Blue 132.64 → 133.55 ms, selected Red + Blue 192.50 → 193.92 ms. Small samples and a shared desktop do not establish statistical equivalence. GPU uniform-only dragging retains its cached-source path; resource validation is performed at capture and mesh-buffer growth, not on every offset. Wrapped channel Move currently uses the CPU preview. No new GPU-frame speed claim is made.
+
+Reproduce on each revision with the identical candidate harness (copy only the example to the baseline checkout):
+
+```sh
+cargo +1.99.0 run --locked -j1 --release -p photocraft-engine --example multi_channel_bench -- --move --subset
+cargo +1.99.0 run --locked -j1 --release -p photocraft-engine --example multi_channel_bench -- --move --subset --region
+```
+
+`CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`, and `RAYON_NUM_THREADS=2` were used. Harness SHA-256: `ed1d417e7c4e1199eeb808983b4a5e666b7bfd4b79028c13a1e3bf30f84a094a`. Raw samples, binary hashes and compiler-artifact provenance are retained locally for publication with this follow-up. The older archived comparisons above remain unchanged.
