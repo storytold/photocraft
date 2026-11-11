@@ -96,3 +96,13 @@ fn a_very_long_stroke_keeps_the_amount_finite() {
     let (_, amount) = paint(0.01, 0.0, 20_000.0, 1.0);
     assert!(amount.is_finite() && amount >= 0.0, "{amount}");
 }
+
+#[test]
+fn a_dab_deposits_the_supply_left_at_its_own_distance() {
+    // A 35 px tip at spacing 1000 % lays dabs at x 30, 380 and 730. At Load 1 % the supply is 390
+    // px of stroke: the dab 350 px in is solid, the one 700 px in is past it and already fading,
+    // not painted with the supply left at the dab before.
+    let (alpha, _) = paint(0.01, 30.0, 770.0, 10.0);
+    assert!(alpha(380) >= 250, "alpha {} at x 380, inside the supply", alpha(380));
+    assert!(alpha(730) < 250, "alpha {} at x 730, 700 px into a 390 px supply", alpha(730));
+}

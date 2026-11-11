@@ -271,9 +271,21 @@ pub fn apply_mixer_dab_region(
         v
     };
     let res = state.reservoir.map(native);
-    let mut amount = if res.is_some() { state.amount.clamp(0.0, 1.0) } else { 0.0 };
-    let mut pickup: Option<Vec<f32>> = state.pickup.map(native);
     let (mix, flow, load) = (m.mix.clamp(0.0, 1.0), m.flow.clamp(0.0, 1.0), m.load.clamp(0.0, 1.0));
+    let mut amount = if res.is_some() { state.amount.clamp(0.0, 1.0) } else { 0.0 };
+    // The supply is a length of stroke (#11943): the dab deposits what is left at its own
+    // distance from the stroke start, the first dab at none.
+    let (x, y) = (fp.dab.center.x, fp.dab.center.y);
+    let before = match state.last_dab {
+        Some((index, ..)) if fp.index > index => state.travelled,
+        _ => 0.0,
+    };
+    let step = state.last_dab.filter(|(index, ..)| fp.index > *index).map_or(0.0, |(_, lx, ly)| (x - lx).hypot(y - ly) as f32);
+    let after = before + if step.is_finite() { step } else { 0.0 };
+    // Far enough past the supply both shares underflow to zero; the load is then simply used up.
+    let left = supply_left(load, before);
+    amount = if left > 0.0 { amount * supply_left(load, after) / left } else { 0.0 };
+    let mut pickup: Option<Vec<f32>> = state.pickup.map(native);
     let mut paint = vec![0.0f32; n];
     // Transfer › Wetness / Mix Jitter scale the settings per dab.
     let (wet, mix) = (m.effective_wet(&fp.dab), mix * fp.dab.mix.clamp(0.0, 1.0));
@@ -347,16 +359,6 @@ pub fn apply_mixer_dab_region(
             }
         }
     }
-    let (x, y) = (fp.dab.center.x, fp.dab.center.y);
-    let before = match state.last_dab {
-        Some((index, ..)) if fp.index > index => state.travelled,
-        _ => 0.0,
-    };
-    let step = state.last_dab.filter(|(index, ..)| fp.index > *index).map_or(0.0, |(_, lx, ly)| (x - lx).hypot(y - ly) as f32);
-    let after = before + if step.is_finite() { step } else { 0.0 };
-    // Far enough past the supply both shares underflow to zero; the load is then simply used up.
-    let left = supply_left(load, before);
-    amount = if left > 0.0 { amount * supply_left(load, after) / left } else { 0.0 };
     state.travelled = after;
     state.last_dab = Some((fp.index, x, y));
     state.amount = amount;
