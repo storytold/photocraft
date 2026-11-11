@@ -82,12 +82,17 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
     let acl = Ok(());
 
     // A save over a 0600 file must not widen it to whatever the process default is.
+    // A failed group lookup counts as "group not kept": the mode is still copied, minus the group bits.
     #[cfg(unix)]
-    let permissions = metadata.and_then(|m| group.and_then(|kept| set_permissions_keeping_group(&m, to, kept)));
+    let permissions = metadata.and_then(|m| set_permissions_keeping_group(&m, to, group.as_ref().copied().unwrap_or(false)));
     #[cfg(not(unix))]
     let permissions = std::fs::metadata(from).and_then(|m| std::fs::set_permissions(to, m.permissions()));
+    #[cfg(unix)]
+    let group = group.map(drop);
+    #[cfg(not(unix))]
+    let group = Ok(());
 
-    attributes.and(acl).and(created).and(permissions)
+    attributes.and(acl).and(created).and(group).and(permissions)
 }
 
 /// Give `to` the group of the replaced file (`from`) when it has another: group bits are access
