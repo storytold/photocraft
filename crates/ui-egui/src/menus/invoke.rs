@@ -39,12 +39,40 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether command `id` leaves a Type box-handle drag going: only the ones that change what is
+/// on screen and nothing else. `UI_COMMANDS` is every command the shell carries out itself, so it
+/// can't tell them apart: it holds `edit.freeTransform` and `file.save`, which must see the dragged
+/// box, `view.clearSelectedGuides`, which edits the document, and `window.nextDocument`, which
+/// switches to another one mid-drag. So the commands that cannot touch either are listed one by
+/// one, and the panel ones (open, close, arrange: `window.panel.*`, `window.toggle.*` and
+/// `type.panels.*`, the Character panel's Cmd+T among them) by prefix, since they only lay out
+/// windows. Everything else applies the box first, which is harmless when no drag is going.
+fn keeps_box_drag(id: &str) -> bool {
+    const VIEW: &[&str] = &[
+        "view.zoomIn",
+        "view.zoomOut",
+        "view.fitOnScreen",
+        "view.actualPixels",
+        "view.rotateView",
+        "view.resetView",
+        "view.screenMode.cycle",
+        "view.darkenInterface",
+        "view.lightenInterface",
+    ];
+    VIEW.contains(&id) || ["window.panel.", "window.toggle.", "type.panels."].iter().any(|prefix| id.starts_with(prefix))
+}
+
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
         authorize(id, &params)?;
+    }
+    // A held Type box handle applies its box before any command that may read or edit the
+    // document runs; a command that edits it first would make the drag's box stale and lose it.
+    if !keeps_box_drag(id) {
+        crate::type_box_preview::end_drag(app);
     }
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
@@ -85,6 +113,14 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     }
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
+    }
+    // Layer › Copy CSS: the engine writes the CSS, the clipboard is the shell's (#9372).
+    if id == photocraft_engine::layer_css_cmds::ID {
+        return Some(app.run(id, params.clone()).inspect(|r| {
+            if let Some(css) = r.get("css").and_then(Value::as_str) {
+                ctx.copy_text(css.to_string());
+            }
+        }));
     }
     if id == "ui.symmetryTransform" {
         return Some(crate::symmetry_ui::begin(app).map(|_| Value::Null));
@@ -203,6 +239,8 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     None
 }
 
+/// The commands the shell answers itself before the engine (File › Open and Save with the
+/// dialogs they ask, loading a path as a selection, …); `Ok(None)` for any other.
 fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Result<Option<Value>, String> {
     let result = match id {
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
@@ -245,7 +283,16 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             }
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
-            app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
+            app.ask_folder(|app, path| {
+                let r = app.run("file.import.videoFramesToLayers", json!({"path": &path}));
+                if let Ok(v) = &r {
+                    // #11113: a truncated GIF or WebP in the folder salvages its early frames;
+                    // the command's warning says the animation arrived shortened.
+                    let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                    crate::notices::footage_warnings(app, v, &what);
+                }
+                r.map_err(|e| e.to_string())
+            })
         }
         // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
         "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
@@ -284,7 +331,19 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                             crate::notices::post(app, title, lines, false, None);
                             app.save_as_with(None, choices)
                         }
-                        // A flat file asks for its name; confirming its own file records a
+                        // Its own flat file, while it still keeps the whole document (one plain
+                        // layer it can store): written back, as Photoshop's Save does (#5733),
+                        // asking first if another app changed it (#6596), then JPEG Options for a
+                        // JPEG (#2223), or TIFF, Targa or DDS Options for those. Cancel in either writes
+                        // nothing.
+                        Some((false, path, d)) if crate::saves_flat_in_place(&d.doc, &path) => {
+                            let doc = d.doc.id;
+                            if app.save_options_open() {
+                                return Err(crate::SAVE_OPTIONS_OPEN.into());
+                            }
+                            crate::disk_change_prompt::intercept(app, doc, &path, false, choices).unwrap_or_else(|| app.save_flat_in_place(path, choices))
+                        }
+                        // Any other flat file asks for its name; confirming its own file records a
                         // plain Save that writes the file an action is played on (#3531).
                         _ => app.save_dialog_flow(None, choices, true),
                     }
@@ -328,6 +387,7 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
     result.map(Some)
 }
 
+/// Dispatch UI actions and dialogs, falling back to the engine for other commands.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
@@ -407,7 +467,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         // Edit › Stroke…: open its full options dialog when called from menus/context
         // menus. Explicit params from Actions, CLI, MCP and control channel execute directly.
         crate::stroke_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
-            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+            // A targeted smart-filter mask can admit Stroke without a raster layer.
+            if let Some(why) = app.session.disabled_reason_with(id, &app.with_mask_target(id, params)) {
                 return Err(why);
             }
             Ok(json!({"dialog": crate::stroke_ui::open(app)}))
@@ -469,7 +530,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         // Edit › Fill… from the menu or its shortcuts: the Fill dialog (with params: the engine).
         crate::fill_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
-            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+            // Admission follows the effective mask/channel target, just like enablement and run.
+            if let Some(why) = app.session.disabled_reason_with(id, &app.with_mask_target(id, params)) {
                 return Err(why);
             }
             Ok(json!({"dialog": crate::fill_ui::open(app)}))
@@ -509,6 +571,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         {
             let kind = &ls["layer.layerStyle.".len()..];
             crate::layer_style::open(app, Some(kind)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
+        }
+        "layer.videoLayers.reloadFrame" => {
+            let r = app.run(id, params)?;
+            // #11113: reloading a clip salvaged from a truncated GIF or WebP discloses the loss,
+            // as the import and replace-footage paths do.
+            crate::notices::footage_warnings(app, &r, crate::i18n::t("Reloaded the footage"));
+            Ok(r)
         }
         _ => app.run(id, params),
     }
@@ -749,6 +818,8 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
         }
         _ if id.starts_with(crate::native_menu::LANGUAGE_PREFIX) => {
             let code = &id[crate::native_menu::LANGUAGE_PREFIX.len()..];
+            // Serbian was `sr` before the catalogs moved to craft-i18n; old scripts still switch.
+            let code = if code.eq_ignore_ascii_case("sr") { "sr-latn" } else { code };
             if code != "auto" && !crate::i18n::Lang::all().any(|lang| lang.code() == code) {
                 Some(Err(format!("unknown UI language `{code}`")))
             } else {
