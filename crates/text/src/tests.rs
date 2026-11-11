@@ -1559,6 +1559,34 @@ fn edited_text_keeps_the_files_txt2_object() {
     }
 }
 
+/// Baking Dynamic Text splits a paragraph into one per line. Each new paragraph run of an edited
+/// `Txt2` object keeps the style of the paragraph it came from, as `TySh` does: by index, the
+/// second line of the first paragraph took the second paragraph's style.
+#[test]
+fn split_paragraphs_keep_their_own_txt2_paragraph_style() {
+    use crate::engine_data::Value as E;
+    let para = |leading: f64, len: usize| format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /7 {leading:.1} >> >> >> /1 {len} >> ");
+    let style = "<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 >> >> >> /1 9 >> ";
+    // "AB CD\rEF\r": two paragraphs, leading 1.0 and 2.0.
+    let prev = format!(
+        "\n\n/98 << /0 7 >> /0 << /8 << /0 [ << /0 << >> >> ] >> >> /1 << /0 << /0 1 >> /1 [ << /0 << /0 (\u{fe}\u{ff}\0A\0B\0 \0C\0D\0\r\0E\0F\0\r) /5 << /0 [ {}{}] >> /6 << /0 [ {style}] >> >> /1 << /0 [ << /0 0 >> ] >> >> ] >> >>",
+        para(1.0, 6),
+        para(2.0, 3)
+    );
+    let prev: Vec<u8> = prev.chars().map(|c| c as u32 as u8).collect();
+    let leadings = |text: &str| -> Vec<f64> {
+        let t = runs_of(text, &[(text.len(), CharStyle::default())]);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+        object.path(&["0", "5", "0"]).and_then(E::as_array).unwrap().iter().map(|r| r.path(&["0", "0", "5", "7"]).and_then(E::as_f64).unwrap()).collect()
+    };
+    // The first paragraph baked into two lines, and with a lead-in paragraph before it.
+    assert_eq!(leadings("AB\nCD\nEF"), vec![1.0, 1.0, 2.0]);
+    assert_eq!(leadings("\nAB\nCD\nEF"), vec![1.0, 1.0, 1.0, 2.0]);
+    // Any other edit keeps the file's paragraphs by index.
+    assert_eq!(leadings("AB\nXY\nEF"), vec![1.0, 2.0, 2.0]);
+}
+
 /// #8415: a style-only edit (`type.setStyle` with no text change) reaches the file's `Txt2`.
 /// Photoshop reads the character style from the object's style runs, and an object whose text
 /// still matched kept the file's runs, so Photoshop reopened the layer in its old font with faux
