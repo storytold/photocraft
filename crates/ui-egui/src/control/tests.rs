@@ -20,10 +20,7 @@ fn batch_occurrence_fields_are_read_only_through_control() {
     assert_eq!(original["__command"], "file.automate.batch");
     assert!(original.contains_key(crate::actions::BATCH_OCCURRENCE));
     assert!(original.contains_key(crate::actions::BATCH_OCCURRENCES));
-    for (field, value) in [
-        (crate::actions::BATCH_OCCURRENCE, json!(1)),
-        (crate::actions::BATCH_OCCURRENCES, json!([{"action": "Forged", "row": 1}])),
-    ] {
+    for (field, value) in [(crate::actions::BATCH_OCCURRENCE, json!(1)), (crate::actions::BATCH_OCCURRENCES, json!([{"action": "Forged", "row": 1}]))] {
         let reply = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
         assert_eq!(reply["ok"], false, "{reply}");
         assert!(reply["error"].as_str().unwrap().contains("Batch occurrence fields are read-only"));
