@@ -137,6 +137,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     // geometry, the Line's arrowheads included, stays.
     let paint = !(is_shape_tool(tool) && draws_path(&app.ui.tool_options));
     crate::shape_options::options_bar(app, ui, tool, paint);
+    if is_shape_tool(tool) {
+        // Path operations, alignment and arrangement, in Shape and Path mode (#13235).
+        crate::widgets::vline(ui, 22.0);
+        super::pen::path_operations_menu(app, ui);
+        super::pen::path_alignment_menu(app, ui);
+        super::pen::path_arrangement_menu(app, ui);
+    }
     // Photoshop-style arrowhead settings at the right of Line options.
     if tool == Tool::Line {
         crate::widgets::vline(ui, 22.0);

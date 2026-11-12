@@ -1871,8 +1871,8 @@ fn image_previews_preference_controls_the_psd_thumbnail() {
     let dir = tmp("previews");
     let mut s = session(300, 200, 16);
     let has_thumbnail = |path: &str| {
-        let file = photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
-        file.resources.iter().any(|r| r.id == photocraft_psd::resources::ids::THUMBNAIL)
+        let file = craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+        file.resources.iter().any(|r| r.id == craft_psd::resources::ids::THUMBNAIL)
     };
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.image_previews = ask);
@@ -1893,7 +1893,7 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     let dir = tmp("maximize");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask);
         for ext in ["psd", "psb"] {
@@ -1944,7 +1944,7 @@ fn maximize_compatibility_param_overrides_the_preference_for_one_save() {
     let dir = tmp("maximize-param");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, param, expect) in [
         (Ask::Always, json!(false), false),
         (Ask::Never, json!(true), true),
