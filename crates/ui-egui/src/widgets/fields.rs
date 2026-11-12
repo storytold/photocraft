@@ -12,11 +12,19 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
+/// A [`value_field`] for a whole number: no decimals, and the arrow keys and a scrub (of the field
+/// or of its caption) move it a whole step at a time, whatever its range. A small range such as
+/// 1–10 would otherwise scrub in hundredths, which a whole-number setting rounds away (#11765).
+pub fn value_field_whole(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), step_from_decimals: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field_named`] for whole numbers that says when a typed value was past `range`
 /// (Photoshop's "Closest value inserted" alerts, #11938): it stores the closest whole number in
 /// range, and returns true once the field is left after such a value was typed, so the caller
 /// shows its alert. While the field has the keyboard it keeps the typed text (a `0` on the way to
-/// `05` stays). A scrub, arrow-key or wheel step past the ends just stops there and says nothing.
+/// `05` stays). A scrub, an arrow-key or a wheel step past the ends just stops there and says
+/// nothing.
 pub fn value_field_whole_alerting(
     ui: &mut Ui,
     name: &str,
@@ -25,8 +33,34 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+}
+
+/// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
+/// typed value past `range` becomes the closest end, unrounded.
+pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+}
+
+fn value_field_alerting_in(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    whole: bool,
+) -> (Response, bool) {
     let (lo, hi) = (*range.start(), *range.end());
-    let fit = |v: f32| if v.is_finite() { v.round().clamp(lo, hi) } else { lo };
+    let fit = |v: f32| {
+        if !v.is_finite() {
+            lo
+        } else if whole {
+            v.round().clamp(lo, hi)
+        } else {
+            v.clamp(lo, hi)
+        }
+    };
     *value = fit(*value);
     let draft_id = ui.make_persistent_id(egui::IdSalt::new(("whole-alerting-typed", name)));
     // Typed text only while its field still has the keyboard: one left without being drawn (a
@@ -36,8 +70,9 @@ pub fn value_field_whole_alerting(
     let mut typed = draft.map_or(*value, |(typed, _, _)| typed);
     // The field's own range is wide, so the typed value reaches here unclamped.
     let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
-    // A step is no typed value (#13304). Only a step the field took counts: a wheel event that
-    // moves less than a notch (or not at all) steps nothing, and must not drop what was typed.
+    // A step past the ends is no typed value (#13304). Only a step the field took counts: a wheel
+    // event that moves less than a notch (or not at all) steps nothing, and must not drop what was
+    // typed.
     let stepped = stepped_this_pass(ui.ctx(), r.id);
     let out_id = r.id.with("out-of-range");
     if r.gained_focus() {
