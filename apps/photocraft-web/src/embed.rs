@@ -518,13 +518,7 @@ fn save_active(app: &mut PhotocraftApp, format: &str) -> Result<SaveOutcome, Str
     let name = protocol::export_name(&state.doc.name, format)?;
     let export = app.services.export.as_ref().ok_or("no exporter")?;
     let (bytes, warnings) = export(&state.doc, &name, &ExportSettings::default())?;
-    Ok(SaveOutcome {
-        in_place: photocraft_engine::file_cmds::saves_in_place(&name),
-        doc: state.doc.id.0,
-        revision: state.revision,
-        bytes,
-        warnings,
-    })
+    Ok(SaveOutcome { in_place: photocraft_engine::file_cmds::saves_in_place(&name), doc: state.doc.id.0, revision: state.revision, bytes, warnings })
 }
 
 /// Records that `doc` at `revision` was delivered to whoever asked for it — the moment a save
@@ -730,7 +724,12 @@ fn bytes_view(source: &JsValue) -> js_sys::Promise {
                 if protocol::check_open_bytes(Some(len as usize)).is_err() {
                     resolve.call1(&JsValue::NULL, &JsValue::from_bool(false)).ok();
                 } else {
-                    pack_bytes_view(&resolve, js_sys::Uint8Array::new(&buffer).into(), num("byteOffset").unwrap_or_default(), num("byteLength").unwrap_or_default());
+                    pack_bytes_view(
+                        &resolve,
+                        js_sys::Uint8Array::new(&buffer).into(),
+                        num("byteOffset").unwrap_or_default(),
+                        num("byteLength").unwrap_or_default(),
+                    );
                 }
                 return;
             }
@@ -750,11 +749,7 @@ fn bytes_view(source: &JsValue) -> js_sys::Promise {
 /// the copy.
 fn bytes_of_view(picked: &JsValue) -> Result<Vec<u8>, String> {
     let sentinel = *picked == JsValue::from_bool(false);
-    let view = if sentinel {
-        None
-    } else {
-        js_sys::Reflect::get(picked, &"view".into()).ok().filter(|v| v.is_instance_of::<js_sys::Uint8Array>())
-    };
+    let view = if sentinel { None } else { js_sys::Reflect::get(picked, &"view".into()).ok().filter(|v| v.is_instance_of::<js_sys::Uint8Array>()) };
     let view = view.map(js_sys::Uint8Array::unchecked_from_js);
     let view_len = view.as_ref().map_or(0, |v| v.length() as usize);
     if let Some(e) = protocol::view_refusal(sentinel, view.is_some(), view_len) {
@@ -809,8 +804,7 @@ fn resolved_url(data: &JsValue) -> Option<Result<String, String>> {
     let resolve = || -> Result<String, String> {
         let window = web_sys::window().ok_or_else(|| protocol::OPEN_URL.to_string())?;
         let base = window.location().href().map_err(|_| protocol::OPEN_URL.to_string())?;
-        let url = web_sys::Url::new_with_base(&data.as_string().unwrap_or_default(), &base)
-            .map_err(|_| protocol::OPEN_URL.to_string())?;
+        let url = web_sys::Url::new_with_base(&data.as_string().unwrap_or_default(), &base).map_err(|_| protocol::OPEN_URL.to_string())?;
         let href = url.href();
         protocol::url_on_origin(&href, ORIGIN.with(|o| o.borrow().clone()).as_deref())?;
         Ok(href)
@@ -843,11 +837,7 @@ async fn fetch_open(url: &str, abort: Option<&web_sys::AbortController>) -> Resu
     if let Some(abort) = abort {
         init.set_signal(Some(&abort.signal()));
     }
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
-        .await
-        .map_err(|_| refused())?
-        .dyn_into()
-        .map_err(|_| refused())?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init)).await.map_err(|_| refused())?.dyn_into().map_err(|_| refused())?;
     let length = resp.headers().get("content-length").ok().flatten();
     if let Err(e) = protocol::response_gate(resp.ok(), resp.redirected(), length.as_deref()) {
         // Declared Content-Length over-limit or other header-level rejection: abort the
@@ -871,10 +861,7 @@ async fn fetch_open(url: &str, abort: Option<&web_sys::AbortController>) -> Resu
         if done != Some(false) {
             break;
         }
-        let view = js_sys::Reflect::get(&chunk, &"value".into())
-            .ok()
-            .and_then(|v| v.dyn_into::<js_sys::Uint8Array>().ok())
-            .ok_or_else(refused)?;
+        let view = js_sys::Reflect::get(&chunk, &"value".into()).ok().and_then(|v| v.dyn_into::<js_sys::Uint8Array>().ok()).ok_or_else(refused)?;
         match protocol::stream_step(total, view.length() as usize) {
             Ok(next) => {
                 total = next;
@@ -924,9 +911,7 @@ fn open(data: JsValue, name: Option<String>) -> js_sys::Promise {
             Some(Err(e)) => return settle_err(&settle, &e),
             None => None,
         };
-        let name = name
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or_else(|| url.as_deref().map(protocol::file_name).unwrap_or_else(|| "document".into()));
+        let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| url.as_deref().map(protocol::file_name).unwrap_or_else(|| "document".into()));
         let source = Rc::new(RefCell::new(SourceFetch::default()));
         // A URL open's transfer is abortable from before the task starts, so a deadline that
         // fires mid-fetch can always reach it (a controller that can't be made still fetches —
@@ -1153,9 +1138,7 @@ fn charge(spent: &mut usize, cost: Option<usize>) -> bool {
 /// here, whatever its forged length says. A `byteLength` getter that throws (a Proxy) reads as
 /// absent: the value is then weighed as the plain value it is, which is all it can be.
 fn binary_shape(v: &JsValue) -> bool {
-    js_sys::ArrayBuffer::is_view(v)
-        || true_buffer_len(v).is_some()
-        || js_sys::Reflect::get(v, &"byteLength".into()).is_ok_and(|n| n.as_f64().is_some())
+    js_sys::ArrayBuffer::is_view(v) || true_buffer_len(v).is_some() || js_sys::Reflect::get(v, &"byteLength".into()).is_ok_and(|n| n.as_f64().is_some())
 }
 
 /// Whether `v`, a member of a bridge message, fits what is left of [`protocol::MAX_CALL_BYTES`]

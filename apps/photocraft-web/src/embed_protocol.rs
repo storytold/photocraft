@@ -8,6 +8,10 @@ use serde_json::{Value, json};
 
 /// The app and `.pcraft` format versions with no document open, for a host that keeps the CLI and
 /// the web build in step (a newer `.pcraft` fails to open with `FormatError::TooNew`).
+///
+/// Only its test calls it — the app serves itself through [`info_with`] — so it is test-gated;
+/// without the gate the wasm build (which compiles this module outside tests) warns it dead.
+#[cfg(test)]
 pub fn info() -> Value {
     info_with(None)
 }
@@ -59,7 +63,8 @@ pub const OPEN_READ: &str = "open couldn't read the data as bytes: it takes an A
 /// of [`call_string_cost`] — it is never copied into Rust to find out) and for the URL form
 /// with the bridge off, no `?embed=` origin to name the one origin at all: a host holding the
 /// bytes (the app's own page) sends them.
-pub const OPEN_URL: &str = "open couldn't take the string as a same-origin URL: it takes an http(s) URL on the ?embed= origin, resolved against the app's own location";
+pub const OPEN_URL: &str =
+    "open couldn't take the string as a same-origin URL: it takes an http(s) URL on the ?embed= origin, resolved against the app's own location";
 
 /// The fixed rejection when the fetch an open's URL asked for doesn't answer with the file: a
 /// network failure, a refused connection, a redirect (redirects are never followed), an HTTP
@@ -81,7 +86,8 @@ pub const MAX_CALL_BYTES: usize = 64 * 1024;
 pub const MAX_CALL_DEPTH: usize = 8;
 
 /// The fixed refusal for a message over either (the text is part of the host's contract).
-pub const CALL_TOO_BIG: &str = "the message is larger than 64 KiB (65536 bytes) or deeper than 8 levels without its data; send the file in data and only the call in the message";
+pub const CALL_TOO_BIG: &str =
+    "the message is larger than 64 KiB (65536 bytes) or deeper than 8 levels without its data; send the file in data and only the call in the message";
 
 /// The fixed refusal when a bridge message carries binary data — a typed array, a `DataView`,
 /// an `ArrayBuffer` — anywhere outside its `data` member. Binary rides only `data` (where
@@ -665,8 +671,7 @@ mod tests {
     fn the_bridge_limits_are_fixed_numbers_and_text() {
         assert_eq!(MAX_PENDING_CALLS, 8);
         assert_eq!(
-            OPEN_TIMEOUT_MS,
-            30_000.0,
+            OPEN_TIMEOUT_MS, 30_000.0,
             "one open at a time makes the deadline also the lock on every later open behind OPEN_BUSY — at 120 s that was two minutes; 30 s still spans answering a dialog over an import, and a cancelled one now rejects at once through the prompt read"
         );
         assert_eq!(OPEN_TIMEOUT, "open gave up waiting for the document: it is held behind a dialog in the app, or never finished opening");
@@ -692,7 +697,11 @@ mod tests {
         assert_eq!(landed_doc(&[1, 2, 3], "Poster.psd", &docs), None, "nothing new yet");
         assert_eq!(landed_doc(&[], "Poster.psd", &[]), None, "no documents at all");
         let named_late = [(1, "Old.psd".to_string()), (4, "other.psd".to_string()), (2, "Poster.psd".to_string())];
-        assert_eq!(landed_doc(&[1], "Poster.psd", &named_late), Some((2, "Poster.psd".to_string())), "the named one wins over an earlier new one it doesn't name");
+        assert_eq!(
+            landed_doc(&[1], "Poster.psd", &named_late),
+            Some((2, "Poster.psd".to_string())),
+            "the named one wins over an earlier new one it doesn't name"
+        );
         // The document of that name that was already there doesn't answer: only what is new
         // since this import started can.
         assert_eq!(landed_doc(&[1], "Poster.psd", &[(1, "Poster.psd".to_string())]), None, "the old same-named document isn't this open's");
@@ -730,11 +739,18 @@ mod tests {
         // Every arm of open_step, in the pass order it decides them — removing or reordering
         // any arm turns its line red.
         // 0. the import failed: its error, at once, whatever else is true.
-        assert_eq!(open_step(&OpenPass { failed: Some("not a PSD".into()), observing: true, timed_out: true, ..pass() }), OpenStep::SettleErr("not a PSD".into()));
+        assert_eq!(
+            open_step(&OpenPass { failed: Some("not a PSD".into()), observing: true, timed_out: true, ..pass() }),
+            OpenStep::SettleErr("not a PSD".into())
+        );
         // 1. an observer: nothing ever settles again — the window holds while the app holds,
         //    and opens when it doesn't (the promise settled at the deadline).
         assert_eq!(open_step(&OpenPass { observing: true, app_holds: true, ..pass() }), OpenStep::HoldWindow);
-        assert_eq!(open_step(&OpenPass { observing: true, app_holds: false, landed: Some((7, "a.psd".into())), ..pass() }), OpenStep::Release, "a landed document doesn't re-open the claim either");
+        assert_eq!(
+            open_step(&OpenPass { observing: true, app_holds: false, landed: Some((7, "a.psd".into())), ..pass() }),
+            OpenStep::Release,
+            "a landed document doesn't re-open the claim either"
+        );
         assert_eq!(open_step(&OpenPass { observing: true, app_holds: false, ..pass() }), OpenStep::Release);
         // 2. bytes on their way: wait; at the deadline, settle the timeout (nothing ran).
         assert_eq!(open_step(&OpenPass { fetching: true, ..pass() }), OpenStep::Wait);
@@ -797,7 +813,11 @@ mod tests {
         // from there. `app_holds` is the pass's half of that read: prompt up, file queued, or
         // an opening job of the name.
         assert_eq!(open_step(&OpenPass { held: true, app_holds: false, ..pass() }), OpenStep::SettleErr(OPEN_TIMEOUT.into()));
-        assert_eq!(open_step(&OpenPass { held: true, app_holds: true, timed_out: true, ..pass() }), OpenStep::TimeoutPending, "still opening: not disposed of, the deadline applies");
+        assert_eq!(
+            open_step(&OpenPass { held: true, app_holds: true, timed_out: true, ..pass() }),
+            OpenStep::TimeoutPending,
+            "still opening: not disposed of, the deadline applies"
+        );
     }
 
     #[test]
@@ -990,7 +1010,11 @@ mod tests {
         ] {
             assert_eq!(url_on_origin(other, embed), Err(OPEN_URL.into()), "{other}");
         }
-        assert_eq!(url_on_origin("https://admin.test/a", None), Err(OPEN_URL.into()), "no ?embed= origin: the URL form is the embedder's channel, nothing is fetched");
+        assert_eq!(
+            url_on_origin("https://admin.test/a", None),
+            Err(OPEN_URL.into()),
+            "no ?embed= origin: the URL form is the embedder's channel, nothing is fetched"
+        );
     }
 
     #[test]
