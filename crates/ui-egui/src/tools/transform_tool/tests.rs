@@ -598,15 +598,25 @@ fn saving_a_reopened_smart_object_keeps_the_pending_rotation() {
         app.session.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 12, 8]})).unwrap();
         let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "psd", &Default::default()).unwrap().bytes;
 
-        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
         let capture = written.clone();
+        let capture_background = written.clone();
         let services = crate::Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|out| (out.document, out.warnings)).map_err(|e| e.to_string())
+            })),
             export: Some(Box::new(|doc, path, settings| {
                 photocraft_io::export(doc, path, &settings.io_options()).map(|out| (out.bytes, out.warnings)).map_err(|e| e.to_string())
             })),
             write: Some(Box::new(move |_, bytes| {
-                capture.borrow_mut().push(bytes.to_vec());
+                capture.lock().unwrap().push(bytes.to_vec());
                 Ok(())
+            })),
+            save_file: Some(Arc::new(move |doc, path, settings, ctl| {
+                let out = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+                ctl.commit()?;
+                capture_background.lock().unwrap().push(out.bytes);
+                Ok(out.warnings)
             })),
             ..Default::default()
         };
@@ -625,14 +635,14 @@ fn saving_a_reopened_smart_object_keeps_the_pending_rotation() {
         }
         crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
         if background {
-            assert!(written.borrow().is_empty(), "save waits for the transform job");
+            assert!(written.lock().unwrap().is_empty(), "save waits for the transform job");
         }
         let other = switch_tab.then(|| {
             app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
             app.active_doc_id().unwrap()
         });
         land_jobs(&mut app);
-        let writes = written.borrow();
+        let writes = written.lock().unwrap();
         assert_eq!(writes.len(), 1);
         let saved = photocraft_io::import("smart.psd", &writes[0]).unwrap().document;
         let placement = |doc: &photocraft_doc::Document| {

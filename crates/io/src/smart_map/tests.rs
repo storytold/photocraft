@@ -1814,6 +1814,19 @@ fn quad_moved_detects_corner_changes() {
     assert!(quad_moved(&Descriptor::new("null"), &spec, spec.warp), "no stored quad");
 }
 
+#[test]
+fn resaving_a_distant_placed_layer_preserves_a_small_rotation() {
+    let at = Affine::translate(200_000.0, -200_000.0);
+    let mut spec = PlacedSpec { idnt: "id", placed: "pl", transform: at, perspective: None, size: (20.0, 10.0), dpi: 72.0, warp: None, filter_fx: None };
+    let mut warnings = Vec::new();
+    let original = parse_sold(&sold_bytes(None, &spec, &mut warnings)).unwrap();
+    spec.transform = original.transform.mul(&Affine::rotate(0.25_f64.to_radians()));
+    let saved = parse_sold(&sold_bytes(Some(&original.descriptor), &spec, &mut warnings)).unwrap();
+    for (actual, expected) in saved.transform.m.iter().zip(spec.transform.m) {
+        assert!((actual - expected).abs() < 1e-9, "{:?} vs {:?}", saved.transform, spec.transform);
+    }
+}
+
 /// Corrupted placed-layer data and filter descriptors never panic: they parse to something
 /// (unknown filters stay verbatim) or to nothing.
 #[test]
