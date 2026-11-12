@@ -35,9 +35,11 @@ const MAX_CELLS: usize = 512;
 pub enum Fold<'a> {
     /// Cells in row order, the last one drawn wins (lens corrections, distortions).
     Rows,
-    /// A warp of the picture in place (Edit › Transform › Warp, a smart object's warp): cells in
-    /// [`cell_order`] (a part the fold turns over on top, else the part dragged furthest), and a fold's layers composite, so transparent
-    /// parts show what is under them, as Warp mode's preview draws them. The map is where a
+    /// A warp of the picture in place (Edit › Transform › Warp, a smart object's warp): a part the
+    /// fold turns over lies on top (a vertex grid's cells in [`cell_order`], the part dragged
+    /// furthest on top among the rest; a smart object's triangles as `ordered_triangles` ranks
+    /// them, in mesh order among the rest), and a fold's layers composite, so transparent parts
+    /// show what is under them, as Warp mode's preview draws them. The map is where a
     /// source point lands without the warp: the identity for a layer, a smart object's placement.
     Stack(&'a (dyn Fn(f64, f64) -> (f64, f64) + Sync)),
 }
@@ -675,38 +677,34 @@ fn cell_triangles(at: &dyn Fn(f64, f64) -> [f64; 2], leaves: &[Cell], rect: [f64
 
 /// The triangles of the quads `corners` (`[top-left, top-right, bottom-left, bottom-right]` vertex
 /// indices), two each split from the top-left corner, in the quads' order, and each one's rank in
-/// a fold's order: for [`Fold::Stack`] a cell turned over on top, else the cell moved furthest (as
-/// [`cell_order`]); the quads' order otherwise.
+/// a fold's order. For [`Fold::Stack`] each triangle is ranked on its own, as the reference
+/// application stacks a smart object's fold: the triangles still facing as at rest in mesh order,
+/// then the ones the warp turns over, also in mesh order, so a flap folded back lies on top. A
+/// triangle with a corner that isn't finite counts as facing as before. Unlike [`cell_order`]
+/// (the vertex grid's order), how far a part moved doesn't count.
 fn ordered_triangles(verts: &[([f64; 2], [f64; 2])], pos: &[[f64; 2]], corners: &[[usize; 4]], fold: &Fold) -> RankedMesh {
-    let mut order: Vec<usize> = (0..corners.len()).collect();
-    if let Fold::Stack(rest) = fold {
-        // As [`cell_order`]: a cell turned over on top, else the cell moved furthest.
-        let at_rest: Vec<[f64; 2]> = verts.iter().map(|(_, s)| rest(s[0], s[1])).map(|(x, y)| [x, y]).collect();
-        let moved =
-            |k: usize| Some(pos[k][0] - at_rest[k][0]).map(|dx| dx.hypot(pos[k][1] - at_rest[k][1])).filter(|m| m.is_finite()).unwrap_or(f64::NEG_INFINITY);
-        let area = |pts: &[[f64; 2]], q: [usize; 4]| {
-            let q = q.map(|k| pts[k]);
-            (0..4).map(|i| q[i][0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * q[i][1]).sum::<f64>()
-        };
-        let key: Vec<(bool, f64)> = corners
-            .iter()
-            .map(|&[c00, c10, c01, c11]| {
-                let q = [c00, c10, c11, c01];
-                (area(pos, q) * area(&at_rest, q) < 0.0, q.iter().map(|&k| moved(k)).sum())
-            })
-            .collect();
-        order.sort_by(|&a, &b| key[a].0.cmp(&key[b].0).then(key[a].1.total_cmp(&key[b].1)));
-    }
-    // The triangles in the quads' own order, each ranked where its quad comes in `order`.
-    let tris = corners.iter().flat_map(|&[c00, c10, c01, c11]| [[c00, c10, c11], [c00, c11, c01]]).collect();
-    let mut rank = vec![0u32; corners.len() * 2];
-    for (r, &k) in order.iter().enumerate() {
-        for (t, v) in [(2 * k, 2 * r), (2 * k + 1, 2 * r + 1)] {
-            if let Some(slot) = rank.get_mut(t) {
-                *slot = u32::try_from(v).unwrap_or(u32::MAX);
-            }
-        }
-    }
+    let tris: Vec<[usize; 3]> = corners.iter().flat_map(|&[c00, c10, c01, c11]| [[c00, c10, c11], [c00, c11, c01]]).collect();
+    let Fold::Stack(rest) = fold else {
+        return (tris, Vec::new());
+    };
+    let at_rest: Vec<[f64; 2]> = verts.iter().map(|(_, s)| rest(s[0], s[1])).map(|(x, y)| [x, y]).collect();
+    // Twice the signed area of triangle `t` over `pts` (NaN where a corner is missing or not finite).
+    let area = |pts: &[[f64; 2]], t: [usize; 3]| {
+        let [a, b, c] = t.map(|k| pts.get(k).copied().unwrap_or([f64::NAN; 2]));
+        (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+    };
+    let turned: Vec<bool> = tris.iter().map(|&t| area(pos, t) * area(&at_rest, t) < 0.0).collect();
+    let up = turned.iter().filter(|&&t| !t).count();
+    let (mut next_up, mut next_turned) = (0usize, up);
+    let rank = turned
+        .iter()
+        .map(|&t| {
+            let slot = if t { &mut next_turned } else { &mut next_up };
+            let r = *slot;
+            *slot += 1;
+            u32::try_from(r).unwrap_or(u32::MAX)
+        })
+        .collect();
     (tris, rank)
 }
 
@@ -801,6 +799,65 @@ const FRINGE: f64 = 0.5;
 /// application's shear probes (sources of 64 to 256 px, each pixel stepping up to 200 source
 /// pixels) never read a coarser one.
 const MAX_MIP_LEVEL: u32 = 3;
+
+/// `t` on the 1/65536 grid the reference application keeps source points on: a point the mesh
+/// puts exactly on a 1/256 step isn't tipped below it by float noise (that would flip its weight
+/// and its colour by a level).
+fn on_grid(t: f64) -> f64 {
+    (t * 65536.0).round() / 65536.0
+}
+
+/// The last of a premultiplied pixel `px` (alpha last) of a single bilinear sample: drawn again
+/// over itself where two triangles of one layer reach it (`twice`), then, for an 8-bit source
+/// (`steps`, whose blends are in 8-bit steps), rounded once, after its edge coverage and any fold
+/// layers under it are in.
+fn settle(px: &mut [f64], twice: bool, steps: Option<f32>) {
+    let k = if twice { 2.0 - px.last().copied().unwrap_or(0.0).clamp(0.0, 1.0) } else { 1.0 };
+    let st = steps.map(f64::from);
+    for c in px.iter_mut() {
+        *c *= k;
+        if let Some(st) = st {
+            *c = (*c * st).round() / st;
+        }
+    }
+}
+
+/// The source points along one row of a triangle as the reference application draws a smart
+/// object's warp: the row's first pixel in the triangle takes its own point, and each pixel after
+/// it adds the triangle's step along x, put on the grid once ([`on_grid`]); the sum isn't put on
+/// the grid again, so the points drift off the exact ones by that rounding along a row.
+struct RowSteps {
+    step: [f64; 2],
+    /// The row's first pixel and its point (`x0` = `i32::MIN` until there is one).
+    x0: i32,
+    q0: [f64; 2],
+    /// Off: every pixel takes its own point.
+    on: bool,
+}
+
+impl RowSteps {
+    /// A row whose pixels step `step_x` through the source each (with `on`).
+    fn new(step_x: [f64; 2], on: bool) -> Self {
+        Self { step: step_x.map(on_grid), x0: i32::MIN, q0: [0.0; 2], on }
+    }
+
+    /// The point of pixel `x` (a pixel right of the row's earlier ones), `exact` the point the
+    /// triangle maps it to, which only the row's first pixel keeps (while on). Kept out of line:
+    /// inlined into the tile's drawing loop, it made that loop about 30 % slower (24 MP Arc 50:
+    /// 0.67 s against 0.52 s), as the loop's own helpers then stopped being inlined.
+    #[inline(never)]
+    fn point(&mut self, x: i32, exact: [f64; 2]) -> [f64; 2] {
+        if !self.on {
+            return exact;
+        }
+        if self.x0 == i32::MIN {
+            (self.x0, self.q0) = (x, exact);
+            return exact;
+        }
+        let n = f64::from(x - self.x0);
+        [self.q0[0] + n * self.step[0], self.q0[1] + n * self.step[1]]
+    }
+}
 
 /// The mip level a source step of length `t` asks for: `floor(log2 t)`, 0 below a 2× reduction,
 /// at most [`MAX_MIP_LEVEL`].
@@ -907,7 +964,9 @@ type BorderEdge = ([f64; 2], [f64; 2], [f64; 2], [f64; 2], (usize, f64, f64));
 /// [`step_level`] of its step along the side down a column where that is coarser; a strip past a
 /// left or right side takes the smaller of that step and the step for [`SIDE_SHARE`] of a pixel
 /// right and one down. It ends where the tap's alpha does, half a texel of that level out; beside
-/// the edge's ends (`τ` outside 0..1) there is none. Measured on the reference application's
+/// the edge's ends (`τ` outside 0..1) there is none. The step down a column counts only past a
+/// side that runs at least as steeply as it runs across (in the destination); past a flatter one
+/// the row's level alone decides. Measured on the reference application's
 /// renders of sheared, scaled and squeezed coordinate images (273 probes, every outline pixel's
 /// source point and level).
 fn strip(p: [f64; 2], &(a, b, sa, sb, (ax, sign, lim)): &BorderEdge, fwd: &[[f64; 2]; 2]) -> Option<(f64, [f64; 2], u32)> {
@@ -938,16 +997,17 @@ fn strip(p: [f64; 2], &(a, b, sa, sb, (ax, sign, lim)): &BorderEdge, fwd: &[[f64
     // Down a column the strip moves along its side by `τ`'s share alone.
     let tau_y = -g[0] / den;
     let down = if ax == 0 { tau_y.abs().min((tau_y + SIDE_SHARE * tau_x).abs()) } else { tau_y.abs() };
-    let level = mip_level(jx).max(step_level(down * (sb[0] - sa[0]).hypot(sb[1] - sa[1])));
+    let steep = ab[1].abs() >= ab[0].abs();
+    let row_level = mip_level(jx);
+    let level = if steep { row_level.max(step_level(down * (sb[0] - sa[0]).hypot(sb[1] - sa[1]))) } else { row_level };
     let out = along * rate;
     if out >= 0.5 * f64::from(1u32 << level) {
         return None;
     }
     let mut q = [sa[0] + tau * (sb[0] - sa[0]), sa[1] + tau * (sb[1] - sa[1])];
     *q.get_mut(ax)? = lim + sign * out;
-    // On the 1/65536 grid of a point inside the picture, for the same reason: a mesh point stored
-    // as a float mustn't tip a tap that lies exactly on a 1/256 step below it.
-    let q = q.map(|t| (t * 65536.0).round() / 65536.0);
+    // On the grid of a point inside the picture, for the same reason ([`on_grid`]).
+    let q = q.map(on_grid);
     Some((along, q, level))
 }
 
@@ -1384,6 +1444,10 @@ struct Win {
 
 fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, draw: Draw) -> Surface {
     let (single, folds) = (draw.single, draw.stack.is_some());
+    // One bilinear tap per pixel, as the reference application draws a smart object's warp: the
+    // path its renders were measured on, which steps source points along rows and draws a pixel
+    // two triangles of one layer reach twice.
+    let one_tap = single && interp == Interp::Bilinear;
     let ranks = std::sync::OnceLock::new();
     let rank_of = |t: u32| draw.stack.map(|f| ranks.get_or_init(f)).and_then(|r| r.get(t as usize)).copied().unwrap_or(u32::MAX);
     let mut fmt = src.format();
@@ -1411,7 +1475,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         y1 = y1.max(v.0[1]);
     }
     // A strip reaches half a texel of the coarsest level past its edge (see `fringe_reach`).
-    let reach = if draw.fringe { (fringe_reach(single && interp == Interp::Bilinear).ceil() as i32).max(1) } else { 1 };
+    let reach = if draw.fringe { (fringe_reach(one_tap).ceil() as i32).max(1) } else { 1 };
     let dst = Rect::new(
         x0.max(-lim).floor() as i32 - reach,
         y0.max(-lim).floor() as i32 - reach,
@@ -1442,7 +1506,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let Ok(index) = u32::try_from(index) else { break };
         let ps = tri.map(|v| verts[v].0);
         // A fringe reaches past the triangle, into a neighbouring tile.
-        let grow = if draw.fringe { fringe_reach(single && interp == Interp::Bilinear).ceil() } else { 0.0 };
+        let grow = if draw.fringe { fringe_reach(one_tap).ceil() } else { 0.0 };
         let bx0 = (ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min) - grow).floor() as i32;
         let by0 = (ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min) - grow).floor() as i32;
         let bx1 = (ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max) + grow).ceil() as i32;
@@ -1496,6 +1560,9 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         let mut stacked = false;
         let mut uv = vec![[f64::NAN; 2]; w * h];
         let mut owner = vec![0u32; w * h];
+        // Pixels two triangles of one layer both reach (on their shared edge), with `one_tap`:
+        // the reference application draws those twice, the second over the first.
+        let mut twice = vec![false; if one_tap { w * h } else { 0 }];
         // The layers of a fold under a pixel's top one, bottom first, as a list linked through
         // `under` (source position, triangle, next node or `u32::MAX`) from the node `under_at`
         // holds for the pixel (`u32::MAX`: none): one arena for the tile rather than a list per
@@ -1526,7 +1593,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 };
                 let raw_jx = [l1x * d1[0] + l2x * d2[0], l1x * d1[1] + l2x * d2[1]];
                 let raw_jy = [l1y * d1[0] + l2y * d2[0], l1y * d1[1] + l2y * d2[1]];
-                lev.push(if single && interp == Interp::Bilinear { mip_level(raw_jx).max(column_level([p0, p1, p2], [s0, s1, s2])) } else { 0 });
+                lev.push(if one_tap { mip_level(raw_jx).max(column_level([p0, p1, p2], [s0, s1, s2])) } else { 0 });
                 elev.push([mip_level(raw_jx).max(step_level(raw_jy[1].abs())), mip_level(raw_jx).max(step_level(raw_jy[0].abs()))]);
                 let jx = cap(raw_jx);
                 let jy = cap(raw_jy);
@@ -1539,6 +1606,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 let eps = -1e-9;
                 for y in by0..by1 {
                     let py = f64::from(y) + 0.5;
+                    let mut row = RowSteps::new(raw_jx, one_tap);
                     for x in bx0..bx1 {
                         let px = f64::from(x) + 0.5;
                         let l1 = ((px - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (py - p0[1])) / det;
@@ -1548,10 +1616,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             continue;
                         }
                         let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
-                        // On a 1/65536 grid, so a point the mesh puts exactly on a 1/256 step isn't
-                        // tipped below it by float noise (that flips its weight and its colour by a
-                        // level).
-                        let q = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]].map(|t| (t * 65536.0).round() / 65536.0);
+                        // On the grid ([`on_grid`]); with `one_tap` stepped along the row from its
+                        // first pixel ([`RowSteps`]).
+                        let exact = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]].map(on_grid);
+                        let q = row.point(x, exact);
                         // Another part of the source: a fold. Triangles of one layer meeting at a pixel
                         // (on their shared edge) interpolate the same source point, to float noise,
                         // and replace each other; one drawn again after another layer comes back on
@@ -1565,6 +1633,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             (order_rank, order) = ranked.into_iter().unzip();
                             stacked = true;
                             uv.fill([f64::NAN; 2]);
+                            twice.fill(false);
                             under_at = vec![u32::MAX; w * h];
                             jac.clear();
                             lev.clear();
@@ -1580,6 +1649,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             // the end.
                             stack_layer(&mut under, head, (uv[o], owner[o]), &near);
                         }
+                        // (`twice` is empty without `one_tap`.)
+                        if let Some(t) = twice.get_mut(o) {
+                            *t |= !uv[o][0].is_nan() && near(uv[o]) && owner[o] != k as u32;
+                        }
                         uv[o] = q;
                         owner[o] = k as u32;
                     }
@@ -1593,7 +1666,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             // The rank of a triangle of `order`.
             let rank_at = |i: u32| if stacked { order_rank.get(i as usize).copied() } else { bin.get(i as usize).map(|&k| rank_of(k)) }.unwrap_or(u32::MAX);
             let flaps = folds.then_some(Flaps { rank: &rank_at, under: &mut under, under_at: &mut under_at });
-            fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner, single && interp == Interp::Bilinear, flaps)
+            fringe(&order, verts, src_rect, t, w, &mut uv, &mut owner, one_tap, flaps)
         } else {
             Fringe::default()
         };
@@ -1914,13 +1987,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     acc[c] += under_top[c] * keep;
                 }
             }
-            // An 8-bit pixel of a single bilinear sample (whose blends are in 8-bit steps) is
-            // rounded once, after its edge coverage and any fold layers under it are in.
-            if let Some(st) = steps.filter(|_| single && interp == Interp::Bilinear) {
-                for c in acc.iter_mut().take(n) {
-                    *c = (*c * f64::from(st)).round() / f64::from(st);
-                }
-            }
+            settle(&mut acc[..n], twice.get(o) == Some(&true), steps.filter(|_| one_tap));
             // A fringe pixel's alpha is capped by its distance out (a strip's by its tap alone).
             cap_alpha(&mut acc[..n], cover.get(o).copied());
             let al = acc[a].clamp(0.0, 1.0);
@@ -2711,6 +2778,66 @@ mod tests {
         assert_eq!(level([10.25, 8.0], right([10.0, 0.0], [10.0, 16.0]), [[1.0, 0.0], [0.0, 1.0]]), Some(0));
     }
 
+    /// Past a side flatter than it is steep in the picture, a strip's level is its row's alone: the
+    /// step down a column doesn't count there.
+    #[test]
+    fn a_flat_sides_strip_takes_its_rows_level() {
+        // A bottom side lying flat, the picture's columns sheared nearly sideways (the source's y
+        // axis lands on 0.96, 0.28): a pixel down moves the strip 3.4 source pixels along the
+        // side, which would ask for level 1; a pixel right moves it one.
+        let bottom: BorderEdge = ([0.0, 10.0], [16.0, 10.0], [0.0, 16.0], [16.0, 16.0], (1, 1.0, 16.0));
+        let (out, q, level) = strip([8.24, 10.07], &bottom, &[[1.0, 0.0], [0.96, 0.28]]).unwrap();
+        assert!((out - 0.25).abs() < 1e-9, "{out}");
+        assert_eq!((q, level), ([8.0, 16.25], 0));
+    }
+
+    /// A smart object's warp steps its source points along a row from the row's first pixel, by
+    /// the triangle's step put on the 1/65536 grid once, so they drift off the exact points.
+    #[test]
+    fn a_rows_points_step_from_its_first_pixel() {
+        let mut row = RowSteps::new([1.0 / 3.0, -0.25], true);
+        assert_eq!(row.point(10, [5.0, 2.0]), [5.0, 2.0]);
+        // Later pixels don't ask for their own point (this one would be NaN).
+        let step = 21845.0 / 65536.0;
+        assert_eq!(row.point(13, [f64::NAN; 2]), [5.0 + 3.0 * step, 1.25]);
+        let far = row.point(3010, [f64::NAN; 2]);
+        assert_eq!(far, [5.0 + 3000.0 * step, 2.0 - 750.0]);
+        assert!((far[0] - 1005.0).abs() > 0.01, "{far:?}");
+        // Off (other warps), every pixel takes its own point.
+        let mut own = RowSteps::new([1.0 / 3.0, 0.0], false);
+        assert_eq!((own.point(10, [5.0, 2.0]), own.point(13, [6.0, 2.0])), ([5.0, 2.0], [6.0, 2.0]));
+    }
+
+    /// Where a fold stacks a smart object's triangles, those still facing as at rest come first in
+    /// mesh order and the turned-over ones after them, also in mesh order, however far either moved.
+    #[test]
+    fn turned_over_triangles_go_on_top_in_mesh_order() {
+        let src = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]];
+        // The left quad is mirrored in x (turned over, hardly moved); the right one is moved far
+        // and faces as before.
+        let pos = [[1.5, 0.0], [1.0, 0.0], [52.0, 0.0], [1.5, 1.0], [1.0, 1.0], [52.0, 1.0]];
+        let verts: Vec<([f64; 2], [f64; 2])> = pos.iter().copied().zip(src).collect();
+        let quads = [[0, 1, 3, 4], [1, 2, 4, 5]];
+        let (tris, rank) = ordered_triangles(&verts, &pos, &quads, &Fold::IN_PLACE);
+        assert_eq!(tris, vec![[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]]);
+        assert_eq!(rank, vec![2, 3, 0, 1]);
+        // Without a fold's stacking nothing is ranked.
+        assert!(ordered_triangles(&verts, &pos, &quads, &Fold::Rows).1.is_empty());
+    }
+
+    /// A smart object's warp draws a pixel that two triangles of one layer both reach (one on their
+    /// shared edge) twice, so a see-through picture is denser along the cut between them.
+    #[test]
+    fn a_pixel_on_a_shared_edge_is_drawn_twice() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        let r = Rect::new(0, 0, 16, 16);
+        src.write_region(r, &[1.0, 1.0, 1.0, 128.0 / 255.0].repeat(256));
+        let out = warp_patches_surface(&src, r, &|x, y| (x, y), [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Envelope);
+        let alpha = |x: i32, y: i32| (out.read_region(Rect::new(x, y, x + 1, y + 1))[3] * 255.0).round();
+        // (3, 3) lies on the diagonal the cell is cut along; (3, 5) inside one triangle.
+        assert_eq!((alpha(3, 3), alpha(3, 5)), (192.0, 128.0));
+    }
+
     /// Inside the picture a triangle squeezed down its columns reads a mip level as well, no
     /// coarser than its own shape allows: the diagonal of its source box per pixel of its width.
     #[test]
@@ -3048,22 +3175,23 @@ mod tests {
         assert_eq!((blend(t, fx, fy, None) * 255.0).round(), 1.0);
     }
 
-    /// A warp scaling a ramp to 3/4 samples pixel x at source position (8x + 1)/6, so many
-    /// pixels fall exactly on a 1/256 weight step; each takes exactly that weight, though float
-    /// noise in the triangles would tip some of them a step (and a level) lower.
+    /// A warp scaling a ramp to 4/5 samples pixel x at source position (10x + 1)/8, so every pixel
+    /// falls exactly on a 1/256 weight step; each takes exactly that weight, though float noise in
+    /// the triangles would tip some of them a step (and a level) lower. (Its step along a row, 5/4,
+    /// lies on the 1/65536 grid, so stepping along the row adds nothing to the points.)
     #[test]
     fn a_point_on_a_weight_step_stays_on_it() {
         let mut src = Surface::new(PixelFormat::RGBA8);
         for x in 0..64 {
             src.fill_rect(Rect::new(x, 0, x + 1, 64), &[f32::from((x * 3) as u8) / 255.0, 0.0, 0.0, 1.0]);
         }
-        let f = |x: f64, y: f64| (x * 0.75, y * 0.75);
+        let f = |x: f64, y: f64| (x * 0.8, y * 0.8);
         let out = warp_patches_surface(&src, Rect::new(0, 0, 64, 64), &f, [&[], &[]], Fold::IN_PLACE, Sampling::Single, Facets::Mesh);
         let block = out.read_region(Rect::new(2, 2, 44, 44));
         for (i, px) in block.chunks(4).enumerate() {
             let (x, y) = (2 + (i % 42) as i64, 2 + (i / 42) as i64);
-            let (ix, r) = ((8 * x + 1).div_euclid(6), (8 * x + 1).rem_euclid(6));
-            let k = ((r * 256) / 6) as f64 / 255.0;
+            let (ix, r) = ((10 * x + 1).div_euclid(8), (10 * x + 1).rem_euclid(8));
+            let k = ((r * 256) / 8) as f64 / 255.0;
             let want = (3.0 * ix as f64 * (1.0 - k) + 3.0 * (ix + 1) as f64 * k).round();
             assert_eq!(f64::from(px[0] * 255.0).round(), want, "pixel ({x}, {y})");
         }
