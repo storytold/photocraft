@@ -2816,6 +2816,15 @@ fn batch_keeps_automations_gate_on_actions_automation_wrote() {
     let saved = photocraft_io::import("red.png", &std::fs::read(join(&out, "red.png")).unwrap()).unwrap().document;
     assert_eq!(photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0], [0.0, 1.0, 1.0, 1.0]);
 
+    // The user's own action that plays the planted one: the scratch session knows automation's
+    // gate, so the planted steps keep it there too and the image is not inverted.
+    s.actions.list.push(Action::new("Wrapper", vec![("actions.play".to_string(), json!({"action": "Planted"}))]));
+    let out = join(&dir, "wrapper");
+    let r = s.execute("file.automate.batch", json!({"action": "Wrapper", "input": [input], "output": out, "format": "png"})).unwrap();
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("disabled"), "{r}");
+    assert!(!std::path::Path::new(&join(&out, "red.png")).exists());
+
     // Open documents: the steps run in the session itself, under the kept gate, which is removed after.
     s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
     let r = s.execute("file.automate.batch", json!({"action": "Planted", "source": "open"})).unwrap();

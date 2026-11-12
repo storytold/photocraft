@@ -914,6 +914,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // Scratch sessions answer to the caller's gate, or to the kept gate of an action automation
     // wrote: a gate can only be added here, never removed.
     let authorize = s.authorize.or(kept);
+    // Scratch sessions know automation's gate too, so an action the steps play (`actions.play`)
+    // that automation wrote keeps it there as in this session (#11578).
+    let automation_gate = s.automation_gate;
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
@@ -1044,6 +1047,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
+                scratch.automation_gate = automation_gate;
                 scratch.actions = actions.clone();
                 scratch.actions.playback_steps = carried.get();
                 scratch.actions.script_steps = script_steps.get();
