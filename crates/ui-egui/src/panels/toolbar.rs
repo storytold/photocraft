@@ -183,22 +183,11 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     toolbar_body(app, ui, true);
                 });
             });
-        // Releasing a floating palette near a window edge docks it there, as Photoshop does;
-        // anywhere else it stays where it was dropped and reopens there next launch.
-        let released = ui.input(|i| i.pointer.any_released());
-        let screen = ui.ctx().content_rect();
-        let center = area.response.rect.center();
-        if released && center.x < screen.left() + 56.0 {
-            app.ui.panels.toolbar_float = None;
-            app.ui.panels.toolbar_side = ToolbarSide::Left;
-            crate::dock::persist_panels(app, ui.ctx());
-        } else if released && center.x > screen.right() - 56.0 {
-            app.ui.panels.toolbar_float = None;
-            app.ui.panels.toolbar_side = ToolbarSide::Right;
-            crate::dock::persist_panels(app, ui.ctx());
-        } else {
-            app.ui.panels.toolbar_float = Some([area.response.rect.min.x, area.response.rect.min.y]);
-        }
+        // A floating palette stays exactly where it was dropped: snapping it back to an edge
+        // undid the drag as soon as the user let go near one, so docking is an explicit choice
+        // (the header's Move Toolbar button). `Area` keeps itself inside the window, and the
+        // dropped position is remembered so it reopens where the user left it.
+        app.ui.panels.toolbar_float = Some([area.response.rect.min.x, area.response.rect.min.y]);
         return;
     }
     let m = if t.pro { 5i8 } else { 7i8 };

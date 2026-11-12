@@ -203,9 +203,14 @@ fn add_from_selection(app: &mut PhotocraftApp) {
     }
 }
 
-/// The next marker name: the highest number already used, plus one. Naming by the list's length
-/// gave two markers the same number as soon as one in the middle was deleted (a 15-row list whose
-/// marker 8 was removed names the next marker "Marker 15" while "Marker 15" is still there).
+/// The next marker name: the highest number already on screen, plus one. Naming by the list's
+/// length gave two markers the same number as soon as one in the middle was deleted (a 15-row list
+/// whose marker 8 was removed names the next marker "Marker 15" while "Marker 15" is still there).
+///
+/// The number is read off the end of the existing names rather than after the current `Marker`
+/// word: a document that was numbered while the interface was in another language carries names
+/// like "标记 7" next to "Marker 7", and only counting the current word's names made the new marker
+/// repeat a number that was already on the canvas.
 pub(crate) fn next_marker_name(app: &PhotocraftApp) -> String {
     let prefix = tl!("Marker");
     let used: Vec<&str> = app
@@ -215,7 +220,8 @@ pub(crate) fn next_marker_name(app: &PhotocraftApp) -> String {
         .unwrap_or_default();
     let mut highest = 0usize;
     for name in &used {
-        if let Some(number) = name.strip_prefix(prefix).and_then(|rest| rest.trim().parse::<usize>().ok()) {
+        let tail: String = name.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
+        if let Ok(number) = tail.parse::<usize>() {
             highest = highest.max(number);
         }
     }
@@ -259,15 +265,17 @@ pub(crate) fn layer_under_frame(app: &PhotocraftApp, pos: [f64; 2], size: [f64; 
     best.map(|(_, id)| id)
 }
 
-/// The layer chosen in the Layers panel, if exactly one is picked and it is a pixel or shape layer
-/// (not the background and not a folder).
+/// The layer chosen in the Layers panel when exactly one is picked. Shapes are stored as groups in
+/// this document model, and a folder can be the thing that moves a whole block of a manual, so the
+/// old "pixel or shape layer only" test refused most of the layers a user would pick here and the
+/// Bind Layer button appeared to do nothing.
 fn selected_layer(app: &PhotocraftApp) -> Option<u64> {
     let st = app.session.active()?;
     let doc = &st.doc;
     let ids = st.selected_layers();
     let id = ids.first().copied()?;
     let layer = doc.layer(id)?;
-    (!doc.is_background(id) && !layer.is_group()).then_some(id.0)
+    (!doc.is_background(id) && layer.visible).then_some(id.0)
 }
 
 #[cfg(test)]
