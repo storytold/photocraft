@@ -122,6 +122,7 @@ pub(crate) fn open(app: &mut PhotocraftApp, parent: u64, effect: &str, field: &s
     validate(app, &t)?;
     let rgb = color_picker_ui::parse_hex(&color).ok_or("invalid effect color")?;
     let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Layer Style Color)", rgb);
+    fields.insert("__document".into(), serde_json::json!(st.doc.id.0));
     fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
     Ok(app.ui.open_dialog(DialogKind::Command, fields))
 }
