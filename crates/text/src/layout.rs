@@ -553,17 +553,27 @@ fn break_units(text: &str, lines: &[FitLine]) -> Vec<Unit> {
     out
 }
 
-/// Whether the first strong character of `s` is right-to-left (UAX #9 P2, without isolates), or
-/// `None` when it has none. Dynamic Text uses it to refuse Auto-direction paragraphs that lay out
-/// right to left.
+/// Whether the first strong character of `s` is right-to-left (UAX #9 P2), or `None` when it has
+/// none. Dynamic Text uses it to refuse Auto-direction paragraphs that lay out right to left.
+/// As P2 says, characters between an isolate initiator (LRI, RLI, FSI) and its matching PDI are
+/// skipped, and an unmatched initiator skips to the end: the layout's own bidi pass detects the
+/// paragraph's direction that way, so a paragraph opening with an isolated Latin name before its
+/// Hebrew text is right-to-left here too.
 pub fn first_strong_rtl(s: &str) -> Option<bool> {
     use icu_properties::{CodePointMapData, props::BidiClass};
     let classes = CodePointMapData::<BidiClass>::new();
-    s.chars().find_map(|c| match classes.get(c) {
-        BidiClass::LeftToRight => Some(false),
-        BidiClass::RightToLeft | BidiClass::ArabicLetter => Some(true),
-        _ => None,
-    })
+    let mut isolates = 0usize;
+    for c in s.chars() {
+        match classes.get(c) {
+            BidiClass::LeftToRightIsolate | BidiClass::RightToLeftIsolate | BidiClass::FirstStrongIsolate => isolates = isolates.saturating_add(1),
+            BidiClass::PopDirectionalIsolate => isolates = isolates.saturating_sub(1),
+            _ if isolates > 0 => {}
+            BidiClass::LeftToRight => return Some(false),
+            BidiClass::RightToLeft | BidiClass::ArabicLetter => return Some(true),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `st` at `scale` times its size, clamped to the type size range; explicit leading and baseline
