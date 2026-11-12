@@ -180,6 +180,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
                 let _ = app.run("revision.align", json!({"indices": picked, "mode": mode}));
             }
         }
+        // Distribute evens the gaps along one axis; it takes a third frame, so the two buttons only
+        // appear once the user has picked three or more.
+        if picked.len() > 2 {
+            widgets::vline(ui, 22.0);
+            for (label, mode) in [(tl!("Distribute Horizontally"), "distributeX"), (tl!("Distribute Vertically"), "distributeY")] {
+                if widgets::secondary_button(ui, label, 0.0).clicked() {
+                    let _ = app.run("revision.align", json!({"indices": picked, "mode": mode}));
+                }
+            }
+        }
         return true;
     }
     let i = picked[0];

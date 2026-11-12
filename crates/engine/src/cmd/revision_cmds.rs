@@ -309,6 +309,60 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
     if picked.len() < 2 {
         return Err(bad(CMD, "aligning needs at least two markers"));
     }
+    // Even spacing along one axis: the outermost frames stay where they are and the frames
+    // between them are spread so that the gaps are equal (Photoshop's Distribute). Aligning needs
+    // two frames, distributing needs three: two frames only have the one gap they already have.
+    if mode == "distributeX" || mode == "distributeY" {
+        let horizontal = mode == "distributeX";
+        if picked.len() < 3 {
+            return Err(bad(CMD, "distributing needs at least three markers"));
+        }
+        let mut order = picked.clone();
+        order.sort_by(|a, b| {
+            let (pa, pb) = (&d0.revision_markers[*a], &d0.revision_markers[*b]);
+            let (ka, kb) = if horizontal { (pa.pos[0], pb.pos[0]) } else { (pa.pos[1], pb.pos[1]) };
+            ka.total_cmp(&kb)
+        });
+        let first = &d0.revision_markers[order[0]];
+        let last = &d0.revision_markers[order[order.len() - 1]];
+        let start = if horizontal { first.pos[0] } else { first.pos[1] };
+        let end = if horizontal { last.pos[0] + last.size[0] } else { last.pos[1] + last.size[1] };
+        let sum: f64 = order
+            .iter()
+            .map(|i| {
+                let m = &d0.revision_markers[*i];
+                if horizontal { m.size[0] } else { m.size[1] }
+            })
+            .sum();
+        let gap = ((end - start) - sum) / (order.len() - 1) as f64;
+        let mut cursor = start;
+        let mut plan: Vec<(usize, f64, f64)> = Vec::new();
+        for i in &order {
+            let m = &d0.revision_markers[*i];
+            let at = cursor.round();
+            let (x, y) = if horizontal { (at, m.pos[1]) } else { (m.pos[0], at) };
+            if (x - m.pos[0]).abs() >= 0.5 || (y - m.pos[1]).abs() >= 0.5 {
+                plan.push((*i, x, y));
+            }
+            cursor += (if horizontal { m.size[0] } else { m.size[1] }) + gap;
+        }
+        let moved = plan.len();
+        if moved > 0 {
+            s.edit("Distribute Revision Markers", move |d, _| {
+                for (i, x, y) in plan {
+                    let mut m = d.revision_markers[i].clone();
+                    m.pos = [x, y];
+                    m.snapshot = snapshot_for(d, &m)?;
+                    m.done = false;
+                    m.manual_done = false;
+                    d.revision_markers[i] = m;
+                }
+                Ok(())
+            })?;
+        }
+        let markers = list_json(&s.active().ok_or(EngineError::NoDocument)?.doc);
+        return Ok(json!({"aligned": moved, "markers": markers}));
+    }
     // The box around the whole run: edges align to it, centres to its centre.
     let first = &d0.revision_markers[picked[0]];
     let (mut left, mut top) = (first.pos[0], first.pos[1]);
@@ -504,7 +558,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Align Revision Markers",
             menu: &[],
             shortcut: None,
-            params: r##"{"indices":[n,...],"mode":"left|right|top|bottom|centerX|centerY"} -> {aligned,markers} (one undo step; every moved frame re-snapshots)"##,
+            params: r##"{"indices":[n,...],"mode":"left|right|top|bottom|centerX|centerY|distributeX|distributeY"} -> {aligned,markers} (one undo step; every moved frame re-snapshots)"##,
             enabled: has_markers,
             run: align,
             journal: true,

@@ -172,22 +172,57 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let double = app.ui.panels.toolbar_double;
     let w = toolbar_width(t.pro, double);
     if let Some([x, y]) = app.ui.panels.toolbar_float {
-        // A floating palette is a movable frame; the grip inside would fight the frame's own drag,
-        // so `floating` hides it there.
-        let frame = egui::Frame::popup(ui.style()).fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 6));
-        let area =
-            egui::Area::new(egui::Id::unique("photocraft-toolbar-float")).order(egui::Order::Middle).fixed_pos(pos2(x, y)).movable(true).show(ui.ctx(), |ui| {
-                frame.show(ui, |ui| {
-                    ui.set_width(w);
-                    ui.set_max_height((ui.ctx().content_rect().height() - 96.0).max(180.0));
-                    toolbar_body(app, ui, true);
-                });
+        // Photoshop's tool palette is an ordinary window: it travels over the canvas, over the
+        // edge of the app window and onto a second monitor. An `Area` cannot leave its own window,
+        // so a floating palette is hosted in a child viewport, which egui paints in its own native
+        // window. Its position is kept relative to the main window, so it reopens where the user
+        // left it and survives a resize.
+        let id = egui::ViewportId::from_hash_of("photocraft-toolbar-window");
+        let size_id = egui::Id::unique("photocraft-toolbar-window-size");
+        let main_rect = ui.ctx().input(|i| i.viewport().outer_rect).unwrap_or_else(|| ui.ctx().content_rect());
+        let height = ui.ctx().data(|d| d.get_temp::<f32>(size_id)).unwrap_or(520.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title(tl!("Toolbar"))
+            .with_position(main_rect.min + vec2(x, y))
+            .with_inner_size(vec2(w + 14.0, height))
+            .with_min_inner_size(vec2(w + 14.0, 160.0))
+            .with_resizable(false);
+        // Reports from the child window are collected here: the callback runs inside this frame,
+        // so locals are the only channel that reaches the app state afterwards.
+        let mut moved: Option<[f32; 2]> = None;
+        let mut measured = 0.0f32;
+        let mut closed = false;
+        ui.ctx().show_viewport_immediate(id, builder, |ui, class| {
+            if class == egui::ViewportClass::EmbeddedWindow {
+                // No multi-viewport support in this backend: the palette stays an egui window
+                // inside the app window, where egui moves it by its own title bar.
+                ui.set_width(w + 12.0);
+                toolbar_body(app, ui, true);
+                return;
+            }
+            let t = Tokens::get(ui.ctx());
+            egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(7, 7)).show(ui, |ui| {
+                ui.set_width(w);
+                toolbar_body(app, ui, true);
             });
-        // A floating palette stays exactly where it was dropped: snapping it back to an edge
-        // undid the drag as soon as the user let go near one, so docking is an explicit choice
-        // (the header's Move Toolbar button). `Area` keeps itself inside the window, and the
-        // dropped position is remembered so it reopens where the user left it.
-        app.ui.panels.toolbar_float = Some([area.response.rect.min.x, area.response.rect.min.y]);
+            measured = ui.min_rect().height();
+            closed = ui.ctx().input(|i| i.viewport().close_requested());
+            if let Some(outer) = ui.ctx().input(|i| i.viewport().outer_rect) {
+                moved = Some([outer.min.x - main_rect.min.x, outer.min.y - main_rect.min.y]);
+            }
+        });
+        if closed {
+            // Closing the window is the same as docking it again: the palette returns to its side.
+            app.ui.panels.toolbar_float = None;
+            crate::dock::persist_panels(app, ui.ctx());
+            return;
+        }
+        if let Some(at) = moved {
+            app.ui.panels.toolbar_float = Some(at);
+        }
+        if measured > 0.0 {
+            ui.ctx().data_mut(|d| d.insert_temp(size_id, measured + 16.0));
+        }
         return;
     }
     let m = if t.pro { 5i8 } else { 7i8 };
@@ -258,6 +293,9 @@ fn toolbar_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, floating: bool) {
         dock.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, dock_tip));
         if dock.on_hover_text(dock_tip).clicked() {
             app.ui.panels.toolbar_side = other;
+            // A floating palette goes back into the dock on this button: the window hosting it
+            // disappears with it, so the side the user asked for is the side it docks to.
+            app.ui.panels.toolbar_float = None;
             // Persist the side as a discrete change; the dock may not be drawn this frame.
             crate::dock::persist_panels(app, ui.ctx());
         }
