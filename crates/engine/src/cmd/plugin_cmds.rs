@@ -160,33 +160,6 @@ pub(crate) fn apply_to_surface(command: &str, params: &Value, surf: &Surface, se
 /// Largest base64 payload `plugin.install` accepts (the module limit, encoded).
 const MAX_DATA_CHARS: usize = (32 << 20) / 3 * 4 + 4;
 
-fn b64_decode(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(u32::from(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            _ => return None,
-        }))
-    };
-    let clean: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
-    if clean.len() % 4 == 1 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(clean.len() / 4 * 3 + 2);
-    for chunk in clean.chunks(4) {
-        let mut n = 0u32;
-        for (i, &c) in chunk.iter().enumerate() {
-            n |= val(c)? << (18 - 6 * i);
-        }
-        let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
-        out.extend_from_slice(bytes.get(..chunk.len() - 1)?);
-    }
-    Some(out)
-}
-
 fn install(_s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.install";
     let plugin = if let Some(data) = p.get("data") {
@@ -194,7 +167,7 @@ fn install(_s: &mut Session, p: &Value) -> Result<Value> {
         if data.len() > MAX_DATA_CHARS {
             return Err(bad(CMD, "`data` is larger than the module limit"));
         }
-        let bytes = b64_decode(data).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?;
+        let bytes = photocraft_paint::tile::b64_decode(data).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?;
         Plugin::load(&bytes, photocraft_plugins::Limits::default()).map_err(err)?
     } else if let Some(path) = p.get("path") {
         let path = path.as_str().filter(|s| !s.is_empty()).ok_or_else(|| bad(CMD, "`path` must be a file path"))?;
