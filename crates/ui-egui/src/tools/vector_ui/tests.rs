@@ -539,7 +539,8 @@ fn path_mode_custom_shape_joins_its_hole_to_it() {
     app.ui.presets_ui.custom_shape = "Ring".into();
     finish_shape(&mut app, Tool::CustomShape, [20.0, 20.0], [70.0, 70.0], egui::Modifiers::NONE);
     let ops: Vec<PathOp> = app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths.iter().map(|s| s.op).collect();
-    assert_eq!(ops, [PathOp::Combine, PathOp::Combine, PathOp::Join], "the rectangle, the ring and its hole");
+    // The ring takes Path mode's default operation, Exclude Overlapping Shapes (#13235).
+    assert_eq!(ops, [PathOp::Combine, PathOp::Exclude, PathOp::Join], "the rectangle, the ring and its hole");
     assert_eq!(work_covered(&app, 45, 45), 0.0, "the ring's hole");
     assert_eq!(work_covered(&app, 22, 45), 1.0, "the ring");
 }
