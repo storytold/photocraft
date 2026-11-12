@@ -1,5 +1,5 @@
+use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value, VersionedDescriptor};
 use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, LutFormat, LutSource, ToneSpace, curve_map_outputs};
-use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value, VersionedDescriptor};
 
 use super::{BW_KEYS, BW_TINT, clamp_i16, cube_file_name, levels_write, lut_source_for, psd_lut_format, put16, q255, rgb_desc};
 
