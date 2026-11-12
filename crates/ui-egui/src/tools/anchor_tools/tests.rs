@@ -53,7 +53,7 @@ fn the_anchor_tools_have_no_letter() {
 }
 
 #[test]
-fn add_on_a_straight_segment_inserts_a_corner_in_one_step() {
+fn add_on_a_straight_segment_inserts_a_smooth_anchor_in_one_step() {
     let mut app = app(Tool::AddAnchorPoint);
     with_path(&mut app);
     let (before, n) = (work(&app), steps(&app));
@@ -61,7 +61,11 @@ fn add_on_a_straight_segment_inserts_a_corner_in_one_step() {
     let p = work(&app);
     assert_eq!(p.subpaths[0].knots.len(), 5);
     let k = p.subpaths[0].knots[3];
-    assert!(!k.smooth && (k.anchor.y - 120.0).abs() < 1e-9 && (k.anchor.x - 80.0).abs() < 1.0, "a corner on the bottom edge: {k:?}");
+    assert!(k.smooth && (k.anchor.y - 120.0).abs() < 1e-9 && (k.anchor.x - 80.0).abs() < 1.0, "a smooth anchor on the bottom edge: {k:?}");
+    assert!(
+        (k.in_ctrl.y - 120.0).abs() < 1e-9 && (k.out_ctrl.y - 120.0).abs() < 1e-9 && k.in_ctrl.x != k.anchor.x && k.out_ctrl.x != k.anchor.x,
+        "with handles along the edge: {k:?}"
+    );
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
     assert!(app.session.undo());
