@@ -55,10 +55,10 @@ Stop and remove the container with:
 docker compose down
 ```
 
-The included `compose.yaml` uses the local image name `photocraft-web:local` and maps host port
-`8080` to container port `8080`. If port 8080 is already in use, change the host side of the
-mapping (the value before the colon) in `compose.yaml`, for example `"8081:8080"`, and then
-open **http://localhost:8081/**.
+The included `compose.yaml` uses the local image name `photocraft-web:local` and maps
+`127.0.0.1:8080` on the host to port `8080` in the container. If port 8080 is already in use,
+change the host port in `compose.yaml`, for example to `"127.0.0.1:8081:8080"`, and then open
+**http://localhost:8081/**.
 
 The runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint and Docker
 health check. It serves precompressed gzip assets, the Wasm MIME type, immutable hashed
