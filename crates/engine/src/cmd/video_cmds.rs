@@ -265,6 +265,9 @@ pub(crate) struct Footage {
     /// The frame rate the footage itself implies (a single animated GIF's or WebP's delays); `None` for
     /// stills and sequences, which carry none.
     pub(crate) fps: Option<f32>,
+    /// Decoder warnings that survived salvaging, e.g. a GIF or WebP truncated mid-animation
+    /// (#11113): the frames are real but incomplete, and the caller must disclose that.
+    pub(crate) warnings: Vec<String>,
 }
 
 /// The frame rate for a GIF's frame delays (milliseconds): that of the most common delay, the
@@ -415,7 +418,7 @@ impl KeptFrames {
         opts: &photocraft_io::ImportOptions,
         ctl: &photocraft_raster::Interrupt,
         delays: &mut Vec<u32>,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let mut over = None;
         let done = photocraft_io::import_animation_frames_with(name, bytes, opts, ctl, &mut |doc, delay_ms| {
             ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
@@ -430,7 +433,9 @@ impl KeptFrames {
             return Err(EngineError::Other(format!("`{name}`: {msg}")));
         }
         match done {
-            Ok(_) => Ok(()),
+            // A file that decoded with salvage (a truncation warning, #11113) must still be
+            // disclosed even though the frames themselves came through.
+            Ok(done) => Ok(done.warnings.into_iter().map(|w| format!("`{name}`: {w}")).collect()),
             Err(photocraft_io::IoError::Cancelled) => Err(EngineError::Cancelled),
             Err(e) => Err(EngineError::Other(format!("`{name}`: {e}"))),
         }
@@ -449,8 +454,8 @@ pub(crate) fn animation_footage(
 ) -> Result<Footage> {
     let mut kept = KeptFrames::with_capacity(0);
     let mut delays = Vec::new();
-    kept.keep_animation(name, bytes, fmt, opts, ctl, &mut delays)?;
-    Ok(Footage { frames: kept.frames, fps: fps_from_delays(&delays) })
+    let warnings = kept.keep_animation(name, bytes, fmt, opts, ctl, &mut delays)?;
+    Ok(Footage { frames: kept.frames, fps: fps_from_delays(&delays), warnings })
 }
 
 /// Load frames from `path`: a single image (1 frame, or every frame of an animated GIF or WebP), or a
@@ -480,8 +485,10 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
     }
     let mut kept = KeptFrames::with_capacity(files.len());
     let mut delays = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let max_footage_bytes = kept.max_bytes;
     for f in &files {
-        let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
+        let bytes = crate::allocation::read_file_within(f, max_footage_bytes).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
         // A GIF (a still one is its only frame) or an animated WebP brings every frame.
         let animated = match photocraft_codecs::detect(&bytes) {
@@ -490,7 +497,11 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
             _ => false,
         };
         if animated {
-            kept.keep_animation(&name, &bytes, fmt, opts, &photocraft_raster::Interrupt::NONE, &mut delays)?;
+            for w in kept.keep_animation(&name, &bytes, fmt, opts, &photocraft_raster::Interrupt::NONE, &mut delays)? {
+                if !warnings.contains(&w) {
+                    warnings.push(w);
+                }
+            }
             continue;
         }
         // A multi-page TIFF: every full-resolution page of the main chain, in order, as the
@@ -531,7 +542,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
     }
     // Only a lone GIF or WebP says how fast it plays; a sequence mixing files has no single rate.
     let fps = if files.len() == 1 { fps_from_delays(&delays) } else { None };
-    Ok(Footage { frames: kept.frames, fps })
+    Ok(Footage { frames: kept.frames, fps, warnings })
 }
 
 fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
@@ -541,7 +552,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.newVideoLayerFromFile".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let Footage { frames, fps: footage_fps } = load_frames(&path, fmt, &footage_import_options(s))?;
+    let Footage { frames, fps: footage_fps, warnings } = load_frames(&path, fmt, &footage_import_options(s))?;
     // An explicit `fps` wins, then the rate the footage implies, then 30.
     let fps = crate::timeline_cmds::fps_param("layer.videoLayers.newVideoLayerFromFile", p)?.or(footage_fps).unwrap_or(30.0);
     let n = frames.len();
@@ -568,7 +579,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         sync(doc);
         Ok(id)
     })?;
-    Ok(json!({"layer": id.0, "frames": n}))
+    Ok(json!({"layer": id.0, "frames": n, "warnings": warnings}))
 }
 
 fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
@@ -578,13 +589,17 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.replaceFootage".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let frames = load_frames(&path, fmt, &footage_import_options(s))?.frames;
-    edit_video(s, "Replace Footage", move |v, _| {
+    let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
+    let mut out = edit_video(s, "Replace Footage", move |v, _| {
         v.original_frames = Some(frames.clone());
         v.frames = frames;
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         Ok(())
-    })
+    })?;
+    if !warnings.is_empty() {
+        out["warnings"] = Value::from(warnings);
+    }
+    Ok(out)
 }
 
 fn interpret_footage(s: &mut Session, p: &Value) -> Result<Value> {
@@ -614,12 +629,16 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     };
     // The footage path is stored in the document.
     let file = crate::doc_path::resolve(&path).map_err(|why| crate::doc_path::refusal("the footage", &path, why))?;
-    let frames = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?.frames;
-    edit_video(s, "Reload Frame", move |v, _| {
+    let Footage { frames, warnings, .. } = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?;
+    let mut out = edit_video(s, "Reload Frame", move |v, _| {
         v.original_frames = Some(frames.clone());
         v.frames = frames;
         Ok(())
-    })
+    })?;
+    if !warnings.is_empty() {
+        out["warnings"] = Value::from(warnings);
+    }
+    Ok(out)
 }
 
 /// The pages of a TIFF that are pages of the document: full-resolution directories of the main
@@ -639,7 +658,7 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "file.import.videoFramesToLayers".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let frames = load_frames(&path, fmt, &footage_import_options(s))?.frames;
+    let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
     let n = frames.len();
     s.edit("Video Frames to Layers", |doc, active| {
         let mut above = *active;
@@ -655,7 +674,7 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
         *active = above;
         Ok(())
     })?;
-    Ok(json!({"layers": n}))
+    Ok(json!({"layers": n, "warnings": warnings}))
 }
 
 /// The document's name without its extension, as a file name: a native document keeps whatever
