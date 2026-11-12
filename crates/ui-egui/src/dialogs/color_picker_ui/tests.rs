@@ -612,8 +612,7 @@ fn cmyk_values_survive_ok_and_a_reopen() {
     set_rgb(&mut d.fields, photocraft_color::convert::cmyk_to_rgb(cyan).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(cyan));
     let fields = d.fields.clone();
     confirm(&mut app, &fields).unwrap();
-    let fg = app.session.tools.foreground;
-    assert_eq!(app.session.tools.picked_cmyk([fg[0], fg[1], fg[2]]), Some(cyan));
+    assert_eq!(app.session.tools.picked_role_cmyk(0), Some(cyan));
     let id = open(&mut app, "foreground");
     let again = current(&app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields);
     assert_eq!(again.cmyk, cyan);

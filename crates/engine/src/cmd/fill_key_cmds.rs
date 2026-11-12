@@ -189,6 +189,48 @@ mod tests {
     }
 
     #[test]
+    fn cmyk_color_history_preserves_inks_and_role_ambiguity() {
+        let mut s = session();
+        let a = [0.25, 0.5, 0.75, 1.0];
+        let b = [0.75, 0.5, 0.25, 1.0];
+        let cyan = [1.0, 0.0, 0.0, 0.0];
+        let magenta = [0.0, 1.0, 0.0, 0.0];
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": a,
+                "foregroundCmyk": cyan
+            }),
+        )
+        .unwrap();
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": b
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(s.tools.matching_cmyk([a[0], a[1], a[2]]), Some(cyan));
+
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": a,
+                "foregroundCmyk": cyan,
+                "background": a,
+                "backgroundCmyk": magenta
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(s.tools.picked_role_cmyk(0), Some(cyan));
+        assert_eq!(s.tools.picked_role_cmyk(1), Some(magenta));
+        assert_eq!(s.tools.matching_cmyk([a[0], a[1], a[2]]), None);
+    }
+    #[test]
     fn foreground_fills_the_layer_without_a_selection() {
         let mut s = session();
         s.execute("edit.fillForeground", json!({})).unwrap();

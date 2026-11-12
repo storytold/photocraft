@@ -1066,6 +1066,7 @@ fn build() -> Vec<CommandSpec> {
                     s.tools.clear_role_cmyk(0);
                     if let Some(inks) = fg_cmyk {
                         s.tools.remember_role_cmyk(0, inks);
+                        s.tools.remember_cmyk([foreground[0], foreground[1], foreground[2]], inks);
                     }
                 }
 
@@ -1073,6 +1074,7 @@ fn build() -> Vec<CommandSpec> {
                     s.tools.clear_role_cmyk(1);
                     if let Some(inks) = bg_cmyk {
                         s.tools.remember_role_cmyk(1, inks);
+                        s.tools.remember_cmyk([background[0], background[1], background[2]], inks);
                     }
                 }
                 Ok(Value::Null)
