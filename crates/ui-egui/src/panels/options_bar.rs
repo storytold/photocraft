@@ -92,7 +92,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::chrome_ui::home_button(app, ui);
                             widgets::vline(ui, 22.0);
                         }
-                        let tool_icon = icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()));
+                        // The tool preset picker is greyed while warping, as in the reference (#12503).
+                        let warping = app.ui.transform.as_ref().is_some_and(|s| s.warp.is_some());
+                        let tool_icon = ui
+                            .add_enabled_ui(!warping, |ui| {
+                                icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()))
+                            })
+                            .inner;
                         // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools (#2825).
                         let mut reset = None;
                         tool_icon.context_menu(|ui| {
@@ -138,7 +144,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let before = app.session.tools.brush.clone();
                             let mut brush = before.clone();
                             // Mode is the tool's own brush's, kept per tool like its size.
-                            if let Some(modes) = crate::blend_keys::tool_modes(tool) {
+                            if tool == Tool::PatternStamp {
+                                // Its list has Behind, greyed on the Background (#12879).
+                                opt_label(ui, tl!("Mode"));
+                                let behind = crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind);
+                                super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush, behind);
+                            } else if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                                 opt_label(ui, tl!("Mode"));
                                 if let Some(Some(m)) =
                                     tool_mode_dropdown(ui, "retouch-mode", &modes, Some(crate::blend_keys::brush_tool_mode(tool, brush.mode)))
@@ -305,6 +316,10 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 opt_label(ui, tl!("Size"));
                 widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
             });
+            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
+            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
+            // Hardness stays with Size, so Opacity follows Mode as in Photoshop and the Pro bar (#9784).
+            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             widgets::vline(ui, 22.0);
             // The Brush's own tooltips here too (#11813); the Eraser keeps its texts.
             let brush = app.ui.tool == Tool::Brush;
@@ -319,9 +334,6 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                     tip(mode, tl!("Painting Mode"));
                 }
             }
-            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
-            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
-            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             let opacity = ui.add_enabled_ui(!block, |ui| whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 66.0)).inner;
             tip(opacity, tl!("Set opacity for stroke"));
             let flow = ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0)).inner;
