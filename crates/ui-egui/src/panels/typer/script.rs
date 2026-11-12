@@ -75,7 +75,15 @@ mod tests {
 
     #[test]
     fn page_headings() {
-        for (s, n) in [("Page 1", Some(1)), ("Page 12 :", Some(12)), ("Page 12 - titre", Some(12)), ("[Page 3]", Some(3)), ("## Page 4", Some(4)), ("**Page 5:** x", Some(5)), ("page 6.", Some(6))] {
+        for (s, n) in [
+            ("Page 1", Some(1)),
+            ("Page 12 :", Some(12)),
+            ("Page 12 - titre", Some(12)),
+            ("[Page 3]", Some(3)),
+            ("## Page 4", Some(4)),
+            ("**Page 5:** x", Some(5)),
+            ("page 6.", Some(6)),
+        ] {
             assert_eq!(page_marker(s), n, "{s}");
         }
         for s in ["Page", "Pages 2", "On page 3", "Page 2 is nice", "Page 0"] {

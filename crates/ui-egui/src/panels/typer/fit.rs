@@ -68,7 +68,7 @@ impl Shape {
         }
         right.reverse();
         left.extend(right);
-        left.dedup_by(|a, b| a[0] == b[0] && b[0] == a[0] && (a[1] - b[1]).abs() < 1e-3);
+        left.dedup();
         left
     }
 
@@ -226,7 +226,13 @@ fn best_at(shape: &Shape, v: &Variant, m: Metrics, scale: f32, (cx, cy): (f32, f
     best
 }
 
-fn break_lines(v: &Variant, caps: &[f32], scale: f32, line_w: &mut HashMap<(usize, usize), f32>, width: &mut dyn FnMut(&str) -> f32) -> Option<(f32, Vec<usize>)> {
+fn break_lines(
+    v: &Variant,
+    caps: &[f32],
+    scale: f32,
+    line_w: &mut HashMap<(usize, usize), f32>,
+    width: &mut dyn FnMut(&str) -> f32,
+) -> Option<(f32, Vec<usize>)> {
     let t = v.tokens.len();
     let n = caps.len();
     let max_cap = caps.iter().copied().fold(0.0, f32::max);

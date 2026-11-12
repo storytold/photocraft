@@ -183,23 +183,23 @@ fn find_layer(layers: &[photocraft_doc::Layer], name: &str) -> Option<LayerId> {
 
 fn paste(app: &mut PhotocraftApp) -> Result<String, String> {
     let lines = app.typer.lines();
-    let Some(cur) = app.typer.current(&lines) else { return Err("Aucune ligne à coller dans le script.".into()) };
+    let Some(cur) = app.typer.current(&lines) else { return Err(tl!("No line to paste in the script.").into()) };
     let line = lines[cur].clone();
     let data = app.typer.data.clone();
     let style = line.style.or(Some(data.default_style)).and_then(|i| data.styles.get(i)).cloned().unwrap_or_default();
     let settings = &data.settings;
 
-    let st = app.session.active().ok_or("Aucun document ouvert.")?;
+    let st = app.session.active().ok_or_else(|| tl!("No document is open.").to_string())?;
     let doc = st.doc.clone();
-    let sel = doc.selection.as_ref().ok_or("Sélectionne une bulle (baguette magique, rectangle ou lasso).")?;
+    let sel = doc.selection.as_ref().ok_or_else(|| tl!("Select a bubble (Magic Wand, rectangle or lasso).").to_string())?;
     let bounds = sel.content_bounds();
     if bounds.is_empty() || bounds.width() * bounds.height() < 200 {
-        return Err("La sélection est trop petite.".into());
+        return Err(tl!("The selection is too small.").into());
     }
     let (w, h) = (bounds.width() as usize, bounds.height() as usize);
     let n = sel.channels().max(1);
     let cov: Vec<f32> = sel.read_region(bounds).chunks(n).map(|c| c[0]).collect();
-    let shape = fit::Shape::from_mask(&cov, w, h, bounds.x0, bounds.y0).ok_or("La sélection est vide.")?;
+    let shape = fit::Shape::from_mask(&cov, w, h, bounds.x0, bounds.y0).ok_or_else(|| tl!("The selection is empty.").to_string())?;
 
     let composite = photocraft_compose::render(&doc, bounds);
     let picked: Vec<[f32; 3]> = cov.iter().zip(&composite.px).filter(|(c, _)| **c >= 0.5).map(|(_, p)| [p[0], p[1], p[2]]).step_by(7).collect();
@@ -269,8 +269,12 @@ fn paste(app: &mut PhotocraftApp) -> Result<String, String> {
             p["align"] = json!("center");
             p["name"] = json!(name);
             let created = run(app, "type.create", p)?;
-            let msg = if plan.scale < 0.999 { format!("Collé à {:.0} % de la taille du style.", plan.scale * 100.0) } else { "Collé.".into() };
-            let msg = if plan.hyphenated { format!("{msg} Avec une césure.") } else { msg };
+            let msg = if plan.scale < 0.999 {
+                crate::i18n::fmt(tl!("Pasted at {percent}% of the style size."), &[("percent", &format!("{:.0}", plan.scale * 100.0))])
+            } else {
+                tl!("Pasted.").to_string()
+            };
+            let msg = if plan.hyphenated { format!("{msg} {}", tl!("With one hyphen.")) } else { msg };
             (created["layer"].as_u64(), plan.center, msg)
         }
         None => {
@@ -282,10 +286,10 @@ fn paste(app: &mut PhotocraftApp) -> Result<String, String> {
             p["name"] = json!(name);
             let created = run(app, "type.create", p)?;
             let c = shape.centroid().unwrap_or(((bounds.x0 + bounds.x1) as f32 / 2.0, (bounds.y0 + bounds.y1) as f32 / 2.0));
-            (created["layer"].as_u64(), c, "Le texte ne tient pas dans la bulle : collage classique.".into())
+            (created["layer"].as_u64(), c, tl!("The text does not fit the bubble: classic paste.").to_string())
         }
     };
-    let layer_id = layer_id.ok_or("type.create n'a pas renvoyé de calque")?;
+    let layer_id = layer_id.ok_or_else(|| tl!("New Type Layer returned no layer.").to_string())?;
     if let Some(b) = run(app, "type.info", json!({ "layer": layer_id }))?["bounds"].as_array().filter(|b| b.len() == 4) {
         let v: Vec<f64> = b.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
         let (dx, dy) = ((f64::from(target.0) - (v[0] + v[2]) / 2.0).round(), (f64::from(target.1) - (v[1] + v[3]) / 2.0).round());
@@ -300,7 +304,7 @@ fn paste(app: &mut PhotocraftApp) -> Result<String, String> {
         run(app, "select.deselect", json!({}))?;
     }
     app.typer.step(&lines, true);
-    Ok(if cleaned { format!("{message} Bulle nettoyée.") } else { message })
+    Ok(if cleaned { format!("{message} {}", tl!("Bubble cleaned.")) } else { message })
 }
 
 fn do_paste(app: &mut PhotocraftApp) {
@@ -374,7 +378,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .resizable(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                for (i, name) in ["Script", "Styles", "Réglages"].iter().enumerate() {
+                for (i, name) in [tl!("Script"), tl!("Styles"), tl!("Settings")].iter().enumerate() {
                     if crate::widgets::pill_tab(ui, name, app.typer.tab == i).clicked() {
                         app.typer.tab = i;
                     }
@@ -402,12 +406,17 @@ fn script_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<fn(&mut Phot
     let mut action: Option<fn(&mut PhotocraftApp)> = None;
     let t = &mut app.typer;
     ui.horizontal(|ui| {
-        ui.toggle_value(&mut t.editing_script, "✏ Modifier le script");
-        ui.checkbox(&mut t.data.settings.paste_on_click, "Coller au clic");
+        ui.toggle_value(&mut t.editing_script, tl!("✏ Edit Script"));
+        ui.checkbox(&mut t.data.settings.paste_on_click, tl!("Paste on Click"));
     });
     if t.editing_script {
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            ui.add(egui::TextEdit::multiline(&mut t.data.script).desired_rows(16).desired_width(f32::INFINITY).hint_text("Page 1\nREG: Une réplique.\n## Une note de traduction"));
+            ui.add(
+                egui::TextEdit::multiline(&mut t.data.script)
+                    .desired_rows(16)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(tl!("Page 1\nREG: A line of dialogue.\n## A translator note")),
+            );
         });
         return None;
     }
@@ -432,20 +441,20 @@ fn script_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<fn(&mut Phot
             }
         }
         if lines.iter().all(|l| l.ignore) {
-            ui.weak("Colle ton script avec « Modifier le script ».");
+            ui.weak(tl!("Paste your script with Edit Script."));
         }
     });
     if let Some(i) = clicked {
         t.data.current = i;
     }
     ui.horizontal(|ui| {
-        if ui.button("◀").on_hover_text("Ligne précédente").clicked() {
+        if ui.button("◀").on_hover_text(tl!("Previous Line")).clicked() {
             t.step(&lines, false);
         }
-        if ui.button("▶").on_hover_text("Ligne suivante").clicked() {
+        if ui.button("▶").on_hover_text(tl!("Next Line")).clicked() {
             t.step(&lines, true);
         }
-        if ui.button("Coller dans la sélection").clicked() {
+        if ui.button(tl!("Paste in Selection")).clicked() {
             action = Some(do_paste);
         }
     });
@@ -469,8 +478,8 @@ fn styles_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     t.edited_style = i;
                 }
             }
-            if ui.button("+").on_hover_text("Nouveau style").clicked() {
-                d.styles.push(Style { name: format!("Style {}", d.styles.len() + 1), ..d.styles.get(t.edited_style).cloned().unwrap_or_default() });
+            if ui.button("+").on_hover_text(tl!("New Style")).clicked() {
+                d.styles.push(Style { name: format!("{} {}", tl!("Style"), d.styles.len() + 1), ..d.styles.get(t.edited_style).cloned().unwrap_or_default() });
                 t.edited_style = d.styles.len() - 1;
             }
         });
@@ -478,31 +487,30 @@ fn styles_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let i = t.edited_style;
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Depuis le calque actif").on_hover_text("Copie la police, la taille et la couleur du calque de texte actif").clicked() {
+            if ui.button(tl!("From Active Layer")).on_hover_text(tl!("Copy the font, size and color of the active type layer")).clicked() {
                 from_layer = true;
             }
-            if ui.add_enabled(d.default_style != i, egui::Button::new("★ Par défaut")).clicked() {
+            if ui.add_enabled(d.default_style != i, egui::Button::new(tl!("★ Default"))).clicked() {
                 d.default_style = i;
             }
-            if ui.add_enabled(d.styles.len() > 1, egui::Button::new("Supprimer")).clicked() {
+            if ui.add_enabled(d.styles.len() > 1, egui::Button::new(tl!("Delete"))).clicked() {
                 d.styles.remove(i);
                 d.default_style = if d.default_style > i { d.default_style - 1 } else { d.default_style.min(d.styles.len() - 1) };
                 t.edited_style = i.min(d.styles.len() - 1);
-                return;
             }
         });
         let s = &mut d.styles[t.edited_style];
         egui::Grid::new("typer-style").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-            ui.label("Nom");
+            ui.label(tl!("Name"));
             ui.text_edit_singleline(&mut s.name);
             ui.end_row();
-            ui.label("Préfixes");
+            ui.label(tl!("Prefixes"));
             ui.add(egui::TextEdit::singleline(&mut s.prefixes).hint_text("REG:, R:"));
             ui.end_row();
-            ui.label("Police");
+            ui.label(tl!("Font"));
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut s.font).desired_width(140.0).hint_text("par défaut"));
-                egui::ComboBox::from_id_salt("typer-font").selected_text("").width(24.0).show_ui(ui, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut s.font).desired_width(140.0).hint_text(tl!("default")));
+                craft_ui::ComboBox::from_id_salt("typer-font").selected_text("").width(24.0).show_ui(ui, |ui| {
                     ui.text_edit_singleline(&mut t.font_filter);
                     let filter = t.font_filter.to_lowercase();
                     for f in t.fonts.iter().filter(|f| f.to_lowercase().contains(&filter)).take(300) {
@@ -514,32 +522,37 @@ fn styles_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             });
             ui.end_row();
-            ui.label("Graisse");
+            ui.label(tl!("Font Style"));
             ui.add(egui::TextEdit::singleline(&mut s.font_style).hint_text("Regular, Bold…"));
             ui.end_row();
-            ui.label("Taille (pt)");
+            ui.label(tl!("Size (pt)"));
             ui.add(egui::DragValue::new(&mut s.size).range(1.0..=1296.0).speed(0.2));
             ui.end_row();
-            ui.label("Interligne (pt)");
-            ui.add(egui::DragValue::new(&mut s.leading).range(0.0..=2000.0).speed(0.2).custom_formatter(|v, _| if v <= 0.0 { "auto".into() } else { format!("{v:.1}") }));
+            ui.label(tl!("Leading (pt)"));
+            ui.add(
+                egui::DragValue::new(&mut s.leading)
+                    .range(0.0..=2000.0)
+                    .speed(0.2)
+                    .custom_formatter(|v, _| if v <= 0.0 { tl!("Auto").into() } else { format!("{v:.1}") }),
+            );
             ui.end_row();
-            ui.label("Approche");
+            ui.label(tl!("Tracking"));
             ui.add(egui::DragValue::new(&mut s.tracking).range(-1000.0..=10000.0));
             ui.end_row();
-            ui.label("Couleur");
+            ui.label(tl!("Color"));
             ui.color_edit_button_srgb(&mut s.color);
             ui.end_row();
-            ui.label("Contour (px)");
+            ui.label(tl!("Stroke (px)"));
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut s.stroke).range(0.0..=250.0).speed(0.1));
                 ui.color_edit_button_srgb(&mut s.stroke_color);
             });
             ui.end_row();
-            ui.label("Options");
+            ui.label(tl!("Options"));
             ui.horizontal(|ui| {
-                ui.checkbox(&mut s.all_caps, "Capitales");
-                ui.checkbox(&mut s.faux_bold, "Gras");
-                ui.checkbox(&mut s.faux_italic, "Italique");
+                ui.checkbox(&mut s.all_caps, tl!("All Caps"));
+                ui.checkbox(&mut s.faux_bold, tl!("Faux Bold"));
+                ui.checkbox(&mut s.faux_italic, tl!("Faux Italic"));
             });
             ui.end_row();
         });
@@ -549,26 +562,26 @@ fn styles_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(new) => {
                 let s = &mut app.typer.data.styles[app.typer.edited_style];
                 *s = Style { name: s.name.clone(), prefixes: s.prefixes.clone(), stroke: s.stroke, stroke_color: s.stroke_color, ..new };
-                app.typer.status = "Style copié depuis le calque actif.".into();
+                app.typer.status = tl!("Style copied from the active layer.").into();
             }
-            Err(e) => app.typer.status = format!("⚠ Sélectionne un calque de texte ({e})."),
+            Err(e) => app.typer.status = format!("⚠ {} ({e})", tl!("Select a type layer.")),
         }
     }
 }
 
 fn settings_tab(s: &mut Settings, ui: &mut egui::Ui) {
-    ui.checkbox(&mut s.paste_on_click, "Coller au clic (baguette, rectangle ou lasso)");
-    ui.checkbox(&mut s.auto_clean, "Auto clean : peindre la bulle sous le texte (calque « TypeR Clean », bulles unies blanches ou noires)");
-    ui.checkbox(&mut s.hyphenate, "Autoriser une césure (français) en dernier recours");
+    ui.checkbox(&mut s.paste_on_click, tl!("Paste on click (Magic Wand, rectangle or lasso)"));
+    ui.checkbox(&mut s.auto_clean, tl!("Auto clean: paint the bubble under the text (TypeR Clean layer, solid white or black bubbles only)"));
+    ui.checkbox(&mut s.hyphenate, tl!("Allow one French hyphen as a last resort"));
     ui.horizontal(|ui| {
-        ui.label("Taille minimale");
+        ui.label(tl!("Minimum Size"));
         let mut pct = s.min_scale * 100.0;
         if ui.add(egui::Slider::new(&mut pct, 30.0..=100.0).suffix(" %")).changed() {
             s.min_scale = pct / 100.0;
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Marge intérieure");
+        ui.label(tl!("Padding"));
         ui.add(egui::DragValue::new(&mut s.padding).range(0.0..=200.0).suffix(" px"));
     });
 }
@@ -602,7 +615,7 @@ mod tests {
         app.typer.data.script = "Page 1\nPremière réplique, assez longue pour tenir sur plusieurs lignes dans la bulle.\nDeuxième".into();
         app.typer.data.settings.auto_clean = true;
         let msg = paste(&mut app).unwrap();
-        assert!(msg.contains("nettoyée"), "{msg}");
+        assert!(msg.contains("Bubble cleaned"), "{msg}");
         let st = app.session.active().unwrap();
         assert!(st.doc.selection.is_none());
         let text_id = st.doc.layers.iter().find(|l| matches!(l.content, LayerContent::Text(_))).expect("a type layer").id;
