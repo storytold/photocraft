@@ -151,9 +151,9 @@ pub struct Drag {
 
 /// Do the widgets show with the current tool?
 fn shows(app: &PhotocraftApp) -> bool {
-    // A document path selected in the Paths panel owns path-tool gestures; the selected
-    // layer's controls must not intercept them. Move still edits the selected layers.
-    (app.ui.tool == Tool::Move || crate::vector_ui::selected_document_path(app).is_none())
+    // Path Selection gives an explicitly selected document path priority. Shape mode and
+    // Move still own their layer widgets even while that panel selection remains.
+    (app.ui.tool != Tool::PathSelection || crate::vector_ui::selected_document_path(app).is_none())
         && app.ui.transform.is_none()
         && !(crate::vector_ui::is_shape_tool(app.ui.tool) && crate::vector_ui::draws_path(&app.ui.tool_options))
         && match app.ui.tool {

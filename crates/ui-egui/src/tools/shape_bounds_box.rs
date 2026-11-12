@@ -60,9 +60,9 @@ pub struct Drag {
 /// The tools that show the box, while View › Extras and View › Show › Target Path show paths
 /// (the overlay draws it only then, so a hidden handle must not take a press either).
 fn shows(app: &PhotocraftApp) -> bool {
-    // A document path selected in the Paths panel owns these gestures; the selected
-    // layer's box must not intercept them.
-    crate::vector_ui::selected_document_path(app).is_none()
+    // Only Path Selection gives a selected document path priority over the layer box;
+    // Shape mode still edits the layer even while that panel selection remains.
+    (app.ui.tool != Tool::PathSelection || crate::vector_ui::selected_document_path(app).is_none())
         && app.ui.transform.is_none()
         && !(crate::vector_ui::is_shape_tool(app.ui.tool) && crate::vector_ui::draws_path(&app.ui.tool_options))
         && app.ui.view.shows(app.ui.view.show.target_path)
