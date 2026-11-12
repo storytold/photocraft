@@ -995,7 +995,7 @@ mod tests {
             false,
         ));
         ramp.write_region(ramp_rect, &(0..256).map(|i| i as f32 / 255.).collect::<Vec<_>>());
-        let native = crate::adjust_cmds::adjust_as_filter("levels", &json!({"gamma":2.0}), &ramp).unwrap();
+        let native = crate::adjust_cmds::adjust_as_filter("levels", &json!({"gamma":2.0}), &ramp).unwrap().expect("Levels supports native filter replay");
         let values = native.read_region(ramp_rect);
         assert_eq!(values.len(), 256);
         let mut s = Session::new();
