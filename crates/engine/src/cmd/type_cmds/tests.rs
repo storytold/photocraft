@@ -693,6 +693,26 @@ fn replacing_text_drops_solved_fit_lines() {
     assert_eq!(fit.area_scale, 1.0);
 }
 
+/// A replacement that changes nothing (`type.edit` with the same text gives an empty span) keeps
+/// Dynamic Text's solved lines: the refresh after it only renders, so dropping them switched the
+/// layer to its natural breaks and sizes.
+#[test]
+fn an_empty_replacement_keeps_solved_fit_lines() {
+    use photocraft_doc::text::{FitLine, TextFit};
+    let mut t = TextLayer::default();
+    replace_text(&mut t, 0, 0, "Hello world");
+    let lines = vec![FitLine { start: 0, scale: 1.0 }, FitLine { start: 6, scale: 1.2 }];
+    t.fit = Some(TextFit { lines: lines.clone(), ..Default::default() });
+    let (a, b, new) = changed_span("Hello world", "Hello world");
+    replace_text(&mut t, a, b, new);
+    assert_eq!(t.text, "Hello world");
+    assert_eq!(t.fit.as_ref().unwrap().lines, lines, "the same text keeps its solved lines");
+    replace_text(&mut t, 5, 5, "");
+    assert_eq!(t.fit.as_ref().unwrap().lines, lines, "inserting nothing is no edit either");
+    replace_text(&mut t, 5, 5, ",");
+    assert!(t.fit.as_ref().unwrap().lines.is_empty(), "an insertion still drops them");
+}
+
 #[test]
 fn style_range_on_empty_text() {
     let mut t = TextLayer::default();

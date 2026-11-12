@@ -6,7 +6,7 @@ use photocraft_doc::{Document, Layer, LayerContent, TextLayer};
 
 fn txt2(doc: &Document) -> Vec<u8> {
     let bytes = photocraft_io::export(doc, "d.psd", &Default::default()).unwrap().bytes;
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
     file.global_blocks.iter().find(|b| &b.key == b"Txt2").map(|b| b.data.clone()).expect("Txt2 written for the Optical layer")
 }
 
@@ -77,9 +77,9 @@ fn unsolved_dynamic_text_is_saved_with_its_solved_pixels() {
     assert!(photocraft_text::fit::is_fitted_lines(&solved));
     let file = |t: &TextLayer| {
         let bytes = photocraft_io::export(&doc_with(t.clone()), "d.psd", &Default::default()).unwrap().bytes;
-        photocraft_psd::PsdFile::from_bytes(&bytes).unwrap()
+        craft_psd::PsdFile::from_bytes(&bytes).unwrap()
     };
-    let pixels = |f: &photocraft_psd::PsdFile| {
+    let pixels = |f: &craft_psd::PsdFile| {
         let layer = &f.layer_info.as_ref().expect("layers").layers[0];
         (layer.rect, layer.channels.iter().map(|c| c.data.clone()).collect::<Vec<_>>())
     };
