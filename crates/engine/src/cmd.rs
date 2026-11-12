@@ -66,6 +66,8 @@ pub mod brush_preset_cmds;
 pub mod channel_cmds;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
+#[cfg(test)]
+mod command_order_tests;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
 #[cfg(test)]
