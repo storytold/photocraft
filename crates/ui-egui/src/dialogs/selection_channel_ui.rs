@@ -29,6 +29,11 @@ const TARGET: &str = "__document";
 /// change of the Channel, and how the chosen channel is followed when a command adds, deletes or
 /// moves channels while the dialog is open.
 const SEEN: &str = "__seen";
+/// The fields as the dialog opened, `document`, `channel`, the Name, Invert and Operation with
+/// the [`SEEN`] of then: what Alt+Cancel (Reset) restores.
+const ORIG: &str = "__orig";
+/// The fields [`ORIG`] keeps: what the user sets, and how the chosen channel is followed.
+const RESET_KEYS: [&str; 6] = ["document", "channel", "name", "invert", "operation", SEEN];
 /// The value of a New document or New channel.
 const NEW: &str = "new";
 const SAVE_OPERATIONS: [&str; 4] = ["replace", "add", "subtract", "intersect"];
@@ -67,7 +72,23 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<Value, String> {
         f.insert("operation".into(), json!(NEW));
     }
     f.insert(SEEN.into(), json!([f.get("document"), f.get("channel"), names]));
+    let orig: Map<String, Value> = RESET_KEYS.iter().filter_map(|k| Some(((*k).to_string(), f.get(*k)?.clone()))).collect();
+    f.insert(ORIG.into(), Value::Object(orig));
     Ok(json!({"dialog": app.ui.open_dialog(crate::state::DialogKind::Command, f)}))
+}
+
+/// Alt+Cancel (Reset), as Photoshop's dialogs do it: the fields go back to how the dialog opened,
+/// and it stays open. The open-time channel is followed from the open-time channel names, so a
+/// channel that moved while the dialog was open is still the one chosen after the next
+/// [`normalize`].
+pub fn reset(f: &mut Map<String, Value>) {
+    let Some(Value::Object(orig)) = f.get(ORIG).cloned() else { return };
+    for k in RESET_KEYS {
+        match orig.get(k) {
+            Some(v) => f.insert(k.into(), v.clone()),
+            None => f.remove(k),
+        };
+    }
 }
 
 /// The document the dialog was opened on, while it is still open.

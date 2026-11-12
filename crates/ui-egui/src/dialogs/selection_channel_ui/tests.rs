@@ -344,3 +344,51 @@ fn the_dialog_shows_the_document_channel_and_operations() {
         assert!(h.query_by_label(label).is_some(), "{label} is shown");
     }
 }
+
+/// Applies Alt+Cancel (Reset) to dialog `d` as the dialog chrome does, after checking that
+/// holding Alt turns its Cancel into Reset.
+fn alt_reset(app: &mut PhotocraftApp, d: u64) {
+    let mut f = fields(app, d);
+    assert!(crate::dialog_alt_reset::supported(&f), "Alt turns Cancel into Reset");
+    crate::dialog_alt_reset::apply(app, &egui::Context::default(), &mut f);
+    normalize(app, &mut f);
+    app.ui.dialog_mut(d).unwrap().fields = f;
+}
+
+/// Alt+Cancel (Reset) puts both dialogs back as they opened, Document included, and leaves them
+/// open, as the form dialogs they replace did; OK then runs with the open-time choices.
+#[test]
+fn alt_reset_restores_the_fields_the_dialog_opened_with() {
+    let mut app = app();
+    app.session.set_active(1);
+    app.run("select.rect", json!({"x": 20, "y": 0, "width": 20, "height": 20})).unwrap();
+    app.run("select.saveSelection", json!({"name": "Old"})).unwrap();
+    app.session.set_active(0);
+    let d = menu(&mut app, SAVE);
+    let opened = fields(&mut app, d);
+    set_document(&mut app, d, 1);
+    set(&mut app, d, "channel", json!(0));
+    set(&mut app, d, "operation", json!("subtract"));
+    assert_ne!(fields(&mut app, d)["document"], opened["document"]);
+    alt_reset(&mut app, d);
+    let f = fields(&mut app, d);
+    for k in ["document", "channel", "name", "operation", SEEN] {
+        assert_eq!(f[k], opened[k], "{k}");
+    }
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(app.session.documents()[0].doc.channels.len(), 1, "saved into a new channel of A");
+
+    app.run("select.saveSelection", json!({"name": "Second"})).unwrap();
+    let d = menu(&mut app, LOAD);
+    let opened = fields(&mut app, d);
+    assert_eq!(opened["channel"], 0);
+    set(&mut app, d, "channel", json!(1));
+    set(&mut app, d, "invert", json!(true));
+    set(&mut app, d, "operation", json!("intersect"));
+    alt_reset(&mut app, d);
+    let f = fields(&mut app, d);
+    for k in ["document", "channel", "invert", "operation", SEEN] {
+        assert_eq!(f[k], opened[k], "{k}");
+    }
+    assert!(app.ui.dialog_mut(d).is_some(), "Reset leaves the dialog open");
+}
