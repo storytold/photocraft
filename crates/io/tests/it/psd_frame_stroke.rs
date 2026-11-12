@@ -2,11 +2,11 @@
 //! vector mask (`vsms`) and its Properties › Stroke as a shape-style `vstk`. The stroke draws
 //! along the outline even when nothing is placed in the frame (#4381).
 
+use craft_psd::{PsdFile, SectionType, TaggedBlock};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Fill, Group, Layer, LayerContent, Path, ShapeStroke, Size, StrokeAlign, Subpath, VectorMask};
 use photocraft_io::vector_map::{parse_vstk, vstk_bytes};
 use photocraft_io::*;
-use photocraft_psd::{PsdFile, SectionType, TaggedBlock};
 
 fn red_inside(width: f32) -> ShapeStroke {
     ShapeStroke { width, align: StrokeAlign::Inside, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..ShapeStroke::default() }
@@ -36,7 +36,7 @@ fn px(d: &Document, x: i32, y: i32) -> [f32; 4] {
 }
 
 /// The group's own record (its top, `lsct` 1 or 2) in a PSD file.
-fn frame_record(f: &mut PsdFile) -> &mut photocraft_psd::LayerRecord {
+fn frame_record(f: &mut PsdFile) -> &mut craft_psd::LayerRecord {
     f.layers_mut()
         .iter_mut()
         .find(|r| r.section_divider().is_some_and(|s| matches!(s.kind, SectionType::OpenFolder | SectionType::ClosedFolder)))
