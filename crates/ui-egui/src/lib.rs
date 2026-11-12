@@ -1110,6 +1110,9 @@ mod rotate_steps_tests;
 mod zoom_mode_tests;
 
 #[cfg(test)]
+mod pattern_stamp_refusal_alert_tests;
+
+#[cfg(test)]
 mod red_eye_context_menu_tests;
 
 #[cfg(test)]
