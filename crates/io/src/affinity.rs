@@ -934,7 +934,7 @@ mod tests {
         let d = page(nodes);
         let mut b = Builder::new("mixed", &d).unwrap();
         b.cache_budget = 4 * 256 * 256 * 4;
-        b.pixel_budget = 64 * 64 * 4;
+        b.pixel_budget = 256 * 256 * 4; // one whole tile for the image
         b.document(&d).unwrap();
         assert_eq!(b.uncached_shapes, 60);
         assert!(b.doc.layers.iter().any(|l| matches!(l.content, LayerContent::Smart(_) | LayerContent::Raster(_))), "the image must import");
