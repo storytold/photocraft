@@ -255,43 +255,77 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
-/// Object Selection with Hard Edge off (#12855): `region` with a softer rim. A 3x3 tent
-/// (1-2-1 each way) turns a hard edge into a two-pixel ramp, about 75% just inside and 25% just
-/// outside it, so the result is one pixel wider on each side. Pixels past `canvas` repeat the
-/// canvas edge, so an object that touches the document border stays fully selected there.
+/// Hard Edge off: the weight of a pixel itself in [`soften_edge`]'s two-tap filter; the pixel
+/// to its left (above) gets the rest.
+const SOFT_EDGE_SELF: f64 = 9.0 / 16.0;
+/// Hard Edge off: the filtered coverage that maps to 0 and the one that maps to 1 (#12855).
+const SOFT_EDGE_RAMP: (f64, f64) = (0.20, 0.54);
+
+/// Object Selection with Hard Edge off (#12855): `region` with the reference application's
+/// softer rim. Each way, every pixel takes 9/16 of itself and 7/16 of its neighbour to the left
+/// (above), which moves the edge about half a pixel right and down; a ramp then maps 0.20..0.54
+/// to 0..1. On a straight edge that leaves one rim pixel at about 195 on the right and bottom
+/// sides, and the left and top edges hard: measured on the reference application's test
+/// rectangle, the fully selected count rises and the partly selected count drops, with the rim
+/// mostly at 175-202. The result can reach one pixel further right and down. Pixels past
+/// `canvas` repeat the canvas edge, so an object that touches the document border stays fully
+/// selected there.
 fn soften_edge(region: &Region, canvas: Rect) -> Region {
     let src = region.bbox;
-    let bbox = Rect::new(src.x0.saturating_sub(1), src.y0.saturating_sub(1), src.x1.saturating_add(1), src.y1.saturating_add(1)).intersect(&canvas);
+    let bbox = Rect::new(src.x0, src.y0, src.x1.saturating_add(1), src.y1.saturating_add(1)).intersect(&canvas);
     if bbox.is_empty() || src.is_empty() {
         return region.clone();
     }
     let (sw, sh) = (src.width() as usize, src.height() as usize);
-    let at = |x: i32, y: i32| -> u32 {
+    let at = |x: i32, y: i32| -> f64 {
         let (x, y) = (x.clamp(canvas.x0, canvas.x1 - 1), y.clamp(canvas.y0, canvas.y1 - 1));
         if !src.contains(x, y) {
-            return 0;
+            return 0.0;
         }
         let (cx, cy) = (x.abs_diff(src.x0) as usize, y.abs_diff(src.y0) as usize);
         if cx >= sw || cy >= sh {
-            return 0;
+            return 0.0;
         }
-        region.mask.get(cy * sw + cx).copied().map_or(0, u32::from)
+        region.mask.get(cy * sw + cx).map_or(0.0, |v| f64::from(*v) / 255.0)
     };
     let (w, h) = (bbox.width() as usize, bbox.height() as usize);
-    // Horizontal pass over the rows the vertical pass reads: one above and one below the box.
-    let rows = h + 2;
-    let mut tmp = vec![0u32; w * rows];
+    let (a, b) = (SOFT_EDGE_SELF, 1.0 - SOFT_EDGE_SELF);
+    // Horizontal pass over the box's rows and the one above it, which the vertical pass reads.
+    let mut tmp = vec![0.0f64; w * (h + 1)];
     for (y, row) in (bbox.y0.saturating_sub(1)..).zip(tmp.chunks_exact_mut(w)) {
         for (x, t) in (bbox.x0..).zip(row.iter_mut()) {
-            *t = at(x.saturating_sub(1), y) + 2 * at(x, y) + at(x.saturating_add(1), y);
+            *t = a * at(x, y) + b * at(x.saturating_sub(1), y);
         }
     }
-    let mut mask = Vec::with_capacity(w * h);
-    for win in tmp.chunks_exact(w).collect::<Vec<_>>().windows(3) {
-        if let [above, mid, below] = win {
-            mask.extend(above.iter().zip(mid.iter()).zip(below.iter()).map(|((a, m), b)| ((a + 2 * m + b + 8) / 16).min(255) as u8));
-        }
-    }
+    let (lo, hi) = SOFT_EDGE_RAMP;
+    let mask = tmp
+        .windows(2 * w)
+        .step_by(w)
+        .flat_map(|pair| {
+            let (above, row) = pair.split_at(w);
+            row.iter().zip(above).map(move |(m, u)| (((a * m + b * u - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8)
+        })
+        .collect();
+    trimmed(Region { bbox, mask }, w)
+}
+
+/// `r` (`w` pixels wide) cut down to its selected pixels, so the reported bounds are the
+/// selection's: the ramp empties the column and row the hard rim had on the left and top.
+fn trimmed(r: Region, w: usize) -> Region {
+    let rows: Vec<&[u8]> = r.mask.chunks_exact(w).collect();
+    let used_rows: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.iter().any(|v| *v > 0)).map(|(y, _)| y).collect();
+    let used_cols: Vec<usize> = (0..w).filter(|x| rows.iter().any(|row| row[*x] > 0)).collect();
+    let (Some(&y0), Some(&y1), Some(&x0), Some(&x1)) = (used_rows.first(), used_rows.last(), used_cols.first(), used_cols.last()) else {
+        return Region { bbox: Rect::new(r.bbox.x0, r.bbox.y0, r.bbox.x0, r.bbox.y0), mask: Vec::new() };
+    };
+    let mask = rows[y0..=y1].iter().flat_map(|row| row[x0..=x1].iter().copied()).collect();
+    let at = |d: usize| i32::try_from(d).unwrap_or(i32::MAX);
+    let bbox = Rect::new(
+        r.bbox.x0.saturating_add(at(x0)),
+        r.bbox.y0.saturating_add(at(y0)),
+        r.bbox.x0.saturating_add(at(x1 + 1)),
+        r.bbox.y0.saturating_add(at(y1 + 1)),
+    );
     Region { bbox, mask }
 }
 
@@ -609,7 +643,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, one pixel wider on each side)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim on the right and bottom, up to one pixel further out there)"##,
             has_doc,
             object_selection
         ),
