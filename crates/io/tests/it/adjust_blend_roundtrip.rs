@@ -9,13 +9,13 @@ use crate::common;
 use std::sync::Arc;
 
 use common::*;
+use craft_psd::PsdFile;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::adjust::{CurvePoint, LevelsChannel};
 use photocraft_doc::adjust::{HueRange, ToneSpace};
 use photocraft_doc::*;
 use photocraft_geom::Rect;
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
 
 const TOL: f32 = 1.0 / 255.0 + 1e-5;
 
@@ -102,13 +102,14 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
                 stops: vec![(0.0, [q16(6554), 0.0, q16(19661)]), (0.5, [1.0, 0.2, 0.0]), (1.0, [1.0, 1.0, 0.8])],
                 reverse: false,
                 dither: false,
+                source: None,
             },
             true,
         ),
-        (Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 0.0])], reverse: true, dither: false }, true),
+        (Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 0.0])], reverse: true, dither: false, source: None }, true),
         // Fewer than two stops: written as the equivalent two-stop gradient.
-        (Adjustment::GradientMap { stops: vec![], reverse: false, dither: false }, false),
-        (Adjustment::GradientMap { stops: vec![(0.4, [0.2, 0.6, 0.4])], reverse: false, dither: false }, false),
+        (Adjustment::GradientMap { stops: vec![], reverse: false, dither: false, source: None }, false),
+        (Adjustment::GradientMap { stops: vec![(0.4, [0.2, 0.6, 0.4])], reverse: false, dither: false, source: None }, false),
         (Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -30.0, 20.0]) }, true),
         (Adjustment::SelectiveColor { relative: false, adjustments: std::array::from_fn(|r| [0.0, r as f32 * 5.0, 0.0, -10.0]) }, true),
         // A block this version cannot read (a truncated Selective Color) is kept verbatim.
@@ -279,7 +280,7 @@ fn every_blend_mode_round_trips() {
             let adj = Layer::new("inside", LayerContent::Adjustment(Adjustment::Invert));
             d.layers.push(Layer::group("pass-through adj", vec![raster("px", fmt, Rect::new(0, 0, 6, 6), 6, true), adj]));
             let (back, _, file) = export_import(&d);
-            assert!(file.layers().iter().any(|l| l.blend_mode == photocraft_psd::BlendMode::PassThrough), "pass key written");
+            assert!(file.layers().iter().any(|l| l.blend_mode == craft_psd::BlendMode::PassThrough), "pass key written");
             assert_docs_eq(&d, &back);
             assert_composite_eq(&d, &back, "pass-through");
             continue;
