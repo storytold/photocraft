@@ -1018,7 +1018,7 @@ fn txt2_with_styles(text: &str, styles: &[(usize, String)]) -> Vec<u8> {
 fn with_text_index(tysh: &[u8], index: i32) -> Vec<u8> {
     let mut t = crate::psd::parse_tysh(tysh).unwrap();
     t.text.items.retain(|(k, _)| !k.is("TextIndex"));
-    t.text.items.push((photocraft_psd::descriptor::Id::new("TextIndex"), photocraft_psd::descriptor::Value::Integer(index)));
+    t.text.items.push((craft_psd::descriptor::Id::new("TextIndex"), craft_psd::descriptor::Value::Integer(index)));
     crate::psd::write_tysh(&t)
 }
 
@@ -1786,7 +1786,7 @@ fn psd_text_fill_is_enabled_after_editing_a_legacy_export() {
     remove_fill_flags(&mut data);
     for (key, value) in &mut legacy.text.items {
         if key.as_bytes() == b"EngineData" {
-            *value = photocraft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
+            *value = craft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
         }
     }
     t.psd_raw = Some(crate::psd::write_tysh(&legacy).into());
@@ -1879,7 +1879,7 @@ fn psd_engine_data_keeps_only_oldstyle_among_numeral_tags() {
 /// (the ink box, as Photoshop writes it) both around `anchor` in a remote local space, and a
 /// `transform` that cancels the remote origin.
 fn legacy_tysh(source: &TextLayer, transform: Affine, anchor: [f64; 2], engine: &mut TextEngine) -> Vec<u8> {
-    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+    use craft_psd::descriptor::{Descriptor, Id, Value as D};
     let layout = engine.layout(source, 72.0);
     let logical = layout.bounds().unwrap().map(f64::from);
     let ink = crate::render::ink_bounds(&layout).unwrap();
@@ -1909,7 +1909,7 @@ fn assert_transform_near(got: Affine, want: Affine, tolerance: f64, what: &str) 
 /// fixed for left, centered and right text through import and a TySh round trip.
 #[test]
 fn legacy_tysh_point_origin_imports_and_round_trips_on_canvas() {
-    use photocraft_psd::descriptor::Value as D;
+    use craft_psd::descriptor::Value as D;
 
     let original = Affine { m: [4.1667, 0.0, 0.0, 4.1667, -32375.0, -32887.5] };
     // The file's layout origin (the anchor on the first baseline) in its local space.
@@ -2580,7 +2580,7 @@ fn txt2_frame_places_point_text_at_its_anchor() {
 
 /// `tysh` with its text-space `bounds` set to `r` (Photoshop's, where it drew the text).
 fn with_bounds(tysh: &[u8], r: [f64; 4]) -> Vec<u8> {
-    use photocraft_psd::descriptor::{Descriptor, Id, Value};
+    use craft_psd::descriptor::{Descriptor, Id, Value};
     let mut t = crate::psd::parse_tysh(tysh).unwrap();
     let mut d = Descriptor::default();
     for (k, v) in ["Left", "Top ", "Rght", "Btom"].iter().zip(r) {
@@ -2893,7 +2893,7 @@ fn font_metadata_survives_tysh_and_named_style_rewrites() {
     }
     for (key, value) in &mut tysh.text.items {
         if key.as_bytes() == b"EngineData" {
-            *value = photocraft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
+            *value = craft_psd::descriptor::Value::RawData(crate::engine_data::write(&data));
         }
     }
     let raw = crate::psd::write_tysh(&tysh);
@@ -4381,4 +4381,23 @@ fn vertical_path_decoration_clipping_and_warp() {
     let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
+}
+
+/// UAX #9 P2 skips the text inside directional isolates when it looks for a paragraph's first
+/// strong character, as the layout's bidi pass does. A paragraph opening with an isolated Latin
+/// name before its Hebrew text is right-to-left: read without isolates, it looked left-to-right,
+/// so Dynamic Text accepted it and forced a left-to-right mark on its lines.
+#[test]
+fn first_strong_rtl_skips_directional_isolates() {
+    use crate::layout::first_strong_rtl;
+    let (lri, rli, fsi, pdi) = ('\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}');
+    assert_eq!(first_strong_rtl(&format!("{lri}Latin{pdi} \u{5e9}\u{5dc}\u{5d5}\u{5dd}")), Some(true));
+    assert_eq!(first_strong_rtl(&format!("{rli}\u{5e9}\u{5dc}\u{5d5}\u{5dd}{pdi} Latin")), Some(false));
+    assert_eq!(first_strong_rtl(&format!("{fsi}Latin{pdi}")), None, "only isolated text: no direction of its own");
+    // Nested isolates close one at a time; an unmatched initiator runs to the end.
+    assert_eq!(first_strong_rtl(&format!("{lri}a{rli}b{pdi}c{pdi}\u{5d0}")), Some(true));
+    assert_eq!(first_strong_rtl(&format!("{lri}Latin \u{5d0}")), None);
+    // A stray PDI changes nothing.
+    assert_eq!(first_strong_rtl(&format!("{pdi}Latin")), Some(false));
+    assert_eq!(first_strong_rtl("\u{5d0}bc"), Some(true));
 }
