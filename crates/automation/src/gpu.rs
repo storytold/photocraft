@@ -26,16 +26,28 @@ pub struct GpuRenderer {
 impl GpuRenderer {
     /// Create and immediately initialize a GPU renderer.
     ///
-    /// When initialization times out, this returns the error without waiting for the
-    /// initialization thread, which keeps running. A renderer made with [`GpuRenderer::lazy`]
-    /// waits for that thread when it is dropped.
+    /// When initialization times out, this waits up to 30 seconds for the initialization thread
+    /// to exit before it returns the error.
     pub fn new() -> Result<Self, AutomationError> {
         let mut r = Self::lazy();
-        if let Err(e) = r.ensure_init() {
+        if let Err(e) = r.init_now() {
+            // `init_now` has already waited for the initialization thread; dropping `r` does not wait again.
             r.abandoned_init = None;
             return Err(AutomationError::Other(format!("failed to initialize GPU renderer: {e}")));
         }
         Ok(r)
+    }
+
+    /// Initialize now. When initialization times out, wait up to [`ABANDONED_INIT_WAIT`] for its
+    /// thread to exit before returning the error.
+    fn init_now(&mut self) -> Result<(), RenderError> {
+        let res = self.ensure_init();
+        if res.is_err()
+            && let Some(init) = &self.abandoned_init
+        {
+            init.wait(ABANDONED_INIT_WAIT);
+        }
+        res
     }
 
     /// Create a GPU renderer that lazily requests an adapter on first render.
@@ -237,5 +249,26 @@ impl BandRenderer for GpuRenderer {
 
     fn forget_document(&mut self, doc: DocId) {
         self.forget_doc(doc);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eager_initialization_waits_for_a_timed_out_thread_before_returning() {
+        // No backends: the initialization thread does not load a graphics driver.
+        // A zero timeout can still see a thread that finished first, so try until one times out.
+        let timed_out = (0..1000).find_map(|_| {
+            let options = NativeContextOptions { timeout: Some(Duration::ZERO), backends: wgpu::Backends::empty(), ..Default::default() };
+            let mut r = GpuRenderer::with_options(options);
+            let res = r.init_now();
+            let timed_out = matches!(res, Err(RenderError::Unavailable(ref msg)) if msg.contains("timed out"));
+            timed_out.then_some(r)
+        });
+        let r = timed_out.expect("a zero-timeout initialization times out");
+        let init = r.abandoned_init().expect("a timed-out renderer keeps its initialization thread");
+        assert!(init.is_finished(), "eager initialization waits for its initialization thread");
     }
 }

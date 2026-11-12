@@ -55,7 +55,9 @@ impl AbandonedInit {
         }
     }
 
-    /// Wait up to `limit` for the thread to exit. Returns whether it exited.
+    /// Wait up to `limit` for the thread's work to finish, then join the thread. Returns whether
+    /// the work finished. The join also waits for the thread's thread-local destructors, which
+    /// `limit` does not cover.
     pub fn wait(&self, limit: Duration) -> bool {
         let start = Instant::now();
         let (finished, changed) = &*self.state;
