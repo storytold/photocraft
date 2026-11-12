@@ -245,7 +245,7 @@ pub fn folder_luts(_: &str) -> Vec<(String, String)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &str) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
+    crate::allocation::read_file_within(path, MAX_FOLDER_LUT_BYTES).ok()
 }
 #[cfg(target_arch = "wasm32")]
 fn read_file(_: &str) -> Option<Vec<u8>> {
@@ -266,19 +266,23 @@ pub fn update_adjustment(existing: &Adjustment, p: &Value) -> Option<Result<Adju
 // ---------- destructive helpers ----------
 
 /// Runs `f` on the target surface's content as straight RGBA (`w × h` = content bounds), blending
-/// the result through the selection.
-fn process_surface(surf: &mut Surface, selection: Option<&Surface>, f: &mut dyn FnMut(&mut Vec<[f32; 4]>, Rect)) {
+/// the result through the selection. Refused before reading when the dense buffers over the
+/// content bounds (which span the gaps between distant tiles) would pass the working budget.
+fn process_surface(surf: &mut Surface, selection: Option<&Surface>, f: &mut dyn FnMut(&mut Vec<[f32; 4]>, Rect)) -> Result<()> {
     let r = surf.content_bounds();
     if r.is_empty() {
-        return;
+        return Ok(());
     }
     let fmt = surf.format();
     let n = fmt.channels();
+    // The native read and the blended output (`n` f32 each), and the edited and original RGBA.
+    crate::allocation::check_dense(r, (n as u64).saturating_mul(8).saturating_add(32), "this adjustment")?;
     let raw = surf.read_region(r);
     let mut px: Vec<[f32; 4]> = raw.chunks_exact(n).map(|q| to_rgba(&fmt, q)).collect();
     let orig = px.clone();
     f(&mut px, r);
     surf.write_region(r, &crate::pixels::mix_through_selection(&fmt, r, &orig, &px, selection));
+    Ok(())
 }
 
 /// One history step running `f` on the active pixel layer (or targeted channel or layer mask).
@@ -288,7 +292,7 @@ fn rgba_edit(s: &mut Session, label: &str, p: &Value, mut f: impl FnMut(&mut Vec
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, id, p)? {
-                process_surface(surf, sel.as_ref(), &mut f);
+                process_surface(surf, sel.as_ref(), &mut f)?;
                 surf.prune();
             }
             Ok(Value::Null)
@@ -298,7 +302,7 @@ fn rgba_edit(s: &mut Session, label: &str, p: &Value, mut f: impl FnMut(&mut Vec
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        process_surface(surf, sel.as_ref(), &mut f);
+        process_surface(surf, sel.as_ref(), &mut f)?;
         Ok(Value::Null)
     })
 }
@@ -372,14 +376,15 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
 /// object): the adjustment applied to a copy of `surf`. `None` for kinds or params it can't run.
-pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<Surface> {
+pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Result<Option<Surface>> {
     // A Color Lookup filter re-reads its LUT `file`, a path stored in the document: followed only
     // as `doc_path` allows, else the filter can't run (like a missing file).
     let resolved;
     let p = match p.get("file").and_then(Value::as_str).filter(|f| kind == "colorLookup" && !f.is_empty()) {
         Some(file) => {
             let mut q = p.clone();
-            q["file"] = json!(crate::doc_path::resolve(file).ok()?.to_str()?);
+            let Some(path) = crate::doc_path::resolve(file).ok().and_then(|p| p.to_str().map(str::to_owned)) else { return Ok(None) };
+            q["file"] = json!(path);
             resolved = q;
             &resolved
         }
@@ -388,14 +393,16 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
     let mut out = surf.clone();
     if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);
-        process_surface(&mut out, None, &mut |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh));
+        process_surface(&mut out, None, &mut |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh))?;
     } else {
         let mode = surf.format().mode;
-        let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
-        crate::pixels::adjust_surface(&mut out, &adj, None, mode).ok()?;
+        let Ok(adj) = crate::adjust_params::from_params(kind, p, None, mode) else { return Ok(None) };
+        if crate::pixels::adjust_surface(&mut out, &adj, None, mode).is_err() {
+            return Ok(None);
+        }
     }
     out.prune();
-    Some(out)
+    Ok(Some(out))
 }
 
 fn shadows_highlights(s: &mut Session, p: &Value) -> Result<Value> {
@@ -635,6 +642,16 @@ pub fn specs() -> Vec<CommandSpec> {
             hdr_toning
         ),
         CommandSpec {
+            id: "image.adjustments.blackWhite.auto",
+            label: "Black & White Auto",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"layer":id?,"filter":index?} → {"reds","yellows","greens","cyans","blues","magentas"} (%: the Auto mix for the image a Black & White adjustment layer sees, a smart object's pixels below its smart filter `filter`, or a pixel layer's own pixels; nothing changes)"##,
+            enabled: has_doc,
+            run: black_white_auto,
+            journal: false,
+        },
+        CommandSpec {
             id: "image.adjustments.colorLookup.list",
             label: "List Color Lookup Looks",
             menu: &[],
@@ -645,6 +662,130 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: false,
         },
     ]
+}
+
+/// At most this many pixels are sampled for [`auto_black_white`].
+const AUTO_BW_SAMPLES: usize = 1 << 16;
+/// Grey levels [`auto_black_white`] tells apart.
+const AUTO_BW_BINS: usize = 32;
+
+/// Black & White's Auto (#9269): the colour weights (%, in [`crate::adjust_params::HUE_RANGES`]
+/// order) that spread the image's greys over the most grey levels. PhotoCraft's own search, not
+/// Photoshop's: from the default mix, each weight in turn steps through 0..=150 % to the value
+/// that most raises the entropy of the greys' histogram ([`AUTO_BW_BINS`] levels), less a pull
+/// back towards the default, until a pass changes nothing. So colours the default mix turns into
+/// the same grey are told apart, with the mildest change that does it; colours the image lacks
+/// keep their default weight.
+pub fn auto_black_white(px: &[[f32; 3]]) -> [f32; 6] {
+    let defaults = crate::adjust_params::BW_DEFAULTS;
+    let score = |w: &[f32; 6]| -> f32 {
+        if px.is_empty() {
+            return 0.0;
+        }
+        let mut bins = [0u32; AUTO_BW_BINS];
+        for c in px {
+            let g = photocraft_compose::adjust::black_white_gray(*c, w).clamp(0.0, 1.0);
+            if let Some(b) = bins.get_mut(((g * AUTO_BW_BINS as f32) as usize).min(AUTO_BW_BINS - 1)) {
+                *b += 1;
+            }
+        }
+        let n = px.len() as f32;
+        let entropy: f32 = bins.iter().filter(|&&k| k > 0).map(|&k| k as f32 / n).map(|q| -q * q.log2()).sum();
+        let pull: f32 = w.iter().zip(defaults).map(|(v, d)| (v - d).abs()).sum::<f32>() / 100.0;
+        entropy - 0.05 * pull
+    };
+    let mut w = defaults;
+    let mut best = score(&w);
+    for _ in 0..4 {
+        let mut changed = false;
+        for k in 0..6 {
+            for step in 0..=15 {
+                let mut t = w;
+                t[k] = step as f32 * 10.0;
+                let s = score(&t);
+                if s > best + 1e-6 {
+                    (best, w, changed) = (s, t, true);
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    w
+}
+
+/// At most [`AUTO_BW_SAMPLES`] of the pixels with alpha: one from each run of `stride` of them, at
+/// a position that varies from run to run (Fibonacci hashing of the run's index), so a pattern
+/// whose period divides `stride` (alternating columns on an even-width canvas) isn't only ever
+/// sampled in one phase.
+fn auto_bw_sample(rgba: &[[f32; 4]]) -> Vec<[f32; 3]> {
+    let covered = || rgba.iter().filter(|c| c[3] > 0.0);
+    let stride = covered().count().div_ceil(AUTO_BW_SAMPLES).max(1);
+    let pick = |run: usize| ((run as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize % stride;
+    covered().enumerate().filter(|(i, _)| i % stride == pick(i / stride)).map(|(_, c)| [c[0], c[1], c[2]]).collect()
+}
+
+/// Hides `id` and everything composited above it. Returns whether `id` is in `layers`.
+fn hide_from(layers: &mut [Layer], id: photocraft_doc::LayerId) -> bool {
+    let mut found = false;
+    for l in layers.iter_mut() {
+        if found || l.id == id {
+            found = true;
+            l.visible = false;
+        } else if l.children_mut().is_some_and(|c| hide_from(c, id)) {
+            found = true;
+        }
+    }
+    found
+}
+
+/// `image.adjustments.blackWhite.auto`: [`auto_black_white`] for `layer` (default the active one):
+/// the composite of what lies below a Black & White adjustment layer (what it adjusts), a smart
+/// object's pixels below smart filter `filter` (what that filter edits), or a pixel layer's own
+/// pixels (what Image › Adjustments › Black & White changes). As in the reference application,
+/// the whole canvas counts: a selection, the adjustment's mask and its clip base don't narrow it.
+fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "image.adjustments.blackWhite.auto";
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let id = match p.get("layer") {
+        None | Some(Value::Null) => st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?,
+        Some(v) => photocraft_doc::LayerId(v.as_u64().ok_or_else(|| bad(cmd, "`layer` must be a layer id"))?),
+    };
+    let filter = match p.get("filter") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "`filter` must be a smart filter index"))?),
+    };
+    let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let area = st.doc.bounds();
+    // Rendering or reading a canvas past the render limit gives nothing to sample: say so rather
+    // than answer with the default mix.
+    if u64::from(area.width()) * u64::from(area.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(bad(cmd, "the canvas is too large to analyse"));
+    }
+    let read = |surf: &Surface| -> Vec<[f32; 4]> {
+        let fmt = surf.format();
+        surf.read_region(area).chunks_exact(fmt.channels()).map(|c| to_rgba(&fmt, c)).collect()
+    };
+    let rgba: Vec<[f32; 4]> = match (&layer.content, filter) {
+        (LayerContent::Smart(sm), Some(i)) => {
+            if i >= sm.smart_filters.len() {
+                return Err(bad(cmd, format!("layer \"{}\" has no smart filter {i}", layer.name)));
+            }
+            let below = crate::smart_cmds::render_below_filter(&st.doc, sm, i)?
+                .ok_or_else(|| EngineError::Other("the smart object's contents are unavailable".into()))?;
+            read(&below)
+        }
+        (_, Some(_)) => return Err(bad(cmd, "`filter` needs a smart object layer")),
+        (LayerContent::Adjustment(_), None) => {
+            let mut below = (*st.doc).clone();
+            hide_from(&mut below.layers, id);
+            photocraft_compose::render(&below, area).into_px()
+        }
+        (_, None) => read(layer.surface().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no pixels", layer.name)))?),
+    };
+    let w = auto_black_white(&auto_bw_sample(&rgba));
+    Ok(Value::Object(crate::adjust_params::HUE_RANGES.iter().zip(w).map(|(k, v)| ((*k).to_string(), json!(v))).collect()))
 }
 
 #[cfg(test)]

@@ -103,6 +103,11 @@ pub struct ToolOptions {
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
+    /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
+    /// means Exclude Overlapping Shapes.
+    #[serde(default = "default_shape_path_op")]
+    pub shape_path_op: String,
     /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
     /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
     pub shape_mode: String,
@@ -251,6 +256,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Zoom tool › Zoom In / Zoom Out: which way a click steps (⌥ turns it around). Reset Tool
+    /// leaves it, as in Photoshop.
+    #[serde(default = "yes")]
+    pub zoom_in: bool,
     /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
     /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
     #[serde(default)]
@@ -325,6 +334,10 @@ fn default_move_target() -> String {
 }
 
 fn default_pen_path_op() -> String {
+    "newLayer".into()
+}
+
+fn default_shape_path_op() -> String {
     "newLayer".into()
 }
 
@@ -498,6 +511,7 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            shape_path_op: default_shape_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
             stroke_width: 0.0,
@@ -506,11 +520,11 @@ impl Default for ToolOptions {
             shape_stroke_gradient: None,
             corner_radius: 0.0,
             polygon_sides: 5,
-            line_weight: 3.0,
+            line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,
-            arrow_width: 52.0,
-            arrow_length: 50.0,
+            arrow_width: 5.0,
+            arrow_length: 10.0,
             arrow_concavity: 0.0,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
@@ -557,6 +571,7 @@ impl Default for ToolOptions {
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            zoom_in: true,
             hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,

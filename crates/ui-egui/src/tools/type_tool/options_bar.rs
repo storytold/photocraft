@@ -107,12 +107,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         None => o.type_align.as_str(),
     };
     // Vertical text shows Top / Center / Bottom for the same left / center / right values, after the
-    // targeted layer's orientation, or with no text targeted the Vertical Type tool's (#12059). The
-    // Type Mask tools keep the horizontal buttons (not measured).
-    let vertical = !app.ui.tool.is_type_mask()
+    // targeted layer's orientation, or with no text targeted the vertical tools' (#12059, #12088).
+    // The Horizontal Type Mask tool keeps the horizontal buttons (not measured).
+    let vertical = app.ui.tool != crate::state::Tool::HorizontalTypeMask
         && match super::defaults::target_text(app) {
             Some(t) => t.orientation == photocraft_doc::text::Orientation::Vertical,
-            None => app.ui.tool == crate::state::Tool::VerticalType,
+            None => app.ui.tool.is_vertical_type(),
         };
     let buttons = if vertical {
         [
@@ -163,6 +163,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let can_warp = crate::menus::is_enabled(app, "type.warpText");
     if ui.add_enabled_ui(can_warp, |ui| crate::icons::button(ui, "text-warp", 24.0, false, tl!("Create warped text"))).inner.clicked()
         && let Err(e) = crate::menus::invoke(app, &ui.ctx().clone(), "type.warpText", json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    // The bar's last button, as in Photoshop (#12054): Window › Character, which shows the
+    // Character | Paragraph group with Character in front, and hides it when clicked again.
+    if crate::icons::button(ui, "panels-top-left", 24.0, false, tl!("Toggle Character and Paragraph panels")).clicked()
+        && let Err(e) = crate::menus::invoke(app, &ui.ctx().clone(), "window.panel.character", json!({}))
     {
         app.ui.status = e;
         app.ui.status_error = true;
@@ -495,3 +503,7 @@ fn size_field(ui: &mut egui::Ui, display: &mut f32, unit: f32, label: &str) -> O
 #[cfg(test)]
 #[path = "size_presets_tests.rs"]
 mod size_presets_tests;
+
+#[cfg(test)]
+#[path = "vertical_mask_align_buttons_tests.rs"]
+mod vertical_mask_align_buttons_tests;
