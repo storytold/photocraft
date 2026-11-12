@@ -1059,3 +1059,28 @@ fn a_dragged_group_does_not_snap_to_its_own_layers() {
     let b = child_bounds(&app, "mover");
     assert_eq!((b.x0, b.y0), (86, 43), "moved by the raw offset");
 }
+
+/// Selected pixels float off the active layer alone: a layer linked to it stays put, so the
+/// pixels still snap to it.
+#[test]
+fn moving_selected_pixels_snaps_to_a_linked_layer() {
+    let mut app = app_with_box();
+    app.run("layer.new.layer", json!({"name": "linked"})).unwrap();
+    app.run("select.rect", json!({"x": 150, "y": 120, "width": 40, "height": 20})).unwrap();
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.select", json!({"name": "mover"})).unwrap();
+    app.run("layer.select", json!({"name": "linked", "mode": "add"})).unwrap();
+    app.run("layer.linkLayers", json!({"linked": true})).unwrap();
+    app.run("layer.select", json!({"name": "mover"})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    app.run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 90})).unwrap();
+    // 37 px down puts the pixels' bottom edge (80 -> 117) 3 px above the linked layer's top (120);
+    // no other edge or centre is within reach.
+    move_drag(&mut app, [60.0, 60.0], [60.0, 97.0]);
+    app.run("select.drop", json!({})).unwrap();
+    let sel = app.session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds().y0);
+    assert_eq!(sel, Some(80), "snapped to the linked layer's top");
+    assert_eq!(child_bounds(&app, "linked").y0, 120, "the linked layer stayed put");
+}

@@ -250,10 +250,14 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         Some((Gesture::Guide, Vec::new()))
     } else if tool == Tool::Move || moves_layer {
         // The targets and everything inside them stay out of the snap targets: a moving group
-        // must not snap to its own layers' starting edges.
+        // must not snap to its own layers' starting edges. Selected pixels float off the active
+        // layer alone, so its linked layers stay put and stay targets.
+        let pixels = crate::move_ui::moves_selected_pixels_with(app, tool);
         let exclude = app.session.active().map_or_else(Vec::new, |s| {
             let mut ids = s.selected_layers();
-            ids.extend(crate::move_ui::with_descendants(&s.doc, &move_targets(&s.doc, &ids)));
+            if !pixels {
+                ids.extend(crate::move_ui::with_descendants(&s.doc, &move_targets(&s.doc, &ids)));
+            }
             ids
         });
         moving_rect(app, tool).map(|rect| (Gesture::Move { rect }, exclude))
