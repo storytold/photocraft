@@ -100,9 +100,15 @@ impl Drop for Abandon {
     fn drop(&mut self) {
         let Some(job) = self.job.take() else { return };
         let runtime = tokio::runtime::Handle::try_current();
-        match &*self.backend {
-            Backend::Headless(session) => {
-                let session = session.clone();
+        // `--live`: the session or app its last resolve pointed at.
+        let target = match &*self.backend {
+            Backend::Headless(session) => Some(crate::live::Target::Headless(session.clone())),
+            Backend::Bridge(client) => Some(crate::live::Target::Bridge(client.clone())),
+            Backend::Live(live) => live.current(),
+        };
+        match target {
+            None => {}
+            Some(crate::live::Target::Headless(session)) => {
                 let abandon = move || drop(session.lock().unwrap_or_else(PoisonError::into_inner).job_abandon(job));
                 match runtime {
                     // A synchronous command can hold the lock for a while: don't block a runtime thread.
@@ -111,9 +117,8 @@ impl Drop for Abandon {
                 }
             }
             // Without a runtime there is no way to reach the app; the job then runs to the end.
-            Backend::Bridge(client) => {
+            Some(crate::live::Target::Bridge(client)) => {
                 if let Ok(runtime) = runtime {
-                    let client = client.clone();
                     drop(runtime.spawn(async move { client.call("jobs.cancel", json!({"job": job.0})).await }));
                 }
             }
@@ -127,9 +132,7 @@ impl PhotocraftMcp {
     /// `waiter` as `step.0 + fraction` of `step.1`, and cancelling the request cancels the job,
     /// leaving the document unchanged. `None` in bridge mode.
     pub(super) async fn headless_wait(&self, id: String, params: Value, waiter: &mut Waiter, step: (usize, usize)) -> Option<Result<Value, AutomationError>> {
-        if !matches!(&*self.backend, Backend::Headless(_)) {
-            return None;
-        }
+        self.headless_session()?;
         let backend = self.backend.clone();
         let cancel = waiter.context.as_ref().map(|context| context.ct.clone());
         // The guard is armed under the lock that starts the job: when the request is dropped while

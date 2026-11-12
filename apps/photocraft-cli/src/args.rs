@@ -270,13 +270,28 @@ pub(crate) struct CommandsArgs {
     pub(crate) filter: Option<String>,
 }
 
-/// Run the MCP server on stdio (headless engine, or bridge to a running `photocraft --control <port>`)
+/// Run the MCP server on stdio (headless engine, bridge to a running `photocraft --control <port>`,
+/// or --live)
 ///
 /// Headless: each automation root grants that direction of file access; an omitted root denies it.
 /// Prefer absolute root paths in MCP client configurations. Bridge: set the roots on the desktop
 /// app; root flags are refused. The token flags require --bridge (or PHOTOCRAFT_CONTROL_PORT).
+/// Live: the desktop app with Edit › Preferences › AI Integrations › Let AI agents connect on,
+/// found again on every call (no port or token to configure); the roots are for a headless session
+/// while the app is closed.
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct McpArgs {
+    #[command(subcommand)]
+    pub(crate) action: Option<McpCommand>,
+    /// Find the desktop app by itself on every call (Edit › Preferences › AI Integrations ›
+    /// Let AI agents connect), with no port or token to configure
+    #[arg(long)]
+    pub(crate) live: bool,
+    /// With --live: while the app is closed, start it, serve a headless session, or fail
+    /// (default: the app's When PhotoCraft Is Closed setting)
+    #[arg(long, value_name = "launch|headless|error", requires = "live", value_parser = when_closed)]
+    pub(crate) when_closed: Option<photocraft_engine::prefs::WhenAppClosed>,
     /// Bridge to the PhotoCraft app listening here instead of a headless engine; a bare port means
     /// 127.0.0.1:<PORT>
     #[arg(long, value_name = "127.0.0.1:PORT", env = "PHOTOCRAFT_CONTROL_PORT", value_parser = bridge)]
@@ -290,6 +305,19 @@ pub(crate) struct McpArgs {
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum McpCommand {
+    Install(McpInstallArgs),
+}
+
+/// Add `photocraft-cli mcp --live` to an MCP client's configuration
+#[derive(Args)]
+pub(crate) struct McpInstallArgs {
+    /// The client to set up; json prints the configuration to paste into any other client
+    #[arg(long, value_parser = ["claude-desktop", "claude-code", "cursor", "json"])]
+    pub(crate) client: String,
 }
 
 /// Keep one headless session open and answer JSON lines on stdio, or on 127.0.0.1:<PORT>
@@ -337,6 +365,8 @@ enum ValueError {
     /// Why a `--bridge` value, or a PHOTOCRAFT_CONTROL_PORT value for `mcp`, is refused.
     #[error("expected a port, 0-65535 (--bridge also takes 127.0.0.1:<PORT>)")]
     Bridge,
+    #[error("expected launch, headless or error")]
+    WhenClosed,
 }
 
 /// Why `parse` refuses `mcp` or `serve` options clap accepted: clap prints it as a usage error
@@ -360,13 +390,16 @@ enum ServerOptionError {
     /// A token flag without the bridge or port that reads it would be ignored (#8035).
     #[error("{flag} requires {transport}")]
     NeedsTransport { flag: &'static str, transport: &'static str },
+    /// `--live` finds the app's port and token by itself.
+    #[error("--live finds the app by itself; {0} is for --bridge")]
+    LiveBridge(&'static str),
 }
 
 impl ServerOptionError {
     fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
         let kind = match self {
             Self::BridgeVar(_) | Self::GpuVar(_) => ErrorKind::ValueValidation,
-            Self::BridgeRoots | Self::BridgeGpu => ErrorKind::ArgumentConflict,
+            Self::BridgeRoots | Self::BridgeGpu | Self::LiveBridge(_) => ErrorKind::ArgumentConflict,
             Self::NeedsTransport { .. } => ErrorKind::MissingRequiredArgument,
         };
         cmd.error(kind, self)
@@ -392,6 +425,10 @@ fn tiff_compression(s: &str) -> Result<TiffCompression, ValueError> {
         "zip" => Ok(TiffCompression::Deflate),
         _ => Err(ValueError::TiffCompression),
     }
+}
+
+fn when_closed(s: &str) -> Result<photocraft_engine::prefs::WhenAppClosed, ValueError> {
+    photocraft_engine::prefs::WhenAppClosed::parse(s).ok_or(ValueError::WhenClosed)
 }
 
 fn on_off(s: &str) -> Result<bool, ValueError> {
@@ -490,6 +527,20 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
             check_gpu_env(&mut cmd, m)?;
         }
         (Command::Mcp(a), Some((name, m))) => {
+            if a.live {
+                // `--live` reads the port and token the app publishes. Given on the command line,
+                // the bridge's flags conflict; exported for another tool, they are left alone.
+                for (id, flag) in [("bridge", "--bridge"), ("control_token", "--control-token"), ("control_token_file", "--control-token-file")] {
+                    if m.value_source(id) == Some(ValueSource::CommandLine) {
+                        if let Some(sub) = cmd.find_subcommand_mut(name) {
+                            return Err(ServerOptionError::LiveBridge(flag).into_clap(sub));
+                        }
+                        return Err(ServerOptionError::LiveBridge(flag).into_clap(&mut cmd));
+                    }
+                }
+                a.bridge = None;
+                return Ok(cli);
+            }
             a.bridge_from_env = from_env(m, "bridge");
             if a.bridge_from_env
                 && let Some(Bridge::Addr(v)) = &a.bridge

@@ -14,8 +14,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             info.extend(gpu_memory_lines(app));
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
+            f.insert("__agentLink".into(), serde_json::to_value(&app.agent_link).unwrap_or(Value::Null));
+            f.insert("__agentClients".into(), json!(app.services.agent_clients.is_some()));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
+            if let Some(action) = f.remove("__agentAction").and_then(|a| a.as_str().map(str::to_string)) {
+                super::agents::agent_action(app, ui.ctx(), f, &action);
+            }
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -34,9 +39,6 @@ pub(super) fn humanize(key: &str) -> String {
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
-        // Integrations: the automation roots (`--automation-read-root` / `--automation-write-root`).
-        "readRoot" => return "Automation read folder".into(),
-        "writeRoot" => return "Automation write folder".into(),
         // Units & Rulers › Column Size (in points), as translated for New Guide Layout.
         "columnWidth" => return "Column width".into(),
         _ => {}
@@ -51,6 +53,14 @@ pub(super) fn humanize(key: &str) -> String {
     // The auto-hide notice settings read best with their own labels (Interface › Notification, #2022).
     if key == "notificationAutoHide" {
         return "Auto Hide Notifications".into();
+    }
+    // AI Integrations: the labels its own rows show (`agents::integration_rows`), also for search.
+    match key {
+        "connectAgents" => return "Let AI agents connect (MCP)".into(),
+        "readRoot" => return "Folder agents can open from".into(),
+        "writeRoot" => return "Folder agents can save to".into(),
+        "whenAppClosed" => return "When PhotoCraft is closed".into(),
+        _ => {}
     }
     if key == "notificationDurationSeconds" {
         return "Notification Duration (seconds)".into();
@@ -126,6 +136,10 @@ pub(super) fn choice_label(v: &str) -> String {
         "ahd" => "AHD (adaptive homogeneity)".into(),
         "mhc" => "Malvar–He–Cutler".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
+        // AI Integrations › When PhotoCraft is closed.
+        "launch" => "Open PhotoCraft".into(),
+        "headless" => "Work without a window".into(),
+        "error" => "Ask to open PhotoCraft".into(),
         v => humanize(v),
     }
 }
@@ -253,6 +267,11 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                 if !has_visible_fields(&values, &section) {
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
+                } else if section == "integrations"
+                    && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
+                {
+                    super::agents::integration_rows(ui, obj, f);
+                    ui.add_space(8.0);
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system, filter);
                     if section == "fileHandling" {

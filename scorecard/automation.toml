@@ -80,3 +80,9 @@ target = "Agent acceptance suite grown to 30-50 workflows"
 status = "partial"
 issue = 219
 note = "automation/tests/it/agent_tasks.rs runs 10 workflows over MCP"
+
+[[item]]
+id = "AUTO-MCP-LIVE"
+target = "Connect an MCP client to the running app without a terminal (no flags, ports or tokens to copy)"
+status = "done"
+note = "2026-10-14: Preferences › AI Integrations › Let AI agents connect starts the loopback control server at runtime and publishes agent-connection.json; photocraft-cli mcp --live finds the app on every call (launch / headless / error while it is closed); Add to Claude Desktop / Claude Code / Cursor and mcp install --client. automation/tests/mcp_live.rs, apps/photocraft/src/agent_link.rs tests"

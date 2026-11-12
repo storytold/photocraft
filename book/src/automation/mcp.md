@@ -1,9 +1,12 @@
 # MCP
 
-`photocraft-automation` implements an MCP server over stdio with two backends:
+`photocraft-automation` implements an MCP server over stdio with three backends:
 
 - **Headless:** an in-process `Headless` session owns the engine and performs file I/O.
 - **Bridge:** `BridgeClient` forwards tools to a desktop application started with `photocraft --control <port>`.
+- **Live:** `photocraft-cli mcp --live` finds the desktop application through the connection file it publishes while Edit › Preferences › AI Integrations › *Let AI agents connect* is on, before every tool call; while the app is closed it starts it, serves a headless session, or reports an error, as chosen there.
+
+The simplest setup needs no terminal: turn on *Let AI agents connect* in PhotoCraft, then click *Add to Claude Desktop* (or Claude Code, or Cursor) in the same panel. See [`docs/mcp.md`](../../../docs/mcp.md#connecting-the-desktop-app-no-terminal).
 
 For a source checkout, first [install the CLI on PATH and register the server](../../../docs/mcp.md#install-and-register).
 The installed binary survives `cargo clean`; a symlink into `target/release` does not.
@@ -55,6 +58,12 @@ Stdio MCP does not open a network listener. Its client receives only the read an
 explicitly granted at launch; omitting a root omits that authority. Bridge mode authenticates its
 loopback control connection with a bearer token before invoking any control method and uses the
 roots configured on the desktop process.
+
+*Let AI agents connect* (off by default) opens the same loopback, token-authenticated control
+listener as `--control`, with a token the app replaces every time the connection starts (in
+`agent-control.token`, user-only on Unix, in the settings folder). The folders chosen in that panel
+are the desktop process's roots, and the roots of a `mcp --live` headless session only when *When
+PhotoCraft is closed* is set to work without a window.
 
 The current server does not issue scoped sessions or distinguish trusted tools from high-impact tools. Authentication proves possession of the token; it does not restrict an authenticated client to document-only access. Do not expose either transport through an untrusted broker, shell, proxy, or remote service without adding an external policy boundary.
 

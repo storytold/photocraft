@@ -120,6 +120,11 @@ choice!(
     /// fastest and softest. Photoshop's Camera Raw has no such choice.
     RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
 );
+choice!(
+    /// AI Integrations › When PhotoCraft Is Closed: what `photocraft-cli mcp --live` does when an
+    /// agent calls a tool and the app isn't running.
+    WhenAppClosed { Launch = "launch", Headless = "headless", Error = "error" } default Launch
+);
 
 impl Unit {
     /// Document pixels → this unit. `dpi` is the document resolution, `extent` the 100% length
@@ -1174,19 +1179,33 @@ impl Default for RawDefaults {
 pub struct Integrations {
     /// Allow agents to drive the app over the loopback control channel / MCP bridge.
     pub allow_agent_control: bool,
-    /// Default control port (0 = only when `--control` is given).
+    /// Port agents connect to (0 = any free port, published in the connection file).
     pub control_port: u32,
     /// The folder automation may read from when no `--automation-read-root` is given (empty =
-    /// none). Read at launch, like the flag.
+    /// none). Applied at once while agents are connected.
     pub read_root: String,
     /// The folder automation may write to when no `--automation-write-root` is given (empty =
-    /// none). Read at launch, like the flag.
+    /// none). Applied at once while agents are connected.
     pub write_root: String,
+    /// Let AI agents connect: while on, the desktop app serves the control protocol on loopback
+    /// for `photocraft-cli mcp --live` without `--control`, and starts or stops it at once when
+    /// this changes (off by default; launch flags still win). After the older fields, so a
+    /// section saved as a list still reads them where they were.
+    pub connect_agents: bool,
+    /// What `photocraft-cli mcp --live` does while the app is closed.
+    pub when_app_closed: WhenAppClosed,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0, read_root: String::new(), write_root: String::new() }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            read_root: String::new(),
+            write_root: String::new(),
+            connect_agents: false,
+            when_app_closed: WhenAppClosed::Launch,
+        }
     }
 }
 
@@ -1658,6 +1677,14 @@ impl Session {
             && language.as_str().is_some_and(|code| code.eq_ignore_ascii_case("sr"))
         {
             *language = json!("sr-latn");
+        }
+        // Before *Let AI agents connect*, a Control Port other than 0 started the control server by
+        // itself. Such a file keeps its connection: the port now means "on, at this port".
+        if let Some(integrations) = v.get_mut("integrations").and_then(Value::as_object_mut)
+            && !integrations.contains_key("connectAgents")
+            && integrations.get("controlPort").and_then(Value::as_u64).is_some_and(|p| (1..=65535).contains(&p))
+        {
+            integrations.insert("connectAgents".into(), json!(true));
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));

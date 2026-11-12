@@ -2029,3 +2029,90 @@ fn info_detail_adds_text_runs_and_antialiasing() {
     assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `mcp install --client json` prints the configuration MCP clients start `mcp --live` with;
+/// Cursor's file gets the same entry, other servers kept (Preferences › AI Integrations).
+#[test]
+fn mcp_install_writes_the_live_entry() {
+    let home = tmp("mcp-install");
+    let out = ok(bin().args(["mcp", "install", "--client", "json"]).env("HOME", &home)).stdout;
+    let v: Value = serde_json::from_str(&out).unwrap();
+    let entry = &v["mcpServers"]["photocraft"];
+    assert_eq!(entry["args"], json!(["mcp", "--live"]), "{out}");
+    assert!(entry["command"].as_str().unwrap().contains("photocraft-cli"), "{out}");
+    // Cursor never opened here: nothing is written, and the error says what to do.
+    let o = bin().args(["mcp", "install", "--client", "cursor"]).env("HOME", &home).env("USERPROFILE", &home).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("open it once"), "{o:?}");
+    assert!(!home.join(".cursor").exists());
+    let cursor = home.join(".cursor/mcp.json");
+    std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+    std::fs::write(&cursor, r#"{"mcpServers": {"other": {"command": "x"}}}"#).unwrap();
+    let out = ok(bin().args(["mcp", "install", "--client", "cursor"]).env("HOME", &home).env("USERPROFILE", &home)).stdout;
+    assert!(out.contains("Cursor"), "{out}");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&cursor).unwrap()).unwrap();
+    assert_eq!(v["mcpServers"]["other"]["command"], "x");
+    assert_eq!(v["mcpServers"]["photocraft"], *entry);
+}
+
+/// Flags that don't go together are usage errors before anything starts.
+#[test]
+fn mcp_live_and_install_reject_mismatched_flags() {
+    for (args, needle) in [
+        (&["mcp", "install"][..], "--client"),
+        (&["mcp", "install", "--client", "vscode"], "vscode"),
+        (&["mcp", "install", "--client", "json", "--live"], "--live"),
+        (&["mcp", "frob"], "frob"),
+        (&["mcp", "--client", "json"], "--client"),
+        (&["mcp", "--when-closed", "launch"], "--live"),
+        (&["mcp", "--live", "--bridge", "127.0.0.1:1"], "--bridge"),
+        (&["mcp", "--live", "--control-token-file", "t"], "--control-token-file"),
+        (&["mcp", "--live", "--when-closed", "sometimes"], "sometimes"),
+    ] {
+        let o = bin().args(args).stdin(Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
+        assert!(err.contains(needle), "{args:?}: {err}");
+    }
+}
+
+/// `mcp --live` serves MCP without the app; a tool call says how to connect it.
+#[test]
+fn mcp_live_without_the_app_explains_what_to_do() {
+    let dir = tmp("mcp-live");
+    let mut child = bin()
+        .args(["mcp", "--live", "--when-closed", "error"])
+        .env("PHOTOCRAFT_CONFIG_DIR", &dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |v: Value| {
+        writeln!(stdin, "{v}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut recv = |id: u64| -> Value {
+        loop {
+            let mut line = String::new();
+            assert!(stdout.read_line(&mut line).unwrap() > 0, "server closed");
+            let v: Value = serde_json::from_str(&line).unwrap();
+            if v["id"] == id {
+                return v;
+            }
+        }
+    };
+    send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
+    recv(1);
+    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ui_inspect","arguments":{}}}));
+    let r = recv(2);
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("AI Integrations"), "{r}");
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+}

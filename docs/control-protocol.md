@@ -19,18 +19,22 @@ If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On
 
 ### Without `--control`: Preferences › Integrations
 
-An app started from the Dock, the Start menu or a file manager has no command line. Preferences › Integrations sets the same things for every launch (read when the app starts):
+An app started from the Dock, the Start menu or a file manager has no command line. Edit › Preferences › AI Integrations starts and stops the control server while the app runs: turning *Let AI agents connect* on or off, or changing its port or folders, applies at once, with no restart.
 
-| Preference | Launch option it stands in for |
+| Preference | What it does |
 |---|---|
-| `integrations.allowAgentControl` (default on) | Off refuses the control server, `--control` included |
-| `integrations.controlPort` (default 0) | `--control <port>`; 0 = only with `--control` |
-| `integrations.readRoot` (default empty) | `--automation-read-root` |
-| `integrations.writeRoot` (default empty) | `--automation-write-root` |
+| `integrations.connectAgents` (default off) | Serve agents on loopback without `--control`, and publish the connection (below) |
+| `integrations.controlPort` (default 0) | The port for that; 0 = any free port (clients read it from the connection file) |
+| `integrations.readRoot` (default empty) | The agents' read folder; with `--control`, stands in for `--automation-read-root` |
+| `integrations.writeRoot` (default empty) | The agents' write folder; with `--control`, stands in for `--automation-write-root` |
+| `integrations.whenAppClosed` (default `launch`) | What `photocraft-cli mcp --live` does while the app is closed: `launch`, `headless` or `error` |
+| `integrations.allowAgentControl` (default on, not in the dialog) | Off refuses `--control` too |
 
-Each launch option, or its environment variable, wins over its preference; the two folders are decided separately (any `--automation-read-root` replaces the read folder). The same folder for both reading and writing shares one capability, as it does when given by flags, so an implicit save works there too. A folder named by a flag that can't be opened stops the launch (exit status 2), as before. A folder named only in the preferences that can't be opened, or isn't an absolute path, is left out, so that direction of file access fails closed; the app still starts, prints the reason on standard error and shows it in a notice. Automation can't change the two folders (`prefs.set` refuses `integrations.readRoot`, `integrations.writeRoot` and the whole `integrations` section): an agent must not widen its own file access.
+A file saved before *Let AI agents connect* existed, whose `controlPort` (1 to 65535) started the server at launch, loads with `connectAgents` on. Started with `--control`, the app leaves the connection to the launch flags and the dialog says so; only `--control` (or `PHOTOCRAFT_CONTROL_PORT`) opens a port at launch.
 
-When the control server is started by `controlPort` (no `--control`) and no token was given, the app keeps its token in its settings folder, in `agent-control.token`, exactly as `--control-token-file <settings folder>/agent-control.token` would (created mode `0600` with a fresh token when missing, reused otherwise; delete it to get a new token). If that file can't be written or read (a read-only or full settings folder), the control server stays off for that launch: the app still starts, prints the reason on standard error and shows it in a notice. A token file named by `--control-token-file` that can't be used still stops the launch (exit status 2). Otherwise the app publishes the connection beside it, in `agent-connection.json`:
+With `--control`, each launch option, or its environment variable, wins over its preference; the two folders are decided separately (any `--automation-read-root` replaces the read folder). The same folder for both reading and writing shares one capability, as it does when given by flags, so an implicit save works there too. A folder named by a flag that can't be opened stops the launch (exit status 2), as before. A folder named only in the preferences that can't be opened, or isn't an absolute path, is left out, so that direction of file access fails closed; the app still starts, prints the reason on standard error and shows it in a notice. Automation can't change the two folders (`prefs.set` refuses `integrations.readRoot`, `integrations.writeRoot` and the whole `integrations` section): an agent must not widen its own file access.
+
+While *Let AI agents connect* is on, the app keeps its token in its settings folder, in `agent-control.token`, exactly as `--control-token-file <settings folder>/agent-control.token` would (created mode `0600` with a fresh token when missing, reused otherwise, also when the port changes; delete it to get a new token). If that file can't be written or read (a read-only or full settings folder), agents can't connect and the dialog shows why. Otherwise the app publishes the connection beside it, in `agent-connection.json`, and removes it when the connection stops:
 
 ```json
 {
@@ -42,7 +46,7 @@ When the control server is started by `controlPort` (no `--control`) and no toke
 }
 ```
 
-A local client reads that file, then the token from `tokenFile`, connects to `127.0.0.1:<port>` and authenticates as below. The file holds no secret. With `--control-token-file` or `PHOTOCRAFT_CONTROL_TOKEN_FILE` (and `controlPort`), `tokenFile` names that file instead; with a token given as a value (`--control-token`, `PHOTOCRAFT_CONTROL_TOKEN`) nothing is published. A `--control` launch publishes nothing: whoever started it chose the port and token.
+A local client reads that file, then the token from `tokenFile`, connects to `127.0.0.1:<port>` and authenticates as below. The file holds no secret. A `--control` launch publishes nothing: whoever started it chose the port and token.
 
 On Windows and Linux the app removes the file when it quits. On macOS (quitting ends the process inside AppKit) and after a crash the file stays behind, naming a `port` nothing listens on: a client should treat a refused connection as "not running", and the next launch replaces or removes the file. Until then, another local program could be listening on that port. A program running as the same user can read the token file anyway, so this matters only against one that can listen on a loopback port but can't read that `0600` file (another user's, or a sandboxed app). A client must check that the process `pid` names is still running before it sends the token, and treat the file as stale otherwise. That check narrows the gap but doesn't close it: the pid can be reused, and the app can quit between the check and the connection. A client that must rule this out should not send the token on the strength of this file at all; it should use challenge authentication (below), which never sends the token to the listener, with no fallback to sending the token. `version` changes only with an incompatible format. The settings folder is the one that holds `preferences.json` (see [Preferences](#preferences); `PHOTOCRAFT_CONFIG_DIR` moves it).
 
@@ -312,8 +316,8 @@ the same commands work in the app, the CLI and headless MCP. Paths are dotted ca
 `unitsAndRulers`, `guidesGridAndSlices`, `plugIns`, `type`, `enhancedControls`, `rawDefaults`,
 `integrations`, plus `shortcuts.<command id>`, `menus` (`hidden`, `colors.<id>`), `toolbar`
 (`hidden`, `order`) and `colorSettings` (Edit › Color Settings).
-`integrations` (`allowAgentControl`, `controlPort`, `readRoot`, `writeRoot`) is read when the
-desktop app starts; see [Without `--control`](#without---control-preferences--integrations).
+`integrations` drives the agent connection while the desktop app runs (`allowAgentControl` also
+when it starts); see [Without `--control`](#without---control-preferences--integrations).
 
 | Command | Params |
 |---|---|
@@ -414,6 +418,10 @@ magenta alignment lines. `ui.pointer` drives the same code, so agents get identi
 - **Headless** (`photocraft-cli mcp`): an in-process `photocraft_engine::Session`. There is no window. CPU composition is the default; `--gpu` or `PHOTOCRAFT_GPU=1` enables optional GPU rendering with automatic CPU fallback.
 - **Bridge** (`photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <path>`): every tool is forwarded to a running `photocraft --control 7878 --control-token-file <path>` over this protocol, so agents see and drive the live app. Explicit `--gpu` / `--no-gpu` flags are rejected with a usage error because the desktop controls rendering; `PHOTOCRAFT_GPU` is ignored in bridge mode. `--bridge 7878` is short for `--bridge 127.0.0.1:7878`. With no `--bridge`, `PHOTOCRAFT_CONTROL_PORT` selects the bridge port (`127.0.0.1:<port>`), and the CLI says so on standard error; with neither (or the variable empty), the MCP runs headless. A value that is not a port is a usage error naming the variable. `--automation-read-root` or `--automation-write-root` with the variable set is a usage error, since the bridge would drop the roots.
 
+- **Live** (`photocraft-cli mcp --live`): the bridge, with the address and token read before every tool call from `agent-connection.json` in the app's settings folder. The app publishes that file while Edit › Preferences › AI Integrations › *Let AI agents connect* is on (not with `--control`), and removes it when the connection stops; a file left by a crash fails the connection probe and counts as no app. See [MCP conventions](mcp.md#connecting-the-desktop-app-no-terminal).
+
+`ui.inspect` reports the connection as `agentLink`: `port` while agents can connect, `launchFlags` when `--control` manages it, `error`, and `mcpCommand` (how MCP clients start the CLI).
+
 The bridge keeps one authenticated TCP connection open, and drops and reconnects before a call once the connection has been idle long enough that the app (which closes idle connections after 30s) may have dropped it. A transport failure while sending a request or waiting for its reply, including a reply timeout, drops the connection and reports that the operation may have completed (a call abandoned before its reply, such as a cancelled MCP wait, also drops it, so the next call never queues behind it); inspect the document before retrying an edit. Edits are never automatically resent (#1007); a connection that could not be established is reported as "the request was not sent" instead. The MCP server opts its pure-read tools (`ui_inspect`, `doc_inspect`, `command_list`, `jobs_list`, `session_list`, `ui_screenshot`) into one automatic retry on a fresh connection, since a read applies nothing; clients driving `BridgeClient` directly opt in per call with `call_read`. The next separate call reconnects and authenticates, and reply lines whose `id` does not match the request are skipped. The client's call timeout is 55s, strictly below the server's 60s reply deadline, so the bridge's error is the one callers see. A waited MCP `command_run` (or `command_batch` step) of an engine command is not bound by it (#8130): the bridge sends `engine.execute` once with `"wait": false` and, when the app starts a background job, polls `jobs.list` until the job ends and returns its result, forwarding progress and cancelling the job (`jobs.cancel`) when the request is cancelled, at once, even while a poll still waits on the app. Limits: a command that does not run as a job, a UI command (not an engine command; the app waits on it) and a lost reply to the start itself still fail at the timeout, the last with "operation may have completed" (look for the job in `jobs_list` before retrying); a failed poll of an uncancelled wait reports the job id and leaves the job running; and an unresponsive app still times out. Clients driving `BridgeClient` directly pass `"wait": false` and poll `jobs.list` themselves. It only accepts the literal loopback addresses `127.0.0.1:<port>` and `[::1]:<port>`, because the app only listens on loopback; `localhost:<port>` means `127.0.0.1:<port>` and is never looked up, since a lookup may return `[::1]` first and reach another process listening there. Every connection authenticates by challenge (see above), so the token is never sent, and a listener that cannot prove it holds the token is reported as such ("the control token was not sent"); an app too old for challenge authentication is refused the same way, so update the app with the CLI. Supply its bearer token with `--control-token-file`, `--control-token`, `PHOTOCRAFT_CONTROL_TOKEN_FILE`, or `PHOTOCRAFT_CONTROL_TOKEN`:
 
 ```sh
@@ -480,6 +488,9 @@ One explicit write-root flag overrides `PHOTOCRAFT_AUTOMATION_WRITE_ROOT`. These
 variables are not supported by headless `photocraft-cli mcp` or `serve`; supply flags explicitly.
 In MCP bridge mode, configure roots on the desktop process. Supplying root flags to
 `photocraft-cli mcp --bridge` is a usage error; a bridge client cannot grant filesystem access.
+With *Let AI agents connect*, the folders chosen in Preferences › AI Integrations (`readRoot` /
+`writeRoot`) are the agents' roots; `mcp --live` uses them for a headless session only when the
+app's *When PhotoCraft is closed* choice (or `--when-closed headless`) asks for one.
 
 Request paths must be non-empty, forward-slash relative paths beneath the applicable root, or
 absolute paths beneath a corresponding granted root. An absolute path is compared with the

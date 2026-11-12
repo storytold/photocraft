@@ -29,6 +29,11 @@ Automation is a privilege boundary because requests can cause filesystem access,
   Screenshots are decoded under separate dimension, pixel, and allocation ceilings before
   downscaling; the 5 MiB PNG limit applies to the returned image.
 - MCP normally uses stdio and can optionally bridge to loopback control TCP.
+- Preferences › AI Integrations › *Let AI agents connect* (off by default) opens that loopback
+  listener without launch flags. Its token is regenerated each time the connection starts and is
+  kept in a user-only file; the published `agent-connection.json` holds the port and the token
+  file's path, never the token. `photocraft-cli mcp --live` probes the port before sending the
+  token, and a file left by a crash fails that probe.
 - The bridge and UI request paths use timeouts.
 - Engine commands are expected to reject invalid parameters without panicking.
 - Remote filesystem methods use separately granted read and write directory capabilities.

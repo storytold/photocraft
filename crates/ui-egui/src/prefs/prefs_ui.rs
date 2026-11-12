@@ -52,6 +52,8 @@ pub struct Runtime {
     show_rulers: Option<bool>,
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
+    /// AI Integrations settings the agent connection was last set up for (`agents::sync_agent_link`).
+    agent_link: Option<prefs::Integrations>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
     pub(crate) tool_colors: Option<[[[f32; 4]; 2]; 2]>,
     pub(crate) tool_cmyk_picks: crate::tool_memory::CmykPicks,
@@ -64,6 +66,7 @@ pub struct Runtime {
 
 pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 
+mod agents;
 mod appearance;
 mod dialogs;
 mod fields;
@@ -102,6 +105,8 @@ pub(crate) use startup::{on_recovery_event, remember_rulers};
 
 // Test modules stay after the production code: the prefs_usage test reads each file up to
 // its first `#[cfg(test)] mod`.
+#[cfg(test)]
+mod agents_tests;
 #[cfg(test)]
 mod recovery_tests;
 

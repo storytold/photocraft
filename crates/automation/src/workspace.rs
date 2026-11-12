@@ -752,7 +752,7 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     let mut segments = path.split('.').filter(|segment| !segment.is_empty());
     let Some(section) = segments.next() else { return true };
     // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
-    // Integrations' automation roots are what this policy grants at the next launch: an agent must
+    // Integrations' automation roots are what this policy grants (applied at once): an agent must
     // not widen its own file access.
     let key = segments.next();
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
