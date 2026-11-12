@@ -303,8 +303,8 @@ pub enum LiveShape {
         rect: [f64; 4],
     },
     /// Regular polygon or star inscribed in `rect`; `star_ratio` = inner/outer radius (1 = polygon).
-    /// `corner_radius` rounds every vertex (0 = sharp), each within what its edges allow; the
-    /// Triangle tool draws a 3-sided one.
+    /// `corner_radius` rounds every vertex of a polygon and the outer points of a star (0 = sharp),
+    /// each within what its edges allow; the Triangle tool draws a 3-sided one.
     Polygon {
         rect: [f64; 4],
         sides: u32,
