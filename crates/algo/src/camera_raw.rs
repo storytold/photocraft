@@ -1029,23 +1029,25 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
 }
 
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
+    // The controls' documented 0..=100 range: raw values drive the filter radii below.
+    let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
     // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
     let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
     let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
     let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
-    if p.noise_luminance > 0.0 {
-        let n = p.noise_luminance / 100.0;
+    if nl > 0.0 {
+        let n = nl / 100.0;
         let r = ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize;
         let smooth = guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6);
-        let keep = p.noise_luminance_detail / 100.0 * 0.5;
+        let keep = nld / 100.0 * 0.5;
         for i in 0..w * h {
             y[i] = smooth[i] + (y[i] - smooth[i]) * keep;
         }
     }
-    if p.noise_color > 0.0 {
-        let sigma = (p.noise_color / 100.0 * 6.0 * ps).max(0.3);
+    if nc > 0.0 {
+        let sigma = (nc / 100.0 * 6.0 * ps).max(0.3);
         let (bcb, bcr) = (gauss(&cb, w, h, sigma), gauss(&cr, w, h, sigma));
-        let keep = p.noise_color_detail / 100.0 * 0.3;
+        let keep = ncd / 100.0 * 0.3;
         for i in 0..w * h {
             cb[i] = bcb[i] + (cb[i] - bcb[i]) * keep;
             cr[i] = bcr[i] + (cr[i] - bcr[i]) * keep;
@@ -1306,6 +1308,12 @@ mod tests {
         let mut nr = noisy.clone();
         develop(&mut nr, w, h, &CameraRaw { noise_luminance: 80.0, ..Default::default() }, false);
         assert!(var(&nr) < var(&noisy) * 0.5);
+        // Out-of-range noise settings are held to their 0..=100 range, not turned into huge radii.
+        let mut wild = noisy.clone();
+        let hostile =
+            CameraRaw { noise_luminance: 1.0e30, noise_color: 1.0e30, noise_luminance_detail: 1.0e30, noise_color_detail: 1.0e30, ..Default::default() };
+        develop(&mut wild, w, h, &hostile, false);
+        assert!(wild.iter().all(|q| q[0].is_finite()));
         let mut sh = noisy.clone();
         develop(&mut sh, w, h, &CameraRaw { sharpen_amount: 100.0, ..Default::default() }, false);
         assert!(var(&sh) > var(&noisy));
