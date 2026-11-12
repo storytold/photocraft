@@ -173,6 +173,17 @@ pub(crate) fn pipette(ctx: &egui::Context, at: Pos2) -> CursorIcon {
     show(&painter, at, Shape::Pipette)
 }
 
+/// Whether the pass whose output is `out` shows the sampling pipette: the OS bitmap and its
+/// visible-fallback crosshair where a bitmap can be uploaded, the drawn pipette elsewhere.
+#[cfg(test)]
+pub(crate) fn pipette_shown(ctx: &egui::Context, out: &egui::PlatformOutput) -> bool {
+    if !native(ctx) {
+        return out.cursor_icon == CursorIcon::None;
+    }
+    let expected = cached_pipette(ctx, native_scale(ctx), false).image;
+    out.cursor_icon == CursorIcon::Crosshair && expected.is_some() && out.cursor_image == expected
+}
+
 pub(crate) fn outline(painter: &Painter, at: Pos2, rings: Vec<Vec<Vec2>>, centre: bool) -> CursorIcon {
     show(painter, at, Shape::Outline { rings: rings.into(), centre })
 }
