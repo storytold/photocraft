@@ -235,8 +235,10 @@ pub fn line(a: (f64, f64), b: (f64, f64), weight: f64) -> Path {
 
 /// A filled vector line with optional arrowheads at its endpoints (#6408).
 /// `width` and `length` measure the head in document pixels, independently of the shaft weight.
-/// `concavity` is 0..100 percent: 0 has a flat rear edge, 100 a deep V-shaped notch.
-/// The shaft stops at the notch, so a concave head remains concave after filling.
+/// `concavity` is -50..50 percent of `length`: the middle of the head's rear edge bends that far
+/// toward the tip (positive) or away from it (negative); 0 is flat. Values outside are clamped, so
+/// documents saved with the old 0..100 range still open (#13258). The shaft stops where the bent
+/// rear edge crosses the shaft's edge, so a concave head stays open after filling.
 // The arguments correspond to the stored LiveShape::ArrowLine parameters.
 #[allow(clippy::too_many_arguments)]
 pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: bool, width: f64, length: f64, concavity: f64) -> Path {
@@ -256,15 +258,16 @@ pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: b
     let (vx, vy) = (-uy, ux);
     let size = (if length.is_finite() { length.max(1.0) } else { 1.0 }).min(distance * if start && end { 0.49 } else { 0.9 });
     let half = (if width.is_finite() { width.max(1.0) } else { 1.0 }) / 2.0;
-    let requested_notch = concavity.clamp(0.0, 100.0) / 100.0;
-    // Preserve 0..50%. Beyond that compress the usable range so the head never collapses.
-    let max_notch = 0.75;
-    let notch = if requested_notch <= 0.5 { requested_notch } else { 0.5 + (requested_notch - 0.5) * (max_notch - 0.5) / 0.5 };
-    // Put the shaft up to the notch, leaving the head's concave edges visible.
-    let inner = size * (1.0 - notch);
+    // The rear edge's bend toward the tip as a fraction of `size` (negative: away from the tip).
+    let notch = if concavity.is_finite() { concavity.clamp(-50.0, 50.0) / 100.0 } else { 0.0 };
+    let hw = weight.max(0.1) / 2.0;
+    // The rear edge runs straight from each outer corner to its bent middle, so where it crosses
+    // the shaft's edge it is bent by `notch` times how far that edge is from the corner; a head no
+    // wider than the shaft meets it at its base. A head bent away from its tip reaches past its
+    // base, so the shaft is capped to never turn inside out.
+    let inner = (size * (1.0 - notch * (1.0 - (hw / half).min(1.0)))).min(if start && end { distance / 2.0 } else { distance });
     let shaft_a = if start { (a.0 + ux * inner, a.1 + uy * inner) } else { a };
     let shaft_b = if end { (b.0 - ux * inner, b.1 - uy * inner) } else { b };
-    let hw = weight.max(0.1) / 2.0;
     let mut pieces = vec![Subpath::polygon(&[
         (shaft_a.0 + vx * hw, shaft_a.1 + vy * hw),
         (shaft_b.0 + vx * hw, shaft_b.1 + vy * hw),
@@ -428,6 +431,10 @@ mod tests {
 #[cfg(test)]
 #[path = "star_outer_corner_radius_tests.rs"]
 mod star_outer_corner_radius_tests;
+
+#[cfg(test)]
+#[path = "line_arrow_concavity_tests.rs"]
+mod line_arrow_concavity_tests;
 
 #[cfg(test)]
 mod line_arrow_6408_tests {

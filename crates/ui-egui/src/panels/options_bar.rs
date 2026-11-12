@@ -1014,7 +1014,7 @@ fn eraser_percent(ui: &mut egui::Ui, label: &str, value: &mut f32) -> bool {
 }
 
 /// Shows one of the range alerts as a modal with OK, once even if more than one pass asks.
-fn range_alert(ui_state: &mut crate::state::UiState, text: &str) {
+pub(crate) fn range_alert(ui_state: &mut crate::state::UiState, text: &str) {
     let message = tl!(text).to_owned();
     let shown =
         ui_state.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
