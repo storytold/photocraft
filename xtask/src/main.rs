@@ -225,7 +225,7 @@ fn cmd_test() -> Result<(), String> {
     run(c, &format!("cargo {tool} {}", TEST_TARGETS.join(" ")))
 }
 
-/// What the CI gate adds to every build: `--locked`, and the optional photocraft-heif crate that
+/// What the CI gate adds to every build: `--locked`, and the optional craft-heif decoder that
 /// official builds open HEIC photos with.
 const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
 

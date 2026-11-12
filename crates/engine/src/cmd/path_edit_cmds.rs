@@ -116,10 +116,11 @@ fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect::<Result<_>>()?;
     let d = offset(CMD, p)?;
+    let label = step_name(CMD, p, "Drag Anchor Points", "Drag Path")?;
     if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
-        return edit_path(s, CMD, p, "Drag Anchor Points", |path| edit::move_anchors_curvature(path, &anchors, d));
+        return edit_path(s, CMD, p, label, |path| edit::move_anchors_curvature(path, &anchors, d));
     }
-    edit_path(s, CMD, p, "Drag Anchor Points", |path| edit::move_anchors(path, &anchors, d))
+    edit_path(s, CMD, p, label, |path| edit::move_anchors(path, &anchors, d))
 }
 
 fn move_handle(s: &mut Session, p: &Value) -> Result<Value> {
@@ -192,6 +193,14 @@ fn delete_anchor(s: &mut Session, p: &Value) -> Result<Value> {
         };
         Ok(())
     })?;
+    // Delete / Backspace (`segments`) that takes a whole subpath is Delete Selection, as in
+    // Photoshop (#12761); the tool's click on a lone anchor stays Delete Anchor Point.
+    if removed
+        && segments
+        && let Some(st) = s.active_mut()
+    {
+        st.history.set_current_label("Delete Selection");
+    }
     if let Some(o) = r.as_object_mut() {
         o.insert("subpathRemoved".into(), json!(removed));
     }
@@ -275,7 +284,7 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"stepName":"Drag Path"? (History step name; the Convert Point tool sends it when it drags a whole path; default "Drag Anchor Points"; any other value is refused)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Direction Point",

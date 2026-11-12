@@ -151,6 +151,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     let tol = crate::distort_ui::tolerance(app);
     match ev {
         ToolEvent::Down { .. } => {
+            // A new quad's first press drops an active selection as its own "Deselect" step, as in
+            // Photoshop (#11975): it is gone after the commit and after Esc too. Refused (a job
+            // locks the document, its reason in the status bar), the press starts no quad.
+            if app.ui.perspective_crop.is_none()
+                && app.pcrop.clicks.is_empty()
+                && app.session.active().is_some_and(|d| d.doc.selection.is_some())
+                && app.run("select.deselect", json!({})).is_err()
+            {
+                return true;
+            }
             app.pcrop.drag = match app.ui.perspective_crop {
                 Some(q) => {
                     let near = (0..4)
@@ -179,9 +189,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         app.ui.perspective_crop = Some(ordered([a, b, c, d]));
                         app.pcrop.clicks.clear();
                     }
-                } else {
+                } else if let Some(quad) = new_box(start, cur, square, centred) {
+                    // Only a drag that built a box replaces the corners clicked so far. One that
+                    // made none (a start the snap moved onto its release point) leaves them, so the
+                    // next click still finishes the quad (#13065).
                     app.pcrop.clicks.clear();
-                    app.ui.perspective_crop = new_box(start, cur, square, centred);
+                    app.ui.perspective_crop = Some(quad);
                 }
             }
             app.pcrop.drag = None;
@@ -446,18 +459,26 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// Options bar: W, ⇄, H, the resolution (the Crop tool's fields), Front Image, Clear, Show Grid,
 /// and cancel / commit.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::crop_size::fields(&mut app.ui.tool_options, ui);
+    let doc_dpi = app.session.active().map_or(72.0, |st| f64::from(st.doc.resolution_dpi));
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    // Out-of-range numbers and text get the reference application's alerts (#11977).
+    if let Some(message) = crate::crop_size::perspective_fields(&mut app.ui.tool_options, ui, doc_dpi, pt_per_in) {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
     if crate::widgets::secondary_button(ui, tl!("Front Image"), 0.0).clicked()
         && let Some((size, dpi)) = app.session.active().map(|st| (st.doc.size, f64::from(st.doc.resolution_dpi)))
     {
         let o = &mut app.ui.tool_options;
         o.crop_width = crate::crop_size::format_length(f64::from(size.width), Unit::Pixels);
         o.crop_height = crate::crop_size::format_length(f64::from(size.height), Unit::Pixels);
-        let res = if o.crop_resolution_unit == crate::crop_size::PX_PER_CM { dpi / 2.54 } else { dpi };
-        o.crop_resolution = crate::widgets::fmt_num2(res);
+        let per_cm = o.crop_resolution_unit == crate::crop_size::PX_PER_CM;
+        // Within the field's limits, so a 30000 ppi document's resolution still commits.
+        o.crop_resolution = crate::crop_size::fit_resolution(if per_cm { dpi / 2.54 } else { dpi }, per_cm);
     }
     if crate::widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
         crate::crop_size::clear(&mut app.ui.tool_options);
+        // Clear also puts the resolution unit back to px/in (#11977).
+        app.ui.tool_options.crop_resolution_unit = crate::crop_size::PX_PER_IN.into();
     }
     crate::widgets::vline(ui, 22.0);
     crate::widgets::checkbox(ui, &mut app.ui.tool_options.perspective_crop_grid, tl!("Show Grid"));
@@ -477,6 +498,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 #[cfg(test)]
+#[path = "perspective_crop_fields_tests.rs"]
+mod perspective_crop_fields_tests;
+
+#[cfg(test)]
 #[path = "perspective_crop_click_preview_tests.rs"]
 mod perspective_crop_click_preview_tests;
 
@@ -491,6 +516,10 @@ mod perspective_crop_modifiers_tests;
 #[cfg(test)]
 #[path = "perspective_crop_shield_tests.rs"]
 mod perspective_crop_shield_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_deselect_tests.rs"]
+mod perspective_crop_deselect_tests;
 
 #[cfg(test)]
 mod tests {

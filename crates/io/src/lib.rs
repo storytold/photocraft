@@ -50,7 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
-mod gradient_bake;
+pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
@@ -99,7 +99,7 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
+    DEFAULT_LOSSY_WEBP_QUALITY, FramesImport, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
     export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
     import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
 };
@@ -384,7 +384,8 @@ pub enum XmpEmbed {
     /// Embed the document's whole XMP packet and free-form text.
     #[default]
     All,
-    /// Embed no XMP or free-form text.
+    /// Leave the document's own XMP packet and free-form text out. Metadata a format writes
+    /// about the file itself, such as a PDF's spot-plate description, is still written.
     None,
 }
 
@@ -432,6 +433,12 @@ pub struct ExportOptions {
     /// PSD/PSB and layered TIFF: read and embed the files linked smart objects name (see
     /// [`PsdExportOptions::read_linked_files`]). On by default; automation turns it off.
     pub read_linked_files: bool,
+    /// PDF: write the document's spot channels as overprinting `/Separation` plates after the
+    /// flattened image, and a Multichannel document as its plates alone (FILE-215-17). On by
+    /// default; `false` (`"pdfSpotPlates": false`) writes the flattened image only, so an RGB,
+    /// Grayscale or CMYK document loses its plates and a Multichannel document, which has no
+    /// image to write, is refused.
+    pub pdf_spot_plates: bool,
     /// `.pcraft`: request the flattened document at its canvas size as `composite/full.png`
     /// (Preferences › File Handling › Save Full-Size Composite in .pcraft Files). The save may
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
@@ -454,6 +461,7 @@ impl Default for ExportOptions {
             document_path: None,
             pcraft_cache: None,
             read_linked_files: true,
+            pdf_spot_plates: true,
             pcraft_full_composite: false,
         }
     }
@@ -1205,7 +1213,8 @@ fn export_stages_with_renderer(
         return Ok(res.into());
     }
     if ext == "pdf" {
-        let mut res = pdf::export(doc, ctl)?;
+        let xmp = if opts.xmp == XmpEmbed::All { doc.metadata.xmp.as_deref() } else { None };
+        let mut res = pdf::export_with(doc, opts.pdf_spot_plates, xmp, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());
