@@ -1850,8 +1850,8 @@ fn empty_or_garbage_stdin_is_a_clear_error() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
-/// #9978 review: `info -` lists a missing font once, as `info <file>` does. The font is one no
-/// system has, so no real fonts are needed.
+/// #9978 review: `info -` lists a missing font once, as `info <file>` does, with and without
+/// `--detail`. The font is one no system has, so no real fonts are needed.
 #[test]
 fn info_from_stdin_reports_each_missing_font_once() {
     let d = tmp("stdin-fonts");
@@ -1861,12 +1861,15 @@ fn info_from_stdin_reports_each_missing_font_once() {
     ok(bin().args(["run", "--new", r#"{"width":96,"height":48}"#, "--cmd", "type.create", "--params", &params, "--out"]).arg(&native));
     let mentions = |info: &Value| info["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().is_some_and(|s| s.contains(family))).count();
 
-    let o = piped(bin().args(["info", "-", "--compact"]), &std::fs::read(&native).unwrap());
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let info: Value = serde_json::from_slice(&o.stdout).unwrap();
-    assert_eq!(mentions(&info), 1, "{info}");
-    let info: Value = serde_json::from_str(&ok(bin().arg("info").arg(&native).arg("--compact")).stdout).unwrap();
-    assert_eq!(mentions(&info), 1, "{info}");
+    for extra in [&["--compact"][..], &["--compact", "--detail"]] {
+        let o = piped(bin().args(["info", "-"]).args(extra), &std::fs::read(&native).unwrap());
+        assert!(o.status.success(), "{extra:?}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(o.stderr.is_empty(), "{extra:?}: info puts warnings in JSON, not stderr");
+        let info: Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(mentions(&info), 1, "info - {extra:?}: {info}");
+        let info: Value = serde_json::from_str(&ok(bin().arg("info").arg(&native).args(extra)).stdout).unwrap();
+        assert_eq!(mentions(&info), 1, "info <file> {extra:?}: {info}");
+    }
     std::fs::remove_dir_all(d).unwrap();
 }
 
@@ -2115,12 +2118,16 @@ fn info_detail_adds_text_runs_and_antialiasing() {
     let text = &type_layer(&detail).expect("type layer")["text"];
     assert!(text.get("antialias").is_some(), "{text}");
     assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
-    // `info -` takes --detail too (#9978).
-    let o = piped(bin().args(["info", "-", "--compact", "--detail"]), &std::fs::read(&file).unwrap());
+    // `info -` takes --detail too (#9978): the same document_detail layer JSON as the file gives,
+    // and without --detail the same plain JSON.
+    let bytes = std::fs::read(&file).unwrap();
+    let o = piped(bin().args(["info", "-", "--compact", "--detail"]), &bytes);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let piped_detail: Value = serde_json::from_slice(&o.stdout).unwrap();
-    let text = &type_layer(&piped_detail).expect("type layer")["text"];
-    assert!(text.get("antialias").is_some(), "{text}");
-    assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
+    assert_eq!(piped_detail["layers"], detail["layers"]);
+    let o = piped(bin().args(["info", "-", "--compact"]), &bytes);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let piped_plain: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(piped_plain["layers"], plain["layers"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
