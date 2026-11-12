@@ -189,9 +189,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         app.ui.perspective_crop = Some(ordered([a, b, c, d]));
                         app.pcrop.clicks.clear();
                     }
-                } else {
+                } else if let Some(quad) = new_box(start, cur, square, centred) {
+                    // Only a drag that built a box replaces the corners clicked so far. One that
+                    // made none (a start the snap moved onto its release point) leaves them, so the
+                    // next click still finishes the quad (#13065).
                     app.pcrop.clicks.clear();
-                    app.ui.perspective_crop = new_box(start, cur, square, centred);
+                    app.ui.perspective_crop = Some(quad);
                 }
             }
             app.pcrop.drag = None;
