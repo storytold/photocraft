@@ -130,7 +130,7 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `crates/psd/tests/fixtures/atn/*.atn` | Independently encoded ATN version-16 and version-12 parser fixtures | PhotoCraft contributors (version-12 files: @yoriswind) | Original synthetic test data; wire layout documented in `crates/psd/src/atn.rs`; provenance in the adjacent README | MIT OR Apache-2.0 |
+| `crates/engine/tests/fixtures/atn/v12-commands.atn` | Independently encoded ATN version-12 parser fixture (Gaussian Blur, Levels, Select All, Make Layer; 404 bytes, sha256 `451958b686da9aab45e65ae902c86333b7149d72021c21904e3aae8e39eb77cb`), copied from the PSD crate's fixtures, which now live in craft-libs' `craft-psd` | PhotoCraft contributors (@yoriswind) | Original synthetic test data | MIT OR Apache-2.0 |
 
 ## Embedded-vector editor source
 

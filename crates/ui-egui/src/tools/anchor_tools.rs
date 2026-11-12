@@ -40,13 +40,9 @@ pub fn effective(tool: Tool, mods: Modifiers) -> Option<Tool> {
     }
 }
 
-/// What a click at `p` would edit with `tool`: the frontmost path under the pointer and the
-/// segment (Add) or anchor (Delete) hit on it. An anchor hit with Add, or a segment with Delete,
-/// edits nothing.
-fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
-    let (r, path, hit) = crate::direct_select::hit_active(app, p)?;
-    // The anchor tools ignore a click on a shape with only its own position lock set (#12730, #12825).
-    if let PathRef::Layer(id) = r
+/// The anchor tools ignore a click on a shape with only its own position lock set (#12730, #12825).
+pub(crate) fn ignores(app: &PhotocraftApp, r: &PathRef) -> bool {
+    if let PathRef::Layer(id) = *r
         && let Some(st) = app.session.active()
         && let Some(layer) = st.doc.layer(LayerId(id))
         && matches!(layer.content, LayerContent::Shape(_))
@@ -54,6 +50,17 @@ fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path
         && let Some(at) = st.doc.path_of(layer.id)
         && at.split_last().is_some_and(|(_, ancestors)| !st.doc.locks_at(ancestors).any())
     {
+        return true;
+    }
+    false
+}
+
+/// What a click at `p` would edit with `tool`: the frontmost path under the pointer and the
+/// segment (Add) or anchor (Delete) hit on it. An anchor hit with Add, or a segment with Delete,
+/// edits nothing.
+fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    let (r, path, hit) = crate::direct_select::hit_active(app, p)?;
+    if ignores(app, &r) {
         return None;
     }
     match (tool, hit) {
@@ -169,6 +176,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 ds.subpath_press = Some([x, y]);
                 // A stale press is dropped with the selection (`cancel_stale`).
                 ds.owner = owner;
+            } else if tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods) {
+                return true;
             } else {
                 click(app, tool, [x, y]);
             }
@@ -189,6 +198,37 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             }
         }
     }
+    true
+}
+
+/// Delete Anchor Point (#12767): a press on a straight segment of the targeted path starts Direct
+/// Selection's segment drag (`Edit::Segment`, `path.bendSegment`, **Drag Segment**); the drag's
+/// Move and Up reach `direct_select::pointer` first. A click without movement records nothing.
+/// Not measured, so as today (a press on a segment does nothing): a curved segment, ⇧, a segment of
+/// a path whose anchors are all selected, and the Pen path being drawn. False when the press is not
+/// on such a segment (an anchor press goes on to delete).
+fn start_segment_drag(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) -> bool {
+    if mods.shift {
+        return false;
+    }
+    let Some((r, path, Hit::Segment(k, t))) = crate::direct_select::hit_active(app, p) else { return false };
+    let Some(sp) = path.subpaths.get(k[0]) else { return false };
+    let end = if k[1] + 1 < sp.knots.len() { k[1] + 1 } else { 0 };
+    // Straight as `edit::straight` (and so `bend_segment`) has it: both facing handles within 1e-9
+    // of their anchors.
+    let retracted = |h: Point, a: Point| (h.x - a.x).hypot(h.y - a.y) < 1e-9;
+    let straight = sp.knots.get(k[1]).zip(sp.knots.get(end)).is_some_and(|(a, b)| retracted(a.out_ctrl, a.anchor) && retracted(b.in_ctrl, b.anchor));
+    let ds = &app.ui.direct_selection;
+    let all_selected = ds.target == Some(r) && (0..path.subpaths.len()).all(|s| edit::subpath_anchors(&path, s).iter().all(|a| ds.anchors.contains(a)));
+    // A shape with only its own position lock is ignored, as a click on it is (#12730, #12825).
+    if r == PathRef::Pen || all_selected || !straight || ignores(app, &r) {
+        return false;
+    }
+    let owner = crate::direct_select::Owner::current(app);
+    let ds = &mut app.ui.direct_selection;
+    *ds = DirectSelection { target: Some(r), segment: Some(k), owner, ..Default::default() };
+    ds.drag =
+        Some(crate::direct_select::Drag::Edit { target: r, base: path, edit: crate::direct_select::Edit::Segment(k, t), start: p, end: p, preview: None });
     true
 }
 
@@ -363,6 +403,8 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
 mod add_anchor_lock_tests;
 #[cfg(test)]
 mod add_anchor_targeted_path_tests;
+#[cfg(test)]
+mod delete_anchor_drag_segment_tests;
 #[cfg(test)]
 mod delete_anchor_live_shape_tests;
 #[cfg(test)]

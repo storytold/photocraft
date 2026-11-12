@@ -1813,6 +1813,12 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
             crate::crop_ui::draw_turn_cursor(ctx, p, toward);
         }
     } else if let Some(p) = response.hover_pos()
+        && let Some(zone) =
+            crate::perspective_crop_ui::cursor(app, xf.to_doc(p)).filter(|z| tool == Tool::PerspectiveCrop && *z != crate::perspective_crop_ui::Zone::Outside)
+    {
+        // What a press there does (#11974); outside the quad the tool's usual crosshair below.
+        ui.ctx().set_cursor_icon(crate::tool_cursor::perspective_crop(input.painter, zone, p));
+    } else if let Some(p) = response.hover_pos()
         && let Some(c) = selection_cursor(app, tool, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
     {
         // Over a selection (Photoshop's cursors): the move cursor where a press drags the
@@ -3114,6 +3120,9 @@ mod cpu_background_tests;
 #[path = "canvas/blend_viewport_tests.rs"]
 mod blend_viewport_regression;
 
+#[cfg(test)]
+#[path = "canvas/perspective_crop_cursor_tests.rs"]
+mod perspective_crop_cursor_tests;
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]
 mod pixel_alignment_tests;
