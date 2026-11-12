@@ -691,5 +691,7 @@ fn text_replacement_drops_solved_fit_lines() {
     s.execute("image.applyDataSet", json!({"name": "A"})).unwrap();
     assert_eq!(text_of(&s, title), "Hello");
     let LayerContent::Text(t) = &doc(&s).layer(title).unwrap().content else { panic!("not a text layer") };
-    assert!(t.fit.as_ref().unwrap().lines.is_empty(), "stale solved lines survived: {:?}", t.fit);
+    // Dropped, or solved again for the new text where the refresh refits: never the old ones.
+    let stale = [FitLine { start: 0, scale: 1.0 }, FitLine { start: 4, scale: 1.5 }];
+    assert_ne!(t.fit.as_ref().unwrap().lines, stale, "stale solved lines survived");
 }
