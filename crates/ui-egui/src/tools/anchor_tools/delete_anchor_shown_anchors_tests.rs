@@ -81,3 +81,18 @@ fn a_click_on_empty_canvas_hides_the_anchors_and_the_next_anchor_click_only_sele
     assert_eq!(knots(&app, 0), 3);
     assert_eq!(drawn(&app), [true, false, false]);
 }
+
+#[test]
+fn at_the_history_limit_the_following_anchor_is_still_selected() {
+    let (mut app, _) = setup(Tool::DeleteAnchorPoint);
+    target_path_1(&mut app);
+    // At the limit a new step evicts the oldest, so the step count does not change.
+    let st = app.session.active_mut().unwrap();
+    st.history.max_states = st.history.past_len();
+    let n = steps(&app);
+    click(&mut app, [300.0, 300.0]);
+    assert_eq!(steps(&app), n, "the step count stays at the limit");
+    assert_eq!(knots(&app, 0), 3);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]]);
+    assert_eq!(drawn(&app), [true, false, false]);
+}

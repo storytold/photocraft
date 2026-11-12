@@ -216,18 +216,12 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
             select_shown(app, r, vec![s], vec![[s, k]]);
             return;
         }
-        let steps = history_len(app);
-        apply(app, r, hit, p);
-        if history_len(app) != steps {
+        if apply(app, r, hit, p) {
             select_follower(app, r, &path, [s, k]);
         }
         return;
     }
     apply(app, r, hit, p);
-}
-
-fn history_len(app: &PhotocraftApp) -> usize {
-    app.session.active().map_or(0, |st| st.history.past_len())
 }
 
 /// Show the anchors of `subpaths` of `r` only, with `anchors` selected: a view change, no history step.
@@ -286,14 +280,16 @@ fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
 /// Add an anchor where `hit` is on a segment of `r`, or delete the anchor it is on: one command.
 /// An added anchor is selected and follows a drag from the press at `p`; the add and the move are
 /// one history step.
-fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
+/// Whether the engine ran the edit: not at a full History (it records a step and evicts the oldest, so
+/// the step count does not change), nor when a live-shape prompt or an error stopped it.
+fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
     let (id, mut params, coalesce) = match hit {
         Hit::Segment([s, k], t) => {
             let key = format!("add-anchor-{}", app.ui.alloc_id());
             ("path.addAnchor", serde_json::json!({"subpath": s, "knot": k, "t": t, "coalesce": key}), Some(key))
         }
         Hit::Anchor([s, k]) => ("path.deleteAnchor", serde_json::json!({"subpath": s, "knot": k}), None),
-        Hit::Handle(..) => return,
+        Hit::Handle(..) => return false,
     };
     // A hit right at a segment's end is an anchor (anchors win the hit test), so `t` is inside.
     if let (Some(o), Some(t)) = (params.as_object_mut(), r.params(app).as_object()) {
@@ -301,9 +297,11 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
     }
     // A live shape becomes a regular path: ask first (#12768).
     if id == "path.deleteAnchor" && crate::dialogs::live_shape_prompt::ask(app, r, &params) {
-        return;
+        return false;
     }
-    match app.run(id, params) {
+    let ran = app.run(id, params);
+    let ok = ran.is_ok();
+    match ran {
         Ok(v) if coalesce.is_some() => {
             let n = |f: &str| v["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
             let base = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
@@ -320,6 +318,7 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
             app.ui.status_error = true;
         }
     }
+    ok
 }
 
 /// The hover feedback over the Direct Selection overlay: Add highlights the segment under the
