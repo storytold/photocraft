@@ -370,3 +370,65 @@ fn an_actions_play_over_control_never_writes_during_or_after_a_stroke() {
     assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
     assert!(app.session.authorize.is_none());
 }
+
+/// Sets its flag when freed.
+struct Marked(Arc<AtomicBool>);
+
+impl Drop for Marked {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// A [`super::paint_thread::Spawn`] that never starts a thread.
+fn no_threads(_: &str, _: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    Err(std::io::Error::other("no threads here"))
+}
+
+/// A [`super::paint_thread::Spawn`] that starts the bin's own thread but no extra ones.
+fn bin_thread_only(name: &str, f: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    if name == "photocraft-drop" { std::thread::Builder::new().name(name.into()).spawn(f).map(|_| ()) } else { no_threads(name, f) }
+}
+
+/// The bin's own thread can't start (the web, or out of threads): every value is freed where it is
+/// handed over, at once, and none is left outstanding.
+#[test]
+fn a_drop_bin_without_its_thread_frees_in_place() {
+    let bin = super::paint_thread::DropBin::with_spawn(2, 2, no_threads);
+    let freed = Arc::new(AtomicBool::new(false));
+    bin.drop_elsewhere(Marked(freed.clone()));
+    assert!(freed.load(Ordering::Acquire), "freed before the call returned");
+    assert_eq!(bin.outstanding(), 0);
+}
+
+/// The bin runs but an extra thread can't start: a value past the queue is freed where it is
+/// handed over, and the counts stay right; the queued ones are freed by the bin as usual.
+#[test]
+fn a_drop_bin_whose_extra_thread_cant_start_frees_that_value_in_place() {
+    let bin = super::paint_thread::DropBin::with_spawn(1, 2, bin_thread_only);
+    let (go, freed) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+    // The bin takes the first and is busy freeing it; the second waits in its queue of one.
+    let started = Arc::new(AtomicBool::new(false));
+    struct Busy(Arc<AtomicBool>, SlowDrop);
+    impl Drop for Busy {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    bin.drop_elsewhere(Busy(started.clone(), SlowDrop(go.clone(), freed.clone())));
+    let start = Instant::now();
+    while !started.load(Ordering::Acquire) {
+        assert!(start.elapsed() < Duration::from_secs(10), "the bin takes the first");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    bin.drop_elsewhere(SlowDrop(go.clone(), freed.clone()));
+    let past = Arc::new(AtomicBool::new(false));
+    bin.drop_elsewhere(Marked(past.clone()));
+    assert!(past.load(Ordering::Acquire), "no extra thread: freed before the call returned");
+    assert_eq!(bin.outstanding(), 2, "the two the bin still holds");
+    go.store(true, Ordering::Release);
+    while freed.load(Ordering::Acquire) < 2 || bin.outstanding() > 0 {
+        assert!(start.elapsed() < Duration::from_secs(10), "the bin frees the other two");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}

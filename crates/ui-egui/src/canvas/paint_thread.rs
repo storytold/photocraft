@@ -298,6 +298,8 @@ pub(super) fn drop_elsewhere<T: Send + 'static>(x: T) {
 /// documents and threads piling up.
 pub(super) struct DropBin {
     tx: Option<Mutex<std::sync::mpsc::SyncSender<Box<dyn Send>>>>,
+    /// Starts a thread (tests make it fail).
+    spawn: Spawn,
     /// Values handed over and not yet freed.
     outstanding: Arc<std::sync::atomic::AtomicUsize>,
     /// Threads of their own freeing one now.
@@ -305,19 +307,35 @@ pub(super) struct DropBin {
     extra_max: usize,
 }
 
+/// Starts a thread named `name` running `f`; on failure `f` (and what it holds) is dropped.
+pub(super) type Spawn = fn(&str, Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// [`Spawn`] on an OS thread.
+fn os_thread(name: &str, f: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new().name(name.into()).spawn(f).map(|_| ())
+}
+
 impl DropBin {
     pub(super) fn new(depth: usize, extra_max: usize) -> Self {
+        Self::with_spawn(depth, extra_max, os_thread)
+    }
+
+    /// [`DropBin::new`] starting its threads with `spawn`.
+    pub(super) fn with_spawn(depth: usize, extra_max: usize, spawn: Spawn) -> Self {
         let outstanding = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (tx, rx) = std::sync::mpsc::sync_channel::<Box<dyn Send>>(depth);
         let freed = Arc::clone(&outstanding);
-        let started = std::thread::Builder::new().name("photocraft-drop".into()).spawn(move || {
-            for x in rx {
-                drop(x);
-                freed.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-            }
-        });
-        let tx = started.ok().map(|_| Mutex::new(tx));
-        Self { tx, outstanding, extra: Arc::new(std::sync::atomic::AtomicUsize::new(0)), extra_max }
+        let started = spawn(
+            "photocraft-drop",
+            Box::new(move || {
+                for x in rx {
+                    drop(x);
+                    freed.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                }
+            }),
+        );
+        let tx = started.ok().map(|()| Mutex::new(tx));
+        Self { tx, spawn, outstanding, extra: Arc::new(std::sync::atomic::AtomicUsize::new(0)), extra_max }
     }
 
     /// Values handed over and not yet freed.
@@ -336,11 +354,14 @@ impl DropBin {
         };
         if self.extra.fetch_add(1, AcqRel) < self.extra_max {
             let (extra, outstanding) = (Arc::clone(&self.extra), Arc::clone(&self.outstanding));
-            let spawned = std::thread::Builder::new().name("photocraft-drop-extra".into()).spawn(move || {
-                drop(full);
-                extra.fetch_sub(1, AcqRel);
-                outstanding.fetch_sub(1, AcqRel);
-            });
+            let spawned = (self.spawn)(
+                "photocraft-drop-extra",
+                Box::new(move || {
+                    drop(full);
+                    extra.fetch_sub(1, AcqRel);
+                    outstanding.fetch_sub(1, AcqRel);
+                }),
+            );
             if spawned.is_ok() {
                 return;
             }
