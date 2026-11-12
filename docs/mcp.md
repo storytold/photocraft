@@ -21,9 +21,11 @@ still refuses agents. Storytold/craft-ai-integrations#195 has the whole design.
    connect (MCP)**. Optionally choose the folders agents can open from and save to, and what
    happens when an agent needs PhotoCraft while it is closed (open it, work without a window,
    or ask the user to open it). Click **Apply** or **OK**.
-2. Click **Add to Claude Desktop**, **Add to Claude Code** or **Add to Cursor** (or **Copy
-   Configuration** for any other MCP client), then restart that client. The buttons show once
-   the box is ticked.
+2. Add PhotoCraft to the MCP client: with the ArtCraft Launcher, Settings › AI agents › **Add**
+   adds one entry for every Craft app (the `craft-ai-mcp` gateway, which starts
+   `photocraft-cli mcp --live`). Without it, click **Copy Configuration** and paste it into the
+   client's MCP settings, or run `photocraft-cli mcp install --client <client>` (below). Then
+   restart that client. The button shows once the box is ticked.
 
 The client then starts `photocraft-cli mcp --live`. The app listens on loopback (any free
 port by default) with a token it creates in its settings folder, and publishes both in

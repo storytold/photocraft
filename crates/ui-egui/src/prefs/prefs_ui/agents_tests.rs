@@ -85,10 +85,10 @@ fn the_launcher_switch_turns_the_agent_connection_on_without_the_box() {
     assert!(!app.agent_link.launcher && app.agent_link.port.is_none());
 }
 
-/// The buttons that set up an AI app only show once agents may connect, and a click reaches
-/// the service with the app's id and shows its answer.
+/// Copy Configuration only shows once agents may connect, and a click reaches the service. The
+/// per-client buttons are the ArtCraft Launcher's (one entry for every Craft app).
 #[test]
-fn ai_integrations_offer_the_client_buttons_only_when_agents_may_connect() {
+fn ai_integrations_offer_the_configuration_only_when_agents_may_connect() {
     use egui_kittest::{Harness, kittest::Queryable};
     let (mut app, _) = app_with_store();
     let clicked: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -104,26 +104,20 @@ fn ai_integrations_offer_the_client_buttons_only_when_agents_may_connect() {
         app
     });
     h.run_steps(4);
-    assert!(h.query_by_label("Add to Claude Desktop").is_none(), "off: nothing to set up yet");
-    assert!(h.query_by_label("Copy Configuration").is_none());
+    assert!(h.query_by_label("Copy Configuration").is_none(), "off: nothing to set up yet");
     h.get_by_label("Let AI agents connect (MCP)").click();
     h.run_steps(3);
-    for label in ["Add to Claude Desktop", "Add to Claude Code", "Add to Cursor", "Copy Configuration", "Copy Prompt for an Agent"] {
-        assert!(h.query_by_label(label).is_some(), "{label}");
+    for label in ["Add to Claude Desktop", "Add to Claude Code", "Add to Cursor", "Copy Prompt for an Agent"] {
+        assert!(h.query_by_label(label).is_none(), "{label} is the launcher's");
     }
-    h.get_by_label("Add to Cursor").click();
+    h.get_by_label("Copy Configuration").click();
     h.run_steps(3);
-    assert_eq!(*clicked.lock().unwrap(), ["cursor"]);
-    assert!(h.query_by_label("Added PhotoCraft to cursor.").is_some(), "the answer is shown");
-    // The prompt for an agent with a terminal goes to the clipboard, with a note saying so.
-    h.get_by_label("Copy Prompt for an Agent").click();
-    h.run_steps(3);
-    assert_eq!(*clicked.lock().unwrap(), ["cursor", "prompt"]);
-    assert!(h.query_by_label_contains("Prompt copied").is_some(), "the copy is confirmed");
-    // Unticked again: the buttons go.
+    assert_eq!(*clicked.lock().unwrap(), ["json"]);
+    assert!(h.query_by_label("Configuration copied.").is_some(), "the copy is confirmed");
+    // Unticked again: the button goes.
     h.get_by_label("Let AI agents connect (MCP)").click();
     h.run_steps(3);
-    assert!(h.query_by_label("Add to Cursor").is_none());
+    assert!(h.query_by_label("Copy Configuration").is_none());
 }
 
 /// Without the suite's AI-MCP feature flag the page shows only the settings it had before.
@@ -141,7 +135,7 @@ fn ai_integrations_without_the_mcp_flag_show_only_the_earlier_settings() {
     h.run_steps(4);
     assert!(h.query_by_label("Let AI agents connect (MCP)").is_none(), "the new connection switch waits for the flag");
     assert!(h.query_by_label("Folder agents can open from").is_none());
-    assert!(h.query_by_label("Add to Claude Desktop").is_none());
+    assert!(h.query_by_label("Copy Configuration").is_none());
     assert!(h.query_by_label("Allow agent control").is_some(), "the earlier setting stays");
 }
 

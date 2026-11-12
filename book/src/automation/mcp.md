@@ -6,7 +6,7 @@
 - **Bridge:** `BridgeClient` forwards tools to a desktop application started with `photocraft --control <port>`.
 - **Live:** `photocraft-cli mcp --live` finds the desktop application through the connection file it publishes while Edit › Preferences › AI Integrations › *Let AI agents connect* is on, before every tool call; while the app is closed it starts it, serves a headless session, or reports an error, as chosen there.
 
-The simplest setup needs no terminal: turn on *Let AI agents connect* in PhotoCraft, then click *Add to Claude Desktop* (or Claude Code, or Cursor) in the same panel. See [`docs/mcp.md`](../../../docs/mcp.md#connecting-the-desktop-app-no-terminal).
+The simplest setup needs no terminal: turn on ArtCraft Launcher › Settings › AI agents and click *Add* next to the AI app; that reaches every Craft app. Without the launcher, turn on *Let AI agents connect* in PhotoCraft and paste its *Copy Configuration* into the AI app. See [`docs/mcp.md`](../../../docs/mcp.md#connecting-the-desktop-app-no-terminal).
 
 For a source checkout, first [install the CLI on PATH and register the server](../../../docs/mcp.md#install-and-register).
 The installed binary survives `cargo clean`; a symlink into `target/release` does not.

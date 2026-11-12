@@ -1,6 +1,6 @@
 //! Preferences › AI Integrations: the agent connection (`integrations.connectAgents`), the folders
 //! agents may use, what `photocraft-cli mcp --live` does while the app is closed, and the buttons
-//! that add PhotoCraft to MCP clients. Changes apply at once, without a restart.
+//! that copies the configuration for an MCP client. Changes apply at once, without a restart.
 
 use super::dialogs::is_preferences;
 use super::fields::{choice_label, humanize};
@@ -110,30 +110,17 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
         obj.insert("whenAppClosed".into(), json!(cur));
         ui.end_row();
     });
-    // The buttons configure an AI app to connect, which only works once agents may: offer them
-    // with the box ticked (launch options manage the connection otherwise).
+    // Adding the Craft apps to an MCP client is the ArtCraft Launcher's job (Settings › AI agents,
+    // one entry for every app, storytold/craft-ai-integrations#195). Without the launcher, the
+    // configuration to paste is here, once agents may connect (launch options manage it otherwise).
     if on && !launch_flags && f.get("__agentClients").and_then(Value::as_bool) == Some(true) {
         ui.add_space(10.0);
         ui.label(RichText::new(tl!("Connect an AI app")).font(crate::theme::semibold(12.5)).color(t.text));
         ui.horizontal_wrapped(|ui| {
-            for (id, label) in [
-                ("claude-desktop", tl!("Add to Claude Desktop")),
-                ("claude-code", tl!("Add to Claude Code")),
-                ("cursor", tl!("Add to Cursor")),
-                ("json", tl!("Copy Configuration")),
-            ] {
-                if crate::widgets::secondary_button(ui, label, 120.0).clicked() {
-                    f.insert("__agentAction".into(), json!(id));
-                }
+            if crate::widgets::secondary_button(ui, tl!("Copy Configuration"), 120.0).clicked() {
+                f.insert("__agentAction".into(), json!("json"));
             }
-        });
-        // Agents with a terminal (Claude Code, Codex, Cursor's agent) can set themselves up.
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            if crate::widgets::secondary_button(ui, tl!("Copy Prompt for an Agent"), 120.0).clicked() {
-                f.insert("__agentAction".into(), json!("prompt"));
-            }
-            ui.label(RichText::new(tl!("Paste it into an agent with a terminal; it registers PhotoCraft by itself.")).color(t.text_faint));
+            ui.label(RichText::new(tl!("Or add every Craft app at once in ArtCraft Launcher › Settings › AI agents.")).color(t.text_faint));
         });
     }
     if let Some(result) = f.get("__agentResult").and_then(Value::as_object) {
@@ -172,10 +159,6 @@ pub(super) fn agent_action(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut
         Ok(text) if action == "json" => {
             ctx.copy_text(text);
             json!({"ok": true, "message": tl!("Configuration copied.")})
-        }
-        Ok(text) if action == "prompt" => {
-            ctx.copy_text(text);
-            json!({"ok": true, "message": tl!("Prompt copied. Paste it into Claude Code, Codex or another agent with a terminal.")})
         }
         Ok(message) => json!({"ok": true, "message": message}),
         Err(e) => json!({"ok": false, "message": e}),
