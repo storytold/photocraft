@@ -55,6 +55,9 @@ fn fill_mode(p: &Value) -> Result<FillMode> {
     }
 }
 
+/// The reference's alert for a Paint Bucket click in a Bitmap document (#12536).
+pub const BITMAP_REFUSAL: &str = "Could not use the paint bucket because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
 fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let fg = s.tools.foreground;
     let c = color(p.get("color"), fg);
@@ -63,6 +66,10 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = opacity(p, "paint.bucket")?;
     let mode = fill_mode(p)?;
     let all = b(p, "sampleAllLayers", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
+    // Before the region, the target and the document copy: a Bitmap click changes nothing.
+    if s.active().is_some_and(|d| d.doc.mode == photocraft_color::ColorMode::Bitmap) {
+        return Err(EngineError::Other(BITMAP_REFUSAL.into()));
+    }
     // Other visible layers can define the region, but the fill still writes only to the target.
     let region = if all {
         let (area, img) = crate::selection_cmds::sample_rgba8(s, true)?;
@@ -86,6 +93,16 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     // A foreground picked as CMYK fills a CMYK document with the picked inks (#4196).
     let inks = s.tools.picked_cmyk([c[0], c[1], c[2]]).filter(|_| c[3] >= 1.0 && pattern.is_none());
     let layer = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|st| st.active_layer) };
+    // A click off the canvas, or on a pixel the selection leaves out, fills nothing and adds no
+    // history state (#12535). A partly selected pixel still fills, clipped to the selection.
+    let fills_nothing =
+        s.active().is_some_and(|d| !d.doc.bounds().contains(x, y) || d.doc.selection.as_ref().is_some_and(|m| m.sample_channel(x, y, 0) <= 0.0));
+    if fills_nothing {
+        // The target's refusals (a locked layer, a missing mask) stay errors: it is resolved on a copy.
+        let mut probe = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
+        crate::channel_cmds::target_surface(&mut probe, layer, p)?;
+        return Ok(json!({ "filled": false }));
+    }
     let filled = s.edit("Paint Bucket", |doc, _| {
         let area = doc.bounds();
         let sel = doc.selection.clone();
@@ -199,3 +216,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bucket_no_op_history_tests;
+
+#[cfg(test)]
+mod bucket_bitmap_tests;
