@@ -1006,7 +1006,8 @@ fn child_bounds(app: &PhotocraftApp, name: &str) -> photocraft_geom::Rect {
     l.surface().unwrap().content_bounds()
 }
 
-fn drag(app: &mut PhotocraftApp, from: [f32; 2], to: [f32; 2]) {
+/// A plain Move drag from `from` to `to`, released there.
+fn move_drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     let m = egui::Modifiers::NONE;
     crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
     crate::canvas::tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, m);
@@ -1043,7 +1044,7 @@ fn a_dragged_group_snaps_to_other_layers() {
     let mut app = app_with_group();
     // 72 px down puts the group's bottom edge (130 -> 202) 2 px past the target's top (200); no
     // other edge or centre is within reach.
-    drag(&mut app, [60.0, 60.0], [80.0, 132.0]);
+    move_drag(&mut app, [60.0, 60.0], [80.0, 132.0]);
     let (m, s) = (child_bounds(&app, "mover"), child_bounds(&app, "second"));
     assert_eq!((m.x0, m.y0, s.y0), (60, 110, 170), "snapped 2 px up, the layers kept their spacing");
 }
@@ -1054,7 +1055,7 @@ fn a_dragged_group_does_not_snap_to_its_own_layers() {
     let mut app = app_with_group();
     // +46, +3: the group's left edge (86) is 4 px from where the mover's right edge was (90) and
     // its top (43) 3 px from where the mover's top was (40); nothing else is in reach.
-    drag(&mut app, [60.0, 60.0], [106.0, 63.0]);
+    move_drag(&mut app, [60.0, 60.0], [106.0, 63.0]);
     let b = child_bounds(&app, "mover");
     assert_eq!((b.x0, b.y0), (86, 43), "moved by the raw offset");
 }
