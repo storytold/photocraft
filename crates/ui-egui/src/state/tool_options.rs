@@ -251,6 +251,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Zoom tool › Zoom In / Zoom Out: which way a click steps (⌥ turns it around). Reset Tool
+    /// leaves it, as in Photoshop.
+    #[serde(default = "yes")]
+    pub zoom_in: bool,
     /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
     /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
     #[serde(default)]
@@ -506,11 +510,11 @@ impl Default for ToolOptions {
             shape_stroke_gradient: None,
             corner_radius: 0.0,
             polygon_sides: 5,
-            line_weight: 3.0,
+            line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,
-            arrow_width: 52.0,
-            arrow_length: 50.0,
+            arrow_width: 5.0,
+            arrow_length: 10.0,
             arrow_concavity: 0.0,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
@@ -557,6 +561,7 @@ impl Default for ToolOptions {
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            zoom_in: true,
             hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
