@@ -1725,6 +1725,7 @@ fn draft_capture_preview_flush_keeps_projection_and_recording_owner() {
     assert_eq!(after["action"]["dialogs"], json!([0]));
 }
 
+#[test]
 fn skipped_steps_count_against_the_script_limit() {
     let mut s = Session::new();
     s.actions.list.push(Action::new("A", (0..3).map(|_| ("select.all".to_string(), json!({}))).collect()));

@@ -279,8 +279,9 @@ pub fn playback_snapshot_target(s: &Session, action: &Action) -> PlaybackTarget 
     let mut rows = s.actions.list.iter().enumerate().filter(|(_, candidate)| *candidate == action).map(|(row, _)| row);
     if let Some(row) = rows.next()
         && rows.next().is_none()
+        && let Some(target) = playback_target(s, row)
     {
-        return playback_target(s, row).expect("the matching row exists");
+        return target;
     }
     PlaybackTarget { name: action.name.clone(), position: None, snapshot: Some((s.actions.playback_namespace, Box::new(action.clone()))) }
 }
