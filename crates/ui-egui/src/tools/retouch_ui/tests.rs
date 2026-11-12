@@ -225,15 +225,15 @@ fn paint_bucket_mode_reaches_the_fill() {
 
 #[test]
 fn clone_without_a_source_names_the_platform_modifier() {
-    // Option-click on the Mac, Alt-click elsewhere (#251).
-    for tool in [Tool::CloneStamp, Tool::Healing] {
-        let mut app = app();
-        app.ui.tool = tool;
-        assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
-        assert!(app.ui.status_error, "{tool:?}");
-        let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
-        assert!(app.ui.status.starts_with(want), "{tool:?}: {}", app.ui.status);
-    }
+    // Option-click on the Mac, Alt-click elsewhere (#251). The Clone Stamp says it in an alert
+    // (#12609, clone_stamp_no_source_alert_tests.rs).
+    let tool = Tool::Healing;
+    let mut app = app();
+    app.ui.tool = tool;
+    assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    assert!(app.ui.status_error);
+    let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
+    assert!(app.ui.status.starts_with(want), "{}", app.ui.status);
 }
 
 #[test]
@@ -824,6 +824,7 @@ fn waiting_remove_strokes_keep_their_own_brush() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
     app.ui.tool = Tool::Remove;
+    crate::paint_mouse::sync_tool_brush(&mut app);
     app.ui.tool_options.remove_after_each_stroke = false;
     let m = egui::Modifiers::NONE;
     let stroke = |app: &mut PhotocraftApp, x: f64| {
