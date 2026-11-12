@@ -145,7 +145,7 @@ pub fn healing_preview_periodic(
 
 /// The image beneath a clone overlay, always from the document being painted.
 pub fn clone_destination_preview(s: &Session, rect: Rect, wrap: bool) -> Result<photocraft_compose::Buffer> {
-    let map = crate::presets::clone_source::Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+    let map = crate::presets::clone_source::Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
     preview_periodic(s, rect, &map, "all", wrap, PreviewSource::Destination)
 }
 
@@ -190,7 +190,7 @@ fn preview_periodic(
             let cmd = if matches!(kind, PreviewSource::Healing) { "healing.preview" } else { "clone.preview" };
             let paint_cmd = if matches!(kind, PreviewSource::Healing) { "paint.healingBrush" } else { "paint.cloneStamp" };
             let params = crate::channel_cmds::inject_target(s, paint_cmd, json!({"sampleLayer": sample_layer}));
-            clone_sampling::resolve(s, &params, cmd)?
+            clone_sampling::resolve_preview(s, &params, map, cmd)?
         }
     };
     let region = clone_sample(&d.doc, Some(id), surf, which, &source, rect, map, wrap, "clone.preview")?;
@@ -419,7 +419,7 @@ impl LiveRetouch {
             _ => return Err(bad(&self.cmd, "only Clone Stamp and History Brush strokes commit their live pixels")),
         };
         if !source_unchanged || *self.brush != stroke.brush || id != self.id {
-            return Err(bad(&self.cmd, "the brush, layer or clone source changed during the stroke"));
+            return Err(bad(&self.cmd, "the brush, layer or clone source document changed during the stroke"));
         }
         let bounds = self.bounds();
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;

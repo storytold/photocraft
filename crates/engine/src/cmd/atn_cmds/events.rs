@@ -1207,6 +1207,15 @@ pub(super) const EVENTS: &[Event] = &[
         from: super::steps_batch::batch_from,
         to: super::steps_batch::batch_to,
     },
+    // File › Automate › Fit Image: the script event recorded after the Image Size it runs (#10723).
+    Event {
+        code: "",
+        name: super::steps_automate::FIT_IMAGE_EVENT,
+        label: "Fit Image",
+        ids: &[super::steps_automate::FIT_IMAGE],
+        from: super::steps_automate::fit_image_from,
+        to: super::steps_automate::fit_image_to,
+    },
     // Create Droplet (#10710): Photoshop has no string ID for it.
     Event {
         code: "CrtD",

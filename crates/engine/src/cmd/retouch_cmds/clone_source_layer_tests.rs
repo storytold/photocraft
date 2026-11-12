@@ -44,7 +44,7 @@ fn clone_current_layer_keeps_the_picked_source_for_preview_live_commit_and_undo(
             for wrap in [false, true] {
                 let (mut s, source, target) = setup(depth, mode);
                 let want = pixel(&s, source, 16, 16);
-                let map = Mapping { source: (16.0, 16.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0] };
+                let map = Mapping { source: (16.0, 16.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
                 let preview = clone_preview_periodic(&s, Rect::new(48, 48, 49, 49), &map, "current", wrap).unwrap();
                 assert_eq!(preview.px[0], want);
                 let p = params(wrap);
@@ -142,7 +142,7 @@ fn clone_repicking_on_the_original_layer_updates_both_layers() {
         s.execute("paint.cloneStamp", p.clone()).unwrap();
         assert_eq!(pixel(&s, source, 48, 48), replacement, "same-layer painting uses the new source");
         s.execute("layer.select", json!({"layer": target.0})).unwrap();
-        let map = Mapping { source: (8.0, 8.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let map = Mapping { source: (8.0, 8.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
         assert_eq!(clone_preview(&s, Rect::new(48, 48, 49, 49), &map, "current").unwrap().px[0], replacement);
         s.execute("paint.cloneStamp", p).unwrap();
         assert_eq!(pixel(&s, target, 48, 48), replacement, "returning to the other layer uses the new source too");
@@ -163,7 +163,7 @@ fn clone_sources_work_between_documents_with_preview_live_commit_and_undo() {
                 let target = s.active().unwrap().active_layer.unwrap();
                 let mut p = params(wrap);
                 p["sampleLayer"] = json!(which);
-                let map = Mapping { source: (16.0, 16.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0] };
+                let map = Mapping { source: (16.0, 16.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
                 let preview = clone_preview_periodic(&s, Rect::new(48, 48, 49, 49), &map, which, wrap).unwrap();
                 for (got, expected) in preview.px[0].iter().zip(want) {
                     assert!((got - expected).abs() < 0.01, "{depth}/{which}/{wrap}");
@@ -433,7 +433,7 @@ fn clone_source_edges_clip_preview_live_and_committed_stamps() {
                         s.execute("layer.select", json!({"layer": target.0})).unwrap();
                     }
                     let (dx, dy) = (if sx == 0 { 1 } else { -1 }, if sy == 0 { 1 } else { -1 });
-                    let map = Mapping { source: (sx as f64, sy as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0] };
+                    let map = Mapping { source: (sx as f64, sy as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
                     let preview = clone_preview(&s, Rect::new(30, 30, 35, 35), &map, which).unwrap();
                     let checks = [(32, 32 + dy, 1.0), (32 + dx, 32, 1.0), (32 - dx, 32 + dy, 0.0), (32 + dx, 32 - dy, 0.0)];
                     for (x, y, alpha) in checks {
@@ -491,7 +491,7 @@ fn clone_pattern_preview_wraps_at_the_source_document_edges() {
     s.execute("file.new", json!({"width": 80, "height": 80, "depth": 16})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     let target = s.active().unwrap().active_layer.unwrap();
-    let map = Mapping { source: (63.0, 16.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0] };
+    let map = Mapping { source: (63.0, 16.0), anchor: (48.0, 48.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
     let preview = clone_preview_periodic(&s, Rect::new(50, 48, 51, 49), &map, "current", true).unwrap();
     assert_eq!(preview.px[0], want);
     s.execute("paint.cloneStamp", json!({"points": [[48,48]], "size": 12, "hardness": 100, "wrap": true})).unwrap();
@@ -763,7 +763,7 @@ fn clone_no_alpha_sources_clip_preview_live_and_commit_at_all_canvas_corners() {
                             let (mut reference, expected) = no_alpha_scene(depth, mode, true, true, external, at, color);
                             let initial = actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap().clone();
                             let fmt = initial.format();
-                            let map = Mapping { source: (at[0] as f64, at[1] as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0] };
+                            let map = Mapping { source: (at[0] as f64, at[1] as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
                             let roi = Rect::new(24, 24, 40, 40);
                             let shown = clone_preview_periodic(&actual, roi, &map, "current", wrap).unwrap();
                             let wanted = clone_preview_periodic(&reference, roi, &map, "current", wrap).unwrap();
@@ -816,9 +816,10 @@ fn clone_no_alpha_sources_match_alpha_sources_with_transforms_and_composites() {
                     let p =
                         json!({"points": [[32,32]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "sampleLayer": which, "mode": blend, "wrap": wrap});
                     let (map, _) = crate::presets::clone_source::resolve(&actual, &p, (32.0, 32.0), "paint.cloneStamp").unwrap();
+                    let (reference_map, _) = crate::presets::clone_source::resolve(&reference, &p, (32.0, 32.0), "paint.cloneStamp").unwrap();
                     let roi = Rect::new(24, 24, 40, 40);
                     let preview = clone_preview_periodic(&actual, roi, &map, which, wrap).unwrap();
-                    let wanted = clone_preview_periodic(&reference, roi, &map, which, wrap).unwrap();
+                    let wanted = clone_preview_periodic(&reference, roi, &reference_map, which, wrap).unwrap();
                     for (a, e) in preview.px.iter().zip(&wanted.px) {
                         assert_eq!(a, e, "{mode}/{which}/{blend}/{wrap}");
                     }
@@ -875,7 +876,7 @@ fn clone_cross_document_hover_rejects_targeted_masks_and_channels_like_strokes()
         } else {
             s.execute("channel.new", json!({"fill": "white"})).unwrap();
         }
-        let map = Mapping { source: (16.0, 16.0), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let map = Mapping { source: (16.0, 16.0), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
         let rect = Rect::new(30, 30, 34, 34);
         assert!(s.execute("paint.cloneStamp", json!({"points": [[32,32]], "size": 8})).is_err());
         assert!(clone_preview(&s, rect, &map, "current").is_err(), "a refused cross-document target cannot have a source overlay");

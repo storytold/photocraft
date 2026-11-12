@@ -7,8 +7,11 @@
 //! anchor (where the stroke started after the source was set) onto the source around the
 //! sample point: a 200 % width paints the source twice as wide, a 30° rotation paints it turned
 //! 30° counter-clockwise on screen (Photoshop's sense).
+//!
+//! A slot remembers the document its source was set in, so ⌥-clicking in one open document and
+//! painting in another clones across them, as in Photoshop.
 
-use photocraft_doc::DocId;
+use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::Rect;
 use photocraft_paint::retouch::Region;
 use serde::{Deserialize, Serialize};
@@ -19,6 +22,9 @@ use crate::commands::CommandSpec;
 use crate::{Result, Session};
 
 pub const SLOTS: usize = 5;
+
+/// A stroke from a slot whose source document was closed.
+pub(crate) const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CloneSource {
@@ -35,6 +41,10 @@ pub struct CloneSource {
     /// Identity of the document picked with the source; absent in older saved slots.
     #[serde(default)]
     pub document: Option<DocId>,
+    /// `document` was closed. Kept apart from the ID, because a document opened later can carry
+    /// the same one (a native copy keeps its original's), and it must not become the source.
+    #[serde(default)]
+    pub document_closed: bool,
     /// W and H in percent.
     pub scale: [f64; 2],
     /// Degrees, counter-clockwise.
@@ -55,6 +65,7 @@ impl Default for CloneSource {
             last_anchor: None,
             layer: None,
             document: None,
+            document_closed: false,
             scale: [100.0, 100.0],
             rotation: 0.0,
             flip_h: false,
@@ -77,9 +88,22 @@ impl CloneSource {
         let anchor = self.last_anchor.or(self.anchor)?;
         Some([self.source?[0] - anchor[0], self.source?[1] - anchor[1]])
     }
-    fn to_json(&self, i: usize) -> Value {
+    /// The other document a stroke in document `painting` samples: `None` when the source was
+    /// set in `painting` itself (or before slots remembered their document).
+    pub fn source_doc(&self, painting: Option<DocId>) -> Option<SourceDoc> {
+        let id = self.document.filter(|d| Some(*d) != painting)?;
+        Some(SourceDoc { id, layer: self.layer.map(LayerId) })
+    }
+    /// The source document's ID while it is still open: `None` once it was closed, even when a
+    /// document with the same ID was opened since.
+    pub fn open_document(&self) -> Option<DocId> {
+        self.document.filter(|_| !self.document_closed)
+    }
+    /// `document` is the source document's index among the open documents (`null` when it was
+    /// closed or never recorded).
+    fn to_json(&self, i: usize, document: Option<usize>) -> Value {
         json!({
-            "index": i, "source": self.source, "anchor": self.anchor, "lastAnchor": self.last_anchor, "offset": self.offset(), "layer": self.layer, "documentId": self.document,
+            "index": i, "source": self.source, "anchor": self.anchor, "lastAnchor": self.last_anchor, "offset": self.offset(), "layer": self.layer, "document": document, "documentId": self.document,
             "width": self.scale[0], "height": self.scale[1], "linked": self.linked, "rotation": self.rotation, "flipH": self.flip_h, "flipV": self.flip_v,
         })
     }
@@ -115,18 +139,34 @@ impl CloneSources {
     pub fn active(&self) -> &CloneSource {
         &self.slots[self.active.min(SLOTS - 1)]
     }
+    /// Document `id` is closing: the slots set in it keep their point, but no longer read it or
+    /// a document opened later with the same ID ([`Session::close`]).
+    pub fn forget_doc(&mut self, id: DocId) {
+        for slot in self.slots.iter_mut().filter(|s| s.document == Some(id)) {
+            slot.document_closed = true;
+        }
+    }
     pub fn active_mut(&mut self) -> &mut CloneSource {
         &mut self.slots[self.active.min(SLOTS - 1)]
     }
 }
 
+/// Another open document a clone source was set in, and the layer it was set on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceDoc {
+    pub id: DocId,
+    pub layer: Option<LayerId>,
+}
+
 /// How a clone stroke samples: destination `d` reads the source at
-/// `source + m · (d − anchor)` (`m` row-major 2 × 2).
+/// `source + m · (d − anchor)` (`m` row-major 2 × 2), in `document` when the source is in
+/// another open document (`None`: the document being painted).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mapping {
     pub source: (f64, f64),
     pub anchor: (f64, f64),
     pub m: [f64; 4],
+    pub document: Option<SourceDoc>,
 }
 
 impl Mapping {
@@ -223,10 +263,10 @@ pub fn resolve(s: &Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<(
     };
     if let Some([dx, dy]) = offset {
         let a = anchor_param.unwrap_or(first);
-        return Ok((Mapping { source: (a.0 + dx, a.1 + dy), anchor: a, m }, None));
+        return Ok((Mapping { source: (a.0 + dx, a.1 + dy), anchor: a, m, document: None }, None));
     }
     if let Some([sx, sy]) = source {
-        return Ok((Mapping { source: (sx, sy), anchor: anchor_param.unwrap_or(first), m }, None));
+        return Ok((Mapping { source: (sx, sy), anchor: anchor_param.unwrap_or(first), m, document: None }, None));
     }
     let Some(src) = slot.source else { return Err(bad(cmd, "missing `source` ([x,y]) or `offset` ([dx,dy]); or set one with cloneSource.set")) };
     let src = (src[0], src[1]);
@@ -234,7 +274,11 @@ pub fn resolve(s: &Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<(
         (true, Some(a)) => (a[0], a[1]),
         _ => first,
     };
-    Ok((Mapping { source: src, anchor, m }, aligned.then_some([anchor.0, anchor.1])))
+    if slot.document_closed {
+        return Err(bad(cmd, SOURCE_CLOSED));
+    }
+    let document = slot.source_doc(s.active().map(|d| d.doc.id));
+    Ok((Mapping { source: src, anchor, m, document }, aligned.then_some([anchor.0, anchor.1])))
 }
 
 /// The Clone Source overlay's blend mode applied to one pixel: the source `src` over the image
@@ -350,9 +394,8 @@ fn valid_point(point: [f64; 2]) -> bool {
 /// Describe a slot with both its stable document identity and its current open-tab index.
 fn slot_json(s: &Session, i: usize) -> Value {
     let slot = &s.presets.clone.slots[i.min(SLOTS - 1)];
-    let mut result = slot.to_json(i);
-    result["document"] = json!(slot.document.and_then(|id| s.documents().iter().position(|st| st.doc.id == id)));
-    result
+    let document = slot.open_document().and_then(|id| s.documents().iter().position(|st| st.doc.id == id));
+    slot.to_json(i, document)
 }
 
 /// Report all slot geometry and stable identities with their current open-document indexes.
@@ -402,6 +445,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         slot.last_anchor = None;
         slot.layer = p.get("layer").and_then(Value::as_u64).or(active_layer);
         slot.document = document;
+        slot.document_closed = false;
     }
     if let Some([dx, dy]) = offset {
         // Edit the pairing shown in the panel, including an unaligned stroke or a live preview.
@@ -559,11 +603,11 @@ mod tests {
         // Issue repro: a 3e9 source with a rotation makes the mapping a resample,
         // so source_rect sees mapped coordinates far outside i32. Must clamp, not
         // overflow (debug panic) or wrap (release, inverted rect).
-        let m = Mapping { source: (3_000_000_000.0, 0.0), anchor: (10.0, 10.0), m: transform_matrix([100.0, 100.0], 45.0, false, false) };
+        let m = Mapping { source: (3_000_000_000.0, 0.0), anchor: (10.0, 10.0), m: transform_matrix([100.0, 100.0], 45.0, false, false), document: None };
         let r = m.source_rect(Rect::new(0, 0, 24, 16));
         assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "rect must stay ordered: {r:?}");
         // A negative source must clamp the same way.
-        let m = Mapping { source: (-3_000_000_000.0, 0.0), anchor: (10.0, 10.0), m: transform_matrix([100.0, 100.0], 45.0, false, false) };
+        let m = Mapping { source: (-3_000_000_000.0, 0.0), anchor: (10.0, 10.0), m: transform_matrix([100.0, 100.0], 45.0, false, false), document: None };
         let r = m.source_rect(Rect::new(0, 0, 24, 16));
         assert!(r.x0 <= r.x1 && r.y0 <= r.y1, "rect must stay ordered: {r:?}");
     }
@@ -593,7 +637,7 @@ mod tests {
 
     #[test]
     fn source_rect_normal_case_unchanged() {
-        let m = Mapping { source: (200.0, 0.0), anchor: (10.0, 10.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let m = Mapping { source: (200.0, 0.0), anchor: (10.0, 10.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
         assert_eq!(m.source_rect(Rect::new(0, 0, 24, 16)), Rect::new(188, -12, 216, 8));
     }
 
@@ -604,13 +648,13 @@ mod tests {
             px.copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
         }
         for at in [(3.0e9, 0.0), (0.0, 3.0e9), (-3.0e9, 0.0), (f64::MAX, f64::MAX), (f64::INFINITY, 0.0), (f64::NAN, 0.0)] {
-            let map = Mapping { source: at, anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+            let map = Mapping { source: at, anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
             assert_eq!(resample(&source, Rect::new(0, 0, 1, 1), &map, Some(3)).data, vec![0.0; 4]);
         }
         // The unrepresentable left neighbour is transparent, while the neighbour at MIN
         // remains valid. Do not saturate both neighbours onto the same edge pixel.
         source.rect = Rect::new(i32::MIN, 0, i32::MIN + 2, 2);
-        let map = Mapping { source: (f64::from(i32::MIN) - 0.25, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let map = Mapping { source: (f64::from(i32::MIN) - 0.25, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
         assert_eq!(resample(&source, Rect::new(0, 0, 1, 1), &map, Some(3)).data, vec![1.0, 0.0, 0.0, 0.75]);
     }
 }

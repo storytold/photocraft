@@ -274,6 +274,7 @@ pub(super) fn sample(pre: &Document, id: Option<LayerId>, surf: &Surface, which:
     sample_with(pre.bounds(), surf.channels(), rect, cmd, |r| Ok(super::sample(pre, id, surf, which, r)))
 }
 
+/// Repeat `read` using the source document's bounds, even when the target is a different size.
 pub(super) fn sample_with(tile: Rect, n: usize, rect: Rect, cmd: &str, mut read: impl FnMut(Rect) -> Result<Region>) -> Result<Region> {
     if tile.is_empty() {
         return Err(bad(cmd, "cannot repeat an empty document"));

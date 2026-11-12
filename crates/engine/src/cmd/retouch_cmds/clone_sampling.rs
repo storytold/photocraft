@@ -176,21 +176,33 @@ fn convert_region(mut region: Region, from: PixelFormat, to: PixelFormat, transf
 
 /// Resolve a picked slot or explicit local coordinates without anchoring or modifying a document.
 pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
+    resolve_source(s, p, cmd, None)
+}
+
+/// A preview mapping can explicitly name an open source independently of the selected slot.
+pub(super) fn resolve_preview(s: &Session, p: &Value, map: &crate::presets::clone_source::Mapping, cmd: &str) -> Result<CloneFrom> {
+    resolve_source(s, p, cmd, map.document)
+}
+
+fn resolve_source(s: &Session, p: &Value, cmd: &str, source: Option<crate::presets::clone_source::SourceDoc>) -> Result<CloneFrom> {
+    let slot = s.presets.clone.active();
+    let picked = uses_slot(p);
+    if picked && slot.document_closed && source.is_none_or(|d| Some(d.id) == slot.document) {
+        return Err(bad(cmd, crate::presets::clone_source::SOURCE_CLOSED));
+    }
+    let picked_document = source.map(|d| d.id).or(slot.document);
     if !targets_pixels(p) {
         // A local mask/channel has no corresponding surface in another document. Refuse this
         // unsupported target instead of quietly cloning the destination's own mask/channel.
-        let picked = uses_slot(p);
-        if picked && s.presets.clone.active().document.is_some_and(|id| s.active().is_none_or(|st| st.doc.id != id)) {
+        if picked && picked_document.is_some_and(|id| s.active().is_none_or(|st| st.doc.id != id)) {
             return Err(bad(cmd, "cross-document cloning requires a pixel-layer destination"));
         }
         return Ok(CloneFrom::default());
     }
     let which = sample_layers(p, cmd)?;
     let active = s.active().ok_or(EngineError::NoDocument)?;
-    let slot = s.presets.clone.active();
     // Explicit coordinates are in the destination document. A picked slot carries its document.
-    let picked = uses_slot(p);
-    let doc_id = picked.then_some(slot.document).flatten().unwrap_or(active.doc.id);
+    let doc_id = picked.then_some(picked_document).flatten().unwrap_or(active.doc.id);
     let st = s.documents().iter().find(|st| st.doc.id == doc_id).ok_or_else(|| bad(cmd, "the clone source document was closed; pick a new source"))?;
     let external = st.doc.id != active.doc.id;
     // Adobe documents matching document modes for Clone Stamp; Healing Brush additionally
@@ -203,7 +215,7 @@ pub(super) fn resolve(s: &Session, p: &Value, cmd: &str) -> Result<CloneFrom> {
     if which == SampleLayers::Current || (external && which == SampleLayers::CurrentAndBelow) {
         let id = match p.get("sourceLayer") {
             Some(value) => Some(LayerId(value.as_u64().ok_or_else(|| bad(cmd, "sourceLayer must be a layer id"))?)),
-            None if picked => slot.layer.map(LayerId),
+            None if picked => source.map_or(slot.layer.map(LayerId), |d| d.layer),
             None => None,
         }
         .or(if external { st.active_layer } else { None });

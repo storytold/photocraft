@@ -1212,3 +1212,16 @@ fn history_brush_options_bar_shows_source_name() {
     h.run_steps(4);
     h.get_by_label("The History Brush source was deleted: set a new source in the History panel");
 }
+
+/// An empty Clone Source slot refuses to paint, as with no source at all: the ⌥-click point left
+/// in `ui.clone_source` carries no document, so it must not be read from another document.
+#[test]
+fn an_empty_clone_source_slot_refuses_to_paint() {
+    let mut app = app();
+    app.ui.tool = Tool::CloneStamp;
+    crate::retouch_ui::set_source(&mut app, 10.0, 10.0);
+    assert!(crate::retouch_ui::clone_params(&app).is_some());
+    app.run("cloneSource.select", json!({"index": 1})).unwrap();
+    assert!(app.ui.clone_source.is_some(), "the old ⌥-click point is still remembered");
+    assert!(crate::retouch_ui::clone_params(&app).is_none());
+}
