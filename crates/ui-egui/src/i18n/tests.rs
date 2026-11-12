@@ -445,7 +445,6 @@ fn bundled_catalogs_are_consistent() {
     }
 }
 
-
 #[test]
 fn lithuanian_plural_rule_handles_compound_counts() {
     let lt = Lang::from_code("lt").expect("lt registered");
