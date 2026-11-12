@@ -77,23 +77,25 @@ pub struct FrameStages {
 }
 
 impl FrameStages {
-    /// The raw input hook: the frame starts at `now` with `moves` pointer moves.
-    pub fn start(&mut self, now: f64, moves: usize) {
+    /// The raw input hook: the frame starts at `now`.
+    pub fn start(&mut self, now: f64) {
         self.t = now;
-        self.moves = moves;
         self.started = true;
     }
 
-    /// The UI build starts at `now`; `cpu_prev` is eframe's CPU time for the previous frame, in s.
-    /// A later egui pass of the same frame keeps the first pass's input time.
-    pub fn ui_start(&mut self, now: f64, cpu_prev: Option<f32>) {
+    /// The UI build starts at `now` with `moves` pointer moves (counted here, not in the raw input
+    /// hook: egui's plugins, such as the Wayland pen reader, add theirs in between); `cpu_prev` is
+    /// eframe's CPU time for the previous frame, in s. A later egui pass of the same frame keeps the
+    /// first pass's input time and moves.
+    pub fn ui_start(&mut self, now: f64, cpu_prev: Option<f32>, moves: usize) {
         if self.ui_started {
             return;
         }
         self.ui_started = true;
         if !self.started {
-            self.start(now, 0);
+            self.start(now);
         }
+        self.moves = moves;
         self.input_ms = (now - self.t - self.command_ms).max(0.0);
         self.cpu_prev_ms = cpu_prev.map(|s| f64::from(s) * 1000.0);
     }
@@ -226,8 +228,8 @@ mod tests {
 
     fn frame(t: f64, ms: f64) -> FrameStages {
         let mut s = FrameStages::default();
-        s.start(t, 0);
-        s.ui_start(t + 1.0, None);
+        s.start(t);
+        s.ui_start(t + 1.0, None, 0);
         s.refresh("full", 100, ms / 2.0, 1.0);
         s
     }
@@ -260,14 +262,15 @@ mod tests {
         assert_eq!(r.frames().count(), 0, "exactly 50 ms isn't over");
     }
 
+    /// The recorded stages never add up to more than the frame took.
     #[test]
     fn stages_never_exceed_the_frame() {
         let mut r = SlowFrames::default();
         // A command run between frames (before the hook) makes the stages longer than the clock.
         let mut s = FrameStages::default();
         s.command("layer.setProps", 80.0);
-        s.start(1000.0, 2);
-        s.ui_start(1005.0, Some(0.004));
+        s.start(1000.0);
+        s.ui_start(1005.0, Some(0.004), 2);
         s.damage_ms = 2.0;
         s.refresh("gpu-full", 12, 30.0, 10.0);
         s.ui_ms = 40.0;
@@ -313,11 +316,11 @@ mod app_tests {
     /// the last asks egui for another, as a sizing pass does. `stroke`: each pass renders stroke
     /// points for 1 ms.
     fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, passes: usize, pass_ms: u64, stroke: bool) {
-        app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
+        app.perf.stage.start(crate::gpu_canvas::now_ms());
         ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
             let t0 = crate::gpu_canvas::now_ms();
-            app.perf.stage.ui_start(t0, None);
+            app.perf.stage.ui_start(t0, None, 1);
             std::thread::sleep(std::time::Duration::from_millis(pass_ms));
             if stroke {
                 app.perf.stage.stroke_ms += 1.0;
@@ -363,10 +366,10 @@ mod app_tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
         let ctx = egui::Context::default();
-        app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
+        app.perf.stage.start(crate::gpu_canvas::now_ms());
         ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
-            app.perf.stage.ui_start(crate::gpu_canvas::now_ms(), None);
+            app.perf.stage.ui_start(crate::gpu_canvas::now_ms(), None, 1);
             if ctx.current_pass_index() == 0 {
                 // The first pass's live stroke (its `finish_frame` saw `live_stroke`), which the
                 // last pass cancels before rendering any stroke points.
