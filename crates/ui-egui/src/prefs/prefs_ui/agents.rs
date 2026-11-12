@@ -43,7 +43,10 @@ pub(super) fn sync_agent_link(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Actions automation records keep the policy as their gate when the user plays them, as they
     // do with `--control` (`PhotocraftApp::new`); the gate stays once agents have connected.
     app.session.automation_gate = app.session.automation_gate.or(app.services.automation_authorize);
+    // The service reports the connection; the feature flag is the app's, set once at launch.
+    let mcp_flag = app.agent_link.mcp_flag;
     app.agent_link = update.status;
+    app.agent_link.mcp_flag = mcp_flag;
     app.agent_link.launcher = launcher;
 }
 

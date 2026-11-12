@@ -85,6 +85,21 @@ fn the_launcher_switch_turns_the_agent_connection_on_without_the_box() {
     assert!(!app.agent_link.launcher && app.agent_link.port.is_none());
 }
 
+/// The connection's updates keep the AI-MCP flag the app was started with: losing it would put the
+/// page back to the settings it had before the flag after the first frame.
+#[test]
+fn connection_updates_keep_the_mcp_flag() {
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    app.services.agent_link = Some(Box::new(|_: &prefs::Integrations, _: &egui::Context| crate::AgentLink::default()));
+    app.agent_link.mcp_flag = true;
+    tick(&mut app, &ctx);
+    assert!(app.agent_link.mcp_flag, "first frame");
+    app.run("prefs.set", json!({"values": {"integrations.connectAgents": true}})).unwrap();
+    tick(&mut app, &ctx);
+    assert!(app.agent_link.mcp_flag, "after a change");
+}
+
 /// Copy Configuration only shows once agents may connect, and a click reaches the service. The
 /// per-client buttons are the ArtCraft Launcher's (one entry for every Craft app).
 #[test]
