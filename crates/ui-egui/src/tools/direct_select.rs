@@ -86,6 +86,10 @@ pub struct DirectSelection {
     pub(crate) owner: Option<Owner>,
     #[serde(skip)]
     pub(crate) cancelled_drag: bool,
+    /// The saved path whose anchors the first Escape hid (#13072): the next Escape deactivates it,
+    /// and targeting another path starts at the first Escape again.
+    #[serde(skip)]
+    pub(crate) escape_hidden: Option<usize>,
     /// Path Selection only: the target path's [`crate::path_components::SelectionSignature`] when
     /// the selection was made — a structural identity that survives history revisions (a click
     /// activates the layer, colours change, components move), so the component selection lives
