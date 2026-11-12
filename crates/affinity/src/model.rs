@@ -663,6 +663,11 @@ impl Reader<'_, '_, '_> {
         self.text_work <= MAX_TEXT_WORK
     }
 
+    /// Text work units left before [`MAX_TEXT_WORK`] is spent.
+    pub(crate) fn text_left(&self) -> usize {
+        MAX_TEXT_WORK.saturating_sub(self.text_work)
+    }
+
     /// Counts retained page rectangles against [`MAX_PAGES`].
     fn charge_pages(&mut self, n: usize) -> Result<(), Error> {
         self.pages = self.pages.saturating_add(n);

@@ -212,8 +212,17 @@ fn slice_widths(tag: &[u32]) -> Option<Vec<usize>> {
 /// left, [6] top, [7] right, [8] bottom border, inclusive); `full` when absent or empty.
 fn image_area(t: &Tiff, mn: Option<&Ifd>, full: Rect) -> Rect {
     let info = mn.map(|m| t.tag_uints(m, CANON_SENSOR_INFO)).unwrap_or_default();
+    sensor_area(&info, full)
+}
+
+/// [`image_area`] from the SensorInfo values.
+fn sensor_area(info: &[u32], full: Rect) -> Rect {
     let active = match info.get(5..9) {
-        Some(&[l, tp, r, b]) if r > l && b > tp => Rect::new(l as usize, tp as usize, (r - l + 1) as usize, (b - tp + 1) as usize).intersect(&full),
+        // Inclusive borders: a damaged note can put them a full u32 range apart.
+        Some(&[l, tp, r, b]) if r > l && b > tp => match ((r - l).checked_add(1), (b - tp).checked_add(1)) {
+            (Some(w), Some(h)) => Rect::new(l as usize, tp as usize, w as usize, h as usize).intersect(&full),
+            _ => full,
+        },
         _ => full,
     };
     if active.is_empty() { full } else { active }
@@ -397,6 +406,19 @@ pub(crate) fn realign_black(b: BlackLevels, active: Rect) -> BlackLevels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sensor_area_never_overflows_on_damaged_borders() {
+        let full = Rect::new(0, 0, 6000, 4000);
+        // Inclusive borders at the ends of the u32 range: the width and height do not fit in a u32.
+        assert_eq!(sensor_area(&[0, 0, 0, 0, 0, 0, 0, u32::MAX, u32::MAX], full), full);
+        assert_eq!(sensor_area(&[0, 0, 0, 0, 0, 1, 1, u32::MAX, u32::MAX], full), Rect::new(1, 1, 5999, 3999));
+        assert_eq!(sensor_area(&[0, 6000, 4000, 0, 0, 10, 20, 109, 219], full), Rect::new(10, 20, 100, 200));
+        // Absent, empty or inverted borders keep the full frame.
+        for info in [&[][..], &[0; 9], &[0, 0, 0, 0, 0, 10, 10, 5, 5]] {
+            assert_eq!(sensor_area(info, full), full, "{info:?}");
+        }
+    }
 
     #[test]
     fn red_row_measurement_never_panics_on_odd_geometry() {

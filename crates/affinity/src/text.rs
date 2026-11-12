@@ -46,7 +46,7 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
             }
         }
         // `block_chars` scans the `Utf8` string, or walks each segment's `Glys` slots (nulls included) and `Utf8` text, and stops at the character limit: charge only that scan, first.
-        let slots = scan_cost(s, glyphs, room(total));
+        let slots = scan_cost(s, glyphs, room(total), r.text_left());
         if !r.charge_text(slots) {
             r.warn("text beyond the document text budget (truncated)");
             break;
@@ -89,7 +89,8 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
         _ => bounds.x0,
     };
     if !artistic {
-        if s.objs(frame, b"ColW").len() > 1 || s.array_len(frame, b"ColW").is_some_and(|n| n > 1) {
+        // The raw slot count, not a walk of the slots: a shared frame is read for every occurrence.
+        if s.array_len(frame, b"ColW").is_some_and(|n| n > 1) {
             r.warn("text frames with several columns (imported as one column)");
         }
         if s.class(id) == Some(crate::stream::Tag::of(b"TxtC")) {
@@ -111,8 +112,11 @@ fn prefix(t: &str, want: usize) -> (usize, usize) {
 
 /// What `block_chars` scans for a block, in the units `charge_text` takes: the `Utf8` bytes it
 /// reads, or per segment its `Glys` slots (nulls included) and the `Utf8` bytes it reads, up to the
-/// character allowance `room`; text past it is never scanned, so it is not charged.
-fn scan_cost(s: &Stream, glyphs: ObjId, room: usize) -> usize {
+/// character allowance `room`; text past it is never scanned, so it is not charged. Segments are
+/// shared and repeated by reference, so a segment's slots are counted before they are walked, and
+/// once the count passes `budget` (the text work left) it is returned without walking further: the
+/// charge fails as it would after the whole walk.
+fn scan_cost(s: &Stream, glyphs: ObjId, room: usize, budget: usize) -> usize {
     if let Some(t) = s.str(glyphs, b"Utf8") {
         return prefix(t, room).0;
     }
@@ -121,9 +125,12 @@ fn scan_cost(s: &Stream, glyphs: ObjId, room: usize) -> usize {
         if len >= room {
             break;
         }
+        cost = cost.saturating_add(s.array_len(seg, b"Glys").unwrap_or(0));
+        if cost > budget {
+            return cost;
+        }
         let inline = s.objs(seg, b"Glys").len();
         len += inline.min(room - len);
-        cost = cost.saturating_add(s.array_len(seg, b"Glys").unwrap_or(0));
         let (bytes, chars) = prefix(s.str(seg, b"Utf8").unwrap_or_default(), room.saturating_sub(len));
         len += chars;
         cost = cost.saturating_add(bytes);
@@ -203,12 +210,12 @@ fn run_attrs(r: &mut Reader, attrs: ObjId, text: String, world: Affine) -> TextR
     let size = slot(doubles, 0, float).filter(|v| *v > 0.0 && *v < 1e6).unwrap_or(12.0 * r.dpi / 72.0);
     let tracking = slot(doubles, 4, float).unwrap_or(0.0);
     let leading = (slot(ints, 4, int) == Some(1)).then(|| slot(doubles, 13, float)).flatten().filter(|v| *v > 0.0);
-    let objects = match s.field(attrs, b"Objs") {
-        Some(Value::Array(a)) => a.iter().map(|v| if let Value::Obj(o) = v { *o } else { None }).collect(),
-        _ => Vec::new(),
-    };
-    let fill = objects.first().copied().flatten().and_then(|f| paint::descriptor(r, f, world)).unwrap_or(Paint::None);
-    if objects.get(1).copied().flatten().and_then(|f| paint::descriptor(r, f, world)).is_some_and(|p| p != Paint::None) {
+    // Shared attributes are read for every run: take the fill and stroke slots by index, never
+    // copying the whole object list (null slots included) per run.
+    let objects = s.field(attrs, b"Objs");
+    let obj = |v: &Value| if let Value::Obj(o) = v { *o } else { None };
+    let fill = slot(objects, 0, obj).and_then(|f| paint::descriptor(r, f, world)).unwrap_or(Paint::None);
+    if slot(objects, 1, obj).and_then(|f| paint::descriptor(r, f, world)).is_some_and(|p| p != Paint::None) {
         r.warn("outlined (stroked) text");
     }
     if slot(doubles, 10, float).is_some_and(|h| (h - 1.0).abs() > 1e-3) {
@@ -240,5 +247,24 @@ fn paragraph_align(r: &mut Reader, p: ObjId) -> Align {
             r.warn("an unknown paragraph alignment (imported as left)");
             Align::Left
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::synth::{self, F, tag};
+
+    #[test]
+    fn the_scan_cost_stops_once_the_glyph_slots_pass_the_budget() {
+        // Three references to one segment of ten null glyph slots: thirty slots in all.
+        let mut refs = vec![F::Def(1, vec![tag(b"Segm")], vec![(tag(b"Glys"), F::Shared(vec![F::Null; 10]))])];
+        refs.extend([F::Ref(1), F::Ref(1)]);
+        let s = crate::stream::parse(&synth::stream(&[(tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Mixd"), F::Shared(refs))]))])).unwrap();
+        let glyphs = s.obj(s.root, b"Glyp").unwrap();
+        assert_eq!(scan_cost(&s, glyphs, room(0), usize::MAX), 30);
+        assert_eq!(scan_cost(&s, glyphs, room(0), 30), 30);
+        // Past the budget at the second segment: neither it nor the third is walked.
+        assert_eq!(scan_cost(&s, glyphs, room(0), 15), 20);
     }
 }

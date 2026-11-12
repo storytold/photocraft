@@ -150,16 +150,20 @@ pub(crate) fn curves(r: &mut Reader, crvs: ObjId) -> Option<Path> {
     };
     let corners = match s.obj(crvs, b"CnrD") {
         Some(c) => {
-            let fields: Vec<&Value> = s.positional(c).collect();
+            // Only the second and third fields are read: never collect all of a shared curve's
+            // corner fields, which would be repeated for every occurrence.
+            let mut fields = s.positional(c);
+            fields.next();
+            let (indices, radii) = (fields.next(), fields.next());
             // The corner arrays are scanned for every occurrence of a shared curve, so charge
             // them like records before they are walked.
-            if let Some(len) = fields.get(1).and_then(|v| v.array_len())
+            if let Some(len) = indices.and_then(Value::array_len)
                 && let Err(reason) = r.geometry_budget.records(len)
             {
                 r.warn(reason);
                 return None;
             }
-            corner_radii(fields)
+            corner_radii(indices, radii)
         }
         None => None,
     };
@@ -284,8 +288,8 @@ fn subpath(anchors: &[Anchor], closed: bool, radii: Option<&Vec<(usize, f64)>>) 
 }
 
 /// `CnrD`: positional `[u8, i32[] record indices, f64[] radii, u8[] types]`.
-fn corner_radii(fields: Vec<&Value>) -> Option<Vec<(usize, f64)>> {
-    let (Some(Value::Array(idx)), Some(Value::Array(rad))) = (fields.get(1), fields.get(2)) else { return None };
+fn corner_radii(indices: Option<&Value>, radii: Option<&Value>) -> Option<Vec<(usize, f64)>> {
+    let (Some(Value::Array(idx)), Some(Value::Array(rad))) = (indices, radii) else { return None };
     Some(
         idx.iter()
             .zip(rad)
