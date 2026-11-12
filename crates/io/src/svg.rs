@@ -788,6 +788,10 @@ fn parse_image_bounded_with(
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_BOUNDED_SVG_BYTES {
         return Err(overrun(IoError::Svg("embedded SVG source exceeds the 16 MiB byte limit".into())));
     }
+    // gzip inside gzip is not SVG text: like a syntax error it leaves only this image out.
+    if matches!(craft_svg::svgz::inflate(bytes, usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX)), Err(craft_svg::svgz::Error::Nested)) {
+        return Err(IoError::Svg("the embedded SVG holds another compressed file, not a document".into()));
+    }
     let xml = inflate_with_limit(bytes, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
     // Charged before anything can leave the image out, so skipped images still use up the budget.
     let xml_len = u64::try_from(xml.len()).unwrap_or(u64::MAX);
