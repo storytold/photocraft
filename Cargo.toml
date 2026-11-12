@@ -19,7 +19,7 @@ photocraft-raster = { path = "crates/raster" }
 photocraft-doc = { path = "crates/doc" }
 photocraft-ops = { path = "crates/ops" }
 # PSD/PSB and the Photoshop resource files (ABR, ASL, ACO, ATN, ...): the shared reader and writer (craft-libs#875).
-craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "2b35d243241bc4c1aaa7a1cc89657c1aad5b3d02" }
+craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "55d120f201771acbb32b2cf122d4a6dc82593a57" }
 photocraft-codecs = { path = "crates/codecs" }
 photocraft-raw = { path = "crates/raw" }
 photocraft-affinity = { path = "crates/affinity" }
