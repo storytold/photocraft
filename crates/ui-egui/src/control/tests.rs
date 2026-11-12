@@ -171,7 +171,9 @@ fn app_open_aseprite_alias_opens_an_editable_document_and_remembers_its_source()
         import: Some(Box::new(|name, bytes, opts| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
         })),
-        automation_read: Some(Box::new(move |_| Ok(("sprite.ase".into(), bytes.to_vec())))),
+        automation_read: Some(Box::new(move |path| {
+            Ok(crate::AutomationReadResult { name: "sprite.ase".into(), bytes: bytes.to_vec(), save_path: Some(path.into()) })
+        })),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);

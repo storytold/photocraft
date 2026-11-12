@@ -184,8 +184,8 @@ mod tests {
 
     #[test]
     fn adobe_ase_swatches_still_import_as_presets() {
-        use photocraft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
-        let bytes = photocraft_psd::ase::write(&AseFile {
+        use craft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
+        let bytes = craft_psd::ase::write(&AseFile {
             entries: vec![AseEntry::Swatch(AseSwatch { name: "Swatch".into(), color: AseColor::Rgb([1.0, 0.0, 0.0]), kind: AseKind::Process })],
         })
         .unwrap();
