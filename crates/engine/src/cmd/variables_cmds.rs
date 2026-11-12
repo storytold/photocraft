@@ -183,6 +183,10 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                     let style = t.char_runs().into_iter().next().map(|r| r.style).unwrap_or_default();
                     let para = t.paragraph_runs().into_iter().next().map(|r| r.style).unwrap_or_default();
                     t.text = text.clone();
+                    // Solved Dynamic Text lines index the old text (see `type_cmds::replace_text`).
+                    if let Some(fit) = t.fit.as_mut() {
+                        fit.lines.clear();
+                    }
                     t.runs = vec![TextRun { len: t.text.len(), style }];
                     t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: para }];
                     t.sync_summary();
