@@ -59,13 +59,18 @@ fn main() {
     let assert_chinese_app_menu = |bar: &NSMenu, lang| {
         let app_menu = submenu(bar, "PhotoCraft");
         let names = titles(&app_menu);
-        for want in ["设置", "服务", "隐藏其他", "全部显示"] {
+        for (source, want) in [("Settings", "设置"), ("Services", "服务"), ("Hide Others", "隐藏其他"), ("Show All", "全部显示")] {
             assert!(names.iter().any(|n| n == want), "{want} missing from the Simplified Chinese app menu: {names:?}");
+            assert!(!names.iter().any(|n| n == source), "stale English item {source} in the Simplified Chinese app menu");
         }
         // App-specific translations can arrive in a later craft-i18n pin.
         for source in ["About {app}", "Hide {app}", "Quit {app}"] {
             let want = i18n::fmt(i18n::tr(lang, source), &[("app", "PhotoCraft")]);
             assert!(names.contains(&want), "{want} missing from the Simplified Chinese app menu: {names:?}");
+            let english = i18n::fmt(source, &[("app", "PhotoCraft")]);
+            if want != english {
+                assert!(!names.contains(&english), "stale English item {english} in the Simplified Chinese app menu");
+            }
         }
         let language = submenu(&app_menu, "语言");
         assert!(checked(&language, index(&language, "简体中文")));
@@ -231,10 +236,14 @@ fn main() {
     let window = submenu(&main_menu(), "Window");
     assert!(nsapp.windowsMenu().is_some_and(|w| Retained::as_ptr(&w) == Retained::as_ptr(&window)), "AppKit knows the new Window menu");
     let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
-    // The last rows (both documents are "Untitled").
-    let rows = [window.numberOfItems() - 2, window.numberOfItems() - 1];
-    let shown: Vec<String> = rows.iter().filter_map(|&i| window.itemAtIndex(i)).map(|it| it.title().to_string()).collect();
-    assert_eq!(shown, names, "in tab order, after Bring All to Front: {:?}", titles(&window));
+    let document_rows = |window: &NSMenu| {
+        // The last rows are the two documents, in tab order.
+        let rows = [window.numberOfItems() - 2, window.numberOfItems() - 1];
+        let shown: Vec<String> = rows.iter().filter_map(|&i| window.itemAtIndex(i)).map(|it| it.title().to_string()).collect();
+        assert_eq!(shown, names, "document rows at the end of the Window menu: {:?}", titles(window));
+        rows
+    };
+    let rows = document_rows(&window);
     assert!(!checked(&window, rows[0]) && checked(&window, rows[1]), "the active document is checked");
     dequeue(&other());
     window.performActionForItemAtIndex(rows[0]);
@@ -251,6 +260,15 @@ fn main() {
         // Switch back with documents open and read the localized menu from AppKit again.
         switch_language(&mut app, "Language", "简体中文", "zh-hans");
         assert_chinese_app_menu(&main_menu(), lang);
+        let window = submenu(&main_menu(), "窗口");
+        let rows = document_rows(&window);
+        assert!(checked(&window, rows[0]) && !checked(&window, rows[1]), "the active document stays checked after rebuilding the menu");
+        dequeue(&other());
+        window.performActionForItemAtIndex(rows[1]);
+        app_frame(&mut app);
+        assert_eq!(app.session.active_index(), Some(1), "choosing a document from the localized menu brings it forward");
+        let window = submenu(&main_menu(), "窗口");
+        assert!(!checked(&window, rows[0]) && checked(&window, rows[1]), "the localized menu checks the newly selected document");
 
         // A preference commit can trigger a menu sync before drawing picks up the new language.
         switch_language(&mut app, "语言", "English", "en");
