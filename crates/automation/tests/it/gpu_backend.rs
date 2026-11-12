@@ -212,6 +212,28 @@ mod tests {
     }
 
     #[test]
+    fn a_timed_out_renderer_keeps_its_initialization_thread_until_it_is_dropped() {
+        // No backends: the initialization thread does not load a graphics driver.
+        // A zero timeout can still see a thread that finished first, so try until one times out.
+        let doc = make_test_doc(16, 16, SampleType::U8);
+        let timed_out = (0..1000).find_map(|_| {
+            let options = photocraft_gpu::context::NativeContextOptions {
+                timeout: Some(std::time::Duration::ZERO),
+                backends: wgpu::Backends::empty(),
+                ..Default::default()
+            };
+            let mut r = GpuRenderer::with_options(options);
+            let res = r.render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Ok::<(), photocraft_io::IoError>(()));
+            let timed_out = matches!(res, Err(photocraft_io::RenderError::Unavailable(ref msg)) if msg.contains("timed out"));
+            timed_out.then_some(r)
+        });
+        let r = timed_out.expect("a zero-timeout initialization times out");
+        let init = r.abandoned_init().cloned().expect("a timed-out renderer keeps its initialization thread");
+        drop(r);
+        assert!(init.is_finished(), "dropping the renderer waits for its initialization thread");
+    }
+
+    #[test]
     fn gpu_renderer_diagnostics_and_bounded_storage() {
         let mut r = match GpuRenderer::new() {
             Ok(r) => r,
