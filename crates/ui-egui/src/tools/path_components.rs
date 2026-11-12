@@ -65,6 +65,10 @@ pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
 /// The first component always combines (it is what the others act on), so it keeps its operation.
 pub(crate) fn set_op(app: &mut PhotocraftApp, op: &str) -> Result<(), String> {
     *crate::vector_ui::path_op_field(app) = op.into();
+    if app.ui.tool == crate::state::Tool::Pen {
+        // Keep the variants' existing shared last pick without losing the Pen's per-mode picks.
+        app.ui.tool_options.pen_path_op = op.into();
+    }
     if op == "newLayer" {
         return Ok(());
     }

@@ -98,11 +98,17 @@ pub struct ToolOptions {
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
-    /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
-    /// the path or shape it is drawn into: "newLayer" (Shape mode: a new shape layer; Path mode
-    /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
+    /// Legacy/shared last Path Operations pick (#1397), retained for old settings and the
+    /// Freeform/Curvature Pens: "newLayer" (Shape: new layer; Path: combine), "combine",
+    /// "subtract", "intersect" or "exclude". The ordinary Pen's mode slots take priority.
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Pen-only Path/Shape picks (#12905). Missing fields retain legacy explicit picks;
+    /// the legacy New Layer sentinel means Exclude in Pen Path mode, New Layer in Shape mode.
+    #[serde(default)]
+    pub pen_path_mode_op: Option<String>,
+    #[serde(default)]
+    pub pen_shape_mode_op: Option<String>,
     /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
     /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
     /// means Exclude Overlapping Shapes.
@@ -511,6 +517,8 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            pen_path_mode_op: None,
+            pen_shape_mode_op: None,
             shape_path_op: default_shape_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
