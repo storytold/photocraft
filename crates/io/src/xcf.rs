@@ -899,10 +899,12 @@ fn validate_canvas(w: u32, h: u32) -> Result<()> {
 }
 
 /// Returns an explicit byte-order choice request for historically ambiguous high-depth storage.
-fn sample_order_request(version: u32, precision: Precision) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
+fn sample_order_request(version: u32, precision: Precision, base_type: u32) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
     if (7..=11).contains(&version) && precision.bytes > 1 {
         let bits_per_sample = precision.bytes.checked_mul(8).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| invalid("precision bit count overflows"))?;
-        Ok(Some(crate::HistoricalXcfSampleOrderRequest { version, bits_per_sample }))
+        // Both callers validate the base type and reject high-depth indexed data first.
+        let mode = if base_type == 1 { ColorMode::Grayscale } else { ColorMode::Rgb };
+        Ok(Some(crate::HistoricalXcfSampleOrderRequest { version, bits_per_sample, mode }))
     } else {
         Ok(None)
     }
@@ -924,7 +926,7 @@ pub(crate) fn historical_sample_order_request(bytes: &[u8]) -> Result<Option<cra
     if base_type == 2 && precision != Precision::GAMMA8 {
         return Err(invalid("indexed pixels require 8-bit nonlinear integer precision"));
     }
-    sample_order_request(version, precision)
+    sample_order_request(version, precision, base_type)
 }
 
 /// Imports unwrapped XCF; ambiguous historical samples require an explicit choice.
@@ -1011,7 +1013,7 @@ pub(crate) fn import_with_sample_order(
     }
     // Development writers did not define high-depth sample byte order in XCF7–11.
     // Neither source pixels nor producer names establish the original host order.
-    let request = sample_order_request(version, precision)?;
+    let request = sample_order_request(version, precision, base_type)?;
     let historical_sample_order_ambiguous = request.is_some();
     let sample_order = match request {
         Some(request) => selected_order.ok_or(IoError::HistoricalXcfSampleOrderRequired(request))?,
