@@ -318,10 +318,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::snapshot_dialog::owns(fields) => crate::snapshot_dialog::body(ui, fields),
         _ if crate::channel_options_ui::owns(fields) => crate::channel_options_ui::body(ui, fields),
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
-        _ if crate::shape_dialog::owns(fields) => {
-            crate::shape_dialog::body(app, ui, fields);
-            crate::shape_dialog::open_owed_alert(app, fields);
-        }
+        _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
         _ if delete_prompt(fields) => delete_prompt_body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
@@ -791,6 +788,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 || (modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))))
         {
             outcome = Some(false);
+        }
+        // A size warning must precede creation, while Cancel discards the edit and its warning.
+        // Wait until the buttons have answered so the click that left a field cannot do both.
+        if crate::shape_dialog::owns(&fields) && outcome != Some(false) && crate::shape_dialog::open_owed_alert(app, ctx, &mut fields) {
+            outcome = None;
         }
         if let Some(dm) = app.ui.dialog_mut(d.id) {
             dm.fields = fields;

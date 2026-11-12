@@ -187,12 +187,18 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     result
 }
 
-/// Opens the range alert when [`body`] noted an out-of-range Width or Height, once even if one is
-/// already showing.
-pub fn open_owed_alert(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
-    if f.remove(ALERT_OWED).is_some() {
+/// Returns whether a size warning is owed, blocking creation until it has been acknowledged.
+pub fn open_owed_alert(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut Map<String, Value>) -> bool {
+    if !f.contains_key(ALERT_OWED) {
+        return false;
+    }
+    // A mouse press leaves the field before its button answers on release. Keep the warning
+    // pending until then, so Cancel can discard it instead of opening an orphaned alert.
+    if !ctx.input(|i| i.pointer.any_down()) {
+        f.remove(ALERT_OWED);
         crate::panels::options_bar::range_alert(&mut app.ui, SIZE_RANGE_ALERT);
     }
+    true
 }
 
 /// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.

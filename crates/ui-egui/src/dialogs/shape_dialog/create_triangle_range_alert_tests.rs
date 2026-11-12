@@ -22,13 +22,18 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-/// Types `text` into the field named `name`, then Tabs out of it.
-fn type_into(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
+/// Types `text` into the field named `name`, keeping the keyboard in that field.
+fn type_draft(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(name)).expect("the field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
     h.run_steps(1);
+}
+
+/// Types `text` into the field named `name`, then Tabs out of it.
+fn type_into(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
+    type_draft(h, name, text);
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
 }
@@ -85,4 +90,66 @@ fn the_other_shapes_keep_clamping_silently() {
         assert_eq!(size(&h, "width"), 300_000.0, "{tool:?}");
         assert!(alerts(&h).is_empty(), "{tool:?} has no alert yet");
     }
+}
+
+#[test]
+fn enter_or_ok_on_an_invalid_size_waits_for_the_warning_before_creating() {
+    for name in ["Width:", "Height:"] {
+        for click_ok in [false, true] {
+            let mut h = harness(Tool::Triangle);
+            let layers = h.state().session.active().unwrap().doc.layers.len();
+            type_draft(&mut h, name, "400000");
+            assert!(alerts(&h).is_empty(), "typing alone does not alert");
+            if click_ok {
+                h.get_by_label("OK").click();
+            } else {
+                h.key_press(egui::Key::Enter);
+            }
+            h.run_steps(4);
+            assert_eq!(alerts(&h), vec![SIZE_RANGE_ALERT.to_string()]);
+            assert_eq!(size(&h, &name.trim_end_matches(':').to_lowercase()), 300_000.0);
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers, "the warning must precede creation");
+            ok(&mut h);
+            assert!(alerts(&h).is_empty());
+            assert!(h.state().ui.dialogs.iter().any(|d| owns(&d.fields)), "acknowledging the warning keeps Create Triangle open");
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
+            h.get_by_label("OK").click();
+            h.run_steps(4);
+            assert!(h.state().ui.dialogs.is_empty());
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers + 1);
+        }
+    }
+}
+
+#[test]
+fn cancel_or_escape_on_an_invalid_size_leaves_no_warning_or_shape() {
+    for click_cancel in [false, true] {
+        let mut h = harness(Tool::Triangle);
+        let layers = h.state().session.active().unwrap().doc.layers.len();
+        type_draft(&mut h, "Width:", "400000");
+        if click_cancel {
+            h.get_by_label("Cancel").click();
+        } else {
+            h.key_press(egui::Key::Escape);
+        }
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.is_empty(), "cancellation must not leave a range warning behind");
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
+    }
+}
+
+#[test]
+fn a_cancel_mouse_press_and_release_in_separate_frames_discards_the_warning() {
+    let mut h = harness(Tool::Triangle);
+    let layers = h.state().session.active().unwrap().doc.layers.len();
+    type_draft(&mut h, "Width:", "400000");
+    let pos = h.get_by_label("Cancel").rect().center();
+    h.event(egui::Event::PointerMoved(pos));
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    assert!(alerts(&h).is_empty(), "wait for the button to answer on release");
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(4);
+    assert!(h.state().ui.dialogs.is_empty());
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
 }
