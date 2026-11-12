@@ -2,7 +2,7 @@
 //! Convert to Dynamic Text. The fit itself runs in `type_cmds::refresh`, so every edit of a
 //! fitted layer refits it in the same history step.
 
-use photocraft_doc::text::{Orientation, TextDirection, TextFit, TextShape};
+use photocraft_doc::text::{Orientation, TextFit, TextShape};
 use photocraft_doc::{LayerContent, TextLayer};
 use serde_json::{Value, json};
 
@@ -27,17 +27,9 @@ pub fn fit_refusal(t: &TextLayer) -> Option<&'static str> {
     if t.orientation == Orientation::Vertical {
         return Some("Dynamic Text does not support vertical type");
     }
-    let mut at = 0usize;
-    let rtl = t.paragraph_runs().iter().any(|p| {
-        let range = at..at.saturating_add(p.len);
-        at = range.end;
-        match p.style.direction {
-            TextDirection::Rtl => true,
-            TextDirection::Ltr => false,
-            TextDirection::Auto => t.text.get(range).and_then(photocraft_text::layout::first_strong_rtl) == Some(true),
-        }
-    });
-    if rtl {
+    // Per text paragraph, with the paragraph style at its start, as layout reads it (and as PSD
+    // export asks): a paragraph run can span several paragraphs, or end inside one.
+    if photocraft_text::layout::has_rtl_paragraph(t) {
         return Some("Dynamic Text does not support right-to-left text");
     }
     if matches!(t.shape, TextShape::Path { .. }) {

@@ -447,6 +447,30 @@ fn refused_targets() {
     }
 }
 
+/// Right-to-left is decided per text paragraph, as layout decides it: a Hebrew second paragraph
+/// under one Auto paragraph run is refused, and a run edge inside a Latin-first paragraph is not.
+#[test]
+fn right_to_left_is_checked_per_text_paragraph() {
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle};
+    let hebrew = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}";
+    let (mut s, id) = session_with_box_text(&format!("Hi\n{hebrew}"), 12.0, [0.0, 0.0, 300.0, 100.0]);
+    assert_eq!(text(&s, id).paragraph_runs().len(), 1, "one Auto run over both paragraphs");
+    let e = s.execute("type.convertToDynamicText", json!({"layer": id.0})).unwrap_err().to_string();
+    assert!(e.contains("right-to-left"), "{e}");
+
+    let (mut s, id) = session_with_box_text(&format!("Hi {hebrew}"), 12.0, [0.0, 0.0, 300.0, 100.0]);
+    s.edit("run edge", |doc, _| {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            let style = ParagraphStyle::default();
+            t.paragraphs = vec![ParagraphRun { len: 3, style: style.clone() }, ParagraphRun { len: hebrew.len(), style }];
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.convertToDynamicText", json!({"layer": id.0})).unwrap();
+    assert!(text(&s, id).fit.is_some());
+}
+
 #[test]
 fn a_layer_named_by_its_name_is_checked_as_it_runs() {
     // With two layers selected the menus are off; a call naming one by its name is enabled
