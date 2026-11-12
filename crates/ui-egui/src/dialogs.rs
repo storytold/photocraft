@@ -286,7 +286,10 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// The delete confirmations: a layer from the Layers panel's trash, a note (#11788), or all notes
 /// (#11791).
 fn delete_prompt(fields: &Fields) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::analysis_ui::owns_clear_notes(fields)
+    crate::delete_layer_prompt::owns(fields)
+        || crate::analysis_ui::owns_delete_note(fields)
+        || crate::analysis_ui::owns_clear_notes(fields)
+        || live_shape_prompt::owns(fields)
 }
 
 fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
@@ -294,6 +297,8 @@ fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
         crate::analysis_ui::clear_notes_body(ui);
     } else if crate::analysis_ui::owns_delete_note(fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
+    } else if live_shape_prompt::owns(fields) {
+        live_shape_prompt::body(ui, fields);
     } else {
         crate::delete_layer_prompt::body(ui, fields);
     }
@@ -493,7 +498,7 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
-        } else if crate::analysis_ui::owns_delete_note(fields) {
+        } else if crate::analysis_ui::owns_delete_note(fields) || live_shape_prompt::owns(fields) {
             tl!("No")
         } else {
             tl!("Cancel")
@@ -564,7 +569,7 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
-    } else if crate::analysis_ui::owns_delete_note(&d.fields) {
+    } else if crate::analysis_ui::owns_delete_note(&d.fields) || live_shape_prompt::owns(&d.fields) {
         tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
@@ -899,6 +904,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::delete_layer_prompt::owns,
     crate::analysis_ui::owns_delete_note,
     crate::analysis_ui::owns_clear_notes,
+    live_shape_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
@@ -1146,6 +1152,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
+        _ if live_shape_prompt::owns(&d.fields) => live_shape_prompt::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1319,6 +1326,7 @@ mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
 pub mod liquify_ui;
+pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
 pub mod merge_channels_ui;
 pub mod new_doc_ui;

@@ -215,6 +215,7 @@ impl Session {
             self.cancel_jobs_on(id);
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
+            self.presets.clone.forget_doc(id);
             self.link_missing.retain(|(d, _)| *d != id.0);
             self.link_scan = None;
         }
