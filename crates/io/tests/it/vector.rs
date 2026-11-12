@@ -78,6 +78,32 @@ fn saved_paths_work_path_and_clipping_roundtrip() {
     assert!(roundtrip(&b3).clipping_path.is_none());
 }
 
+/// Non-ASCII path names survive a PSD save/reopen: the Pascal resource name is written as
+/// UTF-8, not as the `?` fallback (`legacy_name`) used where a Unicode companion resource
+/// carries the real name (#13184).
+#[test]
+fn non_ascii_path_names_survive_roundtrip() {
+    let mut d = doc();
+    d.paths.push(NamedPath { name: "test 1".into(), path: path(), psd_raw: None });
+    d.paths.push(NamedPath { name: "測1試".into(), path: path(), psd_raw: None });
+    d.paths.push(NamedPath { name: "Путь 🙂 3".into(), path: path(), psd_raw: None });
+    let b = roundtrip(&d);
+    assert_eq!(b.paths[0].name, "test 1");
+    assert_eq!(b.paths[1].name, "測1試");
+    assert_eq!(b.paths[2].name, "Путь 🙂 3");
+}
+
+/// The Pascal resource name caps at 255 bytes; a longer UTF-8 name truncates on a char
+/// boundary, so the reopened name is a valid prefix instead of a broken last character.
+#[test]
+fn long_path_names_truncate_on_char_boundary() {
+    let name: String = "П".repeat(128); // 256 UTF-8 bytes: one past the cap.
+    let mut d = doc();
+    d.paths.push(NamedPath { name, path: path(), psd_raw: None });
+    let b = roundtrip(&d);
+    assert_eq!(b.paths[0].name, "П".repeat(127));
+}
+
 #[test]
 fn shape_layer_typed_roundtrip() {
     let mut d = doc();
