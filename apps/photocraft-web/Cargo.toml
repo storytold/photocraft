@@ -38,7 +38,7 @@ js-sys = "0.3"
 # The embedding API (src/embed.rs, src/embed_protocol.rs).
 photocraft-format = { workspace = true }
 serde_json = { workspace = true }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "DomRect", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Response", "Headers", "ReadableStream", "ReadableStreamDefaultReader", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "RequestInit", "RequestMode", "RequestRedirect", "Navigator", "CustomEvent", "CustomEventInit", "MessageEvent", "RequestCredentials", "ErrorEvent", "PromiseRejectionEvent"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "DomRect", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Response", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "RequestInit", "RequestMode", "Navigator", "CustomEvent", "CustomEventInit", "MessageEvent", "ErrorEvent", "PromiseRejectionEvent"] }
 
 [dev-dependencies]
 photocraft-format = { workspace = true }

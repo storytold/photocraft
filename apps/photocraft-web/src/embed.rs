@@ -1,14 +1,11 @@
 //! The embedding API (#1614): `window.photocraft` for the page the app runs in, the same document
 //! calls over `postMessage` for a page that embeds it in a cross-origin iframe (`?embed=<origin>`).
-//! The Photopea-compatible mode is refused in this build (`PhotopeaConfig::DISABLED`).
 //!
 //! ```js
 //! photocraft.info()                       // {app, format, doc: {id, name} | null}
 //! photocraft.isDirty()                    // unsaved changes in an open document?
 //! await photocraft.open(bytes, "a.psd")   // ArrayBuffer, typed array or Blob, ≤ 64 MiB →
 //!                                        //   {warnings, doc: {id, name}} once the document is in the session
-//! await photocraft.open("/api/asset/7")   // or a URL string on the ?embed= origin: the app
-//!                                        //   fetches it itself, with the page's session cookies
 //! await photocraft.save("psd")            // the active document as a Uint8Array (default "pcraft"),
 //!                                        //   its export warnings on it as `.warnings`
 //! await photocraft.request("ui.inspect")  // a desktop control-channel method → its result
@@ -18,9 +15,9 @@
 //! An open settles only once a document of the very name it asked for has entered the session
 //! — new since its import started, matched by exact name and nothing else — reported back as
 //! `doc` and by `info()`, so a save asked after it can't take an older document. One open is in
-//! flight at a time, and its window is taken as the open's first step — before the string is
-//! parsed as a URL or a byte of the data is read: a second while the first is unsettled (its
-//! bytes being fetched or read, its import running, or waiting for its document behind a
+//! flight at a time, and its window is taken as the open's first step — before a byte of the
+//! data is read: a second while the first is unsettled (its
+//! bytes being read, its import running, or waiting for its document behind a
 //! dialog in the app) rejects `protocol::OPEN_BUSY` at once, and that is what keeps two opens
 //! from ever answering with each other's; there is no pool to draw a fallback from and no
 //! claim a cancelled open could make on the next one's document. An import still decoding, or
@@ -42,22 +39,6 @@
 //! `protocol::OPEN_READ`, and a real byte shape over `protocol::MAX_OPEN_BYTES` with
 //! `protocol::OPEN_TOO_BIG` — gated on its true length before any view of it is made.
 //!
-//! A *string* argument is the URL form: resolved against the app's own location and let
-//! through only as an `http(s)` URL on the `?embed=` origin (`protocol::OPEN_URL` otherwise —
-//! decided under the one-open window, before anything is queued or fetched), the app fetches
-//! it itself, same-origin, with the page's session cookies; **no redirects at all** — any 3xx
-//! refuses the fetch (`redirect: "error"`, and the answer's `redirected` re-checked as the
-//! belt) — and anything but a 2xx answer rejects `protocol::OPEN_FETCH`. The body a 2xx
-//! answers with is read as a *stream*, counted against `protocol::MAX_OPEN_BYTES` as it
-//! arrives (a declared `Content-Length` over it refused before a byte is read): the same
-//! budget, the same `protocol::OPEN_TOO_BIG`, that a handed-over buffer answers to — enforced
-//! while the bytes arrive, so an unbounded or lying-length body is never buffered whole. The
-//! one-open window is taken before the URL is even parsed, so `protocol::OPEN_BUSY` covers
-//! the fetching phase too, and the fetch has no timer of its own: it lives inside the same
-//! 30 s deadline every open gets — a fetch still running at the deadline is aborted with the
-//! promise. Without a `name`, the open takes the URL's last path segment
-//! (`protocol::file_name`), "document" when it has none.
-//!
 //! A save
 //! marks the document clean only after its bytes have reached the caller — the promise resolved
 //! here, or the reply's transfer finished over the bridge — so an export, a reply or a transfer
@@ -66,7 +47,7 @@
 //! Over `postMessage` (only from the `?embed=` origin, replies only to it): send
 //! `{photocraft: id, method: "open" | "save" | "isDirty" | "info", …}` (`open`: `data` an
 //! ArrayBuffer — the bytes ride the message's structured clone and are never read through the
-//! JSON face — or a same-origin URL string the app fetches itself, and `name`; `save`:
+//! JSON face — and `name`; `save`:
 //! `format`), get `{photocraft: id, ok, result | error}` back
 //! (`save`'s result is an ArrayBuffer, transferred, with the export `warnings` beside it). A
 //! message is weighed on the clone before anything decodes it — over `protocol::MAX_CALL_BYTES`
@@ -93,22 +74,18 @@ use wasm_bindgen::JsCast as _;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::embed_protocol::{self as protocol, Call, PhotopeaConfig};
+use crate::embed_protocol::{self as protocol, Call};
 
 type Settle = (js_sys::Function, js_sys::Function);
 
-/// An open's byte source, shared by its queue entry and its byte-acquisition task (a URL
-/// fetch or a read of handed-over bytes): the task writes its one answer here — bytes that
-/// already passed every byte gate, or the fixed refusal — and the frame pass takes it. While a
-/// URL fetch is in flight the cell also carries its abort handle, created before the task
-/// starts, so the entry's deadline can always reach the transfer and kill it. An answer that
-/// arrives after the entry's deadline settled it is read by no one (the entry is gone) and is
-/// dropped with this.
+/// An open's byte source, shared by its queue entry and its byte-acquisition task (a read of
+/// handed-over bytes): the task writes its one answer here — bytes that already passed every
+/// byte gate, or the fixed refusal — and the frame pass takes it. An answer that arrives after
+/// the entry's deadline settled it is read by no one (the entry is gone) and is dropped with
+/// this.
 #[derive(Default)]
-struct SourceFetch {
+struct PendingBytes {
     answer: Option<Result<Vec<u8>, String>>,
-    /// The URL fetch's abort handle; a byte read has none.
-    abort: Option<web_sys::AbortController>,
 }
 
 /// The one open waiting for its document: the import runs on a frame of the app's loop, and
@@ -118,12 +95,11 @@ struct SourceFetch {
 struct PendingOpen {
     name: String,
     bytes: Vec<u8>,
-    /// The open's byte source while its bytes are still on their way ([`SourceFetch`]): a URL
-    /// open's fetch, or a byte open's read of its data. `None` once the bytes have landed —
-    /// from there the entry is exactly a bytes-in-hand open's. While it is `Some`, nothing of
-    /// the entry runs: only its deadline can end it (the fetch's timeout is the open's own,
-    /// no second timer).
-    source: Option<Rc<RefCell<SourceFetch>>>,
+    /// The open's byte source while its bytes are still being read ([`PendingBytes`]): a byte
+    /// open's read of its data. `None` once the bytes have landed — from there the entry is
+    /// exactly a bytes-in-hand open's. While it is `Some`, nothing of the entry runs: only its
+    /// deadline can end it (the read has no timer of its own).
+    source: Option<Rc<RefCell<PendingBytes>>>,
     /// The document ids in the session when this import started: only a document new since
     /// then can answer this request — by exact name ([`protocol::landed_doc`]), never an
     /// older one that happens to carry the same name.
@@ -172,7 +148,7 @@ impl PendingOpen {
 
     /// An entry whose bytes are still on their way: the task writes them (or the refusal)
     /// into `source`, and until it does nothing of the entry runs.
-    fn with_source(name: String, source: Rc<RefCell<SourceFetch>>, settle: Settle) -> Self {
+    fn with_source(name: String, source: Rc<RefCell<PendingBytes>>, settle: Settle) -> Self {
         Self { source: Some(source), ..Self::with_bytes(name, Vec::new(), settle) }
     }
 }
@@ -257,8 +233,8 @@ pub fn install(query: &str, ctx: egui::Context) -> Receiver<ControlRequest> {
 }
 
 /// Every frame, with the app: opens and saves what was asked for, settles answered control
-/// requests, reports Photopea uploads that failed, and tells the page when the unsaved state
-/// changes (after the saves, so `await save(); isDirty()` sees the save).
+/// requests, and tells the page when the unsaved state changes (after the saves, so
+/// `await save(); isDirty()` sees the save).
 pub fn process(app: &mut PhotocraftApp) {
     settle_opens(app);
     settle_saves(app);
@@ -280,9 +256,6 @@ pub fn process(app: &mut PhotocraftApp) {
             }
         });
     });
-    for error in UPLOAD_ERRORS.with(|e| std::mem::take(&mut *e.borrow_mut())) {
-        photocraft_ui_egui::notices::post(app, "The document wasn't saved to the server", vec![error], true, None);
-    }
     ACTIVE_DOC.with(|d| *d.borrow_mut() = app.session.active().map(|st| protocol::DocInfo { id: st.doc.id.0, name: st.doc.name.clone() }));
     let dirty = app.has_unsaved_work();
     if DIRTY.with(|d| d.replace(dirty)) != dirty {
@@ -307,9 +280,8 @@ pub fn process(app: &mut PhotocraftApp) {
 /// 1. it observes an import it could not cancel (below): hold the one-open window while the
 ///    app still holds anything of the file, then release — settling nothing either way, its
 ///    promise settled at its deadline;
-/// 2. its bytes are still on their way (a URL fetch or a byte read): wait, or at the deadline
-///    settle `protocol::OPEN_TIMEOUT` (nothing of it has run, so the release is safe — the
-///    in-flight transfer is killed with it);
+/// 2. its bytes are still being read: wait, or at the deadline settle `protocol::OPEN_TIMEOUT`
+///    (nothing of it has run, so the release is safe);
 /// 3. it was a preset file: its bytes went to the libraries, no document will appear, at once;
 /// 4. its deadline passed — checked **before** the claim, so a request past its deadline never
 ///    takes a document that appeared in the deadline-crossing frame (`protocol::OPEN_TIMEOUT`)
@@ -345,10 +317,10 @@ fn settle_opens(app: &mut PhotocraftApp) {
     if queue.is_empty() {
         return;
     }
-    // An open whose bytes answered since the last pass (a URL fetch's or a byte read's): take
-    // the answer in — bytes (already through every byte gate where the task read them) as the
-    // entry's own, a failure as the open's — so from this pass on the entry is exactly a
-    // bytes-in-hand open's.
+    // An open whose bytes answered since the last pass (a byte read's): take the answer in —
+    // bytes (already through every byte gate where the task read them) as the entry's own, a
+    // failure as the open's — so from this pass on the entry is exactly a bytes-in-hand
+    // open's.
     for p in queue.iter_mut() {
         let answered = p.source.as_ref().and_then(|fetch| fetch.borrow_mut().answer.take());
         if let Some(answer) = answered {
@@ -397,7 +369,7 @@ fn settle_opens(app: &mut PhotocraftApp) {
         let app_holds = prompt_up || app.jobs.opens.iter().any(|t| t.name == p.name);
         let step = protocol::open_step(&protocol::OpenPass {
             failed: p.failed.clone(),
-            fetching: p.source.is_some(),
+            reading: p.source.is_some(),
             landed: protocol::landed_doc(&p.before, &p.name, &docs),
             app_holds,
             held: p.held,
@@ -411,20 +383,8 @@ fn settle_opens(app: &mut PhotocraftApp) {
                 let doc = doc.map_or(Value::Null, |(id, name)| json!({ "id": id, "name": name }));
                 settle_ok(&p.settle, &json!({ "warnings": p.warnings, "doc": doc }));
             }
-            protocol::OpenStep::AbortFetch => {
-                log::warn!("embed: open of {} gave up waiting for its fetch", p.name);
-                // The deadline settled the promise; the abort makes sure the transfer itself
-                // stops too — headers, body stream and all — instead of running on to an
-                // answer nobody will read. (The task's late answer drops with the cell.)
-                abort_source(&p);
-                settle_err(&p.settle, protocol::OPEN_TIMEOUT);
-            }
             protocol::OpenStep::TimeoutPending => {
                 log::warn!("embed: open of {} gave up waiting for its document", p.name);
-                // The usual import-phase entry has already detached its source. Keep the
-                // terminate-or-observe boundary total even so: no source transfer may stay
-                // alive underneath a timed-out entry, whichever cancellation path it takes.
-                abort_source(&p);
                 settle_err(&p.settle, protocol::OPEN_TIMEOUT);
                 // The window may only open once nothing can still land this open's document.
                 // The import is terminated through the app's own Cancel — same semantics as
@@ -451,18 +411,6 @@ fn settle_opens(app: &mut PhotocraftApp) {
     OPENS.with(|o| *o.borrow_mut() = waiting);
     if still {
         repaint_soon();
-    }
-}
-
-/// Kills the transfer of an open whose bytes are still on their way (the deadline settled its
-/// promise this pass): the abort handle lives in the entry's source cell from before the task
-/// started, so it is always there to take. The answer the task would have written lands in the
-/// now-detached cell and drops with it.
-fn abort_source(p: &PendingOpen) {
-    if let Some(source) = p.source.as_ref()
-        && let Some(abort) = source.borrow_mut().abort.take()
-    {
-        abort.abort();
     }
 }
 
@@ -565,24 +513,6 @@ fn promise(run: impl FnOnce(Settle)) -> js_sys::Promise {
 
 fn error(msg: &str) -> JsValue {
     js_sys::Error::new(msg).into()
-}
-
-/// Queues `bytes` as `name` to open on a coming frame, as File › Open does, and settles once a
-/// document of that exact name is in the session (with its warnings and identity), or has
-/// failed as File › Open reports it. The bytes are already in hand (the Photopea-style start-up
-/// opens); the interactive faces take their window earlier, in [`open`], before reading
-/// anything. The door check stays the one-open rule's authority either way: it runs in the
-/// promise executor, synchronously.
-fn open_queued(name: String, bytes: Vec<u8>) -> js_sys::Promise {
-    let p = promise(|settle| {
-        if OPENS.with(|o| !o.borrow().is_empty()) {
-            settle_err(&settle, protocol::OPEN_BUSY);
-            return;
-        }
-        OPENS.with(|o| o.borrow_mut().push(PendingOpen::with_bytes(name, bytes, settle)));
-    });
-    repaint();
-    p
 }
 
 fn save(format: String) -> js_sys::Promise {
@@ -766,11 +696,8 @@ fn bytes_of_view(picked: &JsValue) -> Result<Vec<u8>, String> {
 
 /// The byte gates a handed-over buffer passes, on either face: the measured length before the
 /// copy ([`measured_len`]), the true-body probe and view read ([`bytes_view`],
-/// [`bytes_of_view`]), and the measured length again with the bytes in hand. A URL open's
-/// fetched bytes never reach here — they are gated where they are read ([`fetch_open`]: the
-/// response face and the streaming count) against the same
-/// [`protocol::MAX_OPEN_BYTES`], with the same refusal texts. One budget, whichever way the
-/// bytes arrived; no face or form of open bypasses it.
+/// [`bytes_of_view`]), and the measured length again with the bytes in hand. One budget on
+/// every open; no face or form of open bypasses it.
 async fn gated_bytes(data: &JsValue) -> Result<Vec<u8>, String> {
     // The incoming size, when it can be told without reading: refuse before the copy. A
     // value that won't even be measured reads as unknown and the bytes in hand decide.
@@ -785,111 +712,11 @@ async fn gated_bytes(data: &JsValue) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// `data` as the URL an open fetches itself, when it is a string: resolved against the app's
-/// own location, its origin exactly the `?embed=` origin ([`protocol::url_on_origin`]) — a
-/// cross-origin URL, another scheme, an unparseable string and a string too long to be a URL
-/// (over the call budget at the worst-unit bound — never copied into Rust to find out) all
-/// refuse the one fixed [`protocol::OPEN_URL`], before anything is queued or fetched. `None`:
-/// `data` isn't a string, and the byte form answers it.
-fn resolved_url(data: &JsValue) -> Option<Result<String, String>> {
-    if !data.is_string() {
-        return None;
-    }
-    // The length before the copy: a URL rides under the call budget, and a longer string is
-    // refused without ever being spelled into Rust.
-    let units = js_sys::JsString::unchecked_from_js(data.clone()).length() as usize;
-    if protocol::call_string_cost(units).is_none_or(|cost| cost > protocol::MAX_CALL_BYTES) {
-        return Some(Err(protocol::OPEN_URL.into()));
-    }
-    let resolve = || -> Result<String, String> {
-        let window = web_sys::window().ok_or_else(|| protocol::OPEN_URL.to_string())?;
-        let base = window.location().href().map_err(|_| protocol::OPEN_URL.to_string())?;
-        let url = web_sys::Url::new_with_base(&data.as_string().unwrap_or_default(), &base).map_err(|_| protocol::OPEN_URL.to_string())?;
-        let href = url.href();
-        protocol::url_on_origin(&href, ORIGIN.with(|o| o.borrow().clone()).as_deref())?;
-        Ok(href)
-    };
-    Some(resolve())
-}
-
-/// Fetches `url` — absolute and on the embed origin, checked before this runs — as the iframe
-/// itself would: same-origin credentials, so the page's session cookies ride the request (how
-/// an embedder's authenticated asset endpoints work), and **no redirects at all**
-/// (`redirect: "error"`: the embed origin's asset endpoints have no redirect need, and a
-/// same-origin URL that would 302 elsewhere must not feed the pipeline — a 3xx fails the
-/// fetch, the fixed [`protocol::OPEN_FETCH`], and `response.redirected` is re-checked on the
-/// answer as the belt under that). The bytes it returns are already gated: the response face
-/// ([`protocol::response_gate`] — 2xx, not redirected, a declared `Content-Length` inside the
-/// byte budget) before the body is touched, then a **streaming read** whose running count
-/// ([`protocol::stream_step`]) refuses the moment it crosses [`protocol::MAX_OPEN_BYTES`] —
-/// the same budget and the same [`protocol::OPEN_TOO_BIG`] text the handed-over byte path
-/// gives, enforced *while* the bytes arrive instead of after they are whole, so an unbounded
-/// body or a lying length is never buffered. `abort`, when the open's deadline has its
-/// controller, kills the transfer in flight.
-async fn fetch_open(url: &str, abort: Option<&web_sys::AbortController>) -> Result<Vec<u8>, String> {
-    let refused = || protocol::OPEN_FETCH.to_string();
-    let window = web_sys::window().ok_or_else(refused)?;
-    let init = web_sys::RequestInit::new();
-    // The credentials a plain `fetch()` gets, spelled out: same-origin, cookies included.
-    init.set_credentials(web_sys::RequestCredentials::SameOrigin);
-    // Any 3xx fails the fetch outright: no follow, no cross-origin hop.
-    init.set_redirect(web_sys::RequestRedirect::Error);
-    if let Some(abort) = abort {
-        init.set_signal(Some(&abort.signal()));
-    }
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init)).await.map_err(|_| refused())?.dyn_into().map_err(|_| refused())?;
-    let length = resp.headers().get("content-length").ok().flatten();
-    if let Err(e) = protocol::response_gate(resp.ok(), resp.redirected(), length.as_deref()) {
-        // Declared Content-Length over-limit or other header-level rejection: abort the
-        // transfer before returning, same cleanup as the streaming over-limit path (the one
-        // unified道 both converge to). Without this, a refused response could leave the fetch
-        // half-open until GC, and the 30s deadline wouldn't manage it either.
-        if let Some(abort) = abort {
-            abort.abort();
-        }
-        return Err(e);
-    }
-    // A null body is a null-body status (204/205): no bytes to read, no stream to cancel.
-    // Everything else streams, chunk by chunk, counted as it arrives.
-    let Some(body) = resp.body() else { return Ok(Vec::new()) };
-    let reader: web_sys::ReadableStreamDefaultReader = body.get_reader().dyn_into().map_err(|_| refused())?;
-    let mut bytes = Vec::new();
-    let mut total = 0usize;
-    loop {
-        let chunk = JsFuture::from(reader.read()).await.map_err(|_| refused())?;
-        let done = js_sys::Reflect::get(&chunk, &"done".into()).ok().and_then(|v| v.as_bool());
-        if done != Some(false) {
-            break;
-        }
-        let view = js_sys::Reflect::get(&chunk, &"value".into()).ok().and_then(|v| v.dyn_into::<js_sys::Uint8Array>().ok()).ok_or_else(refused)?;
-        match protocol::stream_step(total, view.length() as usize) {
-            Ok(next) => {
-                total = next;
-                bytes.append(&mut view.to_vec());
-            }
-            Err(e) => {
-                // Over the budget mid-stream: stop the transfer and refuse — never buffer a
-                // byte past the crossing.
-                let _ = reader.cancel();
-                if let Some(abort) = abort {
-                    abort.abort();
-                }
-                return Err(e);
-            }
-        }
-    }
-    Ok(bytes)
-}
-
 /// Opens `data` as `name`. Both faces — `window.photocraft.open` and the `postMessage` bridge —
-/// come through here, so the byte budget is one policy. A *string* `data` is the URL form
-/// ([`resolved_url`] → [`fetch_open`]): the app fetches the file itself, and the bytes it gets
-/// are counted against the same budget as a handed-over buffer. The one-open window is taken as the
-/// open's **first step**, in the promise executor, synchronously — before the string is parsed
-/// as a URL or a byte of the data is read — so `protocol::OPEN_BUSY` covers the parsing, the
-/// fetching and the reading phases alike: no two opens are ever reading at once, and a refused
-/// one is refused before its data is touched. A bad URL settles in the executor and never
-/// holds the window (nothing was pushed — the release is as immediate as the refusal).
+/// come through here, so the byte budget is one policy. The one-open window is taken as the
+/// open's **first step**, in the promise executor, synchronously — before a byte of the data
+/// is read — so `protocol::OPEN_BUSY` covers the reading phase too: no two opens are ever
+/// reading at once, and a refused one is refused before its data is touched.
 ///
 /// Everything that touches `data`'s JS side runs inside a promise executor (`measured_len`,
 /// `bytes_source`, `bytes_view`) or in the spawned task's await points: whatever it throws
@@ -898,43 +725,21 @@ async fn fetch_open(url: &str, abort: Option<&web_sys::AbortController>) -> Resu
 /// exception unwinds through a Rust frame on this path.
 fn open(data: JsValue, name: Option<String>) -> js_sys::Promise {
     let p = promise(move |settle| {
-        // The one-open rule's authority: synchronous in this executor, so neither a URL's
-        // fetch nor a byte read ever starts while another open is in flight.
+        // The one-open rule's authority: synchronous in this executor, so no byte read ever
+        // starts while another open is in flight.
         if OPENS.with(|o| !o.borrow().is_empty()) {
             settle_err(&settle, protocol::OPEN_BUSY);
             return;
         }
-        // The URL form, decided under the window: a refused string settles here — the window
-        // is never held by it, before anything of it is queued or fetched.
-        let url = match resolved_url(&data) {
-            Some(Ok(url)) => Some(url),
-            Some(Err(e)) => return settle_err(&settle, &e),
-            None => None,
-        };
-        let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| url.as_deref().map(protocol::file_name).unwrap_or_else(|| "document".into()));
-        let source = Rc::new(RefCell::new(SourceFetch::default()));
-        // A URL open's transfer is abortable from before the task starts, so a deadline that
-        // fires mid-fetch can always reach it (a controller that can't be made still fetches —
-        // the deadline settles the promise either way, the abort is hygiene).
-        if url.is_some() {
-            source.borrow_mut().abort = web_sys::AbortController::new().ok();
-        }
+        let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document".into());
+        let source = Rc::new(RefCell::new(PendingBytes::default()));
         OPENS.with(|o| o.borrow_mut().push(PendingOpen::with_source(name, source.clone(), settle)));
-        // The byte-acquisition task — a URL's fetch or a byte read — writes its one answer
-        // into the shared cell; the frame pass takes it in. It never touches the promise's
-        // settle: an answer that arrives after the entry's deadline settled it is read by no
-        // one (the entry is gone) and drops with the cell. A URL fetch's answer is already
-        // gated where it was read ([`fetch_open`]: the response face and the streaming count,
-        // the same budget and refusal texts [`gated_bytes`] gives a handed-over buffer — and
-        // its bytes are engine-made from typed chunks, so no caller-shaped value is read on
-        // that path); a byte read's answer is gated by [`gated_bytes`] itself.
+        // The byte-acquisition task — a read of `data` — writes its one answer into the shared
+        // cell; the frame pass takes it in. It never touches the promise's settle: an answer
+        // that arrives after the entry's deadline settled it is read by no one (the entry is
+        // gone) and drops with the cell.
         wasm_bindgen_futures::spawn_local(async move {
-            let abort = source.borrow().abort.clone();
-            let answer = match url.as_deref() {
-                Some(url) => fetch_open(url, abort.as_ref()).await,
-                None => gated_bytes(&data).await,
-            };
-            source.borrow_mut().answer = Some(answer);
+            source.borrow_mut().answer = Some(gated_bytes(&data).await);
             repaint();
         });
     });
@@ -1252,155 +1057,4 @@ impl Drop for CallSlot {
     fn drop(&mut self) {
         INFLIGHT.with(|c| c.set(c.get().saturating_sub(1)));
     }
-}
-
-// ---------- the Photopea-compatible mode (refused in this build) ----------
-
-/// The Photopea-compatible config in the URL hash: **refused in this build** — a config is
-/// rejected with one controlled log line and the app opens as usual
-/// ([`PhotopeaConfig::DISABLED`] says why; `None` when the hash holds no config).
-pub fn photopea_config(query: &str) -> Option<PhotopeaConfig> {
-    let hash = web_sys::window().and_then(|w| w.location().hash().ok())?;
-    PhotopeaConfig::trusted(&hash, query, parent_origin().as_deref()).unwrap_or_else(|e| {
-        if e == PhotopeaConfig::DISABLED {
-            log::warn!("embed: {e}");
-        } else {
-            log::error!("embed: ignoring the config in the URL: {e}");
-        }
-        None
-    })
-}
-
-/// The origin of the page that frames the app, as the browser tells it: `None` at top level.
-/// `location.ancestorOrigins` where the browser has it (Chromium, Safari), else the origin of
-/// `document.referrer`, which a frame's first load gets from its parent (Firefox; a parent page
-/// that sends `Referrer-Policy: no-referrer` leaves it empty, and the config unread).
-fn parent_origin() -> Option<String> {
-    let window = web_sys::window()?;
-    let parent = window.parent().ok().flatten()?;
-    if JsValue::from(parent) == JsValue::from(window.clone()) {
-        return None;
-    }
-    let ancestors = js_sys::Reflect::get(&window.location(), &"ancestorOrigins".into()).ok().filter(|v| !v.is_undefined() && !v.is_null());
-    if let Some(list) = ancestors {
-        return js_sys::Reflect::get(&list, &0.into()).ok().and_then(|o| o.as_string());
-    }
-    protocol::url_origin(&window.document()?.referrer())
-}
-
-/// Posts a Photopea-style status string to the parent window, only ever to the `?embed=` origin
-/// (Photopea posts to any origin; these carry file names).
-fn post_status(message: &str) {
-    let Some(parent) = web_sys::window().and_then(|w| w.parent().ok().flatten()) else { return };
-    let Some(target) = ORIGIN.with(|o| o.borrow().clone()) else { return };
-    parent.post_message(&JsValue::from_str(message), &target).ok();
-}
-
-fn js_err(e: JsValue) -> String {
-    format!("{e:?}")
-}
-
-/// A request without cookies, as Photopea makes them (so storage that answers CORS with `*`
-/// works).
-fn no_cookies() -> web_sys::RequestInit {
-    let init = web_sys::RequestInit::new();
-    init.set_credentials(web_sys::RequestCredentials::Omit);
-    init
-}
-
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &no_cookies())).await.map_err(js_err)?.dyn_into().map_err(js_err)?;
-    if !resp.ok() {
-        return Err(format!("HTTP {} for {url}", resp.status()));
-    }
-    let buf = JsFuture::from(resp.array_buffer().map_err(js_err)?).await.map_err(js_err)?;
-    Ok(js_sys::Uint8Array::new(&buf).to_vec())
-}
-
-/// Opens the config's files, telling the parent `"loading:<name>"` for each and
-/// `"open-error:<name>"` when one can't be downloaded or opened, then `"done"` once they are open,
-/// as Photopea does when it is ready.
-pub fn open_config_files(config: &PhotopeaConfig) {
-    let files = config.files.clone();
-    wasm_bindgen_futures::spawn_local(async move {
-        for url in files {
-            let name = protocol::file_name(&url);
-            post_status(&format!("loading:{name}"));
-            let opened = match fetch_bytes(&url).await {
-                Ok(bytes) => JsFuture::from(open_queued(name.clone(), bytes)).await.map(|_| ()).map_err(js_err),
-                Err(e) => Err(e),
-            };
-            if let Err(e) = opened {
-                log::error!("embed: couldn't open {url}: {e}");
-                post_status(&format!("open-error:{name}"));
-            }
-        }
-        post_status("done");
-    });
-}
-
-thread_local! {
-    /// Whether an upload is on its way, and the latest save waiting behind it.
-    static UPLOADING: Cell<bool> = const { Cell::new(false) };
-    static NEXT: RefCell<Option<(String, Vec<u8>)>> = const { RefCell::new(None) };
-    /// Whether the last upload failed: until one succeeds the work isn't safe on the server.
-    static FAILED: Cell<bool> = const { Cell::new(false) };
-    /// Failed uploads for [`process`] to report in the app.
-    static UPLOAD_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Whether a save to the Photopea server is on its way or failed, so the page keeps asking before
-/// it is closed meanwhile.
-pub fn upload_unconfirmed() -> bool {
-    UPLOADING.with(Cell::get) || FAILED.with(Cell::get)
-}
-
-/// Sends a save to the config's server in Photopea's body and tells the parent "saving", then the
-/// server's `echoToOE` text, "saved" or "error" (a failure is also reported in the app, and leaving
-/// the page asks first until a save gets through). One upload at a time: saves made meanwhile wait,
-/// and only the latest is sent, so an older copy never lands after a newer one.
-///
-/// Unreachable while the mode is refused ([`PhotopeaConfig::DISABLED`]): this single waiting slot
-/// is the whole-app queue that refusal exists for. Binding it per document is the price of
-/// re-enabling.
-pub fn upload(config: &PhotopeaConfig, path: &str, bytes: &[u8]) -> Result<(), String> {
-    let url = config.server_url.clone().ok_or("no server url")?;
-    let source = config.files.first().cloned().unwrap_or_else(|| path.to_string());
-    let body = protocol::save_body(&source, &protocol::extension(path), bytes)?;
-    post_status("saving");
-    if UPLOADING.with(|u| u.replace(true)) {
-        NEXT.with(|n| *n.borrow_mut() = Some((url, body)));
-        return Ok(());
-    }
-    wasm_bindgen_futures::spawn_local(async move {
-        let mut job = Some((url, body));
-        while let Some((url, body)) = job.take() {
-            let (message, failure) = match post_body(&url, &body).await {
-                Ok((true, text)) => (protocol::reply_message(true, &text), None),
-                Ok((false, text)) => (protocol::reply_message(false, &text), Some(format!("The server answered with an error ({url})."))),
-                Err(e) => ("error".to_string(), Some(e)),
-            };
-            FAILED.with(|f| f.set(failure.is_some()));
-            if let Some(e) = failure {
-                log::error!("embed: couldn't save to the server: {e}");
-                UPLOAD_ERRORS.with(|u| u.borrow_mut().push(e));
-            }
-            post_status(&message);
-            job = NEXT.with(|n| n.borrow_mut().take());
-        }
-        UPLOADING.with(|u| u.set(false));
-        repaint();
-    });
-    Ok(())
-}
-
-async fn post_body(url: &str, body: &[u8]) -> Result<(bool, String), String> {
-    let window = web_sys::window().ok_or("no window")?;
-    let init = no_cookies();
-    init.set_method("POST");
-    init.set_body(&js_sys::Uint8Array::from(body));
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init)).await.map_err(js_err)?.dyn_into().map_err(js_err)?;
-    let text = JsFuture::from(resp.text().map_err(js_err)?).await.map_err(js_err)?.as_string().unwrap_or_default();
-    Ok((resp.ok(), text))
 }
