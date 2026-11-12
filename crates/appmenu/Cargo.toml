@@ -14,7 +14,7 @@ rust-version.workspace = true
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 zbus = "=5.19.0"
 # Same zvariant zbus 5.19 pulls (`^5.14`); used directly for wire values and signatures.
-zvariant = "=5.15.0"
+zvariant = "=5.15.1"
 serde = { version = "1", features = ["derive", "rc"] }
 # Signal emission from the synchronous update path needs a tiny block_on driver.
 futures-lite = { version = "=2.6.1", default-features = false, features = ["std"] }

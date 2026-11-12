@@ -128,7 +128,15 @@ impl Drop for AppMenu {
     }
 }
 
-fn worker(app_name: &str, rx: Receiver<Message>, state: Arc<Mutex<MenuState>>, bus: Arc<Mutex<Option<String>>>, hosted: Arc<AtomicBool>, failed: Arc<AtomicBool>, wake: MenuWake) {
+fn worker(
+    app_name: &str,
+    rx: Receiver<Message>,
+    state: Arc<Mutex<MenuState>>,
+    bus: Arc<Mutex<Option<String>>>,
+    hosted: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    wake: MenuWake,
+) {
     log::debug!("AppMenu: worker starting ({app_name})");
     let Ok(conn) = connection(&state, &bus) else {
         log::debug!("AppMenu: no D-Bus session bus; global menu stays off");

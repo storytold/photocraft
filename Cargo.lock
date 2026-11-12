@@ -5511,7 +5511,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-appmenu"
-version = "0.17.0"
+version = "0.23.1"
 dependencies = [
  "futures-lite",
  "log",
