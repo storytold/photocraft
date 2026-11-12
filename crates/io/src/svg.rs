@@ -24,7 +24,19 @@ use resvg::usvg;
 
 use crate::{ImportResult, IoError};
 
-mod limits;
+/// Hard caps on the memory resvg needs to draw a subtree, checked before it draws: craft-svg's
+/// `tree::draw`, within this crate's peak pixel budget.
+mod limits {
+    use resvg::{tiny_skia, usvg};
+
+    pub(super) use craft_svg::tree::draw::Refusal;
+    #[cfg(test)]
+    pub(super) use craft_svg::tree::draw::px;
+
+    pub(super) fn check(nodes: &[usvg::Node], ts: tiny_skia::Transform, w: u32, h: u32, held: u64) -> Result<(), Refusal> {
+        craft_svg::tree::draw::check(nodes, ts, w, h, held, super::MAX_PEAK_PIXEL_BYTES)
+    }
+}
 
 /// Largest canvas side an SVG opens at; a larger drawing is scaled down to fit.
 pub const MAX_SIDE: u32 = 16_384;
@@ -134,14 +146,9 @@ const PARSER_STACK_BYTES: usize = 8 << 20;
 pub const MAX_INFLATED_BYTES: u64 = 128 << 20;
 
 /// Does this look like an SVG document (plain XML; `.svgz` is recognised by its extension)?
+/// The first element must be `<svg`, after nothing but a prolog (craft-svg's sniff).
 pub fn is_svg(bytes: &[u8]) -> bool {
-    let head = bytes.get(..bytes.len().min(4096)).unwrap_or(bytes);
-    let text = String::from_utf8_lossy(head);
-    let t = text.trim_start_matches('\u{feff}').trim_start();
-    if t.starts_with("<svg") {
-        return true;
-    }
-    (t.starts_with("<?xml") || t.starts_with("<!DOCTYPE") || t.starts_with("<!--")) && t.contains("<svg")
+    craft_svg::sniff::is_svg(bytes)
 }
 
 /// The fonts text runs are shaped with: the bundled craft fonts plus, on the desktop, the
@@ -966,22 +973,15 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
     inflate_with_limit(bytes, MAX_INFLATED_BYTES)
 }
 
-/// [`inflate`] with an explicit `limit`, which also applies to uncompressed input.
+/// [`inflate`] with an explicit `limit`, which also applies to uncompressed input. gzip members
+/// one after another are one file (craft-svg's `svgz`).
 fn inflate_with_limit(bytes: &[u8], limit: u64) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
-    use std::io::Read;
-    if !bytes.starts_with(&[0x1f, 0x8b]) {
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
-            return Err(IoError::Svg(format!("the SVG exceeds the {limit} byte limit")));
-        }
-        return Ok(std::borrow::Cow::Borrowed(bytes));
-    }
-    let mut out = Vec::new();
-    let mut reader = flate2::bufread::MultiGzDecoder::new(bytes).take(limit.saturating_add(1));
-    reader.read_to_end(&mut out).map_err(|e| IoError::Svg(format!("the compressed SVG couldn't be inflated: {e}")))?;
-    if u64::try_from(out.len()).unwrap_or(u64::MAX) > limit {
-        return Err(IoError::Svg(format!("the compressed SVG inflates past {} MB", limit >> 20)));
-    }
-    Ok(std::borrow::Cow::Owned(out))
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    craft_svg::svgz::inflate(bytes, limit).map_err(|e| match e {
+        craft_svg::svgz::Error::TooLarge(_) if !bytes.starts_with(&[0x1f, 0x8b]) => IoError::Svg(format!("the SVG exceeds the {limit} byte limit")),
+        craft_svg::svgz::Error::TooLarge(_) => IoError::Svg(format!("the compressed SVG inflates past {} MB", limit >> 20)),
+        e => IoError::Svg(format!("the compressed SVG couldn't be inflated: {e}")),
+    })
 }
 
 /// The deepest element nesting in `xml`, stopping as soon as it passes `limit` (the result is
