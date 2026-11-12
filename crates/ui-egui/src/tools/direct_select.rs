@@ -10,8 +10,9 @@
 //!   The arrow keys nudge the selected anchors 1 px (⇧ 10 px), one history step per press.
 //! * Convert Point (the tool, or Pen + ⌥): click an anchor to make it a corner, drag from it to
 //!   pull out smooth handles, drag a handle to move it alone. The tool selects the anchor it
-//!   converts, so its handles show; a press on empty canvas or a segment does nothing, and ⌘/Ctrl
-//!   is Direct Selection, as with the Pen.
+//!   converts, so its handles show; a press on empty canvas does nothing, and ⌘/Ctrl is Direct
+//!   Selection, as with the Pen. The tool drags a straight segment with nothing selected, or the
+//!   whole path when all of it is selected, as Direct Selection would (#12741).
 //! * While a Pen path is being drawn, ⌘/Ctrl edits it in place (its anchors, handles and
 //!   segments) and the Pen carries on drawing from its last anchor once ⌘/Ctrl is let go; a
 //!   ⌘/Ctrl-press anywhere else ends it, as in Photoshop (#4022).
@@ -75,6 +76,9 @@ pub struct DirectSelection {
     pub anchors: Vec<[usize; 2]>,
     /// A clicked segment (`[subpath, knot]` it leaves): its two handles show.
     pub segment: Option<[usize; 2]>,
+    /// The subpaths of `target` whose anchors are drawn (Delete Anchor Point on a saved path, #12769);
+    /// `None` draws all of them, as right after the path is targeted.
+    pub shown: Option<Vec<usize>>,
     #[serde(skip)]
     pub drag: Option<Drag>,
     /// The history step the drag's commit joins (`coalesce`): a Curvature Pen click on a segment
@@ -85,12 +89,20 @@ pub struct DirectSelection {
     pub(crate) owner: Option<Owner>,
     #[serde(skip)]
     pub(crate) cancelled_drag: bool,
+    /// The saved path whose anchors the first Escape hid (#13072): the next Escape deactivates it,
+    /// and targeting another path starts at the first Escape again.
+    #[serde(skip)]
+    pub(crate) escape_hidden: Option<usize>,
     /// Path Selection only: the target path's [`crate::path_components::SelectionSignature`] when
     /// the selection was made — a structural identity that survives history revisions (a click
     /// activates the layer, colours change, components move), so the component selection lives
     /// until the path's structure changes (#10854).
     #[serde(skip)]
     pub(crate) signature: Option<crate::path_components::SelectionSignature>,
+    /// Where a ⌥-press with Delete Anchor Point hit an anchor: its release without a drag selects
+    /// the anchor's subpath (`anchor_tools`).
+    #[serde(skip)]
+    pub(crate) subpath_press: Option<[f64; 2]>,
 }
 
 /// The cached structural check for one document revision. Type Paths are generated only when
@@ -263,6 +275,8 @@ pub enum Edit {
     /// A handle, where it was at the press, and whether it moves alone (⌥).
     Handle([usize; 2], Handle, Point, bool),
     Segment([usize; 2], f64),
+    /// The Convert Point tool dragging a whole selected path by a segment: its anchors, all of them.
+    Path(Vec<[usize; 2]>),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
 }
@@ -283,6 +297,7 @@ impl Edit {
                 ("path.moveHandle", json!({"subpath": s, "knot": k, "handle": h.name(), "to": [from.x + d[0], from.y + d[1]], "independent": independent}))
             }
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
+            Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
         }
     }
@@ -292,7 +307,7 @@ impl Edit {
         let d = [end[0] - start[0], end[1] - start[1]];
         let mut p = base.clone();
         match self {
-            Edit::Anchors(a) => edit::move_anchors(&mut p, a, d),
+            Edit::Anchors(a) | Edit::Path(a) => edit::move_anchors(&mut p, a, d),
             Edit::Curvature(a) => edit::move_anchors_curvature(&mut p, a, d),
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
@@ -350,6 +365,15 @@ pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
         || ds.drag.is_some()
         || matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
         || (app.ui.tool == Tool::Pen && app.ui.pen.is_none() && !ds.anchors.is_empty() && still_valid(app, ds))
+}
+
+/// Are the anchors of subpath `s` of `r` drawn now (#12769)?
+pub(crate) fn anchors_shown(app: &PhotocraftApp, r: PathRef, s: usize) -> bool {
+    let ds = &app.ui.direct_selection;
+    if ds.target != Some(r) || !still_valid(app, ds) {
+        return true;
+    }
+    ds.shown.as_ref().is_none_or(|shown| shown.contains(&s))
 }
 
 /// The active paths, front first: the targeted vector mask, the active shape layer's path or the
@@ -650,8 +674,21 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
             }
             Edit::Convert(k)
         }
-        // Pen + ⌥ on a segment does nothing.
-        Hit::Segment(..) if convert => return true,
+        // Pen + ⌥ on a segment does nothing; so does the tool where the reference was not
+        // measured: with ⇧ or ⌥, on a curve, or with part of the path selected.
+        Hit::Segment(k, t) if convert => {
+            if !own_tool || mods.alt || mods.shift || !straight(&base, k) {
+                return true;
+            }
+            let all: Vec<[usize; 2]> = (0..base.subpaths.len()).flat_map(|s| edit::subpath_anchors(&base, s)).collect();
+            if ds.anchors.is_empty() {
+                Edit::Segment(k, t)
+            } else if all.iter().all(|a| ds.anchors.contains(a)) {
+                Edit::Path(all)
+            } else {
+                return true;
+            }
+        }
         Hit::Anchor(k) => {
             ds.segment = None;
             if mods.alt {
@@ -681,6 +718,18 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
     };
     ds.drag = Some(Drag::Edit { target, base, edit, start: p, end: p, preview: None });
     true
+}
+
+/// Is the segment leaving knot `k` straight: both of its handles retracted? The distance test is
+/// the one `edit::bend_segment` uses, so a segment counted straight here moves as straight there.
+fn straight(path: &Path, [s, k]: [usize; 2]) -> bool {
+    let Some(sub) = path.subpaths.get(s) else { return false };
+    let next = if k + 1 < sub.knots.len() { k + 1 } else { 0 };
+    let near = |c: Point, a: Point| (c.x - a.x).hypot(c.y - a.y) < 1e-9;
+    match (sub.knots.get(k), sub.knots.get(next)) {
+        (Some(a), Some(b)) => near(a.out_ctrl, a.anchor) && near(b.in_ctrl, b.anchor),
+        _ => false,
+    }
 }
 
 /// What the idle Curvature Pen has under document point `p` on the active paths: an anchor or a
@@ -768,10 +817,15 @@ pub(crate) fn grab_added(app: &mut PhotocraftApp, target: PathRef, base: Path, k
     app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Anchors(vec![k]), start: p, end: p, preview: None });
 }
 
+/// Did the pointer move between `start` and `end` (document points): a screen pixel or more?
+pub(crate) fn moved(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
+    (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.point_zoom()) >= 1.0
+}
+
 /// End of an edit drag: commit it as one command. A click (no movement) commits nothing, except
 /// Pen + ⌥ on an anchor, which makes it a corner. The Pen path being drawn takes the edit directly.
 fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2], mods: Modifiers) {
-    let moved = (end[0] - start[0]).hypot(end[1] - start[1]) * f64::from(app.point_zoom()) >= 1.0;
+    let moved = moved(app, start, end);
     if target == PathRef::Pen {
         let edited = match edit {
             Edit::Convert(k) if !moved => {
@@ -920,7 +974,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
                 crate::vector_ui::draw_handle(painter, to_scr([kn.anchor.x, kn.anchor.y]), to_scr([c.x, c.y]), accent);
             }
         }
-        for (s, sp) in path.subpaths.iter().enumerate() {
+        for (s, sp) in path.subpaths.iter().enumerate().filter(|(s, _)| !ours || anchors_shown(app, r, *s)) {
             for (k, kn) in sp.knots.iter().enumerate() {
                 crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), accent);
             }
@@ -943,6 +997,9 @@ mod convert_point_targeted_path_tests;
 
 #[cfg(test)]
 mod convert_point_tolerance_tests;
+
+#[cfg(test)]
+mod convert_point_drag_segment_tests;
 
 #[cfg(test)]
 mod freeform_command_tests {

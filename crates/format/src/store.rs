@@ -119,11 +119,25 @@ impl Compressor {
     }
 }
 
+/// Smallest zstd window [`decompress_bounded`] accepts, whatever the object's size.
+const MAX_ZSTD_WINDOW_FLOOR: u64 = 8 << 20;
+
 /// Decodes a zstd frame of at most `max` bytes (`LimitExceeded` beyond). With `exact`, the
 /// decoded length must be exactly that (`Corrupt` otherwise).
 fn decompress_bounded(data: &[u8], max: usize, exact: Option<usize>, what: &str) -> Result<Vec<u8>> {
     let zstd = |e: &dyn std::fmt::Display| FormatError::corrupt(format!("{what}: zstd: {e}"));
-    let mut dec = ruzstd::decoding::StreamingDecoder::new(data).map_err(|e| zstd(&e))?;
+    // The decoder allocates its window up front, before any output reaches the length check:
+    // hold it to what this object may decode to (our frames use a 128 KiB window; libzstd's
+    // defaults stay under 8 MiB), not ruzstd's 128 MiB default.
+    let window = u64::try_from(exact.unwrap_or(max)).unwrap_or(u64::MAX).max(MAX_ZSTD_WINDOW_FLOOR);
+    let mut dec = match ruzstd::decoding::StreamingDecoder::new_with_max_window_size(data, window) {
+        Ok(dec) => dec,
+        // A well-formed frame asking for more window than this object may decode to is over its limit.
+        Err(ruzstd::decoding::errors::FrameDecoderError::WindowSizeTooBig { requested, .. }) => {
+            return Err(FormatError::LimitExceeded(format!("{what}: zstd window of {requested} bytes exceeds {window}")));
+        }
+        Err(e) => return Err(zstd(&e)),
+    };
     let mut out = Vec::with_capacity(exact.unwrap_or(0).min(max).min(64 << 20));
     // `max` may be `usize::MAX`: one byte past it must not overflow.
     let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
@@ -879,11 +893,12 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
         validate_bundle_file(root, path)?;
         file.write_all(data)?;
         file.sync_all()?;
-        drop(file);
-        // Preserve the existing mode where possible, as the generic atomic writer does.
+        // Preserve the existing mode where possible, as the generic atomic writer does: through
+        // the open handle, so a staging entry swapped meanwhile is not what gets the mode.
         if let Ok(permissions) = std::fs::metadata(path).map(|m| m.permissions()) {
-            let _ = std::fs::set_permissions(&tmp, permissions);
+            let _ = file.set_permissions(permissions);
         }
+        drop(file);
         // Recheck the parent and target just before publishing. rename replaces a symlink
         // itself, never its referent, even if one appears after this check.
         validate_bundle_file(root, path)?;
@@ -1797,4 +1812,15 @@ fn an_incompressible_blob_at_its_limit_still_loads() {
     assert!(spent(9 * data.len() as u64).blob_bounded(&hash, usize::MAX).is_ok());
     let e = spent(9 * data.len() as u64 + 1).blob_bounded(&hash, usize::MAX).unwrap_err();
     assert!(matches!(e, FormatError::LimitExceeded(ref m) if m.contains(&format!("exceeds {} bytes", data.len() - 1))), "{e}");
+}
+
+/// A well-formed zstd frame that asks for a larger window than the object may decode to is over
+/// its limit, not damaged; one within the window decodes.
+#[test]
+fn a_zstd_window_past_the_limit_is_a_limit_not_corruption() {
+    // Magic, a header with a window descriptor only (exponent 15: a 32 MiB window), then one empty last raw block.
+    let frame = |window_descriptor: u8| [0x28, 0xB5, 0x2F, 0xFD, 0x00, window_descriptor, 0x01, 0x00, 0x00];
+    let e = decompress_bounded(&frame(15 << 3), 100, None, "tile").unwrap_err();
+    assert!(matches!(e, FormatError::LimitExceeded(_)), "{e}");
+    assert_eq!(decompress_bounded(&frame(0), 100, None, "tile").unwrap(), Vec::<u8>::new());
 }
