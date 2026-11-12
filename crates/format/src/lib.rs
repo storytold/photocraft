@@ -8,6 +8,7 @@
 //! blobs/<blake3>.zst       content-addressed binary data (ICC, EXIF, PSD blocks, smart objects)
 //! thumb.png                optional thumbnail (caller-rendered)
 //! composite/preview.png    optional flattened preview (caller-rendered)
+//! composite/full.png       optional flattened composite at the canvas size (caller-rendered)
 //! save.lock                directory bundles only: held while a save runs (empty)
 //! ```
 //!
@@ -29,8 +30,10 @@ pub mod atomic;
 pub mod autosave;
 mod convert;
 mod finite;
+mod import_conversion;
 pub mod manifest;
 mod migrate;
+mod noreplace;
 pub mod read;
 mod store;
 pub mod zip;
@@ -40,17 +43,18 @@ use std::path::Path;
 use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
 
-pub use atomic::{atomic_write, atomic_write_progress};
+pub use atomic::{atomic_write, atomic_write_no_follow, atomic_write_progress, atomic_write_stream, atomic_write_stream_progress};
 #[cfg(not(target_arch = "wasm32"))]
 pub use autosave::RecoveryStore;
 pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, recover};
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
-pub use read::read_file;
+pub use noreplace::{PublishNewError, rename_noreplace, write_noreplace};
+pub use read::{read_file, read_file_limited};
 pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};
 
 /// File extension of the native format.
-pub const EXTENSION: &str = "pcraft";
+pub use craft_pcraft_format::EXTENSION;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
@@ -76,6 +80,20 @@ impl FormatError {
     }
 }
 
+impl From<craft_pcraft_format::Error> for FormatError {
+    fn from(e: craft_pcraft_format::Error) -> Self {
+        use craft_pcraft_format::Error;
+        match e {
+            Error::Corrupt(m) => FormatError::Corrupt(m),
+            Error::Unsupported(m) => FormatError::Unsupported(m),
+            Error::TooNew { found, supported, .. } => FormatError::TooNew { found, supported },
+            Error::LimitExceeded(m) => FormatError::LimitExceeded(m),
+            Error::Json(e) => FormatError::Json(e),
+            other => FormatError::Corrupt(other.to_string()),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, FormatError>;
 
 /// Previews to embed. The format crate cannot render (it sits beside the
@@ -84,6 +102,12 @@ pub type Result<T> = std::result::Result<T, FormatError>;
 pub struct SaveOptions {
     pub thumbnail: Option<Rgba8Image>,
     pub composite: Option<Rgba8Image>,
+    /// The flattened document at its canvas size, for other apps that read `.pcraft` files. A ZIP
+    /// save leaves it out when it would take the archive past 4 GiB or 65,535 entries, and every
+    /// save leaves it out when it cannot be encoded.
+    pub full_composite: Option<Rgba8Image>,
+    /// The ICC profile of `full_composite`'s pixels, embedded in its PNG.
+    pub full_composite_icc: Option<Vec<u8>>,
 }
 
 /// Limits applied while loading untrusted bundles.
@@ -93,7 +117,8 @@ pub struct LoadOptions {
     pub max_manifest_bytes: usize,
     /// Maximum size of one decompressed blob.
     pub max_blob_bytes: usize,
-    /// Maximum total decompressed tile + blob bytes.
+    /// Maximum total decompressed tile + blob bytes. The default follows the machine
+    /// ([`total_budget`]).
     pub max_total_bytes: u64,
     /// Keep document and layer ids from the file (the id counter is advanced
     /// past them). When `false`, fresh ids are assigned.
@@ -117,12 +142,48 @@ pub const MAX_CANVAS_SIDE: u32 = 300_000;
 /// canvas with no content allocates nothing for its area.
 pub const MAX_CANVAS_PIXELS: u64 = MAX_CANVAS_SIDE as u64 * MAX_CANVAS_SIDE as u64;
 
+/// Byte budgets of a load in the browser build. A wasm32 instance has at most 4 GiB of linear
+/// memory, which the editor, the file's own bytes and the loaded document's composites share, so
+/// the desktop defaults (1 GiB a blob, 16 GiB in all) would let a small, highly compressible
+/// bundle exhaust it before any budget is reached.
+#[cfg(target_arch = "wasm32")]
+pub const BROWSER_MAX_BLOB_BYTES: usize = 512 << 20;
+/// See [`BROWSER_MAX_BLOB_BYTES`].
+#[cfg(target_arch = "wasm32")]
+pub const BROWSER_MAX_TOTAL_BYTES: u64 = 1 << 30;
+
+/// The least [`total_budget`] gives a machine whose memory is known, so a load isn't refused
+/// because RAM is briefly short.
+pub const MIN_TOTAL_BUDGET: u64 = 1 << 30;
+
+/// The default [`LoadOptions::max_total_bytes`] (#8595): `cap` (the format's own limit), lowered to
+/// what this machine can hold, the available RAM plus the room left on the scratch disk, but not
+/// below [`MIN_TOTAL_BUDGET`]. Decoded tiles start in RAM and spill to the scratch disk as memory
+/// fills, so both count. A bundle names each tile's decoded size, so a small file of nearly empty,
+/// highly compressed tiles can ask for far more than the machine has; past this budget the load
+/// stops with an error before decoding more, instead of the process running out of memory. With
+/// neither figure known (the browser, an unknown platform), `cap` stands.
+pub fn total_budget(cap: u64, available_ram: Option<u64>, scratch_room: Option<u64>) -> u64 {
+    match (available_ram, scratch_room) {
+        (None, None) => cap,
+        (ram, scratch) => ram.unwrap_or(0).saturating_add(scratch.unwrap_or(0)).max(MIN_TOTAL_BUDGET).min(cap),
+    }
+}
+
 impl Default for LoadOptions {
     fn default() -> Self {
+        #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+        let mut limits = craft_pcraft_format::Limits::default();
+        #[cfg(target_arch = "wasm32")]
+        {
+            limits.max_blob_bytes = limits.max_blob_bytes.min(BROWSER_MAX_BLOB_BYTES);
+            limits.max_total_bytes = limits.max_total_bytes.min(BROWSER_MAX_TOTAL_BYTES);
+        }
+        let ram = photocraft_raster::memory::system::current().available_ram;
         LoadOptions {
-            max_manifest_bytes: 256 << 20,
-            max_blob_bytes: 1 << 30,
-            max_total_bytes: 16 << 30,
+            max_manifest_bytes: limits.max_manifest_bytes,
+            max_blob_bytes: limits.max_blob_bytes,
+            max_total_bytes: total_budget(limits.max_total_bytes, ram, photocraft_raster::spill::scratch_capacity()),
             preserve_ids: true,
             max_canvas_side: MAX_CANVAS_SIDE,
             max_canvas_pixels: MAX_CANVAS_PIXELS,
@@ -162,6 +223,14 @@ pub fn load_from_bytes_with(bytes: &[u8], opts: &LoadOptions) -> Result<Document
     store::load(&src, opts)
 }
 
+/// Load while reporting the tile/blob bytes already counted by the native loader.
+/// Nested-document consumers can share a byte allowance across embedded bundles, rather than
+/// granting the full per-bundle allowance at every nesting level. This is not process RSS.
+pub fn load_from_bytes_measured(bytes: &[u8], opts: &LoadOptions) -> Result<(Document, u64)> {
+    let src = store::ZipSource::new(bytes)?;
+    store::load_measured(&src, opts)
+}
+
 /// Load a bundle from a path: a directory bundle or a ZIP file.
 pub fn load_path(path: &Path) -> Result<Document> {
     load_path_with(path, &LoadOptions::default())
@@ -194,6 +263,17 @@ pub fn read_thumbnail(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
     let m = store::read_manifest(&src, &LoadOptions::default())?;
     match m.thumbnail {
         Some(p) => Ok(Some(src.get(&p, 64 << 20)?)),
+        None => Ok(None),
+    }
+}
+
+/// The embedded full-size composite (PNG bytes): `None` when the manifest has no
+/// `full_composite` member. A member that names any entry other than `composite/full.png` is
+/// refused.
+pub fn read_full_composite(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
+    let src = store::ZipSource::new(bytes)?;
+    match store::read_full_composite_entry(&src, &LoadOptions::default())? {
+        Some(p) => Ok(Some(src.get(p, bytes.len())?)),
         None => Ok(None),
     }
 }

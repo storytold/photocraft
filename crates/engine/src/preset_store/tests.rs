@@ -518,10 +518,21 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     // Deleted behind the store's back.
     let k0 = key(&t, "Big 0");
     mem.remove(&tip_file(&k0)).unwrap();
+    t.execute("tools.setBrush", json!({"preset": "Hard Round"})).unwrap();
+    let broken = t.tools.presets.iter_mut().find(|p| p.name == "Big 0").unwrap();
+    broken.captures.color = true;
+    broken.brush.color = [1.0, 0.0, 0.0, 1.0];
+    t.tools.foreground = [0.0, 0.0, 1.0, 1.0];
     let before = t.tools.brush.clone();
+    let preset_before = t.tools.current_preset.clone();
+    let foreground_before = t.tools.foreground;
+    let revision_before = t.tools.brush_rev;
     assert!(t.execute("tools.setBrush", json!({"preset": "Big 0"})).is_err());
     assert!(t.execute("paint.stroke", json!({"points": [[1, 1], [9, 9]], "preset": "Big 0"})).is_err());
     assert_eq!(t.tools.brush, before);
+    assert_eq!(t.tools.current_preset, preset_before);
+    assert_eq!(t.tools.foreground, foreground_before);
+    assert_eq!(t.tools.brush_rev, revision_before);
     // Corrupt, or a different bitmap under the same name.
     let k1 = key(&t, "Big 1");
     mem.write(&tip_file(&k1), b"PCTIP1\x08garbage").unwrap();
@@ -1124,4 +1135,22 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
     assert!(!opened.warnings.is_empty());
     assert!(mem.read(PATTERNS_FILE, 1 << 20).is_err());
     assert_eq!(mem.read(LEGACY_PATTERNS_FILE, MAX_PATTERNS_BYTES).unwrap(), old);
+}
+
+/// A symlink planted among the presets must not carry a managed write to its target: the
+/// document writer follows links on purpose, the store confines itself to its directory.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_preset_entry_is_refused_not_written_through() {
+    let dir = TempDir::new("symlink");
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let outside = dir.0.join("outside.txt");
+    std::fs::write(&outside, b"victim").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.0.join("planted.json")).unwrap();
+    let be = DirBackend::new(&dir.0);
+    let e = be.write("planted.json", b"{}").unwrap_err();
+    assert!(e.contains("symbolic link"), "{e}");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
+    be.write("fresh.json", b"{}").unwrap();
+    assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
 }
