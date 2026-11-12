@@ -36,6 +36,84 @@ fn params(wrap: bool) -> Value {
     json!({"points": [[48, 48]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "wrap": wrap})
 }
 
+/// Nullable client fields use the picked layer; malformed non-null overrides still fail atomically.
+#[test]
+fn clone_null_source_layer_matches_omission_for_clone_and_heal() {
+    for depth in [8, 16, 32] {
+        for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+            for external in [false, true] {
+                for which in ["current", "currentAndBelow"] {
+                    if !external && which != "current" {
+                        continue;
+                    }
+                    let (mut s, _, _) = setup(depth, "rgb");
+                    if external {
+                        s.execute("file.new", json!({"width": 64, "height": 64, "depth": depth})).unwrap();
+                        s.execute("layer.new.layer", json!({})).unwrap();
+                    }
+                    let target = s.active().unwrap().active_layer.unwrap();
+                    let rect = Rect::new(40, 40, 56, 56);
+                    let mut omitted = params(false);
+                    omitted["sampleLayer"] = json!(which);
+                    omitted["aligned"] = json!(false);
+                    let mut nullable = omitted.clone();
+                    nullable["sourceLayer"] = Value::Null;
+                    let expected_live = LiveRetouch::begin(&s, cmd, &omitted).unwrap();
+                    let actual_live = LiveRetouch::begin(&s, cmd, &nullable).unwrap();
+                    let live_pixels = |live: &LiveRetouch| live.doc.layer(target).unwrap().surface().unwrap().read_region(rect);
+                    assert_eq!(live_pixels(&actual_live), live_pixels(&expected_live), "{depth}/{cmd}/{external}/{which}");
+                    assert!(actual_live.doc.layer(target).unwrap().surface().unwrap().rgba(48, 48)[3] > 0.0, "the picked source has pixels");
+                    s.execute(cmd, omitted).unwrap();
+                    let expected = s.active().unwrap().doc.layer(target).unwrap().surface().unwrap().read_region(rect);
+                    assert!(s.undo());
+                    s.execute(cmd, nullable.clone()).unwrap();
+                    assert_eq!(s.active().unwrap().doc.layer(target).unwrap().surface().unwrap().read_region(rect), expected);
+                    let before = s.active().unwrap().doc.clone();
+                    let slots = s.presets.clone.clone();
+                    for invalid in [json!("bad"), json!(-1), json!(1.5), json!(true), json!([]), json!(u64::MAX)] {
+                        nullable["sourceLayer"] = invalid;
+                        assert!(LiveRetouch::begin(&s, cmd, &nullable).is_err());
+                        assert!(s.execute(cmd, nullable.clone()).is_err());
+                        assert_eq!(s.active().unwrap().doc, before);
+                        assert_eq!(s.presets.clone, slots);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A null document preserves a slot during edits and picks the active document for a new source.
+#[test]
+fn clone_null_document_matches_omission_for_source_and_slot_edits() {
+    for depth in [8, 16, 32] {
+        let (mut s, _, _) = setup(depth, "rgb");
+        let original = s.active().unwrap().doc.id;
+        s.execute("file.new", json!({"width": 64, "height": 64, "depth": depth})).unwrap();
+        let active = s.active().unwrap().doc.id;
+        let before = s.active().unwrap().doc.clone();
+        for mut p in [json!({"width": 150}), json!({"offset": [-20, -10], "anchor": [40, 30]}), json!({"source": [8, 12]})] {
+            let slots = s.presets.clone.clone();
+            let expected = s.execute("cloneSource.set", p.clone()).unwrap();
+            let expected_slots = s.presets.clone.clone();
+            s.presets.clone = slots;
+            p["document"] = Value::Null;
+            assert_eq!(s.execute("cloneSource.set", p.clone()).unwrap(), expected);
+            assert_eq!(s.presets.clone, expected_slots);
+            assert_eq!(s.presets.clone.active().document, Some(if p.get("source").is_some() { active } else { original }));
+            assert_eq!(s.active().unwrap().doc, before, "source edits do not paint");
+        }
+        let slots = s.presets.clone.clone();
+        for invalid in [json!("bad"), json!(-1), json!(1.5), json!(true), json!([]), json!(u64::MAX)] {
+            assert!(s.execute("cloneSource.set", json!({"source": [20, 20], "document": invalid})).is_err());
+            assert_eq!(s.presets.clone, slots);
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+        assert!(s.execute("cloneSource.set", json!({"document": 0, "width": 200})).is_err(), "an explicit document still requires a source");
+        assert_eq!(s.presets.clone, slots);
+    }
+}
+
 /// A picked layer must remain the source through target switches and every rendering path.
 #[test]
 fn clone_current_layer_keeps_the_picked_source_for_preview_live_commit_and_undo() {

@@ -425,7 +425,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if anchor.is_some() && offset.is_none() {
         return Err(bad(CMD, "anchor requires an offset edit"));
     }
-    let doc = match p.get("document") {
+    let doc = match p.get("document").filter(|v| !v.is_null()) {
         None => s.active(),
         Some(value) => {
             if source.is_none() {

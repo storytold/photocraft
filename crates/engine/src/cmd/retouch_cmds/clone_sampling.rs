@@ -213,7 +213,7 @@ fn resolve_source(s: &Session, p: &Value, cmd: &str, source: Option<crate::prese
     }
     let mut layer = None;
     if which == SampleLayers::Current || (external && which == SampleLayers::CurrentAndBelow) {
-        let id = match p.get("sourceLayer") {
+        let id = match p.get("sourceLayer").filter(|v| !v.is_null()) {
             Some(value) => Some(LayerId(value.as_u64().ok_or_else(|| bad(cmd, "sourceLayer must be a layer id"))?)),
             None if picked => source.map_or(slot.layer.map(LayerId), |d| d.layer),
             None => None,
