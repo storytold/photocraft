@@ -132,9 +132,12 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if let Some(r) = crate::rasterize_prompt::intercept_filter(app, id, params) {
         return Some(r);
     }
-    // A pending Pen anchor is gesture state; Edit › Undo must match the keyboard.
-    if id == "edit.undo" && crate::vector_ui::pen_undo_last_point(app) {
-        return Some(Ok(Value::Null));
+    // A pending Pen anchor is gesture state; Edit › Undo must match the keyboard. Undo back to
+    // where a Pen path was finished (closed, ↩/Esc, another tool) gives the path back to the Pen
+    // rather than deleting it; Redo finishes it again. Step Backward/Forward step the same way.
+    // An open Free Transform or Crop box steps itself first.
+    if let Some(r) = crate::vector_ui::pen_history_step(app, id) {
+        return Some(r.map(|_| Value::Null));
     }
     if id == "edit.undo" && crate::actions::library::edit_undo_label(app).is_some() {
         return Some(crate::actions::library::undo(app));

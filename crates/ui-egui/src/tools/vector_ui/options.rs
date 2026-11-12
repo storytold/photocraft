@@ -67,8 +67,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
-        let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0);
+        // Photoshop's Pen lists Shape, Path and a greyed Pixels (#12906); the other pens keep theirs.
+        let opts = if tool == Tool::Pen {
+            vec![("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path")), ("pixels".to_string(), tl!("Pixels"))]
+        } else {
+            vec![("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))]
+        };
+        crate::widgets::dropdown_enabled(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0, |m| m != "pixels");
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
             crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
@@ -132,6 +137,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     // geometry, the Line's arrowheads included, stays.
     let paint = !(is_shape_tool(tool) && draws_path(&app.ui.tool_options));
     crate::shape_options::options_bar(app, ui, tool, paint);
+    if is_shape_tool(tool) {
+        // Path operations, alignment and arrangement, in Shape and Path mode (#13235).
+        crate::widgets::vline(ui, 22.0);
+        super::pen::path_operations_menu(app, ui);
+        super::pen::path_alignment_menu(app, ui);
+        super::pen::path_arrangement_menu(app, ui);
+    }
     // Photoshop-style arrowhead settings at the right of Line options.
     if tool == Tool::Line {
         crate::widgets::vline(ui, 22.0);
@@ -397,7 +409,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 }
             }
             photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, corner_radius, .. } => {
-                // One radius rounds every vertex of a triangle, polygon or star, as in Photoshop.
+                // One radius rounds every vertex of a triangle or polygon, or a star's outer points, as in Photoshop.
                 ui.horizontal(|ui| {
                     let mut r = *corner_radius as f32;
                     if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {

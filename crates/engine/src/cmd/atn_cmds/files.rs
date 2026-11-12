@@ -1,4 +1,4 @@
-use super::convert::{ReplacementSet, UniqueNames, export_with_keys, import_first_with_keys};
+use super::convert::{ReplacementSet, UniqueNames, clip_name, export_with_keys, import_first_with_keys};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
 mod replacement;
@@ -26,7 +26,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
-            imp.set = n.trim().to_string();
+            // Held to the importer's name limit: the set name is copied into every action.
+            imp.set = clip_name(n.trim()).trim_end().to_string();
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
             }

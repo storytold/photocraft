@@ -812,7 +812,7 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Suspend
         } else {
             None
         };
-        let recording = actions_cmds::begin_playback_at(&mut app.session, row, &mut action)?;
+        let recording = actions_cmds::begin_playback_at_from(&mut app.session, row, &mut action, from)?;
         Ok(recording.and(owner_id))
     })();
     let owner_id = match recording {
