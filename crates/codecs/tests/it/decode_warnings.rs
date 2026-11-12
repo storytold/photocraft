@@ -509,3 +509,12 @@ fn fits_source_probe_preserves_nonimage_payload_and_allows_empty_extensions() {
         assert_eq!(has_unretained_source_data(&bytes).unwrap(), data, "empty primary versus skipped one-dimensional payload");
     }
 }
+
+#[test]
+fn the_frame_count_reads_back_from_the_warnings_text() {
+    let text = |total| DecodeWarning::MoreFrames { total }.to_string();
+    assert_eq!(DecodeWarning::more_frames_in(&text(Some(7))), Some(Some(7)));
+    assert_eq!(DecodeWarning::more_frames_in(&text(None)), Some(None));
+    assert_eq!(DecodeWarning::more_frames_in("only the first of many frames was imported"), None);
+    assert_eq!(DecodeWarning::more_frames_in("something else"), None);
+}

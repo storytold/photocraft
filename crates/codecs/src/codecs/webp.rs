@@ -70,18 +70,36 @@ pub(crate) fn is_animated(bytes: &[u8]) -> bool {
 /// and the first one carries [`DecodeWarning::Truncated`]. The frame count
 /// ([`super::gif_frames::MAX_GIF_FRAMES`]) and the total decoded bytes are checked against
 /// `limits` before each frame is kept.
-pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<super::gif_frames::AnimationFrame>>, CodecError> {
+pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits, stop: &dyn Fn() -> bool) -> Result<Option<Vec<super::gif_frames::AnimationFrame>>, CodecError> {
+    Ok(decode_prefix(bytes, limits, &|_, _| usize::MAX, stop)?.map(|(frames, _)| frames))
+}
+
+/// [`decode_frames`], stopping after the first `keep(width, height)` frames so that a caller who
+/// can only hold those never decodes the rest, or once `stop` says so; the `bool` says that more
+/// frames follow.
+pub(crate) fn decode_prefix(
+    bytes: &[u8],
+    limits: &Limits,
+    keep: &dyn Fn(u32, u32) -> usize,
+    stop: &dyn Fn() -> bool,
+) -> Result<Option<(Vec<super::gif_frames::AnimationFrame>, bool)>, CodecError> {
     use super::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
     if !is_animated(bytes) {
         return Ok(None);
     }
     let (mut dec, w, h, layout) = open(bytes, limits)?;
+    let keep = keep(w, h);
     let size = dec.output_buffer_size().ok_or_else(|| err("image too large"))?;
     let icc = dec.icc_profile().ok().flatten();
     let mut buf = alloc_zeroed::<u8>(size)?;
     let mut out: Vec<AnimationFrame> = Vec::new();
     let mut damaged = false;
+    let mut more = false;
     for _ in 0..dec.num_frames() {
+        if out.len() >= keep || stop() {
+            more = true;
+            break;
+        }
         if out.len() >= MAX_GIF_FRAMES {
             return Err(CodecError::LimitExceeded(format!("more than {MAX_GIF_FRAMES} frames")));
         }
@@ -105,7 +123,7 @@ pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<
     if damaged && let Some(first) = out.first_mut() {
         first.image.warnings.push(DecodeWarning::Truncated { format: F });
     }
-    Ok(Some(out))
+    Ok(Some((out, more)))
 }
 
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {

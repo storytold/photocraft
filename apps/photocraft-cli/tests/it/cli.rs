@@ -288,6 +288,7 @@ fn info_and_convert_report_decode_warnings() {
     let cases = [
         ("whole.jpg", &jpeg[..], None, None),
         ("half.jpg", &jpeg[..jpeg.len() / 2], Some("JPEG data ends early (the file is truncated or damaged); part of the image is missing"), None),
+        // The CLI opens an animated GIF's first frame, as before frame animations (#6898 review).
         ("anim.gif", &gif[..], Some("only the first of 3 frames was imported"), Some("written as an 8-bit palette PNG (2 colours)")),
     ];
     for (name, bytes, warning, export) in cases {
@@ -298,14 +299,7 @@ fn info_and_convert_report_decode_warnings() {
         assert_eq!(v["warnings"], json!(warning.into_iter().collect::<Vec<_>>()), "{name}");
         let err = ok(bin().arg("convert").arg(&file).arg(d.join(format!("{name}.png")))).stderr;
         let expected: Vec<String> = warning.into_iter().chain(export).map(|w| format!("warning: {w}")).collect();
-        assert_eq!(
-            err.trim(),
-            expected.join(
-                "
-"
-            ),
-            "{name}"
-        );
+        assert_eq!(err.trim(), expected.join("\n"), "{name}");
     }
     std::fs::remove_dir_all(d).unwrap();
 }

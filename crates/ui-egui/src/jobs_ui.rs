@@ -281,19 +281,46 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
+    let started = app.session.start_open_for_user_with_background(name, source, path.clone(), app.background_jobs).map_err(|e| e.to_string())?;
+    track_open(app, name, path, started, slot, order)
+}
+
+/// [`start_open`] for the animation prompt's answer (`choice`, Frames or Video): the file `name` is
+/// read again in that shape, without asking.
+pub(crate) fn start_open_answered(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    choice: photocraft_engine::prefs::AnimatedOpen,
+) -> Result<(), String> {
+    let started = app.session.start_open_answered(name, source, path.clone(), choice, app.background_jobs).map_err(|e| e.to_string())?;
+    track_open(app, name, path, started, slot, order)
+}
+
+fn track_open(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    started: Started,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
+    match started {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name: name.to_string(), path, slot, order });
+            track_open_tab(app, OpenTab { job, name: name.to_string(), path, slot, order });
             Ok(())
         }
     }
 }
 
 /// A file opening in the background gets its tab: focused, with the status line naming it.
-fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
+fn track_open_tab(app: &mut PhotocraftApp, tab: OpenTab) {
     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &tab.name)]);
     app.jobs.focus = Some(tab.job);
     app.jobs.opens.push(tab);
@@ -317,7 +344,7 @@ pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, or
     match started {
         Started::Done(v) => finish_open(app, &name, None, &v, None, order),
         Started::Job(job) => {
-            track_open(app, OpenTab { job, name, path: None, slot: None, order });
+            track_open_tab(app, OpenTab { job, name, path: None, slot: None, order });
             Ok(())
         }
     }
@@ -718,7 +745,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
+    let held = |doc, read_only, question, animated, policy_applied| crate::open_prompt::Held {
         doc,
         read_only,
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
@@ -729,14 +756,17 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         slot,
         order,
         question,
+        animated,
         policy_applied,
         smart_object: v.get("smartObject").and_then(Value::as_bool).unwrap_or(false),
     };
-    // Held back for the profile prompt (Ask When Opening).
+    // Held back for the profile prompt (Ask When Opening) or the animation prompt.
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
+        let bytes = app.session.take_held_open_bytes(id);
         let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
-        return Ok(());
+        let asked = |k: &str| v.get(k).filter(|q| !q.is_null()).cloned();
+        let waiting = crate::open_prompt::Held { bytes, ..held(doc, read_only, asked("color"), asked("animated"), false) };
+        return crate::open_prompt::arrive_asking(app, waiting);
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
     // handler may have moved or closed tabs, so the apply-time index is no longer authority.
@@ -748,7 +778,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     {
         let read_only = st.source_read_only;
         let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        crate::open_prompt::arrive(app, held(doc, read_only, None, None, true));
         return Ok(());
     }
     if let Some(slot) = tab_slot(app, slot, order) {

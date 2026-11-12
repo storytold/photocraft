@@ -1,8 +1,8 @@
 //! `decode_webp_frames`: every frame of an animated WebP, composited, with its duration (#1198).
 
 use photocraft_codecs::{
-    AnimationFrame, ChannelLayout, CodecError, DecodeOptions, DecodeWarning, EncodeOptions, Format, Image, Limits, decode, decode_webp_frames, encode,
-    webp_is_animated,
+    AnimationFrame, ChannelLayout, CodecError, DecodeOptions, DecodeWarning, EncodeOptions, Format, Image, Limits, decode, decode_webp_frames,
+    decode_webp_frames_prefix, encode, webp_is_animated,
 };
 
 const RED: [u8; 4] = [255, 0, 0, 255];
@@ -163,4 +163,41 @@ fn the_byte_budget_covers_all_frames_together() {
     let opts = DecodeOptions { limits: Limits { max_alloc: 256, ..Limits::default() }, ..Default::default() };
     assert_eq!(decode_webp_frames(&two, &opts).unwrap().len(), 2);
     assert!(matches!(decode_webp_frames(&ten, &opts), Err(CodecError::LimitExceeded(_))));
+}
+
+#[test]
+fn a_prefix_stops_at_what_the_caller_can_hold() {
+    let a = animated(4, 4, &[part(RED, 4, 4, 50), part(GREEN, 4, 4, 60), part(BLUE, 4, 4, 70)]);
+    let prefix = |keep: usize| {
+        decode_webp_frames_prefix(&a, &DecodeOptions::default(), |w, h| {
+            assert_eq!((w, h), (4, 4));
+            keep
+        })
+        .unwrap()
+    };
+    let (two, more) = prefix(2);
+    assert_eq!((two.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), more), (vec![50, 60], true));
+    for keep in [3, 50] {
+        let (all, more) = prefix(keep);
+        assert_eq!((all.len(), more), (3, false));
+    }
+}
+
+#[test]
+fn a_prefix_does_not_read_the_frames_past_it() {
+    // A budget that holds two frames and not ten: stopping at two never reaches it.
+    let ten: Vec<Part> = (0..10).map(|i| part(if i % 2 == 0 { RED } else { BLUE }, 4, 4, 50)).collect();
+    let ten = animated(4, 4, &ten);
+    let opts = DecodeOptions { limits: Limits { max_alloc: 256, ..Limits::default() }, ..Default::default() };
+    assert!(matches!(decode_webp_frames(&ten, &opts), Err(CodecError::LimitExceeded(_))));
+    let (two, more) = decode_webp_frames_prefix(&ten, &opts, |_, _| 2).unwrap();
+    assert_eq!((two.len(), more), (2, true));
+}
+
+#[test]
+fn a_prefix_of_a_still_is_its_one_frame() {
+    let mut still = Vec::new();
+    still.extend(photocraft_codecs::encode(&solid(RED, 4, 4), Format::WebP, &EncodeOptions { webp_lossless: true, ..Default::default() }).unwrap());
+    let (frames, more) = decode_webp_frames_prefix(&still, &DecodeOptions::default(), |_, _| 2).unwrap();
+    assert_eq!((frames.len(), more), (1, false));
 }

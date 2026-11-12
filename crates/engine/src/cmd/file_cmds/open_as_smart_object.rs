@@ -81,7 +81,7 @@ fn apply(
     let raw = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
     let question = s.color.open_question(&doc).filter(|_| !raw);
     if damaged || question.is_some() {
-        let held = s.hold_open(doc, false);
+        let held = s.hold_open(doc, false, None);
         return Ok(json!({"held": held, "name": name, "warnings": warnings, "color": question, "damaged": damaged, "smartObject": true}));
     }
     let color = s.color.open_policy(&mut doc, s.prefs().file_handling.ignore_exif_profile_tag);
