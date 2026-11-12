@@ -105,9 +105,12 @@ fn reset_tool_restores_new_layer() {
     assert_eq!(app.ui.tool_options.shape_path_op, "newLayer");
 }
 
+fn labels(e: &[(&'static str, &'static str)]) -> Vec<&'static str> {
+    e.iter().map(|(l, _)| *l).collect()
+}
+
 #[test]
 fn entries_follow_the_reference_order() {
-    let labels = |e: &[(&str, &str)]| e.iter().map(|(l, _)| *l).collect::<Vec<_>>();
     assert_eq!(
         labels(&PATH_ALIGN_ENTRIES),
         ["Align Left Edges", "Align Horizontal Centers", "Align Right Edges", "Align Top Edges", "Align Vertical Centers", "Align Bottom Edges"]

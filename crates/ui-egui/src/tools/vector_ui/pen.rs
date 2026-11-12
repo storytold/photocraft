@@ -860,12 +860,12 @@ pub(super) fn path_alignment_menu(_app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.add_enabled_ui(false, |ui| path_op_button(ui, glyph, tl!(label), false));
         }
         ui.separator();
-        let key = egui::Id::new("path-align-to");
+        let key = egui::Id::unique("path-align-to");
         let mut canvas = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
         ui.horizontal(|ui| {
             ui.label(tl!("Align To:"));
             let text = if canvas { tl!("Canvas") } else { tl!("Selection") };
-            egui::ComboBox::from_id_salt("path-align-to-box").selected_text(text).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("path-align-to-box").selected_text(text).show_ui(ui, |ui| {
                 ui.selectable_value(&mut canvas, false, tl!("Selection"));
                 ui.selectable_value(&mut canvas, true, tl!("Canvas"));
             });
