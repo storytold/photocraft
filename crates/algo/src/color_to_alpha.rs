@@ -12,8 +12,11 @@
 //! and `a = max_i a_i`. Then `Q = C + (P − C) / a`, and the layer's alpha is multiplied by `a`.
 //! Composited over `C` again with Normal blending, the result reproduces `P`.
 //!
-//! Two thresholds shape `a`: distances at or below `transparency` become fully transparent, at or
-//! above `opacity` fully opaque, linear in between (`0` and `1` leave `a` as computed).
+//! Two thresholds shape each `a_i`, as in GIMP: a channel's distance `|P_i − C_i|` at or below
+//! `transparency` gives 0, at or above `opacity` gives 1, and in between it is stretched over
+//! the room left toward the channel limit, capped at `opacity` (`0` and `1` leave `a_i` as
+//! computed). Measuring the distance, not the ratio, lets a pixel a few levels from a key near a
+//! channel limit vanish like one around a mid-range key (#13433).
 //!
 //! The arithmetic runs on the stored channel values of the document (encoded, not linearised, at
 //! every depth). That is the space PhotoCraft's Normal blending composites in, so the unmixed
@@ -25,20 +28,16 @@ use crate::Ctx;
 use crate::fxutil::{MAXC, native, ncol};
 use crate::image::Image;
 
-/// The opacity `a` (0–1) a pixel needs to be a mix of some in-range colour and `key`, per the
-/// module docs. Out-of-range samples (32-bit HDR values beyond what `key` can reach) need full
-/// opacity; non-finite samples are ignored.
-pub fn opacity(colour: &[f32], key: &[f32]) -> f32 {
+/// The opacity `a` (0–1) a pixel needs to be a mix of some in-range colour and `key`, with the
+/// thresholds applied per channel (module docs). Out-of-range samples (32-bit HDR values beyond
+/// what `key` can reach) need full opacity; non-finite samples are ignored.
+pub fn opacity(colour: &[f32], key: &[f32], transparency: f32, opacity_threshold: f32) -> f32 {
     let mut a = 0.0f32;
     for (&p, &c) in colour.iter().zip(key) {
-        let ai = if p > c {
-            // Past a key at the top of the range (`1 − C = 0`) no in-range colour reaches `P`.
-            if c < 1.0 { (p - c) / (1.0 - c) } else { 1.0 }
-        } else if p < c {
-            if c > 0.0 { (c - p) / c } else { 1.0 }
-        } else {
-            0.0
-        };
+        // Past a key at a channel limit (no room left) no in-range colour reaches `P`: `remap`
+        // gives 1 for any distance above the transparency threshold.
+        let room = if p > c { 1.0 - c } else { c };
+        let ai = remap((p - c).abs(), transparency, opacity_threshold.min(room));
         if ai.is_finite() {
             a = a.max(ai);
         }
@@ -62,7 +61,7 @@ pub fn remap(a: f32, transparency: f32, opacity: f32) -> f32 {
 /// multiplied by. Fully opaque results keep the colour as it was; fully transparent ones take the
 /// key colour (any colour would do, this one keeps the result deterministic).
 pub fn unmix(colour: &mut [f32], key: &[f32], transparency: f32, opacity_threshold: f32) -> f32 {
-    let a = remap(opacity(colour, key), transparency, opacity_threshold);
+    let a = opacity(colour, key, transparency, opacity_threshold);
     if a >= 1.0 {
         return 1.0;
     }
@@ -164,6 +163,22 @@ mod tests {
         let mut px = [0.4, 0.4, 0.4];
         assert_eq!(unmix(&mut px, &[1.0; 3], 0.0, 0.5), 1.0);
         assert_eq!(px, [0.4, 0.4, 0.4]);
+    }
+
+    #[test]
+    fn thresholds_measure_the_distance_from_a_key_near_a_channel_limit() {
+        // #13433: pixels one to three levels from #fc03fb vanish like those around a mid grey.
+        let v = |n: f32| n / 255.0;
+        let key = [v(252.0), v(3.0), v(251.0)];
+        for px in [[1.0, 0.0, 1.0], [v(253.0), v(2.0), v(252.0)], [v(251.0), v(4.0), v(250.0)]] {
+            let mut q = px;
+            assert_eq!(unmix(&mut q, &key, 0.25, 0.6), 0.0, "{px:?}");
+        }
+        let mut grey = [v(128.0); 3];
+        assert_eq!(unmix(&mut grey, &[v(125.0); 3], 0.25, 0.6), 0.0);
+        // A colour far from the key stays opaque.
+        let mut blue = [0.0, 0.0, 1.0];
+        assert_eq!(unmix(&mut blue, &key, 0.25, 0.6), 1.0);
     }
 
     #[test]
