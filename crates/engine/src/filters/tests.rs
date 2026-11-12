@@ -695,8 +695,19 @@ fn wave_scale_params_default_to_100_and_clamp_to_photoshops_range() {
         other => panic!("{p}: {other:?}"),
     };
     assert_eq!(scales(json!({})), (100.0, 100.0));
-    assert_eq!(scales(json!({"scaleHorizontal": 35, "scaleVertical": 80.5})), (35.0, 80.5));
+    assert_eq!(scales(json!({"scaleHorizontal": 35, "scaleVertical": 80.5})), (35.0, 81.0));
     assert_eq!(scales(json!({"scaleHorizontal": 0, "scaleVertical": 400})), (1.0, 100.0));
     assert!(validate_params("filter.distort.wave", &json!({"scaleHorizontal": 0})).is_err());
     assert!(validate_params("filter.distort.wave", &json!({"scaleVertical": 100.5})).is_err());
+}
+
+/// A fractional Wave scale (the command accepts one) renders as the whole percent a PSD smart
+/// filter stores in its integer `SclH` and `SclV`, so saving and reopening doesn't change the
+/// render. Photoshop's dialog takes whole percents only.
+#[test]
+fn fractional_wave_scales_render_as_the_whole_percent_files_store() {
+    let wave = |h: f64, v: f64| params_for("filter.distort.wave", &json!({"scaleHorizontal": h, "scaleVertical": v}));
+    assert_eq!(wave(40.4, 15.6), wave(40.0, 16.0));
+    assert_eq!(wave(0.6, 99.5), wave(1.0, 100.0));
+    assert_ne!(wave(40.0, 16.0), wave(41.0, 16.0), "whole percents stay distinct");
 }

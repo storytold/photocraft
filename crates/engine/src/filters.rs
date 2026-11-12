@@ -149,8 +149,10 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             wavelength_max: f(p, "wavelengthMax", 120.0).clamp(2.0, 999.0),
             amplitude_min: f(p, "amplitudeMin", 5.0).clamp(1.0, 998.0),
             amplitude_max: f(p, "amplitudeMax", 35.0).clamp(1.0, 999.0),
-            scale_horizontal: f(p, "scaleHorizontal", 100.0).clamp(1.0, 100.0),
-            scale_vertical: f(p, "scaleVertical", 100.0).clamp(1.0, 100.0),
+            // Whole percents, as Photoshop's dialog and the PSD and .atn descriptors hold them, so a
+            // fraction renders as the value those files store and reopen with.
+            scale_horizontal: f(p, "scaleHorizontal", 100.0).round().clamp(1.0, 100.0),
+            scale_vertical: f(p, "scaleVertical", 100.0).round().clamp(1.0, 100.0),
             wave_type: match s(p, "type", "sine") {
                 "triangle" => WaveType::Triangle,
                 "square" => WaveType::Square,
