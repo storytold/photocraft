@@ -744,7 +744,7 @@ fn a_snapshot_uploads_straight_alpha_the_way_the_canvas_does() {
         aspect: 1.0,
     };
     super::draw_snapshot(&mut app, &painter, &xf);
-    let delta = ctx.tex_manager().write().take_delta();
+    let mut delta = ctx.tex_manager().write().take_delta();
     let texel = delta
         .set
         .values()
@@ -754,6 +754,8 @@ fn a_snapshot_uploads_straight_alpha_the_way_the_canvas_does() {
             (img.size == [1, 1]).then(|| img.pixels[0])
         })
         .expect("the snapshot uploaded");
+    // Handled here, as a renderer would.
+    delta.clear();
     assert!(texel.a().abs_diff(128) <= 1 && texel.r().abs_diff(128) <= 1, "premultiplied half red: {texel:?}");
 }
 
