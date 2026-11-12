@@ -1813,6 +1813,12 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
             crate::crop_ui::draw_turn_cursor(ctx, p, toward);
         }
     } else if let Some(p) = response.hover_pos()
+        && let Some(zone) =
+            crate::perspective_crop_ui::cursor(app, xf.to_doc(p)).filter(|z| tool == Tool::PerspectiveCrop && *z != crate::perspective_crop_ui::Zone::Outside)
+    {
+        // What a press there does (#11974); outside the quad the tool's usual crosshair below.
+        ui.ctx().set_cursor_icon(crate::tool_cursor::perspective_crop(input.painter, zone, p));
+    } else if let Some(p) = response.hover_pos()
         && let Some(c) = selection_cursor(app, tool, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
     {
         // Over a selection (Photoshop's cursors): the move cursor where a press drags the
@@ -1863,6 +1869,22 @@ fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size:
         crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
     }
     egui::CursorIcon::None
+}
+
+/// A pen tool's cursor at screen point `p` (document point `doc`): the crosshair for precise Other
+/// Cursors (#4639), the black arrow for Add Anchor Point unless a click would split a segment
+/// (#12729; ⌘ is Direct Selection's arrow, ⌥ keeps the pen), else the tool's own pen icon.
+fn pen_tool_cursor(app: &PhotocraftApp, ui: &egui::Ui, tool: Tool, doc: [f64; 2], p: Pos2) -> egui::CursorIcon {
+    if precise_other_cursor(app) {
+        return egui::CursorIcon::Crosshair;
+    }
+    if tool == Tool::AddAnchorPoint {
+        let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+        if !mods.alt && (mods.command || !crate::anchor_tools::adds_anchor_at(app, tool, doc)) {
+            return crate::tool_cursor::arrow(ui.ctx(), p);
+        }
+    }
+    pen_cursor(ui.ctx(), tool, p)
 }
 
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
@@ -1998,10 +2020,12 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         {
             crate::tool_cursor::continue_path(painter, p)
         }
+        // Add Anchor Point: the pen with "+" only over a segment a click would split, else the
+        // black arrow (#12729); ⌘ is Direct Selection's arrow. ⌥ and Precise stay as they were.
         // The pen tools: their own icon with its nib on the point, or the crosshair for
-        // precise Other Cursors (#4639).
+        // precise Other Cursors (#4639); Add Anchor Point the black arrow off a segment (#12729).
         Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
-            if precise_other_cursor(app) { egui::CursorIcon::Crosshair } else { pen_cursor(ui.ctx(), tool, p) }
+            pen_tool_cursor(app, ui, tool, xf.to_doc(p), p)
         }
         // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
         Tool::Move if crate::move_mods::copying(app, alt) => egui::CursorIcon::Copy,
@@ -3114,6 +3138,9 @@ mod cpu_background_tests;
 #[path = "canvas/blend_viewport_tests.rs"]
 mod blend_viewport_regression;
 
+#[cfg(test)]
+#[path = "canvas/perspective_crop_cursor_tests.rs"]
+mod perspective_crop_cursor_tests;
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]
 mod pixel_alignment_tests;
