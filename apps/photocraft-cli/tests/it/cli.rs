@@ -2086,6 +2086,8 @@ fn mcp_live_without_the_app_explains_what_to_do() {
     let mut child = bin()
         .args(["mcp", "--live", "--when-closed", "error"])
         .env("PHOTOCRAFT_CONFIG_DIR", &dir)
+        // The machine's ArtCraft Launcher may have agents on; this test needs them off.
+        .env("CRAFT_MCP_DIR", &dir)
         .env("PHOTOCRAFT_CONTROL_PORT", "not-a-port")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
