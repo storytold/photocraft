@@ -1,5 +1,37 @@
 use super::*;
 
+/// Compare owned filter-mask encoding with borrowed compression at every depth.
+#[test]
+fn owned_filter_masks_match_borrowed_compression_at_every_depth() {
+    let bounds = GeomRect::new(-3, -2, 7, 5);
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
+        let mut surface = Surface::new(fmt);
+        surface.fill_rect(bounds, &[0.25]);
+        let mask = LayerMask { surface, ..LayerMask::reveal_all() };
+        for mask in [None, Some(&mask)] {
+            let item = filter_mask_item("test", mask, bounds, sample);
+            let (rect, actual) = item.mask.unwrap();
+            assert_eq!(rect, PsdRect { top: bounds.y0, left: bounds.x0, bottom: bounds.y1, right: bounds.x1 });
+            let raw = match mask {
+                Some(mask) => crate::pixels::surface_planes(&mask.surface, bounds, 1, &[false], false).remove(0),
+                None => {
+                    let mut out = Vec::new();
+                    for _ in 0..bounds.width() as usize * bounds.height() as usize {
+                        crate::pixels::encode_be(1.0, sample, &mut out);
+                    }
+                    out
+                }
+            };
+            let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+            assert_eq!(
+                actual,
+                EffectsPlane::encode(compression, &raw, bounds.width() as usize, bounds.height() as usize, crate::pixels::psd_depth(sample)).unwrap()
+            );
+        }
+    }
+}
+
 fn count(hay: &[u8], needle: &[u8]) -> usize {
     hay.windows(needle.len()).filter(|w| *w == needle).count()
 }

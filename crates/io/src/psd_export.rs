@@ -12,7 +12,7 @@ use photocraft_raster::{Interrupt, Surface};
 
 use crate::adjust_map;
 use crate::blocks;
-use crate::pixels::{deinterleave, encode_be, psd_depth};
+use crate::pixels::{encode_be, psd_depth, surface_planes};
 use crate::psd_import::REGENERATED;
 
 mod banded;
@@ -163,10 +163,6 @@ fn psd_background(doc: &Document) -> Option<photocraft_doc::LayerId> {
 /// as pixels instead.
 const MAX_NESTING: u32 = 8;
 
-fn h_of(r: photocraft_geom::Rect) -> usize {
-    r.height() as usize
-}
-
 fn psd_mode(m: ColorMode) -> PsdMode {
     match m {
         ColorMode::Grayscale => PsdMode::Grayscale,
@@ -189,26 +185,29 @@ impl Ex<'_> {
         if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
     }
 
-    fn encode(&self, id: i16, plane: &[u8], w: usize, h: usize) -> ChannelData {
+    /// Encode an owned layer or mask plane, optionally moving its result to scratch storage.
+    fn encode(&self, id: i16, plane: Vec<u8>, w: usize, h: usize) -> ChannelData {
         let depth = psd_depth(self.fmt.sample);
         // Photoshop writes empty layer/mask channels as just the raw compression code.
         // A ZIP stream for a zero-sized channel makes readers try to decompress an
         // invalid image extent (notably psd-tools for 32-bit adjustment layers).
         let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
-        let c = ChannelData::encode(id, compression, plane, w, h, depth, self.version)
-            .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
-            .unwrap_or(ChannelData::new(id, Some(Compression::Raw), plane.to_vec()));
+        let layout = photocraft_psd::compression::PlaneLayout { planes: 1, width: w, height: h, depth, version: self.version };
+        let (compression, data) = crate::pixels::compress_plane(plane, compression, &layout);
+        let c = ChannelData::new(id, Some(compression), data);
         match &self.stage {
             Some(stage) => stage.channel(c),
             None => c,
         }
     }
 
+    /// Build empty raw colour and transparency channels for an empty layer.
     fn empty_channels(&self) -> Vec<ChannelData> {
-        (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0)).collect()
+        (-1..self.cc as i16).map(|id| self.encode(id, Vec::new(), 0, 0)).collect()
     }
 
-    fn pixel_channels(&self, s: &Surface, name: &str) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
+    /// Gather and encode a raster layer, omitting transparency when it is unused.
+    fn pixel_channels(&self, s: &Surface, name: &str, include_alpha: bool) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
         let mut warnings = Vec::new();
         let s = if s.format() != self.fmt {
             warnings.push(format!("layer \"{name}\": pixels converted from {:?} to {:?}", s.format(), self.fmt));
@@ -225,41 +224,32 @@ impl Ex<'_> {
         // encoded a band of rows at a time instead (#5333).
         let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
         if dense > banded::banded_from() {
-            return (to_psd_rect(r), self.banded_channels(&s, r), warnings);
-        }
-        // The interleaved gather is the sequential pass for full-canvas layers, so it runs
-        // in row bands on all cores and the band results concatenate in order.
-        let row_len = r.width() as usize;
-        let bands = crate::pixels::bands(h_of(r));
-        let parts =
-            crate::pixels::par_map(bands, |rows| s.to_interleaved(photocraft_geom::Rect::new(r.x0, r.y0 + rows.start as i32, r.x1, r.y0 + rows.end as i32)));
-        let mut bytes = Vec::with_capacity(row_len * h_of(r) * s.format().bytes_per_pixel());
-        for part in parts {
-            bytes.extend_from_slice(&part);
-            // Free gathered bands before allocating channel planes below; pooling them here
-            // retains another layer-sized allocation throughout deinterleave.
-        }
-        if self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16 {
-            crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, false);
+            return (to_psd_rect(r), self.banded_channels(&s, r, include_alpha), warnings);
         }
         let mut invert = vec![self.cmyk; self.cc];
         invert.push(false);
-        let planes = deinterleave(&bytes, self.cc + 1, self.fmt.sample, &invert);
-        drop(bytes);
+        let planes =
+            surface_planes(&s, r, self.cc + usize::from(include_alpha), &invert, self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16);
         let (w, h) = (r.width() as usize, r.height() as usize);
         // Alpha (-1) first, then the colour channels; each compressed on its own thread.
-        let order: Vec<(i16, &Vec<u8>)> =
-            std::iter::once((-1, &planes[self.cc])).chain(planes.iter().take(self.cc).enumerate().map(|(c, p)| (c as i16, p))).collect();
-        let ch = crate::pixels::par_map(order, |(id, plane)| self.encode(id, plane, w, h));
+        let mut order: Vec<_> = planes.into_iter().enumerate().map(|(c, p)| (if c == self.cc { -1 } else { c as i16 }, p)).collect();
+        if include_alpha {
+            order.rotate_right(1);
+        }
+        let ch = crate::pixels::par_map_cpu(order, |(id, plane)| self.encode(id, plane, w, h));
         (to_psd_rect(r), ch, warnings)
     }
 
+    /// Encode a mask at document depth, retaining extraction errors for serialization to report.
     fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> (MaskData, Option<ChannelData>) {
         let s = if m.surface.format() != self.mask_fmt { m.surface.convert(self.mask_fmt) } else { m.surface.clone() };
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
         let r = s.content_bounds();
         let (w, h) = (r.width() as usize, r.height() as usize);
-        let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, self.mask_fmt.sample, &[false]).remove(0) };
+        let channel = match crate::pixels::try_surface_plane(&s, r) {
+            Ok(plane) => self.encode(-2, plane, w, h),
+            Err(error) => failed_mask_channel(error),
+        };
         let mut flags = 0u8;
         if !m.linked {
             flags |= PsdMask::FLAG_RELATIVE;
@@ -280,7 +270,7 @@ impl Ex<'_> {
             real: None,
             real_first: true,
         };
-        (MaskData::Mask(pm), Some(self.encode(-2, &plane, w, h)))
+        (MaskData::Mask(pm), Some(channel))
     }
 
     /// Prefer numbers above imported layer IDs, wrapping safely at u32::MAX.
@@ -300,10 +290,11 @@ impl Ex<'_> {
         }
     }
 
+    /// Build one layer record with its pixels, masks and additional information blocks.
     fn record(&mut self, l: &Layer, extra: Vec<TaggedBlock>, pixels: Option<&Surface>) -> LayerRecord {
         let id = self.layer_id(l);
         let (rect, mut channels, warnings) = match pixels {
-            Some(s) => self.pixel_channels(s, &l.name),
+            Some(s) => self.pixel_channels(s, &l.name, self.background != Some(l.id)),
             None => (PsdRect::default(), self.empty_channels(), Vec::new()),
         };
         self.warnings.extend(warnings);
@@ -1009,7 +1000,12 @@ impl Ex<'_> {
         // fill must be rendered from the document's patterns, not left transparent (#1907).
         let buf = photocraft_compose::render_fill_content(l, f, self.canvas, &self.patterns);
         let mut s = Surface::new(self.fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&self.fmt, *p)).collect();
+        let mut vals = Vec::with_capacity(buf.px.len() * self.fmt.channels());
+        let mut pixel = [0.0f32; 5];
+        for p in &buf.px {
+            let n = photocraft_raster::from_rgba_into(&self.fmt, *p, &mut pixel);
+            vals.extend_from_slice(&pixel[..n]);
+        }
         s.write_region(self.canvas, &vals);
         s.prune();
         s
@@ -1109,6 +1105,25 @@ impl Ex<'_> {
             }
         }
     }
+}
+
+/// Preserve the model API while making every attempt to write a failed mask return its error.
+fn failed_mask_channel(error: photocraft_psd::PsdError) -> ChannelData {
+    use photocraft_psd::source::{ReadAt, Source, Stored};
+    struct Failed(photocraft_psd::PsdError);
+    impl ReadAt for Failed {
+        /// Advertise a nonempty failed channel so serialization attempts to read its error.
+        fn len(&self) -> u64 {
+            1
+        }
+        /// Return the original mask extraction error without erasing its variant.
+        fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> photocraft_psd::Result<()> {
+            Err(self.0.clone())
+        }
+    }
+    let mut channel = ChannelData::new(-2, Some(Compression::Raw), Vec::new());
+    channel.stored = Some(Stored { source: Source::new(Failed(error)), offset: 0, len: 1 });
+    channel
 }
 
 #[cfg(test)]
