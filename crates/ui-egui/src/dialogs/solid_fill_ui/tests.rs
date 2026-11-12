@@ -283,6 +283,7 @@ fn cmyk_typed_into_the_picker_is_the_fills_colour_in_a_cmyk_document() {
         let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(inks).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
         f.insert("color".into(), json!(format!("#{r:02x}{g:02x}{b:02x}")));
         f.insert("__cmyk".into(), json!(inks));
+        f.insert("__cmykRgb".into(), f["color"].clone());
     };
     let fill = |app: &PhotocraftApp| {
         let st = app.session.active().unwrap();
@@ -328,6 +329,7 @@ fn with_inks(f: &mut serde_json::Map<String, serde_json::Value>, inks: [f32; 4])
     let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(inks).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
     f.insert("color".into(), json!(format!("#{r:02x}{g:02x}{b:02x}")));
     f.insert("__cmyk".into(), json!(inks));
+    f.insert("__cmykRgb".into(), f["color"].clone());
 }
 
 /// Inks that share the picker's hex with the fill's own are still a preview and a thumbnail, as

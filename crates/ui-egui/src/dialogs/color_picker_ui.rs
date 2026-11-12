@@ -149,6 +149,9 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
     if let Some(cmyk) = app.session.tools.picked_cmyk(rgb) {
         seed_cmyk(&mut fields, cmyk);
     }
+    if let Some(st) = app.session.active() {
+        fields.insert("__document".into(), json!(st.doc.id.0));
+    }
     app.ui.open_dialog(DialogKind::Command, fields)
 }
 
@@ -156,6 +159,10 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
 /// Reset restore them with the colour, so OK after either keeps them rather than inks recomputed
 /// from the colour's sRGB stand-in.
 pub(crate) fn seed_cmyk(f: &mut Map<String, Value>, cmyk: [f32; 4]) {
+    // Never retain native inks if Only Web Colors changed the opening RGB.
+    if f.get("__webSnapped") == Some(&json!(true)) {
+        return;
+    }
     f.insert("__cmyk".into(), json!(cmyk));
     f.insert("__origCmyk".into(), json!(cmyk));
     if let Some(color) = f.get("color").cloned() {
@@ -191,10 +198,12 @@ pub(crate) fn initial_fields(target: &str, label: &str, rgb: [f32; 3]) -> Map<St
 /// picker never rewrites a fill behind the user's back (#4995).
 pub(crate) fn fields_with_web(app: &PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> Map<String, Value> {
     let mut f = initial_fields(target, label, rgb);
+    f.insert("__webSnapped".into(), json!(false));
     f.insert("__webOnly".into(), json!(app.ui.color_panel.web_only));
     if app.ui.color_panel.web_only {
         set_rgb(&mut f, rgb, Keep::Nothing);
         f.insert("__orig".into(), f["color"].clone());
+        f.insert("__webSnapped".into(), json!(f["color"] != json!(hex(rgb))));
     }
     f
 }
@@ -220,6 +229,9 @@ pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialo
     let mut f = fields_with_web(app, "field", label, rgb);
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
+    if let Some(st) = app.session.active() {
+        f.insert("__document".into(), json!(st.doc.id.0));
+    }
     let id = app.ui.open_dialog(DialogKind::Command, f);
     live_preview::begin_field(app, id, dialog, field);
     id

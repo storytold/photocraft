@@ -348,7 +348,11 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
         _ if crate::color_picker_ui::owns(fields) => {
-            outcome = crate::color_picker_ui::body(ui, fields);
+            let space = app.session.active().and_then(|st| {
+                let document = fields.get("__document").and_then(Value::as_u64)?;
+                (document == st.doc.id.0).then(|| photocraft_compose::cmyk_space(&st.doc)).flatten()
+            });
+            outcome = photocraft_color::convert::with_cmyk_space(space.as_ref(), || crate::color_picker_ui::body(ui, fields));
             crate::color_picker_ui::take_add_swatch(app, fields);
             if let Some(web) = fields.get("__webOnly").and_then(Value::as_bool) {
                 app.ui.color_panel.web_only = web;
