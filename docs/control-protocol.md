@@ -629,11 +629,34 @@ Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture or Dehaze cha
 white-balance gains, develop exposure, and the other five in linear light before the camera's
 tone curve, as Camera Raw does for raw files; without an as-shot white balance, or without the file's bytes, they stay RGB
 adjustments), applies the remaining settings as one `filter.cameraRaw` step and leaves the
-document unmodified; its result is `{document, redeveloped, filter?}`. The preview keeps the
-method the file was opened with. Cancel closes the document. `app.open` and other automation
+document unmodified; its result is `{document, redeveloped, filter?}`. The preview develops
+those raw-stage settings from the sensor data as Open does: the fitted view from the frame binned
+to the preview's size (no demosaic, so it keeps the method the file was opened with), 1:1 and
+closer zooms from the whole frame, so highlights the default develop clipped come back at a lower
+exposure in the preview as they do on Open. Until Open a raw in the dialog (or in its filmstrip)
+is not a document: no tab, nothing on the canvas, no History; the open documents and the
+active one stay as they were. Open makes a document of each raw it opens (its result's
+`document` is that tab, after the Open Document scripts; `null` if one closed it); Cancel and Done
+make none. The exception is a raw opened with File › Open as Smart Object: it is reviewed as the
+smart-object document it already is (active behind the dialog), and Cancel and Done close it. `app.open` and other automation
 opens never show the dialog. The preference `rawDefaults.openInCameraRaw` (default `true`) turns
 it off; `rawDefaults.demosaic` (`ahd` by default, `mhc`, `bilinear`; Preferences › Camera Raw)
 is the method the app's raw opens develop with (interactive opens, `app.open` and Place).
+
+**Several raws.** Raws opened together share the dialog, in a filmstrip on its left, each with
+its own settings; Open develops the selected ones (below) and lets the others go, with their
+unsaved settings, as Cancel lets every one go. Several can be selected as
+in Camera Raw's filmstrip: a click selects one raw and shows it, Shift-click selects the range
+from the raw last clicked without Shift, ⌘-click (Ctrl on Windows and Linux) adds a raw and shows
+it or takes it out (another selected raw is shown when the shown one is taken out; the last one
+stays), and ⌘A or the filmstrip's Select All selects every raw (never the document behind the
+dialog). An edit to the shown raw changes the same settings, and only those, on every other
+selected raw: one Color Mixer band or grading-wheel slider at a time, a point curve whole. Each
+keeps its other settings and demosaic method; the grain seed stays per photograph, and Auto tones
+each raw from its own pixels. `params.ui.filmstrip` drives it and must be sent on its own:
+`{"click": index, "shift"?: bool, "command"?: bool}` or `{"selectAll": true}`. The reply and
+`ui.inspect.cameraRaw.filmstrip` list the raws as `{name, selected, shown, edited,
+thumbnailPending}`.
 
 Imported PSD Camera Raw filters whose processing settings are all mapped or neutral use this
 same editor. `params.__cameraRawPsd` is reserved import/export metadata: preserve it when editing

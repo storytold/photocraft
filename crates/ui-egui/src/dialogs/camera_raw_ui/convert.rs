@@ -105,24 +105,103 @@ pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize,
     (proxy, pw, ph, k)
 }
 
+/// What the dialog develops: the layer's pixels and, for a raw being opened, its sensor data.
+pub(super) struct Source {
+    pub(super) surf: photocraft_raster::Surface,
+    /// The raw file the open-time dialog develops its raw-stage settings from ([`ProxyJob`](super::ProxyJob)).
+    /// With the demosaic method the raw was developed with.
+    pub(super) raw: Option<crate::camera_raw_detail_ui::RawDetail>,
+    /// The document the pixels belong to: a held raw's, which is not in the session. `None`: the
+    /// active document.
+    pub(super) doc: Option<std::sync::Arc<photocraft_doc::Document>>,
+}
+
+impl From<photocraft_raster::Surface> for Source {
+    fn from(surf: photocraft_raster::Surface) -> Self {
+        Source { surf, raw: None, doc: None }
+    }
+}
+
+/// A raw proxy's straight RGBA pixels, and whether Temperature / Tint were applied at the raw
+/// stage ([`photocraft_io::raw::RawPixels::white_balance`]).
+pub(super) type RawProxy = (Vec<[f32; 4]>, bool);
+
+/// The preview proxy developed from a raw's binned sensor data with the settings the document
+/// was developed with, as straight RGBA: the same pixels [`box_proxy`] reads from the document,
+/// up to the binning. `Ok(None)` when its size is not `pw`×`ph` (a canvas changed since); `Err`
+/// when it can't be developed, as Open would fail to.
+pub(super) fn raw_proxy(
+    raw: &crate::camera_raw_detail_ui::RawDetail,
+    tuning: &photocraft_io::raw::RawTuning,
+    pw: usize,
+    ph: usize,
+) -> Result<Option<RawProxy>, String> {
+    let dev = raw.source.develop_proxy(tuning).map_err(|e| format!("RAW Develop preview develop failed: {e}"))?;
+    Ok(((dev.width, dev.height) == (pw, ph)).then(|| (raw.document_pixels(&dev.rgb), dev.white_balance)))
+}
+
+/// The conversion from a raw develop's ProPhoto RGB to `doc`'s colours: `Ok(None)` when the
+/// document still has them (kept, or its profile discarded by the Color Settings open policy),
+/// else the conversion the policy made, with Color Settings' intent and black point compensation.
+/// `Err` when that conversion can't be built: the sensor pixels can't be shown as the document's.
+pub(super) fn raw_to_document(
+    app: &PhotocraftApp,
+    doc: &photocraft_doc::Document,
+    conversion: Option<photocraft_cms::TransformOptions>,
+) -> Result<Option<std::sync::Arc<photocraft_cms::Transform>>, String> {
+    if doc.icc_profile.is_none() {
+        return Ok(None);
+    }
+    let profile = photocraft_engine::color_cmds::document_profile(doc);
+    let prophoto = photocraft_cms::Builtin::ProPhotoCompat.profile();
+    if profile.same_colors(prophoto) {
+        return Ok(None);
+    }
+    let opts = conversion.unwrap_or_else(|| conversion_options(app));
+    photocraft_cms::cached(prophoto, &profile, opts).map(Some).map_err(|e| e.to_string())
+}
+
+/// Color Settings' intent and black point compensation now, as the open policy converts with.
+pub(super) fn conversion_options(app: &PhotocraftApp) -> photocraft_cms::TransformOptions {
+    let settings = &app.session.color.settings;
+    photocraft_cms::TransformOptions { intent: settings.intent(), bpc: settings.bpc, ..Default::default() }
+}
+
 pub(super) fn open_pixels(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
     layer: LayerId,
-    surf: photocraft_raster::Surface,
+    source: Source,
     params: CameraRaw,
     coverage: Coverage,
     target: Target,
 ) -> Result<(), String> {
-    let st = app.session.active().ok_or("no document")?;
-    let canvas = st.doc.bounds();
-    let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
+    let Source { surf, raw, doc } = source;
+    let doc = match doc {
+        Some(doc) => doc,
+        None => app.session.active().ok_or("no document")?.doc.clone(),
+    };
+    let canvas = doc.bounds();
+    let name = doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let mut params = params;
     if params.encoding_gamma == 0.0 {
-        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
+        params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&doc);
     }
     let (area, w, h) = preview_area(canvas, &surf)?;
-    let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
+    // A raw being opened: the proxy is its binned sensor data developed as the document was, so
+    // the preview of a raw-stage setting starts from the same pixels Open develops from.
+    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
+    let developed = raw.as_ref().and_then(|r| {
+        let as_opened = photocraft_io::raw::RawTuning { demosaic: r.demosaic, ..Default::default() };
+        raw_proxy(r, &as_opened, w.div_ceil(k), h.div_ceil(k)).ok().flatten().map(|(px, _)| px)
+    });
+    // A binned frame of another size can't stand in for the proxy; the raw still serves the
+    // full-size preview and the tone curve.
+    let raw_proxy_ok = developed.is_some();
+    let (proxy, pw, ph, k) = match developed {
+        Some(px) => (px, w.div_ceil(k), h.div_ceil(k), k),
+        None => box_proxy(&surf, area, w, h),
+    };
     // Coverage at the centre of each proxy block.
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
         (0..ph)
@@ -131,12 +210,12 @@ pub(super) fn open_pixels(
             .collect::<Vec<_>>()
     };
     let selection = match &coverage {
-        Coverage::Selection => st.doc.selection.as_ref().map(|mask| sample(&|x, y| mask.sample_channel(x, y, 0))),
+        Coverage::Selection => doc.selection.as_ref().map(|mask| sample(&|x, y| mask.sample_channel(x, y, 0))),
         Coverage::Mask(mask) => Some(sample(&|x, y| mask.value(x, y))),
         Coverage::None => None,
     };
-    let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
-    let display = app.session.color.canvas_display(&st.doc).map_err(|e| e.to_string())?;
+    let source = photocraft_engine::color_cmds::composite_profile(&doc);
+    let display = app.session.color.canvas_display(&doc).map_err(|e| e.to_string())?;
     let lab_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
     let scope_transform = photocraft_cms::cached(&source, photocraft_cms::Builtin::Srgb.profile(), Default::default()).map_err(|e| e.to_string())?;
     if let Some(saved) = app.session.prefs().dialogs.get("filter.cameraRaw.scope")
@@ -159,6 +238,9 @@ pub(super) fn open_pixels(
         layer,
         layer_name: name,
         original: params.clone(),
+        synced: params.clone(),
+        auto_all: false,
+        thumb_revision: 0,
         params,
         target,
         before_histogram: RgbHistogram::from_rgba(&proxy),
@@ -181,7 +263,7 @@ pub(super) fn open_pixels(
             area,
             match coverage {
                 Coverage::Selection => {
-                    st.doc.selection.clone().map(crate::camera_raw_detail_ui::Coverage::Selection).unwrap_or(crate::camera_raw_detail_ui::Coverage::None)
+                    doc.selection.clone().map(crate::camera_raw_detail_ui::Coverage::Selection).unwrap_or(crate::camera_raw_detail_ui::Coverage::None)
                 }
                 Coverage::Mask(mask) => crate::camera_raw_detail_ui::Coverage::Mask(mask),
                 Coverage::None => crate::camera_raw_detail_ui::Coverage::None,
@@ -200,9 +282,16 @@ pub(super) fn open_pixels(
         curve_rect: None,
         render_ms: 0.0,
         raw_open: None,
-        raw_curve: None,
+        // The raw's tone curve: the full-size preview and, without the binned proxy, the fitted
+        // one retone with it from the first render on.
+        raw_curve: raw.as_ref().map(|r| std::sync::Arc::new(r.source.tone_curve().to_vec())),
+        raw_source: raw,
+        raw_proxy: raw_proxy_ok,
+        auto_proxy: Default::default(),
+        raw_loading: None,
         pending: None,
         preview_error: None,
+        render_error: None,
         gpu,
         source_key: crate::camera_raw_gpu::source_key(),
         develop_ms: 0.0,
@@ -212,6 +301,8 @@ pub(super) fn open_pixels(
         edit_origin: None,
         main_focused: false,
     };
+    d.detail.raw_curve = d.raw_curve.clone();
+    d.detail.raw = d.raw_source.clone();
     d.render(ctx);
     app.camera_raw = Some(d);
     Ok(())

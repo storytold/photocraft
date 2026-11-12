@@ -183,7 +183,7 @@ fn fill_samples(row: &mut [f32], raw: impl Iterator<Item = [u16; 3]>, table: &[[
 }
 
 /// Grey-world neutral (camera-space R, G, B) from unclipped mid-range samples.
-fn grey_world(s: &Sensor, sc: &Scale) -> [f64; 3] {
+pub(crate) fn grey_world(s: &Sensor, sc: &Scale) -> [f64; 3] {
     let c = s.crop;
     let step = (c.height / 512).max(1);
     let rows: Vec<usize> = (0..c.height).step_by(step).collect();
@@ -222,7 +222,7 @@ fn grey_world(s: &Sensor, sc: &Scale) -> [f64; 3] {
     mean.map(|v| v / m)
 }
 
-fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
+pub(crate) fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
     let m = n.iter().cloned().fold(f64::MIN, f64::max);
     (m > 0.0 && n.iter().all(|v| v.is_finite() && *v > 1e-4)).then(|| n.map(|v| v / m))
 }
@@ -630,7 +630,7 @@ fn working_memory(w: usize, h: usize, cfa: bool, bayer: bool, shape: Shape, opts
 
 /// Gain-map factors (DNG OpcodeList2 GainMap) for data row `y`, columns
 /// `x0..x0 + w`, sample `k`; `None` when no map touches the row.
-fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f32>> {
+pub(crate) fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f32>> {
     let a = s.active;
     if s.gain_maps.is_empty() || y < a.y || a.width == 0 || a.height == 0 {
         return None;
