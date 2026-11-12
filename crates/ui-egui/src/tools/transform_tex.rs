@@ -16,7 +16,7 @@
 //! helper thread, and the closest finer level already uploaded is shown until it is ready
 //! (#11103): halving a 24 MP layer took a whole frame or more on the UI thread.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{Color32, ColorImage, TextureHandle, TextureId, TextureOptions};
@@ -50,7 +50,7 @@ pub struct PreviewTextures {
     gate: Arc<Mutex<()>>,
     /// How many levels the workers have uploaded, for tests.
     #[cfg(test)]
-    uploads: Arc<AtomicUsize>,
+    uploads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for PreviewTextures {
@@ -84,7 +84,7 @@ impl PreviewTextures {
             #[cfg(test)]
             gate: Arc::new(Mutex::new(())),
             #[cfg(test)]
-            uploads: Arc::new(AtomicUsize::new(0)),
+            uploads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -104,7 +104,7 @@ impl PreviewTextures {
     /// what tells it they are all done, and how many levels they uploaded; the last two still work
     /// once the preview is gone.
     #[cfg(test)]
-    pub(crate) fn worker_hooks(&self) -> (Arc<Mutex<()>>, impl Fn() -> bool + use<>, Arc<AtomicUsize>) {
+    pub(crate) fn worker_hooks(&self) -> (Arc<Mutex<()>>, impl Fn() -> bool + use<>, Arc<std::sync::atomic::AtomicUsize>) {
         let building = Arc::clone(&self.building);
         (Arc::clone(&self.gate), move || building.lock().unwrap_or_else(PoisonError::into_inner).is_empty(), Arc::clone(&self.uploads))
     }
