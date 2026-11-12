@@ -392,7 +392,11 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
 pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, fill: Value, stroke: Value) {
     let name = app.ui.presets_ui.shape().to_string();
-    let r = run(app, "shape.presets.place", json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke}));
+    let r = run(
+        app,
+        "shape.presets.place",
+        json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "historyName": "Custom Shape Tool"}),
+    );
     if r.is_none() && !photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name)) {
         let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);

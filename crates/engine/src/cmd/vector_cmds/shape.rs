@@ -433,8 +433,8 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// The Freeform Pen or Line Tool history override labels new layers; additions retain the Add
-/// Shape label.
+/// A tool's history name (`historyName`) labels new layers and additions alike; without one, the
+/// steps are New Shape Layer and Add Shape.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
@@ -452,7 +452,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
-        with_shape(s, id, "Add Shape", |sh, _| {
+        with_shape(s, id, super::paths::pen_history_name(p, CMD, "Add Shape")?, |sh, _| {
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.
                 if sp.op != PathOp::Join {
