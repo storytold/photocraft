@@ -99,7 +99,7 @@ pub fn polygon(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64) -> P
     let sides = sides.clamp(3, 100) as usize;
     let (rx, ry) = (w / 2.0, h / 2.0);
     let (cx, cy) = (x + rx, y + ry);
-    let star = star_ratio > 0.0 && star_ratio < 1.0;
+    let star = is_star(star_ratio);
     let count = if star { sides * 2 } else { sides };
     let pts: Vec<(f64, f64)> = (0..count)
         .map(|i| {
@@ -109,6 +109,18 @@ pub fn polygon(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64) -> P
         })
         .collect();
     Path::new(vec![Subpath::polygon(&pts)])
+}
+
+/// Does `star_ratio` make [`polygon`] a star (inner points between its outer ones)?
+fn is_star(star_ratio: f64) -> bool {
+    star_ratio > 0.0 && star_ratio < 1.0
+}
+
+/// Does vertex `i` of [`polygon`] with `star_ratio` take the corner radius? Every vertex of a
+/// plain polygon; only a star's outer points (even `i`), its inner points stay sharp, as in
+/// Photoshop.
+pub fn polygon_rounds_vertex(star_ratio: f64, i: usize) -> bool {
+    !is_star(star_ratio) || i.is_multiple_of(2)
 }
 
 /// A rounded vertex: see [`fillet`].
@@ -168,6 +180,12 @@ pub fn fillet(prev: [f64; 2], v: [f64; 2], next: [f64; 2], r: f64) -> Option<Fil
 /// circular arc of radius `r` tangent to both its edges, each capped as [`fillet`] does, like
 /// Photoshop's rounded triangles and polygons. `r <= 0` leaves it sharp.
 pub fn round_corners(path: Path, r: f64) -> Path {
+    round_corners_where(path, r, |_| true)
+}
+
+/// [`round_corners`] for the vertices `rounds` picks by their index in the subpath; the others
+/// stay sharp corners.
+pub fn round_corners_where(path: Path, r: f64, rounds: impl Fn(usize) -> bool) -> Path {
     if r.is_nan() || r <= 0.0 {
         return path;
     }
@@ -183,7 +201,7 @@ pub fn round_corners(path: Path, r: f64) -> Path {
             let mut knots = Vec::with_capacity(n * 2);
             for i in 0..n {
                 let (prev, v, next) = (pt(i + n - 1), pt(i), pt(i + 1));
-                let Some(f) = fillet(prev, v, next, r) else {
+                let Some(f) = rounds(i).then(|| fillet(prev, v, next, r)).flatten() else {
                     knots.push(Knot::corner(v[0], v[1]));
                     continue;
                 };
@@ -280,7 +298,7 @@ pub fn live_path(s: &LiveShape) -> Path {
         LiveShape::Rect { rect: [x, y, w, h], radii } => rounded_rect(*x, *y, *w, *h, *radii),
         LiveShape::Ellipse { rect: [x, y, w, h] } => ellipse(*x, *y, *w, *h),
         LiveShape::Polygon { rect: [x, y, w, h], sides, star_ratio, corner_radius } => {
-            round_corners(polygon(*x, *y, *w, *h, *sides, *star_ratio), *corner_radius)
+            round_corners_where(polygon(*x, *y, *w, *h, *sides, *star_ratio), *corner_radius, |i| polygon_rounds_vertex(*star_ratio, i))
         }
         LiveShape::Line { from, to, weight } => line((from[0], from[1]), (to[0], to[1]), *weight),
         LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {
@@ -368,9 +386,9 @@ mod tests {
     }
 
     #[test]
-    fn a_star_rounds_its_inner_vertices_too() {
+    fn a_star_rounds_its_outer_vertices_only() {
         let p = live_path(&LiveShape::Polygon { rect: [0.0, 0.0, 200.0, 200.0], sides: 5, star_ratio: 0.5, corner_radius: 6.0 });
-        assert_eq!(p.subpaths[0].knots.len(), 20);
+        assert_eq!(p.subpaths[0].knots.len(), 15);
     }
 
     #[test]
@@ -406,6 +424,10 @@ mod tests {
         assert!((top.x - 5.0).abs() < 1e-9 && top.y.abs() < 1e-9);
     }
 }
+
+#[cfg(test)]
+#[path = "star_outer_corner_radius_tests.rs"]
+mod star_outer_corner_radius_tests;
 
 #[cfg(test)]
 mod line_arrow_6408_tests {
