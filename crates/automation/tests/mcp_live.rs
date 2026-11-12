@@ -125,6 +125,8 @@ fn live(dir: &Path, when_closed: Option<WhenAppClosed>) -> LiveConfig {
     let mut c = LiveConfig::new(dir.to_path_buf());
     c.when_closed = when_closed;
     c.launch_timeout = Duration::from_secs(10);
+    // The machine's own ArtCraft Launcher settings stay out of the tests.
+    c.launcher_allows = || false;
     c
 }
 
@@ -201,6 +203,19 @@ async fn launch_starts_the_app_once_and_only_when_agents_may_connect() {
     assert!(text(&r).contains("Let AI agents connect"), "{}", text(&r));
     assert_eq!(launches.load(Ordering::SeqCst), 0);
     client.cancel().await.unwrap();
+
+    // The ArtCraft Launcher's switch alone is consent: the app is started without its own box.
+    let mut c = config(&dir);
+    c.launcher_allows = || true;
+    let client = connect(PhotocraftMcp::live(c)).await;
+    let r = call(&client, "ui_inspect", json!({})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    assert_eq!(launches.load(Ordering::SeqCst), 1);
+    client.cancel().await.unwrap();
+    for app in apps.lock().unwrap().drain(..) {
+        quit(app);
+    }
+    launches.store(0, Ordering::SeqCst);
 
     prefs(&dir, json!({"connectAgents": true}));
     let client = connect(PhotocraftMcp::live(config(&dir))).await;

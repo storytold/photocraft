@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use photocraft_engine::prefs::{Integrations, WhenAppClosed};
+use photocraft_engine::prefs::WhenAppClosed;
 
 use crate::agent_link::{self, Connection, PROBE_TIMEOUT};
 use crate::bridge::BridgeClient;
@@ -39,11 +39,22 @@ pub struct LiveConfig {
     /// Starts the app; `None` when this install can't (Flatpak sandbox, no app beside the CLI).
     pub launch: Option<LaunchFn>,
     pub launch_timeout: Duration,
+    /// Whether the ArtCraft Launcher turned agents on for every Craft app
+    /// ([`agent_link::launcher_allows_agents`]); tests replace it.
+    pub launcher_allows: fn() -> bool,
 }
 
 impl LiveConfig {
     pub fn new(config_dir: PathBuf) -> Self {
-        LiveConfig { config_dir, when_closed: None, read_root: None, write_root: None, launch: None, launch_timeout: LAUNCH_TIMEOUT }
+        LiveConfig {
+            config_dir,
+            when_closed: None,
+            read_root: None,
+            write_root: None,
+            launch: None,
+            launch_timeout: LAUNCH_TIMEOUT,
+            launcher_allows: agent_link::launcher_allows_agents,
+        }
     }
 }
 
@@ -86,13 +97,15 @@ impl Live {
             return Ok(());
         }
         let dir = self.cfg.config_dir.clone();
-        let (found, integrations) = blocking(move || (find_app(&dir), agent_link::read_integrations(&dir))).await?;
+        let launcher_allows = self.cfg.launcher_allows;
+        let (found, integrations, launcher) = blocking(move || (find_app(&dir), agent_link::read_integrations(&dir), launcher_allows())).await?;
+        let allowed = agent_link::agents_allowed(&integrations, launcher);
         if let Some((c, token)) = found? {
             self.use_app(&c, token)?;
             return Ok(());
         }
         match self.cfg.when_closed.unwrap_or(integrations.when_app_closed) {
-            WhenAppClosed::Error => Err(closed(&integrations)),
+            WhenAppClosed::Error => Err(closed(allowed)),
             WhenAppClosed::Headless => {
                 let read = self.cfg.read_root.clone().or_else(|| agent_link::folder(&integrations.read_root));
                 let write = self.cfg.write_root.clone().or_else(|| agent_link::folder(&integrations.write_root));
@@ -101,13 +114,15 @@ impl Live {
                 self.set(Target::Headless(Arc::new(Mutex::new(Headless::with_workspace(workspace)))), None);
                 Ok(())
             }
-            WhenAppClosed::Launch => self.launch_and_wait(&integrations).await,
+            WhenAppClosed::Launch => self.launch_and_wait(allowed).await,
         }
     }
 
-    async fn launch_and_wait(&self, integrations: &Integrations) -> Result<(), String> {
-        if !integrations.connect_agents {
-            return Err(closed(integrations));
+    /// `allowed`: agents may connect ([`agent_link::agents_allowed`]); otherwise the app would never
+    /// listen, so it isn't started.
+    async fn launch_and_wait(&self, allowed: bool) -> Result<(), String> {
+        if !allowed {
+            return Err(closed(false));
         }
         let Some(launch) = &self.cfg.launch else {
             return Err("PhotoCraft isn't running, and this install can't start it from here: open PhotoCraft, then try again.".into());
@@ -157,11 +172,11 @@ fn find_app(dir: &Path) -> Result<Option<(Connection, String)>, String> {
     Ok(Some((c, token)))
 }
 
-fn closed(integrations: &Integrations) -> String {
-    if integrations.connect_agents {
+fn closed(allowed: bool) -> String {
+    if allowed {
         "PhotoCraft isn't running: open it, then try again.".into()
     } else {
-        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › AI Integrations › Let AI agents connect, then try again.".into()
+        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › AI Integrations › Let AI agents connect (or ArtCraft Launcher › Settings › AI agents), then try again.".into()
     }
 }
 

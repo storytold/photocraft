@@ -111,6 +111,34 @@ fn apply(running: &mut Option<Running>, dir: Option<&Path>, integrations: &Integ
     out
 }
 
+/// How often [`launcher_watch`] looks at the ArtCraft Launcher's files.
+const LAUNCHER_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether the ArtCraft Launcher turned agents on for every Craft app
+/// ([`agent_link::launcher_allows_agents`]), watched on its own thread so the UI can ask every
+/// frame without touching the disk. A change wakes the UI, which then starts or stops the
+/// connection. Without a thread (one couldn't be started) the answer stays what it was at launch.
+pub fn launcher_watch(ctx: &egui::Context) -> Box<dyn Fn() -> bool> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let on = Arc::new(AtomicBool::new(agent_link::launcher_allows_agents()));
+    let (seen, ctx) = (on.clone(), ctx.clone());
+    let started = std::thread::Builder::new().name("launcher-agents".into()).spawn(move || {
+        loop {
+            std::thread::sleep(LAUNCHER_POLL);
+            let now = agent_link::launcher_allows_agents();
+            if seen.swap(now, Ordering::Relaxed) != now {
+                log::info!("ArtCraft Launcher: agents {}", if now { "on" } else { "off" });
+                ctx.request_repaint();
+            }
+        }
+    });
+    if let Err(e) = started {
+        log::warn!("couldn't watch the ArtCraft Launcher's agents switch: {e}");
+    }
+    Box::new(move || on.load(Ordering::Relaxed))
+}
+
 /// How MCP clients start this install's CLI (`photocraft-cli mcp --live`), or `None` when it
 /// isn't installed beside the app (a development build of the app alone).
 pub fn mcp_launch() -> Option<McpLaunch> {

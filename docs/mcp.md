@@ -7,6 +7,16 @@ ArtCraft Launcher › Settings › Experimental features, which writes `ArtCraft
 Craft app, or start PhotoCraft with `CRAFT_FLAGS=AI-MCP`. Without it the page shows only Allow
 Agent Control and Control Port, as before; a Control Port already set keeps its connection.
 
+**With the ArtCraft Launcher** there is nothing to do in PhotoCraft: turning on Settings › AI
+agents › **Let AI agents use Craft apps** there is the person's consent for every Craft app. The
+launcher then keeps its app list `ArtCraft/mcp/apps.json` (in the per-user local configuration
+folder; `CRAFT_MCP_DIR` moves it), and while that list names `photocraft` and `AI-MCP` is on,
+PhotoCraft accepts agents as if **Let AI agents connect** were ticked: the page shows the box ticked
+and says the launcher turned it on, and PhotoCraft's own choice is kept for when the launcher's
+switch goes off. The app looks at the launcher's files every 2 s, so switching there applies
+without a restart; `photocraft-cli mcp --live` looks before every call. Allow Agent Control off
+still refuses agents. Storytold/craft-ai-integrations#195 has the whole design.
+
 1. In PhotoCraft, open **Edit › Preferences › AI Integrations** and turn on **Let AI agents
    connect (MCP)**. Optionally choose the folders agents can open from and save to, and what
    happens when an agent needs PhotoCraft while it is closed (open it, work without a window,

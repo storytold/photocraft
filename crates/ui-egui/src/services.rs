@@ -371,6 +371,9 @@ pub struct AgentLinkStatus {
     /// The suite's `AI-MCP` feature flag (`craft-flags`): without it the page shows only the
     /// connection settings PhotoCraft had before (Allow Agent Control, Control Port).
     pub mcp_flag: bool,
+    /// The ArtCraft Launcher turned agents on for every Craft app (Settings › AI agents): that
+    /// counts as *Let AI agents connect*, whatever the box says.
+    pub launcher: bool,
 }
 
 /// What [`Services::agent_link`] did after the MCP settings changed.
@@ -590,6 +593,10 @@ pub struct Services {
     pub agent_link: Option<AgentLinkFn>,
     /// Preferences › AI Integrations' buttons that add PhotoCraft to MCP clients (desktop).
     pub agent_clients: Option<AgentClientFn>,
+    /// Whether the ArtCraft Launcher turned agents on for every Craft app, cheap enough to ask every
+    /// frame (the desktop app watches the launcher's files on its own thread). `None` without the
+    /// suite's `AI-MCP` flag, on the web, and in tests that don't set it.
+    pub launcher_agents: Option<Box<dyn Fn() -> bool>>,
     /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
     pub encode_png: Option<EncodePngFn>,
     /// Open a URL in the system browser (native). Falls back to `ctx.open_url` (web) when unset.

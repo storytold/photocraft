@@ -186,6 +186,51 @@ pub fn read_integrations(dir: &Path) -> Integrations {
         .unwrap_or_default()
 }
 
+// ---- ArtCraft Launcher --------------------------------------------------------------------------
+
+/// The id the ArtCraft Launcher lists PhotoCraft under in its app list.
+pub const LAUNCHER_APP_ID: &str = "photocraft";
+/// The launcher's app list for the MCP gateway (storytold/craft-ai-integrations,
+/// `docs/CRAFT-AI-MCP.md`). The launcher writes it when Settings › AI agents › *Let AI agents use
+/// Craft apps* is turned on and removes it when that is turned off.
+pub const LAUNCHER_APPS_FILE: &str = "apps.json";
+/// Moves the launcher's folder, as it does for the launcher and the gateway.
+pub const LAUNCHER_DIR_ENV: &str = "CRAFT_MCP_DIR";
+/// Version of the launcher's app list this reads.
+const LAUNCHER_APPS_VERSION: u64 = 1;
+
+/// The launcher's folder: [`LAUNCHER_DIR_ENV`], otherwise `ArtCraft/mcp` in the per-user local
+/// configuration folder, where the launcher writes it and the gateway reads it.
+pub fn launcher_dir(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    match env(LAUNCHER_DIR_ENV) {
+        Some(d) if !d.is_empty() => Some(PathBuf::from(d)),
+        _ => dirs::config_local_dir().map(|b| b.join("ArtCraft").join("mcp")),
+    }
+}
+
+/// Whether the launcher's app list in `dir` names PhotoCraft. A list that is missing, too big,
+/// not JSON or of another version counts as no.
+pub fn launcher_lists_photocraft(dir: &Path) -> bool {
+    let Some(text) = read_small(&dir.join(LAUNCHER_APPS_FILE)).ok().flatten() else { return false };
+    let Ok(list) = serde_json::from_str::<Value>(&text) else { return false };
+    list.get("version").and_then(Value::as_u64) == Some(LAUNCHER_APPS_VERSION)
+        && list.get("apps").and_then(Value::as_array).is_some_and(|apps| apps.iter().any(|a| a.get("id").and_then(Value::as_str) == Some(LAUNCHER_APP_ID)))
+}
+
+/// The person turned agents on for every Craft app in the ArtCraft Launcher: the suite's `AI-MCP`
+/// flag is on and the launcher's app list names PhotoCraft. That switch is their consent, as
+/// *Let AI agents connect* is (storytold/craft-ai-integrations#195), so PhotoCraft accepts agents
+/// without its own box ticked. Reads two small files; call it from a timer, not every frame.
+pub fn launcher_allows_agents() -> bool {
+    craft_flags::load().enabled(&craft_flags::AI_MCP) && launcher_dir(|k| std::env::var_os(k)).is_some_and(|d| launcher_lists_photocraft(&d))
+}
+
+/// Agents may connect: *Let AI agents connect* is on, or the launcher turned agents on
+/// ([`launcher_allows_agents`]). Allow Agent Control off still refuses both.
+pub fn agents_allowed(integrations: &Integrations, launcher: bool) -> bool {
+    integrations.connect_agents || launcher
+}
+
 // ---- MCP clients --------------------------------------------------------------------------------
 
 /// How an MCP client starts PhotoCraft's MCP server.
@@ -644,6 +689,42 @@ mod tests {
             xdg_config: None,
             path: None,
         }
+    }
+
+    #[test]
+    fn the_launcher_list_counts_only_when_it_names_photocraft() {
+        let dir = temp("launcher");
+        assert!(!launcher_lists_photocraft(&dir), "no list: the launcher's switch is off");
+        let write = |text: &str| std::fs::write(dir.join(LAUNCHER_APPS_FILE), text).unwrap();
+        write(r#"{"version":1,"apps":[{"id":"filmcraft","command":"/x","args":["mcp"]},{"id":"photocraft","command":"/y"}]}"#);
+        assert!(launcher_lists_photocraft(&dir));
+        write(r#"{"version":1,"apps":[{"id":"filmcraft","command":"/x"}]}"#);
+        assert!(!launcher_lists_photocraft(&dir), "PhotoCraft isn't in the list");
+        write(r#"{"version":2,"apps":[{"id":"photocraft","command":"/y"}]}"#);
+        assert!(!launcher_lists_photocraft(&dir), "another version");
+        write(r#"{"version":1,"apps":{"id":"photocraft"}}"#);
+        assert!(!launcher_lists_photocraft(&dir), "apps not a list");
+        write("not json");
+        assert!(!launcher_lists_photocraft(&dir));
+        std::fs::remove_file(dir.join(LAUNCHER_APPS_FILE)).unwrap();
+        std::fs::create_dir(dir.join(LAUNCHER_APPS_FILE)).unwrap();
+        assert!(!launcher_lists_photocraft(&dir), "a folder in its place");
+    }
+
+    #[test]
+    fn the_launcher_folder_follows_its_override() {
+        let at = |v: &str| launcher_dir(|k| (k == LAUNCHER_DIR_ENV).then(|| v.into()));
+        assert_eq!(at("/portable/mcp"), Some(PathBuf::from("/portable/mcp")));
+        assert_eq!(at(""), dirs::config_local_dir().map(|b| b.join("ArtCraft").join("mcp")), "empty means unset");
+    }
+
+    #[test]
+    fn either_switch_lets_agents_in() {
+        let mut i = Integrations::default();
+        assert!(!agents_allowed(&i, false));
+        assert!(agents_allowed(&i, true), "the launcher's switch alone");
+        i.connect_agents = true;
+        assert!(agents_allowed(&i, false), "PhotoCraft's box alone");
     }
 
     #[test]

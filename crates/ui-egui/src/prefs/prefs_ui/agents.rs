@@ -12,10 +12,15 @@ pub(super) const AGENT_LINK_RETRY_S: f64 = 5.0;
 /// Start, move or stop the agent connection when its settings change
 /// ([`crate::Services::agent_link`]); the first frame applies the saved settings. A connection
 /// that is on but failed to start is tried again every [`AGENT_LINK_RETRY_S`], so freeing its
-/// port is enough, without touching a setting.
+/// port is enough, without touching a setting. The ArtCraft Launcher's agents switch
+/// ([`crate::Services::launcher_agents`]) counts as the box ticked: the person turned agents on for
+/// every Craft app there.
 pub(super) fn sync_agent_link(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let launcher = app.services.launcher_agents.as_ref().is_some_and(|on| on());
     let Some(link) = app.services.agent_link.as_mut() else { return };
-    let current = &app.session.prefs().integrations;
+    let mut effective = app.session.prefs().integrations.clone();
+    effective.connect_agents |= launcher;
+    let current = &effective;
     let now = crate::gpu_canvas::now_ms() / 1000.0;
     let retry_due = app.prefs_rt.agent_link_retry.is_some_and(|at| now >= at);
     if app.prefs_rt.agent_link.as_ref() == Some(current) && !retry_due {
@@ -39,6 +44,7 @@ pub(super) fn sync_agent_link(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // do with `--control` (`PhotocraftApp::new`); the gate stays once agents have connected.
     app.session.automation_gate = app.session.automation_gate.or(app.services.automation_authorize);
     app.agent_link = update.status;
+    app.agent_link.launcher = launcher;
 }
 
 /// The rows of the section. A button click is left in `f["__agentAction"]` for [`agent_action`].
@@ -46,10 +52,18 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
     let t = Tokens::get(ui.ctx());
     let status = f.get("__agentLink").cloned().unwrap_or(Value::Null);
     let launch_flags = status.get("launchFlags").and_then(Value::as_bool) == Some(true);
+    let launcher = status.get("launcher").and_then(Value::as_bool) == Some(true);
     let mut on = obj.get("connectAgents").and_then(Value::as_bool).unwrap_or(false);
     let label = humanize("connectAgents");
-    ui.add_enabled_ui(!launch_flags, |ui| crate::widgets::checkbox(ui, &mut on, tl!(&label)));
+    if launcher && !launch_flags {
+        // On for the whole suite: shown ticked, and PhotoCraft's own choice is kept as it was.
+        ui.add_enabled_ui(false, |ui| crate::widgets::checkbox(ui, &mut true, tl!(&label)));
+        ui.label(RichText::new(tl!("Turned on in ArtCraft Launcher › Settings › AI agents, for every Craft app.")).color(t.text_dim));
+    } else {
+        ui.add_enabled_ui(!launch_flags, |ui| crate::widgets::checkbox(ui, &mut on, tl!(&label)));
+    }
     obj.insert("connectAgents".into(), json!(on));
+    let on = on || launcher;
     ui.label(
         RichText::new(tl!("AI apps such as Claude can then open, edit and save documents here. Only programs on this computer can connect.")).color(t.text_dim),
     );

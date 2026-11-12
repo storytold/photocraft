@@ -50,6 +50,41 @@ fn ai_integrations_start_and_stop_the_agent_connection_through_the_service() {
     assert!(crate::control::inspect(&app, &ctx).get("agentLink").is_some());
 }
 
+/// The ArtCraft Launcher's agents switch counts as the box ticked, and turning it off there stops
+/// the connection again; PhotoCraft's own saved choice is never changed by it.
+#[test]
+fn the_launcher_switch_turns_the_agent_connection_on_without_the_box() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    let calls: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let seen = calls.clone();
+    app.services.agent_link = Some(Box::new(move |p: &prefs::Integrations, _: &egui::Context| {
+        seen.lock().unwrap().push(p.connect_agents);
+        crate::AgentLink {
+            stopped: !p.connect_agents,
+            status: crate::AgentLinkStatus { port: p.connect_agents.then_some(4321), ..Default::default() },
+            ..Default::default()
+        }
+    }));
+    let launcher = Arc::new(AtomicBool::new(false));
+    let on = launcher.clone();
+    app.services.launcher_agents = Some(Box::new(move || on.load(Ordering::Relaxed)));
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), [false]);
+    launcher.store(true, Ordering::Relaxed);
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), [false, true], "the launcher's switch alone starts it");
+    assert!(app.agent_link.launcher && app.agent_link.port == Some(4321));
+    assert!(!app.session.prefs().integrations.connect_agents, "the box's own value is kept");
+    tick(&mut app, &ctx);
+    assert_eq!(calls.lock().unwrap().len(), 2, "no change, no restart");
+    launcher.store(false, Ordering::Relaxed);
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), [false, true, false], "off in the launcher stops it");
+    assert!(!app.agent_link.launcher && app.agent_link.port.is_none());
+}
+
 /// The buttons that set up an AI app only show once agents may connect, and a click reaches
 /// the service with the app's id and shows its answer.
 #[test]

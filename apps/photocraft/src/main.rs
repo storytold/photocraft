@@ -732,6 +732,8 @@ fn main() -> eframe::Result {
             app.agent_link.mcp_flag = flags.enabled(&craft_flags::AI_MCP);
             if app.agent_link.mcp_flag {
                 app.services.agent_clients = Some(agent_link::clients(mcp.clone()));
+                // ArtCraft Launcher › Settings › AI agents turns agents on for every Craft app.
+                app.services.launcher_agents = Some(agent_link::launcher_watch(&cc.egui_ctx));
             }
             if let Some((listener, token, _)) = control {
                 app.agent_link.launch_flags = true;
