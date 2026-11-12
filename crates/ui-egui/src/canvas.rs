@@ -882,7 +882,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         }
         let b = crate::dialogs::free_buttons(input.ctx, input.rect);
         let pointer = input.ctx.input(|i| i.pointer.latest_pos());
-        crate::zoom_tool::drag(app, input.ctx, input.view, input.xf, &b, pointer);
+        crate::zoom_tool::drag(app, input.ctx, input.view, input.xf, &b, pointer, &zoom_out);
         if b.clicked
             && let Some(p) = pointer
         {
@@ -1001,6 +1001,8 @@ struct CanvasToolInput<'a> {
     under_dialog: bool,
     menu_dismiss_press: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
+    /// The Animated Zoom direction for ⌥ held or not: `zoom_out` without the Zoom Out mode.
+    hold_zoom_out: &'a dyn Fn(bool) -> bool,
     display_zoom: f32,
 }
 
@@ -1206,7 +1208,7 @@ fn handle_canvas_tool_navigation(
     // it owns the press: no scrub, and its release is no click step. A menu-dismissal press
     // must not arm it: holding the dismissal click would zoom (CodeRabbit, #9841).
     if tool == Tool::Zoom && !transform_owns_pointer {
-        let out = zoom_out(ui.input(|i| i.modifiers.alt));
+        let out = (input.hold_zoom_out)(ui.input(|i| i.modifiers.alt));
         let on_canvas = !input.menu_dismiss_press && !input.under_dialog && !over_compass && response.is_pointer_button_down_on();
         let hold = crate::zoom_hold::hold_id(idx, primary, ctx.viewport_id());
         if crate::zoom_hold::update(ctx, view, xf, app.session.prefs().general.animated_zoom, out, ppp, on_canvas, hold) {
@@ -1215,7 +1217,7 @@ fn handle_canvas_tool_navigation(
     }
     // Zoom tool drags: scrubby zoom or a zoom rectangle (zoom_tool.rs); clicks step below.
     // Like the Hand, the selected Zoom yields to an open Free Transform box (#4799).
-    if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos()) {
+    if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos(), zoom_out) {
         (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
     }
 }
@@ -2387,10 +2389,20 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
-    // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
-    // Window › Modifier Keys (the way around a desktop that takes Alt+click, `alt_grab`).
+    // Zoom direction: the temporary zoom key decides, else the Zoom tool's Zoom In / Zoom Out
+    // mode, turned around by ⌥ held or latched in Window › Modifier Keys (the way around a
+    // desktop that takes Alt+click, `alt_grab`). A held Z is a temporary zoom key too: in, out
+    // with ⌥, whatever the mode (#12066).
     let sticky_alt = app.ui.shell.sticky_alt;
+    let out_mode = !app.ui.tool_options.zoom_in && !crate::spring_tools::holds(app, Tool::Zoom);
     let zoom_out = |alt: bool| match temporary {
+        Some(crate::hold_keys::Temporary::ZoomOut) => true,
+        Some(crate::hold_keys::Temporary::ZoomIn) => false,
+        _ => (alt || sticky_alt) != out_mode,
+    };
+    // Animated Zoom (press and hold) keeps its direction in either mode: in, out with ⌥. Zoom
+    // Out mode was not measured for it (#12066).
+    let hold_zoom_out = |alt: bool| match temporary {
         Some(crate::hold_keys::Temporary::ZoomOut) => true,
         Some(crate::hold_keys::Temporary::ZoomIn) => false,
         _ => alt || sticky_alt,
@@ -2509,6 +2521,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             under_dialog,
             menu_dismiss_press,
             zoom_out: &zoom_out,
+            hold_zoom_out: &hold_zoom_out,
             display_zoom: display_view.zoom,
         };
         handle_primary_canvas_input(app, ui, &mut view, &input);
