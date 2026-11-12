@@ -169,6 +169,10 @@ pub struct NewParams {
     /// white | black | transparent | #rrggbb
     #[serde(default)]
     pub background: Option<String>,
+    /// Pixels per inch, 1 to 30000 (default 72). Sets the print size and the ppi written to
+    /// exported files; the pixel dimensions stay as given.
+    #[serde(default)]
+    pub resolution: Option<f64>,
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -876,7 +880,7 @@ impl PhotocraftMcp {
         self.run_command("file.import.variableDataSets".into(), bridge_params, true).await
     }
 
-    #[tool(description = "Create a new document (defaults: 1920x1080 RGB 8-bit white).")]
+    #[tool(description = "Create a new document (defaults: 1920x1080 RGB 8-bit white, 72 ppi).")]
     async fn doc_new(&self, Parameters(p): Parameters<NewParams>) -> Result<CallToolResult, McpError> {
         let mut params = serde_json::Map::new();
         if let Some(v) = p.width {
@@ -893,6 +897,9 @@ impl PhotocraftMcp {
         }
         if let Some(v) = p.background {
             params.insert("background".into(), v.into());
+        }
+        if let Some(v) = p.resolution {
+            params.insert("resolution".into(), v.into());
         }
         if let Some(v) = p.name {
             params.insert("name".into(), v.into());
