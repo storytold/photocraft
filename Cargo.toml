@@ -11,9 +11,8 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["serde"] }
-# Feature flags shared with the launcher and the other Craft apps (craft-libs#1118). Pinned to the
-# pull request head craft-libs#1119 until it merges; re-pin then.
-craft-flags = { git = "https://github.com/storytold/craft-libs", rev = "d6d6835dc888a270a96a575fba58ab01abf6c122" }
+# Feature flags shared with the launcher and the other Craft apps (craft-libs#1118, #1119).
+craft-flags = { git = "https://github.com/storytold/craft-libs", rev = "86d6e8c5b05a4dadc35ff1c8e5d2f992c687ee97" }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }
