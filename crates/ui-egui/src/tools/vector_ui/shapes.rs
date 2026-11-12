@@ -151,7 +151,15 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             .and_then(|st| st.doc.work_path.clone())
             .unwrap_or_else(|| photocraft_doc::vector::Path { fill_rule: outline.fill_rule, ..Default::default() });
         let outline = as_one_component(&outline, path.fill_rule).unwrap_or(outline);
+        let first_new = path.subpaths.len();
         path.subpaths.extend(outline.subpaths);
+        // The first component of a path always combines; the later ones take the drag's operation.
+        if first_new > 0
+            && let Some(op) = drag_path_op(app)
+            && let Some(sp) = path.subpaths.get_mut(first_new)
+        {
+            sp.op = path_op_of(op);
+        }
         let path = photocraft_engine::vector_cmds::path_json(&path);
         let r = app.run("path.set", json!({"name": "work", "path": path, "historyName": line_history_name(tool)}));
         match r {
@@ -173,9 +181,32 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         return;
     }
     p["historyName"] = json!(line_history_name(tool));
+    // With an operation other than New Layer the drag joins the active shape layer.
+    if let Some(op) = drag_path_op(app)
+        && let Some(id) = super::options::selected_shape(&app.session)
+    {
+        p["addTo"] = json!(id.0);
+        p["op"] = json!(op);
+    }
     if let Err(e) = create_shape(app, p) {
         app.ui.status = e;
         app.ui.status_error = true;
+    }
+}
+
+/// The operation the next Shape-tool drag is added with (the options bar's Path operations);
+/// None for a new shape layer. The one place press modifiers can override it (#13227).
+fn drag_path_op(app: &PhotocraftApp) -> Option<&'static str> {
+    super::pen::shape_path_op(&app.ui.tool_options)
+}
+
+fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
+    use photocraft_doc::vector::PathOp;
+    match op {
+        "subtract" => PathOp::Subtract,
+        "intersect" => PathOp::Intersect,
+        "exclude" => PathOp::Exclude,
+        _ => PathOp::Combine,
     }
 }
 
