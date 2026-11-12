@@ -296,9 +296,14 @@ pub(crate) fn decode_channels(bytes: &[u8], index: usize, names: &[&str], limits
     let (w, h) = (layer.size.0, layer.size.1);
     let channels = &layer.channel_data.list;
     let npx = w * h;
+    // More names than channels can only repeat one: refuse before the per-name lookups multiply.
+    if names.len() > channels.len() {
+        return Err(err("more channel names than the part has channels"));
+    }
+    let have: Vec<String> = channels.iter().map(|c| c.name.to_string()).collect();
     let mut picked: Vec<&AnyChannel<FlatSamples>> = Vec::with_capacity(names.len());
     for name in names {
-        let c = channels.iter().find(|c| c.name.to_string() == *name).ok_or_else(|| err(format!("the part has no channel {name}")))?;
+        let c = have.iter().position(|n| n == name).map(|i| &channels[i]).ok_or_else(|| err(format!("the part has no channel {name}")))?;
         if c.sample_data.len() != npx {
             return Err(err("channel sample count mismatch (subsampled channels are unsupported)"));
         }
