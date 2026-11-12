@@ -12,7 +12,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
-use crate::resample::{Resample, resize_surface};
+use crate::resample::prefilter_transform;
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -383,6 +383,7 @@ fn warp(
     }
     let mut h = *h;
     let mut src_rect = src_rect;
+    let mut frame = [src_rect.x0, src_rect.y0, src_rect.x1, src_rect.y1].map(f64::from);
     // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
     // that matters is the one at the source point landing in the clip's centre.
     let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
@@ -397,15 +398,18 @@ fn warp(
     // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
     if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
         let f = scale.max(1.0 / 64.0);
-        reduced = resize_surface(src, f, f, Resample::Bicubic);
+        reduced = prefilter_transform(src, f, src_rect, ctl);
         src = &reduced;
         h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
         src_rect = crate::resample::scaled_rect(src_rect, f, f);
+        // The reduced sample grid is integer-aligned. Keep the actual, fractional outline for
+        // coverage so rounding the grid outwards doesn't enlarge the visible result.
+        frame = frame.map(|v| v * f);
     }
     let Some(inv) = h.inverse() else { return Ok(out) };
+    let [x0, y0, x1, y1] = frame;
     // Destination bounds: the warped corners (plus a pixel for filter support).
-    let corners = [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)]
-        .map(|(x, y)| h.apply(x as f64, y as f64));
+    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| h.apply(x, y));
     // A sampled pixel's inverse w is 1 / (forward w at its source point). While the forward w keeps one sign over the source
     // (plus the margin the sampler reads), every sampled pixel lies at least `w_lo` from the inverse horizon, so clipping a tile
     // there keeps its footprint exact and bounded even when a steep Distort brings that horizon into the tile (#2271).
@@ -512,6 +516,7 @@ fn warp(
         let extent = |e: f64| if e.is_finite() && e > 1e-12 { e } else { 1.0 };
         let foot_u = extent((dx.0 - o.0).abs() + (dy.0 - o.0).abs());
         let foot_v = extent((dx.1 - o.1).abs() + (dy.1 - o.1).abs());
+        let coverage = |p: f64, lo: f64, hi: f64, width: f64| ((p + width / 2.0).min(hi) - (p - width / 2.0).max(lo)).max(0.0) / width;
         let w = t.width() as usize;
         let len = w.checked_mul(t.height() as usize).and_then(|v| v.checked_mul(n)).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
         let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
@@ -525,11 +530,26 @@ fn warp(
                 if front.is_some_and(|s| s * inv.w(x as f64 + 0.5, y as f64 + 0.5) <= 0.0) {
                     continue;
                 }
-                let (u, v) = inv.apply(x as f64 + 0.5, y as f64 + 0.5);
-                let (u, v) = (u - 0.5, v - 0.5);
-                if u < src_rect.x0 as f64 - 1.0 || v < src_rect.y0 as f64 - 1.0 || u > src_rect.x1 as f64 || v > src_rect.y1 as f64 {
+                let (uc, vc) = inv.apply(x as f64 + 0.5, y as f64 + 0.5);
+                if !uc.is_finite() || !vc.is_finite() {
                     continue;
                 }
+                let (u, v, opacity) = if interp == Interp::Nearest {
+                    if uc < x0 || vc < y0 || uc >= x1 || vc >= y1 {
+                        continue;
+                    }
+                    (uc - 0.5, vc - 0.5, 1.0)
+                } else {
+                    let opacity = coverage(uc, x0, x1, foot_u) * coverage(vc, y0, y1, foot_v);
+                    if opacity <= 0.0 {
+                        continue;
+                    }
+                    // A very small object can cover part of a pixel whose centre is well past
+                    // its edge in source coordinates. Repeat the edge when sampling it.
+                    let u = (uc - 0.5).clamp(src_rect.x0 as f64 - 1.0, src_rect.x1 as f64);
+                    let v = (vc - 0.5).clamp(src_rect.y0 as f64 - 1.0, src_rect.y1 as f64);
+                    (u, v, opacity)
+                };
                 acc[..n].fill(0.0);
                 match interp {
                     Interp::Nearest => {
@@ -544,7 +564,7 @@ fn warp(
                         for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
                             for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
                                 for (c, s) in acc.iter_mut().enumerate().take(n) {
-                                    *s += clamped(ix + dx, iy + dy, c) * wx * wy;
+                                    *s += clamped(ix.saturating_add(dx), iy.saturating_add(dy), c) * wx * wy;
                                 }
                             }
                         }
@@ -556,22 +576,13 @@ fn warp(
                             for (i, wxi) in wx.iter().enumerate() {
                                 let k = wxi * wyj;
                                 for (c, s) in acc.iter_mut().enumerate().take(n) {
-                                    *s += clamped(ix - 1 + i as i32, iy - 1 + j as i32, c) * k;
+                                    *s += clamped(ix.saturating_add(i as i32 - 1), iy.saturating_add(j as i32 - 1), c) * k;
                                 }
                             }
                         }
                     }
                 }
-                if interp != Interp::Nearest {
-                    // How much of this pixel the warped source rect covers, per axis.
-                    let (uc, vc) = (u + 0.5, v + 0.5);
-                    let cu = ((uc - src_rect.x0 as f64).min(src_rect.x1 as f64 - uc) / foot_u + 0.5).clamp(0.0, 1.0);
-                    let cv = ((vc - src_rect.y0 as f64).min(src_rect.y1 as f64 - vc) / foot_v + 0.5).clamp(0.0, 1.0);
-                    for s in acc.iter_mut().take(n) {
-                        *s *= cu * cv;
-                    }
-                }
-                let al = acc[a].clamp(0.0, 1.0);
+                let al = (acc[a] * opacity).clamp(0.0, 1.0);
                 if al <= 0.0 {
                     continue;
                 }
