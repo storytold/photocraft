@@ -1,6 +1,6 @@
 //! Camera Raw's preview develop on the 858×572 proxy of a 6000×4000 image: the CPU develop
 //! against the GPU passes (upload, render, readback), for per-pixel settings and for the spatial
-//! stages (Dehaze, Shadows and Highlights, Clarity, Texture) with them. "Source uploaded every
+//! stages (Dehaze, Shadows and Highlights, Clarity, Texture, Detail) with them. "Source uploaded every
 //! time" also makes Dehaze's copy on the CPU every time, as a white balance drag does.
 //! `cargo run --release -p photocraft-gpu --example bench_camera_raw [-- --quick]`
 use std::time::Instant;
@@ -102,7 +102,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Clarity +50, Texture +50, Dehaze +40, every per-pixel stage", CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, ..per_pixel_stages.clone() }),
         (
             "Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
-            CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, shadows: 50.0, highlights: -50.0, ..per_pixel_stages },
+            CameraRaw { clarity: 50.0, texture: 50.0, dehaze: 40.0, shadows: 50.0, highlights: -50.0, ..per_pixel_stages.clone() },
+        ),
+        ("Sharpening 40", CameraRaw { sharpen_amount: 40.0, pixel_scale: scale, ..Default::default() }),
+        ("Sharpening 40, Masking 30", CameraRaw { sharpen_amount: 40.0, sharpen_masking: 30.0, pixel_scale: scale, ..Default::default() }),
+        ("Noise Reduction 30", CameraRaw { noise_luminance: 30.0, pixel_scale: scale, ..Default::default() }),
+        ("Color Noise Reduction 25", CameraRaw { noise_color: 25.0, pixel_scale: scale, ..Default::default() }),
+        (
+            "Sharpening 40, Masking 30, both noise reductions, every per-pixel stage",
+            CameraRaw { sharpen_amount: 40.0, sharpen_masking: 30.0, noise_luminance: 30.0, noise_color: 25.0, ..per_pixel_stages.clone() },
+        ),
+        (
+            "Detail, Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
+            CameraRaw {
+                sharpen_amount: 40.0,
+                sharpen_masking: 30.0,
+                noise_luminance: 30.0,
+                noise_color: 25.0,
+                clarity: 50.0,
+                texture: 50.0,
+                dehaze: 40.0,
+                shadows: 50.0,
+                highlights: -50.0,
+                ..per_pixel_stages
+            },
         ),
     ];
     for (name, p) in &sets {
@@ -120,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  CPU develop                          {cpu:7.2} ms");
         println!("  GPU, source uploaded every time      {upload:7.2} ms");
         println!("  GPU, source cached (slider drag)     {cached:7.2} ms");
-        if !toned && (p.whites != 0.0 || p.blacks != 0.0) {
+        if !p.spatial_tone() && (p.whites != 0.0 || p.blacks != 0.0) {
             let points_ms = time(runs, || {
                 std::hint::black_box(white_black_points(&src, w, h, p));
             });

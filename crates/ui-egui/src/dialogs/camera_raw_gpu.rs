@@ -1,7 +1,6 @@
-//! Camera Raw's preview develop on the GPU (#6916). When the settings don't use Detail
-//! (sharpening, noise reduction), the proxy develops in wgpu passes
+//! Camera Raw's preview develop on the GPU (#6916). The proxy develops in wgpu passes
 //! (`photocraft_gpu::CameraRawDevelop`) on the canvas's device and is read back once for the
-//! histogram, scopes and display conversion. Detail, Rendering Mode CPU,
+//! histogram, scopes and display conversion. Calibration, Rendering Mode CPU,
 //! `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software adapter, a device fault or a failed
 //! develop all keep the CPU develop on the worker.
 //!
@@ -118,8 +117,8 @@ impl CameraRawGpu {
         CameraRawGpu { device, queue, health, pass, failed: Arc::default(), points: Arc::default() }
     }
 
-    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Detail or Calibration, the
-    /// pass still building, a fault, or a GPU error (logged; the dialog then stays on the CPU).
+    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Calibration, the pass still
+    /// building, a fault, or a GPU error (logged; the dialog then stays on the CPU).
     /// `key` names the pixels when they are the dialog's unchanged proxy ([`source_key`]), so they
     /// upload once. Neutral settings are `None` too: the CPU develop returns them at once, a GPU
     /// round trip would only cost.
@@ -151,10 +150,10 @@ impl CameraRawGpu {
     }
 
     /// The image's black and white points for Whites and Blacks, measured on the CPU. With a
-    /// spatial stage the GPU measures them after it instead.
+    /// spatial stage before them the GPU measures them after it instead (Detail comes after).
     #[cfg(not(target_arch = "wasm32"))]
     fn points(&self, px: &[[f32; 4]], key: Option<u64>, w: usize, h: usize, p: &CameraRaw) -> Option<(f32, f32)> {
-        if (p.whites == 0.0 && p.blacks == 0.0) || p.spatial() {
+        if (p.whites == 0.0 && p.blacks == 0.0) || p.spatial_tone() {
             return None;
         }
         let Some(key) = key else { return photocraft_algo::camera_raw::white_black_points(px, w, h, p) };
@@ -230,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn per_pixel_settings_develop_on_the_gpu_like_the_cpu_and_the_rest_stays_on_the_cpu() {
+    fn every_stage_but_calibration_develops_on_the_gpu_like_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
         for depth in [8, 16, 32] {
             let Some((mut app, ctx)) = gpu_app(depth) else { return };
@@ -276,11 +275,22 @@ mod tests {
                 let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
                 assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
             }
-            // Detail develops the whole frame on the CPU.
-            for detail in [CameraRaw { sharpen_amount: 40.0, ..toned.clone() }, CameraRaw { noise_luminance: 30.0, dehaze: 20.0, ..per_pixel.clone() }] {
-                let (backend, shown, cpu) = developed(&mut app, &ctx, detail);
-                assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
+            // And Detail: sharpening and noise reduction, alone (Whites and Blacks measured on
+            // the CPU before it) and after every other stage.
+            for detail in [
+                CameraRaw { sharpen_amount: 60.0, sharpen_masking: 30.0, ..per_pixel.clone() },
+                CameraRaw { noise_luminance: 40.0, noise_color: 50.0, ..per_pixel.clone() },
+                CameraRaw { sharpen_amount: 80.0, noise_luminance: 30.0, noise_color: 40.0, clarity: 30.0, texture: 25.0, dehaze: 20.0, ..toned.clone() },
+            ] {
+                let (backend, gpu, cpu) = developed(&mut app, &ctx, detail.clone());
+                assert_eq!(backend, "gpu", "{depth}-bit, {detail:?}");
+                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                assert!(worst <= TOL, "{depth}-bit, {detail:?}: off by {worst}");
             }
+            // Calibration develops the whole frame on the CPU (#5128).
+            let calibrated = CameraRaw { sharpen_amount: 40.0, shadow_tint: 30.0, ..per_pixel.clone() };
+            let (backend, shown, cpu) = developed(&mut app, &ctx, calibrated);
+            assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
             // A device fault: the CPU, from the next frame on.
             app.gpu.as_ref().unwrap().health().mark(photocraft_gpu::Fault::Lost("test".into()));
             let (backend, shown, cpu) = developed(&mut app, &ctx, per_pixel);
