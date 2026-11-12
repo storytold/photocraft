@@ -93,9 +93,9 @@ impl Session {
         self.admit(id, spec, params).map(|_| ())
     }
 
-    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
-    /// the precondition (on a named layer for commands that take one), a job running on the
-    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
+    /// refused command leaves it floating) and again after: the precondition (on a named layer
+    /// for commands that take one), a job running on the document, a hidden target. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));

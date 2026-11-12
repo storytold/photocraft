@@ -1760,6 +1760,12 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
+        // A command that may not run leaves a floating selection floating (#13169): it is refused
+        // before the piece drops, without a History step. One that may run is checked again
+        // below, once the piece has dropped, on the pixels and selection it will change.
+        if crate::float_cmds::drops_for(self, id) {
+            self.admit(id, spec, &params)?;
+        }
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
