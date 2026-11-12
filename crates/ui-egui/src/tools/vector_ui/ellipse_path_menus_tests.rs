@@ -172,3 +172,27 @@ fn a_custom_shape_with_an_operation_joins_the_active_shape_layer() {
     let ops: Vec<PathOp> = active_shape(&app).path.subpaths.iter().map(|s| s.op).collect();
     assert_eq!(ops, [PathOp::Combine, PathOp::Subtract, PathOp::Join], "the ellipse, the ring and its hole");
 }
+
+/// #13442 review: a custom shape that can't be made one component (its parts exclude each other)
+/// is not added with an operation, which would change its parts' operations: the layer stays as
+/// it was and the status says why.
+#[test]
+fn a_custom_shape_that_is_not_one_component_is_refused() {
+    use photocraft_doc::vector::{Path, Subpath};
+    let mut app = app();
+    drag(&mut app, [50.0, 50.0], [200.0, 200.0]);
+    let before = active_shape(&app).path;
+    let xor = Path::new(vec![
+        Subpath::polygon(&[(0.0, 0.0), (60.0, 0.0), (60.0, 60.0), (0.0, 60.0)]),
+        Subpath::polygon(&[(40.0, 40.0), (100.0, 40.0), (100.0, 100.0), (40.0, 100.0)]).with_op(PathOp::Exclude),
+    ]);
+    let r = app.run("shape.presets.new", json!({"name": "Xor", "path": photocraft_engine::vector_cmds::path_json(&xor)})).unwrap();
+    app.ui.tool = Tool::CustomShape;
+    app.ui.presets_ui.custom_shape = r["name"].as_str().unwrap().into();
+    app.ui.tool_options.shape_path_op = "combine".into();
+    let layers = layer_count(&app);
+    drag(&mut app, [100.0, 100.0], [250.0, 250.0]);
+    assert_eq!(layer_count(&app), layers);
+    assert_eq!(active_shape(&app).path, before, "the layer is unchanged");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+}

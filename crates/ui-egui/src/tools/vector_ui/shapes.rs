@@ -179,7 +179,17 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             && let Some(id) = super::options::selected_shape(&app.session)
             && let Some(outline) = shape_outline(app, tool, start, end, mods)
         {
-            let outline = as_one_component(&outline, outline.fill_rule).unwrap_or(outline);
+            // `shape.create` gives every component the operation, so a shape of several components
+            // that can't be made one (its parts intersect or exclude) would change: refuse it.
+            let outline = match as_one_component(&outline, outline.fill_rule) {
+                Some(one) => one,
+                None if outline.subpaths.len() <= 1 => outline,
+                None => {
+                    app.ui.status = tl!("This custom shape can't be added to a shape layer with a path operation: choose New Layer").into();
+                    app.ui.status_error = true;
+                    return;
+                }
+            };
             let path = photocraft_engine::vector_cmds::path_json(&outline);
             if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op})) {
                 app.ui.status = e;
