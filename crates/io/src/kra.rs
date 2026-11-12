@@ -20,66 +20,36 @@
 mod tests;
 mod tiles;
 
+use craft_kra::tiles::{Space, TileFile};
+use craft_kra::{Archive, Node};
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask};
-use photocraft_format::zip::ZipReader;
 use photocraft_geom::Size;
 use photocraft_raster::{Interrupt, Surface};
 
-use crate::ora::{MAX_NODES, MAX_PIXEL_BYTES, MAX_SIDE, Warnings, krita_blend};
+use crate::ora::{MAX_PIXEL_BYTES, Warnings, krita_blend};
 use crate::{ImportResult, IoError};
-use tiles::{Space, TileFile};
+use tiles::SpaceExt;
+
+pub(crate) use craft_kra::{EXTENSIONS, is_kra};
 
 type Result<T> = std::result::Result<T, IoError>;
-
-/// The `mimetype` entry of a Krita archive.
-pub(crate) const MIMETYPE: &[u8] = b"application/x-krita";
-pub(crate) const EXTENSIONS: [&str; 2] = ["kra", "krz"];
-const MAX_MAINDOC: usize = 32 << 20;
-const MAX_LAYER_FILE: usize = 1 << 30;
 
 fn invalid(message: impl Into<String>) -> IoError {
     IoError::Kra(message.into())
 }
 
-/// `true` for a Krita archive (by its `mimetype` entry).
-pub(crate) fn is_kra(bytes: &[u8]) -> bool {
-    crate::ora::zip_mimetype(bytes).is_some_and(|mime| mime.trim_ascii() == MIMETYPE)
-}
-
-fn attr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
-    node.attribute(name).map(str::trim)
-}
-
-fn number(node: roxmltree::Node<'_, '_>, name: &str, default: f64) -> Result<f64> {
-    match attr(node, name) {
-        None | Some("") => Ok(default),
-        Some(v) => v.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or_else(|| invalid(format!("invalid {name} attribute `{v}`"))),
+/// The format crate's error as this crate's.
+fn kra_err(e: craft_kra::Error) -> IoError {
+    match e {
+        craft_kra::Error::Invalid(m) => invalid(m),
+        craft_kra::Error::Unsupported(m) => IoError::Unsupported(m),
     }
-}
-
-fn offset(node: roxmltree::Node<'_, '_>, name: &str) -> Result<i32> {
-    let v = number(node, name, 0.0)?.round();
-    if v.abs() > f64::from(MAX_SIDE) * 4.0 {
-        return Err(invalid(format!("{name} offset {v} is out of range")));
-    }
-    Ok(v as i32)
-}
-
-fn truthy(node: roxmltree::Node<'_, '_>, name: &str) -> bool {
-    matches!(attr(node, name), Some("1" | "true"))
-}
-
-/// Child elements named `tag` inside the node's `<container>` element (`layers` or `masks`).
-fn children<'a, 'i>(node: roxmltree::Node<'a, 'i>, container: &str, tag: &'static str) -> impl Iterator<Item = roxmltree::Node<'a, 'i>> {
-    node.children().filter(move |c| c.has_tag_name(container)).flat_map(move |c| c.children().filter(move |n| n.has_tag_name(tag)))
 }
 
 struct Reader<'a, 'c> {
-    zip: ZipReader<'a>,
+    archive: Archive<'a>,
     ctl: &'c Interrupt<'c>,
-    /// `<image name>/layers/`.
-    dir: String,
     /// The document's pixel format (layers in another supported space are converted to it).
     fmt: PixelFormat,
     nodes: usize,
@@ -88,49 +58,32 @@ struct Reader<'a, 'c> {
 }
 
 impl Reader<'_, '_> {
-    fn file(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let path = format!("{}{name}", self.dir);
-        match self.zip.find(&path) {
-            None => Ok(None),
-            Some(e) => self.zip.read(e, MAX_LAYER_FILE).map(Some).map_err(|err| invalid(format!("{path}: {err}"))),
-        }
-    }
-
-    /// The default pixel Krita stores next to a tiled file, decoded to `space` samples.
-    fn default_pixel(&self, name: &str, space: Space) -> Result<Option<Vec<f32>>> {
-        let Some(bytes) = self.file(&format!("{name}.defaultpixel"))? else { return Ok(None) };
-        if bytes.len() != space.pixel_size() {
-            return Err(invalid(format!("{name}.defaultpixel has {} bytes, expected {}", bytes.len(), space.pixel_size())));
-        }
-        Ok(Some(space.normalised(&bytes)))
-    }
-
     /// A tiled pixel file in `space` as a surface in `fmt`, offset by (`dx`, `dy`).
     fn surface(&mut self, name: &str, space: Space, fmt: PixelFormat, dx: i32, dy: i32) -> Result<Option<Surface>> {
-        let Some(bytes) = self.file(name)? else { return Ok(None) };
-        let file = TileFile::parse(&bytes)?;
+        let Some(bytes) = self.archive.layer_file(name).map_err(kra_err)? else { return Ok(None) };
+        let file = TileFile::parse(&bytes).map_err(kra_err)?;
         if file.pixel_size != space.pixel_size() {
             return Err(invalid(format!("{name}: pixel size {} does not match its colour space", file.pixel_size)));
         }
-        let cost = file.decoded_bytes(fmt.bytes_per_pixel(), dx, dy)?;
+        let cost = tiles::decoded_bytes(&file, fmt.bytes_per_pixel(), dx, dy)?;
         self.budget = self.budget.checked_sub(cost).ok_or_else(|| invalid("decoded layers exceed the 1 GiB limit"))?;
-        let mut surface = match self.default_pixel(name, space)? {
+        let mut surface = match self.archive.default_pixel(name, space).map_err(kra_err)? {
             Some(px) if px.iter().any(|v| *v != 0.0) => Surface::with_default(fmt, &space.to_format(&px, fmt)),
             _ => Surface::new(fmt),
         };
-        file.decode_into(&mut surface, space, dx, dy, self.ctl)?;
+        tiles::decode_into(&file, &mut surface, space, dx, dy, self.ctl)?;
         surface.prune();
         Ok(Some(surface))
     }
 
-    fn props(&mut self, node: roxmltree::Node<'_, '_>, layer: &mut Layer) -> Result<()> {
-        layer.name = attr(node, "name").filter(|n| !n.is_empty()).map_or_else(|| format!("Layer {}", self.nodes), str::to_string);
-        layer.visible = attr(node, "visible") != Some("0");
-        layer.opacity = (number(node, "opacity", 255.0)? / 255.0).clamp(0.0, 1.0) as f32;
-        if truthy(node, "locked") {
+    fn props(&mut self, node: &Node, layer: &mut Layer) {
+        layer.name = node.name.as_deref().filter(|n| !n.is_empty()).map_or_else(|| format!("Layer {}", self.nodes), str::to_string);
+        layer.visible = node.visible;
+        layer.opacity = (node.opacity / 255.0).clamp(0.0, 1.0) as f32;
+        if node.locked {
             layer.locks.all = true;
         }
-        let op = attr(node, "compositeop").unwrap_or("normal");
+        let op = node.composite_op.as_deref().unwrap_or("normal");
         layer.blend = match krita_blend(op) {
             Some((mode, approx)) => {
                 if approx {
@@ -143,24 +96,22 @@ impl Reader<'_, '_> {
                 BlendMode::Normal
             }
         };
-        if attr(node, "channelflags").is_some_and(|f| f.contains('0')) {
+        if node.channel_flags.as_deref().is_some_and(|f| f.contains('0')) {
             self.warnings.layer(&layer.name, "channel locks (Krita's per-channel blending) are ignored");
         }
-        if truthy(node, "inheritalpha") {
+        if node.inherit_alpha {
             self.warnings.layer(&layer.name, "Inherit Alpha is not supported; these layers blend normally");
         }
-        if attr(node, "keyframes").is_some_and(|k| !k.is_empty()) {
+        if node.keyframes.as_deref().is_some_and(|k| !k.is_empty()) {
             self.warnings.layer(&layer.name, "animated layers open with the frame Krita saved in the layer");
         }
-        Ok(())
     }
 
     /// The node's transparency masks, combined into one layer mask.
-    fn masks(&mut self, node: roxmltree::Node<'_, '_>, layer: &mut Layer, dx: i32, dy: i32) -> Result<()> {
-        for mask in children(node, "masks", "mask") {
+    fn masks(&mut self, node: &Node, layer: &mut Layer, dx: i32, dy: i32) -> Result<()> {
+        for mask in &node.masks {
             self.ctl.check().map_err(|_| IoError::Cancelled)?;
-            let kind = attr(mask, "nodetype").unwrap_or("");
-            match kind {
+            match mask.node_type.as_str() {
                 "transparencymask" => {}
                 // A layer's local selection: not part of its look.
                 "selectionmask" => continue,
@@ -179,11 +130,11 @@ impl Reader<'_, '_> {
                 self.warnings.layer(&layer.name, "only the first transparency mask of a layer is kept");
                 continue;
             }
-            let Some(file) = attr(mask, "filename") else { continue };
-            let (mx, my) = (dx.saturating_add(offset(mask, "x")?), dy.saturating_add(offset(mask, "y")?));
+            let Some(file) = mask.filename.as_deref() else { continue };
+            let (mx, my) = (dx.saturating_add(mask.x), dy.saturating_add(mask.y));
             match self.surface(&format!("{file}.pixelselection"), Space::Alpha8, PixelFormat::GRAY8, mx, my)? {
                 Some(surface) => {
-                    layer.mask = Some(LayerMask { surface, enabled: attr(mask, "visible") != Some("0"), ..LayerMask::reveal_all() });
+                    layer.mask = Some(LayerMask { surface, enabled: mask.visible, ..LayerMask::reveal_all() });
                 }
                 None => self.warnings.layer(&layer.name, "a transparency mask's pixels are missing from the file"),
             }
@@ -191,32 +142,28 @@ impl Reader<'_, '_> {
         Ok(())
     }
 
-    /// The `<layers>` of `node`, bottom-to-top (maindoc.xml lists the topmost first).
-    fn layers(&mut self, node: roxmltree::Node<'_, '_>, depth: usize, dx: i32, dy: i32) -> Result<Vec<Layer>> {
+    /// `nodes` (topmost first, as maindoc.xml lists them) as layers, bottom-to-top.
+    fn layers(&mut self, nodes: &[Node], depth: usize, dx: i32, dy: i32) -> Result<Vec<Layer>> {
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(IoError::Unsupported(format!("layer groups nested deeper than {}", photocraft_doc::MAX_GROUP_DEPTH)));
         }
         let mut out = Vec::new();
-        for child in children(node, "layers", "layer") {
+        for child in nodes {
             self.ctl.check().map_err(|_| IoError::Cancelled)?;
             self.nodes += 1;
-            if self.nodes > MAX_NODES {
-                return Err(invalid(format!("more than {MAX_NODES} layers")));
-            }
-            let (x, y) = (dx.saturating_add(offset(child, "x")?), dy.saturating_add(offset(child, "y")?));
-            let kind = attr(child, "nodetype").unwrap_or("");
-            let mut layer = match kind {
+            let (x, y) = (dx.saturating_add(child.x), dy.saturating_add(child.y));
+            let mut layer = match child.node_type.as_str() {
                 "paintlayer" => {
                     let mut layer = Layer::raster("", self.fmt);
-                    self.props(child, &mut layer)?;
-                    let space = attr(child, "colorspacename").and_then(Space::from_name);
-                    match (space, attr(child, "filename")) {
+                    self.props(child, &mut layer);
+                    let space = child.colorspace_name.as_deref().and_then(Space::from_name);
+                    match (space, child.filename.as_deref()) {
                         (Some(space), Some(file)) => match self.surface(file, space, self.fmt, x, y)? {
                             Some(s) => layer.content = LayerContent::Raster(s),
                             None => self.warnings.layer(&layer.name, "the layer's pixels are missing from the file; it opens empty"),
                         },
                         (None, _) => {
-                            let cs = attr(child, "colorspacename").unwrap_or("?");
+                            let cs = child.colorspace_name.as_deref().unwrap_or("?");
                             self.warnings.layer(&layer.name, &format!("layers in Krita's {cs} colour space are not supported and were left out"));
                             continue;
                         }
@@ -226,8 +173,8 @@ impl Reader<'_, '_> {
                 }
                 "grouplayer" => {
                     let mut layer = Layer::group("", Vec::new());
-                    self.props(child, &mut layer)?;
-                    if truthy(child, "passthrough") {
+                    self.props(child, &mut layer);
+                    if child.passthrough {
                         if layer.blend != BlendMode::Normal {
                             self.warnings.layer(&layer.name, "a pass-through group's blend mode is ignored, as in Krita");
                         }
@@ -235,15 +182,15 @@ impl Reader<'_, '_> {
                     }
                     // A group's own x/y is not applied to its children: Krita moves a group by
                     // moving their pixels, and its merged image ignores the group offset.
-                    let kids = self.layers(child, depth + 1, dx, dy)?;
+                    let kids = self.layers(&child.layers, depth + 1, dx, dy)?;
                     if let LayerContent::Group(g) = &mut layer.content {
                         g.children = kids;
-                        g.expanded = !truthy(child, "collapsed");
+                        g.expanded = !child.collapsed;
                     }
                     layer
                 }
                 other => {
-                    let name = attr(child, "name").unwrap_or(other).to_string();
+                    let name = child.name.as_deref().unwrap_or(other).to_string();
                     let what = match other {
                         "shapelayer" => "vector layers",
                         "adjustmentlayer" => "filter layers",
@@ -265,8 +212,12 @@ impl Reader<'_, '_> {
 }
 
 /// Krita's merged image as a one-layer stand-in, for documents we can't read layer by layer.
-fn preview(name: &str, zip: &ZipReader<'_>, why: String) -> Result<ImportResult> {
-    let png = zip.read_by_name("mergedimage.png", MAX_LAYER_FILE).map_err(|e| invalid(format!("{why}, and the merged image can't be read: {e}")))?;
+fn preview(name: &str, archive: &mut Archive<'_>, why: String) -> Result<ImportResult> {
+    let png = match archive.merged_image() {
+        Ok(Some(png)) => png,
+        Ok(None) => return Err(invalid(format!("{why}, and the file has no merged image"))),
+        Err(e) => return Err(invalid(format!("{why}, and the merged image can't be read: {e}"))),
+    };
     let mut r = crate::flat::import_flat(name, &png)?;
     r.document.name = name.to_string();
     r.warnings.insert(0, format!("{why}; the file opens as Krita's merged image, without its layers"));
@@ -276,56 +227,21 @@ fn preview(name: &str, zip: &ZipReader<'_>, why: String) -> Result<ImportResult>
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
-    let zip = ZipReader::new(bytes).map_err(|e| invalid(e.to_string()))?;
-    let mime = zip.read_by_name("mimetype", 256).map_err(|e| invalid(e.to_string()))?;
-    if mime.trim_ascii() != MIMETYPE {
-        return Err(invalid("the archive's mimetype is not application/x-krita"));
-    }
-    let xml = zip.read_by_name("maindoc.xml", MAX_MAINDOC).map_err(|e| invalid(e.to_string()))?;
-    let xml = std::str::from_utf8(&xml).map_err(|_| invalid("maindoc.xml is not UTF-8"))?;
-    // maindoc.xml declares Krita's DTD by public id; Krita writes no internal subset, which
-    // `xml::parse` refuses (its entities could hide nesting from the depth check).
-    let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    let tree = crate::xml::parse(xml, opts).map_err(|e| invalid(format!("maindoc.xml: {e}")))?;
-    let image = tree.root_element().children().find(|n| n.has_tag_name("IMAGE")).ok_or_else(|| invalid("maindoc.xml has no IMAGE"))?;
-    let side = |a: &str| -> Result<u32> {
-        let v = number(image, a, 0.0)?;
-        if !(1.0..=f64::from(MAX_SIDE)).contains(&v) || v.fract() != 0.0 {
-            return Err(invalid(format!("image {a} {v} must be a whole number of pixels from 1 to {MAX_SIDE}")));
-        }
-        Ok(v as u32)
-    };
-    let (w, h) = (side("width")?, side("height")?);
-    if (w as usize).saturating_mul(h as usize).saturating_mul(8) > MAX_PIXEL_BYTES {
-        return Err(invalid("the canvas exceeds the 1 GiB pixel limit"));
-    }
-    let cs = attr(image, "colorspacename").unwrap_or("");
-    let Some(space) = Space::from_name(cs) else {
-        return preview(name, &zip, format!("Krita's {cs} colour space is not supported yet"));
+    let mut archive = Archive::open(bytes).map_err(kra_err)?;
+    let image = archive.image().clone();
+    let Some(space) = Space::from_name(&image.colorspace_name) else {
+        return preview(name, &mut archive, format!("Krita's {} colour space is not supported yet", image.colorspace_name));
     };
     let (mode, depth) = space.model();
-    let image_name = attr(image, "name").unwrap_or("");
-    let mut reader = Reader {
-        zip,
-        ctl,
-        dir: format!("{image_name}/layers/"),
-        fmt: PixelFormat::new(mode, depth, true),
-        nodes: 0,
-        budget: MAX_PIXEL_BYTES,
-        warnings: Warnings::default(),
-    };
-    let layers = reader.layers(image, 1, 0, 0)?;
+    let mut reader = Reader { archive, ctl, fmt: PixelFormat::new(mode, depth, true), nodes: 0, budget: MAX_PIXEL_BYTES, warnings: Warnings::default() };
+    let layers = reader.layers(&image.layers, 1, 0, 0)?;
     ctl.progress(0.9);
-    let mut document = Document::new(name, Size::new(w, h), mode, depth);
+    let mut document = Document::new(name, Size::new(image.width, image.height), mode, depth);
     document.layers = layers;
-    let icc = format!("{image_name}/annotations/icc");
-    if let Some(e) = reader.zip.find(&icc) {
-        let profile = reader.zip.read(e, 16 << 20).map_err(|err| invalid(format!("{icc}: {err}")))?;
-        if !profile.is_empty() {
-            document.icc_profile = Some(std::sync::Arc::new(profile));
-        }
+    if let Some(profile) = reader.archive.icc_profile().map_err(kra_err)? {
+        document.icc_profile = Some(std::sync::Arc::new(profile));
     }
-    let (xres, yres) = (number(image, "x-res", 72.0)?, number(image, "y-res", 72.0)?);
+    let (xres, yres) = (image.x_res, image.y_res);
     if xres > 0.0 && xres < 1.0e6 {
         document.resolution_dpi = xres as f32;
         if let Some(w) = crate::unequal_resolution_warning(xres, yres) {
@@ -335,7 +251,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if document.layers.is_empty() {
         reader.warnings.note("no layers of the Krita document could be imported");
     }
-    if image.children().any(|n| n.has_tag_name("assistants") || n.has_tag_name("ReferenceImages")) {
+    if image.assistants || image.reference_images {
         reader.warnings.note("drawing assistants and reference images were left out");
     }
     Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false })
