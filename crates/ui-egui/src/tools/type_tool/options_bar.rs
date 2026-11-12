@@ -167,6 +167,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+    // The bar's last button, as in Photoshop (#12054): Window › Character, which shows the
+    // Character | Paragraph group with Character in front, and hides it when clicked again.
+    if crate::icons::button(ui, "panels-top-left", 24.0, false, tl!("Toggle Character and Paragraph panels")).clicked()
+        && let Err(e) = crate::menus::invoke(app, &ui.ctx().clone(), "window.panel.character", json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
     if app.ui.text_edit.is_some() {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
