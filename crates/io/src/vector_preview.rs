@@ -384,7 +384,7 @@ mod tests {
         smart.vector_preview = Some(preview.clone());
         doc.layers.push(Layer::new("native", LayerContent::Smart(smart)));
         let out = crate::export(&doc, "psd", &Default::default()).unwrap();
-        let mut file = photocraft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+        let mut file = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
         let record = file.layers()[0].clone();
         *file.layers_mut() = vec![record; 100];
         let before = HASHED_SOURCE_BYTES.with(std::cell::Cell::get);
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(after.0 - before.0, source.len(), "the shared native source must not be hashed per layer or per use");
         assert_eq!(after.1 - before.1, 1, "the shared preview must not be rendered per layer or per use");
         assert_eq!(after.2 - before.2, source.len(), "the conversion cache must not re-hash the shared Embedded owner per layer");
-        let file = photocraft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+        let file = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
         assert!(file.layers().iter().all(|layer| layer.block(&PSD_KEY).is_some()));
         let back = check(&out.bytes);
 

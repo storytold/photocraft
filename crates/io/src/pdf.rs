@@ -1,13 +1,23 @@
 //! The PDF writer (ISO 32000-1 basics): raster pages, one or many per file.
 //!
 //! A small, self-contained writer. [`PdfWriter`] takes pages one at a time, compressing each
-//! image as it arrives so a long document never holds more than one page's samples; [`export`]
-//! (File › Save a Copy / Save As › PDF, #3401) and [`print_pdf`] are its one-page uses, and the
-//! engine's File › Export › Artboards to PDF writes one page per board through it. A page holds
-//! a Flate- or JPEG-compressed image XObject, optional printer marks as vector operators and
-//! optional Helvetica text; an embedded ICC profile rides in an ICCBased colour space. [`export`]
-//! also draws simple top shape and text layers as vectors over the image (with a selection font
-//! for their text). Layer-preserving PDF and PDF import stay open (FILE-215-10).
+//! image as it arrives and writing it into its sink (a `Vec`, or the temporary file of an atomic
+//! save), so a long document never holds more than one page's samples. [`export`] (File › Save a
+//! Copy / Save As › PDF, #3401) writes the document, or one page per artboard, through it; the
+//! engine's File › Export › Artboards to PDF and File › Automate › PDF Presentation write one
+//! page per board or file. A page holds a Flate- or JPEG-compressed image XObject, optional
+//! printer marks as vector operators and optional Helvetica text; an embedded ICC profile rides
+//! in an ICCBased colour space. [`export`] also draws simple top shape and text layers as vectors
+//! over the image (with a selection font for their text). Layer-preserving PDF and PDF import
+//! stay open (FILE-215-10).
+//!
+//! Spot channels leave as plates (FILE-215-17): one 8-bit image XObject per channel in a
+//! `/Separation` colour space named after the channel, painted over the composite with overprint
+//! on, so a RIP or a separating rasteriser (Ghostscript `tiffsep`, `psdcmyk`) keeps each one as
+//! its own named plate instead of mixing it into CMYK. The plates carry no mask: a viewer that
+//! ignores overprint shows the last plate opaque, Acrobat's Overprint Preview and any separating
+//! RIP show the real result, and an explicit image mask makes Illustrator report "An unknown
+//! imaging construct was encountered". An artboard page carries its own region of every plate.
 
 use std::io::Write;
 
@@ -41,6 +51,24 @@ pub struct PrintImage {
     pub encoding: ImageEncoding,
 }
 
+/// One spot plate: a named `/Separation` colorant with 8-bit ink density over the whole image
+/// box (`width × height` samples, 255 = solid ink), and the CMYK a viewer mixes to show it.
+pub struct SpotPlate {
+    /// The colorant name, as the channel is named. A RIP names the plate after it.
+    pub name: String,
+    /// The alternate colour (`/DeviceCMYK`, 1 = full ink) of the tint transform: how a viewer
+    /// previews the ink. A RIP prints the plate, not this.
+    pub cmyk: [f32; 4],
+    /// The ink colour as CIE L*a*b* (D50) and as encoded sRGB, and the solidity (0..1), for the
+    /// XMP description a converter reads to rebuild the spot channel (see [`plates_xmp`]).
+    pub lab: [f32; 3],
+    pub srgb: [f32; 3],
+    pub solidity: f32,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
+}
+
 /// Printer marks around the image.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Marks {
@@ -49,14 +77,21 @@ pub struct Marks {
     pub registration: bool,
 }
 
-/// One page: paper (pt), image box (pt, origin bottom-left), marks and texts.
+/// One page: paper (pt), image box (pt, origin bottom-left), marks, texts and spot plates.
+///
+/// The image is optional: a Multichannel document is nothing but its plates. The plates are
+/// painted over the image box in order, each with overprint on, so painting one never knocks
+/// the others (or the image) out.
 pub struct PrintPage {
     pub paper: (f64, f64),
-    pub image: PrintImage,
+    pub image: Option<PrintImage>,
     pub rect: (f64, f64, f64, f64),
     pub marks: Marks,
     pub description: Option<String>,
     pub label: Option<String>,
+    /// The page's name in the PDF `/PageLabels` tree (Unicode-capable; not drawn on the page).
+    pub page_label: Option<String>,
+    pub plates: Vec<SpotPlate>,
 }
 
 pub(super) fn pdf_string(s: &str) -> String {
@@ -72,6 +107,35 @@ pub(super) fn pdf_string(s: &str) -> String {
         }
     }
     o.push(')');
+    o
+}
+
+/// A PDF text string with UTF-16BE hex (the Unicode-capable form, byte-order mark included).
+fn pdf_unicode_string(s: &str) -> String {
+    let mut o = String::from("<FEFF");
+    for u in s.encode_utf16() {
+        o.push_str(&format!("{u:04X}"));
+    }
+    o.push('>');
+    o
+}
+
+/// `s` as a PDF name object (ISO 32000-1 §7.3.5): `/` then the UTF-8 bytes, every byte outside
+/// the regular printable ASCII range, `#` and the delimiters as `#xx`. An empty name would be
+/// the bare `/`, which some readers reject, so it becomes `/Spot`.
+fn pdf_name(s: &str) -> String {
+    let mut o = String::from("/");
+    for b in s.bytes() {
+        let regular = (0x21..=0x7e).contains(&b) && !matches!(b, b'#' | b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%');
+        if regular {
+            o.push(char::from(b));
+        } else {
+            o.push_str(&format!("#{b:02X}"));
+        }
+    }
+    if o.len() == 1 {
+        o.push_str("Spot");
+    }
     o
 }
 
@@ -278,8 +342,10 @@ pub const MAX_BYTES: u64 = 9_900_000_000;
 /// A PDF built page by page into `W` (a `Vec<u8>`, or the temporary file of an atomic save, so a
 /// long document is never held in memory). Objects 1–3 are the catalog and the page tree (both
 /// written by [`PdfWriter::finish`], once every page is known) and the shared Helvetica; each
-/// page then adds its page, contents, image and optional ICC profile objects, and the selection
-/// font of its live text if it has any.
+/// page then adds its page, contents and image objects, its ICC profile unless the previous
+/// page's is the same, one XObject per spot plate (and, on the first page with plates, the
+/// overprint ExtGState they share), and the selection font of its live text if it has any.
+/// [`PdfWriter::finish`] adds the XMP metadata stream and the page-label tree when present.
 pub struct PdfWriter<W: Write = Vec<u8>> {
     out: W,
     /// Bytes written so far.
@@ -290,6 +356,14 @@ pub struct PdfWriter<W: Write = Vec<u8>> {
     offsets: Vec<u64>,
     kids: Vec<usize>,
     presentation: Option<Presentation>,
+    /// The last ICC profile written and its object, reused by the next page with the same one.
+    icc: Option<(Vec<u8>, usize)>,
+    /// The overprint ExtGState every plate is painted with, once a page has plates.
+    overprint: Option<usize>,
+    /// Each page's `/PageLabels` name (empty for none).
+    labels: Vec<String>,
+    /// The catalog's `/Metadata` packet.
+    xmp: Option<String>,
 }
 
 impl Default for PdfWriter {
@@ -315,7 +389,18 @@ impl PdfWriter {
 impl<W: Write> PdfWriter<W> {
     /// A writer that streams the file into `out` as pages arrive.
     pub fn to(out: W) -> std::result::Result<Self, IoError> {
-        let mut w = Self { out, pos: 0, limit: MAX_BYTES, offsets: vec![0, 0], kids: Vec::new(), presentation: None };
+        let mut w = Self {
+            out,
+            pos: 0,
+            limit: MAX_BYTES,
+            offsets: vec![0, 0],
+            kids: Vec::new(),
+            presentation: None,
+            icc: None,
+            overprint: None,
+            labels: Vec::new(),
+            xmp: None,
+        };
         w.put(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")?;
         // 1 and 2 (catalog, page tree) are written by `finish`.
         w.obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")?;
@@ -338,6 +423,12 @@ impl<W: Write> PdfWriter<W> {
     /// Pages added so far.
     pub fn pages(&self) -> usize {
         self.kids.len()
+    }
+
+    /// Embed `xmp` as the catalog's `/Metadata` stream (unfiltered, as the XMP specification asks
+    /// of a packet in a PDF, so a reader can find it by scanning for the packet header).
+    pub fn set_metadata(&mut self, xmp: Option<String>) {
+        self.xmp = xmp;
     }
 
     /// Append `bytes`, refusing to grow the file past its limit ([`MAX_BYTES`]).
@@ -397,24 +488,51 @@ impl<W: Write> PdfWriter<W> {
         vectors: &str,
         selection_font: Option<&selection::SelectionFont>,
     ) -> std::result::Result<(), IoError> {
-        let img = &page.image;
         if self.kids.len() >= MAX_PAGES {
             return Err(IoError::Unsupported(format!("a PDF holds at most {MAX_PAGES} pages")));
         }
-        if img.width == 0 || img.height == 0 || !matches!(img.channels, 1 | 3 | 4) {
-            return Err(IoError::Unsupported("a PDF page needs a non-empty gray, RGB or CMYK image".into()));
+        if let Some(img) = &page.image {
+            if img.width == 0 || img.height == 0 || !matches!(img.channels, 1 | 3 | 4) {
+                return Err(IoError::Unsupported("a PDF page needs a non-empty gray, RGB or CMYK image".into()));
+            }
+            let samples = (img.width as usize).saturating_mul(img.height as usize).saturating_mul(img.channels);
+            if img.encoding == ImageEncoding::Flate && img.data.len() != samples {
+                return Err(IoError::Unsupported(format!("page image has {} bytes, expected {samples}", img.data.len())));
+            }
+        } else if page.plates.is_empty() {
+            return Err(IoError::Unsupported("a PDF page needs an image or spot plates".into()));
         }
-        let samples = (img.width as usize).saturating_mul(img.height as usize).saturating_mul(img.channels);
-        if img.encoding == ImageEncoding::Flate && img.data.len() != samples {
-            return Err(IoError::Unsupported(format!("page image has {} bytes, expected {samples}", img.data.len())));
+        for p in &page.plates {
+            let samples = (p.width as usize).saturating_mul(p.height as usize);
+            if p.width == 0 || p.height == 0 || p.data.len() != samples {
+                return Err(IoError::Unsupported(format!("spot plate {:?} has {} bytes for {}×{} samples", p.name, p.data.len(), p.width, p.height)));
+            }
         }
         let (pw, ph) = page.paper;
         let (x, y, w, h) = page.rect;
-        // Numbers are known before writing: page, contents, image, then the profile if any, then
-        // the selection font's three objects.
-        let n = self.offsets.len() + 1;
-        let (contents, image, icc) = (n + 1, n + 2, n + 3);
-        let selection_base = if img.icc.is_some() { n + 4 } else { n + 3 };
+        // Numbers are known before writing, handed out in the order the objects are written: page,
+        // contents, image, the profile unless the last one is reused, the plates, the overprint
+        // state the first time plates appear, then the selection font's three objects.
+        let mut next = self.offsets.len() + 1;
+        let mut take = |present: bool| {
+            let o = present.then_some(next);
+            next += usize::from(present);
+            o
+        };
+        let n = take(true).unwrap_or_default();
+        let contents = take(true).unwrap_or_default();
+        let image = take(page.image.is_some());
+        let profile = page.image.as_ref().and_then(|i| i.icc.as_deref());
+        let reused_icc = match (profile, &self.icc) {
+            (Some(p), Some((last, o))) if p == last.as_slice() => Some(*o),
+            _ => None,
+        };
+        let new_icc = take(profile.is_some() && reused_icc.is_none());
+        let icc = reused_icc.or(new_icc);
+        let plates: Vec<usize> = page.plates.iter().filter_map(|_| take(true)).collect();
+        let new_gs = take(!page.plates.is_empty() && self.overprint.is_none());
+        let gs = self.overprint.or(new_gs);
+        let selection_base = next;
         let mut show = String::new();
         if let Some(p) = self.presentation {
             if let Some(s) = p.advance {
@@ -424,17 +542,37 @@ impl<W: Write> PdfWriter<W> {
                 show.push_str(&format!(" /Trans {t}"));
             }
         }
+        let mut xobjects = String::new();
+        if let Some(o) = image {
+            xobjects.push_str(&format!("/Im0 {o} 0 R "));
+        }
+        for (k, o) in plates.iter().enumerate() {
+            xobjects.push_str(&format!("/Sp{k} {o} 0 R "));
+        }
+        let ext_gstate = match gs {
+            Some(o) if !page.plates.is_empty() => format!("/ExtGState << /GS0 {o} 0 R >> "),
+            _ => String::new(),
+        };
         let select = if selection_font.is_some() { format!(" /FSelect {selection_base} 0 R") } else { String::new() };
         self.obj(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 {image} 0 R >> /Font << /F1 3 0 R{select} >> >> /Contents {contents} 0 R{show} >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << {xobjects}>> {ext_gstate}/Font << /F1 3 0 R{select} >> >> /Contents {contents} 0 R{show} >>"
             )
             .as_bytes(),
         )?;
         self.kids.push(n);
+        self.labels.push(page.page_label.clone().unwrap_or_default());
         // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
-        let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\nq {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n");
+        let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\n");
+        if image.is_some() {
+            content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
+        }
         content.push_str(vectors);
+        // Each plate overprints what is already on the page: with `/OP true` a Separation paints
+        // its own colorant only, leaving the others (and the composite) as they are.
+        for k in 0..page.plates.len() {
+            content.push_str(&format!("q /GS0 gs {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Sp{k} Do Q\n"));
+        }
         content.push_str(&marks_ops(page.marks, page.rect));
         let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
         let pad = if any_marks { 30.0 } else { 6.0 };
@@ -445,19 +583,43 @@ impl<W: Write> PdfWriter<W> {
             content.push_str(&format!("BT /F1 8 Tf 0 g {:.2} {:.2} Td {} Tj ET\n", x, y - pad - 8.0, pdf_string(d)));
         }
         self.stream("/Filter /FlateDecode", &deflate(content.as_bytes()))?;
-        let device = match img.channels {
-            1 => "/DeviceGray",
-            4 => "/DeviceCMYK",
-            _ => "/DeviceRGB",
-        };
-        let cs = if img.icc.is_some() { format!("[/ICCBased {icc} 0 R]") } else { device.to_string() };
-        let dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {cs} /BitsPerComponent 8", img.width, img.height);
-        match img.encoding {
-            ImageEncoding::Flate => self.stream(&format!("{dict} /Filter /FlateDecode"), &deflate(&img.data))?,
-            ImageEncoding::Jpeg => self.stream(&format!("{dict} /Filter /DCTDecode"), &img.data)?,
-        };
-        if let Some(profile) = &img.icc {
-            self.stream(&format!("/N {} /Alternate {device} /Filter /FlateDecode", img.channels), &deflate(profile))?;
+        if let Some(img) = &page.image {
+            let device = match img.channels {
+                1 => "/DeviceGray",
+                4 => "/DeviceCMYK",
+                _ => "/DeviceRGB",
+            };
+            let cs = match icc {
+                Some(o) => format!("[/ICCBased {o} 0 R]"),
+                None => device.to_string(),
+            };
+            let dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {cs} /BitsPerComponent 8", img.width, img.height);
+            match img.encoding {
+                ImageEncoding::Flate => self.stream(&format!("{dict} /Filter /FlateDecode"), &deflate(&img.data))?,
+                ImageEncoding::Jpeg => self.stream(&format!("{dict} /Filter /DCTDecode"), &img.data)?,
+            };
+            if let (Some(o), Some(profile)) = (new_icc, &img.icc) {
+                self.stream(&format!("/N {} /Alternate {device} /Filter /FlateDecode", img.channels), &deflate(profile))?;
+                self.icc = Some((profile.clone(), o));
+            }
+        }
+        for p in &page.plates {
+            // A tint transform from the colorant's density to its alternate: 0 → paper, 1 → `cmyk`
+            // (an exponential interpolation function with N = 1 is linear).
+            let cmyk = p.cmyk.map(|v| format!("{:.4}", v.clamp(0.0, 1.0))).join(" ");
+            let cs = format!("[/Separation {} /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [{cmyk}] /N 1 >>]", pdf_name(&p.name));
+            // No mask on the plate: where it has no ink it paints "0" of its own colorant, which a
+            // separating RIP reads as no ink and overprint keeps the other plates under. (A stencil
+            // or colour-key mask would let plain viewers show every plate, but Illustrator reports
+            // an explicit image mask as an unknown imaging construct, and Quartz draws nothing for a
+            // colour-key-masked Separation image.)
+            let dict =
+                format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {cs} /BitsPerComponent 8 /Filter /FlateDecode", p.width, p.height);
+            self.stream(&dict, &deflate(&p.data))?;
+        }
+        if let Some(o) = new_gs {
+            self.obj(b"<< /Type /ExtGState /OP true /op true /OPM 1 >>")?;
+            self.overprint = Some(o);
         }
         if let Some(font) = selection_font {
             for body in font.objects(selection_base) {
@@ -481,6 +643,25 @@ impl<W: Write> PdfWriter<W> {
                 let names = self.obj(format!("<< /Names [(PhotoCraft Presentation) {script} 0 R] >>").as_bytes())?;
                 catalog.push_str(&format!(" /Names << /JavaScript {names} 0 R >>"));
             }
+        }
+        if let Some(xmp) = self.xmp.take() {
+            let n = self.stream("/Type /Metadata /Subtype /XML", xmp.as_bytes())?;
+            catalog.push_str(&format!(" /Metadata {n} 0 R"));
+        }
+        // A label tree is written only for a non-empty name: an all-empty tree would be `/Nums []`.
+        // Every page then gets an entry: a number-tree range runs until the next key, so omitting
+        // an empty name would make that page inherit the previous page's label. An empty
+        // dictionary gives the page the default (decimal) label instead.
+        if self.labels.iter().any(|l| !l.is_empty()) {
+            let nums = self
+                .labels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| if l.is_empty() { format!("{i} << >>") } else { format!("{i} << /P {} >>", pdf_unicode_string(l)) })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let o = self.obj(format!("<< /Nums [{nums}] >>").as_bytes())?;
+            catalog.push_str(&format!(" /PageLabels {o} 0 R"));
         }
         catalog.push_str(" >>");
         self.write_at(1, catalog.as_bytes())?;
@@ -554,13 +735,188 @@ pub fn flat_page_over(doc: &Document, others: OtherModes, paper: f32) -> std::re
     }
     let image = PrintImage { width: doc.size.width, height: doc.size.height, channels: device, data, icc, encoding: ImageEncoding::Flate };
     let (pw, ph) = print_size(doc);
-    Ok(PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None })
+    Ok(PrintPage {
+        paper: (pw, ph),
+        image: Some(image),
+        rect: (0.0, 0.0, pw, ph),
+        marks: Marks::default(),
+        description: None,
+        label: None,
+        page_label: None,
+        plates: Vec::new(),
+    })
 }
 
 /// `doc`'s size in points at its resolution.
 pub fn print_size(doc: &Document) -> (f64, f64) {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi)
+}
+
+/// `s` as XML character data.
+fn xml_text(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            '"' => o.push_str("&quot;"),
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// The RDF namespace every XMP packet's `rdf:RDF` element is in.
+const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// Where a description joins an XMP packet's RDF element, found as XML rather than by its
+/// spelling, so the prefix the packet binds to RDF, whitespace in its end tag and markup in
+/// comments make no difference: the byte offset of the element's end tag (`closed` false), or of
+/// the `/>` of a self-closing element (`closed` true) together with its qualified name, so the
+/// caller can expand it. None when the packet does not parse or has no RDF element.
+fn rdf_insertion(xmp: &str) -> Option<(usize, Option<&str>)> {
+    // roxmltree does not take a byte order mark ahead of the prolog; offsets below are into `xmp`.
+    let bom = xmp.strip_prefix('\u{feff}').map_or(0, |_| '\u{feff}'.len_utf8());
+    let body = xmp.get(bom..)?;
+    let doc = crate::xml::parse(body, roxmltree::ParsingOptions::default()).ok()?;
+    let rdf = doc.descendants().find(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "RDF")?;
+    let range = rdf.range();
+    let text = body.get(range.clone())?;
+    if let Some(open) = text.strip_suffix("/>") {
+        // `<r:RDF …/>`: the qualified name follows the `<`, up to whitespace or the `/`.
+        let name = open.get(1..)?;
+        let end = name.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(name.len());
+        return Some((bom + range.end - 2, Some(name.get(..end)?)));
+    }
+    // The end tag is the last thing in the element's own range.
+    Some((bom + range.start + text.rfind("</")?, None))
+}
+
+/// The XMP namespace of the spot-plate description.
+pub const SPOT_PLATES_NS: &str = "http://ns.getartcraft.com/photocraft/spot-plates/1.0/";
+
+/// The XMP packet of a spot-plate PDF: the document's own packet (`doc_xmp`, if any) with one
+/// `rdf:Description` added under [`SPOT_PLATES_NS`] that lists the plates in painting order, so a
+/// converter can rebuild each spot channel with its real ink colour, which the Separation
+/// colour space's CMYK alternate cannot carry:
+///
+/// ```xml
+/// <rdf:Description rdf:about="" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+///                  xmlns:pcsp="http://ns.getartcraft.com/photocraft/spot-plates/1.0/">
+///  <pcsp:plates>
+///   <rdf:Seq>
+///    <rdf:li rdf:parseType="Resource">
+///     <pcsp:index>0</pcsp:index>                 <!-- 0-based, the order the plates are painted -->
+///     <pcsp:name>Underbase White</pcsp:name>     <!-- the Separation colorant name, as the channel is named -->
+///     <pcsp:labL>100.00</pcsp:labL>              <!-- ink colour, CIE L*a*b*, D50 -->
+///     <pcsp:labA>0.00</pcsp:labA>
+///     <pcsp:labB>0.00</pcsp:labB>
+///     <pcsp:srgb>#FFFFFF</pcsp:srgb>             <!-- the same colour as encoded sRGB, for convenience -->
+///     <pcsp:solidity>100</pcsp:solidity>         <!-- 0–100, Photoshop's Spot Channel Options › Solidity -->
+///    </rdf:li>
+///   </rdf:Seq>
+///  </pcsp:plates>
+/// </rdf:Description>
+/// ```
+///
+/// An alpha-type channel of a Multichannel document lists as black with solidity 0. The plates
+/// are the document's, the same on every page of an artboard export.
+fn plates_xmp(doc_xmp: Option<&str>, plates: &[SpotPlate]) -> String {
+    // The description binds `rdf` itself: the packet it joins may bind another prefix to RDF.
+    let mut d = format!("  <rdf:Description rdf:about=\"\" xmlns:rdf=\"{RDF_NS}\" xmlns:pcsp=\"{SPOT_PLATES_NS}\">\n   <pcsp:plates>\n    <rdf:Seq>\n");
+    // Two decimals, never "-0.00".
+    let two = |v: f32| {
+        let v = (v * 100.0).round() / 100.0;
+        if v == 0.0 { 0.0 } else { v }
+    };
+    for (i, p) in plates.iter().enumerate() {
+        let hex = p.srgb.map(|v| format!("{:02X}", (v.clamp(0.0, 1.0) * 255.0).round() as u8)).concat();
+        d.push_str(&format!(
+            "     <rdf:li rdf:parseType=\"Resource\">\n      <pcsp:index>{i}</pcsp:index>\n      <pcsp:name>{}</pcsp:name>\n      <pcsp:labL>{:.2}</pcsp:labL>\n      <pcsp:labA>{:.2}</pcsp:labA>\n      <pcsp:labB>{:.2}</pcsp:labB>\n      <pcsp:srgb>#{hex}</pcsp:srgb>\n      <pcsp:solidity>{}</pcsp:solidity>\n     </rdf:li>\n",
+            xml_text(&p.name),
+            two(p.lab[0]),
+            two(p.lab[1]),
+            two(p.lab[2]),
+            (p.solidity * 100.0).round() as u32
+        ));
+    }
+    d.push_str("    </rdf:Seq>\n   </pcsp:plates>\n  </rdf:Description>\n");
+    // Into the document's packet when it has one, inside its RDF element; else a packet of its
+    // own. A packet that does not parse or has no RDF element has nowhere for the description to
+    // go and is kept as it is rather than replaced; so is one whose insertion offset falls off a
+    // char boundary, which the parser never yields but a document-supplied packet must not panic.
+    if let Some(xmp) = doc_xmp {
+        let Some((at, self_closing)) = rdf_insertion(xmp) else {
+            return xmp.to_owned();
+        };
+        // A self-closing element's tail skips its `/>`.
+        let tail_at = if self_closing.is_some() { at + 2 } else { at };
+        let (Some(head), Some(tail)) = (xmp.get(..at), xmp.get(tail_at..)) else {
+            return xmp.to_owned();
+        };
+        let mut out = String::with_capacity(xmp.len() + d.len() + 16);
+        out.push_str(head);
+        match self_closing {
+            // `<r:RDF …/>` becomes `<r:RDF …>` + the description + `</r:RDF>`.
+            Some(name) => {
+                out.push_str(">\n");
+                out.push_str(&d);
+                out.push_str(" </");
+                out.push_str(name);
+                out.push('>');
+            }
+            None => out.push_str(&d),
+        }
+        out.push_str(tail);
+        return out;
+    }
+    format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"{RDF_NS}\">\n{d} </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    )
+}
+
+/// The channels of `doc` that leave as plates, in channel order (the first prints first,
+/// underneath): every channel of a Multichannel document, the spot channels of any other.
+fn plate_channels(doc: &Document) -> impl Iterator<Item = &photocraft_doc::AlphaChannel> {
+    let multichannel = doc.mode == ColorMode::Multichannel;
+    doc.channels.iter().filter(move |ch| multichannel || ch.spot.is_some())
+}
+
+/// The spot plates of `doc` over `rect` (the canvas, or one artboard's rect), in channel order.
+///
+/// In a Multichannel document every channel is a plate: its spot channels at the ink density
+/// they store (1 = solid), an alpha-type channel as the transparent black ink the composite shows
+/// it as (1 − value, as `photocraft_compose::multichannel` prints it). Any other document keeps
+/// its alpha channels as masks and exports only its spot channels. The alternate colour is the
+/// ink colour separated through the CMYK profile in use (`Color::in_mode`); it only previews the
+/// plate, as Photoshop's does. Solidity is a preview attribute too: it is not part of the plate
+/// image or its tint transform, and only the XMP description ([`plates_xmp`]) carries it.
+fn plates_of(doc: &Document, rect: photocraft_geom::Rect) -> Vec<SpotPlate> {
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    plate_channels(doc)
+        .map(|ch| {
+            let (ink, alpha_type) = match ch.spot {
+                Some((ink, _)) => (ink, false),
+                None => (photocraft_color::Color::BLACK, true),
+            };
+            let n = ch.surface.channels().max(1);
+            let values = ch.surface.read_region(rect);
+            let data: Vec<u8> = values.chunks(n).map(|px| px.first().copied().unwrap_or(0.0)).map(|v| to8(if alpha_type { 1.0 - v } else { v })).collect();
+            let srgb = ink.to_rgb();
+            SpotPlate {
+                name: ch.name.clone(),
+                cmyk: ink.in_mode(ColorMode::Cmyk).c,
+                lab: photocraft_color::convert::srgb_to_lab(srgb),
+                srgb,
+                solidity: ch.spot.map_or(0.0, |(_, s)| s.clamp(0.0, 1.0)),
+                width: rect.width(),
+                height: rect.height(),
+                data,
+            }
+        })
+        .collect()
 }
 
 /// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
@@ -635,35 +991,192 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::Selectio
     (layers, selection_font)
 }
 
-/// File › Save As / Save a Copy › PDF (#3401): the flattened document, at its print size
-/// (pixels ÷ resolution × 72 pt), as a one-page PDF. Layers and transparency are dropped — the
-/// warning says so — and the embedded profile travels with the image.
-pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
-    // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
-    // compositing. Stop at the first unsupported visible layer, since it may depend on the
-    // backdrop (adjustments, blend modes, masks, effects, or clipping).
-    let (vector_layers, selection_font) = collect_vectors(doc);
-    let mut backdrop = doc.clone();
-    for (index, _) in &vector_layers {
-        if let Some(layer) = backdrop.layers.get_mut(*index) {
-            layer.visible = false;
-        }
+/// Pixels in `rect`, saturating on overflow.
+fn rect_pixels(rect: photocraft_geom::Rect) -> u64 {
+    u64::from(rect.width()).saturating_mul(u64::from(rect.height()))
+}
+
+/// File › Save As / Save a Copy › PDF (#3401): the flattened document at its print size
+/// (pixels ÷ resolution × 72 pt). One page per artboard when the document has artboards, else one
+/// page for the whole document. Layers and transparency are dropped — the warning says so — and
+/// the embedded profile travels with the images.
+///
+/// On a whole-document page the topmost simple shape and text layers stay vectors over the
+/// flattened rest, with selectable text ([`collect_vectors`]); artboard pages are raster.
+///
+/// With `spot_plates`, the document's spot channels follow each page's image and vectors as
+/// overprinting `/Separation` plates (FILE-215-17), an artboard page carrying its own region of
+/// each, and a Multichannel document, which is nothing but its channels, is written as plates
+/// alone. Without it a Multichannel document has nothing to write and is refused.
+pub fn export(doc: &Document, spot_plates: bool, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
+    export_with(doc, spot_plates, doc.metadata.xmp.as_deref(), ctl)
+}
+
+/// [`export`] with the XMP packet to embed (`doc_xmp`: the document's, or `None` when the save
+/// embeds no metadata). With spot plates the packet gains their description ([`plates_xmp`]);
+/// without plates it is written as it is, and nothing when there is none.
+pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
+    if w == 0 || h == 0 {
+        return Err(IoError::Unsupported("PDF needs a document with non-zero width and height; nothing was written".into()));
     }
-    let page = flat_page(&backdrop, OtherModes::Refuse)?;
-    let mut warnings = vec!["PDF was saved flattened: layers, masks-as-editable and transparency are not preserved (#3401)".into()];
+    // The composite's channels per pixel; None for a Multichannel document, which has no composite.
+    let device = match doc.mode {
+        ColorMode::Rgb => Some(3),
+        ColorMode::Grayscale => Some(1),
+        ColorMode::Cmyk => Some(4),
+        ColorMode::Multichannel if spot_plates && !doc.channels.is_empty() => None,
+        ColorMode::Multichannel => {
+            return Err(IoError::Unsupported(
+                "a Multichannel PDF is its channels as spot plates; with no channels, or spot plates left out, there is nothing to write".into(),
+            ));
+        }
+        m => {
+            return Err(IoError::Unsupported(format!(
+                "PDF saves RGB, Grayscale, CMYK and Multichannel documents; {m:?} needs converting to RGB first (Image > Mode)"
+            )));
+        }
+    };
+    let fmt = doc.pixel_format();
+    let n = fmt.channels().max(1);
+    let dpi = f64::from(doc.resolution_dpi.max(1.0));
+    let paper = if doc.mode == ColorMode::Cmyk { 0.0 } else { 1.0 };
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let icc = doc.icc_profile.as_ref().map(|p| p.to_vec());
+    let plate_count = if spot_plates { plate_channels(doc).count() } else { 0 };
+    // Straight alpha, composited here over paper: white in RGB/Gray (1 = full light), zero ink
+    // in CMYK (0 = paper).
+    let image_of = |values: &[f32], rect: photocraft_geom::Rect, device: usize| {
+        let mut data = Vec::with_capacity((rect.width() as usize * rect.height() as usize).saturating_mul(device));
+        for px in values.chunks(n) {
+            let a = px.last().copied().unwrap_or(1.0).clamp(0.0, 1.0);
+            for v in px.iter().take(device) {
+                data.push(to8(v * a + paper * (1.0 - a)));
+            }
+        }
+        PrintImage { width: rect.width(), height: rect.height(), channels: device, data, icc: icc.clone(), encoding: ImageEncoding::Flate }
+    };
+    let page_of = |image: Option<PrintImage>, rect: photocraft_geom::Rect, page_label: Option<String>| {
+        let (pw, ph) = (f64::from(rect.width()) * 72.0 / dpi, f64::from(rect.height()) * 72.0 / dpi);
+        let plates = if spot_plates { plates_of(doc, rect) } else { Vec::new() };
+        PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None, page_label, plates }
+    };
+    let mut warnings = Vec::new();
+    if device.is_some() {
+        warnings.push("PDF was saved flattened: layers, masks-as-editable and transparency are not preserved (#3401)".into());
+    }
+    let artboards = doc.artboards();
+    let (pages, vectors, selection_font) = if !artboards.is_empty() {
+        // Every page's encoded pixels are kept until the PDF is assembled; bound that peak.
+        const MAX_PDF_EXPORT_BYTES: u64 = 1 << 30;
+        let page_pixels: u64 = artboards.iter().fold(0u64, |bytes, (_, _, a)| bytes.saturating_add(rect_pixels(a.rect)));
+        // A page keeps `device` bytes a pixel for its composite and one a pixel for each plate.
+        let retained = page_pixels.saturating_mul((device.unwrap_or(0) + plate_count) as u64);
+        // One page renders at a time: its f32 composite surface plus the region read back from
+        // it, both `n` channels at 4 bytes per pixel. The whole-document canvas is never held.
+        let largest = artboards.iter().map(|(_, _, a)| rect_pixels(a.rect)).max().unwrap_or(0);
+        let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(2);
+        let estimate = retained.saturating_add(temporary);
+        if estimate > MAX_PDF_EXPORT_BYTES {
+            return Err(IoError::Unsupported(format!(
+                "PDF export would need about {} MB for {} artboards; export them in smaller batches",
+                estimate >> 20,
+                artboards.len()
+            )));
+        }
+        // One document shell is reused for every page. Each page renders a document holding only
+        // its artboard group (the same isolation as `artboard_document`), so an overlapping board
+        // cannot paint on another board's page. Layer pixels are shared with `doc`; this one
+        // clone and the per-page group clone hold no new pixel buffers, but they are outside the
+        // 1 GiB estimate because they are not retained page data.
+        let mut one = doc.clone();
+        let mut pages = Vec::with_capacity(artboards.len());
+        for (id, name, artboard) in &artboards {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            let rect = artboard.rect;
+            if rect.width() == 0 || rect.height() == 0 {
+                continue;
+            }
+            // A hidden artboard still gets its page, rendered from its own content rather than
+            // left blank by the group's visibility.
+            let Some(layer) = doc.layer(*id) else { continue };
+            let image = device.map(|device| {
+                let mut group = layer.clone();
+                group.visible = true;
+                one.layers.clear();
+                one.layers.push(group);
+                // Render only this artboard's rect; the surface never holds the whole document.
+                let surface = photocraft_compose::composite_to_surface(&one, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+                image_of(&surface.read_region(rect), rect, device)
+            });
+            pages.push(page_of(image, rect, Some((*name).to_string())));
+        }
+        if pages.is_empty() {
+            return Err(IoError::Unsupported("PDF: the document's artboards have no area".into()));
+        }
+        warnings.push(format!("PDF exported {} artboards as {} pages; vector/text layers on artboards are rasterised", artboards.len(), pages.len()));
+        let vectors = vec![String::new(); pages.len()];
+        (pages, vectors, selection::SelectionFont::default())
+    } else {
+        let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
+        // Simple topmost shapes and text layers can be drawn over the flattened backdrop without
+        // changing compositing. Stop at the first unsupported visible layer, since it may depend
+        // on the backdrop (adjustments, blend modes, masks, effects, or clipping). A Multichannel
+        // document has no composite for them to sit on: it is its plates alone.
+        let (vector_layers, selection_font) = if device.is_some() { collect_vectors(doc) } else { (Vec::new(), selection::SelectionFont::default()) };
+        let image = device.map(|device| {
+            let mut backdrop = doc.clone();
+            for (index, _) in &vector_layers {
+                if let Some(layer) = backdrop.layers.get_mut(*index) {
+                    layer.visible = false;
+                }
+            }
+            let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+            image_of(&surface.read_region(canvas), canvas, device)
+        });
+        // The vector layers, bottom to top, in the document's pixel space (y down), over the
+        // image and under the plates.
+        let mut vectors = String::new();
+        if !vector_layers.is_empty() {
+            let scale = 72.0 / dpi;
+            let ph = f64::from(doc.size.height) * scale;
+            vectors.push_str(&format!("q {scale} 0 0 -{scale} 0 {ph} cm\n"));
+            for (_, ops) in vector_layers.iter().rev() {
+                vectors.push_str(ops);
+            }
+            vectors.push_str("Q\n");
+        }
+        (vec![page_of(image, canvas, None)], vec![vectors], selection_font)
+    };
+    // The plates are the document's: every page has the same ones, over its own region.
+    let plates = pages.first().map(|p| p.plates.as_slice()).unwrap_or_default();
+    if !plates.is_empty() {
+        let names: Vec<&str> = plates.iter().map(|p| p.name.as_str()).collect();
+        warnings.push(format!(
+            "{} spot plate{} written as overprinting Separation colorants ({}), 8-bit; their preview colours are the inks separated to CMYK",
+            plates.len(),
+            if plates.len() == 1 { "" } else { "s" },
+            names.join(", ")
+        ));
+    } else if doc.channels.iter().any(|ch| ch.spot.is_some()) {
+        warnings.push("spot channels were not written: spot plates were left out".into());
+    }
+    let xmp = if plates.is_empty() { doc_xmp.map(str::to_owned) } else { Some(plates_xmp(doc_xmp, plates)) };
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    let scale = 72.0 / f64::from(doc.resolution_dpi.max(1.0));
-    let (_, ph) = page.paper;
-    let mut vectors = format!("q {scale} 0 0 -{scale} 0 {ph} cm\n");
-    for (_, ops) in vector_layers.iter().rev() {
-        vectors.push_str(ops);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let mut out = PdfWriter::new();
+    out.set_metadata(xmp);
+    for (i, page) in pages.iter().enumerate() {
+        // Whole-document pages may carry live vectors and their selection font; artboard pages
+        // are raster only.
+        let v = vectors.get(i).map(String::as_str).unwrap_or_default();
+        let font = artboards.is_empty().then_some(&selection_font);
+        out.add_page_with_vectors(page, v, font)?;
     }
-    vectors.push_str("Q\n");
-    let mut w = PdfWriter::new();
-    w.add_page_with_vectors(&page, &vectors, Some(&selection_font))?;
-    Ok(ExportResult { bytes: w.finish()?, warnings })
+    Ok(ExportResult { bytes: out.finish()?, warnings })
 }
 
 #[cfg(test)]

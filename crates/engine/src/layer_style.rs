@@ -2,6 +2,7 @@
 
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;
+use photocraft_doc::effects::PATTERN_SCALE_RANGE;
 use photocraft_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx,
     StrokePosition,
@@ -511,7 +512,7 @@ pub fn contour_from_param(v: &Value) -> Option<Contour> {
 /// The contours of an `.shc` contour preset file (Contour Editor › Load…), as `contour` params.
 /// Points are rescaled from the file's `0..=255` levels; unusable curves are skipped.
 pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
-    let file = photocraft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
+    let file = craft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
     Ok(file
         .into_iter()
         .filter_map(|c| {
@@ -532,7 +533,7 @@ pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
 
 /// An `.shc` file holding every contour of `list` (Save Contours…).
 pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
-    let file: Vec<photocraft_psd::shc::ShcContour> = list
+    let file: Vec<craft_psd::shc::ShcContour> = list
         .iter()
         .map(|contour| {
             let (name, points) = match contour {
@@ -542,12 +543,12 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
             let points = points
                 .iter()
                 .enumerate()
-                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .map(|(i, p)| craft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
                 .collect();
-            photocraft_psd::shc::ShcContour { name, points }
+            craft_psd::shc::ShcContour { name, points }
         })
         .collect();
-    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    craft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
@@ -804,7 +805,7 @@ fn overlay_pattern(fx: &mut Effect, p: &Value) {
         *id = String::new();
     }
     if let Some(x) = f_of(p, "scale") {
-        *scale = (x / 100.0).clamp(0.01, 10.0);
+        *scale = (x / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1);
     }
     if let Some(x) = f_of(p, "angle") {
         *angle = x;
@@ -912,7 +913,7 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
         bv.texture = Some(photocraft_doc::BevelTexture {
             name: t.to_string(),
             id: t.to_string(),
-            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(0.01, 10.0),
+            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1),
             depth: (f(p, "textureDepth", 100.0) / 100.0).clamp(-10.0, 10.0),
             invert: b(p, "textureInvert", false),
             link: b(p, "textureLink", true),
