@@ -60,7 +60,10 @@ pub(super) fn pace(app: &mut PhotocraftApp, frame: &super::Frame, i: usize, id: 
     let used = app.session.actions.playback_steps;
     let pb = &mut app.paused_playbacks;
     let token = pb.pause(frame.after(i.saturating_add(1)), 0, gate, used, doc)?;
-    if let Some(entry) = pb.paused.get_mut(&token) { entry.timed = true; entry.ran = ran; }
+    if let Some(entry) = pb.paused.get_mut(&token) {
+        entry.timed = true;
+        entry.ran = ran;
+    }
     let due = Instant::now().checked_add(wait).unwrap_or_else(Instant::now);
     if let Some(old) = pb.timer.replace(Timer { token, due, rev })
         && let Some(old) = pb.paused.remove(&old.token)
