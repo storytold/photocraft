@@ -16,7 +16,11 @@ pub struct Limits {
     /// PNG also applies this to the aggregate decoded text/XMP UTF-8 bytes,
     /// including keywords, separately from pixels. Animated WebP charges
     /// every retained frame's full pixel copy plus its own copy of the
-    /// file's ICC profile against this budget. This is not a total RSS cap.
+    /// file's ICC profile against this budget. TIFF charges its decode working memory (each
+    /// band worker's strip or tile scratch buffer, decoder state and the frame a JPEG strip or
+    /// tile decodes to) next to the output, runs only as many workers at once as fit, and
+    /// refuses the image when not even one does.
+    /// This is not a total RSS cap.
     pub max_alloc: u64,
 }
 
@@ -231,60 +235,12 @@ impl DpxBits {
     }
 }
 
-/// How a DDS texture stores its pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DdsCompression {
-    /// Uncompressed, 8 bits per channel: BGRA (BGRX without alpha), or luminance with or
-    /// without alpha for grayscale. Lossless.
-    #[default]
-    None,
-    /// BC1 (DXT1): 4 bits per pixel. Alpha is on or off: texels under half opacity become
-    /// transparent black.
-    Bc1,
-    /// BC2 (DXT3): 8 bits per pixel, with 4 bits of explicit alpha per texel.
-    Bc2,
-    /// BC3 (DXT5): 8 bits per pixel, with smooth interpolated alpha.
-    Bc3,
-}
+/// How a DDS texture is written: from craft-raster-codecs, which writes it.
+pub use craft_raster_codecs::dds::{DdsCompression, DdsOptions};
 
-impl DdsCompression {
-    pub const ALL: [DdsCompression; 4] = [DdsCompression::None, DdsCompression::Bc1, DdsCompression::Bc2, DdsCompression::Bc3];
-
-    /// The name scripts and the CLI use: `none`, `bc1`, `bc2` or `bc3`.
-    pub fn name(self) -> &'static str {
-        match self {
-            DdsCompression::None => "none",
-            DdsCompression::Bc1 => "bc1",
-            DdsCompression::Bc2 => "bc2",
-            DdsCompression::Bc3 => "bc3",
-        }
-    }
-
-    /// [`Self::name`] back to a compression, also taking the DXT names (`dxt1`, `dxt3`,
-    /// `dxt5`), in any case. Anything else is `None`.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "none" => Some(DdsCompression::None),
-            "bc1" | "dxt1" => Some(DdsCompression::Bc1),
-            "bc2" | "dxt3" => Some(DdsCompression::Bc2),
-            "bc3" | "dxt5" => Some(DdsCompression::Bc3),
-            _ => None,
-        }
-    }
-
-    /// A block compression (lossy), not uncompressed pixels.
-    pub fn is_block(self) -> bool {
-        self != DdsCompression::None
-    }
-}
-
-/// What a DDS file is written with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DdsOptions {
-    pub compression: DdsCompression,
-    /// Write the full mip chain down to 1×1, each level a box filter of the one above.
-    pub mipmaps: bool,
-}
+/// The longer side, in pixels, at which a TIFF image pyramid stops: the last level written is
+/// the first one no longer than this ([`EncodeOptions::tiff_pyramid`]).
+pub const TIFF_PYRAMID_MIN: u32 = 64;
 
 /// Options for [`crate::encode`].
 #[derive(Debug, Clone)]
@@ -310,6 +266,11 @@ pub struct EncodeOptions {
     /// Always write TIFF as BigTIFF (8-byte offsets). Without it a TIFF is written as BigTIFF
     /// only when it could pass the 4 GiB a classic TIFF can address.
     pub tiff_bigtiff: bool,
+    /// TIFF: after the full image, write Photoshop's "Save Image Pyramid" levels: copies at half,
+    /// a quarter, … of the size, each marked reduced-resolution (`NewSubfileType` 1), down to
+    /// [`crate::TIFF_PYRAMID_MIN`] px on the longer side. Readers that don't know pyramids open
+    /// the full image, which comes first.
+    pub tiff_pyramid: bool,
     pub exr_compression: ExrCompression,
     /// DPX bits per sample. `None` follows the image: 8 for 8-bit, 16 otherwise.
     pub dpx_bits: Option<DpxBits>,
@@ -334,6 +295,7 @@ impl Default for EncodeOptions {
             webp_quality: 80,
             tiff_compression: TiffCompression::None,
             tiff_bigtiff: false,
+            tiff_pyramid: false,
             exr_compression: ExrCompression::Zip16,
             dpx_bits: None,
             dds: DdsOptions::default(),
