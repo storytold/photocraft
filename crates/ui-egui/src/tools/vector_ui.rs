@@ -244,6 +244,9 @@ mod pen_mode_menu_tests;
 #[cfg(test)]
 mod ellipse_path_menus_tests;
 
+#[cfg(test)]
+mod curvature_delete_key_tests;
+
 pub(crate) use pen::freeform_locked_shape;
 #[cfg(test)]
 use pen_resume::pen_finish_on_redo;
