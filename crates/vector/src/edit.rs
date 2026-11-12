@@ -211,8 +211,9 @@ fn lerp(a: Point, b: Point, t: f64) -> Point {
 
 /// Add Anchor Point: inserts an anchor into the segment leaving `knot` at curve parameter `t`
 /// (strictly between 0 and 1) and returns the new knot's `[subpath, knot]`. A curve is split at
-/// `t` (de Casteljau), so its shape does not change and the new anchor is smooth; on a straight
-/// segment (both handles retracted) the new anchor is a corner on the line.
+/// `t` (de Casteljau), so its shape does not change and the new anchor is smooth. A straight
+/// segment (both handles retracted) is split the same way, with controls (start, start, end, end):
+/// the new anchor is smooth with handles, and the neighbours keep their retracted handles.
 pub fn add_anchor(path: &mut Path, knot: [usize; 2], t: f64) -> Result<[usize; 2], String> {
     if !(t.is_finite() && t > 0.0 && t < 1.0) {
         return Err("`t` must be strictly between 0 and 1".into());
@@ -220,18 +221,15 @@ pub fn add_anchor(path: &mut Path, knot: [usize; 2], t: f64) -> Result<[usize; 2
     let end = segment_end(path, knot)?;
     let a = *knot_mut(path, knot)?;
     let b = *knot_mut(path, end)?;
-    let new = if straight(&a, &b) {
-        // Hit testing and hover feedback use the cubic parameter, which is not linear even
-        // when both handles are retracted. Keep the inserted corner at that same point.
-        let p = eval(&[a.anchor, a.out_ctrl, b.in_ctrl, b.anchor], t);
-        Knot::corner(p.x, p.y)
-    } else {
-        let (p01, p12, p23) = (lerp(a.anchor, a.out_ctrl, t), lerp(a.out_ctrl, b.in_ctrl, t), lerp(b.in_ctrl, b.anchor, t));
-        let (p012, p123) = (lerp(p01, p12, t), lerp(p12, p23, t));
-        knot_mut(path, knot)?.out_ctrl = p01;
-        knot_mut(path, end)?.in_ctrl = p23;
-        Knot::smooth(lerp(p012, p123, t), p012, p123)
-    };
+    // Straight or not, the segment is split by de Casteljau at `t`. A straight one has controls
+    // (start, start, end, end), so the neighbours' handles stay retracted and the new anchor is
+    // smooth with handles a quarter of the segment either side at the middle. The hit position
+    // stays the cubic point at `t`, which hit testing and hover feedback use.
+    let (p01, p12, p23) = (lerp(a.anchor, a.out_ctrl, t), lerp(a.out_ctrl, b.in_ctrl, t), lerp(b.in_ctrl, b.anchor, t));
+    let (p012, p123) = (lerp(p01, p12, t), lerp(p12, p23, t));
+    knot_mut(path, knot)?.out_ctrl = p01;
+    knot_mut(path, end)?.in_ctrl = p23;
+    let new = Knot::smooth(lerp(p012, p123, t), p012, p123);
     let [s, k] = knot;
     let at = k.checked_add(1).ok_or_else(|| format!("no segment leaves knot {k} of subpath {s}"))?;
     let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
@@ -582,6 +580,55 @@ mod tests {
         }
     }
 
+    /// #8653: on any curve (an S-curve, one with a retracted handle, a closed subpath's wrapping
+    /// segment) the split is exact, the new anchor is smooth with collinear opposite handles, and
+    /// the neighbours' handles are shortened along their own lines to t and 1 − t of their length.
+    #[test]
+    fn a_split_curve_keeps_its_shape_with_a_smooth_anchor_and_shortened_neighbour_handles() {
+        let s_curve = {
+            let mut sp = Subpath::polyline(&[(0.0, 0.0), (90.0, 30.0)]);
+            sp.knots[0].out_ctrl = Point::new(60.0, -50.0);
+            sp.knots[1].in_ctrl = Point::new(10.0, 90.0);
+            (Path::new(vec![sp]), [0, 0])
+        };
+        let half_retracted = {
+            let mut sp = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+            sp.knots[1].in_ctrl = Point::new(100.0, 60.0);
+            (Path::new(vec![sp]), [0, 0])
+        };
+        let closed_wrap = {
+            let mut sp = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)]);
+            sp.knots[2].out_ctrl = Point::new(40.0, 140.0);
+            sp.knots[0].in_ctrl = Point::new(-30.0, 50.0);
+            (Path::new(vec![sp]), [0, 2])
+        };
+        for (name, (path, knot)) in [("s-curve", s_curve), ("half-retracted", half_retracted), ("closed wrap", closed_wrap)] {
+            for t in [0.07, 0.31, 0.5, 0.88] {
+                let seg = path.subpaths[0].segments()[knot[1]];
+                let mut p = path.clone();
+                let r = add_anchor(&mut p, knot, t).unwrap();
+                let k = at(&p, r[0], r[1]);
+                assert!(k.smooth, "{name} t={t}");
+                assert!(dist(k.anchor, eval(&seg, t)) < 1e-9, "{name} t={t}");
+                let (vi, vo) = ((k.in_ctrl.x - k.anchor.x, k.in_ctrl.y - k.anchor.y), (k.out_ctrl.x - k.anchor.x, k.out_ctrl.y - k.anchor.y));
+                let cross = (vi.0 * vo.1 - vi.1 * vo.0) / (vi.0.hypot(vi.1) * vo.0.hypot(vo.1));
+                assert!(cross.abs() < 1e-9 && vi.0 * vo.0 + vi.1 * vo.1 < 0.0, "{name} t={t}: handles collinear and opposite {k:?}");
+                // The neighbours: the previous anchor's out handle is t of its old length, the
+                // next anchor's in handle 1 − t, each on its old line.
+                let halves = p.subpaths[0].segments();
+                let (first, second) = (halves[r[1] - 1], halves[r[1]]);
+                assert!(dist(first[1], lerp(seg[0], seg[1], t)) < 1e-9, "{name} t={t}");
+                assert!(dist(second[2], lerp(seg[3], seg[2], 1.0 - t)) < 1e-9, "{name} t={t}");
+                // Exact: the halves reparametrised cover the old segment.
+                for i in 0..=200 {
+                    let u = f64::from(i) / 200.0;
+                    let q = if u <= t { eval(&first, u / t) } else { eval(&second, (u - t) / (1.0 - t)) };
+                    assert!(dist(q, eval(&seg, u)) < 1e-9, "{name} t={t} u={u}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn adding_to_a_straight_segment_uses_the_hit_position() {
         for (points, closed) in [
@@ -599,19 +646,23 @@ mod tests {
                 let added = add_anchor(&mut p, knot, hit_t).unwrap();
                 let inserted = at(&p, added[0], added[1]);
                 assert!(dist(inserted.anchor, clicked) < 1e-9, "t={t}: inserted {:?}, clicked {clicked:?}", inserted.anchor);
-                assert_eq!(inserted, Knot::corner(clicked.x, clicked.y), "straight segments retain retracted handles");
+                assert!(inserted.smooth, "a straight segment is split like any cubic");
+                let handles = [inserted.in_ctrl, inserted.out_ctrl];
+                assert!(handles.iter().all(|h| dist(*h, inserted.anchor) > 1e-6), "the new anchor has handles");
             }
         }
     }
 
     #[test]
-    fn adding_to_a_straight_segment_makes_a_corner_on_the_line() {
+    fn adding_to_a_straight_segment_makes_a_smooth_anchor_on_the_line() {
         let mut p = tri();
         // The closing segment (2 → 0) wraps: the new anchor goes last.
         assert_eq!(add_anchor(&mut p, [0, 2], 0.5).unwrap(), [0, 3]);
-        assert_eq!(at(&p, 0, 3), Knot::corner(25.0, 40.0));
+        let k = at(&p, 0, 3);
+        assert!(k.smooth && dist(k.anchor, Point::new(25.0, 40.0)) < 1e-9, "{k:?}");
         assert_eq!(add_anchor(&mut p, [0, 0], 0.25).unwrap(), [0, 1]);
-        assert_eq!(at(&p, 0, 1), Knot::corner(15.625, 0.0));
+        let k = at(&p, 0, 1);
+        assert!(k.smooth && dist(k.anchor, Point::new(15.625, 0.0)) < 1e-9, "{k:?}");
         assert_eq!(p.subpaths[0].knots.len(), 5);
         assert!(p.subpaths[0].closed);
     }
@@ -717,3 +768,7 @@ mod tests {
 #[cfg(test)]
 #[path = "edit_delete_last_anchor_tests.rs"]
 mod edit_delete_last_anchor_tests;
+
+#[cfg(test)]
+#[path = "edit_add_anchor_straight_tests.rs"]
+mod edit_add_anchor_straight_tests;

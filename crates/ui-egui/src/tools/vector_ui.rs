@@ -24,6 +24,7 @@ mod overlay;
 mod path_ops;
 mod paths_panel;
 mod pen;
+mod pen_resume;
 mod shapes;
 
 pub(crate) use curvature::curvature_anchor_at;
@@ -50,12 +51,13 @@ pub(crate) use path_ops::{
 };
 #[cfg(test)]
 use paths_panel::path_context_actions;
+pub(crate) use paths_panel::path_renaming;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_footer, paths_panel};
 #[cfg(test)]
 pub(crate) use pen::over_first_anchor;
 #[cfg(test)]
 use pen::pen_to_json;
-pub(crate) use pen::{PATH_OPS, pen_path, pen_replace};
+pub(crate) use pen::{PATH_OPS, path_op_field, pen_path, pen_replace};
 pub use pen::{
     cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
     pen_undo_last_point, pen_up,
@@ -216,7 +218,13 @@ mod pen_draw_tests;
 mod pen_path_ops_tests;
 
 #[cfg(test)]
+mod pen_rubber_band_tests;
+
+#[cfg(test)]
 mod paint_tests;
+
+#[cfg(test)]
+mod pen_resume_tests;
 
 #[cfg(test)]
 mod add_anchor_options_bar_tests;
@@ -227,7 +235,16 @@ mod delete_anchor_options_bar_tests;
 #[cfg(test)]
 mod pen_enter_deselects_tests;
 
+#[cfg(test)]
+mod pen_mode_menu_tests;
+
+#[cfg(test)]
+mod ellipse_path_menus_tests;
+
 pub(crate) use pen::freeform_locked_shape;
+#[cfg(test)]
+use pen_resume::pen_finish_on_redo;
+pub(crate) use pen_resume::{FinishedPen, box_steps, pen_history_enabled, pen_history_step};
 
 /// Where a Pen draft goes, captured at its first anchor.
 #[derive(Clone, Debug)]

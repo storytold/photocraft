@@ -5,14 +5,27 @@
 //! round. The Angle range is -359.99..359.99, wide, so today's wide-range rounding to one
 //! decimal decided the dialog's value; only this field now keeps hundredths.
 
-use super::filter_dialog::{body, open, params_of};
+use super::filter_dialog::{body, open, params_of, reset_fields};
 use crate::PhotocraftApp;
 use serde_json::{Map, Value, json};
 
 /// Draw a dialog body once, as a live dialog does every frame: the drawn fields are what
 /// the dialog shows and what OK sends.
 fn drawn(f: &mut Map<String, Value>) {
-    egui::Context::default().run_ui(Default::default(), |ui| body(ui, f)).textures_delta.clear();
+    drawn_texts(f);
+}
+
+/// [`drawn`], returning the text the frame painted.
+fn drawn_texts(f: &mut Map<String, Value>) -> Vec<String> {
+    let mut out = egui::Context::default().run_ui(Default::default(), |ui| body(ui, f));
+    out.textures_delta.clear();
+    out.shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A 318 px square document (the size `ok_runs_the_two_decimal_angle` measures on), a ruler
@@ -83,6 +96,29 @@ fn the_ruler_angle_rounds_at_full_precision_before_the_field_narrows() {
     assert_eq!(f["direction"], json!("ccw"));
 }
 
+/// #13067: the 43x27 ruler's first drawn frame, after opening and again after Alt+Reset,
+/// shows the 32.12 the dialog stores (the unrounded pre-fill narrowed to exactly 32.125
+/// and drew 32.13 until the next repaint), and the dialog keeps that 32.12 as the exact
+/// f64 OK sends, not the 32.1199989 an f32 field value widens to.
+#[test]
+fn the_ruler_angle_shows_and_sends_the_exact_rounded_value() {
+    let (mut app, id, mut f) = ruler_dialog([143, 127]);
+    let check = |f: &mut Map<String, Value>, when: &str| {
+        let shown = drawn_texts(f);
+        assert!(shown.iter().any(|t| t == "32.12"), "{when}: the Angle field shows 32.12, drew {shown:?}");
+        assert!(!shown.iter().any(|t| t == "32.13"), "{when}: the Angle field must not show 32.13, drew {shown:?}");
+        assert_eq!(f["angle"].as_f64(), Some(32.12), "{when}: the dialog keeps the exact rounded angle");
+        assert_eq!(params_of(f)["angle"].as_f64(), Some(32.12), "{when}: OK sends the exact rounded angle");
+    };
+    // `ruler_dialog` drew one frame already: the first frame draws the fields as opened.
+    check(&mut app.ui.dialog_mut(id).unwrap().fields.clone(), "after opening");
+    check(&mut f, "on the next frame");
+    // Move off the pre-fill first, so only the reset can bring 32.12 back.
+    f.insert("angle".into(), json!(5.0));
+    reset_fields(&app, &mut f);
+    check(&mut f, "after Alt+Reset");
+}
+
 /// The fix is per-field: unrelated number fields keep the precision they have today —
 /// wide ranges round to one decimal (in another dialog, and under the same key name),
 /// small ranges keep their two.
@@ -110,4 +146,20 @@ fn other_number_fields_keep_their_precision() {
     drawn(&mut f);
     let x = f["centerX"].as_f64().unwrap();
     assert!((x - 0.12).abs() < 1e-5, "the Radial Blur centre {x} keeps its two decimals");
+}
+
+/// The pre-fill is rounded before any frame draws: `ui.dialog.open` then `ui.dialog.confirm`
+/// can run without a draw between them, and the 43x27 ruler's raw 32.1249984 must not reach
+/// the command, after opening or after Alt+Reset.
+#[test]
+fn the_ruler_angle_is_rounded_before_the_first_frame() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 318, "height": 318})).unwrap();
+    app.run("image.analysis.rulerTool", json!({"start": [100, 100], "end": [143, 127]})).unwrap();
+    let id = open(&mut app, "image.rotation.arbitrary").unwrap();
+    let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    assert_eq!(params_of(&f)["angle"].as_f64(), Some(32.12), "undrawn, OK sends the rounded angle");
+    f.insert("angle".into(), json!(5.0));
+    reset_fields(&app, &mut f);
+    assert_eq!(params_of(&f)["angle"].as_f64(), Some(32.12), "undrawn after Alt+Reset, OK sends the rounded angle");
 }
