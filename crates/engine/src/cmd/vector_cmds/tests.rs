@@ -312,6 +312,23 @@ fn reapplying_unchanged_live_rectangle_keeps_nonuniformly_scaled_corners() {
     }
 }
 
+/// #13442 review: a component added with `addTo` takes `op` on its first subpath; its joined
+/// subpaths (holes) stay joined instead of turning into components of their own.
+#[test]
+fn shape_add_to_keeps_joined_subpaths() {
+    use photocraft_doc::vector::{Path, PathOp, Subpath};
+    let mut s = session(100, 100, 8);
+    let id = s.execute("shape.create", json!({"kind": "rect", "rect": [0, 0, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
+    let ring = Path::new(vec![
+        Subpath::polygon(&[(50.0, 50.0), (90.0, 50.0), (90.0, 90.0), (50.0, 90.0)]),
+        Subpath::polygon(&[(60.0, 60.0), (60.0, 80.0), (80.0, 80.0), (80.0, 60.0)]).with_op(PathOp::Join),
+    ]);
+    let path = crate::vector_cmds::path_json(&ring);
+    s.execute("shape.create", json!({"kind": "path", "path": path, "addTo": id, "op": "subtract"})).unwrap();
+    let ops: Vec<PathOp> = shape(&s, id).path.subpaths.iter().map(|sp| sp.op).collect();
+    assert_eq!(ops, [PathOp::Combine, PathOp::Subtract, PathOp::Join]);
+}
+
 #[test]
 fn shape_add_to_with_path_ops() {
     let mut s = session(100, 100, 8);
@@ -568,6 +585,26 @@ fn open_pen_paths_make_the_same_selection_as_closed_paths() {
     }
 }
 
+/// ⇧⌘↩, ⌥⌘↩ and ⇧⌥⌘↩'s commands are Make Selection from Path with their mode (#7726), whatever
+/// `mode` the params ask for.
+#[test]
+fn the_fixed_mode_path_commands_combine_as_their_mode() {
+    let mut s = session(80, 80, 8);
+    let square = |x: f64| path_json(&vector::shapes::rect(x, 20.0, 30.0, 30.0));
+    s.execute("path.set", json!({"name": "Sq", "path": square(30.0)})).unwrap();
+    for (id, mode) in [("path.addToSelection", "add"), ("path.subtractFromSelection", "subtract"), ("path.intersectWithSelection", "intersect")] {
+        s.execute("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 30, "antiAlias": false})).unwrap();
+        s.execute("path.toSelection", json!({"name": "Sq", "mode": mode, "antiAlias": false})).unwrap();
+        let want = selection_mask(&s);
+        s.execute("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 30, "antiAlias": false})).unwrap();
+        s.execute(id, json!({"name": "Sq", "mode": "replace", "antiAlias": false})).unwrap();
+        assert_eq!(selection_mask(&s), want, "{id} is mode {mode}");
+    }
+    // Intersecting keeps only the 10 px both squares cover.
+    let mask = selection_mask(&s);
+    assert_eq!(mask.iter().filter(|v| **v > 0.5).count(), 10 * 30);
+}
+
 #[test]
 fn selection_to_work_path_roundtrip_iou() {
     let mut s = session(240, 180, 8);
@@ -653,6 +690,9 @@ fn stroke_path_simulate_pressure_tapers_both_ends() {
     let coverage = |simulate: bool, x: i32| -> usize {
         let mut s = session(200, 60, 8);
         s.execute("layer.new.layer", json!({})).unwrap();
+        // Simulate Pressure tapers a brush that follows pen pressure; the default brush stopped
+        // doing that on its own (#11809).
+        s.execute("tools.setBrush", json!({"brush": {"pressureSize": true}})).unwrap();
         s.execute("path.set", json!({"path": {"subpaths": [{"closed": false, "knots": [[20, 30], [180, 30]]}]}})).unwrap();
         let p = json!({"tool": "brush", "size": 20, "hardness": 1.0, "color": "#000000", "opacity": 100, "simulatePressure": simulate});
         s.execute("path.stroke", p).unwrap();
