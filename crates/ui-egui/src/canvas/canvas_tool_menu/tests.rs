@@ -5,7 +5,7 @@ use egui_kittest::{Harness, kittest::Queryable};
 #[path = "zoom_menu_anchor_tests.rs"]
 mod zoom_menu_anchor_tests;
 
-fn app() -> PhotocraftApp {
+pub(super) fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app
@@ -23,12 +23,12 @@ fn work_path(app: &mut PhotocraftApp) {
     .unwrap();
 }
 
-fn choose_open(app: &mut PhotocraftApp, command: &str) {
+pub(super) fn choose_open(app: &mut PhotocraftApp, command: &str) {
     assert!(open(app, &Context::default(), Tool::Pen, [10.0, 10.0]));
     choose(app, &Context::default(), command);
 }
 
-fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
@@ -45,7 +45,7 @@ fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -213,7 +213,9 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([16.0, 16.0])));
     assert_eq!(active(&app), Some(id));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all", FAUX_BOLD, FAUX_ITALIC] {
+    // The text-edit rows belong to the edit menu only; the faux rows act on the whole layer
+    // here since #12043 (the new tests cover them).
+    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all"] {
         assert!(!available(&app, &menu, edit_row), "{edit_row} belongs to the edit menu only");
     }
     assert!(entry_enabled(&app, &menu, "type.convertToParagraphText") && !entry_enabled(&app, &menu, "type.convertToPointText"));
@@ -524,7 +526,7 @@ fn zoom_app(w: u32, h: u32) -> PhotocraftApp {
     app
 }
 
-fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
+pub(super) fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
     crate::canvas::ViewXform::active(app).unwrap().to_screen(doc[0], doc[1])
 }
 
@@ -567,7 +569,7 @@ fn space_hand_right_click_opens_the_view_menu() {
     let menu = h.state().ui.canvas_tool_menu.clone().expect("Space's Hand opens the view menu");
     // The Hand's own rows: the fixed zooms only (#12022).
     assert!(rows(&menu) == HAND_MENU && menu.tool == Tool::Hand && menu.anchor.is_some(), "the Hand's view menu, about the point");
-    assert_eq!((h.state().ui.tool, menu.over), (Tool::Move, Some(Tool::Move)), "the Move tool stays selected, the menu over it");
+    assert_eq!((h.state().ui.tool, menu.under), (Tool::Move, Some(Tool::Move)), "the Move tool stays selected, the menu over it");
     // The menu stays when Space is let go, as a popup does; a tool change closes it.
     h.event(space(false));
     h.run_steps(3);
@@ -583,7 +585,7 @@ fn space_hand_right_click_opens_the_view_menu() {
     right_click(&mut h, outside, Modifiers::NONE);
     let pasteboard = h.state().ui.canvas_tool_menu.clone().expect("Space's Hand opens the pasteboard menu outside");
     assert!(pasteboard.pasteboard, "pasteboard menu outside");
-    assert_eq!((h.state().ui.tool, pasteboard.over), (Tool::Move, Some(Tool::Move)), "the Move tool stays selected, the pasteboard menu over it");
+    assert_eq!((h.state().ui.tool, pasteboard.under), (Tool::Move, Some(Tool::Move)), "the Move tool stays selected, the pasteboard menu over it");
     // Like the view menu, it stays when Space is let go; a tool change closes it.
     h.event(space(false));
     h.run_steps(3);

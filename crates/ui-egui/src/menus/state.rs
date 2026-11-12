@@ -12,9 +12,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::can_transform(app);
     }
-    // Draft Pen points can be undone even when the document has no History entries.
-    if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
-        return true;
+    // Draft Pen points can be undone even when the document has no History entries; Redo would
+    // put a finished Pen path back beside its own edited draft. Step Backward/Forward alike.
+    if let Some(on) = crate::vector_ui::pen_history_enabled(app, id) {
+        return on;
     }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
@@ -150,6 +151,12 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     // menu can't change an item's kind in place, so a change would rebuild the whole menu.
     if id == "select.isolateLayers" {
         return Some(app.session.active().is_some_and(|d| !d.isolated_layers.is_empty()));
+    }
+    // Edit › Transform › Warp carries a check while the active layer is warped (a smart object
+    // with a stored warp, or a Warp box open), as the reference's does: picking it then edits
+    // that warp (#9798).
+    if id == "edit.transform.warp" {
+        return Some(crate::transform_tool::warps_active_layer(app));
     }
     if id == "view.proofColors" || id == "view.gamutWarning" {
         let Some(d) = app.session.active() else { return Some(false) };
