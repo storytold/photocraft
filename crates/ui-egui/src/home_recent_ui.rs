@@ -84,12 +84,7 @@ impl ThumbnailCache {
 fn paths_match(a: &str, b: &str) -> bool {
     #[cfg(windows)]
     {
-        if a == b {
-            return true;
-        }
-        let a_norm = a.replace('\\', "/");
-        let b_norm = b.replace('\\', "/");
-        a_norm.eq_ignore_ascii_case(&b_norm)
+        a == b || a.replace('\\', "/").eq_ignore_ascii_case(&b.replace('\\', "/"))
     }
     #[cfg(not(windows))]
     {
