@@ -253,7 +253,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
         _ => {
             let t = Tiff::new(bytes).ok_or(RawError::NotRaw)?;
             match format {
-                RawFormat::Dng => dng::decode(&t, limits).map(lift_clipped),
+                RawFormat::Dng => dng::decode(bytes, limits).map(lift_clipped),
                 RawFormat::Cr2 => cr2::decode(&t, limits),
                 RawFormat::Rw2 => rw2::decode(&t, limits),
                 RawFormat::Orf => orf::decode(&t, limits),

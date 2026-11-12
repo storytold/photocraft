@@ -84,7 +84,7 @@ pub(crate) fn read_packed(t: &Tiff, ifd: &Ifd, bits: u32, limits: &Limits) -> Re
     };
     let src = t.bytes(*off as usize, *len as usize).ok_or_else(|| RawError::malformed("packed NEF strip lies outside the file"))?;
     let data = unpack_little_rows(src, w, h, bits)?;
-    Ok(Plane { width: w, height: h, samples: 1, bits, data, float_scale: None })
+    Ok(Plane { width: w, height: h, samples: 1, bits, data })
 }
 
 fn unpack_little_rows(src: &[u8], w: usize, h: usize, bits: u32) -> Result<Vec<u16>> {
@@ -511,7 +511,7 @@ fn read_strip(t: &Tiff, raw: &Ifd, width: usize, height: usize, bits: u32, table
     let end = (last as usize).saturating_add(last_len as usize).min(t.data.len());
     let src = t.data.get(start..end).filter(|s| !s.is_empty()).ok_or_else(|| RawError::malformed("raw data lies outside the file"))?;
     let data = decode(src, width, height, bits, table)?;
-    Ok(Plane { width, height, samples: 1, bits, data, float_scale: None })
+    Ok(Plane { width, height, samples: 1, bits, data })
 }
 
 #[cfg(test)]

@@ -1,55 +1,52 @@
-//! Digital Negative (Adobe DNG Specification 1.7): raw IFD selection, CFA
-//! description, linearization, black/white levels, active area, default
-//! crop, colour calibration and white balance.
+//! Digital Negative (Adobe DNG Specification 1.7): the file format is craft-libs' `craft-raw`
+//! (raw IFD selection, decompression, linearization, levels, active area, default crop, CFA,
+//! colour tags and opcode lists). This maps its `RawImage` onto [`Sensor`], keeps the cases this
+//! developer does not handle as unsupported, and applies the MapPolynomial opcodes lossy DNGs
+//! carry (#8125).
 
 use crate::color::{self, Calibration, ColorInfo, IDENTITY};
 use crate::error::{RawError, Result};
-use crate::sensor::{BlackLevels, Cfa, JpegLayout, Rect, Sensor, read_plane};
-use crate::tiff::{Ifd, Tiff, tag};
+use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
 use crate::{Limits, RawFormat, opcodes};
 
-const PHOTOMETRIC_CFA: u32 = 32803;
-const PHOTOMETRIC_LINEAR_RAW: u32 = 34892;
-
-/// The main raw image: NewSubFileType 0 with CFA or LinearRaw data, largest first.
-fn raw_ifd(t: &Tiff, ifds: &[Ifd]) -> Option<Ifd> {
-    ifds.iter()
-        .filter(|i| t.tag_uint(i, tag::NEW_SUBFILE_TYPE).unwrap_or(0) == 0)
-        .filter(|i| matches!(t.tag_uint(i, tag::PHOTOMETRIC), Some(PHOTOMETRIC_CFA | PHOTOMETRIC_LINEAR_RAW)))
-        .max_by_key(|i| u64::from(t.tag_uint(i, tag::IMAGE_WIDTH).unwrap_or(0)) * u64::from(t.tag_uint(i, tag::IMAGE_LENGTH).unwrap_or(0)))
-        .cloned()
-}
-
-fn matrix(t: &Tiff, ifd: &Ifd, tg: u16) -> Option<color::Mat3> {
-    let v = t.tag_floats(ifd, tg);
-    if v.len() != 9 {
-        return None;
+/// The shared crate's error as this crate's.
+pub(crate) fn raw_err(e: craft_raw::RawError) -> RawError {
+    match e {
+        craft_raw::RawError::NotRaw => RawError::NotRaw,
+        craft_raw::RawError::Unsupported(m) => RawError::Unsupported(m),
+        craft_raw::RawError::Corrupt(m) => RawError::Malformed(m),
+        craft_raw::RawError::Limit(m) => RawError::LimitExceeded(m.to_string()),
+        craft_raw::RawError::Tiff(e) => RawError::Malformed(e.to_string()),
     }
-    color::from_slice(&v)
 }
 
-fn triple(t: &Tiff, ifd: &Ifd, tg: u16) -> Option<[f64; 3]> {
-    let v = t.tag_floats(ifd, tg);
-    (v.len() == 3 && v.iter().all(|x| x.is_finite() && *x > 0.0)).then(|| [v[0], v[1], v[2]])
+/// This crate's limits as a sample count for the shared decoder.
+pub(crate) fn raw_limits(limits: &Limits) -> craft_raw::Limits {
+    let mut out = craft_raw::Limits::default();
+    // Samples are 2 bytes (or 4 for floats, checked again below).
+    out.max_samples = usize::try_from(limits.max_pixels.saturating_mul(4).min(limits.max_alloc / 2)).unwrap_or(usize::MAX);
+    out
 }
 
-/// Colour calibration from IFD0.
-pub(crate) fn color_info(t: &Tiff, ifd0: &Ifd) -> ColorInfo {
+fn rect(r: craft_raw::Rect) -> Rect {
+    Rect::new(r.x, r.y, r.width, r.height)
+}
+
+/// Colour calibration from the colour tags: invertible matrices only, sorted by temperature,
+/// forward matrices used only when both calibrations have one.
+pub(crate) fn color_info(c: &craft_raw::ColorData) -> ColorInfo {
     let mut cal = Vec::new();
-    for (cm, cc, fm, ill, default_t) in [
-        (tag::COLOR_MATRIX_1, tag::CAMERA_CALIBRATION_1, tag::FORWARD_MATRIX_1, tag::CALIBRATION_ILLUMINANT_1, 2856.0),
-        (tag::COLOR_MATRIX_2, tag::CAMERA_CALIBRATION_2, tag::FORWARD_MATRIX_2, tag::CALIBRATION_ILLUMINANT_2, 6504.0),
-    ] {
-        let Some(color_matrix) = matrix(t, ifd0, cm) else { continue };
+    for (i, default_t) in [(0, 2856.0), (1, 6504.0)] {
+        let Some(color_matrix) = c.color_matrix[i] else { continue };
         if color::invert(&color_matrix).is_none() {
             continue;
         }
-        let temperature = t.tag_uint(ifd0, ill).and_then(color::illuminant_temperature).unwrap_or(default_t);
+        let temperature = color::illuminant_temperature(u32::from(c.illuminant[i])).unwrap_or(default_t);
         cal.push(Calibration {
             temperature,
             color_matrix,
-            forward_matrix: matrix(t, ifd0, fm).filter(|m| color::invert(m).is_some()),
-            camera_calibration: matrix(t, ifd0, cc).filter(|m| color::invert(m).is_some()).unwrap_or(IDENTITY),
+            forward_matrix: c.forward_matrix[i].filter(|m| color::invert(m).is_some()),
+            camera_calibration: c.camera_calibration[i].filter(|m| color::invert(m).is_some()).unwrap_or(IDENTITY),
         });
     }
     cal.sort_by(|a, b| a.temperature.total_cmp(&b.temperature));
@@ -58,148 +55,52 @@ pub(crate) fn color_info(t: &Tiff, ifd0: &Ifd) -> ColorInfo {
             c.forward_matrix = None;
         }
     }
-    let white_xy = {
-        let v = t.tag_floats(ifd0, tag::AS_SHOT_WHITE_XY);
-        (v.len() == 2 && v.iter().all(|x| *x > 0.0 && *x < 1.0)).then(|| [v[0], v[1]])
-    };
+    let positive = |v: [f64; 3]| v.iter().all(|x| x.is_finite() && *x > 0.0);
     ColorInfo {
         calibrations: cal,
-        analog_balance: triple(t, ifd0, tag::ANALOG_BALANCE),
-        as_shot_neutral: triple(t, ifd0, tag::AS_SHOT_NEUTRAL),
-        as_shot_white_xy: white_xy,
+        analog_balance: c.analog_balance.filter(|v| positive(*v)),
+        as_shot_neutral: c.as_shot_neutral.filter(|v| positive(*v)),
+        as_shot_white_xy: c.as_shot_white_xy.filter(|v| v.iter().all(|x| *x > 0.0 && *x < 1.0)),
     }
-}
-
-/// CFA pattern of a DNG raw IFD, anchored at the active area origin.
-fn cfa(t: &Tiff, ifd: &Ifd, active: &Rect) -> Result<Cfa> {
-    let dim = t.tag_uints(ifd, tag::CFA_REPEAT_PATTERN_DIM);
-    let (rows, cols) = match dim.as_slice() {
-        [r, c] => (*r as usize, *c as usize),
-        _ => (2, 2),
-    };
-    let pattern = t.tag_uints(ifd, tag::CFA_PATTERN);
-    if rows == 0 || cols == 0 || rows > 16 || cols > 16 || pattern.len() != rows * cols {
-        return Err(RawError::malformed("bad CFA pattern"));
-    }
-    let planes = match t.tag_uints(ifd, tag::CFA_PLANE_COLOR) {
-        v if v.is_empty() => vec![0, 1, 2],
-        v => v,
-    };
-    if planes != [0, 1, 2] {
-        return Err(RawError::unsupported(format!("CFA plane colours {planes:?} (only red, green, blue)")));
-    }
-    if t.tag_uint(ifd, tag::CFA_LAYOUT).unwrap_or(1) != 1 {
-        return Err(RawError::unsupported("non-rectangular CFA layout"));
-    }
-    let colors = pattern
-        .into_iter()
-        .map(|code| u8::try_from(code).ok().filter(|c| *c <= 2))
-        .collect::<Option<Vec<u8>>>()
-        .ok_or_else(|| RawError::unsupported("CFA colours other than red, green and blue"))?;
-    let c = Cfa { width: cols, height: rows, colors, origin_x: active.x, origin_y: active.y };
-    if !c.is_bayer() {
-        return Err(RawError::unsupported(format!("{rows}x{cols} non-Bayer CFA (e.g. X-Trans)")));
-    }
-    Ok(c)
-}
-
-fn rect_from(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Rect {
-    let full = Rect::new(0, 0, width, height);
-    match t.tag_uints(ifd, tag::ACTIVE_AREA).as_slice() {
-        [top, left, bottom, right] if bottom > top && right > left => {
-            Rect::new(*left as usize, *top as usize, (*right - *left) as usize, (*bottom - *top) as usize).intersect(&full)
-        }
-        _ => full,
-    }
-}
-
-fn crop_value(value: f64, name: &str) -> Result<usize> {
-    if !value.is_finite() || value < 0.0 {
-        return Err(RawError::malformed(format!("invalid DNG {name}")));
-    }
-    let rounded = value.round();
-    let usize_limit = 2.0_f64.powi(usize::BITS as i32);
-    if rounded >= usize_limit {
-        return Err(RawError::malformed(format!("DNG {name} is not representable")));
-    }
-    Ok(rounded as usize)
 }
 
 /// Decodes a DNG file's raw image and metadata.
-pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
-    let ifds = t.all_ifds();
-    let ifd0 = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("DNG has no IFD0"))?;
-    let raw = raw_ifd(t, &ifds).ok_or_else(|| RawError::malformed("DNG has no raw image"))?;
-    let mut warnings = Vec::new();
-    let photometric = t.tag_uint(&raw, tag::PHOTOMETRIC).unwrap_or(0);
-    let plane = read_plane(t, &raw, limits, JpegLayout::Flat)?;
-    let samples = plane.samples;
-    let is_cfa = photometric == PHOTOMETRIC_CFA;
-    if is_cfa && samples != 1 {
-        return Err(RawError::unsupported(format!("CFA data with {samples} samples per pixel")));
-    }
+pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
+    let raw = craft_raw::decode_with(bytes, &raw_limits(limits)).map_err(raw_err)?;
+    let samples = raw.cpp;
+    let is_cfa = raw.cfa.is_some();
     // LinearRaw: three colour samples, or one for a monochrome camera or scanner (DNG 1.7,
     // ColorPlanes 1: Leica Monochrom, VueScan film scans).
     if !is_cfa && samples != 1 && samples != 3 {
         return Err(RawError::unsupported(format!("LinearRaw data with {samples} samples per pixel")));
     }
-    let active = rect_from(t, &raw, plane.width, plane.height);
+    limits.check(raw.width as u64, raw.height as u64, 2 * samples as u64)?;
+    let mut warnings = Vec::new();
+    let active = rect(raw.active_area);
     if active.is_empty() {
         return Err(RawError::malformed("empty active area"));
     }
-    let cfa = if is_cfa { Some(cfa(t, &raw, &active)?) } else { None };
-
-    // Default crop, relative to the active area. Each tag has its own default (DNG 1.7.1.0,
-    // DefaultCropOrigin and DefaultCropSize): the origin (0, 0), the size the whole image.
-    let mut crop = active;
-    if raw.has(tag::DEFAULT_CROP_ORIGIN) || raw.has(tag::DEFAULT_CROP_SIZE) {
-        // A present tag must hold two values; an absent one takes its default.
-        let pair = |tg: u16, default: [f64; 2]| -> Option<[f64; 2]> {
-            if !raw.has(tg) {
-                return Some(default);
+    let cfa = match &raw.cfa {
+        Some(c) => {
+            let c = Cfa { width: c.width, height: c.height, colors: c.pattern.clone(), origin_x: 0, origin_y: 0 };
+            if !c.is_bayer() {
+                return Err(RawError::unsupported(format!("{}x{} non-Bayer CFA (e.g. X-Trans)", c.height, c.width)));
             }
-            match t.tag_floats(&raw, tg).as_slice() {
-                [a, b] => Some([*a, *b]),
-                _ => None,
-            }
-        };
-        let origin = pair(tag::DEFAULT_CROP_ORIGIN, [0.0, 0.0]);
-        let size = pair(tag::DEFAULT_CROP_SIZE, [plane.width as f64, plane.height as f64]);
-        if let (Some([ox, oy]), Some([cw, ch])) = (origin, size) {
-            let (ox, oy, cw, ch) = (
-                crop_value(ox, "DefaultCropOrigin"),
-                crop_value(oy, "DefaultCropOrigin"),
-                crop_value(cw, "DefaultCropSize"),
-                crop_value(ch, "DefaultCropSize"),
-            );
-            let (ox, oy, cw, ch) = (ox?, oy?, cw?, ch?);
-            let active_right = active.x.checked_add(active.width).ok_or_else(|| RawError::malformed("DNG active-area right edge overflow"))?;
-            let active_bottom = active.y.checked_add(active.height).ok_or_else(|| RawError::malformed("DNG active-area bottom edge overflow"))?;
-            let candidate = active.x.checked_add(ox).zip(active.y.checked_add(oy)).and_then(|(x, y)| {
-                let right = x.checked_add(cw)?;
-                let bottom = y.checked_add(ch)?;
-                (x >= active.x && y >= active.y && right <= active_right && bottom <= active_bottom).then_some(Rect::new(x, y, cw, ch))
-            });
-            if let Some(r) = candidate.filter(|r| !r.is_empty()) {
-                crop = r;
-            } else {
-                warnings.push("out-of-range or empty DNG default crop; active area used".to_string());
-            }
-        } else {
-            warnings.push("incomplete DNG default crop; active area used".to_string());
+            Some(c)
         }
-    }
-    let scale = t.tag_floats(&raw, tag::DEFAULT_SCALE);
-    if scale.len() == 2 && (scale[0] - scale[1]).abs() > 1e-6 {
+        None => None,
+    };
+    let crop = Rect::new(active.x + raw.crop.x, active.y + raw.crop.y, raw.crop.width, raw.crop.height).intersect(&active);
+    let crop = if crop.is_empty() { active } else { crop };
+    if (raw.pixel_aspect - 1.0).abs() > 1e-6 {
         warnings.push("non-square pixels (DefaultScale) are not resampled".to_string());
     }
     // Opcode lists: OpcodeList2 gain maps (lens shading) and polynomials (the tone mapping lossy
     // DNGs carry per plane, #8125) are applied; everything else is reported.
     let mut gain_maps = Vec::new();
     let mut polynomials = Vec::new();
-    for (tg, what) in [(tag::OPCODE_LIST_1, 1), (tag::OPCODE_LIST_2, 2), (tag::OPCODE_LIST_3, 3)] {
-        let Some(bytes) = raw.get(tg).and_then(|e| t.raw(e)) else { continue };
-        let ops = opcodes::parse(bytes);
+    for (list, what) in [(&raw.opcodes.list1, 1), (&raw.opcodes.list2, 2), (&raw.opcodes.list3, 3)] {
+        let ops = opcodes::from_list(list);
         if what == 2 {
             gain_maps = ops.gain_maps;
             polynomials = ops.polynomials;
@@ -215,83 +116,65 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
             warnings.push(format!("DNG OpcodeList{what}: {} not applied", ops.skipped.join(", ")));
         }
     }
-
     // DNG 1.6 ProfileGainTableMap: the local tone mapping that phones (Samsung Expert RAW) rely on
     // for their default look. Without it the rendering is darker in the shadows.
-    if ifd0.has(tag::PROFILE_GAIN_TABLE_MAP) || raw.has(tag::PROFILE_GAIN_TABLE_MAP) {
+    if raw.color.profile.gain_table_map.is_some() {
         warnings.push("DNG ProfileGainTableMap (local tone mapping) is not applied".to_string());
     }
 
-    let max = ((1u32 << plane.bits) - 1) as f32;
-    // A LinearizationTable maps integer samples; floating-point data is linear already.
-    let linearization =
-        raw.get(tag::LINEARIZATION_TABLE).filter(|_| plane.float_scale.is_none()).map(|e| t.uints(e)).filter(|v| !v.is_empty() && v.len() <= 65536);
-    let mut linearization: Option<Vec<u16>> = linearization.map(|v| v.into_iter().map(|x| x.min(65535) as u16).collect());
-    let white_default = match &linearization {
-        Some(l) => f32::from(l.iter().copied().max().unwrap_or(u16::MAX)),
-        None => max,
-    };
-    // Floating-point levels are in the floats' units: scale them as the samples were.
-    let unit = plane.float_scale.unwrap_or(1.0);
-    let wl = t.tag_floats(&raw, tag::WHITE_LEVEL);
-    let white = [0, 1, 2].map(|s| wl.get(s).or_else(|| wl.first()).map(|v| *v as f32 * unit).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(white_default));
-
-    let (rows, cols) = match t.tag_uints(&raw, tag::BLACK_LEVEL_REPEAT_DIM).as_slice() {
-        [r, c] if (1..=16).contains(r) && (1..=16).contains(c) => (*r as usize, *c as usize),
-        _ => (1, 1),
-    };
-    let bl = t.tag_floats(&raw, tag::BLACK_LEVEL);
-    let mut black = if bl.len() == rows * cols * samples {
-        BlackLevels { rows, cols, values: bl.iter().map(|v| *v as f32 * unit).collect(), delta_h: Vec::new(), delta_v: Vec::new() }
-    } else {
-        BlackLevels::uniform(bl.first().copied().unwrap_or(0.0) as f32 * unit)
-    };
-    let dh = t.tag_floats(&raw, tag::BLACK_LEVEL_DELTA_H);
-    if dh.len() == active.width {
-        black.delta_h = dh.iter().map(|v| *v as f32 * unit).collect();
-    }
-    let dv = t.tag_floats(&raw, tag::BLACK_LEVEL_DELTA_V);
-    if dv.len() == active.height {
-        black.delta_v = dv.iter().map(|v| *v as f32 * unit).collect();
-    }
-
-    // MapPolynomial maps linear reference values: linearize the samples first (the table is then
-    // done with), and map them in place.
-    let mut data = plane.data;
-    if !polynomials.is_empty() {
-        if let Some(l) = linearization.take() {
-            for v in &mut data {
-                *v = l.get(usize::from(*v)).or_else(|| l.last()).copied().unwrap_or(*v);
-            }
+    // Floating-point samples are scaled so the highest white level becomes 65535 (no plane is
+    // clipped below its own white), and their levels with them.
+    let (mut data, unit) = match raw.data {
+        craft_raw::RawData::U16(v) => (v, 1.0),
+        craft_raw::RawData::F32(v) => {
+            let white = raw.white.iter().copied().filter(|v| v.is_finite() && *v > 0.0).fold(0.0f32, f32::max);
+            let unit = 65535.0 / if white > 0.0 { white } else { 1.0 };
+            (v.into_iter().map(|s| (s * unit).round().clamp(0.0, 65535.0) as u16).collect(), unit)
         }
-        opcodes::apply_polynomials(&mut data, plane.width, samples, active, &polynomials, &black, white);
+    };
+    let white = [0, 1, 2].map(|s| raw.white.get(s).or_else(|| raw.white.first()).map(|v| v * unit).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(65535.0));
+    let b = &raw.black;
+    let mut black = if b.values.len() > 1 {
+        BlackLevels { rows: b.repeat_rows, cols: b.repeat_cols, values: b.values.iter().map(|v| v * unit).collect(), delta_h: Vec::new(), delta_v: Vec::new() }
+    } else {
+        BlackLevels::uniform(b.values.first().copied().unwrap_or(0.0) * unit)
+    };
+    if b.delta_h.len() == active.width {
+        black.delta_h = b.delta_h.iter().map(|v| v * unit).collect();
+    }
+    if b.delta_v.len() == active.height {
+        black.delta_v = b.delta_v.iter().map(|v| v * unit).collect();
+    }
+    // MapPolynomial maps linear reference values: the shared decoder has already applied any
+    // LinearizationTable, so the samples are mapped in place.
+    if !polynomials.is_empty() {
+        opcodes::apply_polynomials(&mut data, raw.width, samples, active, &polynomials, &black, white);
     }
 
-    let color = color_info(t, &ifd0);
+    let color = color_info(&raw.color);
     // A monochrome image has no colour to calibrate: it develops as neutral grey.
     if color.calibrations.is_empty() && (is_cfa || samples != 1) {
         warnings.push("the DNG has no colour matrix; colours are approximate".to_string());
     }
-    let baseline_exposure = t.tag_floats(&ifd0, tag::BASELINE_EXPOSURE).first().copied().unwrap_or(0.0)
-        + t.tag_floats(&raw, tag::BASELINE_EXPOSURE_OFFSET).first().copied().unwrap_or(0.0);
-    let model = t.tag_ascii(&ifd0, tag::UNIQUE_CAMERA_MODEL).or_else(|| t.tag_ascii(&ifd0, tag::MODEL));
+    let baseline_exposure = raw.color.baseline_exposure;
+    let model = raw.camera.unique_model.clone().or_else(|| raw.camera.model.clone());
     Ok(Sensor {
         format: RawFormat::Dng,
-        make: t.tag_ascii(&ifd0, tag::MAKE),
+        make: raw.camera.make.clone(),
         model,
-        width: plane.width,
-        height: plane.height,
+        width: raw.width,
+        height: raw.height,
         samples,
         data,
         cfa,
-        linearization,
+        linearization: None,
         black,
         white,
         active,
         crop,
         color,
         camera_wb: None,
-        orientation: crate::tiff::orientation(t.tag_uint(&ifd0, tag::ORIENTATION)),
+        orientation: raw.orientation.to_exif(),
         baseline_exposure: if baseline_exposure.is_finite() { baseline_exposure.clamp(-10.0, 10.0) } else { 0.0 },
         gain_maps,
         tone_curve: Vec::new(),

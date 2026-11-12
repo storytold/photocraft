@@ -15,6 +15,8 @@ testgen = ["dep:image"]
 corpus = []
 
 [dependencies]
+# DNG: the file format (craft-libs). JPEG XL tiles are added on native only, below.
+craft-raw = { workspace = true }
 # Adobe DNG compression 8: zlib (RFC 1950) with the TIFF predictor (pure-Rust backend).
 flate2 = { workspace = true }
 # Adobe DNG compression 34892: baseline JPEG tiles (lossy), decoded by zune-jpeg.
@@ -31,6 +33,8 @@ rayon = { workspace = true }
 # Native only: it added 0.88 MB to the browser build's wasm, which has a hard size cap
 # (packaging/web/package.sh); there JPEG XL DNG is reported as unsupported (src/jxl.rs).
 jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"] }
+# JPEG XL DNG tiles in craft-raw, native only for the same size cap.
+craft-raw = { workspace = true, features = ["jxl"] }
 
 [dev-dependencies]
 photocraft-raw = { path = ".", features = ["testgen"] }

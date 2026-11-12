@@ -1,10 +1,6 @@
-//! DNG opcode lists (DNG 1.7, chapter 7 "Opcode List Processing").
-//!
-//! An opcode list is big-endian whatever the file's byte order: a count, then
-//! per opcode its ID, DNG version, flags (bit 0 = optional), parameter size
-//! and parameters. OpcodeList2's GainMap (ID 9), the lens-shading correction
-//! phones write, and MapPolynomial (ID 8), the tone mapping lossy DNGs carry
-//! per plane, are applied; other opcodes are reported.
+//! DNG opcode lists (DNG 1.7, chapter 7 "Opcode List Processing"), as craft-raw parses them.
+//! OpcodeList2's GainMap (ID 9), the lens-shading correction phones write, and MapPolynomial
+//! (ID 8), the tone mapping lossy DNGs carry per plane, are applied; other opcodes are reported.
 
 use crate::par;
 use crate::sensor::{BlackLevels, Rect};
@@ -116,35 +112,31 @@ fn name(id: u32) -> String {
     }
 }
 
-fn be32(b: &[u8], at: usize) -> Option<u32> {
-    let s: [u8; 4] = b.get(at..at.checked_add(4)?)?.try_into().ok()?;
-    Some(u32::from_be_bytes(s))
-}
-
-fn be64f(b: &[u8], at: usize) -> Option<f64> {
-    let s: [u8; 8] = b.get(at..at.checked_add(8)?)?.try_into().ok()?;
-    Some(f64::from_be_bytes(s)).filter(|v| v.is_finite())
-}
-
-fn gain_map(p: &[u8]) -> Option<GainMap> {
-    let u = |i: usize| be32(p, 4 * i).map(|v| v as usize);
-    let (top, left, bottom, right) = (u(0)?, u(1)?, u(2)?, u(3)?);
-    let (plane, planes, row_pitch, col_pitch) = (u(4)?, u(5)?, u(6)?, u(7)?);
-    let (points_v, points_h) = (u(8)?, u(9)?);
-    let (spacing_v, spacing_h, origin_v, origin_h) = (be64f(p, 40)?, be64f(p, 48)?, be64f(p, 56)?, be64f(p, 64)?);
-    let map_planes = u(18)?;
+/// A GainMap opcode this developer applies; `None` for one with an empty or oversized grid, a
+/// zero pitch or spacing, an empty area or a non-finite gain.
+fn gain_map(op: &craft_raw::Opcode) -> Option<GainMap> {
+    let craft_raw::Opcode::GainMap { area, points_v, points_h, spacing, origin, map_planes, gains } = op else { return None };
+    let u = |v: u32| v as usize;
+    let (top, left, bottom, right) = (u(area.top), u(area.left), u(area.bottom), u(area.right));
+    let (row_pitch, col_pitch, points_v, points_h, map_planes) = (u(area.row_pitch), u(area.col_pitch), u(*points_v), u(*points_h), u(*map_planes));
+    let (spacing_v, spacing_h, origin_v, origin_h) = (spacing[0], spacing[1], origin[0], origin[1]);
     let n = points_v.checked_mul(points_h)?.checked_mul(map_planes)?;
-    if n == 0 || n > 1 << 20 || row_pitch == 0 || col_pitch == 0 || spacing_v <= 0.0 || spacing_h <= 0.0 || bottom <= top || right <= left {
+    if n == 0 || n > 1 << 20 || row_pitch == 0 || col_pitch == 0 || bottom <= top || right <= left {
         return None;
     }
-    let gains = (0..n).map(|i| be32(p, 76 + 4 * i).map(f32::from_bits).filter(|g| g.is_finite())).collect::<Option<Vec<f32>>>()?;
+    if ![spacing_v, spacing_h, origin_v, origin_h].iter().all(|v| v.is_finite()) || spacing_v <= 0.0 || spacing_h <= 0.0 {
+        return None;
+    }
+    if gains.len() != n || gains.iter().any(|g| !g.is_finite()) {
+        return None;
+    }
     Some(GainMap {
         top,
         left,
         bottom,
         right,
-        plane,
-        planes,
+        plane: u(area.plane),
+        planes: u(area.planes),
         row_pitch,
         col_pitch,
         points_v,
@@ -154,7 +146,7 @@ fn gain_map(p: &[u8]) -> Option<GainMap> {
         origin_v,
         origin_h,
         map_planes,
-        gains,
+        gains: gains.clone(),
     })
 }
 
@@ -198,15 +190,42 @@ impl MapPolynomial {
     }
 }
 
-fn map_polynomial(p: &[u8]) -> Option<MapPolynomial> {
-    let u = |i: usize| be32(p, 4 * i).map(|v| v as usize);
-    let (top, left, bottom, right) = (u(0)?, u(1)?, u(2)?, u(3)?);
-    let (plane, planes, row_pitch, col_pitch, degree) = (u(4)?, u(5)?, u(6)?, u(7)?, u(8)?);
-    if degree > 8 || planes == 0 || row_pitch == 0 || col_pitch == 0 || bottom <= top || right <= left {
+/// A MapPolynomial opcode this developer applies; `None` for a degree above 8, no planes, a zero
+/// pitch, an empty area or a non-finite coefficient.
+fn map_polynomial(op: &craft_raw::Opcode) -> Option<MapPolynomial> {
+    let craft_raw::Opcode::MapPolynomial { area, coefficients } = op else { return None };
+    let u = |v: u32| v as usize;
+    let (top, left, bottom, right) = (u(area.top), u(area.left), u(area.bottom), u(area.right));
+    let (plane, planes, row_pitch, col_pitch) = (u(area.plane), u(area.planes), u(area.row_pitch), u(area.col_pitch));
+    if coefficients.is_empty() || coefficients.len() > 9 || planes == 0 || row_pitch == 0 || col_pitch == 0 || bottom <= top || right <= left {
         return None;
     }
-    let coefficients = (0..=degree).map(|i| be64f(p, 36 + 8 * i)).collect::<Option<Vec<f64>>>()?;
-    Some(MapPolynomial { top, left, bottom, right, plane, planes, row_pitch, col_pitch, coefficients })
+    if coefficients.iter().any(|c| !c.is_finite()) {
+        return None;
+    }
+    Some(MapPolynomial { top, left, bottom, right, plane, planes, row_pitch, col_pitch, coefficients: coefficients.clone() })
+}
+
+/// The DNG opcode ID of an opcode, for its name in warnings.
+fn id(op: &craft_raw::Opcode) -> u32 {
+    use craft_raw::Opcode as O;
+    match op {
+        O::WarpRectilinear { .. } => 1,
+        O::WarpFisheye { .. } => 2,
+        O::FixVignetteRadial { .. } => 3,
+        O::FixBadPixelsConstant { .. } => 4,
+        O::FixBadPixelsList { .. } => 5,
+        O::TrimBounds { .. } => 6,
+        O::MapTable { .. } => 7,
+        O::MapPolynomial { .. } => 8,
+        O::GainMap { .. } => 9,
+        O::DeltaPerRow { .. } => 10,
+        O::DeltaPerColumn { .. } => 11,
+        O::ScalePerRow { .. } => 12,
+        O::ScalePerColumn { .. } => 13,
+        O::WarpRectilinear2 { .. } => 14,
+        O::Unknown { id, .. } => *id,
+    }
 }
 
 /// Applies `polys` in order to `data` (`width × height` pixels of `samples` interleaved u16
@@ -254,27 +273,21 @@ const MAX_POLYNOMIALS: usize = 64;
 /// carry one per CFA plane (four).
 const MAX_GAIN_MAPS: usize = 64;
 
-/// Parses an opcode list.
-pub(crate) fn parse(list: &[u8]) -> Opcodes {
+/// The gain maps and polynomials of an opcode list, and the names of the opcodes not applied.
+pub(crate) fn from_list(list: &[craft_raw::Opcode]) -> Opcodes {
     let mut out = Opcodes::default();
-    let Some(count) = be32(list, 0) else { return out };
-    let mut at = 4usize;
-    for _ in 0..count.min(4096) {
-        let (Some(id), Some(size)) = (be32(list, at), be32(list, at.saturating_add(12))) else { break };
-        let start = at.saturating_add(16);
-        let Some(params) = list.get(start..start.saturating_add(size as usize)) else { break };
-        let applied = match id {
-            9 if out.gain_maps.len() < MAX_GAIN_MAPS => gain_map(params).map(|m| out.gain_maps.push(m)).is_some(),
-            8 if out.polynomials.len() < MAX_POLYNOMIALS => map_polynomial(params).map(|p| out.polynomials.push(p)).is_some(),
+    for op in list.iter().take(4096) {
+        let applied = match op {
+            craft_raw::Opcode::GainMap { .. } if out.gain_maps.len() < MAX_GAIN_MAPS => gain_map(op).map(|m| out.gain_maps.push(m)).is_some(),
+            craft_raw::Opcode::MapPolynomial { .. } if out.polynomials.len() < MAX_POLYNOMIALS => map_polynomial(op).map(|p| out.polynomials.push(p)).is_some(),
             _ => false,
         };
         if !applied {
-            let n = name(id);
+            let n = name(id(op));
             if !out.skipped.contains(&n) {
                 out.skipped.push(n);
             }
         }
-        at = at.saturating_add(16).saturating_add(size as usize);
     }
     out
 }
@@ -282,6 +295,11 @@ pub(crate) fn parse(list: &[u8]) -> Opcodes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An opcode list's bytes, through craft-raw's parser.
+    fn parse(bytes: &[u8]) -> Opcodes {
+        from_list(&craft_raw::opcodes::parse_list(bytes))
+    }
 
     fn list(ops: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let mut b = (ops.len() as u32).to_be_bytes().to_vec();
@@ -368,12 +386,15 @@ mod tests {
         assert!((p.eval(0.5) - (0.1 + 0.25 + 0.1)).abs() < 1e-12);
         assert_eq!((p.eval(-1.0), p.eval(9.0)), (0.1, 1.0), "input and output clip to 0..1");
         assert!(p.covers(3, 4, 1) && p.covers(3, 4, 2) && !p.covers(3, 4, 0) && !p.covers(3, 4, 3));
-        // A degree above 8, a zero pitch, or too few coefficients: not applied, and named.
-        for bad in [polynomial_params(1, 9, &[0.0; 10]), polynomial_params(0, 1, &[0.0, 1.0]), polynomial_params(1, 2, &[0.0, 1.0])] {
+        // A degree above 8 or too few coefficients: not applied, and named.
+        for bad in [polynomial_params(1, 9, &[0.0; 10]), polynomial_params(1, 2, &[0.0, 1.0])] {
             let ops = parse(&list(&[(8, bad)]));
             assert!(ops.polynomials.is_empty());
             assert_eq!(ops.skipped, vec!["MapPolynomial".to_string()]);
         }
+        // A zero pitch is read as 1 (craft-raw's reading of the area), so the opcode applies.
+        let ops = parse(&list(&[(8, polynomial_params(0, 1, &[0.0, 1.0]))]));
+        assert_eq!(ops.polynomials.first().map(|p| (p.row_pitch, p.col_pitch)), Some((1, 1)));
     }
 
     #[test]

@@ -41,36 +41,13 @@ pub(crate) mod tag {
     /// In the Interoperability IFD.
     pub const INTEROP_INDEX: u16 = 1;
     pub const DNG_VERSION: u16 = 50706;
-    pub const UNIQUE_CAMERA_MODEL: u16 = 50708;
-    pub const CFA_PLANE_COLOR: u16 = 50710;
-    pub const CFA_LAYOUT: u16 = 50711;
-    pub const LINEARIZATION_TABLE: u16 = 50712;
-    pub const BLACK_LEVEL_REPEAT_DIM: u16 = 50713;
     pub const BLACK_LEVEL: u16 = 50714;
-    pub const BLACK_LEVEL_DELTA_H: u16 = 50715;
-    pub const BLACK_LEVEL_DELTA_V: u16 = 50716;
     pub const WHITE_LEVEL: u16 = 50717;
-    pub const DEFAULT_SCALE: u16 = 50718;
     pub const DEFAULT_CROP_ORIGIN: u16 = 50719;
     pub const DEFAULT_CROP_SIZE: u16 = 50720;
-    pub const COLOR_MATRIX_1: u16 = 50721;
-    pub const COLOR_MATRIX_2: u16 = 50722;
-    pub const CAMERA_CALIBRATION_1: u16 = 50723;
-    pub const CAMERA_CALIBRATION_2: u16 = 50724;
-    pub const ANALOG_BALANCE: u16 = 50727;
     pub const AS_SHOT_NEUTRAL: u16 = 50728;
-    pub const AS_SHOT_WHITE_XY: u16 = 50729;
     pub const BASELINE_EXPOSURE: u16 = 50730;
-    pub const CALIBRATION_ILLUMINANT_1: u16 = 50778;
-    pub const CALIBRATION_ILLUMINANT_2: u16 = 50779;
     pub const ACTIVE_AREA: u16 = 50829;
-    pub const FORWARD_MATRIX_1: u16 = 50964;
-    pub const FORWARD_MATRIX_2: u16 = 50965;
-    pub const OPCODE_LIST_1: u16 = 51008;
-    pub const OPCODE_LIST_2: u16 = 51009;
-    pub const OPCODE_LIST_3: u16 = 51022;
-    pub const BASELINE_EXPOSURE_OFFSET: u16 = 51109;
-    pub const PROFILE_GAIN_TABLE_MAP: u16 = 52525;
     // CR2 private tag in the raw IFD: slice count, slice width, last slice width.
     pub const CR2_SLICE: u16 = 50752;
 }

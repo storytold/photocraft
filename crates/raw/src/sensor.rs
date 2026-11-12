@@ -189,9 +189,6 @@ pub(crate) struct Plane {
     pub samples: usize,
     pub bits: u32,
     pub data: Vec<u16>,
-    /// For floating-point samples, the factor they were multiplied by (their white level becomes
-    /// 65535, `bits` is then 16): the file's black and white levels are scaled by it too.
-    pub float_scale: Option<f32>,
 }
 
 pub(crate) struct Segment {
@@ -361,7 +358,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             data[at..at + cols * samples].copy_from_slice(src);
         }
     }
-    Ok(Plane { width, height, samples, bits, data, float_scale })
+    Ok(Plane { width, height, samples, bits, data })
 }
 
 /// Bytes of decoded samples the segments hold at once.
@@ -740,10 +737,14 @@ mod tests {
         d.black = vec![64];
         d.storage = DngStorage::Lj92Tiles { width: 16, height: 16 };
         let b = d.build();
+        // DNGs are decoded by craft-raw now; the tile reader here still serves the other formats.
+        let t = crate::tiff::Tiff::new(&b).unwrap();
+        let ifds = t.all_ifds();
+        let raw = ifds.iter().find(|i| t.tag_uint(i, crate::tiff::tag::PHOTOMETRIC) == Some(32803)).unwrap();
         let tight = Limits { max_alloc: 1500, ..Limits::default() };
-        assert!(matches!(crate::decode(&b, &tight), Err(RawError::LimitExceeded(_))));
+        assert!(matches!(read_plane(&t, raw, &tight, JpegLayout::Flat), Err(RawError::LimitExceeded(_))));
         let exact = Limits { max_alloc: 2048, ..Limits::default() };
-        assert!(crate::decode(&b, &exact).is_ok(), "the padded tiles exactly at the budget still decode");
+        assert!(read_plane(&t, raw, &exact, JpegLayout::Flat).is_ok(), "the padded tiles exactly at the budget still decode");
     }
 
     /// #4959: a lossless-JPEG frame may declare up to four times its segment's samples. The
