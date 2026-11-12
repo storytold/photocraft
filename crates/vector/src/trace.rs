@@ -483,7 +483,9 @@ fn fit_run(pts: &[P], tol: f64, window: f64, out: &mut Vec<[P; 4]>) {
     let mut a = 0;
     while a + 1 < m {
         let fit = |b: usize| fit_piece(pts.get(a..=b)?, t1, tol, max_turn);
-        // Farthest end that fits: doubling steps, then halving the gap to the first failure.
+        // Farthest end that fits: doubling steps, then halving the gap to the first failure. The
+        // error does not always grow with the length (a few samples can fit worse than more), so
+        // a failed step looks one step further before it stops the doubling.
         let mut good = a + 1;
         let mut bad = m;
         let mut step = 2;
@@ -492,15 +494,20 @@ fn fit_run(pts: &[P], tol: f64, window: f64, out: &mut Vec<[P; 4]>) {
             if b <= good {
                 break;
             }
+            let ahead = (a + step.saturating_mul(2)).min(m - 1);
             if fit(b).is_some() {
                 good = b;
-                if b == m - 1 {
-                    break;
-                }
+            } else if ahead > b && fit(ahead).is_some() {
+                good = ahead;
                 step = step.saturating_mul(2);
             } else {
                 bad = b;
+                continue;
             }
+            if good == m - 1 {
+                break;
+            }
+            step = step.saturating_mul(2);
         }
         while bad < m && bad - good > 1 {
             let mid = good + (bad - good) / 2;

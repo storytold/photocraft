@@ -35,6 +35,12 @@ fn strokes() -> [(&'static str, Vec<[f64; 2]>, bool); 5] {
     [("line", line(), false), ("sine", sine(), false), ("circle", circle(60), true), ("circle-open", circle(54), false), ("vee", vee(), false)]
 }
 
+/// The stroke as given and on the whole pixels a mouse delivers at 100 % zoom.
+fn as_given_and_in_pixels(points: Vec<[f64; 2]>) -> [Vec<[f64; 2]>; 2] {
+    let pixels = points.iter().map(|p| [p[0].round(), p[1].round()]).collect();
+    [points, pixels]
+}
+
 fn fit(points: &[[f64; 2]], curve_fit: f64, closed: bool) -> Subpath {
     let sp = fit_trace(points, curve_fit, closed);
     assert!(sp.is_some(), "the stroke fits");
@@ -60,38 +66,49 @@ fn max_deviation(sp: &Subpath, samples: &[[f64; 2]]) -> f64 {
 
 #[test]
 fn sine_anchors_sit_on_the_four_peaks() {
-    let samples = sine();
-    let sp = fit(&samples, 2.0, false);
-    let got = anchors(&sp);
-    assert_eq!(got.len(), 6, "{got:?}");
-    assert_eq!((got.first(), got.last()), (samples.first(), samples.last()), "press and release are anchors");
-    for (a, peak) in got[1..5].iter().zip([[150.0, 460.0], [250.0, 340.0], [350.0, 460.0], [450.0, 340.0]]) {
-        assert!((a[0] - peak[0]).hypot(a[1] - peak[1]) <= 3.0, "{a:?} is not on the peak {peak:?}: {got:?}");
+    for samples in as_given_and_in_pixels(sine()) {
+        let sp = fit(&samples, 2.0, false);
+        let got = anchors(&sp);
+        assert_eq!(got.len(), 6, "{got:?}");
+        assert_eq!((got.first(), got.last()), (samples.first(), samples.last()), "press and release are anchors");
+        for (a, peak) in got[1..5].iter().zip([[150.0, 460.0], [250.0, 340.0], [350.0, 460.0], [450.0, 340.0]]) {
+            assert!((a[0] - peak[0]).hypot(a[1] - peak[1]) <= 3.0, "{a:?} is not on the peak {peak:?}: {got:?}");
+        }
+        assert!(sp.knots[1..5].iter().all(|k| k.smooth));
     }
-    assert!(sp.knots[1..5].iter().all(|k| k.smooth));
 }
 
 #[test]
 fn closed_circle_has_five_anchors_and_the_open_one_four() {
-    let sp = fit(&circle(60), 2.0, true);
-    assert!(sp.closed);
-    assert_eq!(sp.knots.len(), 5, "{:?}", anchors(&sp));
-    assert!(sp.knots.iter().all(|k| k.smooth), "a circle has no corners");
-    let sp = fit(&circle(54), 2.0, false);
-    assert!(!sp.closed);
-    assert_eq!(sp.knots.len(), 4, "{:?}", anchors(&sp));
-    assert!(sp.knots[1..3].iter().all(|k| k.smooth));
+    for samples in as_given_and_in_pixels(circle(60)) {
+        let sp = fit(&samples, 2.0, true);
+        assert!(sp.closed);
+        assert_eq!(sp.knots.len(), 5, "{:?}", anchors(&sp));
+        assert!(sp.knots.iter().all(|k| k.smooth), "a circle has no corners");
+    }
+    for samples in as_given_and_in_pixels(circle(54)) {
+        let sp = fit(&samples, 2.0, false);
+        assert!(!sp.closed);
+        assert_eq!(sp.knots.len(), 4, "{:?}", anchors(&sp));
+        assert!(sp.knots[1..3].iter().all(|k| k.smooth));
+    }
 }
 
+/// On whole pixels the first segment past the turn fits worse over a few samples than over many;
+/// the fit still reaches past them to the reference application's four anchors.
 #[test]
 fn vee_turns_with_a_rounded_join_not_a_cusp() {
-    let sp = fit(&vee(), 2.0, false);
-    let got = anchors(&sp);
-    assert_eq!(got.len(), 4, "{got:?}");
-    assert_eq!((got[0], got[3]), ([100.0, 450.0], [400.0, 450.0]));
-    assert!(sp.knots[1..3].iter().all(|k| k.smooth), "no corner anchor: {got:?}");
-    // Both inner anchors are near the turn, not along the legs.
-    assert!(got[1..3].iter().all(|a| (a[0] - 250.0).hypot(a[1] - 550.0) < 60.0), "{got:?}");
+    for (i, samples) in as_given_and_in_pixels(vee()).into_iter().enumerate() {
+        let sp = fit(&samples, 2.0, false);
+        let got = anchors(&sp);
+        assert_eq!(got.len(), 4, "{got:?}");
+        assert_eq!((got[0], got[3]), ([100.0, 450.0], [400.0, 450.0]));
+        assert!(sp.knots[1..3].iter().all(|k| k.smooth), "no corner anchor: {got:?}");
+        if i == 0 {
+            // As measured, both inner anchors are near the turn, not along the legs.
+            assert!(got[1..3].iter().all(|a| (a[0] - 250.0).hypot(a[1] - 550.0) < 60.0), "{got:?}");
+        }
+    }
 }
 
 #[test]
@@ -119,8 +136,7 @@ fn a_lower_curve_fit_gives_more_anchors() {
 #[test]
 fn every_sample_stays_within_curve_fit() {
     for (name, points, closed) in strokes() {
-        let pixels: Vec<[f64; 2]> = points.iter().map(|p| [p[0].round(), p[1].round()]).collect();
-        for samples in [points, pixels] {
+        for samples in as_given_and_in_pixels(points) {
             for curve_fit in [0.5, 1.0, 2.0, 5.0, 10.0] {
                 let sp = fit(&samples, curve_fit, closed);
                 let d = max_deviation(&sp, &samples);
