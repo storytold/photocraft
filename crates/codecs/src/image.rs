@@ -373,69 +373,24 @@ impl ExrPartInfo {
     }
 }
 
-/// One selection policy for header ranking/probing and flat decoding: never synthesize
-/// RGB(A) or YA from separate layers. OpenEXR layers use the full prefix before the last
-/// dot, including nested layers; a leading or trailing dot alone does not name a layer.
+/// One selection policy for header ranking/probing and flat decoding (craft-exr's): never
+/// synthesize RGB(A) or YA from separate layers.
 pub(crate) fn exr_color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(ChannelLayout, Vec<usize>)> {
-    #[derive(Default)]
-    struct Group {
-        r: Option<usize>,
-        g: Option<usize>,
-        b: Option<usize>,
-        a: Option<usize>,
-        y: Option<usize>,
-    }
-
-    // Sorted prefixes make rank ties deterministic independently of channel order, with
-    // the empty (unprefixed) group first. Unsupported channels cannot complete a group.
-    let mut groups = std::collections::BTreeMap::<&str, Group>::new();
-    let mut count = 0usize;
-    for (index, name) in names.into_iter().enumerate() {
-        count = count.saturating_add(1);
-        let (prefix, base) = name.rsplit_once('.').filter(|(prefix, base)| !prefix.is_empty() && !base.is_empty()).unwrap_or(("", name));
-        if !matches!(base, "R" | "G" | "B" | "A" | "Y") {
-            continue;
-        }
-        let group = groups.entry(prefix).or_default();
-        let component = match base {
-            "R" => &mut group.r,
-            "G" => &mut group.g,
-            "B" => &mut group.b,
-            "A" => &mut group.a,
-            "Y" => &mut group.y,
-            _ => continue,
+    use craft_exr::channels::ColorLayout;
+    craft_exr::channels::color_channels(names).map(|(layout, indices)| {
+        let layout = match layout {
+            ColorLayout::Y => ChannelLayout::Gray,
+            ColorLayout::YA => ChannelLayout::GrayA,
+            ColorLayout::Rgb => ChannelLayout::Rgb,
+            ColorLayout::Rgba => ChannelLayout::Rgba,
         };
-        component.get_or_insert(index);
-    }
-
-    let mut best = None;
-    let mut best_rank = 0;
-    for group in groups.values() {
-        let candidate = if let (Some(r), Some(g), Some(b)) = (group.r, group.g, group.b) {
-            match group.a {
-                Some(a) => (ChannelLayout::Rgba, vec![r, g, b, a]),
-                None => (ChannelLayout::Rgb, vec![r, g, b]),
-            }
-        } else if let Some(y) = group.y {
-            match group.a {
-                Some(a) => (ChannelLayout::GrayA, vec![y, a]),
-                None => (ChannelLayout::Gray, vec![y]),
-            }
-        } else {
-            continue;
-        };
-        let rank = candidate.0.channels();
-        if rank > best_rank {
-            best = Some(candidate);
-            best_rank = rank;
-        }
-    }
-    best.or_else(|| (count == 1).then(|| (ChannelLayout::Gray, vec![0])))
+        (layout, indices)
+    })
 }
 
 /// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
 pub(crate) fn base_channel_name(name: &str) -> &str {
-    name.rsplit('.').next().unwrap_or(name)
+    craft_exr::channels::base_channel_name(name)
 }
 
 /// One Cryptomatte layer of an EXR file (Cryptomatte specification 1.2): per-pixel object or
@@ -731,7 +686,7 @@ fn convert_data(data: &[u8], from: ChannelLayout, from_sample: SampleType, layou
     } else if let Some(fast) = convert_int_direct(data, from, from_sample, layout, sample) {
         fast
     } else if layout == from {
-        quantize(&to_normalized(data, from_sample), sample)
+        convert_depth(data, from_sample, sample)
     } else {
         let src = to_normalized(data, from_sample);
         let values = convert_layout(&src, from, layout);
@@ -828,11 +783,26 @@ fn clamp01(v: f32) -> f32 {
 }
 
 pub(crate) fn quantize(values: &[f32], sample: SampleType) -> Vec<u8> {
+    quantize_samples(values.iter().copied(), sample)
+}
+
+/// Quantize normalized samples without an intermediate float buffer.
+fn quantize_samples(values: impl Iterator<Item = f32>, sample: SampleType) -> Vec<u8> {
     match sample {
-        SampleType::U8 => values.iter().map(|&v| (clamp01(v) * 255.0).round() as u8).collect(),
-        SampleType::U16 => values.iter().flat_map(|&v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
-        SampleType::F16 => values.iter().flat_map(|&v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
-        SampleType::F32 => values.iter().flat_map(|&v| v.to_ne_bytes()).collect(),
+        SampleType::U8 => values.map(|v| (clamp01(v) * 255.0).round() as u8).collect(),
+        SampleType::U16 => values.flat_map(|v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
+        SampleType::F16 => values.flat_map(|v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
+        SampleType::F32 => values.flat_map(|v| v.to_ne_bytes()).collect(),
+    }
+}
+
+/// Convert sample depth with source-type dispatch outside the sample loop.
+fn convert_depth(data: &[u8], from: SampleType, sample: SampleType) -> Vec<u8> {
+    match from {
+        SampleType::U8 => quantize_samples(data.iter().map(|&v| v as f32 / 255.0), sample),
+        SampleType::U16 => quantize_samples(data.as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes([c[0], c[1]]) as f32 / 65535.0), sample),
+        SampleType::F16 => quantize_samples(data.as_chunks::<2>().0.iter().map(|c| f16::from_bits(u16::from_ne_bytes([c[0], c[1]])).to_f32()), sample),
+        SampleType::F32 => quantize_samples(data.as_chunks::<4>().0.iter().map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])), sample),
     }
 }
 
@@ -926,6 +896,32 @@ mod tests {
     /// The generic f32 route `convert` used before the integer fast paths (the reference).
     fn convert_via_f32(img: &Image, layout: ChannelLayout, sample: SampleType) -> Vec<u8> {
         quantize(&convert_layout(&img.to_normalized(), img.layout, layout), sample)
+    }
+
+    /// Depth changes match eager normalization, including every U16 and F16 bit pattern.
+    #[test]
+    fn depth_conversion_matches_the_normalized_reference() {
+        for from in SampleType::ALL {
+            let data: Vec<u8> = match from {
+                SampleType::U8 => (0..=255).collect(),
+                SampleType::U16 | SampleType::F16 => (0u32..=65535).flat_map(|v| (v as u16).to_ne_bytes()).collect(),
+                SampleType::F32 => [
+                    0u32, 0x80000000, 1, 0x007fffff, 0x00800000, 0x3effffff, 0x3f000000, 0x3f000001, 0x3f7fffff, 0x3f800000, 0x3f800001, 0x7f7fffff,
+                    0xff7fffff, 0x7f800000, 0xff800000, 0x7fc12345, 0x7f812345,
+                ]
+                .into_iter()
+                .flat_map(u32::to_ne_bytes)
+                .collect(),
+            };
+            let img = Image::from_raw((data.len() / from.bytes()) as u32, 1, ChannelLayout::Gray, from, data).unwrap();
+            let normalized = img.to_normalized();
+            for to in SampleType::ALL {
+                if from == to || (!from.is_float() && !to.is_float()) {
+                    continue;
+                }
+                assert_eq!(img.convert(ChannelLayout::Gray, to).data(), quantize(&normalized, to), "{from:?} to {to:?}");
+            }
+        }
     }
 
     #[test]
