@@ -913,7 +913,7 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
         let surf = paint_surface(doc, id, &json!({}))?;
-        Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
+        apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
     })?;
     Ok(damage_json(s, dmg))
 }
