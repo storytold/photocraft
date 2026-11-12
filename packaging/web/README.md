@@ -35,8 +35,8 @@ app with Trunk, including HEIF support, then copies only the static site into NG
 ### Docker Compose
 
 If you prefer Compose, run these commands from the repository root. Docker Compose builds the
-image from the local source tree, binds port `8080` to `127.0.0.1` on the host, and restarts the
-container unless it has been explicitly stopped:
+image from the local source tree and binds port `8080` to `127.0.0.1` on the host. It does not
+set a restart policy, which keeps this local-development service from restarting automatically:
 
 ```sh
 docker compose up --build -d
