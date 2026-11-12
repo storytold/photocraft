@@ -93,7 +93,7 @@ const BAND_BYTES: usize = 32 << 20;
 /// Row ranges (`0..h`, relative to a layer whose first row is at document row `top`) to decode a
 /// layer in: each ends on a tile row boundary, so no tile is written by two bands, and holds
 /// about [`BAND_BYTES`] of `row_bytes`-byte rows.
-fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
+pub(crate) fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
     let tile = TILE_SIZE as usize;
     let rows = (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile;
     row_bands(top, h, rows)
@@ -101,7 +101,7 @@ fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
 
 // `rows` is a positive multiple of TILE_SIZE. Mask decoding uses one tile row at a
 // time so a narrow but tall mask never needs a whole-plane conversion buffer.
-fn row_bands(top: i32, h: usize, rows: usize) -> Vec<(usize, usize)> {
+pub(crate) fn row_bands(top: i32, h: usize, rows: usize) -> Vec<(usize, usize)> {
     // The first band ends at the first tile boundary at least `rows` rows in.
     let into_tile = usize::try_from(top.rem_euclid(TILE_SIZE)).unwrap_or(0);
     let mut out = Vec::new();
