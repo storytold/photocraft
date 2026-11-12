@@ -383,7 +383,7 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
 }
 
 /// Photoshop-style radio button.
-fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
+pub(crate) fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;

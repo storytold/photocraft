@@ -438,10 +438,12 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     // OK / Cancel buttons stay inside a small window. The preview window below the
     // parameters reserves its own space (#3769).
     let room = (ui.ctx().content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(fields)).max(120.0);
-    let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
+    let mut body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
         egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
             if crate::bitmap_dialog::owns(fields) {
                 crate::bitmap_dialog::body(app, ui, fields);
+            } else if fields.get("__command").and_then(Value::as_str) == Some("image.adjustments.replaceColor") {
+                crate::filter_dialog::body_with(ui, fields, &mut |ui, f| crate::dialogs::replace_color_preview::thumbnail(app, ui, f));
             } else {
                 crate::filter_dialog::body(ui, fields);
             }
@@ -1338,6 +1340,7 @@ pub mod palette;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+pub(crate) mod replace_color_preview;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
 pub mod screen_picker;
