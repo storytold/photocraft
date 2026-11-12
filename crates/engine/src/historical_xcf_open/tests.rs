@@ -104,7 +104,7 @@ fn pending_source_count_is_bounded_without_discarding_earlier_choices() {
 #[test]
 fn pending_sources_charge_retained_and_incoming_capacity_after_truncation() {
     let mut s = Session::new();
-    let question = photocraft_io::HistoricalXcfSampleOrderRequest { version: 7, bits_per_sample: 16 };
+    let question = photocraft_io::HistoricalXcfSampleOrderRequest { version: 7, bits_per_sample: 16, mode: photocraft_color::ColorMode::Rgb };
     let mut buffer = Vec::with_capacity(128);
     buffer.extend([1u8, 2, 3, 4]);
     buffer.truncate(1);
