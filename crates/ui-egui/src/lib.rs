@@ -1036,6 +1036,10 @@ mod status_bar_tests;
 mod stroke_timing_tests;
 
 #[cfg(test)]
+mod cam_reset_tool_mode_tests;
+#[cfg(test)]
+mod patch_reset_tool_tests;
+#[cfg(test)]
 mod patch_tool_history_names_tests;
 #[cfg(test)]
 mod polygon_lasso_step_snap_tests;
