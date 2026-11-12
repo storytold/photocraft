@@ -76,6 +76,12 @@ pub fn read_all(reader: &mut impl Read, size_hint: u64) -> io::Result<Vec<u8>> {
     read_all_with(reader, size_hint, READ_CHUNK, MAX_OPEN_BYTES)
 }
 
+/// [`read_all`] with the caller's own total limit, in bytes: a stream over `max` (or with
+/// `size_hint > max`) fails with `FileTooLarge` without allocating past `max`.
+pub fn read_all_limited(reader: &mut impl Read, size_hint: u64, max: u64) -> io::Result<Vec<u8>> {
+    read_all_with(reader, size_hint, READ_CHUNK, max.min(MAX_OPEN_BYTES))
+}
+
 /// Read `reader` to its end in reads of at most `chunk` bytes, failing once it has given more
 /// than `max` bytes. The hint only sizes the buffer: a file that grows or shrinks while being
 /// read is still read to its end, within `max`. Past the hint the buffer grows only after a probe
@@ -264,5 +270,41 @@ mod tests {
         assert_eq!(size_text(512), "512 bytes");
         assert_eq!(size_text(4_750_000_000), "4.75 GB");
         assert_eq!(size_text(759_000_000), "759.00 MB");
+    }
+
+    #[test]
+    fn interrupted_reads_are_retried_without_over_allocating() {
+        struct Interrupted<'a> {
+            data: &'a [u8],
+            pos: usize,
+            step: usize,
+            flip: bool,
+        }
+        impl Read for Interrupted<'_> {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                self.flip = !self.flip;
+                if self.flip {
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                let n = out.len().min(self.step).min(self.data.len() - self.pos);
+                out[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+
+        let data: Vec<u8> = (0..12_345u32).map(|i| (i * 13 % 251) as u8).collect();
+        let mut exact = Interrupted { data: &data, pos: 0, step: 503, flip: false };
+        let buf = read_all_limited(&mut exact, data.len() as u64, data.len() as u64).unwrap();
+        assert_eq!(buf, data);
+        assert_eq!(buf.capacity(), data.len());
+
+        let mut growing = Interrupted { data: &data, pos: 0, step: 503, flip: false };
+        let buf = read_all_limited(&mut growing, 1_000, data.len() as u64).unwrap();
+        assert_eq!(buf, data);
+
+        let mut over = Interrupted { data: &data, pos: 0, step: 503, flip: false };
+        let err = read_all_limited(&mut over, 0, data.len() as u64 - 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::FileTooLarge);
     }
 }
