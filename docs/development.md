@@ -273,7 +273,7 @@ cargo run -p photocraft-cli -- info out.psd --detail                    # also t
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
-cargo run -p photocraft-cli -- batch --actions actions.json --in photos/ --out done/ --format jpg
+cargo run -p photocraft-cli -- batch --actions actions.atn --action "Action name" --in photos/ --out done/ --format jpg
 cargo run -p photocraft-cli -- commands --filter blur                    # the command registry
 cargo run -p photocraft-cli --example man-and-completions -- out/       # man pages + bash/zsh/fish/elvish/PowerShell completions
 ```

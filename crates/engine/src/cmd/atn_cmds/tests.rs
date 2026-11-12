@@ -2981,7 +2981,7 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
     saved_native(&mut s, "DeleteNumeric");
     assert_eq!(s.actions.list, before_actions, "session actions must remain unchanged during native fallback");
     assert_eq!(s.active().unwrap().revision, before_rev, "document revision must remain unchanged during native fallback");
-    assert_eq!(s.actions.list.iter().find(|action| action.name == "DeleteNumeric").unwrap().steps[0].1["layer"], 42);
+    assert_eq!(s.actions.list.iter().find(|action| action.name == "DeleteNumeric").unwrap().steps[0].1["layer"], u32::MAX as u64 + 1);
 
     // Same rejection and state invariance for remaining commands with numeric layer reference
     for (name, id, params) in [

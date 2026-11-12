@@ -242,6 +242,9 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        // Web preferences hydrate after the authoritative Actions headers were attached.
+        #[cfg(target_arch = "wasm32")]
+        app.session.reconcile_actions_function_keys();
         layers_panel_ui::restore_options(&mut app);
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.

@@ -13,6 +13,148 @@ fn app() -> PhotocraftApp {
     app
 }
 
+#[test]
+fn incremental_displace_picker_keeps_only_its_step_owned_until_answered() {
+    use crate::file_dialog::{FileDialogAnswer, FileDialogReply};
+    use std::{cell::RefCell, rc::Rc};
+    for confirm in [true, false] {
+        let mut app = app();
+        let id = draft(&mut app, &[("filter.distort.displace", json!({})), ("layer.new.layer", json!({"name":"After map"}))]);
+        app.run("actions.editor.step", json!({"draft":id,"op":"dialog","step":0,"enabled":true})).unwrap();
+        app.run("actions.editor.record", json!({"draft":id})).unwrap();
+        let reply = Rc::new(RefCell::new(None::<FileDialogReply>));
+        let shown = reply.clone();
+        app.services.file_dialog = Some(Box::new(move |_, _, answer| *shown.borrow_mut() = Some(answer)));
+        let ctx = egui::Context::default();
+        start_preview(&mut app, id, 0).unwrap();
+        tick_with_quantum(&mut app, &ctx, 1);
+        let dialog = app.ui.dialogs.last().unwrap().id;
+        let token = app.ui.dialogs.last().unwrap().fields[RESUME].as_u64().unwrap();
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert!(app.ui.dialogs.is_empty());
+        app.poll_file_dialog(&ctx, None);
+        tick_with_quantum(&mut app, &ctx, 1);
+        tick_with_quantum(&mut app, &ctx, 1);
+        assert!(app.paused_playbacks.paused.contains_key(&token));
+        assert!(app.session.actions.held_playback.is_some());
+        let dir = tempfile::tempdir().unwrap();
+        let map = dir.path().join("map.png");
+        let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "png", &Default::default()).unwrap().bytes;
+        std::fs::write(&map, bytes).unwrap();
+        reply.borrow_mut().take().unwrap().send(confirm.then(|| FileDialogAnswer::Paths(vec![map.to_string_lossy().into_owned()])));
+        app.poll_file_dialog(&ctx, None);
+        tick_with_quantum(&mut app, &ctx, 1);
+        assert_eq!(app.session.active().unwrap().doc.walk().iter().any(|(_, _, layer)| layer.name == "After map"), confirm);
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert!(app.session.actions.held_playback.is_none());
+        assert!(app.session.actions.recording_active());
+    }
+
+    let mut app = app();
+    let id = draft(&mut app, &[("filter.blur.gaussianBlur", json!({"radius":1}))]);
+    app.run("actions.editor.step", json!({"draft":id,"op":"dialog","step":0,"enabled":true})).unwrap();
+    start_preview(&mut app, id, 0).unwrap();
+    let ctx = egui::Context::default();
+    tick_with_quantum(&mut app, &ctx, 1);
+    app.ui.dialogs.clear();
+    app.services.file_dialog = Some(Box::new(|_, _, _| {}));
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: None }, |_, _| Ok(json!({}))).unwrap();
+    tick_with_quantum(&mut app, &ctx, 1);
+    assert!(app.paused_playbacks.paused.is_empty(), "an unrelated pending picker must not own this step");
+    assert!(app.session.actions.held_playback.is_none());
+}
+
+#[test]
+fn group_continuation_retains_captured_gate_and_rejects_changed_live_policy() {
+    fn captured(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+        if id == "layer.new.layer" && params["name"] == "Forbidden" {
+            Err(photocraft_engine::EngineError::Other("captured group policy".into()))
+        } else {
+            Ok(())
+        }
+    }
+    fn other(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Ok(())
+    }
+    for changed in [false, true] {
+        let mut app = app();
+        app.session.actions.list.extend([
+            Action::new("First", vec![("layer.new.layer".into(), json!({"name":"Allowed"}))]),
+            Action::new("Second", vec![("layer.new.layer".into(), json!({"name":"Forbidden"}))]),
+        ]);
+        app.session.authorize = Some(captured);
+        start_library(&mut app, &[0, 1]).unwrap();
+        app.session.authorize = None;
+        let ctx = egui::Context::default();
+        tick_with_quantum(&mut app, &ctx, 1);
+        assert!(app.session.active().unwrap().doc.walk().iter().any(|(_, _, layer)| layer.name == "Allowed"));
+        if changed {
+            app.session.authorize = Some(other);
+        }
+        tick_with_quantum(&mut app, &ctx, 1);
+        tick_with_quantum(&mut app, &ctx, 1);
+        assert!(!app.session.active().unwrap().doc.walk().iter().any(|(_, _, layer)| layer.name == "Forbidden"));
+        assert!(app.ui.status.contains(if changed { "authorization context changed" } else { "captured group policy" }), "{}", app.ui.status);
+        assert!(app.actions_runtime.task.is_none());
+        assert!(app.session.actions.held_playback.is_none());
+    }
+}
+
+#[test]
+fn failed_incremental_resume_clears_progress_and_releases_its_owner() {
+    fn first(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Ok(())
+    }
+    fn changed(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Err(photocraft_engine::EngineError::Other("changed gate".into()))
+    }
+    let mut app = app();
+    let id = draft(&mut app, &[("filter.blur.gaussianBlur", json!({"radius":1})), ("select.all", json!({}))]);
+    app.run("actions.editor.step", json!({"draft":id,"op":"dialog","step":0,"enabled":true})).unwrap();
+    app.run("actions.editor.record", json!({"draft":id})).unwrap();
+    app.session.authorize = Some(first);
+    start_preview(&mut app, id, 0).unwrap();
+    tick_with_quantum(&mut app, &egui::Context::default(), 1);
+    let fields = app.ui.dialogs.last().unwrap().fields.clone();
+    app.session.authorize = Some(changed);
+    assert!(resume(&mut app, &fields).is_err());
+    assert!(inspect(&app)["playing"].is_null());
+    assert!(app.paused_playbacks.paused.is_empty());
+    assert!(app.session.actions.held_playback.is_none());
+    assert!(app.session.actions.recording_active());
+}
+
+#[test]
+fn incremental_parent_stack_distinguishes_scoped_names_and_rejects_real_cycles() {
+    for cycle in [false, true] {
+        let mut app = app();
+        let mut outer =
+            Action::new("Echo", vec![("actions.play".into(), json!({"action":"Echo","set":"Two"})), ("layer.new.layer".into(), json!({"name":"Outer tail"}))]);
+        outer.set = Some("One".into());
+        let mut inner = Action::new(
+            "Echo",
+            if cycle { vec![("actions.play".into(), json!({"action":"Echo","set":"One"}))] } else { vec![("layer.new.layer".into(), json!({"name":"Inner"}))] },
+        );
+        inner.set = Some("Two".into());
+        app.session.actions.list.extend([outer, inner]);
+        start_library(&mut app, &[0]).unwrap();
+        for _ in 0..5 {
+            tick_with_quantum(&mut app, &egui::Context::default(), 1);
+        }
+        let names: Vec<_> = app.session.active().unwrap().doc.walk().iter().map(|(_, _, layer)| layer.name.clone()).collect();
+        assert_eq!(names.iter().any(|name| name == "Inner"), !cycle);
+        assert_eq!(names.iter().any(|name| name == "Outer tail"), !cycle);
+        if cycle {
+            assert!(app.ui.status.contains("recursive action call"), "{}", app.ui.status);
+        } else {
+            assert!(!app.ui.status_error, "{}", app.ui.status);
+        }
+        assert!(app.actions_runtime.task.is_none());
+        assert!(app.session.actions.playback_stack.is_empty());
+        assert!(app.session.actions.held_playback.is_none());
+    }
+}
+
 /// Streaming and nested dialog pauses keep upstream's one-action Undo boundary in both history modes.
 #[test]
 fn streamed_history_keeps_the_root_boundary_across_quanta_and_nested_dialogs() {

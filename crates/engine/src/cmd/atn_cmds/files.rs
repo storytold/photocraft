@@ -2,6 +2,22 @@ use super::convert::{export_groups, import_with_encoding};
 use super::sidecar;
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
+/// A set rename moves its own references; foreign scopes retain their meaning.
+fn retarget_scopes(action: &mut Action, from: &str, to: &str) {
+    for (id, params) in &mut action.steps {
+        let keys: &[&str] = match id.as_str() {
+            "actions.play" | "file.automate.batch" | "file.automate.createDroplet" => &["set", "actionSet"],
+            "actions.conditional" => &["set", "thenSet", "elseSet"],
+            _ => &[],
+        };
+        for key in keys {
+            if params.get(*key).and_then(Value::as_str) == Some(from) {
+                params[*key] = json!(to);
+            }
+        }
+    }
+}
+
 /// Validate and normalize an external archive before committing actions, physical rows and shortcuts.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
@@ -27,34 +43,31 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             set.metadata = sidecar::empty_source(raw, index);
         }
     }
-    let original_set = imp.set.clone();
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
             if imp.sets.len() != 1 {
                 return Err(bad(cmd, "set override requires exactly one real set"));
             }
+            let original_set = imp.set.clone();
+            let original_wire = imp.sets.first().ok_or_else(|| bad(cmd, "missing imported set"))?.wire_name.clone();
             imp.set = super::convert::clip_name(n.trim()).trim_end().to_string();
             if let Some(set) = imp.sets.first_mut() {
                 set.name = imp.set.clone();
+                set.wire_name = imp.set.clone();
             }
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
+                retarget_scopes(a, &original_set, &imp.set);
+                if original_wire != original_set {
+                    retarget_scopes(a, &original_wire, &imp.set);
+                }
             }
         }
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     }
-    // Native Batch and droplet calls keep main's set-override and collision-renaming rules.
-    // Only references to the imported source set follow its override; foreign scopes stay intact.
     for action in &mut imp.actions {
         action.automation = s.authorize.is_some();
-        for (id, params) in &mut action.steps {
-            if matches!(id.as_str(), "file.automate.batch" | "file.automate.createDroplet")
-                && params.get("set").and_then(Value::as_str) == Some(original_set.as_str())
-            {
-                params["set"] = json!(imp.set);
-            }
-        }
     }
     let replace = match p.get("replace") {
         None | Some(Value::Null) => true,
@@ -74,25 +87,6 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|count| *count <= super::atn::MAX_TOTAL_ITEMS)
             .ok_or_else(|| bad(cmd, "combined action library exceeds the step limit"))?;
     }
-    let old_groups = sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?;
-    let retained_groups: Vec<_> = old_groups.iter().filter(|(name, _)| !replace || !targets.contains(*name)).collect();
-    let sidecar_needed = imp.sets.iter().any(|set| set.metadata.is_some())
-        || imp.actions.iter().any(sidecar::action_needs_metadata)
-        || retained_groups.iter().any(|(_, selection)| {
-            selection.source.is_some()
-                || selection.actions.iter().any(|action| sidecar::action_needs_metadata(action))
-        });
-    let overhead = usize::from(sidecar_needed);
-    if retained_groups.len().checked_add(imp.sets.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_SETS) {
-        return Err(bad(cmd, "combined action library exceeds the set limit"));
-    }
-    if retained.checked_add(imp.actions.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_TOTAL_ACTIONS)
-        || total_steps.checked_add(overhead).is_none_or(|count| count > super::atn::MAX_TOTAL_ITEMS)
-    {
-        return Err(bad(cmd, "combined action library leaves no space for its metadata sidecar"));
-    }
-    drop(retained_groups);
-    drop(old_groups);
     let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().filter(|name| targets.contains(*name)).cloned().collect();
     let old_rows = s.actions.sets.iter().filter(|name| !replace || !targets.contains(*name)).count();
     let new_rows = if provenance.is_some() || imp.sets.iter().any(|set| set.metadata.is_some()) {
@@ -112,24 +106,38 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         super::normalize_import(&mut imp, s.actions.list.iter().filter(keep).map(|action| action.name.clone()), true).map_err(|error| bad(cmd, error))?;
     let keys = imp.function_keys.clone();
     let steps: usize = imp.actions.iter().map(|action| action.steps.len()).sum();
-    let added = imp.actions;
+    let mut added = imp.actions;
+    crate::actions_cmds::shift_action_calls(&mut added, 0, retained);
     let set_names: Vec<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
     if replace {
-        s.actions.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
-        sidecar::retire_sets(&mut s.actions, &targets);
+        proposed.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
+        sidecar::retire_sets(&mut proposed, &targets);
     }
-    s.actions.list.extend(added);
+    proposed.list.extend(added);
     for (index, set) in imp.sets.into_iter().enumerate() {
         if provenance.is_some() || set.metadata.is_some() {
-            let slot = s.actions.sets.len();
-            sidecar::install_row(&mut s.actions, &set.name, set.metadata);
+            let slot = proposed.sets.len();
+            sidecar::install_row(&mut proposed, &set.name, set.metadata);
             if let Some(raw) = &provenance {
-                crate::actions_cmds::library::import_row(&mut s.actions, raw, index, slot);
+                crate::actions_cmds::library::import_row(&mut proposed, raw, index, slot);
             }
-        } else if (set.actions.is_empty() || previous_rows.contains(&set.name)) && !s.actions.sets.contains(&set.name) {
-            sidecar::install_row(&mut s.actions, &set.name, None);
+        } else if (set.actions.is_empty() || previous_rows.contains(&set.name)) && !proposed.sets.contains(&set.name) {
+            sidecar::install_row(&mut proposed, &set.name, None);
         }
     }
+    let mut shortcuts = s.prefs().shortcuts.clone();
+    for (name, key) in &keys {
+        shortcuts.retain(|k, v| !(k.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && v == key));
+        shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
+    }
+    // The exact durable representation owns group, sidecar and byte limits. Refuse before
+    // publishing either the actions or preferences so a rejected import leaves both intact.
+    crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
+    s.actions.sets = proposed.sets;
+    s.actions.library = proposed.library;
+    s.actions.atn_set_rows = proposed.atn_set_rows;
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
             for (name, key) in &keys {
@@ -185,15 +193,29 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         }
         sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
     };
-    // Preserve the old default single-set output name; a multi-set Save keeps each real group.
-    if p.get("action").is_none()
+    // Preserve the old default single-set output name and move its internal calls with it.
+    let renamed_actions = if p.get("action").is_none()
         && set_param.is_none()
         && groups.len() == 1
-        && let Some((name, _)) = groups.first_mut()
+        && let Some((name, selection)) = groups.first_mut()
         && name != super::UNGROUPED_SET
     {
+        let from = name.clone();
         *name = DEFAULT_SET.to_string();
-    }
+        Some(
+            selection
+                .actions
+                .iter()
+                .map(|action| {
+                    let mut action = (**action).clone();
+                    retarget_scopes(&mut action, &from, DEFAULT_SET);
+                    action
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
     let names: Vec<String> = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.name.clone()).collect();
     let set_names: Vec<String> = groups.iter().map(|(name, _)| name.clone()).collect();
     let set = set_param.or_else(|| set_names.first().cloned()).unwrap_or_else(|| DEFAULT_SET.to_string());
@@ -203,7 +225,8 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let borrowed: Vec<_> = groups
         .iter()
         .map(|(name, selection)| {
-            (name.as_str(), sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
+            let actions = renamed_actions.as_ref().map_or_else(|| selection.actions.clone(), |actions| actions.iter().collect());
+            (name.as_str(), sidecar::Selection { actions, source: selection.source.clone(), raw: selection.raw.clone() })
         })
         .collect();
     let (bytes, skipped) = export_groups(&borrowed, &keys, skip).map_err(|error| bad(cmd, error))?;

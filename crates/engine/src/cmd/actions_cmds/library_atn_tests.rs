@@ -8,7 +8,7 @@ use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn wire() -> Vec<u8> {
     fn ascii(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -513,4 +513,318 @@ fn shortcut_change_without_action_revision_is_persisted() {
     let files = atn::parse_sets(&bytes).unwrap();
     let action = &files[0].actions[0];
     assert_eq!((action.function_key, action.shift, action.command), (9, true, true));
+}
+
+/// Build reserved native events directly so the writer under test is not the input oracle.
+fn native_archive(rows: &[(&str, &[Action])]) -> Vec<u8> {
+    let files: Vec<_> = rows
+        .iter()
+        .map(|(name, actions)| AtnFile {
+            name: UnicodeString::new_nul(name),
+            actions: actions
+                .iter()
+                .map(|action| AtnAction {
+                    name: UnicodeString::new_nul(&action.name),
+                    items: action
+                        .steps
+                        .iter()
+                        .map(|(id, params)| AtnItem {
+                            event: AtnEvent::name("photocraftCommand"),
+                            descriptor: Some(
+                                Descriptor::new("null")
+                                    .with("command", D::Text(UnicodeString::new(id)))
+                                    .with("params", D::Text(UnicodeString::new(&params.to_string()))),
+                            ),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .collect();
+    atn::write_sets(&files).unwrap()
+}
+
+#[test]
+fn disk_attachment_and_portable_append_rebase_only_the_added_numeric_calls() {
+    let first = Action::new("First", vec![]);
+    let second = Action::new("Second", vec![]);
+    let caller = Action::new(
+        "Caller",
+        vec![
+            ("actions.play".into(), json!({"action":1})),
+            ("file.automate.batch".into(), json!({"action":1})),
+            ("file.automate.batch".into(), json!({"action":0,"calledActions":[{"name":"Embedded","steps":[]}]})),
+            ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":0}]],"calledActions":[{"name":"Embedded","steps":[]}]})),
+        ],
+    );
+    let bytes = native_archive(&[("Disk", &[first, second, caller])]);
+    for portable in [false, true] {
+        let mut session = crate::Session::new();
+        session.actions.list.push(Action::new("Local", vec![("actions.play".into(), json!({"action":0}))]));
+        if portable {
+            session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).unwrap();
+        } else {
+            library::attach(&mut session.actions, library::decode(&bytes).unwrap());
+        }
+        let restored = library::decode(&encode(&session.actions)).unwrap();
+        assert_eq!(restored.list[0].steps[0].1["action"], 0);
+        assert_eq!(restored.list[3].steps[0].1["action"], 2);
+        assert_eq!(restored.list[3].steps[1].1["action"], 2);
+        assert_eq!(restored.list[3].steps[2].1["action"], 1, "named Batch selects its source from the caller list");
+        assert_eq!(restored.list[3].steps[3].1["steps"][0][1]["action"], 0, "inline Batch uses its embedded action namespace");
+        assert_eq!(restored.list[2].name, "Second");
+    }
+}
+
+#[test]
+fn scalar_native_call_parameters_survive_projection_without_panicking() {
+    for id in ["actions.play", "actions.conditional"] {
+        for params in [json!(7), json!(true), json!("scalar"), json!([]), Value::Null] {
+            let action = Action::new("Malformed call", vec![(id.into(), params)]);
+            let bytes = native_archive(&[("S", std::slice::from_ref(&action))]);
+            let state = library::decode(&bytes).unwrap();
+            // An unrelated edit forces the native projection path through library_items.
+            let fresh = ActionState {
+                list: state
+                    .list
+                    .into_iter()
+                    .map(|mut action| {
+                        action.library_origin = None;
+                        action.library_steps.clear();
+                        action
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            assert_eq!(library::decode(&encode(&fresh)).unwrap().list[0].steps, action.steps);
+            let (portable, _) = atn_cmds::export("S", &[&action], &[], false).unwrap();
+            assert_eq!(atn_cmds::import(&portable).unwrap().actions[0].steps, action.steps);
+        }
+    }
+}
+
+#[test]
+fn imported_explicit_wire_scope_wins_over_the_empty_set_display_alias() {
+    let child = Action::new("Child", vec![]);
+    let caller = Action::new(
+        "Caller",
+        vec![
+            ("actions.play".into(), json!({"action":"Child","set":"Ungrouped Actions"})),
+            ("actions.conditional".into(), json!({"then":"Child","thenSet":"Ungrouped Actions","else":"Child","elseSet":""})),
+            ("actions.conditional".into(), json!({"then":"Child","else":"Child","set":""})),
+        ],
+    );
+    let bytes = native_archive(&[("", std::slice::from_ref(&child)), ("Ungrouped Actions", &[child, caller])]);
+    let mut imported = atn_cmds::import(&bytes).unwrap();
+    atn_cmds::normalize_import(&mut imported, [], false).unwrap();
+    let steps = &imported.actions[2].steps;
+    assert_eq!(steps[0].1, json!({"action":"Child 2","set":"Ungrouped Actions 2"}));
+    assert_eq!(steps[1].1["then"], "Child 2");
+    assert_eq!(steps[1].1["thenSet"], "Ungrouped Actions 2");
+    assert_eq!(steps[1].1["else"], "Child");
+    assert_eq!(steps[1].1["elseSet"], "Ungrouped Actions");
+    assert_eq!(steps[2].1, json!({"then":"Child","else":"Child","set":"Ungrouped Actions"}));
+}
+
+#[test]
+fn set_override_retargets_internal_play_and_conditional_scopes_before_collision_renaming() {
+    let child = Action::new("Child", vec![]);
+    let caller = Action::new(
+        "Caller",
+        vec![
+            ("actions.play".into(), json!({"action":"Child","set":"S"})),
+            ("actions.conditional".into(), json!({"then":"Child","set":"S","thenSet":"S","else":"Child","elseSet":"Foreign"})),
+        ],
+    );
+    let bytes = native_archive(&[("S", &[child, caller])]);
+    let mut session = crate::Session::new();
+    session.actions.list.push(Action::new("Child", vec![]));
+    session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"set":"T","replace":false})).unwrap();
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    let steps = &restored.list[2].steps;
+    assert_eq!(steps[0].1, json!({"action":"Child 2","set":"T"}));
+    assert_eq!(steps[1].1["then"], "Child 2");
+    assert_eq!(steps[1].1["set"], "T");
+    assert_eq!(steps[1].1["thenSet"], "T");
+    assert_eq!(steps[1].1["else"], "Child");
+    assert_eq!(steps[1].1["elseSet"], "Foreign");
+}
+
+#[test]
+fn import_checks_exact_durable_group_capacity_before_changing_actions_or_preferences() {
+    let mut session = crate::Session::new();
+    for index in 0..atn::MAX_SETS {
+        let mut action = Action::new(format!("Local {index}"), vec![]);
+        action.set = Some(if index % 2 == 0 { "A" } else { "B" }.into());
+        session.actions.list.push(action);
+    }
+    let before = encode(&session.actions);
+    let preferences = session.prefs().clone();
+    let revision = session.actions.rev;
+    let bytes = native_archive(&[("C", &[Action::new("Imported", vec![])])]);
+    assert!(session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).is_err());
+    assert_eq!(encode(&session.actions), before);
+    assert_eq!(session.prefs(), &preferences);
+    assert_eq!(session.actions.rev, revision);
+    // Replacing the interleaved A rows reduces the actual durable group count and is admitted.
+    let bytes = native_archive(&[("A", &[Action::new("Replacement", vec![])])]);
+    session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+    assert!(library::decode(&encode(&session.actions)).is_ok());
+}
+
+#[test]
+fn default_single_set_export_retargets_calls_in_copies_and_reimports_standalone() {
+    let mut child = Action::new("Child", vec![]);
+    child.set = Some("S".into());
+    let mut parent = Action::new(
+        "Parent",
+        vec![
+            ("actions.play".into(), json!({"action":"Child","set":"S"})),
+            ("actions.conditional".into(), json!({"then":"Child","thenSet":"S","else":"Child","set":"S"})),
+        ],
+    );
+    parent.set = Some("S".into());
+    let mut session = crate::Session::new();
+    session.actions.list = vec![child, parent];
+    let original = session.actions.list.clone();
+    let output = session.execute("actions.save", json!({})).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(output["data"].as_str().unwrap()).unwrap();
+    let mut imported = atn_cmds::import(&bytes).unwrap();
+    atn_cmds::normalize_import(&mut imported, [], false).unwrap();
+    assert_eq!(imported.sets[0].name, atn_cmds::DEFAULT_SET);
+    assert_eq!(imported.actions[1].steps[0].1["set"], atn_cmds::DEFAULT_SET);
+    assert_eq!(session.actions.list, original, "Save only retargets export copies");
+}
+
+#[test]
+fn empty_library_source_can_accept_its_metadata_bearing_export_after_reopen() {
+    let empty = encode(&ActionState::default());
+    let mut session = crate::Session::new();
+    session.actions = library::decode(&empty).unwrap();
+    let mut action = Action::new("Metadata", vec![]);
+    action.description = "kept".into();
+    session.actions.list.push(action);
+    let populated = encode(&session.actions);
+    // Import retains the reopened empty source while adding a separately decoded row.
+    let mut reopened = crate::Session::new();
+    reopened.actions = library::decode(&empty).unwrap();
+    reopened.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&populated)})).unwrap();
+    let restored = library::decode(&encode(&reopened.actions)).unwrap();
+    assert_eq!(restored.list[0].description, "kept");
+}
+
+#[test]
+fn unencodable_legacy_library_remains_available_and_never_replaces_legacy_bytes() {
+    let payload = "x".repeat(MAX_ACTIONS_BYTES as usize / 2 + 1024);
+    let bytes = serde_json::to_vec(&json!({"version":1,"actions":[{"name":"Large legacy","steps":[["future.command",{"text":payload}]]}]})).unwrap();
+    assert!(bytes.len() < MAX_ACTIONS_BYTES as usize);
+    let mem = MemBackend::default();
+    mem.files.lock().unwrap().insert(LEGACY_ACTIONS_FILE.into(), bytes.clone());
+    let opened = preset_store::open(Box::new(mem.clone()));
+    assert!(matches!(opened.actions, preset_store::LoadedActions::MigrationBlocked(_)));
+    assert_eq!(opened.actions[0].name, "Large legacy");
+    assert!(opened.warnings.iter().any(|warning| warning.contains("migration blocked")));
+    let mut session = crate::Session::new();
+    session.attach_preset_store(opened);
+    assert_eq!(session.actions.list[0].steps[0].1["text"].as_str().unwrap().len(), MAX_ACTIONS_BYTES as usize / 2 + 1024);
+    session.sync_preset_store();
+    assert_eq!(mem.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+    assert!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
+    assert!(mem.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES).is_err());
+}
+
+#[test]
+fn authoritative_atn_function_keys_survive_later_preference_hydration() {
+    let mut files = atn::parse_sets(&close_archive()).unwrap();
+    files[0].actions[0].function_key = 8;
+    files[0].actions[0].shift = true;
+    files[0].actions.push(AtnAction { name: UnicodeString::new_nul("No header"), ..Default::default() });
+    let bytes = atn::write_sets(&files).unwrap();
+    let mem = MemBackend::default();
+    mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), bytes.clone());
+    let mut session = crate::Session::new();
+    session.attach_preset_store(preset_store::open(Box::new(mem.clone())));
+    let mut stale = crate::Session::new();
+    stale.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(format!("{}Save and close", super::PLAY_SHORTCUT_PREFIX), "F2".into());
+        prefs.shortcuts.insert(format!("{}No header", super::PLAY_SHORTCUT_PREFIX), "F3".into());
+        prefs.shortcuts.insert(format!("{}Legacy", super::PLAY_SHORTCUT_PREFIX), "F4".into());
+    });
+    session.load_prefs_json(&serde_json::to_string(stale.prefs()).unwrap()).unwrap();
+    session.reconcile_actions_function_keys();
+    assert_eq!(session.prefs().shortcuts.get(&format!("{}Save and close", super::PLAY_SHORTCUT_PREFIX)).map(String::as_str), Some("Shift+F8"));
+    assert!(!session.prefs().shortcuts.contains_key(&format!("{}No header", super::PLAY_SHORTCUT_PREFIX)));
+    session.sync_preset_store();
+    assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+
+    let migrated = MemBackend::default();
+    migrated.files.lock().unwrap().insert(LEGACY_ACTIONS_FILE.into(), legacy());
+    let mut session = crate::Session::new();
+    session.attach_preset_store(preset_store::open(Box::new(migrated)));
+    session.load_prefs_json(&serde_json::to_string(stale.prefs()).unwrap()).unwrap();
+    let hydrated = session.prefs().clone();
+    session.reconcile_actions_function_keys();
+    assert_eq!(session.prefs(), &hydrated, "migrated libraries retain preference-owned bindings");
+}
+
+#[test]
+fn legacy_actions_with_trailing_bytes_cannot_mutate_the_live_library() {
+    // With no descriptors or steps, the version12 and version16 record layouts agree.
+    let mut valid = atn::write(&AtnFile {
+        name: UnicodeString::new_nul("Legacy input"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Incoming"), function_key: 7, ..Default::default() }],
+        ..Default::default()
+    })
+    .unwrap();
+    valid[..4].copy_from_slice(&12u32.to_be_bytes());
+    let mut suffixed = valid.clone();
+    suffixed.extend_from_slice(b"unparsed legacy suffix");
+
+    let mut positive = crate::Session::new();
+    positive.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&valid)})).unwrap();
+    assert_eq!(positive.actions.list.len(), 1, "valid version12 remains accepted");
+    assert_eq!(positive.actions.list[0].name, "Incoming");
+
+    let mem = MemBackend::default();
+    let mut state = ActionState { sets: vec!["Kept group".into()], ..Default::default() };
+    let mut kept = Action::new("Kept", vec![("file.close".into(), json!({}))]);
+    kept.set = Some("Kept group".into());
+    state.list.push(kept);
+    mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), library::encode(&state, &[]).unwrap());
+    let mut session = crate::Session::new();
+    assert!(session.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
+    session.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    let key = format!("{}Kept", super::PLAY_SHORTCUT_PREFIX);
+    session.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(key.clone(), "F2".into());
+        prefs.alternate_shortcuts.insert(key.clone(), vec!["F3".into()]);
+        prefs.shortcuts.insert("file.save".into(), "Ctrl+S".into());
+    });
+    session.sync_preset_store();
+    assert!(session.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    let actions_before = session.actions.clone();
+    let bytes_before = encode(&session.actions);
+    let prefs_before = session.prefs().clone();
+    let files_before = mem.files.lock().unwrap().clone();
+    let document = session.active().unwrap();
+    let dirty_before = document.is_dirty();
+    let history_before = (document.history.past_len(), document.history.can_undo(), document.history.can_redo());
+
+    let error = session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&suffixed)})).unwrap_err();
+    assert!(error.to_string().contains("trailing bytes after legacy action set"), "{error}");
+    assert_eq!(session.actions, actions_before, "definitions, raw provenance and revisions stay intact");
+    assert_eq!(encode(&session.actions), bytes_before, "durable library bytes stay intact");
+    assert_eq!(session.prefs(), &prefs_before);
+    let document = session.active().unwrap();
+    assert_eq!(document.is_dirty(), dirty_before);
+    assert_eq!((document.history.past_len(), document.history.can_undo(), document.history.can_redo()), history_before);
+    assert!(session.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert_eq!(*mem.files.lock().unwrap(), files_before, "rejection writes no preset files");
+    session.sync_preset_store();
+    assert_eq!(*mem.files.lock().unwrap(), files_before, "rejection leaves no deferred preset write");
+    assert_eq!(session.actions, actions_before, "sync cannot acknowledge a rejected definition");
+    assert!(session.preset_store.as_mut().unwrap().take_warnings().is_empty());
 }

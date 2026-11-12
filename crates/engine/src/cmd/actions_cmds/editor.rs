@@ -66,7 +66,10 @@ fn owned<'a>(s: &'a Session, p: &Value, cmd: &str) -> Result<&'a Draft> {
 
 /// Raw replayable capture is counted before projection to retain the editor's allocation bound.
 fn pending<'a>(s: &'a Session, draft: &Draft) -> impl Iterator<Item = &'a (String, Value)> {
-    s.journal.iter().skip(draft.recording.unwrap_or(s.journal.len())).filter(|(id, params)| super::recorded(id, params) && (s.actions.record_tools || !super::tool_stroke(id)))
+    s.journal
+        .iter()
+        .skip(draft.recording.unwrap_or(s.journal.len()))
+        .filter(|(id, params)| super::recorded(id, params) && (s.actions.record_tools || !super::tool_stroke(id)))
 }
 
 /// Build the visible value without flushing into either destination or changing its cursor.
@@ -188,6 +191,27 @@ fn shortcut(text: &str, old: &str) -> Result<String> {
     Ok(crate::atn_cmds::function_key_name(key, shift, command))
 }
 
+/// Resolve existing library targets before checking the unpublished draft name.
+fn calls_definition(s: &Session, draft: &Draft, value: &Action, id: &str, params: &Value) -> bool {
+    let targets: Vec<Value> = match id {
+        "actions.play" => vec![params.clone()],
+        "actions.conditional" => ["then", "else"].into_iter().filter_map(|branch| super::conditional_target(params, branch)).collect(),
+        _ => return false,
+    };
+    targets.iter().any(|target| {
+        let resolved = super::playback_index(&s.actions.list, target).ok();
+        if draft.source.is_some() && resolved == draft.source {
+            return true;
+        }
+        resolved.is_none()
+            && target.get("action").and_then(Value::as_str) == Some(value.name.as_str())
+            && target
+                .get("set")
+                .filter(|scope| !scope.is_null())
+                .is_none_or(|scope| scope.as_str() == Some(crate::atn_cmds::logical_set_name(value.set.as_deref())))
+    })
+}
+
 /// Stage current metadata fields; future backend fields remain in the complete clone untouched.
 fn update(s: &mut Session, p: &Value) -> Result<Value> {
     fields(p, &["draft", "name", "description", "icon", "color", "shortcut"], UPDATE)?;
@@ -196,13 +220,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let mut next = draft.clone();
     if let Some(value) = p.get("name") {
         next.value.name = name(value, Some(&next.value.name), UPDATE)?;
-        if next.value.name != draft.value.name
-            && next
-                .value
-                .steps
-                .iter()
-                .any(|(id, params)| super::call_keys(id).iter().any(|key| params.get(key).and_then(Value::as_str) == Some(next.value.name.as_str())))
-        {
+        if next.value.name != draft.value.name && next.value.steps.iter().any(|(id, params)| calls_definition(s, draft, &next.value, id, params)) {
             return Err(bad(UPDATE, "an action cannot play itself"));
         }
     }
@@ -252,13 +270,7 @@ fn new_step(s: &Session, p: &Value, old: Option<&(String, Value)>, draft: &Draft
     if !crate::actions_edit_cmds::is_step_command(id) || !params.is_object() {
         return Err(bad(STEP, "a new step needs a known command and object params"));
     }
-    let owns_current_name = draft.value.name != draft.opening.name || draft.source.is_none_or(|index| super::owns_name(&s.actions.list, index));
-    if super::call_keys(id).iter().any(|key| {
-        owns_current_name && params.get(key).and_then(Value::as_str) == Some(draft.value.name.as_str())
-            || draft.source.is_some_and(|index| super::owns_name(&s.actions.list, index))
-                && params.get(key).and_then(Value::as_str) == Some(draft.opening.name.as_str())
-            || draft.source.is_some_and(|source| params.get(key).and_then(Value::as_u64) == Some(source as u64))
-    }) {
+    if calls_definition(s, draft, &draft.value, id, &params) {
         return Err(bad(STEP, "an action cannot play itself"));
     }
     Ok((id.to_string(), params))
@@ -498,6 +510,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         // Save closes this capture even when it has no completed steps. The committed
         // library, shortcut maps and their revisions still remain exactly unchanged.
         let mut next = draft.clone();
+        next.value = value.clone();
         next.recording = None;
         let response = view(&next, &value);
         s.actions.editor = Some(next);

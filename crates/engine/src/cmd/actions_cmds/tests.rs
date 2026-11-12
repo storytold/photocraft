@@ -1856,3 +1856,111 @@ fn playback_stops_when_a_nested_batch_cannot_write_its_error_log() {
     assert_eq!(s.active().unwrap().doc.layers.len(), layers, "the step after the Batch must not run");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn review_scoped_recorded_calls_keep_the_selected_occurrence() {
+    for shell in [false, true] {
+        for sets in [["One", "Two"], ["Same", "Same"]] {
+            let mut s = Session::new();
+            s.actions.list = sets.iter().map(|set| Action { set: Some((*set).into()), ..Action::new("A", Vec::new()) }).collect();
+            s.execute("actions.record", json!({"name":"Recorder"})).unwrap();
+            if shell {
+                let (_, _, owner) = playback::library(&mut s, &json!({"action":1})).unwrap();
+                owner.unwrap().finish(&mut s);
+            } else {
+                s.execute("actions.play", json!({"action":1})).unwrap();
+            }
+            s.execute("actions.stop", json!({})).unwrap();
+            let (id, call) = &s.actions.list[2].steps[0];
+            assert_eq!(id, "actions.play");
+            assert_eq!(playback_index(&s.actions.list, call).unwrap(), 1, "shell={shell}: {call}");
+            assert_eq!(call["set"], sets[1]);
+        }
+    }
+}
+
+#[test]
+fn review_batch_deletion_remaps_only_caller_namespace_selectors() {
+    let mut s = Session::new();
+    let steps = vec![
+        ("file.automate.batch".into(), json!({"action":1})),
+        ("file.automate.batch".into(), json!({"action":0})),
+        ("file.automate.batch".into(), json!({"action":1,"calledActions":[{"name":"Embedded","steps":[]}]})),
+        ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":1}]]})),
+        ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":1}]],"calledActions":[{"name":"Embedded","steps":[]}]})),
+    ];
+    s.actions.list = vec![Action::new("A", Vec::new()), Action::new("B", Vec::new()), Action::new("Runner", steps)];
+    s.execute("actions.delete", json!({"action":0})).unwrap();
+    let calls = &s.actions.list[1].steps;
+    assert_eq!(calls[0].1["action"], 0, "B survives at its new caller-list index");
+    assert!(calls[1].1["action"].is_null(), "deleted A cannot become B");
+    assert_eq!(calls[2].1["action"], 0, "named Batch selects its source from the caller list");
+    assert_eq!(calls[3].1["steps"][0][1]["action"], 0, "unscoped inline calls share that list");
+    assert_eq!(calls[4].1["steps"][0][1]["action"], 1, "embedded inline calls own another namespace");
+}
+
+#[test]
+fn review_conditional_scopes_select_rename_and_dependency_targets() {
+    let mut s = Session::new();
+    s.actions.list = ["One", "Two"].into_iter().map(|set| Action { set: Some(set.into()), ..Action::new("A", Vec::new()) }).collect();
+    let mut steps = vec![("actions.conditional".into(), json!({"if":"always","then":"A","thenSet":"Two","else":"A","set":"One"}))];
+    let captured = called_actions(&s.actions.list, &mut steps);
+    assert_eq!(captured.iter().map(|action| action.set.as_deref()).collect::<Vec<_>>(), [Some("One"), Some("Two")]);
+    s.actions.list.push(Action::new("Caller", steps));
+    s.execute("actions.rename", json!({"action":1,"name":"Second"})).unwrap();
+    assert_eq!(s.actions.list[2].steps[0].1["then"], "Second");
+    assert_eq!(s.actions.list[2].steps[0].1["else"], "A");
+    s.execute("actions.rename", json!({"action":0,"name":"First"})).unwrap();
+    assert_eq!(s.actions.list[2].steps[0].1["then"], "Second");
+    assert_eq!(s.actions.list[2].steps[0].1["else"], "First");
+}
+
+#[test]
+fn review_playback_cycles_use_rows_namespaces_and_safe_pause_rebinding() {
+    let mut s = Session::new();
+    s.actions.list = vec![Action::new("A", Vec::new()), Action::new("A", Vec::new())];
+    let target = playback_target(&s, 1).unwrap();
+    let action = s.actions.list[1].clone();
+    let recording = begin_playback_target_from(&mut s, &action, 0, target.clone()).unwrap();
+    assert!(playback_plan(&s, &json!({"action":0})).is_ok(), "another same-name occurrence is callable");
+    assert!(playback_plan(&s, &json!({"action":1})).is_err(), "the actual active row is recursive");
+    s.actions.playback_namespace += 1;
+    assert!(playback_plan(&s, &json!({"action":1})).is_ok(), "an embedded library owns its rows");
+    s.actions.playback_namespace -= 1;
+    finish_playback(&mut s, recording, &action, 0);
+    s.actions.touch();
+    assert!(refresh_playback_target(&s, &action, &target).is_err(), "changed duplicate occurrences cannot be guessed");
+    s.actions.list[0].name = "Other".into();
+    let rebound = refresh_playback_target(&s, &action, &target).unwrap();
+    assert!(rebound.matches(&s, 1, &action));
+}
+
+#[test]
+fn review_editor_scope_admission_and_noop_save_keep_projected_steps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    s.actions.list = ["One", "Two"].into_iter().map(|set| Action { set: Some(set.into()), ..Action::new("A", Vec::new()) }).collect();
+    let draft = s.execute("actions.editor.open", json!({"action":1})).unwrap()["draft"].clone();
+    s.execute("actions.editor.step", json!({"draft":draft,"op":"insert","step":0,"id":"actions.play","params":{"action":"A","set":"One"}})).unwrap();
+    assert!(
+        s.execute(
+            "actions.editor.step",
+            json!({"draft":draft,"op":"insert","step":1,"id":"actions.conditional","params":{"if":"always","then":"A","thenSet":"Two"}})
+        )
+        .is_err()
+    );
+    s.execute("actions.editor.discard", json!({"draft":draft})).unwrap();
+    s.actions.list.push(Action::new("Capture", vec![("select.all".into(), json!({}))]));
+    let original = s.actions.list[2].clone();
+    let draft = s.execute("actions.editor.open", json!({"action":2})).unwrap()["draft"].clone();
+    s.execute("actions.editor.step", json!({"draft":draft,"op":"delete","step":0})).unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    let revision = s.actions.rev;
+    let saved = s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(saved["recording"], false);
+    assert_eq!(s.actions.rev, revision, "the committed definition is a no-op");
+    assert_eq!(s.actions.list[2], original);
+    let got = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(got["action"]["steps"], json!([["select.all", {}]]), "ending capture retains its projected replacement");
+}

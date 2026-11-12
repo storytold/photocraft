@@ -397,15 +397,20 @@ fn replacement_retires_only_target_rows_and_keeps_other_set_metadata() {
 }
 
 #[test]
-fn incompatible_archive_notes_refuse_export_even_when_skipping_unsupported() {
+fn incompatible_archive_notes_refuse_import_before_mutation() {
     let mut session = loaded(&fixture(&["A"], false, "First note\0").bytes);
     let second = fixture(&["B"], false, "Second note\0");
-    session.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&second.bytes), "replace": false})).unwrap();
-    let before = session.actions.list.clone();
+    let before = (session.actions.list.clone(), session.actions.sets.clone(), session.actions.atn_set_rows.clone());
+    let prefs = session.prefs().clone();
+    let output = saved_bytes(&mut session, json!({"set":"A"}));
+    let error = session.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&second.bytes), "replace": false})).unwrap_err();
+    assert!(error.to_string().contains("conflict"), "{error}");
+    assert_eq!(session.actions.list, before.0);
+    assert_eq!(session.actions.sets, before.1);
+    assert_eq!(session.actions.atn_set_rows, before.2);
+    assert_eq!(session.prefs(), &prefs);
     for skip in [false, true] {
-        let error = session.execute("actions.save", json!({"skipUnsupported": skip})).unwrap_err().to_string();
-        assert!(error.contains("conflict"), "{error}");
-        assert_eq!(session.actions.list, before);
+        assert_eq!(saved_bytes(&mut session, json!({"set":"A","skipUnsupported":skip})), output);
     }
 }
 

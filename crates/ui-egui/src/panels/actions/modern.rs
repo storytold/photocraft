@@ -20,6 +20,13 @@ pub(crate) struct Runtime {
     delete: Option<(u64, Delete, Option<Gate>)>,
 }
 
+impl Runtime {
+    /// Clear the progress card without cancelling a task or releasing another playback owner.
+    pub(super) fn clear_progress(&mut self) {
+        self.progress = None;
+    }
+}
+
 struct Task {
     frame: Frame,
     parents: Vec<Frame>,
@@ -565,24 +572,32 @@ fn new_group(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Queue an immutable draft snapshot with the backend owner that suspends capture for its entire preview.
 fn start_preview(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Value, String> {
     let (action, owner) = actions_cmds::playback::preview(&mut app.session, draft, from).map_err(|error| error.to_string())?;
-    let frame = Frame { action, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
-    queue(app, frame, owner, Vec::new())
+    let target = actions_cmds::playback_snapshot_target(&app.session, &action);
+    let frame = Frame { action, target, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
+    let gate = effective_gate(app);
+    queue(app, frame, owner, Vec::new(), gate)
 }
 
 /// Snapshot remaining group actions and acquire a frame-spanning owner for the first resolved definition.
 fn start_library(app: &mut PhotocraftApp, indices: &[usize]) -> Result<Value, String> {
+    start_library_with_gate(app, indices, None)
+}
+
+/// Keep the group's captured policy when installing its next action.
+fn start_library_with_gate(app: &mut PhotocraftApp, indices: &[usize], captured: Option<Gate>) -> Result<Value, String> {
+    let gate = super::continuation_gate(captured, effective_gate(app))?;
     let Some((&index, rest)) = indices.split_first() else { return Ok(json!({"ran":0})) };
     let then = rest
         .iter()
         .map(|&index| app.session.actions.list.get(index).cloned().ok_or("The selected action no longer exists".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
-    let (action, from, owner) = actions_cmds::playback::Owner::library(&mut app.session, &json!({"action":index})).map_err(|error| error.to_string())?;
-    let frame = Frame { action, from, source: Source::Library, take: app.session.actions.take, admitted: false, pending_call: false };
-    queue(app, frame, owner, then)
+    let frame = Frame::library(&app.session, &json!({"action":index}))?;
+    let (_, _, owner) = actions_cmds::playback::Owner::library(&mut app.session, &json!({"action":index})).map_err(|error| error.to_string())?;
+    queue(app, frame, owner, then, gate)
 }
 
 /// Install one incremental task and its authorization gate, releasing the supplied owner on admission failure.
-fn queue(app: &mut PhotocraftApp, frame: Frame, owner: actions_cmds::playback::Owner, then: Vec<Action>) -> Result<Value, String> {
+fn queue(app: &mut PhotocraftApp, frame: Frame, owner: actions_cmds::playback::Owner, then: Vec<Action>, gate: Option<Gate>) -> Result<Value, String> {
     if app.actions_runtime.task.is_some() {
         owner.finish(&mut app.session);
         return Err("Another action is already playing".into());
@@ -592,7 +607,7 @@ fn queue(app: &mut PhotocraftApp, frame: Frame, owner: actions_cmds::playback::O
         return Err(error.to_string());
     }
     app.actions_runtime.progress = Some(Progress { root: frame.action.clone(), completed: 0, done: false });
-    app.actions_runtime.task = Some(Task { frame, parents: Vec::new(), owner: Some(owner), gate: effective_gate(app), used: 0, ran: 0, then, history: None });
+    app.actions_runtime.task = Some(Task { frame, parents: Vec::new(), owner: Some(owner), gate, used: 0, ran: 0, then, history: None });
     Ok(json!({"playing":true}))
 }
 
@@ -636,7 +651,9 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         .paused
         .iter()
         .filter_map(|(token, paused)| {
-            let open = if paused.timed {
+            let open = if app.file_dialog_owns_action_step(*token) {
+                true
+            } else if paused.timed {
                 app.paused_playbacks.timer.is_some_and(|timer| timer.token == *token)
             } else if paused.dialog == 0 {
                 app.ui.type_panels.spell.as_ref().is_some_and(|dialog| dialog.resume == Some(*token))
@@ -740,7 +757,8 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
                 ctx.request_repaint();
             } else {
                 let indices: Option<Vec<_>> = task.then.iter().map(|action| app.session.actions.list.iter().position(|current| current == action)).collect();
-                let result = indices.ok_or("A group action changed during playback".to_string()).and_then(|indices| start_library(app, &indices));
+                let result =
+                    indices.ok_or("A group action changed during playback".to_string()).and_then(|indices| start_library_with_gate(app, &indices, task.gate));
                 if result.is_err() {
                     app.actions_runtime.progress = None;
                 }

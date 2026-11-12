@@ -18,7 +18,7 @@ pub struct Owner {
     automation: bool,
     destination: Option<Destination>,
     preview: Option<(u64, Arc<Action>)>,
-    call: Option<(String, usize)>,
+    call: Option<Value>,
 }
 
 /// Restore a Classic recorder only to one unchanged definition, allowing reorder but rejecting ambiguity.
@@ -44,7 +44,7 @@ pub fn admit(s: &Session, id: &str) -> Result<()> {
 }
 
 /// Acquire one playback identity after jobs and capture flush complete, retaining the exact recording destination.
-fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(String, usize)>, required: bool) -> Result<Option<Owner>> {
+fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<Value>, required: bool) -> Result<Option<Owner>> {
     if s.actions.held_playback.is_some() {
         return Err(bad("actions.play", "another action owns a suspended playback"));
     }
@@ -81,8 +81,10 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(S
 /// Resolve an ordinary named library call and suspend either recording destination once.
 pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, Option<Owner>)> {
     admit(s, "actions.play")?;
-    let (action, from) = super::playback_plan(s, params)?;
-    let owner = suspend(s, None, Some((action.name.clone(), from)), false)?;
+    let (row, action, from) = super::playback_plan_at(s, params)?;
+    let target = super::playback_target(s, row).ok_or_else(|| bad("actions.play", "the selected action no longer exists"))?;
+    let call = super::recorded_target_for(s, &action, from, &target);
+    let owner = suspend(s, None, Some(call), false)?;
     Ok((Arc::new(action), from, owner))
 }
 
@@ -104,14 +106,22 @@ impl Owner {
     /// A frame-spanning library call needs the same lease even without an active recorder.
     pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, Self)> {
         admit(s, "actions.play")?;
-        let (action, from) = super::playback_plan(s, params)?;
-        let owner = suspend(s, None, Some((action.name.clone(), from)), true)?.ok_or_else(|| bad("actions.play", "playback ownership is unavailable"))?;
+        let (row, action, from) = super::playback_plan_at(s, params)?;
+        let target = super::playback_target(s, row).ok_or_else(|| bad("actions.play", "the selected action no longer exists"))?;
+        let call = super::recorded_target_for(s, &action, from, &target);
+        let owner = suspend(s, None, Some(call), true)?.ok_or_else(|| bad("actions.play", "playback ownership is unavailable"))?;
         Ok((Arc::new(action), from, owner))
     }
 
     /// Suspend a recorder started while an unowned library dialog waited, using the same take-bound owner.
     pub fn continuation(s: &mut Session, action: &Action, from: usize) -> Result<Option<Self>> {
-        suspend(s, None, Some((action.name.clone(), from)), false)
+        let target = super::playback_snapshot_target(s, action);
+        Self::continuation_target(s, action, from, &target)
+    }
+
+    pub fn continuation_target(s: &mut Session, action: &Action, from: usize, target: &super::PlaybackTarget) -> Result<Option<Self>> {
+        let call = super::recorded_target_for(s, action, from, target);
+        suspend(s, None, Some(call), false)
     }
 
     /// Between UI ticks, reject unowned commands before their pre-command effects or jobs.
@@ -173,10 +183,10 @@ impl Owner {
             None => {}
         }
         if s.actions.recording_active()
-            && let Some((action, from)) = self.call
+            && let Some(call) = self.call
         {
-            super::journal_call(s, &action, from);
-            super::note_step_origin(s, self.automation, "actions.play", &serde_json::json!({"action": action}));
+            super::note_step_origin(s, self.automation, "actions.play", &call);
+            super::journal_call(s, call);
         }
     }
 }

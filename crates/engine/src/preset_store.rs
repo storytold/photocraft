@@ -662,6 +662,8 @@ pub struct PresetStore {
     /// [`crate::actions_cmds::ActionState::rev`] last written (or loaded).
     actions_rev: u64,
     actions_keys: Vec<(String, String)>,
+    /// Authoritative startup ATN headers, reapplied after asynchronous preference hydration.
+    actions_headers: HashMap<String, Option<String>>,
     /// An existing library failed to load or migrate; preserve it on disk.
     actions_skipped: bool,
     /// The pattern files and index (`patterns.json`).
@@ -804,6 +806,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         index: None,
         actions_rev: 0,
         actions_keys: Vec::new(),
+        actions_headers: HashMap::new(),
         actions_skipped,
         patterns: pattern_files,
         warnings: Vec::new(),
@@ -924,7 +927,10 @@ fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Load
             };
             let bytes = match library::encode(&state, &[]) {
                 Ok(bytes) => bytes,
-                Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
+                Err(error) => {
+                    warnings.push(format!("actions: legacy library loaded in memory; migration blocked: {error}"));
+                    return LoadedActions::MigrationBlocked(state);
+                }
             };
             match backend.migrate_actions(&legacy, &bytes, false) {
                 Ok(status) => {
@@ -1391,20 +1397,16 @@ impl Session {
             let pristine = self.actions.rev == 0 && self.actions.list.is_empty() && self.actions.sets.is_empty();
             crate::actions_cmds::library::attach(&mut self.actions, disk);
             if !migrating {
-                // An existing ATN owns its function-key headers. Stale preference bindings
-                // must not silently rewrite an untouched library on attachment.
-                for name in names {
-                    if self.actions.list.iter().filter(|action| action.name == name).count() == 1 {
-                        self.edit_prefs(|prefs| {
-                            let command = format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX);
-                            if let Some(key) = keys.get(&name) {
-                                prefs.shortcuts.insert(command, key.clone());
-                            } else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) {
-                                prefs.shortcuts.remove(&command);
-                            }
-                        });
-                    }
+                if let Some(store) = self.preset_store.as_mut() {
+                    store.actions_headers = names
+                        .into_iter()
+                        .map(|name| {
+                            let key = keys.get(&name).cloned();
+                            (name, key)
+                        })
+                        .collect();
                 }
+                self.reconcile_actions_function_keys();
             }
             if pristine && !migrating {
                 let keys = action_shortcuts(self.prefs());
@@ -1425,6 +1427,24 @@ impl Session {
             warnings.extend(st.take_warnings());
         }
         warnings
+    }
+
+    /// Reapply authoritative startup ATN headers after loading saved preferences.
+    /// Missing, failed and migrated libraries keep preference-owned shortcuts unchanged.
+    pub fn reconcile_actions_function_keys(&mut self) {
+        let headers = self.preset_store.as_ref().map(|store| store.actions_headers.clone()).unwrap_or_default();
+        for (name, key) in headers {
+            if self.actions.list.iter().filter(|action| action.name == name).count() == 1 {
+                self.edit_prefs(|prefs| {
+                    let command = format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX);
+                    if let Some(key) = key {
+                        prefs.shortcuts.insert(command, key);
+                    } else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) {
+                        prefs.shortcuts.remove(&command);
+                    }
+                });
+            }
+        }
     }
 
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).

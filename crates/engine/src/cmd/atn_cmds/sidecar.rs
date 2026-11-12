@@ -602,7 +602,7 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
         let signature_item = signature_file.actions.first_mut().and_then(|action| action.items.first_mut()).ok_or("missing sidecar signature item")?;
         signature_item.descriptor = Some(Descriptor::from_bytes(&outer_signature).map_err(|error| error.to_string())?);
         let mut signature = atn::write(&signature_file).map_err(|error| error.to_string())?;
-        signature.extend(root.patch(&[("sets", Some(objects(&[])?)), ("photocraftLegacyJsonV1", None)])?);
+        signature.extend(root.patch(&[("sets", Some(objects(&[])?)), ("photocraftLegacyJsonV1", None), (EMPTY_LIBRARY, None)])?);
         let source = Arc::new(Source { wrapper: atn::write(file).map_err(|error| error.to_string())?, outer, root, signature });
         result.source = Some(source.clone());
         let mut ordinal = 0usize;

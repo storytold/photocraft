@@ -283,7 +283,8 @@ pub(crate) fn import_row(state: &mut ActionState, imported: &ActionState, index:
 
 /// Attach complete physical state. Edits made while asynchronous startup ran survive, as do
 /// every disk occurrence and empty row; name collisions do not discard either definition.
-pub(crate) fn attach(live: &mut ActionState, disk: ActionState) {
+pub(crate) fn attach(live: &mut ActionState, mut disk: ActionState) {
+    super::shift_action_calls(&mut disk.list, 0, live.list.len());
     let offset = live.sets.len();
     live.library.rows.resize(offset, None);
     live.library.rows.extend(disk.library.rows);

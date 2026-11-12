@@ -210,6 +210,81 @@ impl Action {
     }
 }
 
+/// A resolved library row in its execution namespace, or an immutable unpublished snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaybackTarget {
+    pub name: String,
+    position: Option<(usize, usize, u64)>,
+    snapshot: Option<(usize, Box<Action>)>,
+}
+
+impl From<String> for PlaybackTarget {
+    fn from(name: String) -> Self {
+        Self { name, position: None, snapshot: None }
+    }
+}
+
+impl From<&str> for PlaybackTarget {
+    fn from(name: &str) -> Self {
+        Self::from(name.to_string())
+    }
+}
+
+impl PartialEq<&str> for PlaybackTarget {
+    fn eq(&self, other: &&str) -> bool {
+        self.name == *other
+    }
+}
+
+impl PlaybackTarget {
+    fn matches(&self, s: &Session, row: usize, action: &Action) -> bool {
+        if let Some((namespace, position, _)) = self.position {
+            (namespace, position) == (s.actions.playback_namespace, row)
+        } else if let Some((namespace, snapshot)) = &self.snapshot {
+            *namespace == s.actions.playback_namespace && snapshot.as_ref() == action
+        } else {
+            // Older callers supplying only a name retain their conservative cycle guard.
+            self.name == action.name
+        }
+    }
+}
+
+/// Capture the resolved row before a dialog or Batch switches execution context.
+pub fn playback_target(s: &Session, row: usize) -> Option<PlaybackTarget> {
+    Some(PlaybackTarget { name: s.actions.list.get(row)?.name.clone(), position: Some((s.actions.playback_namespace, row, s.actions.rev)), snapshot: None })
+}
+
+/// A plain paused frame may outlive a reorder. Rebind only an unambiguous unchanged definition.
+pub fn refresh_playback_target(s: &Session, action: &Action, target: &PlaybackTarget) -> Result<PlaybackTarget> {
+    let Some((namespace, row, revision)) = target.position else { return Ok(target.clone()) };
+    if namespace != s.actions.playback_namespace {
+        return Err(bad("actions.play", "the action playback namespace changed"));
+    }
+    if revision == s.actions.rev {
+        if s.actions.list.get(row) == Some(action) {
+            return Ok(target.clone());
+        }
+        return Err(bad("actions.play", "the paused action definition changed"));
+    }
+    let mut rows = s.actions.list.iter().enumerate().filter(|(_, candidate)| *candidate == action).map(|(row, _)| row);
+    let row = rows.next().ok_or_else(|| bad("actions.play", "the paused action no longer exists"))?;
+    if rows.next().is_some() {
+        return Err(bad("actions.play", "the paused action occurrence is ambiguous"));
+    }
+    playback_target(s, row).ok_or_else(|| bad("actions.play", "the paused action no longer exists"))
+}
+
+/// Legacy snapshot APIs infer a row only when exactly one current definition matches.
+pub fn playback_snapshot_target(s: &Session, action: &Action) -> PlaybackTarget {
+    let mut rows = s.actions.list.iter().enumerate().filter(|(_, candidate)| *candidate == action).map(|(row, _)| row);
+    if let Some(row) = rows.next()
+        && rows.next().is_none()
+    {
+        return playback_target(s, row).expect("the matching row exists");
+    }
+    PlaybackTarget { name: action.name.clone(), position: None, snapshot: Some((s.actions.playback_namespace, Box::new(action.clone()))) }
+}
+
 pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 
 /// How deep batches and droplets may run inside one another (a droplet whose steps run a droplet).
@@ -242,9 +317,12 @@ pub struct ActionState {
     /// Nesting depth of `actions.play`, bounded by the playback stack limit.
     #[serde(skip)]
     pub playing: u8,
-    /// Active action names, for cycle detection in engine and desktop playback.
+    /// Active resolved targets, for cycle detection in engine and desktop playback.
     #[serde(skip)]
-    pub playback_stack: Vec<String>,
+    pub playback_stack: Vec<PlaybackTarget>,
+    /// Embedded Batch libraries use a distinct namespace while their parent stack remains live.
+    #[serde(skip)]
+    pub playback_namespace: usize,
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
@@ -475,13 +553,19 @@ pub fn shell_view_command(id: &str) -> bool {
 
 /// Shared validation for headless and shell playback. Does not start playback.
 pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
+    playback_plan_at(s, p).map(|(_, action, from)| (action, from))
+}
+
+pub fn playback_plan_at(s: &Session, p: &Value) -> Result<(usize, Action, usize)> {
     if s.actions.playing > 0 && s.actions.playback_stack.is_empty() {
         return Err(bad("actions.play", "an action is already playing"));
     }
     let idx = playback_index(&s.actions.list, p)?;
     check_playback_budget(s, s.actions.list.get(idx).map_or(0, |a| a.steps.len()))?;
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
-    if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) || editor::recording_into(s, idx)
+    if s.actions.playback_stack.iter().any(|target| target.matches(s, idx, &action))
+        || s.actions.recording.is_some_and(|(_, i)| i == idx)
+        || editor::recording_into(s, idx)
     {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
     }
@@ -489,7 +573,7 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
         return Err(bad("actions.play", "action nesting exceeds 16 levels"));
     }
     let from = from_step(p, action.steps.len())?;
-    Ok((action, from))
+    Ok((idx, action, from))
 }
 
 pub(super) fn check_playback_budget(s: &Session, len: usize) -> Result<()> {
@@ -521,6 +605,17 @@ fn playback_index(list: &[Action], params: &Value) -> Result<usize> {
         return Err(bad("actions.play", format!("the selected action is not in set `{scope}`")));
     }
     Ok(index)
+}
+
+/// Project one Conditional branch using the same explicit/common scope precedence as execution.
+fn conditional_target(params: &Value, branch: &str) -> Option<Value> {
+    let name = params.get(branch)?.as_str().filter(|name| !name.trim().is_empty())?;
+    let mut target = json!({"action": name});
+    let field = if branch == "then" { "thenSet" } else { "elseSet" };
+    if let Some(scope) = params.get(field).filter(|scope| !scope.is_null()).or_else(|| params.get("set").filter(|scope| !scope.is_null())) {
+        target["set"] = scope.clone();
+    }
+    Some(target)
 }
 
 /// Visit calls in the current namespace, leaving embedded inline Batch scopes untouched.
@@ -607,8 +702,9 @@ pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Act
             }
             "actions.conditional" => {
                 for key in ["then", "else"] {
-                    let Some(name) = params.get(key).and_then(Value::as_str) else { continue };
-                    if let Some(i) = list.iter().position(|a| a.name == name) {
+                    if let Some(target) = conditional_target(params, key)
+                        && let Ok(i) = playback_index(list, &target)
+                    {
                         queue.push_back((i, depth));
                     }
                 }
@@ -1019,16 +1115,27 @@ pub fn begin_playback(s: &mut Session, action: &Action) -> Result<Option<(usize,
 /// [`begin_playback`] for a call that starts at step `from`: the steps before it are charged to the
 /// playback budget too.
 pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Result<Option<(usize, usize)>> {
-    begin_playback_charged(s, action, skipped_steps(action, from), false)
+    let target = playback_snapshot_target(s, action);
+    begin_playback_charged(s, action, skipped_steps(action, from), false, target)
 }
 
 /// Resume one immutable shell frame without charging its skipped steps a second time.
 /// The shell restores the carried playback counter before resuming; script counters stay live.
 pub fn continue_playback(s: &mut Session, action: &Action) -> Result<Option<(usize, usize)>> {
-    begin_playback_charged(s, action, 0, true)
+    let target = playback_snapshot_target(s, action);
+    begin_playback_charged(s, action, 0, true, target)
 }
 
-fn begin_playback_charged(s: &mut Session, action: &Action, skipped: u64, continuing: bool) -> Result<Option<(usize, usize)>> {
+/// Start a known resolved target without inferring a row from its snapshot.
+pub fn begin_playback_target_from(s: &mut Session, action: &Action, from: usize, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
+    begin_playback_charged(s, action, skipped_steps(action, from), false, target)
+}
+
+pub fn continue_playback_target(s: &mut Session, action: &Action, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
+    begin_playback_charged(s, action, 0, true, target)
+}
+
+fn begin_playback_charged(s: &mut Session, action: &Action, skipped: u64, continuing: bool, target: PlaybackTarget) -> Result<Option<(usize, usize)>> {
     // Draft capture is suspended by its owner or the headless caller before this route.
     if s.actions.editor.as_ref().is_some_and(|draft| draft.recording.is_some()) {
         return Err(bad("actions.play", "stop draft recording before shell playback"));
@@ -1054,33 +1161,51 @@ fn begin_playback_charged(s: &mut Session, action: &Action, skipped: u64, contin
     }
     let recording = s.actions.recording.take();
     s.actions.playing = s.actions.playing.saturating_add(1);
-    s.actions.playback_stack.push(action.name.clone());
+    s.actions.playback_stack.push(target);
     Ok(recording)
 }
 
 /// Unwind the playback stack and finish grouping only at the outer boundary, then restore suspended recording.
 pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, action: &Action, from: usize) {
-    s.actions.playback_stack.pop();
+    let target = s.actions.playback_stack.pop();
     s.actions.playing = s.actions.playing.saturating_sub(1);
     if s.actions.playing == 0 {
         history::finish_playback(s);
     }
     if let Some((_, idx)) = recording {
-        restore_recording(s, idx, &action.name, from);
+        let params = target.as_ref().map_or_else(|| recorded_target(s, action, from), |target| recorded_target_for(s, action, from, target));
+        restore_recording(s, idx, params);
     }
 }
 
 /// Resume recording into action `idx` and journal the named call that suspended it.
-pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize) {
+pub fn restore_recording(s: &mut Session, idx: usize, params: Value) {
     s.actions.recording = Some((s.journal.len(), idx));
-    journal_call(s, action, from);
+    journal_call(s, params);
 }
 
-fn journal_call(s: &mut Session, action: &str, from: usize) {
-    let mut params = json!({"action": action});
+/// A recorded call retains its resolved set as well as its display name and start step.
+pub fn recorded_target(s: &Session, action: &Action, from: usize) -> Value {
+    let target = playback_snapshot_target(s, action);
+    recorded_target_for(s, action, from, &target)
+}
+
+/// Keep a numeric selector when its exact occurrence cannot be selected by name and set.
+pub fn recorded_target_for(s: &Session, action: &Action, from: usize, target: &PlaybackTarget) -> Value {
+    let mut params = json!({"action": action.name, "set": crate::atn_cmds::logical_set_name(action.set.as_deref())});
+    if let Some((namespace, row, _)) = target.position
+        && namespace == s.actions.playback_namespace
+        && playback_index(&s.actions.list, &params).ok() != Some(row)
+    {
+        params["action"] = json!(row);
+    }
     if from > 0 {
         params["from"] = json!(from);
     }
+    params
+}
+
+fn journal_call(s: &mut Session, params: Value) {
     s.journal.push(("actions.play".into(), params));
 }
 
@@ -1143,7 +1268,8 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 
 /// Validate the selected definition and start position before suspending capture for nested playback.
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
-    let (action, from) = playback_plan(s, p)?;
+    let (row, action, from) = playback_plan_at(s, p)?;
+    let target = playback_target(s, row).ok_or_else(|| bad("actions.play", "the selected action no longer exists"))?;
     // actions.play journals its own named call, rather than using dispatch's journaled
     // command suspension. Flush earlier draft steps before hiding its capture here.
     let draft = if s.actions.editor.as_ref().is_some_and(|draft| draft.recording.is_some()) {
@@ -1152,7 +1278,7 @@ fn play(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         None
     };
-    let recording = match begin_playback_from(s, &action, from) {
+    let recording = match begin_playback_target_from(s, &action, from, target.clone()) {
         Ok(recording) => recording,
         Err(error) => {
             s.actions.restore_capture(draft);
@@ -1172,7 +1298,8 @@ fn play(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(Recording::Draft { owner, take, .. }) = draft {
         s.actions.restore_capture(Some(Recording::Draft { from: s.journal.len(), owner, take }));
         if s.actions.take == take && s.actions.editor.as_ref().is_some_and(|draft| draft.id == owner && draft.recording.is_some()) {
-            journal_call(s, &action.name, from);
+            let call = recorded_target_for(s, &action, from, &target);
+            journal_call(s, call);
         }
     }
     // The call journaled into a recording is automation's step when its caller runs under a gate
@@ -1320,19 +1447,26 @@ fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
             vanished.remove(action.name.as_str());
         }
     }
-    for (id, params) in s.actions.list.iter_mut().flat_map(|action| &mut action.steps) {
-        for &key in call_keys(id) {
-            let Some(value) = params.get(key) else { continue };
-            if value.as_str().is_some_and(|name| vanished.contains(name)) {
-                params[key] = Value::Null;
-            } else if let Some(index) = num(value).and_then(|index| usize::try_from(index).ok()).filter(|&index| index < old_len) {
-                match removed.binary_search(&index) {
-                    Ok(_) => params[key] = Value::Null,
-                    Err(0) => {}
-                    Err(before) => params[key] = json!(index - before),
+    for action in &mut s.actions.list {
+        visit_calls(&mut action.steps, &mut |id, params, _| {
+            let keys = if id == "file.automate.batch" && params.get("steps").is_none() && params.get("action").is_some_and(Value::is_number) {
+                &["action"][..]
+            } else {
+                call_keys(id)
+            };
+            for &key in keys {
+                let Some(value) = params.get(key) else { continue };
+                if value.as_str().is_some_and(|name| vanished.contains(name)) {
+                    params[key] = Value::Null;
+                } else if let Some(index) = num(value).and_then(|index| usize::try_from(index).ok()).filter(|&index| index < old_len) {
+                    match removed.binary_search(&index) {
+                        Ok(_) => params[key] = Value::Null,
+                        Err(0) => {}
+                        Err(before) => params[key] = json!(index - before),
+                    }
                 }
             }
-        }
+        });
     }
     let mut index = 0;
     s.actions.list.retain(|_| {
@@ -1413,7 +1547,15 @@ fn owns_name(list: &[Action], index: usize) -> bool {
 fn rename_call_keys(list: &[Action], index: usize, id: &str, params: &Value) -> &'static [&'static str] {
     match id {
         "actions.play" if playback_index(list, params).ok() == Some(index) => &["action"],
-        "actions.conditional" if owns_name(list, index) => &["then", "else"],
+        "actions.conditional" => {
+            let follows = |branch| conditional_target(params, branch).and_then(|target| playback_index(list, &target).ok()) == Some(index);
+            match (follows("then"), follows("else")) {
+                (true, true) => &["then", "else"],
+                (true, false) => &["then"],
+                (false, true) => &["else"],
+                (false, false) => &[],
+            }
+        }
         "file.automate.batch" if params.get("steps").is_none() && crate::file_cmds::batch_action(list, params).ok() == Some(index) => &["action"],
         _ => &[],
     }

@@ -3,7 +3,6 @@
 #[path = "support/atn_export.rs"]
 mod atn_export;
 
-use photocraft_doc::{LayerId, Rect};
 use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},

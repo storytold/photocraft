@@ -2,6 +2,37 @@ use super::*;
 // These unchanged assertions exercise the Classic presentation explicitly.
 use super::{classic_panel as panel, classic_panel_menu as panel_menu};
 
+#[test]
+fn classic_resume_rejects_missing_group_tail_instead_of_playing_a_prefix() {
+    for missing in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width":8,"height":6})).unwrap();
+        let mut first = Action::new("First", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1}))]);
+        first.dialogs.insert(0);
+        app.session.actions.list.extend([
+            first,
+            Action::new("Second", vec![("layer.new.layer".into(), json!({"name":"Second tail"}))]),
+            Action::new("Third", vec![("layer.new.layer".into(), json!({"name":"Third tail"}))]),
+        ]);
+        play_targets(&mut app, &[0, 1, 2], 0).unwrap();
+        let dialog = app.ui.dialogs.last().unwrap().id;
+        if missing {
+            app.session.actions.list.remove(2);
+        }
+        let result = crate::dialogs::confirm(&mut app, dialog);
+        assert_eq!(result.is_err(), missing);
+        let names = layer_names(&app);
+        assert_eq!(names.iter().any(|name| name == "Second tail"), !missing);
+        assert_eq!(names.iter().any(|name| name == "Third tail"), !missing);
+        if missing {
+            assert!(app.ui.status.contains("group action changed"), "{}", app.ui.status);
+        }
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert!(app.session.actions.held_playback.is_none());
+    }
+}
+
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
     use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};

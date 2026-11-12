@@ -45,6 +45,8 @@ pub struct Imported {
 pub struct ImportedSet {
     /// Logical display name after the reserved empty-wire category rule.
     pub name: String,
+    /// Original archive identity, resolved before logical display aliases.
+    pub(crate) wire_name: String,
     /// This physical set's actions before session collision renaming.
     pub actions: std::ops::Range<usize>,
     pub(crate) metadata: Option<std::sync::Arc<super::sidecar::SetMetadata>>,
@@ -97,22 +99,30 @@ pub fn normalize_import(
                 "actions.conditional" => &["then", "else"],
                 _ => &[],
             };
+            // Both branches resolve in the original wire namespace, even after the first
+            // branch rewrites a shared set to its logical display alias.
+            let shared_scope = params.get("set").and_then(Value::as_str).map(str::to_owned);
             for key in keys {
                 if let Some(target) = params.get(*key).and_then(Value::as_str) {
-                    let scope = params.get(format!("{key}Set")).and_then(Value::as_str).or_else(|| params.get("set").and_then(Value::as_str));
+                    let branch_scope = format!("{key}Set");
+                    let scope_key = if params.get(&branch_scope).is_some_and(Value::is_string) { branch_scope.as_str() } else { "set" };
+                    let scope = params.get(&branch_scope).and_then(Value::as_str).or(shared_scope.as_deref());
                     let to = if let Some(scope) = scope {
-                        scoped_call_target(&imp.sets, &renamed, scope, target, allow_external_calls)?
+                        scoped_call_target(&imp.sets, &renamed, scope, target, allow_external_calls)?.map(|(to, set)| (to.clone(), Some(set.clone())))
                     } else if let Some(to) = local.get(target) {
-                        Some(to)
+                        Some((to.clone(), None))
                     } else {
                         match global.get(target) {
-                            Some(Some(to)) => Some(to),
+                            Some(Some(to)) => Some((to.clone(), None)),
                             Some(None) => return Err("ambiguous cross-set action call; source set is required".to_string()),
                             None => None,
                         }
                     };
-                    if let Some(to) = to {
+                    if let Some((to, scope)) = to {
                         params[*key] = json!(to);
+                        if let Some(scope) = scope {
+                            params[scope_key] = json!(scope);
+                        }
                     }
                 }
             }
@@ -125,22 +135,28 @@ pub fn normalize_import(
 
 /// Resolve only an identified physical archive scope, preserving external/deferred references.
 fn scoped_call_target<'a>(
-    sets: &[ImportedSet],
+    sets: &'a [ImportedSet],
     renamed: &'a [std::collections::HashMap<String, String>],
     scope: &str,
     target: &str,
     allow_external_calls: bool,
-) -> std::result::Result<Option<&'a String>, String> {
-    let mut matching = sets.iter().enumerate().filter(|(_, set)| set.name == scope);
-    let index = match matching.next() {
-        Some((index, _)) => index,
+) -> std::result::Result<Option<(&'a String, &'a String)>, String> {
+    // A literal wire name wins over an alias created for an empty-name set.
+    let wire = sets.iter().any(|set| set.wire_name == scope);
+    let mut matching = sets.iter().enumerate().filter(|(_, set)| if wire { set.wire_name == scope } else { set.name == scope });
+    let (index, name) = match matching.next() {
+        Some((index, set)) => (index, &set.name),
         None if allow_external_calls => return Ok(None),
         None => return Err(format!("action call references missing set `{scope}`")),
     };
     if matching.next().is_some() {
         return Err(format!("ambiguous action call set `{scope}`"));
     }
-    renamed.get(index).and_then(|names| names.get(target)).map(Some).ok_or_else(|| format!("action call target `{target}` is missing from set `{scope}`"))
+    renamed
+        .get(index)
+        .and_then(|names| names.get(target))
+        .map(|target| Some((target, name)))
+        .ok_or_else(|| format!("action call target `{target}` is missing from set `{scope}`"))
 }
 
 /// Retain an unsupported event's ID kind and descriptor for later export without executing it.
@@ -359,6 +375,10 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 /// `"gbk"`) instead of working it out. An unknown label fails.
 pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
     let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    // A legacy decoder may return a valid prefix with unread bytes; publishing it would lose the tail.
+    if bytes.starts_with(&12u32.to_be_bytes()) && files.iter().any(|file| file.warnings.iter().any(|warning| warning.ends_with(" trailing bytes ignored"))) {
+        return Err("trailing bytes after legacy action set".into());
+    }
     let mut metadata = super::sidecar::decode(&files)?;
     let mut out = Imported::default();
     let mut total = 0usize;
@@ -379,7 +399,8 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
         if metadata.hidden == Some(index) {
             continue;
         }
-        let set = file.name.to_string_lossy();
+        let wire_name = file.name.to_string_lossy();
+        let set = wire_name.clone();
         let set = if set.is_empty() {
             super::UNGROUPED_SET.to_string()
         } else if set == super::UNGROUPED_SET {
@@ -406,7 +427,7 @@ pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result
             out.actions.push(converted);
         }
         let source = metadata.sets.get_mut(index).and_then(Option::take);
-        out.sets.push(ImportedSet { name: set, actions: start..out.actions.len(), metadata: source });
+        out.sets.push(ImportedSet { name: set, wire_name, actions: start..out.actions.len(), metadata: source });
     }
     Ok(out)
 }
@@ -447,7 +468,10 @@ pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem
     }
     let mut params = params.clone();
     if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none_or(Value::is_null) {
-        params["set"] = json!(set);
+        if params.is_null() {
+            params = json!({});
+        }
+        params.as_object_mut()?.insert("set".into(), json!(set));
     }
     let (e, descriptor) = event_and_descriptor(id, &params)?;
     // A Filter Gallery effect loaded from its own event saves back as that event (#10592).
