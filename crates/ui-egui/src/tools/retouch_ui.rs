@@ -41,14 +41,10 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
-    // the aligned pairing and applies the slot's scale/rotation/flip.
-    let slot = app.session.presets.clone.active().source.is_some();
-    match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
-        _ if slot => {}
-        (Some(off), _) => p["offset"] = json!(off),
-        (None, Some(src)) => p["source"] = json!(src),
-        (None, None) => return None,
-    }
+    // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
+    // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
+    // so falling back to them would read another document's coordinates from this one's pixels.
+    app.session.presets.clone.active().source?;
     Some(p)
 }
 
@@ -695,8 +691,13 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
 
 /// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
 /// is painted, as in Photoshop: setting the source (⌥-click) leaves nothing on the canvas (#668).
+/// A source in another open document has no point on this canvas.
 pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.active_tool(), Tool::CloneStamp | Tool::Healing) {
+        return None;
+    }
+    let slot = app.session.presets.clone.active();
+    if slot.document_closed || slot.source_doc(app.session.active().map(|d| d.doc.id)).is_some() {
         return None;
     }
     let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
