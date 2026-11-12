@@ -547,3 +547,32 @@ fn planning_reads_cached_rows_instead_of_rebuilding_them() {
         assert!(rows.as_ref() == Some(&planted), "{}: the plan rebuilt rows the cache held", a.label());
     }
 }
+
+/// Gradient fills and Gradient Overlays hand the shader their angle's sine and cosine (`p3.xy`),
+/// computed as `photocraft_compose::effects::gradient_t` computes them: shader trig may be off by
+/// 2^-11 (an NVIDIA Vulkan driver returns cos(0) = 0.99997), which shifted dithered fills a level
+/// and blew up into 23/255 under Color Dodge (`fills_and_dissolve` in the GPU parity tests).
+#[test]
+fn gradient_passes_carry_the_cpu_sine_and_cosine() {
+    use photocraft_doc::{Effect, FxCommon, Gradient, GradientStyle};
+    for angle in [0.0f32, 30.0, 90.0, -135.0, 180.0] {
+        for style in [GradientStyle::Linear, GradientStyle::Reflected, GradientStyle::Radial] {
+            let mut d = Document::new("t", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+            d.layers.push(Layer::new("fill", LayerContent::Fill(Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], angle, 1.0, style, false))));
+            let mut l = Layer::raster("fx", d.pixel_format());
+            l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 40, 30), &[1.0, 0.0, 0.0, 0.5]);
+            let gradient = Gradient { angle, style, ..Gradient::default() };
+            l.effects.items.push(Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient, dither: false, interpolation: None });
+            d.layers.push(l);
+            let p = plan(&d).unwrap();
+            let fills: Vec<_> = p.passes.iter().filter(|p| p.gradient).collect();
+            let overlays: Vec<_> = p.passes.iter().filter(|p| !p.gradient && p.lut.is_some() && p.params[2][2] == 1.0).collect();
+            assert_eq!((fills.len(), overlays.len()), (1, 1), "{angle}° {style:?}");
+            for pass in fills.iter().chain(&overlays) {
+                // p0.x is the angle after fill_layout's whole-pixel snapping.
+                let (s, c) = pass.params[0][0].to_radians().sin_cos();
+                assert_eq!(pass.params[3], [s, c, 0.0, 0.0], "{angle}° {style:?}");
+            }
+        }
+    }
+}

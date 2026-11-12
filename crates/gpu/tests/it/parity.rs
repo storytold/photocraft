@@ -1159,6 +1159,29 @@ fn fills_and_dissolve() {
     check(&mut g, &d, "dissolve");
 }
 
+/// The GPU places a gradient where the CPU does, to well under a level, in a float document
+/// (nothing rounded). Shader `sin`/`cos` may be off by 2^-11 (an NVIDIA Vulkan driver returns
+/// cos(0) = 0.99997, scaling a Linear gradient's position by cos² about its centre); a dithered
+/// fill rounded to 8 bits then lands a level off near half levels, which Color Dodge above it
+/// magnifies to 23/255 (`fills_and_dissolve`). The shader takes the CPU's sine and cosine.
+#[test]
+fn gradient_positions_match_the_cpu_to_a_fraction_of_a_level() {
+    let Some(mut g) = gpu() else { return };
+    let stops = vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))];
+    for style in [GradientStyle::Linear, GradientStyle::Reflected, GradientStyle::Diamond] {
+        for angle in [0.0, 90.0, 30.0, -60.0, 180.0] {
+            let mut d = Document::new("t", Size::new(64, 48), ColorMode::Rgb, SampleType::F32);
+            d.layers.push(Layer::new("g", LayerContent::Fill(Fill::gradient(stops.clone(), angle, 1.0, style, false))));
+            let r = d.bounds();
+            let cpu = photocraft_compose::render(&d, r);
+            let gpu = render_to_vec(&mut g.comp, &g.device, &g.queue, &d, r).unwrap();
+            let (worst, i) = worst_diff(&cpu.px, &gpu);
+            // 1/1000 of an 8-bit level; the bad cosine was off by 3e-5 (1/130 of a level).
+            assert!(worst < 4e-6, "{style:?} {angle}°: off by {:.2e} levels at {i}: cpu {:?} gpu {:?}", worst * 255.0, cpu.px[i], gpu[i]);
+        }
+    }
+}
+
 #[test]
 fn formats_offsets_and_chunks() {
     let Some(mut g) = gpu() else { return };

@@ -48,6 +48,17 @@ pub(super) fn style_index(s: photocraft_doc::GradientStyle) -> f32 {
     }
 }
 
+/// `gradient_t`'s `p3`: the sine and cosine of a gradient's angle (degrees), computed here as
+/// `photocraft_compose::effects::gradient_t` computes them. Shader trig is not precise enough:
+/// Vulkan allows `sin`/`cos` an absolute error of 2^-11, and an NVIDIA driver returns
+/// cos(0) = 0.99997, which scales a Linear gradient's position by cos² about its centre. A dithered
+/// fill rounded to the document's levels then lands a level off wherever it lies near a half
+/// level, and Color Dodge above it magnifies that level into a 23/255 error.
+pub(super) fn gradient_trig(angle: f32) -> [f32; 4] {
+    let (s, c) = angle.to_radians().sin_cos();
+    [s, c, 0.0, 0.0]
+}
+
 fn sample_stops4(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
     match stops {
         [] => [0.0; 4],

@@ -1,5 +1,6 @@
 use super::lower::{
-    Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths, style_index,
+    Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, gradient_trig, placement, single_content_pass, stroke_widths,
+    style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
 use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerContent, LayerId, Plan, Rect, Slot, Surface, bounds, has_effects};
@@ -730,6 +731,7 @@ impl<'a> Planner<'a> {
                 // position hash, see the shader).
                 let quantum = photocraft_compose::adjustment_quantum(self.cx.depth).unwrap_or(0.0);
                 p.params[2] = [offset.0, offset.1, quantum, if *dither { 1.0 } else { 0.0 }];
+                p.params[3] = gradient_trig(angle);
                 self.luts.set(self.luts.get() + 1);
                 if self.luts.get() > MAX_PLAN_LUTS {
                     return Err(Unsupported("too many gradient fills to plan for the GPU (composited on the CPU)".into()));
@@ -1393,6 +1395,7 @@ impl<'a> Planner<'a> {
                 p.params[2][0] = offset.0;
                 p.params[2][1] = offset.1;
                 p.params[2][2] = 1.0;
+                p.params[3] = gradient_trig(angle);
                 p.lut = Some(gradient_rows(g));
             }
             Paint::GlowGradient(g, gain) => {
