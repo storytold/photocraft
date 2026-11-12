@@ -373,50 +373,60 @@ fn new_app() -> PhotocraftApp {
     app
 }
 
-/// Physical keypad Enter commits; ordinary Return and Cmd/Ctrl+Return retain their behavior.
-#[test]
-fn keypad_enter_commits_type_while_return_inserts_a_line_break() {
-    for physical_key in [egui::Key::Enter, egui::Key::NumpadEnter] {
-        let mut app = new_app();
-        let id = app.run("type.create", json!({"text": "Sample", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-        super::edit_active(&mut app).unwrap();
-        let edit = app.ui.text_edit.as_mut().unwrap();
-        edit.anchor = 6;
-        edit.caret = 6;
-        let mut h = harness(1.0, app);
-        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: Some(physical_key), pressed: true, repeat: false, modifiers: Modifiers::NONE });
-        h.run_steps(2);
-        if physical_key == egui::Key::NumpadEnter {
-            assert!(h.state().ui.text_edit.is_none(), "keypad Enter ends editing");
-            assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample"));
-        } else {
-            assert!(h.state().ui.text_edit.is_some(), "main Return keeps editing");
-            assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample\n"));
-            h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Enter);
-            h.run_steps(2);
-            assert!(h.state().ui.text_edit.is_none(), "Cmd/Ctrl+Return still commits");
-        }
-    }
-}
-
-/// Keypad confirmation must leave an active IME composition to the input method.
-#[test]
-fn keypad_enter_does_not_commit_an_ime_preedit() {
+fn editing_sample() -> (Harness<'static, PhotocraftApp>, LayerId) {
     let mut app = new_app();
     let id = app.run("type.create", json!({"text": "Sample", "size": 24})).unwrap()["layer"].as_u64().unwrap();
     super::edit_active(&mut app).unwrap();
     let edit = app.ui.text_edit.as_mut().unwrap();
     edit.anchor = 6;
     edit.caret = 6;
-    let mut h = harness(1.0, app);
+    (harness(1.0, app), LayerId(id))
+}
+
+fn press_enter(h: &mut Harness<'static, PhotocraftApp>, physical_key: Option<egui::Key>, modifiers: Modifiers) {
+    h.event(egui::Event::Key { key: egui::Key::Enter, physical_key, pressed: true, repeat: false, modifiers });
+    h.run_steps(2);
+}
+
+#[test]
+fn type_enter_commits_only_for_a_distinct_keypad_position_or_command() {
+    let keypad = egui::Key::from_name("NumpadEnter").expect("egui recognizes the keypad key name");
+    for (physical, modifiers, commits) in [
+        (Some(egui::Key::Enter), Modifiers::NONE, false),
+        (None, Modifiers::NONE, false),
+        (Some(egui::Key::A), Modifiers::NONE, false),
+        // The pinned backend aliases this position to Enter. A backend that preserves it commits.
+        (Some(keypad), Modifiers::NONE, keypad != egui::Key::Enter),
+        (None, Modifiers::COMMAND, true),
+    ] {
+        let (mut h, id) = editing_sample();
+        press_enter(&mut h, physical, modifiers);
+        assert_eq!(h.state().ui.text_edit.is_none(), commits, "{physical:?} {modifiers:?}");
+        let expected_text = if commits { "Sample" } else { "Sample\n" };
+        assert_eq!(super::current_text(h.state_mut(), id).as_deref(), Some(expected_text));
+    }
+}
+
+#[test]
+fn type_enter_leaves_confirmation_to_the_ime_until_it_commits() {
+    let keypad = egui::Key::from_name("NumpadEnter").unwrap();
+    let (mut h, id) = editing_sample();
     h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "candidate".into(), active_range_chars: None }));
     h.run_steps(2);
-    let before = super::current_text(h.state_mut(), LayerId(id)).unwrap();
-    assert!(h.state().ui.text_edit.as_ref().unwrap().preedit.is_some());
-    h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: Some(egui::Key::NumpadEnter), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    let before = super::current_text(h.state_mut(), id).unwrap();
+    let preedit = h.state().ui.text_edit.as_ref().unwrap().preedit;
+    assert!(preedit.is_some());
+    for (physical, modifiers) in [(Some(egui::Key::Enter), Modifiers::NONE), (Some(keypad), Modifiers::NONE), (None, Modifiers::COMMAND)] {
+        press_enter(&mut h, physical, modifiers);
+        assert_eq!(h.state().ui.text_edit.as_ref().unwrap().preedit, preedit);
+        assert_eq!(super::current_text(h.state_mut(), id).as_deref(), Some(before.as_str()));
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("chosen".into())));
     h.run_steps(2);
-    assert!(h.state().ui.text_edit.as_ref().unwrap().preedit.is_some(), "IME still owns confirmation");
-    assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some(before.as_str()));
+    assert!(h.state().ui.text_edit.as_ref().unwrap().preedit.is_none());
+    assert_eq!(super::current_text(h.state_mut(), id).as_deref(), Some("Samplechosen"));
+    press_enter(&mut h, None, Modifiers::COMMAND);
+    assert!(h.state().ui.text_edit.is_none());
 }
 
 /// #6085: the text caret is a solid black line inside a white halo, so it shows on a white

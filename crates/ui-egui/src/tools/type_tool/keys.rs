@@ -246,8 +246,10 @@ fn handle_pressed_key(
 
     use egui::Key;
     match key {
-        Key::Enter if (modifiers.command || physical_key == Some(Key::NumpadEnter)) && edit.edit.preedit.is_none() => commit_with(app, *modifiers),
-        Key::Enter if modifiers.command || physical_key == Some(Key::NumpadEnter) => {} // IME owns confirmation until preedit ends.
+        // During composition, Enter confirms the candidate through the IME commit event.
+        Key::Enter if edit.edit.preedit.is_some() => {}
+        // Older backends report both physical positions as "Enter".
+        Key::Enter if modifiers.command || physical_key.is_some_and(|key| key.name() == "NumpadEnter") => commit_with(app, *modifiers),
         Key::Enter => insert(app, "\n"),
         Key::Tab if !modifiers.command && !modifiers.alt && !modifiers.shift => {
             // egui queues focus navigation before this handler runs; consuming the
