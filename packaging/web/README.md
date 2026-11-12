@@ -35,6 +35,7 @@ runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint an
 health check. It serves precompressed gzip assets, the Wasm MIME type, immutable hashed
 assets, and an HTML page that revalidates after deployments. No Rust installation, Node.js,
 database, GPU passthrough, or document volume is needed on the host.
+
 ### Docker Compose
 
 If you prefer Compose, run these commands from the repository root. Docker Compose builds the
