@@ -113,15 +113,11 @@ fn invalid_panel_requests_are_atomic_and_do_not_enter_a_custom_workspace() {
 }
 
 fn harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
-    harness_themed(app, size, crate::theme::ThemeKind::ProMedium)
-}
-
-fn harness_themed(app: PhotocraftApp, size: egui::Vec2, theme: crate::theme::ThemeKind) -> Harness<'static, PhotocraftApp> {
     let mut ready = false;
     let mut harness = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
             if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), theme);
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                 ready = true;
                 return;
             }
@@ -2374,36 +2370,148 @@ fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() 
     }
 }
 
-/// Every rect the frame filled with `fill` that is a thin, long band (a divider's width).
-fn divider_bands(h: &Harness<'static, PhotocraftApp>, fill: egui::Color32) -> Vec<egui::Rect> {
-    let mut bands = Vec::new();
+const CLEAR: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
+
+fn harness_themed(app: PhotocraftApp, size: egui::Vec2, theme: crate::theme::ThemeKind) -> Harness<'static, PhotocraftApp> {
+    let mut ready = false;
+    let mut harness = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), theme);
+                // The test window's own backdrop stands in for the real window's black clear colour: a gap
+                // the layout leaves unpainted shows this instead of a panel colour.
+                ui.ctx().all_styles_mut(|style| style.visuals.panel_fill = CLEAR);
+                ready = true;
+                return;
+            }
+            crate::panels::dock_area(app, ui);
+        },
+        app,
+    );
+    harness.run_steps(4);
+    harness
+}
+
+/// The opaque colour the frame paints last at `pos`, by the filled rects it drew (what a pixel
+/// there shows, ignoring text and strokes); `None` when nothing opaque covers it, so the
+/// window's clear colour would show.
+fn painted_at(h: &Harness<'static, PhotocraftApp>, pos: Pos2) -> Option<egui::Color32> {
+    let mut found = None;
     for clipped in &h.output().shapes {
+        if !clipped.clip_rect.contains(pos) {
+            continue;
+        }
         let mut stack = vec![&clipped.shape];
+        let mut flat = Vec::new();
         while let Some(shape) = stack.pop() {
             match shape {
-                egui::Shape::Vec(inner) => stack.extend(inner.iter()),
-                egui::Shape::Rect(r) if r.fill == fill => {
-                    let (w, h) = (r.rect.width(), r.rect.height());
-                    if w.min(h) > 1.0 && w.min(h) < 8.0 && w.max(h) > 100.0 {
-                        bands.push(r.rect);
-                    }
-                }
-                _ => {}
+                egui::Shape::Vec(inner) => stack.extend(inner.iter().rev()),
+                other => flat.push(other),
+            }
+        }
+        for shape in flat.into_iter().rev() {
+            if let egui::Shape::Rect(r) = shape
+                && r.fill.a() == 255
+                && r.rect.contains(pos)
+            {
+                found = Some(r.fill);
             }
         }
     }
-    bands
+    found
+}
+
+/// Both ends of every divider the frame drew between the canvas and a dock, or between two splits, are
+/// painted (the strip between two layout sides belongs to neither side),
+/// never with the window's clear colour (#9819, #13460).
+fn seams(h: &Harness<'static, PhotocraftApp>) -> Vec<(craft_ui::docking::Divider<String>, egui::Rect)> {
+    craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id())
+        .into_iter()
+        .filter_map(|(hit, rect)| match hit {
+            craft_ui::docking::Hit::Divider(d @ (craft_ui::docking::Divider::Split(_) | craft_ui::docking::Divider::Column(_))) => Some((d, rect)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_seams_filled(h: &Harness<'static, PhotocraftApp>, wanted: usize) {
+    let t = crate::theme::Tokens::get(&h.ctx);
+    let seams = seams(h);
+    assert_eq!(seams.len(), wanted, "{seams:?}");
+    for (divider, rect) in seams {
+        // The hit rect straddles the gap, so its two ends are the gap on one side and a panel body
+        // on the other; neither may show the window's clear colour.
+        for pos in [pos2(rect.left() + 1.0, rect.center().y), pos2(rect.right() - 1.0, rect.center().y)] {
+            let colour = painted_at(h, pos);
+            assert!(
+                colour.is_some() && colour != Some(CLEAR),
+                "{divider:?} at {pos:?} shows {colour:?}, not a panel colour (chrome {:?}, card {:?})",
+                t.chrome,
+                t.card
+            );
+        }
+    }
+}
+
+fn start_and_end_docks(app: &PhotocraftApp, both: bool) -> Layout<String> {
+    let Some(Node::Split { second, .. }) = legacy(app).root else { panic!("the dock is beside the canvas") };
+    let Node::Dock { columns, .. } = *second else { panic!("the dock") };
+    let canvas = Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 };
+    let mut start_columns = columns.clone();
+    let mut end_columns = columns;
+    if both {
+        for column in &mut start_columns {
+            column.groups.truncate(1);
+        }
+        for column in &mut end_columns {
+            column.groups.drain(..1);
+        }
+    }
+    let start = Node::Dock { side: Side::Start, columns: start_columns };
+    let root = if both {
+        let end = Node::Dock { side: Side::End, columns: end_columns };
+        let inner = Node::Split { axis: SplitAxis::Horizontal, size: SplitSize::FixedSecond(260.0), first: Box::new(canvas), second: Box::new(end) };
+        Node::Split { axis: SplitAxis::Horizontal, size: SplitSize::FixedFirst(260.0), first: Box::new(start), second: Box::new(inner) }
+    } else {
+        Node::Split { axis: SplitAxis::Horizontal, size: SplitSize::FixedFirst(260.0), first: Box::new(start), second: Box::new(canvas) }
+    };
+    Layout { root: Some(root), floating: Vec::new() }
 }
 
 #[test]
-fn the_gap_between_the_canvas_and_the_dock_is_filled_not_a_black_stripe() {
-    let mut h = harness_themed(app(), vec2(1280.0, 800.0), crate::theme::ThemeKind::ProLight);
-    h.run_steps(2);
-    let card = crate::theme::Tokens::get(&h.ctx).card;
-    assert!(card.a() == 255, "the card fill is opaque");
-    let bands = divider_bands(&h, card);
-    assert!(
-        bands.iter().any(|r| r.width() < r.height() && r.height() > 300.0),
-        "the band between the canvas side and the dock is painted with the card fill (#9819, #13460): {bands:?}"
-    );
+fn the_gap_between_the_canvas_and_the_dock_shows_the_panel_colour_in_a_light_and_a_studio_theme() {
+    for theme in [crate::theme::ThemeKind::ProLight, crate::theme::ThemeKind::Studio] {
+        let h = harness_themed(app(), vec2(1280.0, 800.0), theme);
+        assert_seams_filled(&h, 1);
+        let t = crate::theme::Tokens::get(&h.ctx);
+        // Between the canvas and the dock: just left of the dock's column edge.
+        let canvas = canvas_rect(&h);
+        let colour = painted_at(&h, pos2(canvas.right() + 2.0, canvas.center().y));
+        assert!(colour == Some(t.chrome) || colour == Some(t.card), "{theme:?}: {colour:?}");
+    }
+}
+
+#[test]
+fn the_gap_of_a_split_shows_the_panel_colour_not_the_clear_colour() {
+    for theme in [crate::theme::ThemeKind::ProLight, crate::theme::ThemeKind::Studio] {
+        let mut a = app();
+        a.run("window.panel.move", json!({"panel":"layers", "anchor":CANVAS, "zone":"left"})).unwrap();
+        let h = harness_themed(a, vec2(1280.0, 800.0), theme);
+        assert_seams_filled(&h, 2);
+        let t = crate::theme::Tokens::get(&h.ctx);
+        let split = seams(&h).into_iter().find(|(d, _)| matches!(d, craft_ui::docking::Divider::Split(_))).expect("a split divider").1;
+        assert_eq!(painted_at(&h, split.center()), Some(t.chrome), "{theme:?}: the split gap is the panel colour");
+    }
+}
+
+#[test]
+fn a_dock_on_the_start_edge_and_one_on_each_edge_fill_their_seams() {
+    for theme in [crate::theme::ThemeKind::ProLight, crate::theme::ThemeKind::Studio] {
+        for both in [false, true] {
+            let mut a = app();
+            a.ui.docking = Some(Workspace::new(start_and_end_docks(&a, both)));
+            let h = harness_themed(a, vec2(1280.0, 800.0), theme);
+            assert_seams_filled(&h, if both { 2 } else { 1 });
+        }
+    }
 }

@@ -834,13 +834,10 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     let strip = style.tab_height;
     let card: std::collections::HashSet<String> =
         layout.floating.iter().filter(|window| window.id == PROPERTIES_WINDOW).flat_map(|window| window.panels().cloned()).collect();
-    // The strip between the canvas and the dock is drawn behind everything the pass paints, so
-    // the dock edge's hover highlight stays on top of it; `PanelContent::column_rect` notes where
-    // the dock is.
-    let gap_slot = ui.painter().add(egui::Shape::Noop);
-    let dock_gap = style.dock_gap.unwrap_or(style.gap);
-    let dock_rtl = style.right_to_left;
-    ui.ctx().data_mut(|data| data.remove::<DockEdge>(area.with("dock-edge")));
+    // The layout leaves gaps (the dock gap, split gaps) that no body paints. Fill the whole area
+    // first, behind everything the pass draws, with the colour the theme gives its panels, so a
+    // gap shows that instead of the window's black clear colour (#9819, #13460).
+    ui.painter().rect_filled(ui.available_rect_before_wrap(), 0.0, t.chrome);
     record::clear_bodies(ui.ctx());
     // The panel windows' passes, inside this call, note their keyboard focus again.
     keyboard_focus(ui.ctx()).lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -863,9 +860,6 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
         },
         &mut PanelContent { app, collapsed: &collapsed, fillers: &fillers, card: &card, strip, commands: &mut commands },
     );
-    if let Some(edge) = ui.ctx().data(|data| data.get_temp::<DockEdge>(area.with("dock-edge"))).filter(|_| !dock_only) {
-        ui.painter().set(gap_slot, egui::Shape::rect_filled(edge.gap(dock_gap, dock_rtl), 0.0, t.card));
-    }
     if let Some(error) = output.error.take() {
         app.ui.status = error.to_string();
     }
@@ -1610,25 +1604,6 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
     fn allow_native(&self, id: &String) -> bool {
         !self.card.contains(id)
     }
-    /// Notes the dock's extent, so the gap between it and the canvas can be filled (#9819, #13460).
-    fn column_rect(&mut self, ctx: &egui::Context, _column: &craft_ui::docking::Column<String>, rect: egui::Rect, side: craft_ui::docking::Side) {
-        let id = area_id().with("dock-edge");
-        ctx.data_mut(|data| {
-            let edge = match data.get_temp::<DockEdge>(id) {
-                Some(edge) => DockEdge { rect: edge.rect.union(rect), side },
-                None => DockEdge { rect, side },
-            };
-            data.insert_temp(id, edge);
-        });
-    }
-    /// The gap a split leaves between its two sides is not part of either side's body, so
-    /// nothing painted it and the window's clear colour showed as a black stripe along the
-    /// divider (#9819, #13460). Fill it with the dock's card; the divider's hover and drag
-    /// highlight is drawn over it.
-    fn split_separator(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        let t = crate::theme::Tokens::get(ui.ctx());
-        ui.painter().rect_filled(rect, 0.0, t.card);
-    }
     fn group_header_width(&self, _panels: &[String], _active: &String, _floating: bool, _strip_width: f32) -> f32 {
         28.0
     }
@@ -1705,24 +1680,4 @@ fn panel_active(layout: &Layout<String>, panel: &str) -> bool {
         .flat_map(tree_groups)
         .find(|group| group.panels.iter().any(|id| id == panel))
         .is_some_and(|group| group.panels.get(group.active).is_some_and(|id| id == panel))
-}
-
-/// Where the dock sits this frame, from its columns' rects.
-#[derive(Clone, Copy)]
-struct DockEdge {
-    rect: egui::Rect,
-    side: craft_ui::docking::Side,
-}
-
-impl DockEdge {
-    /// The gap the layout leaves between the dock and the canvas beside it, which neither draws.
-    fn gap(self, width: f32, right_to_left: bool) -> egui::Rect {
-        use craft_ui::docking::Side;
-        let on_left = matches!((self.side, right_to_left), (Side::Start, false) | (Side::End, true));
-        if on_left {
-            egui::Rect::from_min_max(egui::pos2(self.rect.right(), self.rect.top()), egui::pos2(self.rect.right() + width, self.rect.bottom()))
-        } else {
-            egui::Rect::from_min_max(egui::pos2(self.rect.left() - width, self.rect.top()), egui::pos2(self.rect.left(), self.rect.bottom()))
-        }
-    }
 }
