@@ -2,7 +2,7 @@ use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, ta
 use super::options_bar::{rotate_about_pivot, scale_about_pivot};
 use super::{
     Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
-    corners, json,
+    WarpStyle, corners, json,
 };
 
 /// Undo and Redo while the commit runs in the background (Free Transform, or Warp).
@@ -139,7 +139,21 @@ fn transform_document(app: &PhotocraftApp) -> Option<DocId> {
 pub(crate) fn unsaved_transform(app: &PhotocraftApp) -> Option<DocId> {
     let t = app.ui.transform.as_ref()?;
     let document = transform_document(app)?;
-    (committing(app).is_some() || t.quad != corners(t.rect) || t.warp.as_ref().is_some_and(|w| !w.is_identity())).then_some(document)
+    (committing(app).is_some()
+        || t.quad != corners(t.rect)
+        || t.warp.as_ref().is_some_and(|w| {
+            // None has identity geometry, but on warped text it removes the stored warp.
+            !w.is_identity()
+                || (w.style == WarpStyle::None
+                    && warps_type(app)
+                    && app
+                        .session
+                        .active()
+                        .filter(|st| st.doc.id == document)
+                        .and_then(|st| st.doc.layer(LayerId(t.layer)))
+                        .is_some_and(|layer| matches!(&layer.content, LayerContent::Text(text) if text.warp.is_some())))
+        }))
+    .then_some(document)
 }
 
 /// Apply a transform before reading the document for a save. The caller resumes after the

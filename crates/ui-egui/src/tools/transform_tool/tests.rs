@@ -3767,6 +3767,48 @@ fn warp_on_type_takes_a_style_and_keeps_the_type_editable() {
 }
 
 #[test]
+fn closing_with_a_cleared_text_warp_prompts_and_saves_the_removal() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"x": 10, "y": 60, "text": "Hello"})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    let layer = state.active_layer.unwrap();
+    state.path = Some("/pics/warped.psd".into());
+    state.saved_revision = state.revision;
+
+    begin_warp(&mut app, &ctx).unwrap();
+    reset_warp(&mut app);
+    assert!(!app.has_unsaved_work(), "None on already unwarped text is a no-op");
+    cancel(&mut app);
+
+    app.run("type.warpText", json!({"style": "flag", "bend": 40.0})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    state.saved_revision = state.revision;
+    let writes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let capture = writes.clone();
+    app.services.export = Some(Box::new(move |doc, _, _| {
+        assert!(matches!(&doc.layer(layer).unwrap().content, LayerContent::Text(t) if t.warp.is_none()));
+        Ok((Vec::new(), Vec::new()))
+    }));
+    app.services.write = Some(Box::new(move |_, _| {
+        capture.set(capture.get() + 1);
+        Ok(())
+    }));
+
+    begin_warp(&mut app, &ctx).unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Flag);
+    reset_warp(&mut app);
+    assert!(app.has_unsaved_work(), "clearing the saved warp is an unsaved edit");
+    crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert!(app.discard.is_some());
+    assert!(app.session.active().is_some());
+    crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
+    assert_eq!(writes.get(), 1);
+    assert!(app.session.documents().is_empty());
+}
+
+#[test]
 fn anchor_grid_point_on_quad_and_carry_pivot() {
     let quad = [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]];
     assert_eq!(point_on_quad(quad, 0), [0.0, 0.0]);
