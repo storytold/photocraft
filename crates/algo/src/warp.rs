@@ -46,6 +46,8 @@ impl Fold<'_> {
 /// Most subsamples per axis when a warp shrinks the source; also the longest source step per
 /// destination pixel the filter follows (bounds the footprint each tile reads).
 const MAX_SS: f64 = 8.0;
+/// Bounding-box pixels scanned per destination pixel of a tile, across all its triangles.
+const MAX_SCAN_PER_PIXEL: usize = 256;
 
 /// Bounded grid shared by CPU resampling and accelerated previews. Using different
 /// triangles for a curved map changes the sampled pixels even with identical interpolation.
@@ -398,6 +400,14 @@ struct Win {
     fw: usize,
 }
 
+/// Use unclamped alpha so bicubic overshoot does not lighten the colour (#6203), and keep
+/// HDR values in float surfaces while integer surfaces stay in their normalized range.
+#[inline]
+fn straight_sample(color: f64, alpha: f64, sample: photocraft_color::SampleType) -> f32 {
+    let value = color / alpha;
+    if sample == photocraft_color::SampleType::F32 { value as f32 } else { value.clamp(0.0, 1.0) as f32 }
+}
+
 /// `stack`: the picture can fold over itself, and gives each triangle's rank in the order a fold
 /// stacks them (asked once, when a tile first needs it). A tile is drawn in `tris`' order; where
 /// two parts of the source meet at a pixel (a fold), the tile is drawn again in rank order, and
@@ -467,6 +477,11 @@ fn triangles(
         let by0 = ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min).floor() as i32;
         let bx1 = ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max).ceil() as i32;
         let by1 = ps.iter().map(|p| p[1]).fold(f64::MIN, f64::max).ceil() as i32;
+        // Degenerate triangles draw nothing (`work` skips them the same way): do not bin them.
+        let det = (ps[1][0] - ps[0][0]) * (ps[2][1] - ps[0][1]) - (ps[2][0] - ps[0][0]) * (ps[1][1] - ps[0][1]);
+        if det.is_nan() || det.abs() < 1e-12 {
+            continue;
+        }
         let (cx0, cy0) = ((bx0.max(dst.x0) - tx0).div_euclid(ts), (by0.max(dst.y0) - ty0).div_euclid(ts));
         let (cx1, cy1) = ((bx1.min(dst.x1 - 1) - tx0).div_euclid(ts), (by1.min(dst.y1 - 1) - ty0).div_euclid(ts));
         for cy in cy0.max(0)..=cy1 {
@@ -520,6 +535,9 @@ fn triangles(
         let mut under_at: Vec<u32> = Vec::new();
         let mut jac: Vec<([f64; 4], usize, usize)> = Vec::with_capacity(order.len());
         'pass: loop {
+            // Folded warps pile thousands of triangles over the same pixels: the bounding boxes
+            // scanned per tile are capped (a sound warp scans a small multiple of the tile's area).
+            let mut scan_left = w * h * MAX_SCAN_PER_PIXEL + (1 << 16);
             for (k, tri) in order.iter().enumerate() {
                 let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
                 let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
@@ -543,6 +561,12 @@ fn triangles(
                 let bx1 = (p0[0].max(p1[0]).max(p2[0]) + 0.5).ceil().min(f64::from(t.x1)) as i32;
                 let by1 = (p0[1].max(p1[1]).max(p2[1]) + 0.5).ceil().min(f64::from(t.y1)) as i32;
                 let eps = -1e-9;
+                let scan = (bx1 - bx0).max(0) as usize * (by1 - by0).max(0) as usize;
+                // A triangle that no longer fits is skipped, not the end of the tile: later (smaller) ones still draw.
+                if scan > scan_left {
+                    continue;
+                }
+                scan_left -= scan;
                 for y in by0..by1 {
                     let py = f64::from(y) + 0.5;
                     for x in bx0..bx1 {
@@ -821,10 +845,7 @@ fn triangles(
             any = true;
             let b = o * n;
             for c in 0..a {
-                // Use the unclamped alpha so bicubic overshoot past 1 does not lighten the
-                // colour (#6203); preserve HDR values in 32-bit float surfaces.
-                let value = acc[c] / acc[a];
-                outp[b + c] = if fmt.sample == photocraft_color::SampleType::F32 { value as f32 } else { value.clamp(0.0, 1.0) as f32 };
+                outp[b + c] = straight_sample(acc[c], acc[a], fmt.sample);
             }
             outp[b + a] = al as f32;
         }
