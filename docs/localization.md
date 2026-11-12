@@ -22,6 +22,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Bahasa Indonesia | `id` | one form |
 | Português (Brasil) | `pt-br` | singular for 0 and 1 / plural for 2+ |
 | Italiano | `it` | one / other |
+| Lietuvių | `lt` | one / few (2–9, excluding 11–19) / other |
 | Polski | `pl` | one / few (2–4, not 12–14) / many |
 | Ελληνικά | `el` | one / other |
 | Nederlands | `nl` | one / other |
