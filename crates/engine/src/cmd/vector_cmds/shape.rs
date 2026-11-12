@@ -545,13 +545,31 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     shape_info(s, id)
 }
 
+/// The History name of a `shape.edit`: Photoshop names a Properties edit of one arrowhead
+/// setting after it ("Change Arrowhead End", #13267); any other edit, or several keys at once,
+/// stays "Edit Shape".
+fn edit_history_name(p: &Value) -> &'static str {
+    let changed: Vec<&str> = p
+        .as_object()
+        .map(|o| o.keys().map(String::as_str).filter(|k| !matches!(*k, "layer" | "coalesce") && !k.starts_with("__")).collect())
+        .unwrap_or_default();
+    match changed.as_slice() {
+        ["arrowStart"] => "Change Arrowhead Start",
+        ["arrowEnd"] => "Change Arrowhead End",
+        ["arrowWidth"] => "Change Arrowhead Width",
+        ["arrowLength"] => "Change Arrowhead Length",
+        ["arrowConcavity"] => "Change Arrowhead Concavity",
+        _ => "Edit Shape",
+    }
+}
+
 pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.edit";
     let id = layer_id(s, p)?;
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    with_shape(s, id, "Edit Shape", |sh, layer| {
+    with_shape(s, id, edit_history_name(p), |sh, layer| {
         if let Some(v) = p.get("path") {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
             sh.live = None;
