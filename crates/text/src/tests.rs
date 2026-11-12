@@ -1587,6 +1587,78 @@ fn split_paragraphs_keep_their_own_txt2_paragraph_style() {
     assert_eq!(leadings("AB\nXY\nEF"), vec![1.0, 2.0, 2.0]);
 }
 
+/// Baking Dynamic Text sets paragraph indents and spacing (a split paragraph keeps its first-line
+/// indent and space before only on its first line; an area's scale scales them all). An edited
+/// `Txt2` object's paragraph runs take them from the layer, as its `TySh` does, in both the
+/// numbered objects (`/0 /0 /5`, `/1`–`/5`) and the older Photoshop's (`/Features`): they kept the
+/// file's, and Photoshop read those back. Every other paragraph key is kept.
+#[test]
+fn edited_txt2_paragraph_runs_take_the_layers_indents_and_spacing() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle};
+    let para = |len: usize| format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /0 0 /1 9.0 /2 9.0 /3 9.0 /4 9.0 /5 9.0 /7 1.5 >> >> >> /1 {len} >> ");
+    let style = "<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 >> >> >> /1 9 >> ";
+    // "AB CD\rEF\r", every paragraph indented and spaced by 9.
+    let numbered = format!(
+        "\n\n/98 << /0 7 >> /0 << /8 << /0 [ << /0 << >> >> ] >> >> /1 << /0 << /0 1 >> /1 [ << /0 << /0 (\u{fe}\u{ff}\0A\0B\0 \0C\0D\0\r\0E\0F\0\r) /5 << /0 [ {}{}] >> /6 << /0 [ {style}] >> >> /1 << /0 [ << /0 0 >> ] >> >> ] >> >>",
+        para(6),
+        para(3)
+    );
+    let numbered: Vec<u8> = numbered.chars().map(|c| c as u32 as u8).collect();
+    let features = || {
+        let keys = ["Justification", "FirstLineIndent", "StartIndent", "EndIndent", "SpaceBefore", "SpaceAfter", "AutoLeading"];
+        E::Dict(
+            keys.iter()
+                .map(|k| (k.to_string(), if *k == "Justification" { E::Int(0) } else { E::Real(if *k == "AutoLeading" { 1.5 } else { 9.0 }) }))
+                .collect(),
+        )
+    };
+    let td_run = |len: i64| {
+        let sheet = E::Dict(vec![("Name".into(), E::String(String::new())), ("Features".into(), features())]);
+        E::Dict(vec![("RunData".into(), E::Dict(vec![("ParagraphSheet".into(), sheet)])), ("Length".into(), E::Int(len))])
+    };
+    let td_model = E::Dict(vec![
+        ("Text".into(), E::String("AB CD\rEF\r".into())),
+        ("ParagraphRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![td_run(6), td_run(3)]))])),
+    ]);
+    let td = crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("0".into(), E::dict()),
+        ("DocumentObjects".into(), E::Dict(vec![("TextObjects".into(), E::Array(vec![E::Dict(vec![("Model".into(), td_model)])]))])),
+    ]);
+    // The first paragraph baked into two lines, the second line without its first-line indent and
+    // space before; then the second paragraph.
+    let first = ParagraphStyle { first_line_indent_pt: 4.0, start_indent_pt: 1.0, end_indent_pt: 2.0, space_before_pt: 3.0, ..Default::default() };
+    let rest = ParagraphStyle { first_line_indent_pt: 0.0, space_before_pt: 0.0, ..first.clone() };
+    let last = ParagraphStyle { space_after_pt: 5.0, ..Default::default() };
+    let mut t = runs_of("AB\nCD\nEF", &[(8, CharStyle::default())]);
+    t.paragraphs = vec![ParagraphRun { len: 3, style: first }, ParagraphRun { len: 3, style: rest }, ParagraphRun { len: 2, style: last }];
+    let want = [[4.0, 1.0, 2.0, 3.0, 0.0], [0.0, 1.0, 2.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 5.0]];
+    // At 144 ppi a point is two document points, as the style runs' sizes take it.
+    for (dpi, k) in [(72.0, 1.0), (144.0, 2.0)] {
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2_at(&[(0, &t)], Some(&numbered), dpi)).unwrap();
+        let runs = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].path(&["0", "5", "0"]).and_then(E::as_array).unwrap();
+        assert_eq!(runs.len(), 3);
+        for (run, want) in runs.iter().zip(want) {
+            let p = run.path(&["0", "0", "5"]).unwrap();
+            let got: Vec<f64> = ["1", "2", "3", "4", "5"].iter().map(|k| p.get(k).and_then(E::as_f64).unwrap()).collect();
+            assert_eq!(got, want.map(|v| v * k), "at {dpi} ppi");
+            assert_eq!(p.get("7").and_then(E::as_f64), Some(1.5), "the file's other paragraph keys are kept");
+        }
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2_at(&[(0, &t)], Some(&td), dpi)).unwrap();
+        let entry = &out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).unwrap()[0];
+        let runs = entry.path(&["Model", "ParagraphRun", "RunArray"]).and_then(E::as_array).unwrap();
+        assert_eq!(runs.len(), 3);
+        for (run, want) in runs.iter().zip(want) {
+            let f = run.path(&["RunData", "ParagraphSheet", "Features"]).unwrap();
+            let got: Vec<f64> =
+                ["FirstLineIndent", "StartIndent", "EndIndent", "SpaceBefore", "SpaceAfter"].iter().map(|k| f.get(k).and_then(E::as_f64).unwrap()).collect();
+            assert_eq!(got, want.map(|v| v * k), "older objects at {dpi} ppi");
+            assert_eq!(f.get("AutoLeading").and_then(E::as_f64), Some(1.5));
+        }
+    }
+}
+
 /// An empty paragraph the edit didn't add keeps its own `Txt2` paragraph style: matched by
 /// position only, it took the next character's paragraph (the last one's here), so adding a
 /// space, or baking, restyled it. An empty paragraph the edit adds still takes the next one's.
