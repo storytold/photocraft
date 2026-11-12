@@ -711,7 +711,8 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     // Points the live stroke hasn't rendered yet (the release frame's last moves).
     let rest = app.live_stroke.as_ref().map(|l| rest_points(app, d, l.fed)).unwrap_or_default();
     if finishes_after_release(app) {
-        app.finishing_stroke = Some(FinishingStroke { tool: d.tool, params: p, rest, preparing: None, released: crate::gpu_canvas::now_ms() });
+        let paint = ReleasePaint::of(app);
+        app.finishing_stroke = Some(FinishingStroke { tool: d.tool, params: p, rest, preparing: None, released: crate::gpu_canvas::now_ms(), paint });
         continue_finishing_stroke(app);
         return;
     }
@@ -801,12 +802,46 @@ pub(crate) struct FinishingStroke {
     preparing: Option<std::sync::mpsc::Receiver<Prepared>>,
     /// When the pen came up (`now_ms`), for the log.
     released: f64,
+    /// What it paints with, as it was at the release.
+    paint: ReleasePaint,
 }
 
 impl FinishingStroke {
     /// Commit it at once (rendering it from its command if the live stroke is gone).
     fn commit_now(self, app: &mut PhotocraftApp) {
-        commit_brush_stroke_now(app, self.tool, self.params, self.rest);
+        let FinishingStroke { tool, params, rest, paint, .. } = self;
+        paint.while_committing(app, |app| commit_brush_stroke_now(app, tool, params, rest));
+    }
+}
+
+/// The colours and brush a released stroke paints with, as they were at the release. Tool
+/// commands keep running while it finishes ([`runs_while_a_stroke_finishes`]), so its command
+/// runs with these put back: a commit rendered from it (the live stroke lost) paints what the
+/// canvas showed, not a colour or brush picked meanwhile.
+struct ReleasePaint {
+    foreground: [f32; 4],
+    background: [f32; 4],
+    brush: photocraft_engine::BrushSettings,
+}
+
+impl ReleasePaint {
+    fn of(app: &PhotocraftApp) -> Self {
+        let t = &app.session.tools;
+        Self { foreground: t.foreground, background: t.background, brush: t.brush.clone() }
+    }
+
+    /// Run `f` (the stroke's command) with these, then put the newer ones back for what follows.
+    fn while_committing<R>(self, app: &mut PhotocraftApp, f: impl FnOnce(&mut PhotocraftApp) -> R) -> R {
+        let t = &mut app.session.tools;
+        let newer = (
+            std::mem::replace(&mut t.foreground, self.foreground),
+            std::mem::replace(&mut t.background, self.background),
+            std::mem::replace(&mut t.brush, self.brush),
+        );
+        let r = f(app);
+        let t = &mut app.session.tools;
+        (t.foreground, t.background, t.brush) = newer;
+        r
     }
 }
 
@@ -922,7 +957,8 @@ fn commit_prepared(app: &mut PhotocraftApp, f: FinishingStroke, prepared: Prepar
         app.session.offer_live_commit(commit);
     }
     log::info!("stroke: committed {:.0} ms after the release, which didn't wait for it", crate::gpu_canvas::now_ms() - f.released);
-    run_brush_commit(app, f.tool, f.params, doc, key, damage);
+    let FinishingStroke { tool, params, paint, .. } = f;
+    paint.while_committing(app, |app| run_brush_commit(app, tool, params, doc, key, damage));
 }
 
 /// Commit a released stroke that is still finishing, before a new press or a command; true when

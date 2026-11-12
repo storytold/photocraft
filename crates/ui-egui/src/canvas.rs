@@ -107,12 +107,11 @@ pub(crate) use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{
-    ClonePreviewCache, CommittedStroke, FinishingStroke, LiveStroke, cancel_mixer_on_context_change, flush_finishing_stroke, freehand_tool,
-    land_finished_stroke, runs_while_a_stroke_finishes, spread_ms, still_finishing, strokes_live, unsmoothed_line,
+    ClonePreviewCache, CommittedStroke, FinishingStroke, LiveStroke, cancel_mixer_on_context_change, continue_finishing_stroke, flush_finishing_stroke,
+    freehand_tool, land_finished_stroke, runs_while_a_stroke_finishes, spread_ms, still_finishing, strokes_live, unsmoothed_line,
 };
 use strokes::{
-    HOLD_REPEAT_MS, continue_finishing_stroke, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves,
-    stroke_wants_time, tap_at_peak_pressure,
+    HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure,
 };
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};

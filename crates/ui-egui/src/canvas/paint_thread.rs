@@ -278,13 +278,18 @@ impl PaintThread {
     }
 }
 
+/// How many dropped values wait for the bin thread before more get threads of their own.
+const BIN_DEPTH: usize = 2;
+
 /// Drop `x` on a thread kept for that: freeing a released stroke's own copy of a gigapixel
-/// document took the UI thread over a second. Where no thread can start (the web), here.
+/// document took the UI thread over a second. At most [`BIN_DEPTH`] wait for it, so documents
+/// can't pile up when strokes commit faster than it frees them: past that, `x` is freed on a thread
+/// of its own, working alongside. Where no thread can start (the web), here.
 pub(super) fn drop_elsewhere<T: Send + 'static>(x: T) {
-    type Bin = std::sync::mpsc::Sender<Box<dyn Send>>;
+    type Bin = std::sync::mpsc::SyncSender<Box<dyn Send>>;
     static BIN: std::sync::OnceLock<Option<Mutex<Bin>>> = std::sync::OnceLock::new();
     let bin = BIN.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<Box<dyn Send>>();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Box<dyn Send>>(BIN_DEPTH);
         let started = std::thread::Builder::new().name("photocraft-drop".into()).spawn(move || {
             for x in rx {
                 drop(x);
@@ -292,10 +297,15 @@ pub(super) fn drop_elsewhere<T: Send + 'static>(x: T) {
         });
         started.ok().map(|_| Mutex::new(tx))
     });
-    if let Some(tx) = bin {
-        // A dead bin hands it back in the error, dropped here.
-        let _ = tx.lock().unwrap_or_else(PoisonError::into_inner).send(Box::new(x));
-    }
+    let Some(tx) = bin else { return };
+    let full = match tx.lock().unwrap_or_else(PoisonError::into_inner).try_send(Box::new(x)) {
+        Ok(()) => return,
+        Err(std::sync::mpsc::TrySendError::Full(x)) => x,
+        // A dead bin hands it back: dropped here.
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+    };
+    // Where no thread can start, the closure (and `x` with it) is dropped here.
+    let _ = std::thread::Builder::new().name("photocraft-drop-extra".into()).spawn(move || drop(full));
 }
 
 impl Drop for PaintThread {

@@ -120,23 +120,71 @@ fn presses_and_commands_wait_for_a_finishing_stroke() {
 }
 
 /// A step that panics on the thread while the stroke finishes loses the live stroke but never
-/// the document: the release renders the whole stroke from the drag, as one edit.
+/// the document: the release renders the whole stroke from the drag, as one edit. The panic is
+/// armed on the held thread after the release, so it can only happen while the stroke finishes.
 #[test]
 fn a_finishing_stroke_whose_thread_fails_is_rendered_from_the_drag() {
     let mut app = app();
     let steps = app.session.active().unwrap().history.past_len();
-    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, M);
+    let release = release_while_the_thread_is_busy(&mut app);
     app.live_stroke.as_ref().unwrap().paint.panic_next_step();
-    for x in (30..=130).step_by(10) {
-        tool_event(&mut app, ToolEvent::Move { x: f64::from(x), y: 30.0, pressure: 1.0 }, M);
-    }
-    tool_event(&mut app, ToolEvent::Up { x: 130.0, y: 30.0 }, M);
+    assert!(app.finishing_stroke.is_some(), "released, still finishing");
+    release();
     finish(&mut app);
     assert!(app.live_stroke.is_none());
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one edit");
     assert!(app.committed_stroke.is_none(), "rendered again, not taken from the lost live stroke");
     assert_commit_replays(&mut app);
+}
+
+/// Tool commands keep running while a stroke finishes. A commit rendered from its command (its
+/// thread lost) still paints with the colour and brush of the release, as the canvas showed it;
+/// the newer ones stay for the next stroke.
+#[test]
+fn a_commit_rendered_from_its_command_paints_with_the_release_colour_and_brush() {
+    let mut app = app();
+    let release = release_while_the_thread_is_busy(&mut app);
+    app.live_stroke.as_ref().unwrap().paint.panic_next_step();
+    app.run("tools.setColors", json!({"foreground": "#0000ff"})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 40}})).unwrap();
+    release();
+    finish(&mut app);
+    assert!(app.committed_stroke.is_none(), "rendered from its command");
+    let doc = app.session.active().unwrap().doc.clone();
+    let surface = doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap();
+    let px = surface.rgba(80, 30);
+    assert!(px[3] > 0.0 && px[0] > px[2], "red, the release's colour: {px:?}");
+    assert_eq!(surface.rgba(80, 48)[3], 0.0, "12 px wide, the release's brush, not 40");
+    assert!(app.session.tools.foreground[2] > 0.9, "blue stays picked for the next stroke");
+}
+
+/// Dropped values never wait in a queue longer than the bin's depth, and the call never waits:
+/// past that, each is freed on a thread of its own. Every one is freed in the end.
+#[test]
+fn a_full_drop_bin_frees_on_threads_of_its_own_without_waiting() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    struct Slow(Arc<AtomicBool>, Arc<AtomicUsize>);
+    impl Drop for Slow {
+        fn drop(&mut self) {
+            while !self.0.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            self.1.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+    let (go, freed) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+    let start = Instant::now();
+    for _ in 0..6 {
+        super::paint_thread::drop_elsewhere(Slow(go.clone(), freed.clone()));
+    }
+    assert!(start.elapsed() < Duration::from_secs(2), "handing them over never waits for a drop");
+    go.store(true, Ordering::Release);
+    while freed.load(Ordering::Acquire) < 6 {
+        assert!(start.elapsed() < Duration::from_secs(10), "all six are freed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 /// While it finishes, the canvas keeps drawing the live stroke. Dropping it there redrew the whole
