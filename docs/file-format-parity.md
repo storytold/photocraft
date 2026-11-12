@@ -174,6 +174,9 @@ The original reference entry retains its source date and historical totals; curr
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | XCF parts 5/6: native preparation, protected import sources, editing/report workflows and frontend integration documented; full stock-file qualification and XCF export remain open (#11032, #11033). |
+| 2026-11-12 | minor | XCF part 4: supported bounded graphs and coverage adapters lower to native content; unknown operations/resources remain explicit outcomes, with stock-file qualification still incomplete (#11031). |
+| 2026-11-12 | minor | XCF part 3: primary effects become bounded native filter/style/content data with explicit optional-mask admission and unchanged source precision/view limits; graph/coverage and host preparation remain later parts (#11030). |
 | 2026-11-12 | minor | GIMP XCF native import documented separately from unsupported formats: gzip/bzip2/XZ wrappers, integer/float precision, editable supported text and paths, explicit historical sample order and conversion outcomes. No XCF export or effect execution claimed; effect execution and further blend fidelity remain outside part 2 (#11029). |
 | 2026-11-07 | minor | Fujifilm compressed RAF (lossless and lossy, X-Trans and Bayer) decodes instead of falling back to the embedded JPEG preview (#7377) |
 | 2026-11-07 | minor | Photoshop PDF read: pages import as raster artboards through the shared craft-pdf (Hayro) renderer, up to 16 pages, 8192 px per side and 64M px per page; editable text/vectors and PDFium are gone. Write is unchanged. |
