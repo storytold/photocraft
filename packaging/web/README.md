@@ -238,4 +238,4 @@ const ui = await photocraft.uiInspect();                             // the UI s
 const { data } = await photocraft.screenshot();                      // the window as PNG (base64)
 ```
 
-The API is installed in every session.
+The API is installed in every session, once PhotoCraft has loaded its brush presets and started: before then `window.photocraft` is `undefined`, so wait for it before the first call, for example `while (!window.photocraft) await new Promise((r) => setTimeout(r, 50));`. A parent page reaches an embedded PhotoCraft's `window.photocraft` only from a same-origin iframe: a browser gives a cross-origin parent no access to the iframe's globals, so control from another origin needs a message bridge.
