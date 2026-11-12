@@ -15,6 +15,7 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.ui.tool = tool;
+    crate::paint_mouse::sync_tool_brush(&mut app);
     app.run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}})).unwrap();
     app.sync_views();
     app.ui.extras.rulers = false;

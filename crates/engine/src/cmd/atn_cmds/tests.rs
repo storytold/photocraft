@@ -1,6 +1,6 @@
 use super::*;
-use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
 
 /// A wire key has one mapper; distinct wire aliases may still name the same command.
@@ -506,6 +506,21 @@ fn load_renames_play_targets_longer_than_the_name_limit() {
     let renamed = format!("{clipped} 2");
     let caller = s.actions.list.iter().find(|a| a.name == "Caller").unwrap();
     assert_eq!(caller.steps[0].1["action"], renamed.as_str());
+}
+
+/// The `set` override is copied into every loaded action, so it is held to the same limit as a
+/// set name read from the file.
+#[test]
+fn load_clips_an_overlong_set_override() {
+    let mut s = Session::new();
+    let actions: Vec<Action> = (0..3).map(|i| Action::new(format!("A{i}"), vec![])).collect();
+    let refs: Vec<&Action> = actions.iter().collect();
+    let (bytes, _) = export("File", &refs, &[], false).unwrap();
+    let long = "s".repeat(super::convert::MAX_NAME_CHARS * 4);
+    s.execute("actions.load", json!({"data": b64(&bytes), "set": long})).unwrap();
+    let clipped = "s".repeat(super::convert::MAX_NAME_CHARS);
+    assert_eq!(s.actions.list.len(), 3);
+    assert!(s.actions.list.iter().all(|a| a.set.as_deref() == Some(clipped.as_str())));
 }
 
 #[test]
