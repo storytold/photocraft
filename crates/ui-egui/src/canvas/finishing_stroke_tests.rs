@@ -409,13 +409,17 @@ fn a_drop_bin_whose_extra_thread_cant_start_frees_that_value_in_place() {
     let (go, freed) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
     // The bin takes the first and is busy freeing it; the second waits in its queue of one.
     let started = Arc::new(AtomicBool::new(false));
-    struct Busy(Arc<AtomicBool>, SlowDrop);
+    /// Marks that the bin has started freeing it, then frees the slow value it holds.
+    struct Busy {
+        started: Arc<AtomicBool>,
+        _slow: SlowDrop,
+    }
     impl Drop for Busy {
         fn drop(&mut self) {
-            self.0.store(true, Ordering::Release);
+            self.started.store(true, Ordering::Release);
         }
     }
-    bin.drop_elsewhere(Busy(started.clone(), SlowDrop(go.clone(), freed.clone())));
+    bin.drop_elsewhere(Busy { started: started.clone(), _slow: SlowDrop(go.clone(), freed.clone()) });
     let start = Instant::now();
     while !started.load(Ordering::Acquire) {
         assert!(start.elapsed() < Duration::from_secs(10), "the bin takes the first");
