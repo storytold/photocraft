@@ -1,8 +1,8 @@
 use crate::Session;
 use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX};
 use crate::preset_store::{MemBackend, open};
-use photocraft_psd::atn::{AtnAction, AtnFile, write};
-use photocraft_psd::descriptor::UnicodeString;
+use craft_psd::atn::{AtnAction, AtnFile, write};
+use craft_psd::descriptor::UnicodeString;
 use serde_json::json;
 
 #[test]
@@ -492,8 +492,8 @@ fn attachment_keeps_explicit_droplet_ids_in_their_source_library() {
 #[test]
 fn whole_replace_preserves_explicit_atn_play_and_conditional_set_scopes() {
     use crate::actions_cmds::{conditional_branch, resolve_play_target};
-    use photocraft_psd::atn::{AtnEvent, AtnItem};
-    use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, Value as D};
+    use craft_psd::atn::{AtnEvent, AtnItem};
+    use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, Value as D};
 
     let class = |id| Class { name: UnicodeString::default(), class_id: Id::new(id) };
     let name_ref = |id, name| ReferenceItem::Name { class: class(id), name: UnicodeString::new_nul(name) };
