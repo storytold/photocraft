@@ -92,7 +92,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::chrome_ui::home_button(app, ui);
                             widgets::vline(ui, 22.0);
                         }
-                        let tool_icon = icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()));
+                        // The tool preset picker is greyed while warping, as in the reference (#12503).
+                        let warping = app.ui.transform.as_ref().is_some_and(|s| s.warp.is_some());
+                        let tool_icon = ui
+                            .add_enabled_ui(!warping, |ui| {
+                                icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()))
+                            })
+                            .inner;
                         // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools (#2825).
                         let mut reset = None;
                         tool_icon.context_menu(|ui| {
@@ -310,6 +316,10 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 opt_label(ui, tl!("Size"));
                 widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
             });
+            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
+            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
+            // Hardness stays with Size, so Opacity follows Mode as in Photoshop and the Pro bar (#9784).
+            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             widgets::vline(ui, 22.0);
             // The Brush's own tooltips here too (#11813); the Eraser keeps its texts.
             let brush = app.ui.tool == Tool::Brush;
@@ -324,9 +334,6 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                     tip(mode, tl!("Painting Mode"));
                 }
             }
-            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
-            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
-            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             let opacity = ui.add_enabled_ui(!block, |ui| whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 66.0)).inner;
             tip(opacity, tl!("Set opacity for stroke"));
             let flow = ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0)).inner;
@@ -782,6 +789,13 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         }
         Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
         Tool::Zoom => {
+            // Zoom In / Zoom Out: a pair, exactly one pressed; Zoom Out makes a click step out.
+            for (zoom_in, icon, tip) in [(true, "zoom-in", tl!("Zoom In")), (false, "zoom-out", tl!("Zoom Out"))] {
+                if icons::button(ui, icon, 24.0, app.ui.tool_options.zoom_in == zoom_in, tip).clicked() {
+                    app.ui.tool_options.zoom_in = zoom_in;
+                }
+            }
+            widgets::vline(ui, 22.0);
             // Resize Windows to Fit is Preferences › Zoom Resizes Windows itself, as in
             // Photoshop: one setting, shown in both places (zoom_window_fit.rs).
             let mut fit = app.session.prefs().general.zoom_resizes_windows;
