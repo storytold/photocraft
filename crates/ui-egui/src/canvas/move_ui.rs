@@ -456,7 +456,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         // Once its snapshot is ready (and the pointer has moved), the canvas shows the document
         // with the moving layers hidden, at one preview key: hiding them redraws where they were,
         // once; the snapshot follows the pointer; the release redraws where they were and are.
-        let ready = p.snapshot.as_ref().is_some_and(|s| s.texture.is_some());
+        let ready = p.snapshot.as_ref().is_some_and(|s| s.picture.is_some());
         if !ready || offset == (0, 0) && p.offsets.is_empty() {
             return None;
         }

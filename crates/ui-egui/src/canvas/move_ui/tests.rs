@@ -805,8 +805,8 @@ fn a_costly_drag_shows_a_snapshot_and_its_drop_redraws_where_the_layers_land() {
     };
     assert!(at(2048, 32)[3] > 0.99, "the moving layer's band");
     assert!(at(2048, 2048)[3] < 0.01, "the background and the other layers aren't in it");
-    let image = egui::ColorImage::new([1, 1], vec![egui::Color32::RED]);
-    s.texture = Some(egui::Context::default().load_texture("snapshot", image, egui::TextureOptions::LINEAR));
+    // Arrived: the next frame hides the layers under it.
+    s.picture = Some(buf);
 
     let (shown, key) = super::display_doc(&mut app, 0).expect("the canvas with the moving layers hidden");
     assert!(super::is_preview_key(key));
