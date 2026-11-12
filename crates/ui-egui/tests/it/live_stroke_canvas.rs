@@ -174,10 +174,11 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
 /// thread and a frame waits only a few real ms for it, so on a slow machine its newest step
 /// arrives late, and only a later pointer event shows it; release would then paint the rest.
 /// `picture` holds the pointer still and takes a picture, with short real waits between them,
-/// until three in a row match (one slow step can outlast a single wait): at most `TRIES` times,
-/// so a canvas that never settles can't hang the test (the release check then reports it).
+/// until the stroke is idle and three pictures in a row match (matching pixels alone don't prove
+/// a slow step has finished): at most `TRIES` times, so a canvas that never settles can't hang
+/// the test (the release check then reports it).
 fn settled(h: &mut Harness, picture: impl Fn(&mut Harness) -> Pixels) -> Pixels {
-    const TRIES: usize = 40;
+    const TRIES: usize = 80;
     let mut last = picture(h);
     let mut unchanged = 0;
     for _ in 0..TRIES {
@@ -185,7 +186,7 @@ fn settled(h: &mut Harness, picture: impl Fn(&mut Harness) -> Pixels) -> Pixels 
         let next = picture(h);
         unchanged = if next == last { unchanged + 1 } else { 0 };
         last = next;
-        if unchanged == 2 {
+        if unchanged >= 2 && !h.state().live_stroke_busy() {
             break;
         }
     }
