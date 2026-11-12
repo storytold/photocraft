@@ -135,7 +135,9 @@ pub(super) fn read_at_launch(path: &str) -> bool {
         // Only Windows and Linux draw their own title bar.
         "interface.systemTitleBar" => cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))),
         // The desktop app decides on the control server before its window opens.
-        "integrations.allowAgentControl" | "integrations.controlPort" => cfg!(not(target_arch = "wasm32")),
+        "integrations.allowAgentControl" | "integrations.controlPort" | "integrations.readRoot" | "integrations.writeRoot" => {
+            cfg!(not(target_arch = "wasm32"))
+        }
         // The WinTab context is opened once, when the window starts.
         "tools.tabletInput" => cfg!(target_os = "windows"),
         _ => false,
