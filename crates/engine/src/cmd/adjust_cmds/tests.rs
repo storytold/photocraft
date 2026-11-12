@@ -1062,3 +1062,134 @@ fn folder_luts_lists_lut_files_by_name() {
     assert!(folder_luts("").is_empty());
     assert!(folder_luts(dir.path().join("missing").to_str().unwrap()).is_empty());
 }
+
+/// #9269: Black & White's Auto spreads an image's greys wider than the default mix, leaves the
+/// weights of colours the image lacks at their defaults, and changes nothing in the document.
+#[test]
+fn black_white_auto_spreads_the_greys() {
+    use crate::adjust_params::{BW_DEFAULTS, HUE_RANGES};
+    // A red and a blue the default mix turns into the same grey (0.43).
+    let (red, blue) = ([0.776, 0.2, 0.2], [0.29, 0.29, 1.0]);
+    let gray = |c: [f32; 3], w: &[f32; 6]| photocraft_compose::adjust::black_white_gray(c, w);
+    let w = auto_black_white(&[red, blue]);
+    let gap = |w: &[f32; 6]| (gray(red, w) - gray(blue, w)).abs();
+    assert!(gap(&BW_DEFAULTS) < 0.01);
+    assert!(gap(&w) > 1.0 / 32.0, "{w:?}: {}", gap(&w));
+    assert!(w.iter().all(|v| (0.0..=150.0).contains(v)), "{w:?}");
+    // Yellows, greens, cyans and magentas aren't in the image: they keep their defaults.
+    for k in [1, 2, 3, 5] {
+        assert_eq!(w[k], BW_DEFAULTS[k], "{}", HUE_RANGES[k]);
+    }
+    // A grey image (and no pixels at all) keeps the default mix.
+    assert_eq!(auto_black_white(&[[0.2; 3], [0.7; 3]]), BW_DEFAULTS);
+    assert_eq!(auto_black_white(&[]), BW_DEFAULTS);
+
+    // The command: an adjustment layer reads the image under it; the document is unchanged.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, |x, _| if x < 10 { [0.776, 0.2, 0.2, 1.0] } else { [0.29, 0.29, 1.0, 1.0] });
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let rev = s.active().unwrap().revision;
+    let r = s.execute("image.adjustments.blackWhite.auto", json!({"layer": id})).unwrap();
+    let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
+    assert_eq!(got, w.to_vec());
+    assert_eq!(s.active().unwrap().revision, rev, "nothing changes");
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": 999})).is_err());
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": "x"})).is_err());
+
+    // A layer above the adjustment isn't part of what it adjusts.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |_, _| [0.5, 0.5, 0.5, 1.0]);
+    assert_eq!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": id})).unwrap(), r);
+
+    // Sampling a big canvas still finds a thin painted stripe.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 512, "height": 512, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, y| match (x, y < 256) {
+        (1, true) => [0.776, 0.2, 0.2, 1.0],
+        (1, false) => [0.29, 0.29, 1.0, 1.0],
+        _ => [0.0; 4],
+    });
+    let r = s.execute("image.adjustments.blackWhite.auto", json!({})).unwrap();
+    let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
+    assert_eq!(got, w.to_vec());
+
+    // Columns alternating with a period that divides the sampling stride (4 here): both colours
+    // are still sampled, not only the even columns.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 512, "height": 512})).unwrap();
+    paint(&mut s, |x, _| if x % 2 == 0 { [0.776, 0.2, 0.2, 1.0] } else { [0.29, 0.29, 1.0, 1.0] });
+    let r = s.execute("image.adjustments.blackWhite.auto", json!({})).unwrap();
+    let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
+    assert_ne!(got, BW_DEFAULTS.to_vec(), "only one colour was sampled");
+    assert!(gap(&got.clone().try_into().unwrap()) > 1.0 / 32.0, "{got:?}");
+}
+
+/// #9301 review: as in the reference application, Auto reads the whole canvas whatever the
+/// selection, the adjustment's mask or its clip base; a smart filter's Auto reads the pixels below
+/// that filter, not the filtered result; a canvas too large to analyse is an error, not the
+/// default mix.
+#[test]
+fn black_white_auto_reads_the_whole_input() {
+    use crate::adjust_params::{BW_DEFAULTS, HUE_RANGES};
+    let (red, blue) = ([0.776, 0.2, 0.2, 1.0], [0.29, 0.29, 1.0, 1.0]);
+    let mix = auto_black_white(&[[red[0], red[1], red[2]], [blue[0], blue[1], blue[2]]]);
+    assert_ne!(mix, BW_DEFAULTS);
+    let auto = |s: &mut Session, p: Value| -> Vec<f32> {
+        let r = s.execute("image.adjustments.blackWhite.auto", p).unwrap();
+        HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect()
+    };
+    let split = |x: i32, _| if x < 10 { red } else { blue };
+
+    // A selection over the red half doesn't narrow Image › Adjustments' Auto.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, split);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    assert_eq!(auto(&mut s, json!({})), mix.to_vec());
+
+    // Nor does an adjustment layer's mask hiding the blue half.
+    s.execute("select.deselect", json!({})).unwrap();
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.edit("mask", |doc, _| {
+        let b = doc.bounds();
+        let mut m = photocraft_doc::LayerMask::reveal_all();
+        m.surface.write_region(Rect::new(10, 0, b.x1, b.y1), &vec![0.0; 10 * 10]);
+        doc.layer_mut(photocraft_doc::LayerId(id)).unwrap().mask = Some(m);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(auto(&mut s, json!({"layer": id})), mix.to_vec());
+
+    // Nor clipping it to a layer that only covers the red half.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, |_, _| blue);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |x, _| if x < 10 { red } else { [0.0; 4] });
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.createClippingMask", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().clipped);
+    assert_eq!(auto(&mut s, json!({"layer": id})), mix.to_vec());
+
+    // A Black & White smart filter: its own result is grey, its input is the colours.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, split);
+    s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+    s.execute("image.adjustments.blackWhite", json!({})).unwrap();
+    let smart = s.active().unwrap().active_layer.unwrap().0;
+    assert_eq!(auto(&mut s, json!({"layer": smart})), BW_DEFAULTS.to_vec(), "the filtered result is grey");
+    assert_eq!(auto(&mut s, json!({"layer": smart, "filter": 0})), mix.to_vec());
+    for bad in [json!({"layer": smart, "filter": 1}), json!({"layer": smart, "filter": "x"}), json!({"layer": smart, "filter": -1})] {
+        assert!(s.execute("image.adjustments.blackWhite.auto", bad).is_err());
+    }
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"filter": 0})).is_err(), "not a smart object");
+
+    // Past the render limit there is nothing to sample.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40000, "height": 30000, "background": "transparent"})).unwrap();
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": id})).is_err());
+}
