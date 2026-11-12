@@ -4437,3 +4437,30 @@ fn vertical_path_decoration_clipping_and_warp() {
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
 }
+
+/// Dynamic Text's right-to-left check reads each paragraph as layout does: the paragraph style at
+/// its start, and for Auto the first strong character of that paragraph alone. Checking the
+/// whole text's first character, or each paragraph run's, disagreed with layout both ways.
+#[test]
+fn rtl_paragraphs_are_read_per_text_paragraph() {
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle, TextDirection};
+    let layer = |text: &str, paras: &[(usize, TextDirection)]| TextLayer {
+        text: text.into(),
+        paragraphs: paras.iter().map(|&(len, direction)| ParagraphRun { len, style: ParagraphStyle { direction, ..Default::default() } }).collect(),
+        ..Default::default()
+    };
+    let hebrew = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}";
+    // A Hebrew second paragraph under one Auto run: it lays out right to left.
+    let t = layer(&format!("Hi\n{hebrew}"), &[]);
+    assert!(crate::layout::has_rtl_paragraph(&t));
+    // A Hebrew first paragraph set Left to Right, then a Latin Auto one: none is right to left.
+    let first = hebrew.len() + 1;
+    let t = layer(&format!("{hebrew}\nHi"), &[(first, TextDirection::Ltr), (2, TextDirection::Auto)]);
+    assert!(!crate::layout::has_rtl_paragraph(&t));
+    // A run edge inside a Latin-first paragraph doesn't make its Hebrew part a paragraph of its own.
+    let t = layer(&format!("Hi {hebrew}"), &[(3, TextDirection::Auto), (hebrew.len(), TextDirection::Auto)]);
+    assert!(!crate::layout::has_rtl_paragraph(&t));
+    // An explicit Right to Left paragraph is right to left whatever its characters.
+    let t = layer("Hi", &[(2, TextDirection::Rtl)]);
+    assert!(crate::layout::has_rtl_paragraph(&t));
+}
