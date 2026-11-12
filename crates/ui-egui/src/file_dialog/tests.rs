@@ -722,6 +722,33 @@ fn a_save_asks_before_replacing_the_file_its_lowercased_extension_names() {
     }
 }
 
+/// The save looks up the path it writes to once. `CAT.PSD` and `CAT.psd` both exist on a
+/// case-sensitive volume, and the dialog confirmed `CAT.PSD`, so no prompt is needed. Another app
+/// then removes `CAT.PSD` before the write. Looking the path up a second time would lowercase it
+/// and overwrite `CAT.psd`, which nobody was asked about.
+#[test]
+fn a_save_writes_the_path_it_looked_up_even_if_the_file_system_changes() {
+    let (mut app, open, written) = app();
+    let disk = on_disk(&mut app);
+    changed_by_another_app(&disk, "/pics/CAT.PSD");
+    changed_by_another_app(&disk, "/pics/CAT.psd");
+    app.services.same_file = Some(Box::new(|a: &str, b: &str| a == b));
+    let stamp = app.services.file_stamp.take().unwrap();
+    let removed = disk.clone();
+    app.services.file_stamp = Some(Box::new(move |path| {
+        let found = stamp(path);
+        // Another app removes `CAT.PSD` as soon as the save has looked it up.
+        if path == "/pics/CAT.PSD" {
+            removed.borrow_mut().remove(path);
+        }
+        found
+    }));
+    save_as(&mut app, &open, "/pics/CAT.PSD");
+    assert!(replace_prompt(&app).is_none(), "the dialog already asked about this file");
+    assert_eq!(*written.borrow(), ["/pics/CAT.PSD"]);
+    assert_eq!(disk.borrow().get("/pics/CAT.psd"), Some(&1), "the lowercase file is left alone");
+}
+
 /// Opening an uppercase JPEG and confirming its own name in File › Save As overwrites that exact
 /// entry. Before this regression test, the native dialog confirmed `photo.JPG`, then PhotoCraft
 /// wrote `photo.jpg`, leaving both files on a case-sensitive NTFS mount. File › Save over a flat

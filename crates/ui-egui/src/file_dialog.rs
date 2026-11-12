@@ -83,7 +83,8 @@ pub(crate) struct Pending {
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
     then: Then,
-    /// For a save dialog, the path the save writes to for the dialog's answer.
+    /// For a save dialog, the path the save writes to for the dialog's answer. It is called once
+    /// per answer, and the save writes the path it returned.
     saved_path: Option<SavedPath>,
     /// The resolved path named by `replace_prompt`, held until the user answers. It must not be
     /// recomputed after confirmation: the file system can change while the prompt is open.
@@ -186,10 +187,11 @@ impl PhotocraftApp {
         // extensions are hidden, #5039) gets the suggested file's extension, as Photoshop's
         // Save As appends the extension of the chosen file type.
         let suggested_ext = suggested.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
-        let ext = suggested_ext.clone();
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
+            // `poll_file_dialog` has already turned the dialog's answer into the path to write
+            // (`Pending::saved_path`). It is not looked up again: the file system can change in
+            // between, and a second lookup could lowercase a name the first one kept.
             FileDialogAnswer::SaveTo(path) => {
-                let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
                 let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
                 // An export's folder only once it has exported: a failed one doesn't move where
@@ -209,7 +211,7 @@ impl PhotocraftApp {
             _ => Err(UNEXPECTED.into()),
         })?;
         if let Some(p) = self.file_dialog.as_mut() {
-            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
+            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, suggested_ext.as_deref())));
         }
         Ok(asked)
     }
@@ -397,16 +399,21 @@ impl PhotocraftApp {
             // The reply was dropped unanswered: the dialog couldn't be shown.
             Some(Err(TryRecvError::Disconnected)) | None => None,
         };
-        if let Some(FileDialogAnswer::SaveTo(answered)) = &answer
+        // A save looks up the path it writes to once, and both the replace prompt and the save
+        // itself use that path.
+        let mut answer = answer;
+        if let Some(FileDialogAnswer::SaveTo(answered)) = &mut answer
             && let Some(path) = self.file_dialog.as_ref().and_then(|p| p.saved_path.as_ref()).map(|written| written(self, answered))
-            && self.replaces_unasked(answered, &path)
         {
-            crate::replace_prompt::open(self, answered, &path);
-            if let Some(p) = self.file_dialog.as_mut() {
-                p.answer = None;
-                p.held_path = Some(path);
+            if self.replaces_unasked(answered, &path) {
+                crate::replace_prompt::open(self, answered, &path);
+                if let Some(p) = self.file_dialog.as_mut() {
+                    p.answer = None;
+                    p.held_path = Some(path);
+                }
+                return;
             }
-            return;
+            *answered = path;
         }
         let _ = self.finish_file_dialog(answer);
     }
