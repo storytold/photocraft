@@ -606,6 +606,7 @@ pub struct PhotocraftApp {
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.
     pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
+    pub(crate) typer: panels::typer::TypeR,
     /// The run of arrow-key nudges that share one History state (nudge_bundle).
     pub(crate) nudge_bundle: nudge_bundle::NudgeBundle,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
