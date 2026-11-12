@@ -281,10 +281,21 @@ fn issue_11807_one_two_or_three_clicked_corners_keep_existing_key_behavior() {
 #[test]
 fn issue_11807_ctrl_shift_z_keeps_real_redo_during_a_quad() {
     let mut h = app();
+    // Undo a pixel edit, not Deselect: a new quad intentionally deselects (#11975),
+    // which would replace the redo branch before this test ever sends Ctrl+Shift+Z.
+    let unfilled = document(&h);
+    h.state_mut().run("edit.fill", json!({"color": "#2070d0"})).unwrap();
     let redone = document(&h);
+    assert_ne!(redone, unfilled, "the Redo control has an observable pixel edit");
+    assert!(redone.selection.is_none());
     h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(document(&h), unfilled);
+    assert!(document(&h).selection.is_none(), "a new quad must not need Deselect");
+    let before_quad = document_history(&h);
+    assert_eq!(before_quad.redo.len(), 1, "one real edit is available to Redo");
     let position = h.state().session.active().unwrap().history.past_len();
     quad(&mut h);
+    assert_eq!(document_history(&h), before_quad, "quad setup must preserve the complete redo branch");
     let quad = h.state().ui.perspective_crop;
     tap(&mut h, Key::Z, command(true));
     dispatched(&h, "edit.redo");
