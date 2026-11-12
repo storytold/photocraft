@@ -586,6 +586,98 @@ fn land_jobs(app: &mut PhotocraftApp) {
 }
 
 #[test]
+fn closing_with_a_pending_transform_saves_the_transformed_pixels() {
+    use std::sync::Mutex;
+
+    let ctx = egui::Context::default();
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    for background in [false, true] {
+        let mut app = app_with_square(64, square);
+        let state = app.session.active_mut().unwrap();
+        let layer = state.active_layer.unwrap();
+        state.path = Some("/pics/square.psd".into());
+        state.saved_revision = state.revision;
+        let bounds = move |doc: &photocraft_doc::Document| doc.layer(layer).unwrap().surface().unwrap().content_bounds();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inline = written.clone();
+        let worker = written.clone();
+        app.services.export = Some(Box::new(move |doc, _, _| {
+            inline.lock().unwrap().push(bounds(doc));
+            Ok((Vec::new(), Vec::new()))
+        }));
+        app.services.write = Some(Box::new(|_, _| Ok(())));
+        app.services.save_file = Some(Arc::new(move |doc, _, _, ctl| {
+            ctl.commit()?;
+            worker.lock().unwrap().push(bounds(doc));
+            Ok(Vec::new())
+        }));
+        begin(&mut app, &ctx).unwrap();
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+        app.background_jobs = background;
+
+        assert!(app.has_unsaved_work());
+        crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        assert!(app.discard.is_some(), "the visible move counts as an unsaved edit");
+        crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
+        if background {
+            assert!(committing(&app).is_some());
+            assert!(app.discard.is_some());
+            assert!(app.session.active().is_some());
+            assert!(written.lock().unwrap().is_empty());
+            assert!(crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).is_err());
+            land_jobs(&mut app);
+        }
+        assert_eq!(*written.lock().unwrap(), [square.translate(8, 0)]);
+        assert!(app.discard.is_none());
+        assert!(app.session.documents().is_empty());
+    }
+}
+
+#[test]
+fn save_waits_for_content_aware_scale_and_keeps_the_box_on_refusal() {
+    let ctx = egui::Context::default();
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    let mut app = app_with_square(64, square);
+    app.session.active_mut().unwrap().path = Some("/pics/square.psd".into());
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let capture = written.clone();
+    app.services.export = Some(Box::new(move |doc, _, _| {
+        capture.borrow_mut().push(doc.layer(layer).unwrap().surface().unwrap().content_bounds());
+        Ok((Vec::new(), Vec::new()))
+    }));
+    app.services.write = Some(Box::new(|_, _| Ok(())));
+
+    crate::cas_transform::begin(&mut app, &ctx).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = corners([8.0, 8.0, 20.0, 24.0]);
+    t.content_aware.as_mut().unwrap().protect = Some("missing alpha channel".into());
+    let result = crate::menus::invoke(&mut app, &ctx, "file.save", json!({}));
+    assert!(result.unwrap_err().contains("must name an alpha channel"));
+    assert!(written.borrow().is_empty());
+    assert!(app.ui.transform.is_some());
+    assert!(app.transform_preview.is_some());
+
+    crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    let error = crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap_err();
+    assert!(error.contains("must name an alpha channel"));
+    assert!(app.discard.is_some());
+    assert!(app.session.active().is_some());
+    assert!(written.borrow().is_empty());
+    crate::discard_ui::answer_choice(&mut app, &ctx, "cancel", false).unwrap();
+
+    app.ui.transform.as_mut().unwrap().content_aware.as_mut().unwrap().protect = None;
+    app.background_jobs = true;
+    crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert!(committing(&app).is_some());
+    assert!(written.borrow().is_empty());
+    land_jobs(&mut app);
+    assert_eq!(*written.borrow(), [photocraft_geom::Rect::new(8, 8, 20, 24)]);
+    assert!(app.ui.transform.is_none());
+}
+
+#[test]
 fn saving_a_reopened_smart_object_keeps_the_pending_rotation() {
     for (background, already_committing, switch_tab) in [(false, false, false), (true, false, false), (true, true, false), (true, true, true)] {
         let ctx = egui::Context::default();

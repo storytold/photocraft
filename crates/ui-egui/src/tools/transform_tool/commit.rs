@@ -33,10 +33,6 @@ pub fn commit(app: &mut PhotocraftApp) {
         }
         return;
     }
-    if let Some(options) = &t.content_aware {
-        crate::cas_transform::commit(app, &t, options);
-        return;
-    }
     if t.selection {
         let mut p = json!({"rect": t.rect, "interpolation": t.interpolation});
         match &t.warp {
@@ -71,7 +67,9 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
-    let r = if let Some(w) = &t.warp {
+    let r = if let Some(options) = &t.content_aware {
+        crate::cas_transform::commit(app, &t, options)
+    } else if let Some(w) = &t.warp {
         // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
         if w.is_identity() && !type_layer {
             return;
@@ -131,28 +129,56 @@ fn saves_document(id: &str) -> bool {
     matches!(id, "file.save" | "file.saveAs" | "file.saveACopy")
 }
 
-/// A save must see the transform the user sees on the canvas. In the desktop app the commit
-/// may have its own worker, so defer the save until the transformed document is installed.
+/// The document whose transform is open, including a commit in progress.
+fn transform_document(app: &PhotocraftApp) -> Option<DocId> {
+    app.ui.transform.as_ref()?;
+    app.transform_preview.as_ref().map(|pv| pv.doc.id)
+}
+
+/// An edit still visible on the canvas also counts as unsaved work.
+pub(crate) fn unsaved_transform(app: &PhotocraftApp) -> Option<DocId> {
+    let t = app.ui.transform.as_ref()?;
+    let document = transform_document(app)?;
+    (committing(app).is_some() || t.quad != corners(t.rect) || t.warp.as_ref().is_some_and(|w| !w.is_identity())).then_some(document)
+}
+
+/// Apply a transform before reading the document for a save. The caller resumes after the
+/// returned job lands, or proceeds immediately when there is no job.
+pub(crate) fn commit_for_save(app: &mut PhotocraftApp, from_control: bool) -> Result<Option<JobId>, String> {
+    if transform_document(app).is_none_or(|doc| app.active_doc_id().ok() != Some(doc)) {
+        return Ok(None);
+    }
+    if from_control || app.automation_input || app.session.authorize.is_some() {
+        return Err(tl!("Commit or cancel the transform first").into());
+    }
+    if app.after_transform_commit.is_some() || crate::discard_ui::waiting_for_transform(app) {
+        return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+    }
+    commit(app);
+    if let Some(job) = committing(app) {
+        return Ok(Some(job));
+    }
+    if app.ui.transform.is_some() {
+        return Err(app.ui.status.clone());
+    }
+    Ok(None)
+}
+
 pub(crate) fn before_save(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
-    let preview = app.transform_preview.as_ref()?;
-    if !saves_document(id) || app.ui.transform.is_none() || app.active_doc_id().ok() != Some(preview.doc.id) {
+    if !saves_document(id) || transform_document(app).is_none_or(|doc| app.active_doc_id().ok() != Some(doc)) {
         return None;
     }
     if let Err(error) = crate::FormatChoices::from_params(params, id) {
         return Some(Err(error));
     }
-    if app.automation_input || app.session.authorize.is_some() {
-        return Some(Err(tl!("Commit or cancel the transform first").into()));
-    }
-    commit(app);
-    if committing(app).is_some() {
-        if app.after_transform_commit.is_some() {
-            return Some(Err(tl!("Free Transform is still being applied; try again when it has finished.").into()));
+    match commit_for_save(app, false) {
+        Ok(None) => None,
+        Ok(Some(_)) => {
+            app.after_transform_commit = Some((id.to_string(), params.clone()));
+            Some(Ok(serde_json::Value::Null))
         }
-        app.after_transform_commit = Some((id.to_string(), params.clone()));
-        return Some(Ok(serde_json::Value::Null));
+        Err(error) => Some(Err(error)),
     }
-    app.ui.transform.as_ref().map(|_| Err(app.ui.status.clone()))
 }
 
 /// A job ended (see [`crate::jobs_ui`]): when it was the commit, the session ends with it. Its
@@ -174,11 +200,13 @@ pub fn on_job_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: &JobEvent) 
         if switched_away(app) {
             cancel(app);
         }
+        crate::discard_ui::transform_finished(app, ctx, e.id, false);
         return;
     }
     let document = pv.doc.id;
     let landed = matches!(e.outcome, JobOutcome::Done(_));
     finish(app, Some(document), LayerId(t.layer), t.made, landed);
+    crate::discard_ui::transform_finished(app, ctx, e.id, landed);
     let Some((id, params)) = after.filter(|_| landed) else { return };
     let result = if saves_document(&id) {
         app.with_document(document, |app| crate::menus::invoke(app, ctx, &id, params))
@@ -200,6 +228,7 @@ fn keep_open(app: &mut PhotocraftApp, t: TransformSession, preview: Option<Trans
     app.ui.transform = Some(t);
     app.transform_preview = preview;
     app.ui.status = e;
+    app.ui.status_error = true;
 }
 
 /// A transform whose layer or document went away (undo, close) ends silently; picking another tool
