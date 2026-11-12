@@ -139,6 +139,7 @@ pub(super) fn style_names(faces: &[photocraft_text::FaceInfo]) -> Vec<String> {
     style_names_with_instances(faces, &[])
 }
 
+/// Combines face subfamilies, `fvar` named instances, and variable `wght` steps into sorted unique style names.
 pub(super) fn style_names_with_instances(faces: &[photocraft_text::FaceInfo], instances: &[photocraft_text::NamedInstance]) -> Vec<String> {
     let label = |weight: f32, italic: bool| {
         let name = match (weight_name(weight), italic) {

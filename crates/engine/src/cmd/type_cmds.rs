@@ -152,11 +152,13 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Compares two user-space variation coordinates within a tolerance scaled to `[min, max]`.
 fn axis_matches(a: f32, b: f32, min: f32, max: f32) -> bool {
     let tol = if (max - min).abs() >= 10.0 { 0.5 } else { 0.01 };
     (a - b).abs() <= tol
 }
 
+/// Effective user-space coordinate of `s` on `tag` (`s.variations`, `wght`/`ital`, or `default`).
 fn effective_axis_coord(s: &CharStyle, tag: &str, min: f32, default: f32, max: f32) -> f32 {
     let v = s.variations.iter().find(|v| v.axis == tag).map(|v| v.value).unwrap_or_else(|| match tag {
         "wght" => f32::from(s.weight),
@@ -222,6 +224,7 @@ fn installed_postscript_for(fonts: &mut photocraft_text::FontDb, s: &CharStyle) 
     None
 }
 
+/// Looks up [`installed_postscript_for`] `s` against the shared [`photocraft_text::FontDb`].
 fn installed_postscript(s: &CharStyle) -> Option<String> {
     let mut shared = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
     installed_postscript_for(&mut shared.fonts, s).map(|(ps, _)| ps)
