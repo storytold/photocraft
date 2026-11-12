@@ -147,13 +147,13 @@ fn straight(path: &Path, [s, k]: [usize; 2]) -> bool {
 /// when they aren't theirs.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
     if let ToolEvent::Down { x, y, .. } = ev
-        && let Some((tool, r, path, hit)) = pen_auto(app, app.ui.tool, mods, [x, y])
+        && let Some((_, r, path, hit)) = pen_auto(app, app.ui.tool, mods, [x, y])
     {
         // The release finds no Pen drag to finish, so the Pen draws nothing.
         if r == PathRef::Pen {
             edit_pen(app, path, hit, [x, y]);
         } else {
-            apply(app, tool, r, hit, [x, y]);
+            apply(app, r, hit, [x, y]);
         }
         return true;
     }
@@ -170,7 +170,7 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
         edit_pen(app, path, hit, p);
         return;
     }
-    apply(app, tool, r, hit, p);
+    apply(app, r, hit, p);
 }
 
 /// Add or delete an anchor of the Pen path being drawn (`path`, from `pen_path`). It isn't in the
@@ -199,12 +199,11 @@ fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
 
 /// Add an anchor where `hit` is on a segment of `r`, or delete the anchor it is on: one command.
 /// An added anchor is selected and follows a drag from the press at `p`; the add and the move are
-/// one history step. `tool` is the tool in effect (`effective`, or the one Pen Auto Add/Delete acts as),
-/// not the raw current tool: Alt + Add Anchor Point deletes and bends the join like Delete Anchor Point.
-fn apply(app: &mut PhotocraftApp, tool: Tool, r: PathRef, hit: Hit, p: [f64; 2]) {
+/// one history step.
+fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
     // Delete Anchor Point: a drag from the anchor bends the join (#12766), in the deletion's step.
     let deleted = match hit {
-        Hit::Anchor(k) if tool == Tool::DeleteAnchorPoint => {
+        Hit::Anchor(k) if app.ui.tool == Tool::DeleteAnchorPoint => {
             let before = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
             before.and_then(|path| edit::join_knot(&path, k))
         }

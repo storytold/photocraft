@@ -98,8 +98,10 @@ fn a_drag_from_an_anchor_whose_join_is_curved_does_what_the_press_did_before() {
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
 }
 
+/// Not measured, so as today (#12766's rules): Alt + Add Anchor Point deletes the anchor but the
+/// drag doesn't bend the join; only the Delete Anchor Point tool itself bends it.
 #[test]
-fn alt_with_add_anchor_point_bends_the_join_like_delete_anchor_point() {
+fn alt_with_add_anchor_point_deletes_without_bending_the_join() {
     let mut app = app();
     app.ui.tool = crate::state::Tool::AddAnchorPoint;
     let (n, alt) = (steps(&app), Modifiers::ALT);
@@ -110,8 +112,7 @@ fn alt_with_add_anchor_point_bends_the_join_like_delete_anchor_point() {
     tool_event(&mut app, ToolEvent::Up { x: 330.0, y: 280.0 }, alt);
     let k = knots(&app);
     assert_eq!(k.len(), 3);
-    assert!(near(k[0].out_ctrl, 273.3333, 140.0) && near(k[1].in_ctrl, 473.3333, 340.0), "{k:?}");
-    assert!(k[0].smooth && k[1].smooth);
+    assert_eq!(k[0].out_ctrl, k[0].anchor, "the join stays straight: {k:?}");
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
 }
