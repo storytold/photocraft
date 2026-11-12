@@ -2,7 +2,7 @@
 //!
 //! Import and export between [`photocraft_doc::Document`] and files:
 //!
-//! * PSD / PSB (detected by the `8BPS` signature) via `photocraft-psd`, with
+//! * PSD / PSB (detected by the `8BPS` signature) via `craft-psd`, with
 //!   fidelity levels 1–3 (raster layers, masks, blend/opacity/fill,
 //!   visibility, names, groups, clipping, adjustment and fill layers).
 //!   Every layer keeps its unmodelled tagged blocks in `Layer::psd_blocks`
@@ -91,11 +91,11 @@ pub mod vector_preview;
 mod xcf;
 pub mod xml;
 
+use craft_psd::{PsdError, PsdFile};
 pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
-use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
@@ -696,10 +696,7 @@ fn import_psd(
     ctl: &photocraft_raster::Interrupt,
     damaged: &mut bool,
     opts: &ImportOptions,
-    parse: impl FnOnce(
-        &dyn Fn(&PsdFile) -> photocraft_psd::Result<bool>,
-        &dyn Fn(&PsdFile) -> bool,
-    ) -> photocraft_psd::Result<(PsdFile, Option<photocraft_psd::Result<Vec<u8>>>)>,
+    parse: impl FnOnce(&dyn Fn(&PsdFile) -> craft_psd::Result<bool>, &dyn Fn(&PsdFile) -> bool) -> craft_psd::Result<(PsdFile, Option<craft_psd::Result<Vec<u8>>>)>,
 ) -> Result<ImportResult, IoError> {
     let preflight_error = std::cell::RefCell::new(None);
     let admission_guard: std::cell::RefCell<Option<psd_gate::AdmissionGuard>> = std::cell::RefCell::new(None);
@@ -837,7 +834,7 @@ pub fn import_file_for_open_verified(
 ) -> Result<(ImportResult, bool), IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let source = photocraft_psd::FileSource::open(path).map_err(read_failed)?;
+    let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
     let metadata = source.file().metadata().map_err(read_failed)?;
     if !metadata.is_file() {
         return Err(IoError::Read(format!("{}: not a regular file", path.display())));
@@ -851,9 +848,9 @@ pub fn import_file_for_open_verified(
     // the identity from it after parsing, and never from a path that may point elsewhere now.
     let watch = source.file().try_clone().map_err(read_failed)?;
     let mut magic = [0u8; 4];
-    let psd = !has_extension(name, photocraft_format::EXTENSION) && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
+    let psd = !has_extension(name, photocraft_format::EXTENSION) && craft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
     let result = if psd {
-        import_source_with_options(name, photocraft_psd::Source::new(source), ctl, opts)
+        import_source_with_options(name, craft_psd::Source::new(source), ctl, opts)
     } else {
         // Read from the handle that was just identified, not by opening the path again.
         let mut file = source.file();
@@ -881,7 +878,7 @@ pub fn import_file_for_open_verified(
         match streamed {
             Some(result) => Ok((result, false)),
             None => {
-                let bytes = photocraft_format::read::read_all(&mut file, photocraft_psd::ReadAt::len(&source)).map_err(read_failed)?;
+                let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
                 import_for_open_with(name, &bytes, opts, ctl)
             }
         }
@@ -898,15 +895,15 @@ pub fn import_file_for_open_verified(
     result
 }
 
-/// [`import_file_for_open_with`] for a PSD/PSB in any [`photocraft_psd::ReadAt`] source.
-pub fn import_source_for_open_with(name: &str, source: photocraft_psd::Source, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
+/// [`import_file_for_open_with`] for a PSD/PSB in any [`craft_psd::ReadAt`] source.
+pub fn import_source_for_open_with(name: &str, source: craft_psd::Source, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
     import_source_with_options(name, source, ctl, &ImportOptions::default())
 }
 
 /// [`import_source_for_open_with`] with custom import options.
 pub fn import_source_with_options(
     name: &str,
-    source: photocraft_psd::Source,
+    source: craft_psd::Source,
     ctl: &photocraft_raster::Interrupt,
     opts: &ImportOptions,
 ) -> Result<(ImportResult, bool), IoError> {
@@ -923,7 +920,7 @@ pub fn import_source_with_options(
 #[cfg(test)]
 pub(crate) fn import_source_with_limit(
     name: &str,
-    source: photocraft_psd::Source,
+    source: craft_psd::Source,
     ctl: &photocraft_raster::Interrupt,
     pixel_limit: u64,
 ) -> Result<(ImportResult, bool), IoError> {
@@ -1266,7 +1263,7 @@ fn export_stages_with_renderer(
             match preview {
                 // Beside the other resources Photoshop writes ahead of the version info.
                 Ok(r) => {
-                    let at = file.resources.iter().position(|r| r.id == photocraft_psd::resources::ids::VERSION_INFO).unwrap_or(file.resources.len());
+                    let at = file.resources.iter().position(|r| r.id == craft_psd::resources::ids::VERSION_INFO).unwrap_or(file.resources.len());
                     file.resources.insert(at, r);
                 }
                 Err(e) => warnings.push(format!("image preview not saved: {e}")),
@@ -1347,7 +1344,7 @@ fn pcraft_full_composite_with(doc: &Document, ctl: &photocraft_raster::Interrupt
 pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
     let h = &file.header;
     h.validate()?;
-    if h.color_mode == photocraft_psd::ColorMode::Rgb && file.merged_has_alpha() {
+    if h.color_mode == craft_psd::ColorMode::Rgb && file.merged_has_alpha() {
         // Preserve native sample precision before removing the white matte.
         let raw = file.decode_merged()?;
         let plane = raw.len() / usize::from(h.channels);
@@ -1358,9 +1355,9 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
             .chunks_exact(plane)
             .take(4)
             .map(|bytes| match h.depth {
-                32 => Ok(photocraft_psd::pixels::samples_f32(bytes)),
-                16 => Ok(photocraft_psd::pixels::samples_u16(bytes).into_iter().map(|v| f32::from(v) / 65535.0).collect()),
-                _ => photocraft_psd::pixels::plane_to_u8(bytes, h.depth, h.width as usize, h.height as usize)
+                32 => Ok(craft_psd::pixels::samples_f32(bytes)),
+                16 => Ok(craft_psd::pixels::samples_u16(bytes).into_iter().map(|v| f32::from(v) / 65535.0).collect()),
+                _ => craft_psd::pixels::plane_to_u8(bytes, h.depth, h.width as usize, h.height as usize)
                     .map(|values| values.into_iter().map(|v| f32::from(v) / 255.0).collect()),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1388,7 +1385,7 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
     let img = if h.depth == 32 { None } else { file.composite_rgba8().ok() };
     // CMYK goes through the colour-managed model conversion (the PSD crate's RGBA preview is a
     // naive, profile-free conversion).
-    if let (Some(img), false) = (img, matches!(h.color_mode, photocraft_psd::ColorMode::Lab | photocraft_psd::ColorMode::Cmyk)) {
+    if let (Some(img), false) = (img, matches!(h.color_mode, craft_psd::ColorMode::Lab | craft_psd::ColorMode::Cmyk)) {
         let unmatte = file.merged_has_alpha();
         return Ok(img
             .data
@@ -1409,7 +1406,7 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
     // Generic path (Lab, CMYK and others) via the raster model conversion.
     // Keep the merged-alpha marker while discarding layers: otherwise an extra
     // spot/alpha channel in an opaque composite is mistaken for transparency.
-    let layer_info = Some(photocraft_psd::LayerInfo { merged_alpha: file.merged_has_alpha(), layers: Vec::new(), padding: None });
+    let layer_info = Some(craft_psd::LayerInfo { merged_alpha: file.merged_has_alpha(), layers: Vec::new(), padding: None });
     let (doc, _) = psd_to_document(&PsdFile { layer_info, ..file.clone() });
     // Multichannel documents keep their channels apart (no layer): composite them.
     if doc.layers.is_empty() && doc.mode == photocraft_color::ColorMode::Multichannel {
@@ -1426,7 +1423,7 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
 #[cfg(test)]
 mod tests {
     use super::{ImportOptions, ImportPreflight, import, import_for_open, import_preflight, is_psd_input, is_svg_input};
-    use photocraft_psd::{Compression, Version, testgen};
+    use craft_psd::{Compression, Version, testgen};
 
     /// The callers that fit several imports into one budget choose their option from this
     /// classification, so it has to follow the same dispatch as [`super::import`].

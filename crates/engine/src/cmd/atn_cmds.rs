@@ -3,7 +3,7 @@
 //! (Photoshop's Insert Stop) and `actions.photoshopStep` (a step PhotoCraft has no command for
 //! yet, kept verbatim so Save Actions writes it back unchanged).
 //!
-//! Parsing and writing live in `photocraft-psd` (`atn`); this module maps Photoshop *events*
+//! Parsing and writing live in `craft-psd` (`atn`); this module maps Photoshop *events*
 //! (`gaussianBlur` with `Rds`, `make` of an adjustment layer, `set` of the selection…) onto
 //! PhotoCraft commands and back. An event is keyed by both its four-character code (`GsnB`,
 //! older files) and its string name (`gaussianBlur`, Photoshop 2024 and later), as the two are
@@ -18,8 +18,8 @@
 //! {"offset"}`, the document that many places from the active one in opening order, not dragged
 //! tab order (#7103).
 
-use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
+use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::{Map, Value, json};
 
 use crate::actions_cmds::Action;
@@ -36,6 +36,7 @@ mod menu_item;
 
 mod steps_artboard;
 mod steps_artboard_section;
+mod steps_automate;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -188,6 +189,9 @@ mod layer_props_tests;
 
 #[cfg(test)]
 mod layer_list_tests;
+
+#[cfg(test)]
+mod automate_tests;
 
 #[cfg(test)]
 mod stylize_tests;
