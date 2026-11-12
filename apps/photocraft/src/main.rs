@@ -111,7 +111,7 @@ fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::pref
     let Some(mut section) = file.as_ref().and_then(|v| v.get("integrations")).cloned() else {
         return out;
     };
-    // As the engine's load does: a Control Port from before *Let AI agents connect* keeps it on.
+    // As the engine's load does: a Control Port saved before the agents switch keeps it on.
     photocraft_engine::prefs::migrate_integrations(&mut section);
     match serde_json::from_value(section.clone()) {
         Ok(whole) => whole,
@@ -359,7 +359,7 @@ struct ControlNotice {
 
 /// The `--control` server's port, token and workspace, when it is on (exits 2 on a bad
 /// configuration). Preferences › AI Integrations' folders stand in for automation roots no flag
-/// names. The server Preferences start (*Let AI agents connect*) is `agent_link`'s, not this.
+/// names. The server the agents switch starts is `agent_link`'s, not this.
 fn control_setup(
     cli_port: Option<u16>,
     auth: photocraft_automation::args::ControlArgs,
@@ -719,20 +719,15 @@ fn main() -> eframe::Result {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
             });
-            // Preferences › AI Integrations: agents connect without a terminal, unless the launch
-            // flags (`--control`) manage the connection.
-            let mcp = agent_link::mcp_launch();
-            app.agent_link.mcp_command = mcp.as_ref().map(photocraft_automation::agent_link::McpLaunch::shell_line);
-            // The new agent settings and the buttons that add PhotoCraft to MCP clients are behind
-            // the suite's AI-MCP feature flag; the connection itself keeps working as before.
+            // Agents in the open window, unless the launch flags (`--control`) manage the
+            // connection. Behind the suite's AI-MCP feature flag, the ArtCraft Launcher's switch
+            // (Settings › AI agents) is the one consent; without it, as before, a Control Port.
             let flags = craft_flags::load();
             for problem in &flags.problems {
                 log::warn!("feature flags: {problem}");
             }
             app.agent_link.mcp_flag = flags.enabled(&craft_flags::AI_MCP);
             if app.agent_link.mcp_flag {
-                app.services.agent_clients = Some(agent_link::clients(mcp.clone()));
-                // ArtCraft Launcher › Settings › AI agents turns agents on for every Craft app.
                 app.services.launcher_agents = Some(agent_link::launcher_watch(&cc.egui_ctx));
             }
             if let Some((listener, token, _)) = control {
@@ -741,7 +736,7 @@ fn main() -> eframe::Result {
                 let rx = control_server::start(listener, token, cc.egui_ctx.clone());
                 app = app.with_control(rx);
             } else {
-                app.services.agent_link = Some(agent_link::service(services::config_dir(), mcp));
+                app.services.agent_link = Some(agent_link::service(services::config_dir()));
             }
             #[cfg(target_os = "macos")]
             {
@@ -1170,7 +1165,7 @@ mod tests {
         assert_eq!(r.control_port, 0, "the bad port alone takes its default");
         // A bad Allow Agent Control alone takes its default.
         let r = read(r#"{"integrations":{"allowAgentControl":"no","controlPort":7878}}"#);
-        // (A saved port from before *Let AI agents connect* turns it on, in both reads.)
+        // (A saved port from before the agents switch turns it on, in both reads.)
         assert_eq!(r, photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: 7878, connect_agents: true, ..Default::default() });
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":-1}}"#);
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":4294967296}}"#);

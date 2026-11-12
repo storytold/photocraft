@@ -366,13 +366,11 @@ pub struct AgentLinkStatus {
     pub launch_flags: bool,
     /// Why the connection, or one of its folders, couldn't be set up.
     pub error: Option<String>,
-    /// How an MCP client starts PhotoCraft's MCP server (`photocraft-cli mcp --live`).
-    pub mcp_command: Option<String>,
     /// The suite's `AI-MCP` feature flag (`craft-flags`): without it the page shows only the
     /// connection settings PhotoCraft had before (Allow Agent Control, Control Port).
     pub mcp_flag: bool,
-    /// The ArtCraft Launcher turned agents on for every Craft app (Settings › AI agents): that
-    /// counts as *Let AI agents connect*, whatever the box says.
+    /// The ArtCraft Launcher's switch (Settings › AI agents) lets agents use the Craft apps: with
+    /// the `AI-MCP` flag, the one consent for agents in this window.
     pub launcher: bool,
 }
 
@@ -390,9 +388,6 @@ pub struct AgentLink {
 
 /// Starts, moves or stops the agent connection to match Preferences › AI Integrations.
 pub type AgentLinkFn = Box<dyn FnMut(&photocraft_engine::prefs::Integrations, &egui::Context) -> AgentLink>;
-/// Adds PhotoCraft to an MCP client (`claude-desktop`, `claude-code`, `cursor`), returning what
-/// was done, or returns the configuration to paste into any client (`json`).
-pub type AgentClientFn = Box<dyn FnMut(&str) -> Result<String, String>>;
 
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
@@ -591,8 +586,6 @@ pub struct Services {
     /// Preferences › AI Integrations (desktop): starts, moves or stops the agent connection when
     /// its settings change. `None` on the web, and when `--control` manages the connection.
     pub agent_link: Option<AgentLinkFn>,
-    /// Preferences › AI Integrations' buttons that add PhotoCraft to MCP clients (desktop).
-    pub agent_clients: Option<AgentClientFn>,
     /// Whether the ArtCraft Launcher turned agents on for every Craft app, cheap enough to ask every
     /// frame (the desktop app watches the launcher's files on its own thread). `None` without the
     /// suite's `AI-MCP` flag, on the web, and in tests that don't set it.

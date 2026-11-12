@@ -113,7 +113,7 @@ integrate() {
 }
 
 # `PhotoCraft.AppImage --cli <args>` runs the bundled photocraft-cli: MCP clients start
-# `--cli mcp --live` this way (Preferences › AI Integrations), since the mount point that holds
+# `--cli mcp` this way (the ArtCraft Launcher's app list), since the mount point that holds
 # the CLI changes with every run.
 if [ "${1:-}" = "--cli" ]; then
   shift

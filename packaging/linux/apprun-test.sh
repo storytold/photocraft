@@ -154,10 +154,10 @@ rm -f "$am_desktop"
 "$APPDIR/AppRun" >/dev/null || fail "launch after AM removal exited non-zero"
 [[ -f "$DESKTOP" ]] || fail "no desktop entry after the AM launcher was removed"
 
-# 12. `--cli` runs the bundled CLI (MCP clients start `--cli mcp --live`), without integrating.
+# 12. `--cli` runs the bundled CLI (MCP clients start `--cli mcp`), without integrating.
 rm -rf "$XDG_DATA_HOME"
-out="$("$APPDIR/AppRun" --cli mcp --live)" || fail "--cli exited non-zero"
-[ "$out" = "cli stub: mcp --live" ] || fail "--cli output: $out"
+out="$("$APPDIR/AppRun" --cli mcp --headless)" || fail "--cli exited non-zero"
+[ "$out" = "cli stub: mcp --headless" ] || fail "--cli output: $out"
 [ ! -e "$XDG_DATA_HOME" ] || fail "--cli integrated the desktop entry"
 
 echo "AppRun desktop integration ok"

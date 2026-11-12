@@ -1,6 +1,7 @@
-//! Preferences › AI Integrations: the agent connection (`integrations.connectAgents`), the folders
-//! agents may use, what `photocraft-cli mcp --live` does while the app is closed, and the buttons
-//! that copies the configuration for an MCP client. Changes apply at once, without a restart.
+//! Preferences › AI Integrations: whether agents can use the open app (one switch for every Craft
+//! app, in the ArtCraft Launcher), the port, the folders agents may use, and what
+//! `photocraft-cli mcp` does while the app is closed. Changes apply at once, without a restart.
+//! Adding PhotoCraft to an MCP client is the launcher's job too, so there is nothing for it here.
 
 use super::dialogs::is_preferences;
 use super::fields::{choice_label, humanize};
@@ -12,14 +13,18 @@ pub(super) const AGENT_LINK_RETRY_S: f64 = 5.0;
 /// Start, move or stop the agent connection when its settings change
 /// ([`crate::Services::agent_link`]); the first frame applies the saved settings. A connection
 /// that is on but failed to start is tried again every [`AGENT_LINK_RETRY_S`], so freeing its
-/// port is enough, without touching a setting. The ArtCraft Launcher's agents switch
-/// ([`crate::Services::launcher_agents`]) counts as the box ticked: the person turned agents on for
-/// every Craft app there.
+/// port is enough, without touching a setting. With the suite's `AI-MCP` flag, the ArtCraft
+/// Launcher's switch ([`crate::Services::launcher_agents`]) alone decides whether agents may connect:
+/// one switch for every Craft app. Without the flag, as before, a Control Port saved in the
+/// preferences (`connectAgents`, set from it when they load).
 pub(super) fn sync_agent_link(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let launcher = app.services.launcher_agents.as_ref().is_some_and(|on| on());
+    let mcp_flag = app.agent_link.mcp_flag;
     let Some(link) = app.services.agent_link.as_mut() else { return };
     let mut effective = app.session.prefs().integrations.clone();
-    effective.connect_agents |= launcher;
+    if mcp_flag {
+        effective.connect_agents = launcher;
+    }
     let current = &effective;
     let now = crate::gpu_canvas::now_ms() / 1000.0;
     let retry_due = app.prefs_rt.agent_link_retry.is_some_and(|at| now >= at);
@@ -44,7 +49,6 @@ pub(super) fn sync_agent_link(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // do with `--control` (`PhotocraftApp::new`); the gate stays once agents have connected.
     app.session.automation_gate = app.session.automation_gate.or(app.services.automation_authorize);
     // The service reports the connection; the feature flag is the app's, set once at launch.
-    let mcp_flag = app.agent_link.mcp_flag;
     app.agent_link = update.status;
     app.agent_link.mcp_flag = mcp_flag;
     app.agent_link.launcher = launcher;
@@ -55,20 +59,12 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
     let t = Tokens::get(ui.ctx());
     let status = f.get("__agentLink").cloned().unwrap_or(Value::Null);
     let launch_flags = status.get("launchFlags").and_then(Value::as_bool) == Some(true);
-    let launcher = status.get("launcher").and_then(Value::as_bool) == Some(true);
-    let mut on = obj.get("connectAgents").and_then(Value::as_bool).unwrap_or(false);
-    let label = humanize("connectAgents");
-    if launcher && !launch_flags {
-        // On for the whole suite: shown ticked, and PhotoCraft's own choice is kept as it was.
-        ui.add_enabled_ui(false, |ui| crate::widgets::checkbox(ui, &mut true, tl!(&label)));
-        ui.label(RichText::new(tl!("Turned on in ArtCraft Launcher › Settings › AI agents, for every Craft app.")).color(t.text_dim));
-    } else {
-        ui.add_enabled_ui(!launch_flags, |ui| crate::widgets::checkbox(ui, &mut on, tl!(&label)));
-    }
-    obj.insert("connectAgents".into(), json!(on));
-    let on = on || launcher;
+    // One switch for every Craft app: ArtCraft Launcher › Settings › AI agents. There is none here.
     ui.label(
-        RichText::new(tl!("AI apps such as Claude can then open, edit and save documents here. Only programs on this computer can connect.")).color(t.text_dim),
+        RichText::new(tl!(
+            "AI apps such as Claude can open, edit and save documents in this window while ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps is on. Only programs on this computer can connect."
+        ))
+        .color(t.text_dim),
     );
     ui.add_space(4.0);
     let port = status.get("port").and_then(Value::as_u64);
@@ -77,7 +73,7 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
         (true, _, _) => (tl!("Managed by the launch options (--control).").to_string(), t.text_dim),
         (false, _, Some(e)) => (e.to_string(), t.danger),
         (false, Some(p), None) => (crate::i18n::fmt(tl!("Agents can connect on 127.0.0.1:{port}."), &[("port", &p.to_string())]), t.accent_text),
-        (false, None, None) => (tl!("Off: agents can't connect.").to_string(), t.text_faint),
+        (false, None, None) => (tl!("Off: turn on AI agents in ArtCraft Launcher › Settings › AI agents.").to_string(), t.text_faint),
     };
     ui.label(RichText::new(line).color(color));
     ui.add_space(8.0);
@@ -113,19 +109,6 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
         obj.insert("whenAppClosed".into(), json!(cur));
         ui.end_row();
     });
-    // Adding the Craft apps to an MCP client is the ArtCraft Launcher's job (Settings › AI agents,
-    // one entry for every app, storytold/craft-ai-integrations#195). Without the launcher, the
-    // configuration to paste is here, once agents may connect (launch options manage it otherwise).
-    if on && !launch_flags && f.get("__agentClients").and_then(Value::as_bool) == Some(true) {
-        ui.add_space(10.0);
-        ui.label(RichText::new(tl!("Connect an AI app")).font(crate::theme::semibold(12.5)).color(t.text));
-        ui.horizontal_wrapped(|ui| {
-            if crate::widgets::secondary_button(ui, tl!("Copy Configuration"), 120.0).clicked() {
-                f.insert("__agentAction".into(), json!("json"));
-            }
-            ui.label(RichText::new(tl!("Or add every Craft app at once in ArtCraft Launcher › Settings › AI agents.")).color(t.text_faint));
-        });
-    }
     if let Some(result) = f.get("__agentResult").and_then(Value::as_object) {
         let ok = result.get("ok").and_then(Value::as_bool) == Some(true);
         let text = result.get("message").and_then(Value::as_str).unwrap_or("");
@@ -133,9 +116,8 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
     }
 }
 
-/// A button of [`integration_rows`]: choose a folder (into the dialog's working copy), or add
-/// PhotoCraft to an MCP client through [`crate::Services::agent_clients`].
-pub(super) fn agent_action(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut Map<String, Value>, action: &str, dialog: u64) {
+/// A button of [`integration_rows`]: choose a folder (into the dialog's working copy).
+pub(super) fn agent_action(app: &mut PhotocraftApp, f: &mut Map<String, Value>, action: &str, dialog: u64) {
     let key = match action {
         "chooseRead" => Some("readRoot"),
         "chooseWrite" => Some("writeRoot"),
@@ -155,16 +137,5 @@ pub(super) fn agent_action(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut
         if let Err(e) = picked {
             f.insert("__agentResult".into(), json!({"ok": false, "message": e}));
         }
-        return;
     }
-    let Some(add) = app.services.agent_clients.as_mut() else { return };
-    let result = match add(action) {
-        Ok(text) if action == "json" => {
-            ctx.copy_text(text);
-            json!({"ok": true, "message": tl!("Configuration copied.")})
-        }
-        Ok(message) => json!({"ok": true, "message": message}),
-        Err(e) => json!({"ok": false, "message": e}),
-    };
-    f.insert("__agentResult".into(), result);
 }

@@ -93,7 +93,7 @@ impl Waiter {
 /// Cancels a waited job when its waiter goes away without collecting it: rmcp may drop the
 /// request future on cancellation, and nothing else would stop the job.
 struct Abandon {
-    /// The session or app that started the job: under `--live` the current target can change
+    /// The session or app that started the job: in live mode the current target can change
     /// before the guard drops, and the job id means nothing elsewhere.
     target: Target,
     job: Option<JobId>,

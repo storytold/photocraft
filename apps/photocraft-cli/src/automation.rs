@@ -7,7 +7,7 @@ use photocraft_automation::{Headless, PhotocraftMcp, security};
 
 use crate::{
     Result,
-    args::{CommandsArgs, McpArgs, McpCommand, ServeArgs},
+    args::{CommandsArgs, McpArgs, ServeArgs},
     output::{JsonStyle, print_json},
 };
 
@@ -68,12 +68,11 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     }
 }
 
-pub(crate) fn mcp(a: &McpArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
-    if let Some(McpCommand::Install(i)) = &a.action {
-        return mcp_install(&i.client, out);
-    }
+/// `mcp`: the open window when agents may use it, otherwise headless (`mcp_live`); `--headless`
+/// always headless; `--bridge` (or PHOTOCRAFT_CONTROL_PORT) a `photocraft --control` app.
+pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     let server = match &a.bridge {
-        _ if a.live => PhotocraftMcp::live(live_config(a)?),
+        None if !a.headless => PhotocraftMcp::live(live_config(a)?),
         Some(addr) => {
             if a.bridge_from_env {
                 // Name the mode switch, as `serve` does: the way back to headless is to unset it.
@@ -99,7 +98,8 @@ pub(crate) fn mcp(a: &McpArgs, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     Ok(rt.block_on(server.serve_stdio())?)
 }
 
-/// `mcp --live`: the app's settings folder, the closed-app override and the app launcher.
+/// `mcp`: the app's settings folder, the closed-app override, the app launcher, and the headless
+/// session's roots and rendering for when it works without the window.
 fn live_config(a: &McpArgs) -> Result<photocraft_automation::live::LiveConfig> {
     let other = |m: &str| crate::CliError::Other(m.to_string());
     let dir = photocraft_automation::app_dirs::from_env()
@@ -107,30 +107,20 @@ fn live_config(a: &McpArgs) -> Result<photocraft_automation::live::LiveConfig> {
         .ok_or_else(|| other("can't find PhotoCraft's settings folder (no home folder; set PHOTOCRAFT_CONFIG_DIR)"))?;
     let mut config = photocraft_automation::live::LiveConfig::new(dir);
     config.when_closed = a.when_closed;
-    let reads = &a.automation.automation_read_root;
-    if reads.len() > 1 {
-        return Err(other("--live takes one --automation-read-root"));
-    }
-    config.read_root = reads.first().cloned();
+    // As a headless `mcp` always did: folders that can't be opened stop the start, before the
+    // server answers anything, rather than at the first call that would fall back to them.
+    a.automation.workspace()?;
+    config.read_roots.clone_from(&a.automation.automation_read_root);
     config.write_root = a.automation.automation_write_root.clone();
     config.launch = std::env::current_exe().ok().and_then(|exe| photocraft_automation::live::launcher(&exe));
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(crate::CliError::Other)?;
+    config.prepare_headless = Some(Box::new(move |h| {
+        policy.apply_to_headless(h);
+        // stdout carries the protocol; the warnings a headless start has go to stderr.
+        let mut err = std::io::stderr();
+        for d in h.drain_diagnostics() {
+            let _ = writeln!(err, "warning: {d}");
+        }
+    }));
     Ok(config)
-}
-
-/// `mcp install --client <id>`: add this CLI (`mcp --live`) to an MCP client.
-fn mcp_install(id: &str, out: &mut dyn Write) -> Result {
-    use photocraft_automation::agent_link::{Client, ClientEnv, McpLaunch, install};
-    use std::path::Path;
-    let other = |m: String| crate::CliError::Other(m);
-    let ids = Client::ALL.map(Client::id).join(", ");
-    let client = Client::parse(id).ok_or_else(|| other(format!("unknown --client `{id}`: expected one of {ids}")))?;
-    let exe = std::env::current_exe().map_err(|e| other(format!("can't find this program's path: {e}")))?;
-    let launch = match std::env::var_os("APPIMAGE").filter(|v| !v.is_empty()) {
-        Some(image) => McpLaunch::beside(Path::new(""), Some(Path::new(&image))),
-        // Not canonicalized: Windows would turn it into a `\\?\` path some clients can't start.
-        None => McpLaunch::cli(&exe),
-    };
-    let done = install(client, &launch, &ClientEnv::from_env())?;
-    writeln!(out, "{}", done.message(client))?;
-    Ok(())
 }

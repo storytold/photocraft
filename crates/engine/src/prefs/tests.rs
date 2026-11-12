@@ -1218,7 +1218,7 @@ fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
     }
 }
 
-/// A file from before *Let AI agents connect* whose Control Port started the control server keeps
+/// A file from before the agents switch whose Control Port started the control server keeps
 /// it on; one without a port, or that already says, is left as it is.
 #[test]
 fn a_saved_control_port_turns_the_agent_connection_on() {

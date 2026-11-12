@@ -15,11 +15,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             f.insert("__agentLink".into(), serde_json::to_value(&app.agent_link).unwrap_or(Value::Null));
-            f.insert("__agentClients".into(), json!(app.services.agent_clients.is_some()));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
             if let Some(action) = f.remove("__agentAction").and_then(|a| a.as_str().map(str::to_string)) {
-                super::agents::agent_action(app, ui.ctx(), f, &action, id);
+                super::agents::agent_action(app, f, &action, id);
             }
         }
         "shortcuts" => shortcuts_body(app, ui, f),

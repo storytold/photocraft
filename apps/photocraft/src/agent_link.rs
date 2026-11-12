@@ -1,7 +1,8 @@
-//! Preferences › AI Integrations on the desktop: while *Let AI agents connect* is on, the app
-//! serves the control protocol by itself (no `--control`) and publishes the connection file
-//! `photocraft-cli mcp --live` finds it by ([`photocraft_automation::agent_link`]). Turning it on
-//! or off, or changing the port or folders, applies at once. The token stays in the settings
+//! Agents in the open desktop app: while the person lets them in (ArtCraft Launcher › Settings ›
+//! AI agents; without the `AI-MCP` flag, a Control Port saved before), the app serves the control
+//! protocol by itself (no `--control`) and publishes the connection file `photocraft-cli mcp`
+//! finds it by ([`photocraft_automation::agent_link`]). Turning it on or off, or changing the
+//! port or folders in Preferences › AI Integrations, applies at once. The token stays in the settings
 //! folder across launches (`agent-control.token`, as `--control-token-file` would keep it; delete
 //! it for a new one). Agent requests get the policy and the folders chosen there, exactly as with
 //! `--control` and the automation roots.
@@ -12,10 +13,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
-use photocraft_automation::agent_link::{self, Client, ClientEnv, Connection, McpLaunch};
+use photocraft_automation::agent_link::{self, Connection};
 use photocraft_automation::security;
 use photocraft_engine::prefs::Integrations;
-use photocraft_ui_egui::{AgentClientFn, AgentLink, AgentLinkFn, AgentLinkStatus, ControlRequest};
+use photocraft_ui_egui::{AgentLink, AgentLinkFn, ControlRequest};
 
 use crate::control_server;
 
@@ -49,16 +50,15 @@ fn start(dir: &Path, port: u16, ctx: &egui::Context, port_pref: u32) -> Result<(
 }
 
 /// The agent connection service (`settings_dir`: where the connection file and token go).
-pub fn service(settings_dir: Option<PathBuf>, mcp: Option<McpLaunch>) -> AgentLinkFn {
+pub fn service(settings_dir: Option<PathBuf>) -> AgentLinkFn {
     let mut running: Option<Running> = None;
-    let mcp_command = mcp.map(|m| m.shell_line());
-    Box::new(move |integrations: &Integrations, ctx: &egui::Context| apply(&mut running, settings_dir.as_deref(), integrations, ctx, mcp_command.clone()))
+    Box::new(move |integrations: &Integrations, ctx: &egui::Context| apply(&mut running, settings_dir.as_deref(), integrations, ctx))
 }
 
 /// Bring the connection in line with `integrations`: start, restart on another port, stop, or only
 /// change the folders agents may use.
-fn apply(running: &mut Option<Running>, dir: Option<&Path>, integrations: &Integrations, ctx: &egui::Context, mcp_command: Option<String>) -> AgentLink {
-    let mut out = AgentLink { status: AgentLinkStatus { mcp_command, ..Default::default() }, ..Default::default() };
+fn apply(running: &mut Option<Running>, dir: Option<&Path>, integrations: &Integrations, ctx: &egui::Context) -> AgentLink {
+    let mut out = AgentLink::default();
     if !integrations.connect_agents {
         out.stopped = running.take().is_some();
         return out;
@@ -139,30 +139,6 @@ pub fn launcher_watch(ctx: &egui::Context) -> Box<dyn Fn() -> bool> {
     Box::new(move || on.load(Ordering::Relaxed))
 }
 
-/// How MCP clients start this install's CLI (`photocraft-cli mcp --live`), or `None` when it
-/// isn't installed beside the app (a development build of the app alone).
-pub fn mcp_launch() -> Option<McpLaunch> {
-    if let Some(id) = std::env::var_os("FLATPAK_ID").filter(|v| !v.is_empty()) {
-        let args = ["run", "--command=photocraft-cli", &id.to_string_lossy(), "mcp", "--live"].map(str::to_string).to_vec();
-        return Some(McpLaunch { command: "flatpak".into(), args });
-    }
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let appimage = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty()).map(PathBuf::from);
-    let launch = McpLaunch::beside(dir, appimage.as_deref());
-    (appimage.is_some() || dir.join(agent_link::cli_file_name()).is_file()).then_some(launch)
-}
-
-/// Copy Configuration (`json`): the configuration to paste into an MCP client. The same entry
-/// point as `photocraft-cli mcp install --client`, which also adds to a client's own file.
-pub fn clients(mcp: Option<McpLaunch>) -> AgentClientFn {
-    Box::new(move |id: &str| {
-        let client = Client::parse(id).ok_or_else(|| format!("unknown MCP client `{id}`"))?;
-        let launch = mcp.as_ref().ok_or_else(|| format!("photocraft-cli isn't installed beside PhotoCraft, so {} can't start it", client.name()))?;
-        agent_link::install(client, launch, &ClientEnv::from_env()).map(|done| done.message(client)).map_err(|e| e.to_string())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +160,7 @@ mod tests {
     fn turning_agents_on_publishes_a_reachable_connection_and_off_removes_it() {
         let dir = temp();
         let ctx = egui::Context::default();
-        let mut link = service(Some(dir.clone()), None);
+        let mut link = service(Some(dir.clone()));
         // Off (the default): nothing listens, nothing is published.
         let off = link(&Integrations::default(), &ctx);
         assert!(off.requests.is_none() && !off.stopped && off.status.port.is_none());
@@ -231,7 +207,7 @@ mod tests {
     fn a_new_port_restarts_with_the_same_token_and_a_taken_port_is_reported() {
         let dir = temp();
         let ctx = egui::Context::default();
-        let mut link = service(Some(dir.clone()), None);
+        let mut link = service(Some(dir.clone()));
         let first = link(&on(0), &ctx);
         let first_port = first.status.port.unwrap();
         let token_file = dir.join(agent_link::TOKEN_FILE);
@@ -264,7 +240,7 @@ mod tests {
         let settings = dir.join("not-a-folder");
         std::fs::write(&settings, b"").unwrap();
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let mut link = service(Some(settings), None);
+        let mut link = service(Some(settings));
         let r = link(&on(u32::from(port)), &egui::Context::default());
         assert!(r.requests.is_none() && r.status.port.is_none());
         assert!(r.status.error.as_deref().is_some_and(|e| e.contains("token file")), "{:?}", r.status.error);
@@ -276,7 +252,7 @@ mod tests {
     #[test]
     fn a_relative_folder_is_left_out_with_a_reason() {
         let dir = temp();
-        let mut link = service(Some(dir.clone()), None);
+        let mut link = service(Some(dir.clone()));
         let r = link(&Integrations { read_root: ".".into(), ..on(0) }, &egui::Context::default());
         assert!(r.status.port.is_some());
         assert!(r.status.error.as_deref().is_some_and(|e| e.contains("not an absolute path")), "{:?}", r.status.error);
@@ -288,7 +264,7 @@ mod tests {
     #[test]
     fn allow_agent_control_off_keeps_agents_out() {
         let dir = temp();
-        let mut link = service(Some(dir.clone()), None);
+        let mut link = service(Some(dir.clone()));
         let r = link(&Integrations { allow_agent_control: false, ..on(0) }, &egui::Context::default());
         assert!(r.requests.is_none() && r.status.port.is_none() && r.automation.command.is_none());
         assert!(r.status.error.as_deref().is_some_and(|e| e.contains("Allow Agent Control")), "{:?}", r.status.error);
@@ -298,18 +274,8 @@ mod tests {
 
     #[test]
     fn no_settings_folder_is_an_error_not_a_panic() {
-        let mut link = service(None, None);
+        let mut link = service(None);
         let r = link(&on(0), &egui::Context::default());
         assert!(r.requests.is_none() && r.status.error.is_some());
-    }
-
-    #[test]
-    fn clients_without_a_cli_say_so() {
-        let mut add = clients(None);
-        assert!(add("cursor").unwrap_err().contains("photocraft-cli"));
-        assert!(add("nope").unwrap_err().contains("unknown"));
-        assert!(add("json").unwrap_err().contains("photocraft-cli"));
-        let mut add = clients(Some(McpLaunch::cli(Path::new("/x/photocraft-cli"))));
-        assert!(add("json").unwrap().contains("mcp"));
     }
 }

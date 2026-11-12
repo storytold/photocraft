@@ -12,7 +12,7 @@
 //!   control protocol's envelope, used by `photocraft-cli serve`.
 //! * [`files`]: open/save any supported format, `.pcraft` natively.
 //! * [`agent_link`] and [`live`]: connecting agents to the desktop app without a terminal
-//!   (Edit › Preferences › AI Integrations, `photocraft-cli mcp --live` and `mcp install`).
+//!   (the ArtCraft Launcher's agents switch and plain `photocraft-cli mcp`).
 //!
 //! L6, no UI-toolkit dependencies.
 #![forbid(unsafe_code)]

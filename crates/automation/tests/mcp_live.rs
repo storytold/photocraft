@@ -1,4 +1,4 @@
-//! `photocraft-cli mcp --live` (Preferences › AI Integrations): the MCP server finds the desktop
+//! Plain `photocraft-cli mcp` with agents allowed (the ArtCraft Launcher's switch): the MCP server finds the desktop
 //! app through its connection file before every call, follows it to a new port and token, and
 //! applies the closed-app choice (start it, headless, or an error) when no app answers.
 
@@ -60,7 +60,7 @@ fn prefs(dir: &Path, integrations: Value) {
     std::fs::write(dir.join("preferences.json"), json!({"integrations": integrations}).to_string()).unwrap();
 }
 
-/// A desktop app as `--live` sees it: a control server on a free port with a fresh token, its
+/// A desktop app as `mcp` sees it: a control server on a free port with a fresh token, its
 /// connection file published in `dir`. `ui.inspect` answers with `name`. [`quit`] stops it.
 struct FakeApp {
     port: u16,
@@ -125,21 +125,19 @@ fn live(dir: &Path, when_closed: Option<WhenAppClosed>) -> LiveConfig {
     let mut c = LiveConfig::new(dir.to_path_buf());
     c.when_closed = when_closed;
     c.launch_timeout = Duration::from_secs(10);
-    // The machine's own ArtCraft Launcher settings stay out of the tests.
-    c.launcher_allows = || false;
+    // The machine's own ArtCraft Launcher and feature flags stay out of the tests: agents are
+    // allowed exactly when the test's preferences say so (as without the AI-MCP flag).
+    c.allowed = |i| i.connect_agents;
     c
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_closed_app_is_a_tool_error_that_says_what_to_do() {
     let dir = settings_dir("closed");
+    prefs(&dir, json!({"connectAgents": true}));
     let client = connect(PhotocraftMcp::live(live(&dir, Some(WhenAppClosed::Error)))).await;
     // The tool list doesn't need the app.
     assert!(client.list_all_tools().await.unwrap().iter().any(|t| t.name == "ui_inspect"));
-    let r = call(&client, "ui_inspect", json!({})).await;
-    assert_eq!(r.is_error, Some(true));
-    assert!(text(&r).contains("Let AI agents connect"), "connection off: {}", text(&r));
-    prefs(&dir, json!({"connectAgents": true}));
     let r = call(&client, "command_list", json!({})).await;
     assert_eq!(r.is_error, Some(true));
     assert!(text(&r).contains("isn't running"), "{}", text(&r));
@@ -197,16 +195,19 @@ async fn launch_starts_the_app_once_and_only_when_agents_may_connect() {
         }));
         c
     };
-    // Agent connections off in the app: it would never listen, so it isn't started.
+    // Agents not allowed: the app would never listen, so it isn't started; the session works
+    // without a window, as `mcp` always did.
     let client = connect(PhotocraftMcp::live(config(&dir))).await;
     let r = call(&client, "ui_inspect", json!({})).await;
-    assert!(text(&r).contains("Let AI agents connect"), "{}", text(&r));
+    assert!(text(&r).contains("bridge"), "UI tools need the open app: {}", text(&r));
+    let r = call(&client, "command_list", json!({})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
     assert_eq!(launches.load(Ordering::SeqCst), 0);
     client.cancel().await.unwrap();
 
-    // The ArtCraft Launcher's switch alone is consent: the app is started without its own box.
+    // The ArtCraft Launcher's switch is the consent: the app is started on it alone.
     let mut c = config(&dir);
-    c.launcher_allows = || true;
+    c.allowed = |_| true;
     let client = connect(PhotocraftMcp::live(c)).await;
     let r = call(&client, "ui_inspect", json!({})).await;
     assert_eq!(r.is_error, Some(false), "{}", text(&r));
@@ -265,7 +266,7 @@ async fn headless_uses_the_app_folders_and_stays_headless() {
     let dir = settings_dir("headless");
     let work = dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
-    prefs(&dir, json!({"whenAppClosed": "headless", "writeRoot": work.to_string_lossy()}));
+    prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "headless", "writeRoot": work.to_string_lossy()}));
     let client = connect(PhotocraftMcp::live(live(&dir, None))).await;
     let r = call(&client, "doc_new", json!({"width": 8, "height": 8})).await;
     assert_eq!(r.is_error, Some(false), "{}", text(&r));
@@ -284,12 +285,55 @@ async fn headless_uses_the_app_folders_and_stays_headless() {
     client.cancel().await.unwrap();
     quit(app);
     // A folder that doesn't exist is a clear error, not a crash.
-    prefs(&dir, json!({"whenAppClosed": "headless", "readRoot": dir.join("missing").to_string_lossy()}));
+    prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "headless", "readRoot": dir.join("missing").to_string_lossy()}));
     std::fs::remove_file(dir.join(agent_link::CONNECTION_FILE)).unwrap();
     let client = connect(PhotocraftMcp::live(live(&dir, None))).await;
     let r = call(&client, "command_list", json!({})).await;
     assert_eq!(r.is_error, Some(true));
     assert!(text(&r).contains("agent folders"), "{}", text(&r));
     client.cancel().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Agents not allowed: `mcp` serves a session without a window as it always did, with only the
+/// folders given to the command (the app's own folders are for agents the person let in), never
+/// starts the app, and prepares the session as the command asked (`--gpu`).
+#[tokio::test(flavor = "multi_thread")]
+async fn without_consent_mcp_is_headless_with_its_own_folders() {
+    static PREPARED: AtomicUsize = AtomicUsize::new(0);
+    let dir = settings_dir("no-consent");
+    let (app_folder, given) = (dir.join("app-folder"), dir.join("given"));
+    std::fs::create_dir_all(&app_folder).unwrap();
+    std::fs::create_dir_all(&given).unwrap();
+    prefs(&dir, json!({"whenAppClosed": "launch", "writeRoot": app_folder.to_string_lossy()}));
+    let launches = Arc::new(AtomicUsize::new(0));
+    let config = |write_root: Option<PathBuf>| {
+        let mut c = live(&dir, None);
+        c.write_root = write_root;
+        let launches = launches.clone();
+        c.launch = Some(Box::new(move || {
+            launches.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        c.prepare_headless = Some(Box::new(|_| {
+            PREPARED.fetch_add(1, Ordering::SeqCst);
+        }));
+        c
+    };
+    let client = connect(PhotocraftMcp::live(config(None))).await;
+    let r = call(&client, "doc_new", json!({"width": 8, "height": 8})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    let r = call(&client, "doc_save", json!({"path": "out.pcraft"})).await;
+    assert_eq!(r.is_error, Some(true), "the app's folder isn't granted without consent");
+    assert!(!app_folder.join("out.pcraft").exists());
+    client.cancel().await.unwrap();
+    let client = connect(PhotocraftMcp::live(config(Some(given.clone())))).await;
+    call(&client, "doc_new", json!({"width": 8, "height": 8})).await;
+    let r = call(&client, "doc_save", json!({"path": "out.pcraft"})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    assert!(given.join("out.pcraft").exists(), "the command's own root is used");
+    client.cancel().await.unwrap();
+    assert_eq!(launches.load(Ordering::SeqCst), 0, "never started without consent");
+    assert_eq!(PREPARED.load(Ordering::SeqCst), 2, "each headless session is prepared once");
     let _ = std::fs::remove_dir_all(&dir);
 }

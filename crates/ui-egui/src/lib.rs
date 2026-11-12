@@ -261,7 +261,7 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AgentClientFn, AgentLink, AgentLinkFn, AgentLinkStatus, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn,
+    AdoptAutosaveFn, AgentLink, AgentLinkFn, AgentLinkStatus, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn,
     AutomationReadFn, AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn,
     ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession,
     ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn,

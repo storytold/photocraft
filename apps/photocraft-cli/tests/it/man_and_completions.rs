@@ -49,8 +49,6 @@ fn the_example_writes_the_files_the_packages_install() {
     let mut expected: Vec<String> = completions.map(String::from).into();
     expected.push("photocraft-cli.1".into());
     expected.extend(subcommands.iter().map(|s| format!("photocraft-cli-{s}.1")));
-    // Nested subcommands get their own page too (the packages install every `*.1`).
-    expected.push("photocraft-cli-mcp-install.1".into());
     expected.sort();
     assert_eq!(written, expected);
     std::fs::remove_dir_all(&dir).unwrap();

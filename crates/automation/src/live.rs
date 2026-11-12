@@ -1,12 +1,13 @@
-//! `photocraft-cli mcp --live`: tools go to the desktop app found through its connection file
-//! ([`crate::agent_link`]). The file is looked up again on every tool call, so the app may start,
-//! quit or move to another port while the MCP client stays connected, and the MCP client's own
-//! start never opens a window.
+//! `photocraft-cli mcp`: tools go to the open desktop app when the person lets agents use it,
+//! found through its connection file ([`crate::agent_link`]), and otherwise to a session without
+//! a window, as `mcp` always did (`--headless` forces that). The file is looked up again on every
+//! tool call, so the app may start, quit or move to another port while the MCP client stays
+//! connected, and the MCP client's own start never opens a window.
 //!
-//! While the app is closed, MCP › When PhotoCraft Is Closed (or `--when-closed`)
+//! While agents may use the app but it is closed, When PhotoCraft Is Closed (or `--when-closed`)
 //! decides: start the app and wait for it, serve a headless session with the folders chosen in
-//! the app (then for the rest of the MCP session, so documents don't move under the agent), or
-//! report an error that says what to do.
+//! the app, or report an error that says what to do. A session that went headless stays headless
+//! for the rest of the MCP session, so documents don't move under the agent.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -21,6 +22,8 @@ use crate::{AuthorizedWorkspace, security};
 
 /// Starts the desktop app (see [`launcher`]).
 pub type LaunchFn = Box<dyn Fn() -> Result<(), String> + Send + Sync>;
+/// Prepares a headless session before its first call (see [`LiveConfig::prepare_headless`]).
+pub type PrepareFn = Box<dyn Fn(&mut Headless) + Send + Sync>;
 
 /// How long a started app gets to accept agents. A first start can take a while (GPU driver
 /// shader caches, font scan), but MCP clients give a tool call about a minute.
@@ -32,16 +35,18 @@ pub struct LiveConfig {
     pub config_dir: PathBuf,
     /// Overrides the app's preference (`--when-closed`).
     pub when_closed: Option<WhenAppClosed>,
-    /// Override the app's folders for a headless session (`--automation-read-root`,
-    /// `--automation-write-root`).
-    pub read_root: Option<PathBuf>,
+    /// The folders a headless session may use (`--automation-read-root`, repeatable, and
+    /// `--automation-write-root`); while agents may use the app, they override its folders.
+    pub read_roots: Vec<PathBuf>,
     pub write_root: Option<PathBuf>,
     /// Starts the app; `None` when this install can't (Flatpak sandbox, no app beside the CLI).
     pub launch: Option<LaunchFn>,
     pub launch_timeout: Duration,
-    /// Whether the ArtCraft Launcher turned agents on for every Craft app
-    /// ([`agent_link::launcher_allows_agents`]); tests replace it.
-    pub launcher_allows: fn() -> bool,
+    /// Whether the person lets agents use the open app, given its saved preferences
+    /// ([`agent_link::agents_allowed_now`]: the ArtCraft Launcher's switch); tests replace it.
+    pub allowed: fn(&photocraft_engine::prefs::Integrations) -> bool,
+    /// Prepares a headless session before its first call (the CLI's `--gpu` / `--no-gpu`).
+    pub prepare_headless: Option<PrepareFn>,
 }
 
 impl LiveConfig {
@@ -49,11 +54,12 @@ impl LiveConfig {
         LiveConfig {
             config_dir,
             when_closed: None,
-            read_root: None,
+            read_roots: Vec::new(),
             write_root: None,
             launch: None,
             launch_timeout: LAUNCH_TIMEOUT,
-            launcher_allows: agent_link::launcher_allows_agents,
+            allowed: agent_link::agents_allowed_now,
+            prepare_headless: None,
         }
     }
 }
@@ -97,33 +103,50 @@ impl Live {
             return Ok(());
         }
         let dir = self.cfg.config_dir.clone();
-        let launcher_allows = self.cfg.launcher_allows;
-        let (found, integrations, launcher) = blocking(move || (find_app(&dir), agent_link::read_integrations(&dir), launcher_allows())).await?;
-        let allowed = agent_link::agents_allowed(&integrations, launcher);
+        let consent = self.cfg.allowed;
+        let (found, integrations, allowed) = blocking(move || {
+            let integrations = agent_link::read_integrations(&dir);
+            let allowed = consent(&integrations);
+            (find_app(&dir), integrations, allowed)
+        })
+        .await?;
         if let Some((c, token)) = found? {
             self.use_app(&c, token)?;
             return Ok(());
         }
+        if !allowed {
+            // As `mcp` always worked: a session without a window, with only the folders given to
+            // this command. The app's own folders are for agents the person let in.
+            return self.headless(&self.cfg.read_roots, self.cfg.write_root.clone(), "the automation roots can't be used");
+        }
         match self.cfg.when_closed.unwrap_or(integrations.when_app_closed) {
-            WhenAppClosed::Error => Err(closed(allowed)),
+            WhenAppClosed::Error => Err("PhotoCraft isn't running: open it, then try again.".into()),
             WhenAppClosed::Headless => {
-                let read = self.cfg.read_root.clone().or_else(|| agent_link::folder(&integrations.read_root));
+                let reads = if self.cfg.read_roots.is_empty() {
+                    agent_link::folder(&integrations.read_root).into_iter().collect()
+                } else {
+                    self.cfg.read_roots.clone()
+                };
                 let write = self.cfg.write_root.clone().or_else(|| agent_link::folder(&integrations.write_root));
-                let workspace = AuthorizedWorkspace::new(read.as_deref(), write.as_deref())
-                    .map_err(|e| format!("PhotoCraft isn't running and its agent folders can't be used: {e}"))?;
-                self.set(Target::Headless(Arc::new(Mutex::new(Headless::with_workspace(workspace)))), None);
-                Ok(())
+                self.headless(&reads, write, "PhotoCraft isn't running and its agent folders can't be used")
             }
-            WhenAppClosed::Launch => self.launch_and_wait(allowed).await,
+            WhenAppClosed::Launch => self.launch_and_wait().await,
         }
     }
 
-    /// `allowed`: agents may connect ([`agent_link::agents_allowed`]); otherwise the app would never
-    /// listen, so it isn't started.
-    async fn launch_and_wait(&self, allowed: bool) -> Result<(), String> {
-        if !allowed {
-            return Err(closed(false));
+    /// Serve a headless session with these folders from now on.
+    fn headless(&self, reads: &[PathBuf], write: Option<PathBuf>, why: &str) -> Result<(), String> {
+        let workspace = AuthorizedWorkspace::with_read_roots(reads.iter().map(PathBuf::as_path), write.as_deref()).map_err(|e| format!("{why}: {e}"))?;
+        let mut session = Headless::with_workspace(workspace);
+        if let Some(prepare) = &self.cfg.prepare_headless {
+            prepare(&mut session);
         }
+        self.set(Target::Headless(Arc::new(Mutex::new(session))), None);
+        Ok(())
+    }
+
+    /// Start the app (agents may use it) and wait until it accepts them.
+    async fn launch_and_wait(&self) -> Result<(), String> {
         let Some(launch) = &self.cfg.launch else {
             return Err("PhotoCraft isn't running, and this install can't start it from here: open PhotoCraft, then try again.".into());
         };
@@ -137,7 +160,7 @@ impl Live {
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "PhotoCraft didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check Edit › Preferences › AI Integrations.",
+                    "PhotoCraft didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check that AI agents are on in ArtCraft Launcher › Settings › AI agents.",
                     self.cfg.launch_timeout.as_secs()
                 ));
             }
@@ -170,14 +193,6 @@ fn find_app(dir: &Path) -> Result<Option<(Connection, String)>, String> {
     }
     let token = security::client_token(None, Some(&c.token_file)).map_err(|e| format!("PhotoCraft's agent token: {e}"))?;
     Ok(Some((c, token)))
-}
-
-fn closed(allowed: bool) -> String {
-    if allowed {
-        "PhotoCraft isn't running: open it, then try again.".into()
-    } else {
-        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › AI Integrations › Let AI agents connect (or ArtCraft Launcher › Settings › AI agents), then try again.".into()
-    }
 }
 
 /// How to start the desktop app that ships with the CLI at `cli` (detached, with no standard

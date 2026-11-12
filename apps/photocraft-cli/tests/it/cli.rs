@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 /// The binary, without the variables `mcp` and `serve` fall back to: a test that wants one sets it.
 fn bin() -> Command {
-    let mut cmd = Command::new(crate::binary());
+    let mut cmd = crate::command();
     for var in ENV_VARS {
         cmd.env_remove(var);
     }
@@ -163,9 +163,7 @@ fn server_usage_error(args: &[&str], expected: &str) {
 #[test]
 fn server_modes_reject_ignored_or_conflicting_options() {
     for sub in ["mcp", "serve"] {
-        // `mcp` has a subcommand (`mcp install`), so clap reads a stray word there as one.
-        let stray = if sub == "mcp" { "unrecognized subcommand 'stray.psd'" } else { "unexpected argument 'stray.psd'" };
-        server_usage_error(&[sub, "stray.psd"], stray);
+        server_usage_error(&[sub, "stray.psd"], "unexpected argument 'stray.psd'");
         for flag in ["--control-token", "--control-token-file"] {
             server_usage_error(&[sub, flag, "unused"], if sub == "mcp" { "requires --bridge" } else { "requires --port" });
         }
@@ -2032,44 +2030,20 @@ fn info_detail_adds_text_runs_and_antialiasing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `mcp install --client json` prints the configuration MCP clients start `mcp --live` with;
-/// Cursor's file gets the same entry, other servers kept (Preferences › AI Integrations).
+/// Flags that don't go together are usage errors before anything starts. Adding PhotoCraft to an
+/// MCP client is the ArtCraft Launcher's job, so there is no `mcp install`, and plain `mcp` does
+/// what `--live` did, so there is no `--live` either.
 #[test]
-fn mcp_install_writes_the_live_entry() {
-    let home = tmp("mcp-install");
-    let out = ok(bin().args(["mcp", "install", "--client", "json"]).env("HOME", &home)).stdout;
-    let v: Value = serde_json::from_str(&out).unwrap();
-    let entry = &v["mcpServers"]["photocraft"];
-    assert_eq!(entry["args"], json!(["mcp", "--live"]), "{out}");
-    assert!(entry["command"].as_str().unwrap().contains("photocraft-cli"), "{out}");
-    // Cursor never opened here: nothing is written, and the error says what to do.
-    let o = bin().args(["mcp", "install", "--client", "cursor"]).env("HOME", &home).env("USERPROFILE", &home).output().unwrap();
-    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("open it once"), "{o:?}");
-    assert!(!home.join(".cursor").exists());
-    let cursor = home.join(".cursor/mcp.json");
-    std::fs::create_dir_all(cursor.parent().unwrap()).unwrap();
-    std::fs::write(&cursor, r#"{"mcpServers": {"other": {"command": "x"}}}"#).unwrap();
-    let out = ok(bin().args(["mcp", "install", "--client", "cursor"]).env("HOME", &home).env("USERPROFILE", &home)).stdout;
-    assert!(out.contains("Cursor"), "{out}");
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(&cursor).unwrap()).unwrap();
-    assert_eq!(v["mcpServers"]["other"]["command"], "x");
-    assert_eq!(v["mcpServers"]["photocraft"], *entry);
-}
-
-/// Flags that don't go together are usage errors before anything starts.
-#[test]
-fn mcp_live_and_install_reject_mismatched_flags() {
+fn mcp_rejects_mismatched_flags() {
     for (args, needle) in [
-        (&["mcp", "install"][..], "--client"),
-        (&["mcp", "install", "--client", "vscode"], "vscode"),
-        (&["mcp", "install", "--client", "json", "--live"], "--live"),
-        (&["mcp", "frob"], "frob"),
+        (&["mcp", "install"][..], "install"),
+        (&["mcp", "--live"], "--live"),
         (&["mcp", "--client", "json"], "--client"),
-        (&["mcp", "--when-closed", "launch"], "--live"),
-        (&["mcp", "--live", "--bridge", "127.0.0.1:1"], "--bridge"),
-        (&["mcp", "--live", "--control-token-file", "t"], "--control-token-file"),
-        (&["mcp", "--live", "--when-closed", "sometimes"], "sometimes"),
-        (&["mcp", "--live", "--gpu"], "--gpu"),
+        (&["mcp", "--headless", "--bridge", "127.0.0.1:1"], "--bridge"),
+        (&["mcp", "--headless", "--control-token-file", "t"], "--control-token-file"),
+        (&["mcp", "--headless", "--when-closed", "launch"], "--when-closed"),
+        (&["mcp", "--when-closed", "sometimes"], "sometimes"),
+        (&["mcp", "--bridge", "127.0.0.1:1", "--when-closed", "error"], "--when-closed"),
     ] {
         let o = bin().args(args).stdin(Stdio::null()).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
@@ -2078,22 +2052,15 @@ fn mcp_live_and_install_reject_mismatched_flags() {
     }
 }
 
-/// `mcp --live` serves MCP without the app; a tool call says how to connect it. A
-/// PHOTOCRAFT_CONTROL_PORT exported for another tool (here not even a port) is not read.
-#[test]
-fn mcp_live_without_the_app_explains_what_to_do() {
-    let dir = tmp("mcp-live");
-    let mut child = bin()
-        .args(["mcp", "--live", "--when-closed", "error"])
-        .env("PHOTOCRAFT_CONFIG_DIR", &dir)
-        // The machine's ArtCraft Launcher may have agents on; this test needs them off.
-        .env("CRAFT_MCP_DIR", &dir)
-        .env("PHOTOCRAFT_CONTROL_PORT", "not-a-port")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+/// One MCP exchange with `photocraft-cli mcp <args>`: initialize, then each tool call; returns the
+/// tool results.
+fn mcp_session(args: &[&str], env: &[(&str, &std::ffi::OsStr)], calls: &[(&str, Value)]) -> Vec<Value> {
+    let mut cmd = bin();
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut send = |v: Value| {
@@ -2114,12 +2081,37 @@ fn mcp_live_without_the_app_explains_what_to_do() {
         "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
     recv(1);
     send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
-    send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ui_inspect","arguments":{}}}));
-    let r = recv(2);
-    assert_eq!(r["result"]["isError"], true, "{r}");
-    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Preferences › AI Integrations › Let AI agents connect"), "{r}");
+    let mut out = Vec::new();
+    for (i, (name, arguments)) in calls.iter().enumerate() {
+        let id = 2 + i as u64;
+        send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}}));
+        out.push(recv(id)["result"].clone());
+    }
     drop(stdin);
     let _ = child.kill();
     let _ = child.wait();
+    out
+}
+
+/// Plain `mcp` without the person's consent works headless, as it always did: commands run, UI
+/// tools say they need the open app. `--headless` too, and it doesn't read a PHOTOCRAFT_CONTROL_PORT
+/// exported for another tool (here not even a port).
+#[test]
+fn mcp_without_consent_works_headless() {
+    let dir = tmp("mcp-plain");
+    let empty = tmp("mcp-plain-launcher");
+    // `crate::command()` keeps the machine's launcher and flags out already; this test names its
+    // own settings and an empty launcher folder as well, to say what it relies on.
+    let env = [("PHOTOCRAFT_CONFIG_DIR", dir.as_os_str()), ("CRAFT_MCP_DIR", empty.as_os_str())];
+    let calls = [("command_list", json!({})), ("ui_inspect", json!({}))];
+    let r = mcp_session(&["mcp", "--when-closed", "error"], &env, &calls);
+    assert_ne!(r[0]["isError"], true, "headless commands run: {}", r[0]);
+    assert_eq!(r[1]["isError"], true, "{}", r[1]);
+    assert!(r[1]["content"][0]["text"].as_str().unwrap().contains("bridge"), "{}", r[1]);
+    let mut env = env.to_vec();
+    env.push(("PHOTOCRAFT_CONTROL_PORT", std::ffi::OsStr::new("not-a-port")));
+    let r = mcp_session(&["mcp", "--headless"], &env, &calls[..1]);
+    assert_ne!(r[0]["isError"], true, "{}", r[0]);
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&empty);
 }

@@ -50,12 +50,15 @@ fn ai_integrations_start_and_stop_the_agent_connection_through_the_service() {
     assert!(crate::control::inspect(&app, &ctx).get("agentLink").is_some());
 }
 
-/// The ArtCraft Launcher's agents switch counts as the box ticked, and turning it off there stops
-/// the connection again; PhotoCraft's own saved choice is never changed by it.
+/// With the AI-MCP flag the ArtCraft Launcher's switch is the one consent: it starts the
+/// connection, turning it off there stops it again, and a Control Port saved before (the old,
+/// flag-less way) doesn't keep it on.
 #[test]
-fn the_launcher_switch_turns_the_agent_connection_on_without_the_box() {
+fn with_the_flag_the_launcher_switch_alone_turns_the_agent_connection_on_and_off() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let (mut app, _) = app_with_store();
+    app.agent_link.mcp_flag = true;
+    app.run("prefs.set", json!({"values": {"integrations.connectAgents": true}})).unwrap();
     let ctx = egui::Context::default();
     let calls: Arc<Mutex<Vec<bool>>> = Arc::default();
     let seen = calls.clone();
@@ -76,13 +79,32 @@ fn the_launcher_switch_turns_the_agent_connection_on_without_the_box() {
     tick(&mut app, &ctx);
     assert_eq!(*calls.lock().unwrap(), [false, true], "the launcher's switch alone starts it");
     assert!(app.agent_link.launcher && app.agent_link.port == Some(4321));
-    assert!(!app.session.prefs().integrations.connect_agents, "the box's own value is kept");
     tick(&mut app, &ctx);
     assert_eq!(calls.lock().unwrap().len(), 2, "no change, no restart");
     launcher.store(false, Ordering::Relaxed);
     tick(&mut app, &ctx);
     assert_eq!(*calls.lock().unwrap(), [false, true, false], "off in the launcher stops it");
     assert!(!app.agent_link.launcher && app.agent_link.port.is_none());
+}
+
+/// Without the AI-MCP flag nothing changes from before: the launcher's switch means nothing, and a
+/// Control Port saved in the preferences keeps its connection.
+#[test]
+fn without_the_flag_the_launcher_switch_means_nothing() {
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    let calls: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let seen = calls.clone();
+    app.services.agent_link = Some(Box::new(move |p: &prefs::Integrations, _: &egui::Context| {
+        seen.lock().unwrap().push(p.connect_agents);
+        crate::AgentLink { stopped: !p.connect_agents, ..Default::default() }
+    }));
+    app.services.launcher_agents = Some(Box::new(|| true));
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), [false], "the launcher's switch needs the flag");
+    app.run("prefs.set", json!({"values": {"integrations.connectAgents": true}})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), [false, true], "a saved Control Port still counts");
 }
 
 /// The connection's updates keep the AI-MCP flag the app was started with: losing it would put the
@@ -100,18 +122,13 @@ fn connection_updates_keep_the_mcp_flag() {
     assert!(app.agent_link.mcp_flag, "after a change");
 }
 
-/// Copy Configuration only shows once agents may connect, and a click reaches the service. The
-/// per-client buttons are the ArtCraft Launcher's (one entry for every Craft app).
+/// With the flag the page has no switch of its own and nothing that sets up an MCP client: it says
+/// where agents are turned on (the ArtCraft Launcher), and keeps the port, folders and closed-app
+/// choice.
 #[test]
-fn ai_integrations_offer_the_configuration_only_when_agents_may_connect() {
+fn ai_integrations_point_to_the_launcher_and_have_no_switch_or_client_buttons() {
     use egui_kittest::{Harness, kittest::Queryable};
     let (mut app, _) = app_with_store();
-    let clicked: Arc<Mutex<Vec<String>>> = Arc::default();
-    let seen = clicked.clone();
-    app.services.agent_clients = Some(Box::new(move |id: &str| {
-        seen.lock().unwrap().push(id.to_string());
-        Ok(format!("Added PhotoCraft to {id}."))
-    }));
     app.agent_link.mcp_flag = true;
     open_preferences(&mut app, "integrations");
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
@@ -119,20 +136,12 @@ fn ai_integrations_offer_the_configuration_only_when_agents_may_connect() {
         app
     });
     h.run_steps(4);
-    assert!(h.query_by_label("Copy Configuration").is_none(), "off: nothing to set up yet");
-    h.get_by_label("Let AI agents connect (MCP)").click();
-    h.run_steps(3);
-    for label in ["Add to Claude Desktop", "Add to Claude Code", "Add to Cursor", "Copy Prompt for an Agent"] {
-        assert!(h.query_by_label(label).is_none(), "{label} is the launcher's");
+    for label in ["Let AI agents connect (MCP)", "Copy Configuration", "Add to Claude Desktop", "Copy Prompt for an Agent"] {
+        assert!(h.query_by_label(label).is_none(), "{label}");
     }
-    h.get_by_label("Copy Configuration").click();
-    h.run_steps(3);
-    assert_eq!(*clicked.lock().unwrap(), ["json"]);
-    assert!(h.query_by_label("Configuration copied.").is_some(), "the copy is confirmed");
-    // Unticked again: the button goes.
-    h.get_by_label("Let AI agents connect (MCP)").click();
-    h.run_steps(3);
-    assert!(h.query_by_label("Copy Configuration").is_none());
+    h.get_by_label_contains("ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps");
+    h.get_by_label("Off: turn on AI agents in ArtCraft Launcher › Settings › AI agents.");
+    assert!(h.query_by_label("Folder agents can open from").is_some(), "the folders stay");
 }
 
 /// Without the suite's AI-MCP feature flag the page shows only the settings it had before.
@@ -140,7 +149,6 @@ fn ai_integrations_offer_the_configuration_only_when_agents_may_connect() {
 fn ai_integrations_without_the_mcp_flag_show_only_the_earlier_settings() {
     use egui_kittest::{Harness, kittest::Queryable};
     let (mut app, _) = app_with_store();
-    app.services.agent_clients = Some(Box::new(|_: &str| Ok(String::new())));
     app.agent_link.mcp_flag = false;
     open_preferences(&mut app, "integrations");
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
@@ -150,7 +158,6 @@ fn ai_integrations_without_the_mcp_flag_show_only_the_earlier_settings() {
     h.run_steps(4);
     assert!(h.query_by_label("Let AI agents connect (MCP)").is_none(), "the new connection switch waits for the flag");
     assert!(h.query_by_label("Folder agents can open from").is_none());
-    assert!(h.query_by_label("Copy Configuration").is_none());
     assert!(h.query_by_label("Allow agent control").is_some(), "the earlier setting stays");
 }
 

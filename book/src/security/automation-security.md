@@ -29,12 +29,12 @@ Automation is a privilege boundary because requests can cause filesystem access,
   Screenshots are decoded under separate dimension, pixel, and allocation ceilings before
   downscaling; the 5 MiB PNG limit applies to the returned image.
 - MCP normally uses stdio and can optionally bridge to loopback control TCP.
-- Edit › Preferences › AI Integrations › *Let AI agents connect* (off by default), or ArtCraft Launcher › Settings › AI agents for every Craft app, opens that loopback
+- ArtCraft Launcher › Settings › AI agents (off by default; one switch for every Craft app) opens that loopback
   listener without launch flags. Its token is kept in a user-only file in the settings folder
   (`agent-control.token`) and stays the same across restarts and port changes: restarting does
   not revoke it. To revoke an exposed token, delete that file; the next start creates a new one.
   The published `agent-connection.json` holds the port and the token file's path, never the
-  token. `photocraft-cli mcp --live` authenticates with the challenge handshake, so the token
+  token. `photocraft-cli mcp` authenticates with the challenge handshake, so the token
   itself is never sent: the listener must first prove it holds the token, and a stale file whose
   port another program took fails that check before the client reveals anything.
 - The bridge and UI request paths use timeouts.

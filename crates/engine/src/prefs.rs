@@ -121,7 +121,7 @@ choice!(
     RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
 );
 choice!(
-    /// MCP › When PhotoCraft Is Closed: what `photocraft-cli mcp --live` does when an
+    /// MCP › When PhotoCraft Is Closed: what `photocraft-cli mcp` does when an
     /// agent calls a tool and the app isn't running.
     WhenAppClosed { Launch = "launch", Headless = "headless", Error = "error" } default Launch
 );
@@ -1174,10 +1174,10 @@ impl Default for RawDefaults {
     }
 }
 
-/// Before *Let AI agents connect*, a Control Port other than 0 started the control server by itself.
+/// Before the agents switch, a Control Port other than 0 started the control server by itself.
 /// A saved `integrations` section like that keeps its connection: the port now means "on, at this
 /// port". Every reader of the saved section applies this (the app, its launch read, and
-/// `photocraft-cli mcp --live`), so they agree.
+/// `photocraft-cli mcp`), so they agree.
 pub fn migrate_integrations(section: &mut Value) {
     if let Some(integrations) = section.as_object_mut()
         && !integrations.contains_key("connectAgents")
@@ -1200,12 +1200,14 @@ pub struct Integrations {
     /// The folder automation may write to when no `--automation-write-root` is given (empty =
     /// none). Applied at once while agents are connected.
     pub write_root: String,
-    /// Let AI agents connect: while on, the desktop app serves the control protocol on loopback
-    /// for `photocraft-cli mcp --live` without `--control`, and starts or stops it at once when
-    /// this changes (off by default; launch flags still win). After the older fields, so a
+    /// Without the suite's `AI-MCP` flag, agents may connect: the desktop app serves the control
+    /// protocol on loopback for `photocraft-cli mcp` without `--control`, and starts or stops it at
+    /// once when this changes (off by default; launch flags still win). Set from a saved Control
+    /// Port ([`migrate_integrations`]); not in the dialog. With the flag the ArtCraft Launcher's
+    /// switch decides instead. After the older fields, so a
     /// section saved as a list still reads them where they were.
     pub connect_agents: bool,
-    /// What `photocraft-cli mcp --live` does while the app is closed.
+    /// What `photocraft-cli mcp` does while agents may use the app but it is closed.
     pub when_app_closed: WhenAppClosed,
 }
 
