@@ -72,6 +72,20 @@ fn shift_key_tool_switch_is_the_default() {
     assert_ne!(app.ui.tool, Tool::Type);
 }
 
+/// A tool with a shortcut of its own leaves its letter (#4086) but stays in the history: the letter
+/// falls back on the last tool it still picks, not on its group's first.
+#[test]
+fn a_tool_key_passes_over_a_remapped_tool_to_the_last_one_it_picks() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"path": "shortcuts.tools.select.polygonLasso", "value": "F6"})).unwrap();
+    app.ui.remember_group_tool(Tool::MagneticLasso);
+    app.ui.remember_group_tool(Tool::PolygonLasso);
+    press_key(&mut app, &ctx, Key::L, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::MagneticLasso);
+}
+
 /// #3109: on a German layout Ö / # (physical `;` / `\`) step the brush size and ⇧Ö / ⇧#
 /// (⇧# types `'`) its hardness, as Photoshop's German shortcuts.
 #[test]
@@ -161,6 +175,158 @@ fn pen_custom_undo_binding_and_menu_retract_pending_points() {
     assert!(crate::menus::is_enabled(&app, "edit.undo"));
     crate::menus::invoke(&mut app, &ctx, "edit.undo", serde_json::json!({})).unwrap();
     assert!(app.ui.pen.is_none());
+}
+
+/// Verifies pressing Escape with a custom undo shortcut cancels an active type path preview without popping document history.
+#[test]
+fn escape_rebound_to_undo_cancels_type_path_preview_before_dispatch() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::PathSelection;
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[20, 100], [180, 100]]}]}})).unwrap();
+    app.ui.selected_path = Some("work".into());
+    app.run("type.create", json!({"text": "ABC", "x": 20, "y": 100})).unwrap();
+    app.run("type.attachToPath", json!({"start": 20})).unwrap();
+    app.run("type.setPathPlacement", json!({"end": 100})).unwrap();
+    app.ui.views[0].zoom = 1.0;
+
+    crate::type_path_placement::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 40.0, y: 90.0, pressure: 1.0 });
+    crate::type_path_placement::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 50.0, y: 90.0, pressure: 1.0 });
+    assert!(app.ui.type_path_drag.is_some(), "type path drag/preview must be active");
+
+    app.session.prefs.edit(|p| p.shortcuts.insert("edit.undo".into(), "Escape".into()));
+
+    let history_steps = app.session.active().unwrap().history.entries().len();
+    let revision = app.session.active().unwrap().revision;
+    let document = app.session.active().unwrap().doc.clone();
+    assert!(history_steps > 0);
+
+    let ctx = egui::Context::default();
+    press_key(&mut app, &ctx, Key::Escape, Modifiers::NONE);
+
+    assert!(app.ui.type_path_drag.is_none(), "type path preview must be cancelled by Escape");
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &document));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), history_steps, "existing history must remain intact (edit.undo must not be dispatched)");
+}
+
+/// Verifies tool key shortcuts cancel active type path placement capture and releasing afterwards does not commit placement changes.
+#[test]
+fn tool_shortcut_cancels_type_path_placement_and_release_does_not_commit() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::PathSelection;
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[20, 100], [180, 100]]}]}})).unwrap();
+    app.ui.selected_path = Some("work".into());
+    app.run("type.create", json!({"text": "ABC", "x": 20, "y": 100})).unwrap();
+    app.run("type.attachToPath", json!({"start": 20})).unwrap();
+    app.run("type.setPathPlacement", json!({"end": 100})).unwrap();
+    app.ui.views[0].zoom = 1.0;
+
+    let xf = crate::canvas::ViewXform::active(&app).unwrap();
+    assert!(crate::type_path_placement::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 40.0, y: 90.0, pressure: 1.0 }));
+    assert!(crate::type_path_placement::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 50.0, y: 90.0, pressure: 1.0 }));
+    assert!(app.ui.type_path_drag.is_some(), "type path placement drag must be active");
+
+    let history_steps = app.session.active().unwrap().history.entries().len();
+    let ctx = egui::Context::default();
+
+    press_key(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Brush);
+    assert!(app.ui.type_path_drag.is_none(), "switching tool via shortcut must cancel active type path capture");
+
+    press_key(&mut app, &ctx, Key::A, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::PathSelection);
+
+    assert!(!crate::type_path_placement::pointer_with_view(&mut app, crate::canvas::ToolEvent::Up { x: 50.0, y: 90.0 }, Some(&xf)));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), history_steps, "no history step committed after cancelled gesture");
+}
+
+/// A 200×200 document for the ⌘⇧↩ / ⌘⌥↩ tests.
+fn selection_app() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+    app
+}
+
+fn set_work_rect(app: &mut PhotocraftApp, x: i32, y: i32, w: i32, h: i32) {
+    let knots = serde_json::json!([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+    app.run("path.set", serde_json::json!({"path": {"subpaths": [{"closed": true, "op": "combine", "knots": knots}]}})).unwrap();
+}
+
+/// The selection's bounds (x0, y0, x1, y1), if any.
+fn selection_bounds(app: &PhotocraftApp) -> Option<[i32; 4]> {
+    let r = app.session.active().unwrap().doc.selection.as_ref()?.content_bounds();
+    Some([r.x0, r.y0, r.x1, r.y1])
+}
+
+fn press_key(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
+    ctx.begin_pass(egui::RawInput {
+        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+        ..Default::default()
+    });
+    handle(app, ctx);
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn ctrl_shift_enter_adds_the_path_to_the_selection() {
+    let mut app = selection_app();
+    let ctx = egui::Context::default();
+    app.run("select.rect", serde_json::json!({"x": 10, "y": 10, "width": 40, "height": 40})).unwrap();
+    let history = app.session.active().unwrap().history.past_len();
+
+    set_work_rect(&mut app, 100, 100, 40, 40);
+    press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history + 2, "path.set + selection: {}", app.ui.status);
+    // Both rectangles are selected: the key added the path, it did not replace the selection.
+    assert_eq!(selection_bounds(&app), Some([10, 10, 140, 140]));
+}
+
+#[test]
+fn ctrl_alt_enter_subtracts_the_path_from_the_selection() {
+    let mut app = selection_app();
+    let ctx = egui::Context::default();
+    set_work_rect(&mut app, 10, 10, 40, 40);
+    app.run("path.toSelection", serde_json::json!({})).unwrap();
+    assert!(selection_bounds(&app).is_some());
+
+    press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::ALT);
+    assert_eq!(selection_bounds(&app), None, "the only selected area was subtracted: {}", app.ui.status);
+}
+
+#[test]
+fn add_and_subtract_path_keys_are_ignored_while_a_text_field_has_focus() {
+    let mut app = selection_app();
+    let ctx = egui::Context::default();
+    set_work_rect(&mut app, 10, 10, 40, 40);
+    app.run("path.toSelection", serde_json::json!({})).unwrap();
+
+    // Give a text field the keyboard focus, as a panel's numeric field would have it.
+    let mut text = String::new();
+    ctx.run_ui(Default::default(), |ui| {
+        ui.text_edit_singleline(&mut text).request_focus();
+    })
+    .textures_delta
+    .clear();
+
+    let history = app.session.active().unwrap().history.past_len();
+    for modifiers in [Modifiers::COMMAND | Modifiers::ALT, Modifiers::COMMAND | Modifiers::SHIFT] {
+        let events =
+            vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers }];
+        // The field is drawn every frame, so it keeps the focus.
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            assert!(ui.ctx().text_edit_focused());
+            handle(&mut app, ui.ctx());
+            ui.text_edit_singleline(&mut text);
+        })
+        .textures_delta
+        .clear();
+    }
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(selection_bounds(&app).is_some());
 }
 
 #[test]

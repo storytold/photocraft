@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate, softer_glow_tail_amplitude, softer_glow_tail_width};
+use super::blur::{blur, dilate};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -180,7 +180,11 @@ struct PreparedGradient {
 
 impl PreparedGradient {
     fn new(g: &Gradient) -> Self {
-        Self { color: g.stops.iter().map(|(p, c)| (*p, rgb(c))).collect(), opacity: g.opacity_stops.iter().map(|(p, a)| (*p, [*a; 3])).collect() }
+        let mut color: Vec<_> = g.stops.iter().map(|(p, c)| (*p, rgb(c))).collect();
+        color.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut opacity: Vec<_> = g.opacity_stops.iter().map(|(p, a)| (*p, [*a; 3])).collect();
+        opacity.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Self { color, opacity }
     }
 
     fn sample(&self, t: f32) -> [f32; 4] {
@@ -198,13 +202,15 @@ fn sample_stops(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
             if t <= stops[0].0 {
                 return stops[0].1;
             }
-            for w in stops.windows(2) {
-                if t <= w[1].0 {
-                    let k = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 0.0 };
-                    return std::array::from_fn(|i| w[0].1[i] + (w[1].1[i] - w[0].1[i]) * k);
-                }
+            // Sorted in `new`: bisect rather than scan the stops for every covered pixel.
+            let j = stops.partition_point(|s| s.0 < t);
+            // j == 0 for a NaN position: the last stop, as a scan gave.
+            if j >= stops.len() || j == 0 {
+                return stops[stops.len() - 1].1;
             }
-            stops[stops.len() - 1].1
+            let (a, b) = (&stops[j - 1], &stops[j]);
+            let k = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
+            std::array::from_fn(|i| a.1[i] + (b.1[i] - a.1[i]) * k)
         }
     }
 }
@@ -303,9 +309,6 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             let (r, bw) = spread_split(g.size, g.spread);
             let mut m = dilate(&src, r);
             blur(&mut m, bw);
-            if !inner {
-                add_softer_glow_tail(&mut m, &src, g.size, g.range);
-            }
             m
         }
     };
@@ -404,26 +407,4 @@ pub(super) fn paint_glow(dst: &mut Buffer, m: &Map, g: &Glow, shape_bounds: Rect
     let gain = glow_gradient_gain(g.range);
     let strength = Map { w: m.w, h: m.h, v: m.v.iter().map(|v| (v * gain).min(1.0)).collect() };
     paint(dst, &strength, |i| prepared.sample(1.0 - m.v.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0)), g.common.blend, g.common.opacity);
-}
-
-fn add_softer_glow_tail(map: &mut Map, shape: &Map, size: f32, range: f32) {
-    let width = softer_glow_tail_width(size);
-    if width == 0.0 {
-        return;
-    }
-    let amp = softer_glow_tail_amplitude(range);
-    let distance = dist_outside(shape);
-    for (coverage, distance) in map.v.iter_mut().zip(distance) {
-        let t = (distance + 0.5 - (size - width)) / width;
-        let tail = if (0.0..=1.0).contains(&t) {
-            amp * t * t * (3.0 - 2.0 * t)
-        } else if (1.0..=2.0).contains(&t) {
-            let u = t - 1.0;
-            let remaining = 1.0 - u;
-            amp * remaining * remaining * (1.0 + 2.0 * u)
-        } else {
-            0.0
-        };
-        *coverage = coverage.max(tail);
-    }
 }

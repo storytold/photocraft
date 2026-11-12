@@ -2,7 +2,7 @@ use super::panel::{chevron_icon, surface};
 use super::scrub::{label_scrub_response, take_label_scrub};
 use super::slider::slider;
 use super::text_field::first_field_id;
-use super::units::{FieldUnits, field_resolution_id, fmt_num, fmt_num_prec, fmt_num2, parse_num_in, plain, unit_of_suffix};
+use super::units::{FieldUnits, field_resolution_id, fmt_num, fmt_num_fixed, fmt_num_prec, fmt_num2, parse_num_in, plain, unit_of_suffix};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Tokens, Ui, Vec2, pos2, theme, vec2};
 
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub. Typed
@@ -10,6 +10,89 @@ use super::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Tokens, 
 /// into the field's unit (`1in` in a px field, at the resolution [`set_field_resolution`] gave).
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
+}
+
+/// A [`value_field`] for a whole number: no decimals, and the arrow keys and a scrub (of the field
+/// or of its caption) move it a whole step at a time, whatever its range. A small range such as
+/// 1–10 would otherwise scrub in hundredths, which a whole-number setting rounds away (#11765).
+pub fn value_field_whole(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), step_from_decimals: true, ..Default::default() }, None).0
+}
+
+/// A [`value_field_named`] for whole numbers that says when a typed value was past `range`
+/// (Photoshop's "Closest value inserted" alerts, #11938): it stores the closest whole number in
+/// range, and returns true once the field is left after such a value was typed, so the caller
+/// shows its alert. While the field has the keyboard it keeps the typed text (a `0` on the way to
+/// `05` stays). A scrub, an arrow-key or a wheel step past the ends just stops there and says
+/// nothing.
+pub fn value_field_whole_alerting(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+}
+
+/// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
+/// typed value past `range` becomes the closest end, unrounded.
+pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+}
+
+fn value_field_alerting_in(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    whole: bool,
+) -> (Response, bool) {
+    let (lo, hi) = (*range.start(), *range.end());
+    let fit = |v: f32| {
+        if !v.is_finite() {
+            lo
+        } else if whole {
+            v.round().clamp(lo, hi)
+        } else {
+            v.clamp(lo, hi)
+        }
+    };
+    *value = fit(*value);
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new(("whole-alerting-typed", name)));
+    // Typed text only while its field still has the keyboard: one left without being drawn (a
+    // tool switch) shows the stored value when it comes back.
+    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+    let draft = draft.filter(|(_, stored, field)| *stored == *value && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
+    let mut typed = draft.map_or(*value, |(typed, _, _)| typed);
+    // Read before the field: it consumes the arrow keys it steps with, and the wheel it steps
+    // with while focused never shows in the scroll delta. A step past the ends is no typing.
+    let stepped = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
+    // The field's own range is wide, so the typed value reaches here unclamped.
+    let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
+    let out_id = r.id.with("out-of-range");
+    if r.gained_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
+    if r.changed() && typed.is_finite() {
+        *value = fit(typed);
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !stepped;
+        let out = typing && !(lo..=hi).contains(&typed);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+        if typing && r.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value, Some(r.id))));
+        } else {
+            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+        }
+    }
+    if !r.has_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
+    }
+    let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
+    (r, alert)
 }
 
 /// A [`value_field`] whose visible caption was drawn apart from it (an options-bar caption in a
@@ -48,9 +131,11 @@ pub fn compact_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeI
     value_field_box(ui, value, range, suffix, vec2(width, height), 0.0, FieldOpts::default(), None).0
 }
 
-/// A compact field whose mouse scrub wraps at the native fullscreen viewport's horizontal edges.
+/// A compact field whose mouse scrub wraps at the native fullscreen viewport's horizontal edges,
+/// and whose typed number applies on Enter or click-away, never on Esc, Tab or Alt: the zoom
+/// fields (see `zoom_field`).
 pub(crate) fn compact_wrapping_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, size: Vec2) -> Response {
-    value_field_box(ui, value, range, suffix, size, 0.0, FieldOpts { wrap_drag: true, ..Default::default() }, None).0
+    value_field_box(ui, value, range, suffix, size, 0.0, FieldOpts { wrap_drag: true, hold_typed: true, ..Default::default() }, None).0
 }
 
 /// How a [`value_field_in`] shows and reads its number, beyond its suffix.
@@ -65,6 +150,15 @@ pub(super) struct FieldOpts {
     /// The length (px) 100 % stands for, so lengths and percentages convert into each other.
     pub(super) extent: Option<f64>,
     pub(super) wrap_drag: bool,
+    /// A typed number waits for Enter or click-away, as arithmetic does, instead of applying per
+    /// keystroke (the zoom fields: typing `150` over `50` must not zoom to 1 % on the way). Esc,
+    /// Tab and Alt do not apply it (`zoom_field`).
+    pub(super) hold_typed: bool,
+    /// Show an unset value as an empty field rather than `0` (the Crop tool's free ratio sides,
+    /// #10888). Editing, scrubbing and parsing are unchanged.
+    pub(super) blank_when_zero: bool,
+    /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
+    pub(super) keep_zeros: bool,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -110,7 +204,7 @@ fn value_field_box(
     opts: FieldOpts,
     name: Option<&str>,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, step_from_decimals, units, extent, wrap_drag } = opts;
+    let FieldOpts { decimals, step_from_decimals, units, extent, .. } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
     let last_editor = ui.data(|d| d.get_temp::<egui::Id>(slot.id));
@@ -190,7 +284,7 @@ fn value_field_box(
             ui.spacing_mut().button_padding = Vec2::ZERO;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
-                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, decimals, units, wrap_drag)).inner
+                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, units, opts)).inner
             })
             .inner
         }
@@ -269,6 +363,19 @@ pub const POPUP_ARROW_W: f32 = 14.0;
 
 /// Width of a [`popup_value_field`]'s pop-up slider.
 const POPUP_SLIDER_W: f32 = 160.0;
+
+/// A [`value_field`] reserving `trailing` points at its right for an embedded arrow. Returns the
+/// field and its full rectangle; the arrow gets its own interaction id.
+pub fn value_field_with_trailing(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    trailing: f32,
+) -> (Response, Rect) {
+    value_field_in(ui, value, range, suffix, width, trailing, FieldOpts::default(), None)
+}
 
 /// What a [`popup_value_field`] did this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -367,18 +474,34 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
 
 pub(super) const NUMERIC_INPUT_LIMIT: usize = 128;
 
-/// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
-/// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
-/// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
+/// Drops text events longer than [`NUMERIC_INPUT_LIMIT`] from this frame's input: oversized events
+/// must never reach text layout.
+fn drop_oversized_input(ui: &Ui) {
+    ui.input_mut(|input| {
+        input.events.retain(|event| {
+            let text = match event {
+                egui::Event::Text(text) | egui::Event::Paste(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => text,
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => text,
+                _ => return true,
+            };
+            text.chars().nth(NUMERIC_INPUT_LIMIT).is_none()
+        });
+    });
+}
+
+/// The number in a [`value_field`]. A typed number applies as it's typed, unless `opts.hold_typed`;
+/// arithmetic always waits for Enter, Tab or click-away, because per keystroke `5/2` would land
+/// first and a caller that rounds it would cut `5/2*2` short. `changed()` means a new value, not
+/// just a keystroke.
 fn number_edit(
     ui: &mut Ui,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
     fine: bool,
-    decimals: Option<u32>,
     units: crate::numeric_expression::Units,
-    wrap_drag: bool,
+    opts: FieldOpts,
 ) -> Response {
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -388,6 +511,36 @@ fn number_edit(
     if ui.is_enabled() {
         crate::field_tab::register(&ctx, id);
     }
+    // Esc, Tab, a click on the pasteboard, the title bar or an open menu, and a window that lost the
+    // keyboard leave what was typed unapplied (zoom_field.rs). This runs before the field registers its interest in
+    // the focus: Tab would otherwise already have handed the focus on to the next widget.
+    // A zoom field shows its number with the system's decimal separator (`12,5` on a German
+    // Windows), as Photoshop does, so the text it shows is one that can be typed.
+    let format = move |v: f64| {
+        if blank_when_zero && v == 0.0 {
+            return String::new();
+        }
+        let text = match decimals {
+            Some(d) if keep_zeros => fmt_num_fixed(v, d),
+            Some(d) => fmt_num_prec(v, d),
+            None if fine => fmt_num2(v),
+            None => fmt_num(v),
+        };
+        if hold_typed { crate::zoom_field::localize(text) } else { text }
+    };
+    let guard = if hold_typed {
+        let shown = format(f64::from(*value));
+        // The zoom field reads the keys here, before the check below: oversized events go first.
+        if ui.memory(|m| m.has_focus(id)) {
+            drop_oversized_input(ui);
+        }
+        // Tab and a click that keeps the typed number write it as the zoom Enter would make of it.
+        let (lo, hi) = (f64::from(*range.start()), f64::from(*range.end()));
+        let canon = move |t: &str| zoom_number(t, units).filter(|v| v.is_finite()).map(|v| format(if lo <= hi { v.clamp(lo, hi) } else { v }));
+        crate::zoom_field::before(ui, id, &shown, &canon)
+    } else {
+        Default::default()
+    };
     // Use DragValue's focus check before it builds its TextEdit: oversized events must never
     // reach text layout. Registering interest also handles focus arriving by Tab this frame.
     let editing = ui.is_enabled()
@@ -396,16 +549,7 @@ fn number_edit(
             m.has_focus(id)
         });
     if editing {
-        ui.input_mut(|input| {
-            input.events.retain(|event| {
-                let text = match event {
-                    egui::Event::Text(text) | egui::Event::Paste(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => text,
-                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => text,
-                    _ => return true,
-                };
-                text.chars().nth(NUMERIC_INPUT_LIMIT).is_none()
-            });
-        });
+        drop_oversized_input(ui);
     }
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
@@ -414,28 +558,56 @@ fn number_edit(
     let speed = if fine { 0.01 } else { 0.5 };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
     let wrapped_drag = wrapping && ui.input(|i| i.pointer.primary_down());
+    // A zoom field edits a copy: what egui reports as typed is applied below, when nothing vetoes
+    // it (Esc, Tab, a click that keeps it, a window that lost the keyboard), whatever egui itself
+    // does with the key or the click.
+    let mut typed = *value;
+    let target: &mut f32 = if hold_typed { &mut typed } else { &mut *value };
     let mut resp = ui.add(
-        egui::DragValue::new(value)
+        egui::DragValue::new(target)
             .range(range.clone())
             // Only edits are clamped (below): showing a value past the range, such as a type layer
             // scaled to 2400 pt in a 1296 pt field, must not change it (#5717).
             .clamp_existing_to_range(false)
             // A warp is an absolute-position jump. The scoped scrub below removes that jump.
             .speed(if wrapped_drag { 0.0 } else { speed })
-            .custom_formatter(move |v, _| match decimals {
-                Some(d) => fmt_num_prec(v, d),
-                None if fine => fmt_num2(v),
-                None => fmt_num(v),
-            })
-            .update_while_editing(!math)
+            .custom_formatter(move |v, _| format(v))
+            .update_while_editing(!math && !hold_typed)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
             .custom_parser(move |s| {
                 // Short events can accumulate: reject before either parser normalizes the text.
                 if s.chars().nth(NUMERIC_INPUT_LIMIT).is_some() {
                     return None;
                 }
-                let v = parse_num_in(s, units);
-                if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
+                // A zoom field takes `,` or `.` as its decimal point (`100,90` is `100.90`) and reads
+                // a division as a ratio (`1/2` is 50 %, `100/5,0` is 2000 %), as Photoshop does. With
+                // a second separator (`80,,2`) it says the entry is invalid and takes the number
+                // before it (80 %).
+                let ready = if hold_typed {
+                    match crate::zoom_field::read(s) {
+                        crate::zoom_field::Entry::Number(ready) => ready,
+                        crate::zoom_field::Entry::Invalid(lead) => {
+                            crate::zoom_field::note_invalid(&ctx, id);
+                            ctx.data_mut(|d| d.insert_temp(held, false));
+                            return lead.and_then(|lead| zoom_number(&lead, units));
+                        }
+                    }
+                } else {
+                    s.to_owned()
+                };
+                let s = ready.as_str();
+                // A cleared field that draws its zero blank means zero, not "keep what was there" (#10888).
+                let blank = blank_when_zero && s.trim().is_empty();
+                let v = if hold_typed {
+                    zoom_number(s, units)
+                } else if blank {
+                    Some(0.0)
+                } else {
+                    parse_num_in(s, units)
+                };
+                // Whether the text being typed is a number at all, for [`typed_text_parses`].
+                ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
+                if ctx.memory(|m| m.has_focus(id)) && !blank && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
                     return None;
@@ -443,6 +615,18 @@ fn number_edit(
                 v
             }),
     );
+    if hold_typed {
+        // A scrub always applies; a typed value applies unless this frame's guard vetoes it.
+        let scrub = resp.dragged() || resp.drag_started() || resp.drag_stopped();
+        if typed != before && (scrub || !guard.vetoes_typed()) {
+            *value = typed;
+        }
+        // An invalid entry that was applied (not one a vetoed commit read) gets Photoshop's message.
+        if crate::zoom_field::take_invalid(ui.ctx(), id) && !guard.vetoes_typed() {
+            crate::zoom_field::request_invalid_entry(ui.ctx(), (*range.start(), *range.end()));
+        }
+        crate::zoom_field::after(ui, id, guard);
+    }
     if wrap_drag {
         crate::scrub_wrap::update(ui, &resp, value, before, range.clone(), speed, wrapping);
     }
@@ -453,6 +637,21 @@ fn number_edit(
     }
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp
+}
+
+/// Whether the text last typed into the number field `id` (a [`value_field`]'s response id) reads
+/// as a number, an arithmetic entry included once it is complete: `None` before anything was typed.
+pub fn typed_text_parses(ctx: &egui::Context, id: egui::Id) -> Option<bool> {
+    ctx.data(|d| d.get_temp::<bool>(id.with("parses")))
+}
+
+/// The zoom a zoom field's text stands for, with at most one decimal separator (`,` or `.`): a
+/// number, or a ratio (`1/2` is 50 %, `5/2` is 250 %). `None` when it is neither, or holds a
+/// second separator (`zoom_field::read` takes that apart).
+fn zoom_number(text: &str, units: crate::numeric_expression::Units) -> Option<f64> {
+    let crate::zoom_field::Entry::Number(ready) = crate::zoom_field::read(text) else { return None };
+    let v = parse_num_in(&ready, units);
+    if ready.contains('/') { v.map(|r| r * 100.0) } else { v }
 }
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
