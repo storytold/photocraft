@@ -86,7 +86,7 @@ pub(super) fn dynamic_text_gaps(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut v = current;
         ui.push_id(("dynamic-text-gap", key), |ui| {
             if crate::widgets::slider_row(ui, label, &mut v, min..=TextFit::GAP_MAX, "%", None).changed() {
-                let mut p = json!({"layer": layer, key: v.round()});
+                let mut p = json!({"layer": layer, key: v});
                 if let Some(k) = drag_key(ui.ctx()) {
                     p["coalesce"] = json!(k);
                 }
