@@ -78,6 +78,7 @@ fn invalid_profile_prompt_view_reports_failure_and_next_queued_file_opens_protec
     assert!(admitted.source_read_only, "successful queue continuation retains source protection");
     assert_eq!(admitted.color_samplers, vec![[0.5, 0.75]]);
     assert!(app.ui.notices.iter().any(|notice| notice.error && notice.title.contains("bad-channel-view.xcf")));
+    assert_eq!(app.ui.notices.iter().filter(|notice| notice.error).count(), 1, "one named error per failed admission");
 }
 
 #[test]

@@ -145,10 +145,8 @@ pub fn advance(app: &mut PhotocraftApp) {
                     continue;
                 };
                 app.prompt_order.pop_front();
-                let name = held.name.clone();
-                if let Err(error) = open(app, held, None) {
-                    app.open_failed(&name, &error);
-                }
+                // The shared admission wrapper reports failures once; later queued files still advance.
+                let _ = open(app, held, None);
                 if has_open_dialog(app) {
                     return;
                 }
@@ -238,6 +236,9 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         return Ok(json!({"cancelled": dropped}));
     };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
+    // Direct answers and dialog dispatch share this path. Release the answered
+    // profile modal before advancing, including when this file's admission fails.
+    app.ui.dialogs.retain(|dialog| !owns(&dialog.fields));
     if let Some(pos) = app.prompt_order.iter().position(|p| *p == PromptKind::Open) {
         app.prompt_order.remove(pos);
     }
@@ -269,6 +270,9 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
         !h.damage_pending && policy_key(h.doc.mode) == Some(key) && h.question.as_ref().is_some_and(|q| q.get("missing").and_then(Value::as_bool) != Some(true))
     };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
+    // Direct answers and dialog dispatch share this path. Release the answered
+    // profile modal before advancing, including when this file's admission fails.
+    app.ui.dialogs.retain(|dialog| !owns(&dialog.fields));
     if let Some(pos) = app.prompt_order.iter().position(|p| *p == PromptKind::Open) {
         app.prompt_order.remove(pos);
     }
@@ -349,6 +353,16 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
 /// Opens a queued file, applying `action` (the prompt's answer) or else the Color Settings
 /// policy, then does what any open does afterwards.
 fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Value, String> {
+    let name = held.name.clone();
+    let result = open_document(app, held, action);
+    if let Err(error) = &result {
+        app.open_failed(&name, error);
+    }
+    result
+}
+
+/// Perform admission without posting diagnostics; every caller uses the reporting wrapper.
+fn open_document(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Value, String> {
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
@@ -373,7 +387,6 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         && let Err(error) = view.validate(&doc)
     {
         let error = error.to_string();
-        app.open_failed(&name, &error);
         return Err(error);
     }
     let captured_color = color_settings.map(|settings| {
@@ -387,7 +400,6 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         if let Some(action) = action
             && let Err(e) = color.resolve_open(&mut doc, action)
         {
-            app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
         if action.is_none() && question.is_none() && !policy_applied {
@@ -395,7 +407,6 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
             color.open_policy(&mut doc, ignore_exif);
         }
         if let Err(e) = app.session.prepare_imported_document(&mut doc, &photocraft_engine::jobs::JobCtx::new()) {
-            app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
         if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
@@ -408,7 +419,6 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         match app.session.open_imported_document(doc, None, &photocraft_engine::jobs::JobCtx::new()) {
             Ok((index, _)) => index,
             Err(e) => {
-                app.open_failed(&name, &e.to_string());
                 return Err(e.to_string());
             }
         }
@@ -425,7 +435,6 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
             app.session.set_active(previous);
         }
         let error = error.to_string();
-        app.open_failed(&name, &error);
         return Err(error);
     }
     // add_document may remap a persisted ID already owned by another open document.
