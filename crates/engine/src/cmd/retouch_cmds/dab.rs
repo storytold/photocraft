@@ -531,8 +531,11 @@ impl LiveDab {
         neighborhood: DabNeighborhood,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        // The working copy is dense over the stroke's bounds (#8666).
-        reject_huge_stroke(cmd, &stroke)?;
+        // Background Eraser initializes without points so it can disable the transparency lock
+        // before painting. `push` checks the bounds when those points arrive (#8666).
+        if !stroke.points.is_empty() {
+            reject_huge_stroke(cmd, &stroke)?;
+        }
         let colors = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&doc))?;
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
