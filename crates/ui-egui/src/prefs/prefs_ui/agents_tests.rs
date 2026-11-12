@@ -62,6 +62,7 @@ fn ai_integrations_offer_the_client_buttons_only_when_agents_may_connect() {
         seen.lock().unwrap().push(id.to_string());
         Ok(format!("Added PhotoCraft to {id}."))
     }));
+    app.agent_link.mcp_flag = true;
     open_preferences(&mut app, "integrations");
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -88,6 +89,25 @@ fn ai_integrations_offer_the_client_buttons_only_when_agents_may_connect() {
     h.get_by_label("Let AI agents connect (MCP)").click();
     h.run_steps(3);
     assert!(h.query_by_label("Add to Cursor").is_none());
+}
+
+/// Without the suite's AI-MCP feature flag the page shows only the settings it had before.
+#[test]
+fn ai_integrations_without_the_mcp_flag_show_only_the_earlier_settings() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with_store();
+    app.services.agent_clients = Some(Box::new(|_: &str| Ok(String::new())));
+    app.agent_link.mcp_flag = false;
+    open_preferences(&mut app, "integrations");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    assert!(h.query_by_label("Let AI agents connect (MCP)").is_none(), "the new connection switch waits for the flag");
+    assert!(h.query_by_label("Folder agents can open from").is_none());
+    assert!(h.query_by_label("Add to Claude Desktop").is_none());
+    assert!(h.query_by_label("Allow agent control").is_some(), "the earlier setting stays");
 }
 
 #[test]

@@ -368,6 +368,9 @@ pub struct AgentLinkStatus {
     pub error: Option<String>,
     /// How an MCP client starts PhotoCraft's MCP server (`photocraft-cli mcp --live`).
     pub mcp_command: Option<String>,
+    /// The suite's `AI-MCP` feature flag (`craft-flags`): without it the page shows only the
+    /// connection settings PhotoCraft had before (Allow Agent Control, Control Port).
+    pub mcp_flag: bool,
 }
 
 /// What [`Services::agent_link`] did after the MCP settings changed.

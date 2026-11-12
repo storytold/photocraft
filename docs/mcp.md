@@ -2,6 +2,11 @@
 
 ## Connecting the desktop app (no terminal)
 
+These settings are behind the Craft suite's `AI-MCP` feature flag (`craft-flags`): turn it on in
+ArtCraft Launcher › Settings › Experimental features, which writes `ArtCraft/flags.toml` for every
+Craft app, or start PhotoCraft with `CRAFT_FLAGS=AI-MCP`. Without it the page shows only Allow
+Agent Control and Control Port, as before; a Control Port already set keeps its connection.
+
 1. In PhotoCraft, open **Edit › Preferences › AI Integrations** and turn on **Let AI agents
    connect (MCP)**. Optionally choose the folders agents can open from and save to, and what
    happens when an agent needs PhotoCraft while it is closed (open it, work without a window,

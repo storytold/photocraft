@@ -723,7 +723,16 @@ fn main() -> eframe::Result {
             // flags (`--control`) manage the connection.
             let mcp = agent_link::mcp_launch();
             app.agent_link.mcp_command = mcp.as_ref().map(photocraft_automation::agent_link::McpLaunch::shell_line);
-            app.services.agent_clients = Some(agent_link::clients(mcp.clone()));
+            // The new agent settings and the buttons that add PhotoCraft to MCP clients are behind
+            // the suite's AI-MCP feature flag; the connection itself keeps working as before.
+            let flags = craft_flags::load();
+            for problem in &flags.problems {
+                log::warn!("feature flags: {problem}");
+            }
+            app.agent_link.mcp_flag = flags.enabled(&craft_flags::AI_MCP);
+            if app.agent_link.mcp_flag {
+                app.services.agent_clients = Some(agent_link::clients(mcp.clone()));
+            }
             if let Some((listener, token, _)) = control {
                 app.agent_link.launch_flags = true;
                 app.agent_link.port = listener.local_addr().ok().map(|a| a.port());

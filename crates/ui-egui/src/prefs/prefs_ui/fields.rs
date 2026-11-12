@@ -268,10 +268,19 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if section == "integrations"
+                    && f.get("__agentLink").and_then(|s| s.get("mcpFlag")).and_then(Value::as_bool) == Some(true)
                     && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
                 {
                     super::agents::integration_rows(ui, obj, f);
                     ui.add_space(8.0);
+                } else if section == "integrations"
+                    && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
+                {
+                    // Without the AI-MCP feature flag: the settings PhotoCraft had before.
+                    let mut shown: Map<String, Value> =
+                        obj.iter().filter(|(k, _)| LEGACY_INTEGRATIONS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+                    section_fields(ui, &section, &mut shown, &order, lang, system, filter);
+                    obj.extend(shown);
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system, filter);
                     if section == "fileHandling" {
@@ -392,6 +401,10 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
 
 /// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
 /// holds the fields the Color Picker request goes in.
+/// Preferences › AI Integrations without the AI-MCP feature flag: the settings PhotoCraft had
+/// before the agent connection page.
+const LEGACY_INTEGRATIONS: [&str; 2] = ["allowAgentControl", "controlPort"];
+
 const PICK_ID: &str = "prefs-pick-color";
 
 /// The colour swatch clicked this frame, if any: (preference path, label).
