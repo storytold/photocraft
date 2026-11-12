@@ -1640,11 +1640,13 @@ fn recording_folder_survives_preference_sync(entry: &str) {
         assert!(h.query_by_label(&name).is_some(), "{entry}: recording row survives {command} and preference sync");
         assert!(h.query_by_label("Ordinary").is_some(), "an unrelated open folder stays open");
     }
+    let revision = h.state().session.prefs.rev();
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    h.state_mut().run("prefs.set", json!({"path": "general.beepWhenDone", "value": true})).unwrap();
     h.run_steps(3);
     assert!(h.state().session.actions.recording.is_none());
-    assert!(h.query_by_label(&name).is_none(), "after stop, normal preference sync restores the saved collapse");
+    assert_eq!(h.state().session.prefs.rev(), revision, "stop restores disclosure without an unrelated preference change");
+    assert!(h.query_by_label(&name).is_none(), "stop alone restores the saved collapse");
+    assert!(h.query_by_label("Ordinary").is_some(), "an unrelated open folder stays open after stop");
     assert_eq!(h.state().session.prefs().collapsed_action_sets, saved);
     h.state_mut().run("prefs.set", json!({"path": "collapsedActionSets.Retouch", "value": false})).unwrap();
     h.run_steps(3);

@@ -2082,6 +2082,11 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(key) = recording_key {
         app.ui.actions.reveal_recording = Some(key);
     }
+    // A completed take restores saved disclosures; a paused call still owns its temporary reveal.
+    if recording.is_none() && !suspended(app) && app.ui.actions.reveal_recording.take().is_some() {
+        app.ui.actions.collapsed_sets =
+            app.session.prefs().collapsed_action_sets.iter().filter(|(_, collapsed)| **collapsed).map(|(name, _)| name.clone()).collect();
+    }
     if started && let Some(set) = recording_row.and_then(|(i, _)| rows.get(i)).and_then(|row| row.set.as_ref()) {
         app.ui.actions.collapsed_sets.retain(|name| name != set);
     }
