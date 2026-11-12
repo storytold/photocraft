@@ -313,11 +313,7 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         .unwrap_or([0.0; 3]);
     d.fields.remove("__pickColorDefault");
 
-    let cmyk = if field == "color" && crate::fill_ui::owns(&d.fields) {
-        crate::fill_ui::associated_cmyk(&d.fields)
-    } else {
-        None
-    };
+    let cmyk = if field == "color" && crate::fill_ui::owns(&d.fields) { crate::fill_ui::associated_cmyk(&d.fields) } else { None };
 
     let picker_id = open_for_field(app, &title, rgb, id, &field);
 
