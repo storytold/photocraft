@@ -119,6 +119,9 @@ pub(crate) struct ConvertArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 files; never guessed
+    #[arg(long, value_parser = ["little-endian", "big-endian"])]
+    pub(crate) historical_xcf_sample_order: Option<String>,
     /// PDF import resolution in DPI (default 300)
     #[arg(long, value_name = "DPI", value_parser = pdf_dpi)]
     pub(crate) pdf_dpi: Option<f32>,
@@ -145,6 +148,9 @@ pub(crate) struct InfoArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 files; never guessed
+    #[arg(long, value_parser = ["little-endian", "big-endian"])]
+    pub(crate) historical_xcf_sample_order: Option<String>,
     /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
     #[arg(long)]
     pub(crate) detail: bool,
@@ -179,6 +185,9 @@ pub(crate) struct RunArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 files; never guessed
+    #[arg(long, requires = "file", value_parser = ["little-endian", "big-endian"])]
+    pub(crate) historical_xcf_sample_order: Option<String>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]

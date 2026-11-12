@@ -31,7 +31,6 @@ mod gif_frames;
 mod guides_v2;
 mod heif;
 mod heif_unsupported;
-mod import_initial_view;
 mod krita_corpus;
 mod lab16;
 mod large_files;
@@ -78,6 +77,7 @@ mod resolution_axes;
 mod roundtrip;
 mod smart_contents_identity;
 mod smart_corpus;
+mod source_images;
 mod streaming_exr;
 mod svg;
 mod text_corpus;
@@ -90,12 +90,22 @@ mod tiff_save_options;
 mod tiff_type_geometry;
 mod vector;
 mod xcf;
-mod xcf_historical_records;
-mod xcf_historical_sample_order;
-mod xcf_native_import;
-mod xcf_native_paths;
-mod xcf_native_text;
-mod xcf_native_transport;
-mod xcf_native_variants;
-mod xcf_source_evidence;
 mod xmp_export;
+
+mod import_initial_view;
+
+mod xcf_historical_records;
+
+mod xcf_historical_sample_order;
+
+mod xcf_native_import;
+
+mod xcf_native_paths;
+
+mod xcf_native_text;
+
+mod xcf_native_transport;
+
+mod xcf_native_variants;
+
+mod xcf_source_evidence;

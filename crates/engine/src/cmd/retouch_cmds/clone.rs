@@ -13,6 +13,9 @@ pub(super) fn clone_mapping(s: &mut Session, p: &Value, stroke: &Stroke, cmd: &s
     crate::presets::clone_source::mapping(s, p, (f.x, f.y), cmd)
 }
 
+/// Most source pixels one clone sample may read (a 8192 x 8192 window); real strokes stay far below.
+const MAX_CLONE_SOURCE_PIXELS: u64 = 1 << 26;
+
 /// Source pixels for destination `rect`: a translated read, or a bilinear resample when the
 /// clone source is scaled, rotated or flipped.
 #[allow(clippy::too_many_arguments)]
@@ -41,7 +44,13 @@ pub(super) fn clone_sample(
         r.rect = rect;
         return Ok(r);
     }
-    let src = read(map.source_rect(rect))?;
+    // A small W/H scale makes the source window enormous for a bounded destination: refuse it
+    // before the dense read allocates width x height x channels floats.
+    let sr = map.source_rect(rect);
+    if u64::from(sr.width()) * u64::from(sr.height()) > MAX_CLONE_SOURCE_PIXELS {
+        return Err(bad(cmd, "the scaled clone source covers too large an area; raise the clone source's W/H or use a smaller brush"));
+    }
+    let src = read(sr)?;
     Ok(crate::presets::clone_source::resample(&src, rect, map, alpha_index(&surf.format())))
 }
 
@@ -159,7 +168,7 @@ enum LivePaint {
     History(Surface),
     /// The Pattern Stamp's pattern, tiled from its aligned placement (Impressionist strokes are
     /// laid dab by dab: `pattern_stamp::live_impressionist`).
-    Pattern { tile: std::sync::Arc<photocraft_compose::pattern::Tile>, place: photocraft_compose::pattern::Placement },
+    Pattern { tile: std::sync::Arc<photocraft_compose::pattern::Tile>, place: photocraft_compose::pattern::Placement, behind: bool },
 }
 
 /// A retouching stroke shown while it is drawn: the dabs so far composited onto a copy of the
@@ -201,7 +210,7 @@ impl LiveRetouch {
             if st.impressionist {
                 return Err(bad(cmd, "Impressionist strokes are laid dab by dab (pattern_stamp::live_impressionist)"));
             }
-            let paint = LivePaint::Pattern { place: st.placement(), tile: st.tile };
+            let paint = LivePaint::Pattern { place: st.placement(), tile: st.tile, behind: st.behind };
             return Self::with_paint(s, cmd, p, st.stroke, st.id, paint, st.mode);
         }
         let (stroke, id) = parse_brush(s, p, cmd)?;
@@ -382,10 +391,12 @@ impl LiveRetouch {
                 clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, *cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false), cmd)?
             }
             LivePaint::History(src) => Region::read(src, r),
-            LivePaint::Pattern { tile, place } => pattern_stamp::paint_region(tile, place, &self.pre_surf.format(), r),
+            LivePaint::Pattern { tile, place, .. } => pattern_stamp::paint_region(tile, place, &self.pre_surf.format(), r),
         };
+        // The Pattern Stamp's Behind goes beneath the pixels, as its commit lays it.
+        let behind = matches!(self.paint, LivePaint::Pattern { behind: true, .. });
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
-        Ok(apply_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode).union(&r))
+        Ok(pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind).union(&r))
     }
 }

@@ -154,6 +154,12 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut browse: Option<String> = None;
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
+            if f.get("__command").and_then(Value::as_str) == Some("file.scripts.imageProcessor")
+                && f.get("source").and_then(Value::as_str).is_some_and(|source| source != "folder")
+                && matches!(k.as_str(), "input" | "includeSubfolders")
+            {
+                continue;
+            }
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
@@ -416,6 +422,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             Some(app.pick_file_bytes(move |app, path, _bytes| {
                 app.with_document(doc, |app| {
                     let r = app.run(&cmd, json!({"path": path}));
+                    if let Ok(v) = &r {
+                        // #11113: footage salvaged from a truncated GIF or WebP must say so.
+                        let what = crate::i18n::fmt(crate::i18n::t("Imported {name}"), &[("name", &crate::file_open::display_name(&path))]);
+                        crate::notices::footage_warnings(app, v, &what);
+                    }
                     if r.is_ok() && app.session.active().is_some_and(|d| d.doc.timeline.is_some()) {
                         app.ui.timeline.open = true;
                     }
@@ -547,8 +558,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         ),
         "file.scripts.imageProcessor" => dialog(
             app,
-            json!({"input": dir, "includeSubfolders": false, "__labels": subfolders_label(), "output": format!("{dir}/processed"), "format": "jpg", "quality": 8, "width": 0, "height": 0, "convertToSrgb": true}),
-            json!({"format": ["jpg", "png", "psd", "tiff", "webp"]}),
+            json!({
+                "source": if doc.is_some() { "current" } else { "folder" },
+                "input": dir, "includeSubfolders": false, "output": format!("{dir}/processed"),
+                "format": "jpg", "quality": 8, "width": 0, "height": 0, "convertToSrgb": true,
+                "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders")},
+                "__order": ["source", "input", "includeSubfolders", "output", "format", "quality", "width", "height", "convertToSrgb"]
+            }),
+            json!({"source": ["current", "open", "folder"], "format": ["jpg", "png", "psd", "tiff", "webp"]}),
         ),
         "file.automate.batch" => {
             let Some(action) = crate::actions::selected_action(app) else {
@@ -691,7 +708,9 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
             return Ok(json!({"path": path, "warnings": []}));
         }
         let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
-        app.session.journal.push(("file.saveACopy".into(), json!({"path": path})));
+        let step = json!({"path": path});
+        photocraft_engine::actions_cmds::note_automation_step(&mut app.session, "file.saveACopy", &step);
+        app.session.journal.push(("file.saveACopy".into(), step));
         Ok(r)
     })
 }

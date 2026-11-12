@@ -1123,6 +1123,7 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A continuation belongs to the dialog that paused it, even when another
         // action has a valid token. Replacing it would resume or cancel that action.
         Some(_) if field == crate::actions::RESUME => err("the paused action token is read-only"),
+        Some(_) if field == crate::filter_dialog::MATCH_COLOR_DESTINATION => err("the Match Color destination is read-only"),
         Some(_) if previewed => err("confirm or cancel the color picker first"),
         // A Color Picker's target is fixed when it opens: OK must set the field it previewed in.
         Some(d) if matches!(field, "__colorPicker" | "__dialog" | "__field") && crate::color_picker_ui::owns(&d.fields) => {
@@ -1131,6 +1132,14 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A marker picks the handler OK runs: a dialog keeps the ones it was opened with.
         Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => err(format!("`{field}` is set only by the dialog it belongs to")),
         Some(d) => {
+            // Reconcile old choices before interpreting a new explicit source index.
+            crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
+            if field == "source"
+                && d.fields.get("__command").and_then(Value::as_str) == Some("image.adjustments.matchColor")
+                && d.fields.get("source") != Some(&value)
+            {
+                d.fields.remove("sourceLayer");
+            }
             d.fields.insert(field.to_string(), value);
             // A Color Picker's colour shows in its target dialog at once, as a drag would.
             crate::color_picker_ui::live_preview::sync(app);
@@ -1449,6 +1458,25 @@ fn secondary_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &Pointer
     secondary_transform_or_crop_took(app, ctx, g, s) || secondary_canvas_menu_took(app, ctx, g, s)
 }
 
+/// The tool a gesture's right button belongs to, as `hold_keys` decides it in the app (#11271):
+/// Space holds the Hand over the selected tool, ⌘Space or ⌥Space the Zoom (whose right button
+/// opens no view menu). Space types while text is edited or a text field has focus, and
+/// repositions a crop frame, a pen drag or a shape, marquee or lasso being drawn: the selected
+/// tool keeps the button then.
+fn held_tool(app: &PhotocraftApp, ctx: &egui::Context, g: &PointerGesture) -> Tool {
+    let drawing = crate::crop_ui::active(app)
+        || app.ui.pen.as_ref().is_some_and(|pen| pen.dragging && !pen.curvature)
+        || app.drag.as_ref().is_some_and(|d| crate::hold_keys::repositions(d.tool))
+        || crate::type_transform::active(app);
+    if !g.space || app.ui.text_edit.is_some() || ctx.text_edit_focused() || drawing {
+        app.ui.tool
+    } else if g.mods.command || g.mods.alt {
+        Tool::Zoom
+    } else {
+        Tool::Hand
+    }
+}
+
 fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
     let (x, y) = (s.x, s.y);
     let down = matches!(s.ev, ToolEvent::Down { .. });
@@ -1460,14 +1488,15 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
         return true;
     }
     // Right-click with the Move tool, or ⌘/Ctrl+right-click: list the layers there.
-    if crate::layer_pick_ui::is_gesture(app.ui.tool, g.mods) {
+    let held = held_tool(app, ctx, g);
+    if crate::layer_pick_ui::is_gesture(held, g.mods) {
         if down {
             app.ui.canvas_tool_menu = None;
             crate::layer_pick_ui::open(app, ctx, screen_point(app, x, y), x, y);
         }
         return true;
     }
-    if app.ui.tool != crate::state::Tool::Crop {
+    if held != Tool::Crop {
         return false;
     }
     // No menu over the agent's own crop frame or Straighten line still being
@@ -1491,15 +1520,17 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
     if crate::canvas_tool_menu::magnetic_drawing(app) {
         return true;
     }
-    if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
+    let held = held_tool(app, ctx, g);
+    if crate::canvas_tool_menu::pasteboard_at(app, held, [x, y]) {
         if down {
-            crate::canvas_tool_menu::open_pasteboard(app, ctx, app.ui.tool, screen_point(app, x, y));
+            crate::canvas_tool_menu::open_pasteboard(app, ctx, held, screen_point(app, x, y));
         }
         return true;
     }
-    if crate::canvas_tool_menu::is_view_tool(app.ui.tool) {
-        if down {
-            crate::canvas_tool_menu::open_view(app, ctx, app.ui.tool, screen_point(app, x, y), [x, y]);
+    if crate::canvas_tool_menu::is_view_tool(held) {
+        // The selected Zoom or Hand, or the Hand Space holds: the held Zoom has no menu.
+        if down && (held == app.ui.tool || held == Tool::Hand) {
+            crate::canvas_tool_menu::open_view(app, ctx, held, screen_point(app, x, y), [x, y]);
         }
         return true;
     }
@@ -1549,8 +1580,8 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
             Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved),
+                None | Some(Value::Null) => app_open(app, path, false, p),
+                Some(Value::Bool(approved)) => app_open(app, path, *approved, p),
                 Some(_) => err("expected boolean for `approveHighMemory`"),
             },
             None => err("missing `path`"),
@@ -1577,7 +1608,11 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
 
 /// The `app.open` control method: opens a path through the configured automation read
 /// capability, with optional high-memory approval.
-fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
+fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool, params: &Value) -> Outcome {
+    let order = match photocraft_engine::file_cmds::historical_xcf_sample_order(params, "app.open") {
+        Ok(order) => order,
+        Err(error) => return err(error.to_string()),
+    };
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1587,7 +1622,10 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let mut opts = photocraft_engine::jobs::import_options(app.session.prefs());
+        opts.psd_high_memory_approved = approved;
+        opts.historical_xcf_sample_order = order;
+        let warnings = app.open_automation_bytes_with_options(&name, &bytes, &opts)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

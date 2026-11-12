@@ -5,9 +5,35 @@ use super::{ArgumentValue, ColorLiteral, Config, ConfigExpr, MappingContext, Map
 use photocraft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
 use serde_json::json;
 
+#[cfg(test)]
+mod review_tests;
+
+/// A transfer rewrite that cannot preserve its PCS must retain the saved raster,
+/// rather than taking callers' ordinary explicit color-approximation path.
+#[derive(Debug)]
+pub(in crate::xcf) enum LiteralColorError {
+    GrayLabPcsTransfer,
+    Other(String),
+}
+
+impl std::fmt::Display for LiteralColorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GrayLabPcsTransfer => f.write_str("stored Gray Lab PCS requires a PCS-aware sample transfer-curve conversion"),
+            Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<&str> for LiteralColorError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.into())
+    }
+}
+
 /// Decode only portable byte encodings. Native-endian source float blobs have no
 /// byte-order marker; guessing from the importing machine would corrupt colors.
-pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], String> {
+pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], LiteralColorError> {
     // IEEE positive zero has identical bytes in either byte order. This exact
     // transparent default is portable without guessing the author's host.
     if matches!(value.encoding, "RGBA float" | "R'G'B'A float" | "R~G~B~A float")
@@ -27,10 +53,10 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         "YA u8" => (1, true, true, true),
         "Y u8" => (1, false, true, true),
         _ => {
-            return Err(format!(
+            return Err(LiteralColorError::Other(format!(
                 "stored color encoding {} is not independently portable; native-endian float colors need source byte-order evidence",
                 value.encoding
-            ));
+            )));
         }
     };
     if value.pixels.len() != channels + usize::from(alpha) {
@@ -46,7 +72,7 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
     let mut source = if value.profile.is_empty() {
         fallback.profile().clone()
     } else {
-        Profile::parse(value.profile).map_err(|error| format!("stored literal ICC: {error}"))?
+        Profile::parse(value.profile).map_err(|error| LiteralColorError::Other(format!("stored literal ICC: {error}")))?
     };
     let expected = if gray { ColorSpace::Gray } else { ColorSpace::Rgb };
     if source.color_space != expected {
@@ -59,13 +85,18 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         }
         let curve = if linear { Curve::Identity } else { photocraft_cms::curve::srgb_trc() };
         if gray {
+            // Gray Lab PCS curves yield L*/100, not luminance. An Identity or
+            // sRGB luminance curve would silently change the literal's meaning.
+            if source.pcs == photocraft_cms::Pcs::Lab {
+                return Err(LiteralColorError::GrayLabPcsTransfer);
+            }
             source.gray_trc = Some(curve);
         } else {
             source.trc = Some([curve.clone(), curve.clone(), curve]);
         }
     }
     let transform = Transform::new(&source, Builtin::Srgb.profile(), Intent::RelativeColorimetric, false)
-        .map_err(|error| format!("stored literal native color conversion: {error}"))?;
+        .map_err(|error| LiteralColorError::Other(format!("stored literal native color conversion: {error}")))?;
     let samples: Vec<_> = value.pixels.iter().take(channels).map(|v| f32::from(*v) / 255.0).collect();
     let mut rgb = [0.0; 3];
     transform.convert_f32(&samples, channels, &mut rgb, 3, false);
@@ -81,7 +112,7 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
 /// or invalid alpha.
 pub(super) fn color(effect: &StoredEffect<'_>, name: &str) -> Result<[f32; 4], String> {
     match effect.argument(name)? {
-        Some(ArgumentValue::Color(Some(value))) => literal_rgb(value),
+        Some(ArgumentValue::Color(Some(value))) => literal_rgb(value).map_err(|error| error.to_string()),
         Some(ArgumentValue::LiteralColor { rgba, linear }) => {
             if rgba.iter().any(|value| !value.is_finite()) || !(0.0..=1.0).contains(&rgba[3]) {
                 return Err(format!("source color {name} has nonfinite components or invalid alpha"));
@@ -546,7 +577,7 @@ fn config_color(value: &ConfigExpr<'_>) -> Result<[f32; 4], String> {
         }
         profile
     };
-    literal_rgb(&ColorLiteral { encoding, pixels: &bytes, profile: &profile })
+    literal_rgb(&ColorLiteral { encoding, pixels: &bytes, profile: &profile }).map_err(|error| error.to_string())
 }
 
 /// Extract the bounded binary color payload in its declared representation without treating bytes as
@@ -644,7 +675,7 @@ mod tests {
         let duplicate = StoredEffect::test("gegl:color", vec![portable("value", [0.; 4], false), portable("value", [0.; 4], false)]);
         assert!(color(&duplicate, "value").is_err());
         let ambiguous = [0.25f32, 0.5, 0.75, 1.].into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
-        assert!(literal_rgb(&ColorLiteral { encoding: "RGBA float", pixels: &ambiguous, profile: &[] }).unwrap_err().contains("byte-order"));
+        assert!(literal_rgb(&ColorLiteral { encoding: "RGBA float", pixels: &ambiguous, profile: &[] }).unwrap_err().to_string().contains("byte-order"));
     }
     #[test]
     /// Require shared literal validation across direct resource readers rather than divergent acceptance
@@ -669,6 +700,32 @@ mod tests {
                 _ => super::super::residual_tone::map(&invalid, &context),
             };
             assert!(result.unwrap().is_err(), "{operation} must validate a consumed literal");
+        }
+    }
+
+    /// Resource mappings retain the typed literal refusal at their string-error boundary;
+    /// neither an effect argument nor a structured fill may rewrite Gray Lab PCS as luminance.
+    #[test]
+    fn resource_color_readers_preserve_gray_lab_transfer_refusal() {
+        let mut profile = Builtin::GrayGamma22.profile().clone();
+        profile.pcs = photocraft_cms::Pcs::Lab;
+        let profile = profile.with_encoded_bytes().to_bytes();
+        for encoding in ["Y u8", "YA u8", "Y~ u8", "Y~A u8"] {
+            let pixels = if encoding.contains('A') { vec![128, 64] } else { vec![128] };
+            let literal = ColorLiteral { encoding, pixels: &pixels, profile: &profile };
+            let expected = literal_rgb(&literal).unwrap_err().to_string();
+            let effect = StoredEffect::test("gegl:color-overlay", vec![Argument { name: "value", value: ArgumentValue::Color(Some(literal)) }]);
+            assert_eq!(color(&effect, "value").unwrap_err(), expected);
+            assert_eq!(map(&effect, &context()).unwrap().unwrap_err().message, expected);
+            let config = ConfigExpr::List(vec![
+                ConfigExpr::Symbol("color"),
+                ConfigExpr::String(encoding.into()),
+                ConfigExpr::Number(pixels.len() as f64),
+                ConfigExpr::Bytes(pixels),
+                ConfigExpr::Number(profile.len() as f64),
+                ConfigExpr::Bytes(profile.as_ref().clone()),
+            ]);
+            assert_eq!(config_color(&config).unwrap_err(), expected);
         }
     }
     #[test]
@@ -793,7 +850,7 @@ mod tests {
         let with_profile = literal_rgb(&ColorLiteral { encoding: "R'G'B'A u8", pixels: &[64, 128, 192, 255], profile: &profile }).unwrap();
         assert!(with_profile.iter().zip(color).any(|(a, b)| (*a - b).abs() > 0.001));
         let ambiguous = [0.25_f32, 0.5, 0.75, 1.0].into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
-        assert!(literal_rgb(&ColorLiteral { encoding: "RGBA float", pixels: &ambiguous, profile: &[] }).unwrap_err().contains("byte-order"));
+        assert!(literal_rgb(&ColorLiteral { encoding: "RGBA float", pixels: &ambiguous, profile: &[] }).unwrap_err().to_string().contains("byte-order"));
         assert!(literal_rgb(&ColorLiteral { encoding: "R'G'B'A u8", pixels: &[64, 128, 192], profile: &[] }).is_err());
         assert!(literal_rgb(&ColorLiteral { encoding: "R'G'B'A u8", pixels: &[64, 128, 192, 255], profile: b"not ICC" }).is_err());
     }
