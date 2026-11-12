@@ -185,7 +185,9 @@ impl CameraRawGpu {
     /// Develops `px` like [`Self::develop`] but keeps the frame on the GPU, shown through
     /// `display`. `None` when [`Self::develop`] would be, and when `display`'s transform isn't a
     /// matrix/shaper (a CLUT or proofing profile): then the frame is read back and converted on
-    /// the CPU. Native only: the web can't read a frame back when the scopes need it.
+    /// the CPU. With `read` the pixels come back in the same submission
+    /// (`CameraRawFrame::read_back`). Native only: the web can't read a frame back when the
+    /// scopes need it.
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn develop_view(
@@ -197,6 +199,7 @@ impl CameraRawGpu {
         p: &CameraRaw,
         float: bool,
         display: &photocraft_engine::display_color::CanvasDisplay,
+        read: bool,
     ) -> Option<GpuFrame> {
         if p.is_identity() || self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
             return None;
@@ -223,7 +226,7 @@ impl CameraRawGpu {
         let size = [u32::try_from(w).ok()?, u32::try_from(h).ok()?];
         let avoid = Some(self.shown.load(Ordering::Acquire)).filter(|s| *s != NONE_SHOWN);
         let mut pass = pass.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match pass.develop_view(&self.device, &self.queue, Some(&self.health), px, key, size, &stages, &view, avoid) {
+        match pass.develop_view(&self.device, &self.queue, Some(&self.health), px, key, size, &stages, &view, avoid, read) {
             Ok(frame) => Some(frame),
             Err(e) => {
                 log::warn!("{}; RAW Develop develops on the CPU", e.0);

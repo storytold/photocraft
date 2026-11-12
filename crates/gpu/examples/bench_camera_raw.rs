@@ -149,7 +149,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         let display = CameraRawDisplay { encode_srgb: false, shaper: None, key: 0 };
         let mut slot = None;
-        let kept = try_time(runs, || pass.develop_view(&device, &queue, None, &src, Some(1), size, &stages, &display, slot).map(|f| slot = Some(f.slot)))?;
+        let kept =
+            try_time(runs, || pass.develop_view(&device, &queue, None, &src, Some(1), size, &stages, &display, slot, false).map(|f| slot = Some(f.slot)))?;
         println!("{name}:");
         println!("  CPU develop                          {cpu:7.2} ms");
         println!("  GPU, source uploaded every time      {upload:7.2} ms");

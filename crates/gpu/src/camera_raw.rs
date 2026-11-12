@@ -431,7 +431,8 @@ impl CameraRawDevelop {
 
     /// Develops `source` like [`Self::develop`], but keeps the result on the GPU: converted for
     /// the dialog's preview and counted into a histogram, in slot `1 - avoid` (the slot on screen
-    /// is `avoid`; 0 when `None`). Only the histogram is read back (blocking; native only).
+    /// is `avoid`; 0 when `None`). Only the histogram is read back (blocking; native only), and
+    /// with `read` the pixels too, in the same submission ([`CameraRawFrame::read_back`]).
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     pub fn develop_view(
@@ -445,6 +446,7 @@ impl CameraRawDevelop {
         stages: &PerPixel,
         display: &CameraRawDisplay,
         avoid: Option<usize>,
+        read: bool,
     ) -> Result<CameraRawFrame, Unsupported> {
         if let Some(f) = health.and_then(crate::DeviceHealth::fault) {
             return Err(Unsupported(f.to_string()));
@@ -457,11 +459,25 @@ impl CameraRawDevelop {
             let Some(target) = self.target.as_ref().map(|t| t.texture.clone()) else { return Err(Unsupported("no RAW Develop target".into())) };
             let view = &mut self.view;
             view.record(device, queue, &mut encoder, &target, size, display, slot)?;
+            let pixels = read.then(|| match self.readback.take() {
+                Some(b) if b.size() == readback_bytes(size) => b,
+                _ => readback_buffer(device, size),
+            });
+            if let Some(b) = &pixels {
+                copy_out(&mut encoder, &target, b, size);
+            }
             let index = queue.submit([encoder.finish()]);
-            let buffer = view.sums_buffer();
-            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            view.sums_buffer().slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            if let Some(b) = &pixels {
+                b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            }
             wait(device, health, index)?;
-            view.frame(slot)
+            let mut frame = view.frame(slot)?;
+            if let Some(b) = pixels {
+                frame.read_back = Some(mapped(&b, size)?);
+                self.readback = Some(b);
+            }
+            Ok(frame)
         });
         match error {
             Some(e) => {
@@ -539,6 +555,12 @@ pub(crate) fn read_out(
 ) -> Result<Vec<[f32; 4]>, Unsupported> {
     buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     wait(device, health, index)?;
+    mapped(buffer, size)
+}
+
+/// The `size` pixels of `buffer`, mapped, then unmapped.
+#[cfg(not(target_arch = "wasm32"))]
+fn mapped(buffer: &wgpu::Buffer, size: [u32; 2]) -> Result<Vec<[f32; 4]>, Unsupported> {
     let (w, h) = (size[0] as usize, size[1] as usize);
     let row = readback_row(size) as usize;
     let mut out = Vec::with_capacity(w.saturating_mul(h));

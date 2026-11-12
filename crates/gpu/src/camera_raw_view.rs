@@ -59,6 +59,8 @@ pub struct CameraRawFrame {
     pub shown: wgpu::TextureView,
     /// The display texture itself (`Rgba8Unorm`, read back by tests).
     pub display: wgpu::Texture,
+    /// The pixels, when the develop was asked to read them back with the frame.
+    pub read_back: Option<Vec<[f32; 4]>>,
 }
 
 struct Slot {
@@ -461,6 +463,7 @@ impl ViewPasses {
             pixels: s.pixels.clone(),
             shown: s.shown.clone(),
             display: s.display.clone(),
+            read_back: None,
         })
     }
 

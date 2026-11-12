@@ -97,7 +97,7 @@ impl ProxyJob {
         if self.view && self.raw_curve.is_none() && self.selection.is_none() {
             let develop_start = crate::gpu_canvas::now_ms();
             if let Some(gpu) = &self.gpu
-                && let Some(frame) = gpu.develop_view(&self.proxy, Some(self.source_key), pw, ph, &p, self.float, &self.display)
+                && let Some(mut frame) = gpu.develop_view(&self.proxy, Some(self.source_key), pw, ph, &p, self.float, &self.display, self.pixels)
             {
                 let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
                 let histogram = frame.histogram.clone();
@@ -107,10 +107,8 @@ impl ProxyJob {
                     photocraft_algo::camera_raw::develop(&mut px, pw, ph, &settings, float);
                     px
                 };
-                let px = Processed { px: std::sync::OnceLock::new(), gpu: Some(OnGpu { gpu: gpu.clone(), frame: frame.clone(), cpu: Box::new(cpu) }) };
-                if self.pixels {
-                    px.pixels();
-                }
+                let read = frame.read_back.take().map_or_else(std::sync::OnceLock::new, std::sync::OnceLock::from);
+                let px = Processed { px: read, gpu: Some(OnGpu { gpu: gpu.clone(), frame: frame.clone(), cpu: Box::new(cpu) }) };
                 return ProxyFrame {
                     px,
                     histogram,

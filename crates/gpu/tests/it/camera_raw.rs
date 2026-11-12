@@ -811,11 +811,16 @@ fn check_view(g: &mut Gpu, p: &CameraRaw, src: &[[f32; 4]], (w, h): (usize, usiz
     let size = [w as u32, h as u32];
     let read = g.dev.develop(&g.device, &g.queue, None, src, None, size, &stages).unwrap();
     let display = photocraft_gpu::CameraRawDisplay { encode_srgb: srgb, shaper: None, key: 1 };
-    let frame = g.dev.develop_view(&g.device, &g.queue, None, src, None, size, &stages, &display, None).unwrap();
+    let frame = g.dev.develop_view(&g.device, &g.queue, None, src, None, size, &stages, &display, None, false).unwrap();
     assert_eq!((frame.slot, frame.size), (0, size));
     let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels, &mut None).unwrap();
     let same = px.len() == read.len() && px.iter().zip(&read).all(|(a, b)| a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits()));
     assert!(same, "{w}×{h} {p:?}: the view's pixels are the develop's");
+    // Asked for, the pixels come back with the frame, the same bits.
+    let with = g.dev.develop_view(&g.device, &g.queue, None, src, None, size, &stages, &display, Some(frame.slot), true).unwrap();
+    let back = with.read_back.as_deref().unwrap_or_default();
+    let bits = |v: &[[f32; 4]]| v.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(back), bits(&px), "{w}×{h} {p:?}: read back with the frame");
     assert_eq!(frame.histogram, photocraft_algo::histogram::RgbHistogram::from_rgba(&px), "{w}×{h} {p:?}");
     let shown = read_bytes(g, &frame.display);
     for (i, (got, q)) in shown.iter().zip(&px).enumerate() {
@@ -895,7 +900,7 @@ fn the_view_applies_a_matrix_shaper_display_transform() {
             shaper: Some(photocraft_gpu::CameraRawShaper { matrix: shaper.matrix_rows(), input: shaper.input_table(), output: shaper.output_table() }),
             key: 7,
         };
-        let frame = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], &stages, &display, None).unwrap();
+        let frame = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], &stages, &display, None, false).unwrap();
         let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels, &mut None).unwrap();
         let src8: Vec<u8> = px.iter().flat_map(|q| codes(*q, false)).collect();
         let mut cpu = src8.clone();
@@ -919,7 +924,7 @@ fn the_view_develops_into_the_slot_not_on_screen() {
     let display = photocraft_gpu::CameraRawDisplay { encode_srgb: false, shaper: None, key: 0 };
     let develop = |g: &mut Gpu, exposure: f32, avoid: Option<usize>| {
         let stages = per_pixel(&CameraRaw { exposure, ..Default::default() }, w, h, false, None).unwrap();
-        g.dev.develop_view(&g.device, &g.queue, None, &src, None, size, &stages, &display, avoid).unwrap()
+        g.dev.develop_view(&g.device, &g.queue, None, &src, None, size, &stages, &display, avoid, false).unwrap()
     };
     let a = develop(&mut g, -1.0, None);
     let b = develop(&mut g, 1.0, Some(a.slot));
@@ -942,18 +947,18 @@ fn the_view_rejects_bad_sizes_tables_and_faulted_devices() {
     let stages = per_pixel(&CameraRaw::default(), 4, 4, false, None).unwrap();
     let display = photocraft_gpu::CameraRawDisplay { encode_srgb: false, shaper: None, key: 0 };
     let src = vec![[0.5; 4]; 16];
-    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [5, 4], &stages, &display, None).is_err());
-    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [0, 0], &stages, &display, None).is_err());
+    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [5, 4], &stages, &display, None, false).is_err());
+    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [0, 0], &stages, &display, None, false).is_err());
     let nan = [[f32::NAN; 4]; 3];
     let bad = photocraft_gpu::CameraRawDisplay {
         encode_srgb: false,
         shaper: Some(photocraft_gpu::CameraRawShaper { matrix: nan, input: &[[0.0; 4]; 2], output: &[[1.0; 4]; 2] }),
         key: 9,
     };
-    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [4, 4], &stages, &bad, None).is_err());
-    let ok = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [4, 4], &stages, &display, None).unwrap();
+    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [4, 4], &stages, &bad, None, false).is_err());
+    let ok = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [4, 4], &stages, &display, None, false).unwrap();
     let health = DeviceHealth::new();
     health.mark(Fault::Lost("test".into()));
-    assert!(g.dev.develop_view(&g.device, &g.queue, Some(&health), &src, None, [4, 4], &stages, &display, None).is_err());
+    assert!(g.dev.develop_view(&g.device, &g.queue, Some(&health), &src, None, [4, 4], &stages, &display, None, false).is_err());
     assert!(photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, Some(&health), &ok.pixels, &mut None).is_err());
 }
