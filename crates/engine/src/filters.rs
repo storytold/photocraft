@@ -277,8 +277,10 @@ fn replay_with_interrupt(
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
+    // The requested area limits publication; the owner extent still supplies
+    // HDR adaptation and bounds Average's effective input/output domain.
     if let FilterParams::HdrToning(options) = &fp {
-        return algo::tone::checked_hdr::apply_with(surf, options, area, bounds, selection, ctl).map(Some).map_err(crate::hdr_filter::error);
+        return algo::tone::checked_hdr::apply_with(surf, options, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::hdr_filter::error);
     }
     if let FilterParams::Percentile(options) = &fp {
         return algo::rank::apply_with(surf, options, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
@@ -290,7 +292,7 @@ fn replay_with_interrupt(
         return algo::convolution::apply_with(surf, options, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
     }
     if matches!(fp, FilterParams::Average) {
-        return algo::average::apply_preserving_alpha_with(surf, area, bounds, selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
+        return algo::average::apply_preserving_alpha_with(surf, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
     }
     if let Some(operation) = crate::coverage_cmds::operation(&fp) {
         return algo::coverage::apply_with(surf, operation, area, canvas.union(&content), selection, ctl).map(Some).map_err(crate::coverage_cmds::error);
@@ -382,7 +384,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 }
                 if matches!(fp, FilterParams::Average) {
                     return ctx
-                        .stage(0.1, 1.0, &msg, |ctl| algo::average::apply_preserving_alpha_with(surf, area, bounds, sel, ctl))
+                        .stage(0.1, 1.0, &msg, |ctl| algo::average::apply_preserving_alpha_with(surf, area, extent, sel, ctl))
                         .map_err(crate::coverage_cmds::error);
                 }
                 if let FilterParams::ChannelNoise(options) = fp {
@@ -395,7 +397,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 }
                 if let FilterParams::HdrToning(options) = fp {
                     return ctx
-                        .stage(0.1, 1.0, &msg, |ctl| algo::tone::checked_hdr::apply_with(surf, options, area, bounds, sel, ctl))
+                        .stage(0.1, 1.0, &msg, |ctl| algo::tone::checked_hdr::apply_with(surf, options, area, extent, sel, ctl))
                         .map_err(crate::hdr_filter::error);
                 }
                 if let Some(operation) = crate::coverage_cmds::operation(fp) {
@@ -683,5 +685,7 @@ pub fn last_filter(s: &Session) -> Option<(String, Value)> {
     Some((id, params))
 }
 
+#[cfg(test)]
+mod owner_extent_tests;
 #[cfg(test)]
 mod tests;
