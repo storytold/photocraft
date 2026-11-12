@@ -223,7 +223,8 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         // Photoshop's panes are grey around the image; only the image shows transparency (#2362).
         ui.painter().rect_filled(r, 0.0, t.canvas);
         let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
-        let slice_clicked = web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), f);
+        let choosable = matches!(slot.choice, Choice::Variant) && p.is_some();
+        let slice_clicked = web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), choosable, f);
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
         match slot.choice {
             Choice::Plain => {}
@@ -232,7 +233,8 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
                 ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
             }
             // A click (not a drag, which pans) makes the alternative's settings current.
-            // Not the second click of a double-click, and not a click that picked a slice.
+            // Not the second click of a double-click, and not a slice gesture (a click on a user or layer
+            // slice, or a Shift-click on any slice); a plain click on an auto slice does choose.
             Choice::Variant => {
                 if response.clicked_by(egui::PointerButton::Primary)
                     && !response.double_clicked()

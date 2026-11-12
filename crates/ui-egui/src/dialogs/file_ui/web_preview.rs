@@ -294,12 +294,16 @@ pub fn selected_slices(f: &Map<String, Value>) -> Vec<u64> {
     numbers
 }
 
-/// Draws the document's slices over a preview pane, as Photoshop's Save for Web does: user and
+/// Draws the document's slices over a preview pane, as Save for Web does: user and
 /// layer slices outlined in the slice colour, auto slices dashed, each with its number, and the
 /// selected ones highlighted (#10548). A click selects the slice under the pointer and
 /// Shift-click adds or removes one, like the dialog's Slice Select tool; the selection is the
-/// `__selectedSlices` field, which Selected Slices exports. Returns true when a click landed on a
-/// slice, so the caller does not also treat it as a pane click.
+/// `__selectedSlices` field, which Selected Slices exports. Returns true when the click was a
+/// slice gesture (any Shift-click on a slice, or a plain click on a user or layer slice), so the
+/// caller does not also treat it as a pane click. With `choosable` (a 4-Up alternative pane), a
+/// plain click on an auto slice or on no slice leaves the selection alone and returns false: the
+/// auto slices cover the rest of the canvas, so that click chooses the pane instead.
+#[allow(clippy::too_many_arguments)]
 pub fn slices(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -307,6 +311,7 @@ pub fn slices(
     response: &egui::Response,
     doc: &photocraft_doc::Document,
     color: egui::Color32,
+    choosable: bool,
     f: &mut Map<String, Value>,
 ) -> bool {
     use photocraft_doc::SliceOrigin;
@@ -323,21 +328,31 @@ pub fn slices(
     if response.clicked()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        let hit = all.iter().find(|r| to_screen(r.rect).contains(pos)).map(|r| r.number as u64);
-        handled = hit.is_some_and(|n| all.iter().any(|r| r.number as u64 == n && r.origin != SliceOrigin::Auto));
-        let mut selected = selected_slices(f);
-        match hit {
-            Some(n) if ui.input(|i| i.modifiers.shift) => {
+        // A point on the shared edge of a user or layer slice and an auto slice belongs to the
+        // user or layer slice.
+        let at = |r: &&photocraft_doc::slices::ResolvedSlice| to_screen(r.rect).contains(pos);
+        let hit = all.iter().filter(|r| r.origin != SliceOrigin::Auto).find(at).or_else(|| all.iter().find(at));
+        let shift = ui.input(|i| i.modifiers.shift);
+        if let Some(r) = hit {
+            let n = r.number as u64;
+            let auto = r.origin == SliceOrigin::Auto;
+            let mut selected = selected_slices(f);
+            if shift {
+                // Shift-click is always a slice gesture.
                 if let Some(i) = selected.iter().position(|v| *v == n) {
                     selected.remove(i);
                 } else {
                     selected.push(n);
                 }
+                handled = true;
+                f.insert("__selectedSlices".into(), json!(selected));
+            } else if !(choosable && auto) {
+                // Where a plain click on an auto slice chooses the pane, it leaves the selection alone.
+                selected = vec![n];
+                handled = !auto;
+                f.insert("__selectedSlices".into(), json!(selected));
             }
-            Some(n) => selected = vec![n],
-            None => {}
         }
-        f.insert("__selectedSlices".into(), json!(selected));
     }
     let selected = selected_slices(f);
     let highlight = egui::Color32::from_rgb(0xff, 0xb0, 0x00);
