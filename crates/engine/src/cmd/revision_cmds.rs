@@ -282,6 +282,75 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"index": i, "marker": out, "changed": true}))
 }
 
+/// Line the picked markers up: their left, right, top or bottom edges, or their centres (`left`,
+/// `right`, `top`, `bottom`, `centerX`, `centerY`). A run of frames over consecutive rows of a
+/// manual can be made to share a column without dragging each one by hand. Every moved frame
+/// re-takes its snapshot, and the whole run is one undo step.
+fn align(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "revision.align";
+    let mode = p.get("mode").and_then(Value::as_str).ok_or_else(|| bad(CMD, "`mode` is required"))?;
+    let mut picked: Vec<usize> = p
+        .get("indices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad(CMD, "`indices` must be an array of marker indices"))?
+        .iter()
+        .filter_map(Value::as_u64)
+        .map(|i| i as usize)
+        .collect();
+    let d0 = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    picked.retain(|i| *i < d0.revision_markers.len());
+    picked.sort_unstable();
+    picked.dedup();
+    if picked.len() < 2 {
+        return Err(bad(CMD, "aligning needs at least two markers"));
+    }
+    // The box around the whole run: edges align to it, centres to its centre.
+    let first = &d0.revision_markers[picked[0]];
+    let (mut left, mut top) = (first.pos[0], first.pos[1]);
+    let (mut right, mut bottom) = (first.pos[0] + first.size[0], first.pos[1] + first.size[1]);
+    for i in &picked {
+        let m = &d0.revision_markers[*i];
+        left = left.min(m.pos[0]);
+        top = top.min(m.pos[1]);
+        right = right.max(m.pos[0] + m.size[0]);
+        bottom = bottom.max(m.pos[1] + m.size[1]);
+    }
+    let mut plan: Vec<(usize, f64, f64)> = Vec::new();
+    for i in &picked {
+        let m = &d0.revision_markers[*i];
+        let (x, y) = match mode {
+            "left" => (left, m.pos[1]),
+            "right" => (right - m.size[0], m.pos[1]),
+            "top" => (m.pos[0], top),
+            "bottom" => (m.pos[0], bottom - m.size[1]),
+            "centerX" => ((left + right - m.size[0]) / 2.0, m.pos[1]),
+            "centerY" => (m.pos[0], (top + bottom - m.size[1]) / 2.0),
+            other => return Err(bad(CMD, format!("unknown align mode `{other}`"))),
+        };
+        let (x, y) = (x.round(), y.round());
+        // A frame already on the line is left alone, so aligning does not re-arm markers that did
+        // not move.
+        if (x - m.pos[0]).abs() >= 0.5 || (y - m.pos[1]).abs() >= 0.5 {
+            plan.push((*i, x, y));
+        }
+    }
+    let moved = plan.len();
+    if moved > 0 {
+        s.edit("Align Revision Markers", move |d, _| {
+            for (i, x, y) in plan {
+                let mut m = d.revision_markers[i].clone();
+                m.pos = [x, y];
+                m.snapshot = snapshot_for(d, &m)?;
+                m.done = false;
+                d.revision_markers[i] = m;
+            }
+            Ok(())
+        })?;
+    }
+    let markers = list_json(&s.active().ok_or(EngineError::NoDocument)?.doc);
+    Ok(json!({"aligned": moved, "markers": markers}))
+}
+
 /// Re-take the reference snapshot: the whole document, or one marker by `index`.
 fn snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.snapshot";
@@ -418,6 +487,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"index":n,"name":str?,"x":px?,"y":px?,"width":px?,"height":px?,"layerId":layer|null?,"note":str?,"done":bool?} (moving or resizing re-snapshots the frame; `done` marks the marker green or red by hand, without a new snapshot)"##,
             enabled: has_markers,
             run: set,
+            journal: true,
+        },
+        CommandSpec {
+            id: "revision.align",
+            label: "Align Revision Markers",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"indices":[n,...],"mode":"left|right|top|bottom|centerX|centerY"} -> {aligned,markers} (one undo step; every moved frame re-snapshots)"##,
+            enabled: has_markers,
+            run: align,
             journal: true,
         },
         CommandSpec {
@@ -717,5 +796,31 @@ mod tests {
         }
         s.execute("select.all", json!({})).unwrap();
         assert!(!s.active().unwrap().is_dirty(), "a selection is not an edit");
+    }
+
+    /// Left-aligning two frames puts both left edges on the one further left, keeps their rows, and
+    /// leaves the frame that is already on the line alone.
+    #[test]
+    fn align_left_puts_the_frames_on_one_column() {
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0})).unwrap();
+        s.execute("revision.add", json!({"x": 60.0, "y": 40.0, "width": 40.0, "height": 20.0})).unwrap();
+        let v = s.execute("revision.align", json!({"indices": [0, 1], "mode": "left"})).unwrap();
+        assert_eq!(v["aligned"], json!(1), "only the frame that was off the line moved");
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.revision_markers[0].pos, [10.0, 10.0], "the frame already on the line stayed");
+        assert_eq!(d.revision_markers[1].pos, [10.0, 40.0], "it moved sideways only, keeping its row");
+    }
+
+    /// Aligning to a centre puts the frames' middles on the run's middle.
+    #[test]
+    fn align_center_x_puts_the_frames_on_one_middle() {
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0})).unwrap();
+        s.execute("revision.add", json!({"x": 120.0, "y": 40.0, "width": 60.0, "height": 20.0})).unwrap();
+        s.execute("revision.align", json!({"indices": [0, 1], "mode": "centerX"})).unwrap();
+        let d = &s.active().unwrap().doc;
+        let middle = |i: usize| d.revision_markers[i].pos[0] + d.revision_markers[i].size[0] / 2.0;
+        assert_eq!(middle(0), middle(1), "both frames share their centre");
     }
 }

@@ -99,7 +99,13 @@ fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
                 if ui.add(egui::Button::new(RichText::new(tl!("Unbind")).size(11.5)).small()).clicked() {
                     let _ = app.run("revision.set", json!({"index": i, "layerId": null}));
                 }
-                ui.label(RichText::new(format!("↔ {name}")).size(10.5).color(t.text_dim));
+                // A bound layer's name is often a whole sentence ("1.将2号和19号板材… copy 5"), and
+                // drawing it in full widened the row until the buttons of the rows above and below
+                // no longer lined up, which also made the list hard to scan. Show a short prefix
+                // with an ellipsis and keep the whole name in the tooltip.
+                let shown = shorten_name(name, BOUND_NAME_CHARS);
+                ui.label(RichText::new(format!("↔ {shown}")).size(10.5).color(t.text_dim))
+                    .on_hover_text(name.as_str());
             } else if ui.add(egui::Button::new(RichText::new(tl!("Bind Layer")).size(11.5)).small()).clicked() {
                 // Bind what the frame actually covers. The frame's centre alone is not enough: a
                 // marker over a whole row of a manual is wide and short, so its centre often lands
@@ -156,6 +162,21 @@ fn round1(v: f64) -> String {
     } else {
         format!("{r:.1}")
     }
+}
+
+/// Characters of a bound layer's name the row shows before an ellipsis. Layer names in a manual are
+/// whole sentences, so the cap keeps every row the same width whatever the layer is called.
+const BOUND_NAME_CHARS: usize = 16;
+
+/// The first `max` characters of `name`, with `…` when anything was dropped. Counted in characters,
+/// not bytes, so a Chinese name is not cut in the middle of a glyph.
+fn shorten_name(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
+        return name.to_owned();
+    }
+    let mut out: String = name.chars().take(max).collect();
+    out.push('…');
+    out
 }
 
 /// Add a marker from the current selection (Rectangular Marquee), or a centred default box when
@@ -247,4 +268,22 @@ fn selected_layer(app: &PhotocraftApp) -> Option<u64> {
     let id = ids.first().copied()?;
     let layer = doc.layer(id)?;
     (!doc.is_background(id) && !layer.is_group()).then_some(id.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_name;
+
+    /// A short name is drawn in full, a long one keeps its first characters and gains an ellipsis,
+    /// and the ellipsis counts as one character rather than as three bytes of the name.
+    #[test]
+    fn long_layer_names_are_shortened_with_an_ellipsis() {
+        assert_eq!(shorten_name("A29 板材", 16), "A29 板材", "a name that fits is left alone");
+        let long = "1.将2号和19号板材如上图一样安装在一起。";
+        let shown = shorten_name(long, 16);
+        assert_eq!(shown.chars().count(), 17, "16 characters plus the ellipsis");
+        assert!(shown.ends_with('…'), "the tail is an ellipsis");
+        let prefix: String = shown.chars().take(16).collect();
+        assert!(long.starts_with(&prefix), "the shown text is the start of the full name");
+    }
 }

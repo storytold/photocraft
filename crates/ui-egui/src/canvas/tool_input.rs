@@ -499,9 +499,9 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
         match ev {
             ToolEvent::Down { .. } => {
                 let [x, y] = unsnapped(raw);
-                crate::revision_tool::press(app, [x, y], mods.alt);
+                crate::revision_tool::press(app, [x, y], mods.alt, mods.shift);
             }
-            ToolEvent::Move { x, y, .. } => crate::revision_tool::move_to(app, [x, y]),
+            ToolEvent::Move { x, y, .. } => crate::revision_tool::move_to(app, [x, y], mods.shift),
             ToolEvent::Up { x, y } => crate::revision_tool::release(app, [x, y]),
         }
         return;
