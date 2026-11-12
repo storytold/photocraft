@@ -1207,6 +1207,9 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
+    if let Some(fields) = app.ui.dialogs.iter().find(|dialog| dialog.id == id && historical_xcf::owns(&dialog.fields)).map(|dialog| dialog.fields.clone()) {
+        return historical_xcf::answer(app, &fields, true);
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -1233,6 +1236,11 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    if let Some(fields) = app.ui.dialogs.iter().find(|dialog| dialog.id == id && historical_xcf::owns(&dialog.fields)).map(|dialog| dialog.fields.clone()) {
+        let value = historical_xcf::answer(app, &fields, false)?;
+        crate::actions::stopped(app, &fields);
+        return Ok(value);
+    }
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     dont_show_again::closed(app, &closed);
     crate::guide_edit::cancel(app, id);

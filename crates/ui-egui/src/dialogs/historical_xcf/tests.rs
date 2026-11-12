@@ -198,3 +198,44 @@ fn automation_open_forwards_choice_before_read_and_preserves_source_protection()
         }
     }
 }
+
+#[test]
+fn held_only_confirm_and_cancel_denials_preserve_prompt_source_and_reservation_until_retry() {
+    fn deny_open(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "file.open" { Err(photocraft_engine::EngineError::Other("held decision denied".into())) } else { Ok(()) }
+    }
+    for accept in [false, true] {
+        let mut app = app();
+        app.run("file.new", json!({"width":2,"height":2})).unwrap();
+        let original = app.session.active().unwrap().doc.clone();
+        app.session.color.settings.ask_on_missing = false;
+        app.session.color.settings.ask_on_mismatch = false;
+        app.open_bytes("denied.xcf", &fixture::historical_pixel(true)).unwrap();
+        let dialog = app.ui.dialogs.iter_mut().find(|dialog| owns(&dialog.fields)).unwrap();
+        dialog.fields.insert("historicalXcfSampleOrder".into(), json!("little-endian"));
+        let dialog_id = dialog.id;
+        let source = app.historical_opens[0].id;
+        let dialogs = app.ui.dialogs.clone();
+        let order = app.prompt_order.clone();
+        app.session.authorize = Some(deny_open);
+        let result = if accept { crate::dialogs::confirm(&mut app, dialog_id) } else { crate::dialogs::cancel(&mut app, dialog_id) };
+        assert!(result.unwrap_err().contains("held decision denied"));
+        assert_eq!(app.ui.dialogs, dialogs);
+        assert_eq!(app.prompt_order, order);
+        assert_eq!(app.historical_opens.len(), 1);
+        assert!(app.session.holds_historical_xcf_open(source));
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+        app.session.authorize = None;
+        if accept {
+            crate::dialogs::confirm(&mut app, dialog_id).unwrap();
+        } else {
+            crate::dialogs::cancel(&mut app, dialog_id).unwrap();
+        }
+        assert!(!app.session.holds_historical_xcf_open(source));
+        assert!(!app.ui.dialogs.iter().any(|dialog| dialog.id == dialog_id));
+        assert!(app.historical_opens.is_empty());
+        assert!(app.prompt_order.is_empty());
+        assert_eq!(app.session.documents().len(), if accept { 2 } else { 1 });
+    }
+}

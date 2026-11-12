@@ -13,6 +13,7 @@ pub(super) struct Held {
     bytes: Arc<Vec<u8>>,
     options: photocraft_io::ImportOptions,
     path: Option<String>,
+    mode: photocraft_color::ColorMode,
 }
 
 pub(super) fn hold(
@@ -57,7 +58,7 @@ fn hold_with_budget(
     }
     let id = s.jobs.next_historical_xcf.checked_add(1).ok_or_else(|| EngineError::Other("historical source identity limit reached".into()))?;
     s.jobs.next_historical_xcf = id;
-    s.jobs.historical_xcf.push(Held { id, name, bytes, options, path: None });
+    s.jobs.historical_xcf.push(Held { id, name, bytes, options, path: None, mode: question.mode });
     Ok(json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrderRequired":{"version":question.version,"bitsPerSample":question.bits_per_sample}}))
 }
 
@@ -159,6 +160,10 @@ impl Session {
             .iter()
             .position(|held| held.id == id)
             .ok_or_else(|| EngineError::Other("historical XCF source choice is no longer available".into()))?;
+        let held = self.jobs.historical_xcf.get(index).ok_or_else(|| EngineError::Other("historical XCF source choice is no longer available".into()))?;
+        // Authorization refusal leaves the exact source available for retry. Once permitted,
+        // the attempt consumes it before decoding, including ordinary failures and cancellation.
+        WorkerPolicy::capture(self).authorize_working_profile(held.mode)?;
         let held = self.jobs.historical_xcf.remove(index);
         let mut options = held.options;
         options.historical_xcf_sample_order = Some(order);
@@ -219,6 +224,21 @@ impl WorkerPolicy {
         }
     }
 
+    /// A held byte source grants no authority to resolve its mode's user-configured ICC path.
+    fn authorize_working_profile(&self, mode: photocraft_color::ColorMode) -> Result<()> {
+        let working = match crate::color_cmds::mode_space(mode) {
+            photocraft_cms::ColorSpace::Rgb => Some(&self.color.working_rgb),
+            photocraft_cms::ColorSpace::Cmyk => Some(&self.color.working_cmyk),
+            photocraft_cms::ColorSpace::Gray => Some(&self.color.working_gray),
+            _ => None,
+        };
+        if let Some(profile) = working {
+            let _authority = self.authorize.map(|gate| crate::jobs::render_authorization_scope(Some(gate)));
+            crate::jobs::authorize_render_command("edit.profileInfo", &json!({"profile":profile}))?;
+        }
+        Ok(())
+    }
+
     /// Finish color policy and native caches on the execution thread, or retain an unprepared color/damage hold.
     pub(super) fn prepare(self, name: &str, mut imported: photocraft_io::ImportResult, damaged: bool, interactive: bool, ctx: &JobCtx) -> Result<PreparedOpen> {
         ctx.check()?;
@@ -232,18 +252,7 @@ impl WorkerPolicy {
         }
         let mut color = crate::color_cmds::ColorState::default();
         color.settings = self.color.clone();
-        // A held source capability grants no new access to a user-configured ICC
-        // path. Check the actual captured working profile before resolving it.
-        let working = match crate::color_cmds::mode_space(imported.document.mode) {
-            photocraft_cms::ColorSpace::Rgb => Some(&self.color.working_rgb),
-            photocraft_cms::ColorSpace::Cmyk => Some(&self.color.working_cmyk),
-            photocraft_cms::ColorSpace::Gray => Some(&self.color.working_gray),
-            _ => None,
-        };
-        if let Some(profile) = working {
-            let _authority = self.authorize.map(|gate| crate::jobs::render_authorization_scope(Some(gate)));
-            crate::jobs::authorize_render_command("edit.profileInfo", &json!({"profile":profile}))?;
-        }
+        self.authorize_working_profile(imported.document.mode)?;
         let raw = imported.warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE));
         let question = color.open_question(&imported.document).filter(|_| !raw);
         let damaged = interactive && damaged;
