@@ -2,7 +2,7 @@ use super::panel::{chevron_icon, surface};
 use super::scrub::{label_scrub_response, take_label_scrub};
 use super::slider::slider;
 use super::text_field::first_field_id;
-use super::units::{FieldUnits, field_resolution_id, fmt_num, fmt_num_prec, fmt_num2, parse_num_in, plain, unit_of_suffix};
+use super::units::{FieldUnits, field_resolution_id, fmt_num, fmt_num_fixed, fmt_num_prec, fmt_num2, parse_num_in, plain, unit_of_suffix};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Tokens, Ui, Vec2, pos2, theme, vec2};
 
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub. Typed
@@ -12,11 +12,19 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
+/// A [`value_field`] for a whole number: no decimals, and the arrow keys and a scrub (of the field
+/// or of its caption) move it a whole step at a time, whatever its range. A small range such as
+/// 1–10 would otherwise scrub in hundredths, which a whole-number setting rounds away (#11765).
+pub fn value_field_whole(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), step_from_decimals: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field_named`] for whole numbers that says when a typed value was past `range`
 /// (Photoshop's "Closest value inserted" alerts, #11938): it stores the closest whole number in
 /// range, and returns true once the field is left after such a value was typed, so the caller
 /// shows its alert. While the field has the keyboard it keeps the typed text (a `0` on the way to
-/// `05` stays). A scrub past the ends just stops there and says nothing.
+/// `05` stays). A scrub, an arrow-key or a wheel step past the ends just stops there and says
+/// nothing.
 pub fn value_field_whole_alerting(
     ui: &mut Ui,
     name: &str,
@@ -25,8 +33,34 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+}
+
+/// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
+/// typed value past `range` becomes the closest end, unrounded.
+pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+}
+
+fn value_field_alerting_in(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    whole: bool,
+) -> (Response, bool) {
     let (lo, hi) = (*range.start(), *range.end());
-    let fit = |v: f32| if v.is_finite() { v.round().clamp(lo, hi) } else { lo };
+    let fit = |v: f32| {
+        if !v.is_finite() {
+            lo
+        } else if whole {
+            v.round().clamp(lo, hi)
+        } else {
+            v.clamp(lo, hi)
+        }
+    };
     *value = fit(*value);
     let draft_id = ui.make_persistent_id(egui::IdSalt::new(("whole-alerting-typed", name)));
     // Typed text only while its field still has the keyboard: one left without being drawn (a
@@ -34,6 +68,9 @@ pub fn value_field_whole_alerting(
     let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     let draft = draft.filter(|(_, stored, field)| *stored == *value && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
     let mut typed = draft.map_or(*value, |(typed, _, _)| typed);
+    // Read before the field: it consumes the arrow keys it steps with, and the wheel it steps
+    // with while focused never shows in the scroll delta. A step past the ends is no typing.
+    let stepped = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
     // The field's own range is wide, so the typed value reaches here unclamped.
     let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
     let out_id = r.id.with("out-of-range");
@@ -42,7 +79,7 @@ pub fn value_field_whole_alerting(
     }
     if r.changed() && typed.is_finite() {
         *value = fit(typed);
-        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none() && !stepped;
         let out = typing && !(lo..=hi).contains(&typed);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
         if typing && r.has_focus() {
@@ -120,6 +157,8 @@ pub(super) struct FieldOpts {
     /// Show an unset value as an empty field rather than `0` (the Crop tool's free ratio sides,
     /// #10888). Editing, scrubbing and parsing are unchanged.
     pub(super) blank_when_zero: bool,
+    /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
+    pub(super) keep_zeros: bool,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -462,7 +501,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -482,6 +521,7 @@ fn number_edit(
             return String::new();
         }
         let text = match decimals {
+            Some(d) if keep_zeros => fmt_num_fixed(v, d),
             Some(d) => fmt_num_prec(v, d),
             None if fine => fmt_num2(v),
             None => fmt_num(v),
