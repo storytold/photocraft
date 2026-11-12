@@ -157,9 +157,7 @@ pub(super) fn import_first_with_keys(bytes: &[u8], encoding: Option<&str>) -> st
 
 pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<(ReplacementSet, Vec<usize>)>, String> {
     let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
-    if bytes.starts_with(&12u32.to_be_bytes())
-        && files.iter().any(|file| file.warnings.iter().any(|warning| warning.ends_with(" trailing bytes ignored")))
-    {
+    if bytes.starts_with(&12u32.to_be_bytes()) && files.iter().any(|file| file.warnings.iter().any(|warning| warning.ends_with(" trailing bytes ignored"))) {
         return Err("trailing data after the legacy Actions set".to_string());
     }
     Ok(files
