@@ -115,7 +115,7 @@ mod planes;
 mod refs;
 mod selection;
 mod spot;
-mod targeting;
+pub(crate) mod targeting;
 mod tone_target;
 mod view;
 

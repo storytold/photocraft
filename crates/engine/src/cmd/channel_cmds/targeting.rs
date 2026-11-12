@@ -81,8 +81,10 @@ pub(crate) fn as_tone<T>(surf: &mut Surface, spot: bool, area: Rect, f: impl FnO
     out
 }
 
-/// [`invert_region`] over `area`, one block of the tile grid at a time.
-fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
+/// Runs `f` on `area` one block of the tile grid at a time, so a caller that needs a buffer of
+/// its own never allocates one the size of the whole area (CodeRabbit on #10217). Blocks are
+/// clipped to `area`, so an edge block is only as big as what lies inside it.
+pub(crate) fn over_blocks(area: Rect, mut f: impl FnMut(Rect) -> Result<()>) -> Result<()> {
     let t = photocraft_geom::TILE_SIZE;
     let mut y = area.y0.div_euclid(t).saturating_mul(t);
     while y < area.y1 {
@@ -92,7 +94,7 @@ fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
             let x1 = x.saturating_add(t);
             let block = Rect::new(x, y, x1, y1).intersect(&area);
             if !block.is_empty() {
-                invert_region(surf, block)?;
+                f(block)?;
             }
             if x1 <= x {
                 break;
@@ -105,6 +107,11 @@ fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
         y = y1;
     }
     Ok(())
+}
+
+/// [`invert_region`] over `area`, one block of the tile grid at a time.
+fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
+    over_blocks(area, |block| invert_region(surf, block))
 }
 
 /// The surface a pixel command writes to and whether the layer's transparency is locked.

@@ -279,9 +279,14 @@ fn ink_back(tone: &Surface, ink: &mut Surface, area: Rect) -> Result<()> {
     if area.is_empty() {
         return Ok(());
     }
-    let shown = crate::allocation::read_region(tone, area, "a spot channel's stroke")?;
-    ink.try_write_region(area, &shown)?;
-    crate::channel_cmds::invert_region(ink, area)
+    // One block of the tile grid at a time: a stroke over a large canvas would otherwise buffer
+    // its whole damage rectangle here, which is the cost `tone_of` was already freed of
+    // (CodeRabbit on #10217).
+    crate::channel_cmds::targeting::over_blocks(area, |block| {
+        let shown = crate::allocation::read_region(tone, block, "a spot channel's stroke")?;
+        ink.try_write_region(block, &shown)?;
+        crate::channel_cmds::invert_region(ink, block)
+    })
 }
 
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
