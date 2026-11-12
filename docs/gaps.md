@@ -437,7 +437,7 @@ what an agent can't finish alone.
   `.cin`), sharing the DPX header/packing (`crates/codecs/src/codecs/dpx.rs`); a Cineon frame saved
   back keeps its code values.
 - **Progress (2026-10-23):** Amiga IFF/ILBM (`FORM ... ILBM`/`PBM `) 1–8-plane paletted and
-  24-plane RGB bitmaps open, stored or ByteRun1-compressed (`crates/codecs/src/codecs/iff.rs`);
+  24-plane RGB bitmaps open, stored or ByteRun1-compressed (craft-libs' `craft-raster-codecs`, `iff`);
   Save As `.iff` writes a 24-plane ILBM with a 1-bit mask plane for alpha.
 - **Estimate:** 120–220 h.
 
