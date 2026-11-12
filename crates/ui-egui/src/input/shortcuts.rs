@@ -960,7 +960,15 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Enter deselects the components and also untargets the path (its Paths panel row and outline
     // go). Neither adds a History step. Free Transform Path and ⌘↩ (Make Selection) took their
     // keys earlier; with no component selected both keys keep today's behaviour. Not while the
-    // path's name is typed in the panel.
+    // path's name is typed in the panel. Only the bare keys: `consume_key` would also take them with
+    // ⇧ or ⌥, which were not measured.
+    let bare = |k: Key| {
+        ctx.input_mut(|i| {
+            let n = i.events.len();
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.is_none()));
+            i.events.len() != n
+        })
+    };
     if !esc_taken
         && app.ui.tool == Tool::PathSelection
         && !crate::vector_ui::path_renaming(app, ctx)
@@ -968,11 +976,11 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && let Some((crate::direct_select::PathRef::Saved(i), ..)) = crate::path_components::selected(app)
         && i == index
     {
-        if pressed(Key::Escape) {
+        if bare(Key::Escape) {
             crate::path_components::deselect_components(app);
             return;
         }
-        if pressed(Key::Enter) {
+        if bare(Key::Enter) {
             crate::path_components::deselect_components(app);
             if let Some(name) = app.ui.selected_path.clone() {
                 crate::vector_ui::deselect_loaded_path(app, &name);

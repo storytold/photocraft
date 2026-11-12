@@ -110,6 +110,18 @@ fn escape_with_a_pixel_selection_deselects_the_pixels_and_keeps_the_components()
 }
 
 #[test]
+fn shift_or_alt_with_enter_or_escape_keeps_the_components_and_the_path() {
+    for key in [Key::Enter, Key::Escape] {
+        for modifiers in [Modifiers::SHIFT, Modifiers::ALT] {
+            let mut app = app();
+            press(&mut app, key, modifiers);
+            assert!(crate::path_components::selected(&app).is_some(), "{key:?} {modifiers:?}");
+            assert_eq!(app.ui.selected_path.as_deref(), Some("Path 1"), "{key:?} {modifiers:?}");
+        }
+    }
+}
+
+#[test]
 fn enter_and_escape_with_no_component_selected_keep_the_path_targeted() {
     for key in [Key::Enter, Key::Escape] {
         let mut app = app();
