@@ -204,18 +204,9 @@ fn landed_mask(cov: &[f32], area: Rect, inv: &Homography, rect: Rect) -> Vec<boo
         .collect()
 }
 
-/// The plan of the move, checked for its landing: [`plan_unchecked`] and the scan for a selected pixel on
-/// the canvas ([`selected_pixel_lands`]), which can read a whole large selection.
-fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
-    let plan = plan_unchecked(s, p, margin)?;
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
-    check_lands(sel, &plan)?;
-    Ok(plan)
-}
-
-/// Everything [`plan`] checks except that a selected pixel lands on the canvas: cheap, so a live
-/// preview can call it on the UI thread and leave the scan to its job.
+/// Everything a move is checked for except that a selected pixel lands on the canvas ([`check_lands`]),
+/// which can read a whole large selection: cheap, so a caller can plan on the UI thread and run the
+/// scan in its job.
 fn plan_unchecked(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     let mode = match string(p, "mode", "move") {
         "move" => Mode::Move,
@@ -591,7 +582,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
 }
 
 pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
-    let plan = plan(s, p, MAX_MARGIN)?;
+    let plan = plan_unchecked(s, p, MAX_MARGIN)?;
     let label = if plan.mode == Mode::Move { "Content-Aware Move" } else { "Content-Aware Extend" };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
@@ -604,8 +595,10 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
             let p = p.clone();
             move |ctx| {
                 ctx.progress(0.0, label);
-                let mut work = (*doc).clone();
                 let sel = doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
+                // The landing scan runs here, off the UI thread (`plan_unchecked` leaves it out).
+                check_lands(sel, &plan)?;
+                let mut work = (*doc).clone();
                 run_move(&mut work, sel, &plan, &p, ctx, label)
             }
         },
@@ -660,6 +653,8 @@ pub struct ContentAwarePreview {
     params: Value,
     /// Below 1: the scale the move is solved at before it is enlarged back.
     scale: f64,
+    /// The landing scan has already passed for this document and plan (a refinement of a checked preview).
+    checked: bool,
 }
 
 impl ContentAwarePreview {
@@ -668,10 +663,13 @@ impl ContentAwarePreview {
     /// moved selection lands on the canvas: that check runs here, on the worker, not in [`preview`].
     /// Stops with `Cancelled` once `ctx` is cancelled.
     pub fn run(&self, ctx: &crate::jobs::JobCtx) -> Result<(Document, Rect)> {
-        let mut work = (*self.doc).clone();
         let sel = self.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
-        // The scan for a selected pixel on the canvas runs here, off the UI thread (`preview` leaves it out).
-        check_lands(sel, &self.plan)?;
+        // The scan for a selected pixel on the canvas runs here, off the UI thread (`preview` leaves it out);
+        // the full-resolution refinement of a coarse preview that passed it skips the repeat.
+        if !self.checked {
+            check_lands(sel, &self.plan)?;
+        }
+        let mut work = (*self.doc).clone();
         let damage = if self.is_coarse() {
             run_scaled(&mut work, sel, &self.plan, &self.params, self.scale, ctx)?
         } else {
@@ -699,6 +697,7 @@ impl ContentAwarePreview {
             plan: Plan { margin: MAX_MARGIN, ..self.plan },
             params: self.params.clone(),
             scale: 1.0,
+            checked: true,
         })
     }
 }
@@ -715,7 +714,7 @@ pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
     let pixels = px(plan.area).max(px(plan.dest));
     let scale = if pixels > PREVIEW_MAX_PIXELS { (PREVIEW_MAX_PIXELS as f64 / pixels as f64).sqrt() } else { 1.0 };
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(ContentAwarePreview { colors: crate::color_channels::target(s, p)?, doc: d.doc.clone(), plan, params: p.clone(), scale })
+    Ok(ContentAwarePreview { colors: crate::color_channels::target(s, p)?, doc: d.doc.clone(), plan, params: p.clone(), scale, checked: false })
 }
 
 /// The surface's tiles over `r` (shared, not copied) on a surface of their own: what a resize of
@@ -862,7 +861,8 @@ mod tests {
             let (got, damage) = job.run(&JobCtx::new()).unwrap();
             // What the preview has always computed: the move at full resolution, with the
             // preview's margin.
-            let plan = plan(&s, &p, PREVIEW_MARGIN).unwrap();
+            let plan = plan_unchecked(&s, &p, PREVIEW_MARGIN).unwrap();
+            check_lands(s.active().unwrap().doc.selection.as_ref().unwrap(), &plan).unwrap();
             let d = s.active().unwrap();
             let mut want = (*d.doc).clone();
             let (_, want_damage, _) = run_move(&mut want, d.doc.selection.as_ref().unwrap(), &plan, &p, &JobCtx::new(), "test").unwrap();

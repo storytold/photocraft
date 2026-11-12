@@ -40,7 +40,7 @@ pub(crate) fn begin(app: &mut PhotocraftApp, offset: [i32; 2]) -> bool {
     else {
         return false;
     };
-    let b = app.cached_bounds(u64::MAX - document, &sel).intersect(&canvas);
+    let b = crate::retouch_ui::cam_area(app, &sel, canvas, u64::MAX - document);
     if b.is_empty() {
         return false;
     }

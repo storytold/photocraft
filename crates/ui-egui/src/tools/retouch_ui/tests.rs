@@ -1271,3 +1271,22 @@ fn content_aware_move_drag_clamp_uses_the_canvas_for_an_inverted_selection() {
     assert_eq!(patch_offset(&mut app, [50.0, 30.0], [1000.0, 30.0]), [99, 0]);
     assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-1000.0, 30.0]), [-99, 0]);
 }
+
+/// Transform On Drop boxes the area the engine plans over: the canvas for an inverted selection, not the
+/// bounds of its unselected hole (which would also be skipped for a Select All without tiles).
+#[test]
+fn transform_on_drop_box_uses_the_canvas_for_an_inverted_selection() {
+    let mut app = app();
+    app.ui.tool = Tool::ContentAwareMove;
+    let mut sel = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
+    sel.write_interleaved(photocraft_geom::Rect::new(90, 20, 98, 40), &[0u8; 8 * 20]);
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).selection = Some(sel);
+    assert!(crate::cam_transform::begin(&mut app, [5, 0]));
+    assert_eq!(app.ui.cam_transform.as_ref().unwrap().frame.rect, [5.0, 0.0, 105.0, 60.0]);
+    // A plain Select All has no tiles at all; the box still comes up.
+    app.ui.cam_transform = None;
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).selection =
+        Some(photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+    assert!(crate::cam_transform::begin(&mut app, [5, 0]));
+    assert_eq!(app.ui.cam_transform.as_ref().unwrap().frame.rect, [5.0, 0.0, 105.0, 60.0]);
+}

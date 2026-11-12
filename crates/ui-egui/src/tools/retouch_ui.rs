@@ -358,16 +358,21 @@ pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> 
     patch_offset_for(app, tool, start, end)
 }
 
+/// The area a Content-Aware Move plans over: the canvas for an inverted selection (its default pixel
+/// selected), else the selection's bounds on the canvas. Mirrors the engine's `patch::selection_area` rule.
+pub(crate) fn cam_area(app: &mut PhotocraftApp, sel: &photocraft_raster::Surface, canvas: photocraft_geom::Rect, key: u64) -> photocraft_geom::Rect {
+    if sel.default_pixel().first().is_some_and(|v| *v > 0.0) { canvas } else { app.cached_bounds(key, sel).intersect(&canvas) }
+}
+
 /// [`patch_offset`] for a drag made with `tool` (the finishers know theirs; `app.drag` is gone by then).
 fn patch_offset_for(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
     let (dx, dy) = ((end[0] - start[0]).round(), (end[1] - start[1]).round());
     let (dx, dy) = if dx.is_finite() && dy.is_finite() { (dx.clamp(-1e7, 1e7) as i32, dy.clamp(-1e7, 1e7) as i32) } else { (0, 0) };
     let Some((canvas, sel)) = app.session.active().and_then(|st| Some((st.doc.bounds(), st.doc.selection.clone()?))) else { return [dx, dy] };
     let key = u64::MAX - app.session.active().map_or(0, |st| st.doc.id.0);
-    // An inverted selection (its default pixel selected) covers the canvas outside its tiles; the engine
-    // plans a Content-Aware Move over the canvas then, not over the bounds of the unselected hole.
-    let inverted = tool == Tool::ContentAwareMove && sel.default_pixel().first().is_some_and(|v| *v > 0.0);
-    let b = if inverted { canvas } else { app.cached_bounds(key, &sel).intersect(&canvas) };
+    // Only the Content-Aware Move plans over the canvas for an inverted selection; the engine's
+    // `patch::selection_area` rule is mirrored by `cam_area`.
+    let b = if tool == Tool::ContentAwareMove { cam_area(app, &sel, canvas, key) } else { app.cached_bounds(key, &sel).intersect(&canvas) };
     if b.is_empty() {
         return [dx, dy];
     }
