@@ -35,6 +35,7 @@ mod filmstrip;
 mod menu;
 mod open;
 mod proxy;
+mod raw_load;
 mod sidecar;
 
 pub use controls::show;
@@ -49,6 +50,7 @@ pub use open::{
     without_develop_note,
 };
 use open::{Target, non_defaults};
+pub(crate) use open::{after_raw_stage, raw_tuning};
 use proxy::{ProxyFrame, ProxyJob};
 pub use sidecar::sidecar_path;
 #[cfg(test)]
@@ -105,10 +107,23 @@ pub struct CameraRawDialog {
     /// The open-time dialog's camera tone curve: Shadows / Highlights act on the raw data there,
     /// in linear light before this curve, and the preview undoes it to show the same.
     raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    /// The open-time dialog's raw file, decoded: the preview develops the raw-stage settings
+    /// from its sensor data, as Open does, and [`Self::proxy`] is its binned frame developed with
+    /// the defaults.
+    raw_source: Option<crate::camera_raw_detail_ui::RawDetail>,
+    /// [`Self::proxy`] is [`Self::raw_source`]'s binned frame, so the proxy develops from it.
+    raw_proxy: bool,
+    /// The default develop at the preview's size, for Auto when the proxy is the binned frame:
+    /// averaged once, on the first Auto.
+    auto_proxy: std::sync::OnceLock<Vec<[f32; 4]>>,
+    /// The raw source being built on a worker ([`Self::load_raw_source`]).
+    raw_loading: Option<std::sync::mpsc::Receiver<Option<raw_load::RawLoaded>>>,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
     preview_error: Option<(String, u64)>,
+    /// A failure of [`Self::render`] (on this thread) the dialog has not reported yet.
+    render_error: Option<String>,
     /// The GPU develop, when the app may use one.
     pub(crate) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
     /// Names [`Self::proxy`] for the GPU pass's upload cache.
@@ -141,6 +156,7 @@ impl CameraRawDialog {
         result["previewPending"] = json!(self.render_pending());
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());
+        result["rawSourcePending"] = json!(self.raw_source_pending());
         result["detailError"] = json!(self.detail.error);
         result["viewportRect"] = json!(self.viewport.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result["zoom"] = json!(self.viewport.map(|r| navigation.scale(r, vec2(self.full_w as f32, self.full_h as f32) / self.preview_ppp)));
@@ -171,6 +187,20 @@ impl CameraRawDialog {
         if self.show_before { &self.before_histogram } else { &self.after_histogram }
     }
 
+    /// The pixels Auto reads: the default develop box-averaged to the preview's size, also when the
+    /// proxy is a raw's binned sensor data, so the dialog's Auto and Camera Raw Defaults' Auto for
+    /// a raw never shown read the same pixels.
+    pub(crate) fn auto_pixels(&self) -> std::borrow::Cow<'_, [[f32; 4]]> {
+        if !self.raw_proxy {
+            return std::borrow::Cow::Borrowed(self.proxy.as_slice());
+        }
+        std::borrow::Cow::Borrowed(self.auto_proxy.get_or_init(|| {
+            let (surf, area) = self.detail.source();
+            let (w, h) = (area.width() as usize, area.height() as usize);
+            convert::box_proxy(surf, area, w, h).0
+        }))
+    }
+
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
         non_defaults(&self.params)
@@ -193,8 +223,11 @@ impl CameraRawDialog {
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
         // A render still running on the worker has older settings than this one.
         self.pending = None;
-        let frame = self.proxy_job().run();
-        self.publish(ctx, frame);
+        match self.proxy_job().run() {
+            Ok(frame) => self.publish(ctx, frame),
+            // The preview keeps its last frame; the dialog reports the failure.
+            Err(e) => self.render_error = Some(e),
+        }
         self.dirty = false;
     }
 
@@ -203,6 +236,7 @@ impl CameraRawDialog {
             proxy: self.proxy.clone(),
             selection: self.selection.clone(),
             raw_curve: self.raw_curve.clone(),
+            raw_source: self.raw_source.clone().filter(|_| self.raw_proxy),
             params: self.params.clone(),
             float: self.float,
             size: (self.pw, self.ph),
@@ -250,7 +284,8 @@ impl CameraRawDialog {
             let (tx, rx) = std::sync::mpsc::channel::<Result<ProxyFrame, String>>();
             let repaint = ctx.clone();
             let spawned = std::thread::Builder::new().name("camera-raw-proxy".into()).spawn(move || {
-                let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "RAW Develop preview failed".to_string());
+                let frame =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run())).map_err(|_| "RAW Develop preview failed".to_string()).and_then(|r| r);
                 // The dialog may have closed or rendered on its own meanwhile; then nobody listens.
                 if tx.send(frame).is_ok() {
                     repaint.request_repaint();

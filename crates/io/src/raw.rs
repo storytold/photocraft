@@ -84,31 +84,12 @@ pub struct RawTuning {
 /// them as RGB adjustments.
 pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<(ImportResult, bool), IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
-    let exposure = f64::from(tuning.exposure);
-    if !exposure.is_finite() || !(-10.0..=10.0).contains(&exposure) {
-        return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
-    }
+    check_tuning(tuning)?;
     let sensor = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
-    let slider = |v: f32| if v.is_finite() { v.clamp(-100.0, 100.0) } else { 0.0 };
-    let tone = photocraft_raw::Tone {
-        shadows: slider(tuning.shadows),
-        highlights: slider(tuning.highlights),
-        clarity: slider(tuning.clarity),
-        texture: slider(tuning.texture),
-        dehaze: slider(tuning.dehaze),
-    };
     // The colour rendering the default open used (a look fitted to the camera's JPEG for files
     // without colour calibration), so re-developing changes only what the sliders change.
     let camera_look = default_look(bytes, &sensor);
-    let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
-    let wb_applied = match sensor.camera_wb {
-        Some(m) => {
-            let g = wb_gains(tuning.temperature, tuning.tint);
-            opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
-            true
-        }
-        None => false,
-    };
+    let (opts, wb_applied) = tuned_options(&sensor, camera_look, tuning);
     let mut dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
     let cropped = match tuning.crop {
         Some(crop) => {
@@ -123,6 +104,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     } else {
         "estimated white balance".into()
     };
+    let tone = opts.tone;
     let tone = [("shadows", tone.shadows), ("highlights", tone.highlights), ("clarity", tone.clarity), ("texture", tone.texture), ("dehaze", tone.dehaze)]
         .iter()
         .filter(|(_, v)| *v != 0.0)
@@ -130,6 +112,139 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         .collect::<String>();
     let summary = format!("developed in RAW Develop (exposure {:+.2} EV{tone}, {wb}, {} demosaic{cropped})", tuning.exposure, tuning.demosaic.id());
     Ok((developed_document(name, bytes, format, dev, &summary)?, wb_applied))
+}
+
+/// Rejects an exposure the develop cannot take.
+fn check_tuning(tuning: &RawTuning) -> Result<(), IoError> {
+    let exposure = f64::from(tuning.exposure);
+    if !exposure.is_finite() || !(-10.0..=10.0).contains(&exposure) {
+        return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
+    }
+    Ok(())
+}
+
+/// The develop options of `tuning` for `sensor` with the default open's `camera_look`, and
+/// whether Temperature / Tint were applied (the file has an as-shot white balance). What
+/// [`import_raw_tuned`] and the dialog's preview ([`RawSource`]) both develop with.
+fn tuned_options(sensor: &Sensor, camera_look: Option<CameraLook>, tuning: &RawTuning) -> (DevelopOptions, bool) {
+    let slider = |v: f32| if v.is_finite() { v.clamp(-100.0, 100.0) } else { 0.0 };
+    let tone = photocraft_raw::Tone {
+        shadows: slider(tuning.shadows),
+        highlights: slider(tuning.highlights),
+        clarity: slider(tuning.clarity),
+        texture: slider(tuning.texture),
+        dehaze: slider(tuning.dehaze),
+    };
+    let exposure = f64::from(tuning.exposure);
+    let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
+    let wb_applied = match sensor.camera_wb {
+        Some(m) => {
+            let g = wb_gains(tuning.temperature, tuning.tint);
+            opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
+            true
+        }
+        None => false,
+    };
+    (opts, wb_applied)
+}
+
+/// A raw file decoded once for the open-time Camera Raw dialog, so its preview develops the
+/// raw-stage settings (Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture,
+/// Dehaze) from the sensor data as Open does ([`import_raw_tuned`]), instead of applying them to
+/// pixels the default develop has already clipped. It keeps the sensor data, a copy of it binned
+/// down for the fitted preview ([`photocraft_raw::binned`]) and the default open's colour
+/// rendering.
+pub struct RawSource {
+    full: Sensor,
+    /// The binned frame; `None` when the frame can't be binned by the factor (too small, or a CFA
+    /// pattern whose blocks would miss a colour): the preview then develops the whole frame and
+    /// box-averages it by `shrink`.
+    proxy: Option<Sensor>,
+    shrink: usize,
+    look: Option<CameraLook>,
+    curve: Vec<[f32; 2]>,
+}
+
+/// `p` box-averaged by `k` as the dialog's proxy averages the developed document: `k`×`k`
+/// blocks, the last column of blocks cut short and the last row of blocks filled by repeating
+/// the frame's last row.
+fn shrink_rgb(p: RawPixels, k: usize) -> RawPixels {
+    if k <= 1 || p.width == 0 || p.height == 0 || p.rgb.len() < p.width * p.height * 3 {
+        return p;
+    }
+    let (w, h) = (p.width.div_ceil(k), p.height.div_ceil(k));
+    let mut acc = vec![[0u64; 4]; w * h];
+    let rows = p.rgb.as_chunks::<3>().0;
+    for y in 0..p.height {
+        let Some(row) = rows.get(y * p.width..(y + 1) * p.width) else { continue };
+        // The last row also stands in for the rows that fill the last row of blocks, counted
+        // once with their weight rather than revisited.
+        let weight = if y + 1 == p.height { (h * k - y) as u64 } else { 1 };
+        for (x, px) in row.iter().enumerate() {
+            if let Some(a) = acc.get_mut((y / k) * w + x / k) {
+                for c in 0..3 {
+                    a[c] += u64::from(px[c]) * weight;
+                }
+                a[3] += weight;
+            }
+        }
+    }
+    let rgb = acc.iter().flat_map(|a| (0..3).map(move |c| (a[c] + a[3] / 2).checked_div(a[3]).unwrap_or(0) as u16)).collect();
+    RawPixels { width: w, height: h, rgb, white_balance: p.white_balance }
+}
+
+/// A develop of a [`RawSource`]: interleaved 16-bit RGB in the default open's colour space (the
+/// document's own encoding), and whether Temperature / Tint were applied at the raw stage.
+pub struct RawPixels {
+    pub width: usize,
+    pub height: usize,
+    pub rgb: Vec<u16>,
+    pub white_balance: bool,
+}
+
+impl RawSource {
+    /// Decodes `bytes` and bins the frame by `factor` for the preview (the factor the dialog
+    /// box-averages the developed document by, so the two have the same size).
+    pub fn new(bytes: &[u8], factor: usize) -> Result<RawSource, IoError> {
+        let full = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
+        let look = default_look(bytes, &full);
+        let curve = match &look {
+            Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
+            None => full.tone_curve.clone(),
+        };
+        let binned = photocraft_raw::binned(&full, factor).map_err(IoError::Raw)?;
+        let proxy = (binned.width != full.width || binned.height != full.height).then_some(binned);
+        let shrink = if proxy.is_some() { 1 } else { factor.max(1) };
+        Ok(RawSource { full, proxy, shrink, look, curve })
+    }
+
+    /// The tone curve the file develops with by default, as [`tone_curve`] gives it.
+    pub fn tone_curve(&self) -> &[[f32; 2]] {
+        &self.curve
+    }
+
+    /// The binned frame developed with `tuning` (its demosaic method does not apply: the binned
+    /// frame needs none). A frame that can't be binned is developed whole and box-averaged to the
+    /// same size, so the preview still develops from the sensor data.
+    pub fn develop_proxy(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
+        match &self.proxy {
+            Some(proxy) => self.develop(proxy, tuning),
+            None => self.develop(&self.full, tuning).map(|p| shrink_rgb(p, self.shrink)),
+        }
+    }
+
+    /// The whole frame developed with `tuning`, as [`import_raw_tuned`] develops it (uncropped:
+    /// the dialog previews the whole frame).
+    pub fn develop_full(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
+        self.develop(&self.full, tuning)
+    }
+
+    fn develop(&self, sensor: &Sensor, tuning: &RawTuning) -> Result<RawPixels, IoError> {
+        check_tuning(tuning)?;
+        let (opts, white_balance) = tuned_options(sensor, self.look.clone(), tuning);
+        let dev = photocraft_raw::develop_sensor(sensor, &opts).map_err(IoError::Raw)?;
+        Ok(RawPixels { width: dev.width as usize, height: dev.height as usize, rgb: dev.rgb, white_balance })
+    }
 }
 
 /// Crops the upright developed frame to `crop` (fractions of it), as Camera Raw crops a raw.
@@ -383,6 +498,19 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shrink_rgb_weights_the_repeated_last_row() {
+        // 3×5 frame by 2: the last row of blocks takes row 4 twice; columns cut short.
+        let rgb = (0..15u16).flat_map(|i| [i * 100, i * 100, i * 100]).collect();
+        let s = shrink_rgb(RawPixels { width: 3, height: 5, rgb, white_balance: false }, 2);
+        assert_eq!((s.width, s.height), (2, 3));
+        let red: Vec<u16> = s.rgb.iter().step_by(3).copied().collect();
+        assert_eq!(red, vec![200, 350, 800, 950, 1250, 1400]);
+        // A factor far beyond the frame stays one block, with no per-row work.
+        let s = shrink_rgb(RawPixels { width: 1, height: 1, rgb: vec![7, 8, 9], white_balance: true }, 1 << 40);
+        assert_eq!((s.width, s.height, s.rgb), (1, 1, vec![7, 8, 9]));
+    }
 
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {

@@ -298,7 +298,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         d.curve_rect = None;
         d.scope.vectorscope_rect = None;
-        if let Err(e) = d.poll_render(ctx) {
+        d.poll_raw_source();
+        let rendered = match d.render_error.take() {
+            Some(e) => Err(e),
+            None => d.poll_render(ctx),
+        };
+        if let Err(e) = rendered {
             d.preview_error = Some((e.clone(), d.preview_revision));
             app.ui.status = e;
             app.ui.status_error = true;
@@ -348,7 +353,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            let raw_tone = d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
+            // Without the sensor data, the full-size preview can't show the raw-stage sliders.
+            let raw_tone = d.raw_source.is_none() && d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
             let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
             if d.detail.pending() {
@@ -380,18 +386,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         crate::camera_raw_scope_ui::header(&mut props, d, scope);
         d.scope.alt_tone = None;
         let mut dirty = false;
+        let mut auto_clicked = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             let p = &mut d.params;
-            let proxy = &d.proxy;
+            let auto = &mut auto_clicked;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
             section(ui, "Light", true, |ui| {
                 // Auto: Camera Raw's one-click tone from the histogram; the sliders show what it
                 // chose, so each can be adjusted afterwards.
                 if ui.button(tl!("Auto")).on_hover_text(tl!("Set the tone sliders from the image")).clicked() {
-                    photocraft_algo::camera_raw::auto_tone(proxy, p);
-                    dirty = true;
+                    *auto = true;
                 }
                 tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
                 row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
@@ -503,6 +509,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 }
             });
         });
+        if auto_clicked {
+            let mut params = d.params.clone();
+            photocraft_algo::camera_raw::auto_tone(&d.auto_pixels(), &mut params);
+            d.params = params;
+            dirty = true;
+        }
         crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
         crate::camera_raw_scope_ui::shortcuts(ctx, scope);
         d.dirty |= dirty;

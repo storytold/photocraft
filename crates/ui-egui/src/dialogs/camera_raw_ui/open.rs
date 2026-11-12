@@ -1,6 +1,6 @@
-use super::convert::{apply_raw_conversions, open_pixels, output_sharpening, raw_conversions};
+use super::convert::{Source, apply_raw_conversions, open_pixels, output_sharpening, preview_area, raw_conversions};
 use super::sidecar::{read_sidecar, write_sidecar};
-use super::{CameraRaw, LayerId, PhotocraftApp, Rect, Value, json};
+use super::{CameraRaw, LayerId, PROXY_SIDE, PhotocraftApp, Rect, Value, json};
 
 /// Opens the dialog on the active layer.
 /// Where OK writes: a new filter on the layer, or an existing smart filter (by index).
@@ -33,6 +33,10 @@ pub struct RawOpen {
     /// The crop of the file's sidecar (in the raw's stored orientation): Open re-develops and
     /// crops to it. The settings have no crop, so the dialog previews the whole frame.
     pub crop: Option<photocraft_io::camera_raw_xmp::Crop>,
+    /// Color Settings' intent and black point compensation when the raw was queued, which the
+    /// open policy converted the document with: the sensor preview converts with the same ones
+    /// even if Color Settings changes while the raw waits. `None`: the current ones.
+    pub conversion: Option<photocraft_cms::TransformOptions>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -77,6 +81,7 @@ pub fn queue_open_dialog(
         demosaic: method,
         // Read now: a filmstrip raw that is never shown still opens with its sidecar's crop.
         crop: path.and_then(read_sidecar).and_then(|(_, report, _)| report.crop),
+        conversion: Some(super::convert::conversion_options(app)),
     };
     let held = super::filmstrip::HeldRaw::new(app, raw);
     app.raw_shelf.push(held);
@@ -95,8 +100,25 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let canvas = app.session.active().ok_or("no document")?.doc.bounds();
+    // The develop's ProPhoto pixels in the document's colours (the open policy may have converted it).
+    // Without that conversion the sensor pixels can't stand in for the document's: the dialog
+    // previews the developed pixels, as for a raw it can't read.
+    let to_document = app.session.active().map(|st| super::convert::raw_to_document(app, &st.doc, raw.conversion)).and_then(Result::ok);
+    // In the desktop app the raw is read, decoded and binned on a worker, so a large raw doesn't
+    // freeze the dialog ([`CameraRawDialog::load_raw_source`]); elsewhere (tests, the web) here.
+    let background = cfg!(not(target_arch = "wasm32")) && app.background_jobs;
+    let load = background.then(|| to_document.clone().zip(super::raw_load::RawFile::of(&raw))).flatten();
+    let raw_detail = if background { None } else { to_document.and_then(|to_document| raw_source(&raw, canvas, &surf).map(|source| (source, to_document))) };
+    let raw_detail = raw_detail.map(|(source, to_document)| crate::camera_raw_detail_ui::RawDetail {
+        source,
+        demosaic: raw.developed_with,
+        to_document: to_document.clone(),
+    });
+    let source = Source { raw: raw_detail, surf };
     if let Some((params, original)) = kept {
-        open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
+        open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
+        start_load(app, ctx, load, raw.developed_with);
         if let Some(d) = app.camera_raw.as_mut() {
             d.original = original;
         }
@@ -121,33 +143,57 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
         };
         app.ui.status_error = false;
     }
-    open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
+    open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
+    start_load(app, ctx, load, raw.developed_with);
     // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto.
     if !from_sidecar
         && app.session.prefs().raw_defaults.apply_auto_tone
         && let Some(d) = app.camera_raw.as_mut()
     {
-        photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
+        let mut params = d.params.clone();
+        photocraft_algo::camera_raw::auto_tone(&d.auto_pixels(), &mut params);
+        d.params = params;
         d.dirty = true;
     }
     attach_raw(app, raw);
     Ok(())
 }
 
-/// Gives the open dialog its raw: the file name, and the camera tone curve it was developed with.
-fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
-    let curve = match (&raw.bytes, &raw.path) {
-        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
+/// Starts the open dialog's worker-built raw source ([`CameraRawDialog::load_raw_source`]).
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+fn start_load(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    load: Option<(Option<std::sync::Arc<photocraft_cms::Transform>>, super::raw_load::RawFile)>,
+    demosaic: photocraft_io::raw::Demosaic,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Some((to_document, file)), Some(d)) = (load, app.camera_raw.as_mut()) {
+        d.load_raw_source(ctx, file, demosaic, to_document);
+    }
+}
+
+/// The raw file of `raw` decoded for the dialog's preview, binned by the factor the preview
+/// reduces the developed `surf` by: then the preview develops the raw-stage settings from the
+/// sensor data, as Open will. `None` when the file can't be read or decoded again (the preview
+/// then adjusts the default develop).
+fn raw_source(raw: &RawOpen, canvas: Rect, surf: &photocraft_raster::Surface) -> Option<std::sync::Arc<photocraft_io::raw::RawSource>> {
+    let (_, w, h) = preview_area(canvas, surf).ok()?;
+    let factor = w.max(h).div_ceil(PROXY_SIDE).max(1);
+    let source = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => photocraft_io::raw::RawSource::new(b, factor),
         #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
-        _ => None,
+        (None, Some(p)) => photocraft_io::raw::RawSource::new(&std::fs::read(p).ok()?, factor),
+        _ => return None,
     };
+    source.ok().map(std::sync::Arc::new)
+}
+
+/// Gives the open dialog its raw and its file name (the tone curve came with the raw source,
+/// before the first render).
+fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
-        // The full-size preview retones the whole frame with it, as Open will.
-        let curve = curve.map(std::sync::Arc::new);
-        d.detail.raw_curve = curve.clone();
-        d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
 }
@@ -195,6 +241,36 @@ pub(super) fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
     photocraft_io::raw::Tone { shadows: p.shadows, highlights: p.highlights, clarity: p.clarity, texture: p.texture, dehaze: p.dehaze }
 }
 
+/// Everything `p` develops from the sensor data, with the `demosaic` method.
+pub(crate) fn raw_tuning(p: &CameraRaw, demosaic: photocraft_io::raw::Demosaic) -> photocraft_io::raw::RawTuning {
+    photocraft_io::raw::RawTuning {
+        temperature: p.temperature,
+        tint: p.tint,
+        exposure: p.exposure,
+        demosaic,
+        shadows: p.shadows,
+        highlights: p.highlights,
+        clarity: p.clarity,
+        texture: p.texture,
+        dehaze: p.dehaze,
+        // The settings hold no crop (the sidecar's is on the raw, see `RawOpen::crop`): the
+        // preview shows the whole frame.
+        crop: None,
+    }
+}
+
+/// The settings of `p` left after a develop from the sensor data took its raw-stage ones
+/// ([`raw_tuning`]); Temperature and Tint stay when the develop could not apply them
+/// (`white_balance` false: the file has no as-shot white balance).
+pub(crate) fn after_raw_stage(p: &CameraRaw, white_balance: bool) -> CameraRaw {
+    let mut rest = p.clone();
+    (rest.exposure, rest.shadows, rest.highlights, rest.clarity, rest.texture, rest.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    if white_balance {
+        (rest.temperature, rest.tint) = (0.0, 0.0);
+    }
+    rest
+}
+
 /// Open: re-develop for raw-stage settings, apply the rest, keep the document unmodified.
 ///
 /// Re-developing reads and decodes the whole raw again, so in the desktop app (background jobs
@@ -204,20 +280,9 @@ pub(super) fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
 pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, loaded: Option<&CameraRaw>) -> Result<Value, String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     write_sidecar(app, raw, params, loaded);
-    let tuning = photocraft_io::raw::RawTuning {
-        temperature: params.temperature,
-        tint: params.tint,
-        exposure: params.exposure,
-        demosaic: raw.demosaic,
-        shadows: params.shadows,
-        highlights: params.highlights,
-        clarity: params.clarity,
-        texture: params.texture,
-        dehaze: params.dehaze,
-        // The sidecar's crop: re-developing crops the document, before the Camera Raw step, so
-        // the post-crop vignette centres on the crop as in Camera Raw.
-        crop: raw.crop,
-    };
+    // The sidecar's crop: re-developing crops the document, before the Camera Raw step, so the
+    // post-crop vignette centres on the crop as in Camera Raw.
+    let tuning = photocraft_io::raw::RawTuning { crop: raw.crop, ..raw_tuning(params, raw.demosaic) };
     // The open itself: the default settings, developed with the method it was opened with.
     let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
@@ -326,17 +391,7 @@ pub(super) fn finish_redevelop(
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &without_develop_note(&warnings));
-    let mut rest = params.clone();
-    rest.exposure = 0.0;
-    rest.shadows = 0.0;
-    rest.highlights = 0.0;
-    rest.clarity = 0.0;
-    rest.texture = 0.0;
-    rest.dehaze = 0.0;
-    if v.get("wb").and_then(Value::as_bool) == Some(true) {
-        rest.temperature = 0.0;
-        rest.tint = 0.0;
-    }
+    let rest = after_raw_stage(params, v.get("wb").and_then(Value::as_bool) == Some(true));
     finish_open_raw(app, index, rest, Some(true), raw, defaults)
 }
 
@@ -396,8 +451,16 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
     }
     let Some(document) = app.session.documents().get(index).map(|st| st.doc.id) else { return };
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
-    let mut raw =
-        RawOpen { document, name: name.to_string(), path: path.map(str::to_string), bytes: None, developed_with: method, demosaic: method, crop: None };
+    let mut raw = RawOpen {
+        document,
+        name: name.to_string(),
+        path: path.map(str::to_string),
+        bytes: None,
+        developed_with: method,
+        demosaic: method,
+        crop: None,
+        conversion: None,
+    };
     let mut params = CameraRaw::default();
     let sidecar = path.and_then(read_sidecar).map(|(loaded, report, _)| {
         raw.crop = report.crop;
@@ -538,7 +601,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
     }
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::Selection, Target::NewFilter)
+    open_pixels(app, ctx, layer, surf.into(), CameraRaw::default(), Coverage::Selection, Target::NewFilter)
 }
 
 /// Opens Camera Raw on smart filter `index` of smart layer `layer`, with its stored settings and
@@ -559,7 +622,7 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
         .map_err(|e| e.to_string())?
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
     let coverage = sm.filter_mask.clone().filter(|m| m.enabled).map_or(Coverage::None, Coverage::Mask);
-    open_pixels(app, ctx, layer, surf, params, coverage, Target::SmartFilter(index))
+    open_pixels(app, ctx, layer, surf.into(), params, coverage, Target::SmartFilter(index))
 }
 
 /// Largest RAW file re-read for a tuned develop: the RAW decoder's default allocation ceiling

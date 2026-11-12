@@ -79,7 +79,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     let mut next_params = d.params.clone();
     // Auto (the Light panel's button): the tone sliders from the image's histogram.
     if ui.get("auto").and_then(Value::as_bool) == Some(true) {
-        photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut next_params);
+        photocraft_algo::camera_raw::auto_tone(&d.auto_pixels(), &mut next_params);
     }
     if let Some(set) = ui.get("set") {
         if !set.is_object() {
