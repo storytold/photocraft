@@ -111,8 +111,15 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
 /// Open the recorded Fill on its effective target and capture that target for confirmation.
 pub(crate) fn open_with_params(app: &mut PhotocraftApp, params: &Value) -> u64 {
     let mut f = fields(app);
-    let target = app.with_mask_target(COMMAND, params.clone());
-    let target = target.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app));
+    let named_layer = params.get("layer").is_some_and(|l| !l.is_null());
+    let target = if named_layer {
+        // Headless playback of a named-layer step targets pixels unless the step says otherwise;
+        // an explicit target also stops `app.run` adding the active layer's mask target.
+        params.get("target").cloned().unwrap_or_else(|| json!("pixels"))
+    } else {
+        let t = app.with_mask_target(COMMAND, params.clone());
+        t.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app))
+    };
     if let Some(st) = app.session.active() {
         f.insert("__document".into(), json!(st.doc.id.0));
         // Alpha and Quick Mask belong to the document, independently of its active layer.
@@ -138,7 +145,7 @@ pub fn foreground_hex(app: &PhotocraftApp) -> String {
 /// Show a recorded step in the dialog: what the step carries, and the engine's defaults for the
 /// rest (not the remembered choices): contents `color`, colour = `foreground` (a hex string),
 /// Normal 100%, no transparency lock, colour adaptation on, the library's first pattern
-/// (`first_pattern`, none when the library is empty).
+/// (`first_pattern`, none when the library is empty; not shown when the step names its pattern).
 pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str, first_pattern: Option<&str>) {
     let Some(o) = step.as_object() else { return };
     let kept: Map<String, Value> =
@@ -170,10 +177,13 @@ pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str, fir
         f.insert("color".into(), json!(foreground));
         f.insert(loaded_color(), json!(foreground));
     }
-    if !is_set("pattern")
-        && let Some(p) = first_pattern
-    {
-        f.insert("pattern".into(), json!(p));
+    if !is_set("pattern") {
+        if is_set("patternName") {
+            // The step names its pattern; a default id would win over the name in the engine.
+            f.remove("pattern");
+        } else if let Some(p) = first_pattern {
+            f.insert("pattern".into(), json!(p));
+        }
     }
 }
 

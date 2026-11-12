@@ -3322,6 +3322,58 @@ fn fill_step_dialog_switch_to_pattern_fills_pattern() {
     crate::dialogs::confirm(&mut app, id).unwrap();
 }
 
+/// A recorded Fill that names its layer and no target fills that layer's pixels, as headless
+/// playback does, even while the active layer's mask is the Layers panel's target.
+#[test]
+fn fill_step_dialog_on_a_named_layer_ignores_the_active_layers_mask_target() {
+    let mut app = two_tone_app();
+    app.run("layer.new.layer", json!({"name": "top"})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    let top_mask = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        let top = walk.iter().find(|(_, _, l)| l.name == "top").unwrap();
+        top.2.mask.as_ref().unwrap().surface.sample_channel(2, 8, 0)
+    };
+    let before = red_at(&app, 2, 8);
+    assert_eq!(top_mask(&app), 1.0);
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color", "color": "#000000", "layer": "Background"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(red_at(&app, 2, 8) < before, "the named layer's pixels were filled");
+    assert_eq!(top_mask(&app), 1.0, "the active layer's mask is untouched");
+}
+
+/// A recorded pattern name is not overridden by the library's first pattern.
+#[test]
+fn fill_step_dialog_keeps_a_recorded_pattern_name() {
+    let mut app = two_tone_app();
+    let items = &app.session.patterns.items;
+    let (first, name) = (items.first().unwrap().name.clone(), items.last().unwrap().name.clone());
+    assert_ne!(first, name, "the library has more than one pattern");
+    let step = json!({"contents": "pattern", "patternName": name});
+    let mut reference = two_tone_app();
+    reference.run("select.all", json!({})).unwrap();
+    reference.run(FILL_STEP, step.clone()).unwrap();
+    let mut other = two_tone_app();
+    other.run("select.all", json!({})).unwrap();
+    other.run(FILL_STEP, json!({"contents": "pattern", "patternName": first})).unwrap();
+    let grid = |app: &PhotocraftApp| -> Vec<Vec<f32>> {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        let s = walk.first().unwrap().2.surface().unwrap();
+        (0..16).flat_map(|y| (0..16).map(move |x| (x, y))).map(|(x, y)| s.pixel(x, y)).collect()
+    };
+    assert_ne!(grid(&reference), grid(&other), "the two patterns paint differently");
+    app.run("select.all", json!({})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, step));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(fields.get("pattern").is_none(), "no pattern id shadows the name: {fields:?}");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(grid(&app), grid(&reference), "the named pattern was painted");
+}
+
 #[test]
 fn fill_step_dialog_ignores_remembered_color_adaptation() {
     let mut app = two_tone_app();
