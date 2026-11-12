@@ -2328,6 +2328,31 @@ fn leaving_the_handed_off_number_untouched_does_not_snap_the_value() {
     }
 }
 
+/// #13432 review: only an untouched number keeps its unrounded value on leaving; typing that shows
+/// the same text as before (`12+0.31` over a 12.34 shown as 12.3) still applies.
+#[test]
+fn an_arithmetic_edit_that_shows_the_same_text_still_applies() {
+    for line in [false, true] {
+        let mut h = slider_focus_row(Host::Dialog, line, 12.34);
+        let r = h.get_by_role(egui::accesskit::Role::SpinButton).rect();
+        click_here(&mut h, r.center());
+        h.run();
+        h.run();
+        assert!(number_has_focus(&h), "line: {line}");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run();
+        h.event(egui::Event::Text("12+0.31".into()));
+        h.run();
+        click_here(&mut h, egui::pos2(700.0, 500.0));
+        for _ in 0..3 {
+            h.run();
+        }
+        let (value, changes) = *h.state();
+        assert!((value - 12.31).abs() < 1e-4, "the typed sum applies, got {value}, line: {line}");
+        assert!(changes > 0, "and is reported as a change, line: {line}");
+    }
+}
+
 /// #13432: in a docked or floating panel the slider click leaves nothing focused, so tool
 /// shortcuts, Space-to-pan and the hold keys keep working.
 #[test]
