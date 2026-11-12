@@ -323,6 +323,14 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
+        _ => return command_body_editors(app, ui, d, fields, id),
+    }
+    outcome
+}
+
+/// Small Actions, layer and tool editors, after the library and file prompts.
+fn command_body_editors(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
+    match d.kind {
         _ if crate::actions::owns_stop_message(fields) => crate::actions::stop_message_body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
         _ if crate::actions::menu_item::owns(fields) => crate::actions::menu_item::body(ui, fields),
@@ -338,7 +346,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
         _ => return command_body_more(app, ui, d, fields, id),
     }
-    outcome
+    None
 }
 
 /// The rest of the command dialogs: files, colour, export, sizing, filters and forms.
@@ -1105,15 +1113,23 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     Ok(())
 }
 
+/// Finish the Actions editors that can own a dialog independently of its marker.
+fn confirm_action_editor(app: &mut PhotocraftApp, d: &Dialog) -> Option<Result<Value, String>> {
+    if crate::actions::record_again::owns(&d.fields) || crate::actions::record_again::owns_dialog(app, d.id) {
+        return Some(crate::actions::record_again::confirm(app, d.id, &d.fields));
+    }
+    if crate::actions::menu_item::owns(&d.fields) || crate::actions::menu_item::owns_dialog(app, d.id) {
+        return Some(crate::actions::menu_item::confirm(app, d.id, &d.fields));
+    }
+    None
+}
+
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 /// Confirm a command dialog through the first handler whose marker its fields carry; the prompts
 /// and small editors are here, the rest in `confirm_command_more`.
 fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
-    if crate::actions::record_again::owns(&d.fields) || crate::actions::record_again::owns_dialog(app, d.id) {
-        return crate::actions::record_again::confirm(app, d.id, &d.fields);
-    }
-    if crate::actions::menu_item::owns(&d.fields) || crate::actions::menu_item::owns_dialog(app, d.id) {
-        return crate::actions::menu_item::confirm(app, d.id, &d.fields);
+    if let Some(result) = confirm_action_editor(app, &d) {
+        return result;
     }
     match d.kind {
         _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),

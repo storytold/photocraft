@@ -62,10 +62,11 @@ pub(super) fn pace(app: &mut PhotocraftApp, frame: &super::Frame, i: usize, id: 
     let token = pb.pause(frame.after(i.saturating_add(1)), 0, gate, used, doc)?;
     if let Some(entry) = pb.paused.get_mut(&token) { entry.timed = true; entry.ran = ran; }
     let due = Instant::now().checked_add(wait).unwrap_or_else(Instant::now);
-    if let Some(old) = pb.timer.replace(Timer { token, due, rev }) {
-        if let Some(old) = pb.paused.remove(&old.token) {
-            if let Some(owner) = old.record { owner.finish(&mut app.session); }
-        }
+    if let Some(old) = pb.timer.replace(Timer { token, due, rev })
+        && let Some(old) = pb.paused.remove(&old.token)
+        && let Some(owner) = old.record
+    {
+        owner.finish(&mut app.session);
     }
     Ok(json!({"step": i, "id": id, "dialog": PLAYBACK_TIMER}))
 }

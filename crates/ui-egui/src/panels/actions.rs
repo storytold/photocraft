@@ -648,18 +648,16 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
     let mut stopped = None;
     let interactive = playback::is_interactive(app);
     let mut yielded = false;
-    let paced_call = if frame.pending_call && action.enabled_steps().any(|(i, _)| i >= frame.from) {
-        if let Some(wait) = playback::step_pause(app) {
-            match playback::pace(app, &frame, frame.from.saturating_sub(1), "actions.play", ran, wait) {
-                Ok(value) => paused = Some(value),
-                Err(error) => failed = Some(json!({"step": frame.from.saturating_sub(1), "id": "actions.play", "error": error})),
-            }
+    let paced_call = match pace_pending_call(app, &frame, ran) {
+        Some(Ok(value)) => {
+            paused = Some(value);
             true
-        } else {
-            false
         }
-    } else {
-        false
+        Some(Err(error)) => {
+            failed = Some(json!({"step": frame.from.saturating_sub(1), "id": "actions.play", "error": error}));
+            true
+        }
+        None => false,
     };
     for (i, (id, p)) in action.enabled_steps().skip_while(|(i, _)| *i < frame.from).filter(|_| !paced_call) {
         if app.actions_runtime.quantum == Some(0) {
@@ -743,28 +741,7 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
             break;
         }
         let target = app.session.active().map(|d| d.doc.id);
-        let result = if id == "actions.play" {
-            Frame::library(&app.session, p).and_then(|child| run_frame(app, child, None, preserve_tail))
-        } else if id == "actions.conditional" {
-            conditional_frame(app, p, preserve_tail)
-        } else if actions_cmds::saves_smart_contents(&app.session, id) {
-            app.session.execute(actions_cmds::SAVE_CONTENTS, json!({})).map_err(|e| e.to_string())
-        } else if actions_cmds::shell_save_command(id) {
-            // Write synchronously, so the next step doesn't meet a document locked by a
-            // background save.
-            let background = std::mem::replace(&mut app.background_jobs, false);
-            let r = app.replay_save(id, p);
-            app.background_jobs = background;
-            r
-        } else if actions_cmds::shell_view_command(id) {
-            app.sync_views();
-            app.run(id, p.clone())
-        } else if id == "edit.paste" && p.get("as").is_some() {
-            // An explicit vector paste needs the original OS source, not just an old pixel copy.
-            app.run(id, p.clone())
-        } else {
-            app.session.execute(id, p.clone()).map_err(|e| e.to_string())
-        };
+        let result = run_frame_command(app, id, p, preserve_tail);
         match result {
             // A called action that paused for a dialog continues here after it once confirmed.
             Ok(value) => {
@@ -822,6 +799,41 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
         (None, None, None) if yielded => json!({"action": action.name, "ran": ran, "yielded":true}),
         (None, None, None) => json!({"action": action.name, "ran": ran}),
     })
+}
+
+/// Pace the completed child call before entering the remaining steps of its frame.
+fn pace_pending_call(app: &mut PhotocraftApp, frame: &Frame, ran: u64) -> Option<Result<Value, String>> {
+    if !frame.pending_call || !frame.action.enabled_steps().any(|(i, _)| i >= frame.from) {
+        return None;
+    }
+    let wait = playback::step_pause(app)?;
+    Some(playback::pace(app, frame, frame.from.saturating_sub(1), "actions.play", ran, wait))
+}
+
+/// Dispatch a step through the shell when its view, clipboard or save semantics require it.
+fn run_frame_command(app: &mut PhotocraftApp, id: &str, p: &Value, preserve_tail: bool) -> Result<Value, String> {
+    if id == "actions.play" {
+        Frame::library(&app.session, p).and_then(|child| run_frame(app, child, None, preserve_tail))
+    } else if id == "actions.conditional" {
+        conditional_frame(app, p, preserve_tail)
+    } else if actions_cmds::saves_smart_contents(&app.session, id) {
+        app.session.execute(actions_cmds::SAVE_CONTENTS, json!({})).map_err(|e| e.to_string())
+    } else if actions_cmds::shell_save_command(id) {
+        // Write synchronously, so the next step doesn't meet a document locked by a
+        // background save.
+        let background = std::mem::replace(&mut app.background_jobs, false);
+        let r = app.replay_save(id, p);
+        app.background_jobs = background;
+        r
+    } else if actions_cmds::shell_view_command(id) {
+        app.sync_views();
+        app.run(id, p.clone())
+    } else if id == "edit.paste" && p.get("as").is_some() {
+        // An explicit vector paste needs the original OS source, not just an old pixel copy.
+        app.run(id, p.clone())
+    } else {
+        app.session.execute(id, p.clone()).map_err(|e| e.to_string())
+    }
 }
 
 /// Transfer the current history to the paused dialog or yielded playback before unwinding.
