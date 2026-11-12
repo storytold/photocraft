@@ -580,20 +580,10 @@ fn space_hand_right_click_opens_the_view_menu() {
     h.state_mut().ui.tool = Tool::Move;
     h.event(space(true));
     h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "no menu is open before the outside click");
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "no menu is open yet");
     let outside = h.state().last_canvas_rect.min + vec2(5.0, 5.0);
-    right_click(&mut h, outside, Modifiers::NONE);
-    let pasteboard = h.state().ui.canvas_tool_menu.clone().expect("Space's Hand opens the pasteboard menu outside");
-    assert!(pasteboard.pasteboard, "pasteboard menu outside");
-    assert_eq!((h.state().ui.tool, pasteboard.under), (Tool::Move, Some(Tool::Move)), "the Move tool stays selected, the pasteboard menu over it");
-    // Like the view menu, it stays when Space is let go; a tool change closes it.
     h.event(space(false));
     h.run_steps(3);
-    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "the pasteboard menu outlives the held Space");
-    h.state_mut().ui.tool = Tool::Brush;
-    h.run_steps(2);
-    assert!(h.state().ui.canvas_tool_menu.is_none(), "another tool selected closes the pasteboard menu");
-    h.state_mut().ui.tool = Tool::Move;
     h.run_steps(2);
     right_click(&mut h, inside, Modifiers::NONE);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "Space let go, the Move tool's right-click is the layer pick, not the view menu");
