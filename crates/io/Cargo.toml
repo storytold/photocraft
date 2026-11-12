@@ -37,6 +37,10 @@ photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-format = { path = "../format" }
 craft-docpath = { workspace = true }
+craft-kra = { workspace = true }
+craft-ora = { workspace = true }
+craft-xcf = { workspace = true }
+craft-pdn = { workspace = true }
 thiserror = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
@@ -44,7 +48,7 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # svg.rs inflates `.svgz` itself (with a size cap) so the XML can be checked before it is parsed;
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
-# ora.rs reads OpenRaster's stack.xml (already in the tree through usvg).
+# xml.rs parses XML behind a depth guard (already in the tree through usvg).
 roxmltree = "0.21"
 # Reuse usvg's locked header reader to bound embedded SVG raster data before decoding.
 imagesize = "0.13"
