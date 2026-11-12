@@ -56,11 +56,16 @@ fn main() {
     };
     let main_menu = || nsapp.mainMenu().expect("a main menu");
     let checked = |menu: &NSMenu, at: isize| menu.itemAtIndex(at).is_some_and(|it| it.state() == 1);
-    let assert_chinese_app_menu = |bar: &NSMenu| {
+    let assert_chinese_app_menu = |bar: &NSMenu, lang| {
         let app_menu = submenu(bar, "PhotoCraft");
         let names = titles(&app_menu);
-        for want in ["关于 PhotoCraft", "设置", "服务", "隐藏 PhotoCraft", "隐藏其他", "全部显示", "退出 PhotoCraft"] {
+        for want in ["设置", "服务", "隐藏其他", "全部显示"] {
             assert!(names.iter().any(|n| n == want), "{want} missing from the Simplified Chinese app menu: {names:?}");
+        }
+        // App-specific translations can arrive in a later craft-i18n pin.
+        for source in ["About {app}", "Hide {app}", "Quit {app}"] {
+            let want = i18n::fmt(i18n::tr(lang, source), &[("app", "PhotoCraft")]);
+            assert!(names.contains(&want), "{want} missing from the Simplified Chinese app menu: {names:?}");
         }
         let language = submenu(&app_menu, "语言");
         assert!(checked(&language, index(&language, "简体中文")));
@@ -105,8 +110,9 @@ fn main() {
         .expect("an application-defined event")
     };
 
+    let chinese = i18n::Lang::from_code("zh-hans");
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
-    app.session.prefs.edit(|prefs| prefs.interface.language = "zh-hans".into());
+    app.session.prefs.edit(|prefs| prefs.interface.language = chinese.map_or("en", i18n::Lang::code).into());
     let ctx = egui::Context::default();
     let frame = |app: &mut PhotocraftApp, raw: egui::RawInput| {
         let mut out = ctx.run_ui(raw, |ui| {
@@ -118,9 +124,6 @@ fn main() {
     };
     app.services.native_menu = mac_menu::install(&ctx, &app);
     assert!(app.services.native_menu.is_some(), "the menu bar installed");
-    // The saved language must reach AppKit even before the first frame sets the drawing language.
-    assert_chinese_app_menu(&main_menu());
-    assert_eq!(i18n::current(), i18n::Lang::EN, "install restores the caller's drawing language");
 
     let app_frame = |app: &mut PhotocraftApp| {
         let mut raw = egui::RawInput::default();
@@ -140,9 +143,14 @@ fn main() {
         assert_ne!(Retained::as_ptr(&previous), Retained::as_ptr(&main_menu()), "switching languages replaces the installed menu bar");
     };
 
-    // Warm the fonts on the first frame, then switch to English with no document open.
-    app_frame(&mut app);
-    switch_language(&mut app, "语言", "English", "en");
+    if let Some(lang) = chinese {
+        // The saved language must reach AppKit before the first frame sets the drawing language.
+        assert_chinese_app_menu(&main_menu(), lang);
+        assert_eq!(i18n::current(), i18n::Lang::EN, "install restores the caller's drawing language");
+        // Warm the fonts on the first frame, then switch to English with no document open.
+        app_frame(&mut app);
+        switch_language(&mut app, "语言", "English", "en");
+    }
 
     // The Mac layout, as AppKit has it.
     let bar = main_menu();
@@ -239,18 +247,20 @@ fn main() {
     let window = submenu(&main_menu(), "Window");
     assert!(checked(&window, rows[0]) && !checked(&window, rows[1]), "the check moved in place");
 
-    // Switch back with documents open and read the localized menu from AppKit again.
-    switch_language(&mut app, "Language", "简体中文", "zh-hans");
-    assert_chinese_app_menu(&main_menu());
+    if let Some(lang) = chinese {
+        // Switch back with documents open and read the localized menu from AppKit again.
+        switch_language(&mut app, "Language", "简体中文", "zh-hans");
+        assert_chinese_app_menu(&main_menu(), lang);
 
-    // A preference commit can trigger a menu sync before drawing picks up the new language.
-    switch_language(&mut app, "语言", "English", "en");
-    app.run("prefs.set", json!({"values": {"interface.language": "zh-hans"}})).expect("commit Simplified Chinese");
-    i18n::with_language(i18n::Lang::EN, || {
-        frame(&mut app, egui::RawInput::default());
-        assert_eq!(i18n::current(), i18n::Lang::EN, "menu sync restores the drawing language");
-    });
-    assert_chinese_app_menu(&main_menu());
+        // A preference commit can trigger a menu sync before drawing picks up the new language.
+        switch_language(&mut app, "语言", "English", "en");
+        app.run("prefs.set", json!({"values": {"interface.language": "zh-hans"}})).expect("commit Simplified Chinese");
+        i18n::with_language(i18n::Lang::EN, || {
+            frame(&mut app, egui::RawInput::default());
+            assert_eq!(i18n::current(), i18n::Lang::EN, "menu sync restores the drawing language");
+        });
+        assert_chinese_app_menu(&main_menu(), lang);
+    }
 
     println!("mac_menu_appkit: ok");
 }

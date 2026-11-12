@@ -47,6 +47,18 @@ pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
 }
 
+/// Rasterize the same styled SVG used by the toolbar for a composed native cursor.
+pub(crate) fn rasterize(name: &str, side: u32) -> Result<egui::ColorImage, String> {
+    if !white_icons().contains(name) {
+        return Err(format!("Cursor icon {name:?} is missing"));
+    }
+    let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else {
+        return Err(format!("Cursor icon {name:?} has no embedded SVG bytes"));
+    };
+    egui_extras::image::load_svg_bytes_with_size(&bytes, egui::load::SizeHint::Width(side), &Default::default())
+        .map_err(|error| format!("Could not rasterize cursor icon {name:?}: {error}"))
+}
+
 /// Paint an icon centred in `rect`.
 pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
     let r = Rect::from_center_size(rect.center(), Vec2::splat(size));
@@ -83,7 +95,8 @@ pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
 fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
     let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
-    let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    let area =
+        egui::Area::new(egui::Id::unique(("pc-cursor-badge", name))).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image(name, SIZE, Color32::from_black_alpha(220));
         let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
@@ -167,6 +180,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::EllipseShape => "circle",
         Tool::Triangle => "triangle",
         Tool::Polygon => "pentagon",
+        Tool::Star => "star",
         Tool::Line => "slash",
         Tool::CustomShape => "cloud",
     }
