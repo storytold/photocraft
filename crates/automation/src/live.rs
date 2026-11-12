@@ -55,7 +55,7 @@ pub(crate) enum Target {
 }
 
 /// The port and token a bridge client was made for: when the app restarts, either changes.
-type BridgeKey = (u16, String);
+type BridgeKey = (u16, String, u32);
 
 pub struct Live {
     cfg: LiveConfig,
@@ -130,7 +130,8 @@ impl Live {
     }
 
     fn use_app(&self, c: &Connection, token: String) -> Result<(), String> {
-        let key: BridgeKey = (c.port, token);
+        // The pid too: a restarted app keeps its port and token, but the old socket is dead.
+        let key: BridgeKey = (c.port, token, c.pid);
         let same = self.current.lock().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|(_, k)| k.as_ref() == Some(&key));
         if !same {
             let client = BridgeClient::new(c.addr(), key.1.clone()).map_err(|e| e.to_string())?;

@@ -178,7 +178,11 @@ pub fn read_integrations(dir: &Path) -> Integrations {
         .flatten()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|v| v.get("integrations").cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
+        .and_then(|mut v| {
+            // As the app reads it: a Control Port from before *Let AI agents connect* keeps it on.
+            photocraft_engine::prefs::migrate_integrations(&mut v);
+            serde_json::from_value(v).ok()
+        })
         .unwrap_or_default()
 }
 
@@ -548,6 +552,26 @@ fn merge_into_file(file: &Path, launch: &McpLaunch) -> Result<Written, Automatio
     Ok(Written { file: file.to_path_buf(), backup, unchanged: false })
 }
 
+/// Longest wait for one `claude` command: the Preferences button waits on it.
+const CLAUDE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Run `c` and collect its output, killing it after `timeout` (an error then).
+fn output_within(mut c: std::process::Command, timeout: Duration) -> std::io::Result<std::process::Output> {
+    let mut child = c.spawn()?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("no answer within {} s", timeout.as_secs())));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn install_claude_code(launch: &McpLaunch, env: &ClientEnv) -> Result<Installed, AutomationError> {
     let by_hand = format!("claude mcp add --scope user {SERVER_NAME} -- {}", launch.shell_line());
     let claude =
@@ -557,21 +581,34 @@ fn install_claude_code(launch: &McpLaunch, env: &ClientEnv) -> Result<Installed,
     let path = std::env::join_paths(claude.parent().map(Path::to_path_buf).into_iter().chain(env.path.iter().flat_map(std::env::split_paths))).ok();
     let run = |args: &[&str]| {
         let mut c = std::process::Command::new(&claude);
-        c.args(args).stdin(std::process::Stdio::null());
+        c.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
         if let Some(p) = &path {
             c.env("PATH", p);
         }
-        c.output()
+        output_within(c, CLAUDE_TIMEOUT)
     };
-    // `add` refuses a name that exists: replace an older entry (ours, by name).
-    let _ = run(&["mcp", "remove", "--scope", "user", SERVER_NAME]);
     let mut add = vec!["mcp", "add", "--scope", "user", SERVER_NAME, "--", launch.command.as_str()];
     add.extend(launch.args.iter().map(String::as_str));
-    let why = match run(&add) {
+    // Add first, so an older entry stays when adding can't work at all (no Node, a broken
+    // install). `add` refuses a name that exists: only then replace that entry (ours, by name).
+    let mut result = run(&add);
+    let mut replaced = false;
+    let exists = || run(&["mcp", "get", SERVER_NAME]).is_ok_and(|out| out.status.success());
+    if result.as_ref().is_ok_and(|out| !out.status.success()) && exists() {
+        let _ = run(&["mcp", "remove", "--scope", "user", SERVER_NAME]);
+        replaced = true;
+        result = run(&add);
+    }
+    let why = match result {
         Ok(out) if out.status.success() => return Ok(Installed::ClaudeCode),
         Ok(out) => String::from_utf8_lossy(if out.stderr.is_empty() { &out.stdout } else { &out.stderr }).trim().to_string(),
         Err(e) => format!("{}: {e}", claude.display()),
     };
+    if replaced {
+        return Err(AutomationError::Other(format!(
+            "adding PhotoCraft to Claude Code failed ({why}) after its older `{SERVER_NAME}` entry was removed; run this in a terminal to add it again: {by_hand}"
+        )));
+    }
     Err(AutomationError::Other(format!("adding PhotoCraft to Claude Code failed ({why}); run this in a terminal instead: {by_hand}")))
 }
 
@@ -655,6 +692,11 @@ mod tests {
         assert_eq!(folder(&i.read_root), Some(PathBuf::from("/in")));
         assert_eq!(folder(&i.write_root), None);
         assert_eq!(folder("  "), None);
+        // A Control Port saved before *Let AI agents connect* reads as on, as the app reads it.
+        std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"controlPort": 7878}}"#).unwrap();
+        assert!(read_integrations(&dir).connect_agents);
+        std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"controlPort": 7878, "connectAgents": false}}"#).unwrap();
+        assert!(!read_integrations(&dir).connect_agents);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -839,10 +881,19 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         let log = home.join("calls.txt");
         let fail = home.join("fail");
+        let exists = home.join("exists");
+        // `add` fails while an entry exists (as claude's does) or while `fail` is there; `remove`
+        // removes the entry.
         let script = format!(
-            "#!/bin/sh\nprintf 'PATH=%s\\n' \"$PATH\" >> '{log}'\nprintf '%s ' \"$@\" >> '{log}'\nprintf '\\n' >> '{log}'\nif [ \"$2\" = add ] && [ -e '{fail}' ]; then echo 'boom' >&2; exit 1; fi\n",
+            "#!/bin/sh\nprintf 'PATH=%s\\n' \"$PATH\" >> '{log}'\nprintf '%s ' \"$@\" >> '{log}'\nprintf '\\n' >> '{log}'\n\
+             if [ \"$2\" = remove ]; then rm -f '{exists}'; exit 0; fi\n\
+             if [ \"$2\" = get ]; then [ -e '{exists}' ]; exit $?; fi\n\
+             if [ \"$2\" = add ] && [ -e '{exists}' ]; then echo 'already exists' >&2; exit 1; fi\n\
+             if [ \"$2\" = add ] && [ -e '{fail}' ]; then echo 'boom' >&2; exit 1; fi\n\
+             if [ \"$2\" = add ]; then : > '{exists}'; fi\n",
             log = log.display(),
-            fail = fail.display()
+            fail = fail.display(),
+            exists = exists.display()
         );
         let claude = bin.join("claude");
         std::fs::write(&claude, script).unwrap();
@@ -859,15 +910,38 @@ mod tests {
             }
             install(Client::ClaudeCode, &launch, &env)
         };
+        // No entry yet: added, nothing removed.
         assert_eq!(run().unwrap(), Installed::ClaudeCode);
         let calls = std::fs::read_to_string(&log).unwrap();
-        assert!(calls.contains("mcp remove --scope user photocraft \n"), "{calls}");
+        assert!(!calls.contains("mcp remove"), "{calls}");
         assert!(calls.contains("mcp add --scope user photocraft -- /x/photocraft-cli mcp --live \n"), "{calls}");
         assert!(calls.contains(&format!("PATH={}:", bin.display())), "claude's folder comes first: {calls}");
+        // An entry exists: replaced.
+        assert_eq!(run().unwrap(), Installed::ClaudeCode);
+        assert!(std::fs::read_to_string(&log).unwrap().contains("mcp remove --scope user photocraft \n"));
+        assert!(exists.exists());
+        // An entry exists and adding can't work: the error says the older entry went, and how to add it.
         std::fs::write(&fail, "").unwrap();
         let e = run().unwrap_err().to_string();
-        assert!(e.contains("boom") && e.contains("claude mcp add --scope user photocraft -- /x/photocraft-cli mcp --live"), "{e}");
+        assert!(e.contains("was removed") && e.contains("claude mcp add --scope user photocraft -- /x/photocraft-cli mcp --live"), "{e}");
+        // No entry and adding can't work: nothing is removed.
+        std::fs::write(&log, "").unwrap();
+        let e = run().unwrap_err().to_string();
+        assert!(e.contains("boom") && !e.contains("was removed"), "{e}");
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("mcp remove"));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A `claude` that never answers can't hang the Preferences button.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_hangs_is_stopped_after_the_timeout() {
+        let mut c = std::process::Command::new("sleep");
+        c.arg("30").stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        let t = std::time::Instant::now();
+        let e = output_within(c, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
+        assert!(t.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

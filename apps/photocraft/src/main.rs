@@ -108,19 +108,18 @@ fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::pref
     use serde_json::Value;
     let mut out = photocraft_engine::prefs::Preferences::default().integrations;
     let file: Option<Value> = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok());
-    let Some(section) = file.as_ref().and_then(|v| v.get("integrations")) else {
+    let Some(mut section) = file.as_ref().and_then(|v| v.get("integrations")).cloned() else {
         return out;
     };
-    if let Ok(whole) = serde_json::from_value(section.clone()) {
-        out = whole;
-    } else {
-        integration_fields(section, &mut out);
-    }
     // As the engine's load does: a Control Port from before *Let AI agents connect* keeps it on.
-    if section.as_object().is_some_and(|o| !o.contains_key("connectAgents")) && (1..=65535).contains(&out.control_port) {
-        out.connect_agents = true;
+    photocraft_engine::prefs::migrate_integrations(&mut section);
+    match serde_json::from_value(section.clone()) {
+        Ok(whole) => whole,
+        Err(_) => {
+            integration_fields(&section, &mut out);
+            out
+        }
     }
-    out
 }
 
 /// [`integrations`]' value-by-value read of a section that doesn't read as a whole.

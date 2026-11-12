@@ -63,6 +63,12 @@ fn apply(running: &mut Option<Running>, dir: Option<&Path>, integrations: &Integ
         out.stopped = running.take().is_some();
         return out;
     }
+    // Allow Agent Control off refuses every control server, this one as `--control`.
+    if !integrations.allow_agent_control {
+        out.stopped = running.take().is_some();
+        out.status.error = Some("Agents can't connect: Allow Agent Control is off in the preferences file.".into());
+        return out;
+    }
     let Some(dir) = dir else {
         out.stopped = running.take().is_some();
         out.status.error = Some("Agents can't connect: PhotoCraft has no settings folder (no home folder).".into());
@@ -251,6 +257,18 @@ mod tests {
         assert!(r.status.port.is_some());
         assert!(r.status.error.as_deref().is_some_and(|e| e.contains("not an absolute path")), "{:?}", r.status.error);
         drop(link);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Allow Agent Control off (in the file; the dialog doesn't show it) refuses this server too.
+    #[test]
+    fn allow_agent_control_off_keeps_agents_out() {
+        let dir = temp();
+        let mut link = service(Some(dir.clone()), None);
+        let r = link(&Integrations { allow_agent_control: false, ..on(0) }, &egui::Context::default());
+        assert!(r.requests.is_none() && r.status.port.is_none() && r.automation.command.is_none());
+        assert!(r.status.error.as_deref().is_some_and(|e| e.contains("Allow Agent Control")), "{:?}", r.status.error);
+        assert_eq!(agent_link::read_connection(&dir).unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

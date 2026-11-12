@@ -686,6 +686,15 @@ impl PhotocraftMcp {
         }
     }
 
+    /// Where calls go now: the backend's session or app, or `--live`'s last resolve.
+    fn target(&self) -> Option<Target> {
+        match &*self.backend {
+            Backend::Headless(h) => Some(Target::Headless(h.clone())),
+            Backend::Bridge(b) => Some(Target::Bridge(b.clone())),
+            Backend::Live(live) => live.current(),
+        }
+    }
+
     /// `--live`: find the app (or apply the closed-app choice) before a call; the error is the
     /// call's result. Other backends are always ready.
     async fn ready(&self) -> Result<(), String> {
@@ -1138,6 +1147,16 @@ impl PhotocraftMcp {
     }
 }
 
+/// Whether two targets are the same session or the same app connection.
+fn same_target(a: Option<&Target>, b: Option<&Target>) -> bool {
+    match (a, b) {
+        (Some(Target::Headless(a)), Some(Target::Headless(b))) => Arc::ptr_eq(a, b),
+        (Some(Target::Bridge(a)), Some(Target::Bridge(b))) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 fn bridge_only_headless(name: &str) -> Result<CallToolResult, McpError> {
     Ok(fail(format!("`{name}` is only available in headless mode (in the GUI use the window/tab UI or control_call)")))
 }
@@ -1170,9 +1189,17 @@ impl PhotocraftMcp {
         let mut failed = 0;
         // The reply travels as escaped JSON text, so steps are charged their escaped size.
         let mut reply_budget = BatchReplyBudget::escaped();
+        // `--live` may find a restarted app (or go headless) while a batch runs: its steps must
+        // not end up split across two documents in two places.
+        let pinned = self.target();
         for (i, s) in p.steps.into_iter().enumerate() {
             // A cancelled request runs no further steps; the client no longer reads the reply.
             if waiter.is_cancelled() {
+                break;
+            }
+            if !same_target(pinned.as_ref(), self.target().as_ref()) {
+                failed += 1;
+                results.push(json!({"ok": false, "error": "PhotoCraft restarted (or the session changed) during the batch; this step and the ones after it did not run"}));
                 break;
             }
             let response = self.step(s.id, s.params.unwrap_or_else(|| json!({})), s.wait.unwrap_or(true), &mut waiter, (i, total)).await;

@@ -6,8 +6,8 @@ use super::{Color32, Map, PhotocraftApp, RichText, SECTIONS, Sense, Tokens, Valu
 
 // ------------------------------------------------------------------ bodies
 
-/// Render one of our dialogs' bodies.
-pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// Render one of our dialogs' bodies (`id`: the dialog's, for answers that arrive later).
+pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             let mut info = app.perf.gpu_info.lines();
@@ -19,7 +19,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
             if let Some(action) = f.remove("__agentAction").and_then(|a| a.as_str().map(str::to_string)) {
-                super::agents::agent_action(app, ui.ctx(), f, &action);
+                super::agents::agent_action(app, ui.ctx(), f, &action, id);
             }
         }
         "shortcuts" => shortcuts_body(app, ui, f),

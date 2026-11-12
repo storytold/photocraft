@@ -102,3 +102,44 @@ fn ai_integrations_choices_and_paths_validate_through_prefs_set() {
     app.run("prefs.set", json!({"values": {"integrations.writeRoot": "/tmp/out"}})).unwrap();
     assert_eq!(app.session.prefs().integrations.write_root, "/tmp/out");
 }
+
+/// A connection that is on but failed to start (its port taken) is tried again by itself, with the
+/// same settings, and the automation gate follows the live policy.
+#[test]
+fn a_failed_start_is_retried_without_a_setting_change() {
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    let calls: Arc<Mutex<u32>> = Arc::default();
+    let seen = calls.clone();
+    app.services.agent_link = Some(Box::new(move |p: &prefs::Integrations, _: &egui::Context| {
+        let mut n = seen.lock().unwrap();
+        *n += 1;
+        let mut out = crate::AgentLink::default();
+        if p.connect_agents && *n >= 3 {
+            out.status.port = Some(4321);
+            out.automation.authorize = Some(|_, _| Ok(()));
+        } else if p.connect_agents {
+            out.status.error = Some("Couldn't listen on 127.0.0.1:4321: in use".into());
+        }
+        out
+    }));
+    app.run("prefs.set", json!({"values": {"integrations.connectAgents": true}})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), 1);
+    assert!(app.agent_link.port.is_none() && app.prefs_rt.agent_link_retry.is_some(), "a retry is scheduled");
+    // Not yet due: nothing happens.
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), 1);
+    // Due: tried again with the same settings, still failing, then started.
+    app.prefs_rt.agent_link_retry = Some(0.0);
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), 2);
+    app.prefs_rt.agent_link_retry = Some(0.0);
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), 3);
+    assert_eq!(app.agent_link.port, Some(4321));
+    assert!(app.prefs_rt.agent_link_retry.is_none(), "running: no more retries");
+    assert!(app.session.automation_gate.is_some(), "actions agents record keep the policy");
+    tick(&mut app, &ctx);
+    assert_eq!(*calls.lock().unwrap(), 3);
+}

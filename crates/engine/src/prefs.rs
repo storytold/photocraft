@@ -1174,6 +1174,19 @@ impl Default for RawDefaults {
     }
 }
 
+/// Before *Let AI agents connect*, a Control Port other than 0 started the control server by itself.
+/// A saved `integrations` section like that keeps its connection: the port now means "on, at this
+/// port". Every reader of the saved section applies this (the app, its launch read, and
+/// `photocraft-cli mcp --live`), so they agree.
+pub fn migrate_integrations(section: &mut Value) {
+    if let Some(integrations) = section.as_object_mut()
+        && !integrations.contains_key("connectAgents")
+        && integrations.get("controlPort").and_then(Value::as_u64).is_some_and(|p| (1..=65535).contains(&p))
+    {
+        integrations.insert("connectAgents".into(), json!(true));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Integrations {
@@ -1678,13 +1691,8 @@ impl Session {
         {
             *language = json!("sr-latn");
         }
-        // Before *Let AI agents connect*, a Control Port other than 0 started the control server by
-        // itself. Such a file keeps its connection: the port now means "on, at this port".
-        if let Some(integrations) = v.get_mut("integrations").and_then(Value::as_object_mut)
-            && !integrations.contains_key("connectAgents")
-            && integrations.get("controlPort").and_then(Value::as_u64).is_some_and(|p| (1..=65535).contains(&p))
-        {
-            integrations.insert("connectAgents".into(), json!(true));
+        if let Some(integrations) = v.get_mut("integrations") {
+            migrate_integrations(integrations);
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));

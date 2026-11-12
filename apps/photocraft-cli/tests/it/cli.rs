@@ -2067,6 +2067,7 @@ fn mcp_live_and_install_reject_mismatched_flags() {
         (&["mcp", "--live", "--bridge", "127.0.0.1:1"], "--bridge"),
         (&["mcp", "--live", "--control-token-file", "t"], "--control-token-file"),
         (&["mcp", "--live", "--when-closed", "sometimes"], "sometimes"),
+        (&["mcp", "--live", "--gpu"], "--gpu"),
     ] {
         let o = bin().args(args).stdin(Stdio::null()).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
@@ -2075,13 +2076,15 @@ fn mcp_live_and_install_reject_mismatched_flags() {
     }
 }
 
-/// `mcp --live` serves MCP without the app; a tool call says how to connect it.
+/// `mcp --live` serves MCP without the app; a tool call says how to connect it. A
+/// PHOTOCRAFT_CONTROL_PORT exported for another tool (here not even a port) is not read.
 #[test]
 fn mcp_live_without_the_app_explains_what_to_do() {
     let dir = tmp("mcp-live");
     let mut child = bin()
         .args(["mcp", "--live", "--when-closed", "error"])
         .env("PHOTOCRAFT_CONFIG_DIR", &dir)
+        .env("PHOTOCRAFT_CONTROL_PORT", "not-a-port")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

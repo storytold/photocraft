@@ -36,13 +36,19 @@ pub struct Listening {
     /// The bound port (the one the system picked for port 0).
     pub port: u16,
     stop: Arc<AtomicBool>,
+    accept: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Listening {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        // Wake the accept loop so it sees the flag and closes the listener.
-        let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(500));
+        // Wake the accept loop so it sees the flag and closes the listener, and wait for that, so
+        // the port is free when this returns (a restart on the same port binds it again at once).
+        // Without a wake-up the loop would block in `accept`: then don't wait.
+        let woke = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(500)).is_ok();
+        if woke && let Some(accept) = self.accept.take() {
+            let _ = accept.join();
+        }
     }
 }
 
@@ -54,8 +60,8 @@ pub fn listen(port: u16, token: String, ctx: egui::Context) -> std::io::Result<(
     let port = listener.local_addr()?.port();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
-    std::thread::Builder::new().name("control server".into()).spawn(move || accept(listener, token, tx, ctx, Some(stopped)))?;
-    Ok((rx, Listening { port, stop }))
+    let accept = std::thread::Builder::new().name("control server".into()).spawn(move || accept(listener, token, tx, ctx, Some(stopped)))?;
+    Ok((rx, Listening { port, stop, accept: Some(accept) }))
 }
 
 /// Accept connections on `listener` and serve each on its own thread, until `stop` is set (never,
@@ -203,12 +209,8 @@ mod tests {
         assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"], "pong");
         handler.join().unwrap();
         drop(server);
-        // The listener closes once the accept loop has seen the stop flag.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(200)).is_ok() {
-            assert!(Instant::now() < deadline, "port {port} still accepts connections after stop");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        // The listener is closed when the drop returns: the same port binds again at once.
+        TcpListener::bind(("127.0.0.1", port)).expect("the port is free after the drop");
     }
     #[test]
     fn port_zero_logs_the_bound_port() {

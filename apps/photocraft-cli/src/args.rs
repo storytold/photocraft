@@ -393,13 +393,16 @@ enum ServerOptionError {
     /// `--live` finds the app's port and token by itself.
     #[error("--live finds the app by itself; {0} is for --bridge")]
     LiveBridge(&'static str),
+    /// `--live` drives the app, which decides on rendering.
+    #[error("configure rendering on the desktop app; --gpu and --no-gpu require headless MCP mode, not --live")]
+    LiveGpu,
 }
 
 impl ServerOptionError {
     fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
         let kind = match self {
             Self::BridgeVar(_) | Self::GpuVar(_) => ErrorKind::ValueValidation,
-            Self::BridgeRoots | Self::BridgeGpu | Self::LiveBridge(_) => ErrorKind::ArgumentConflict,
+            Self::BridgeRoots | Self::BridgeGpu | Self::LiveBridge(_) | Self::LiveGpu => ErrorKind::ArgumentConflict,
             Self::NeedsTransport { .. } => ErrorKind::MissingRequiredArgument,
         };
         cmd.error(kind, self)
@@ -511,6 +514,11 @@ fn steps(m: &ArgMatches) -> Vec<Step> {
 /// stray.psd --help`): clap reports the mistake first.
 pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cmd = Cli::command().mut_subcommands(|sub| sub.mut_args(blank_env_is_unset));
+    // `mcp --live` finds the app itself: a PHOTOCRAFT_CONTROL_PORT exported for another tool is
+    // not read, so a value it couldn't use anyway doesn't stop it.
+    if args.first().is_some_and(|a| a == "mcp") && args.iter().take_while(|a| *a != "--").any(|a| a == "--live") {
+        cmd = cmd.mut_subcommand("mcp", |sub| sub.mut_arg("bridge", |arg| arg.env(None::<&str>)));
+    }
     let argv = std::iter::once(OsString::from("photocraft-cli")).chain(args.iter().cloned());
     let matches = match cmd.try_get_matches_from_mut(argv) {
         Err(e) if args.iter().take_while(|a| *a != "--").any(|a| *a == "--help" || *a == "-h") => {
@@ -537,6 +545,13 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                         }
                         return Err(ServerOptionError::LiveBridge(flag).into_clap(&mut cmd));
                     }
+                }
+                // A headless session `--live` falls back to takes the app's rendering, not these.
+                if m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine) {
+                    if let Some(sub) = cmd.find_subcommand_mut(name) {
+                        return Err(ServerOptionError::LiveGpu.into_clap(sub));
+                    }
+                    return Err(ServerOptionError::LiveGpu.into_clap(&mut cmd));
                 }
                 a.bridge = None;
                 return Ok(cli);
