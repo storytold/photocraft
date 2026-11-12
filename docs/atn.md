@@ -334,7 +334,8 @@ run. This covers the parent event, not complete recordings with generated helper
 Fit Image is the script event `3caa3434-cb67-11d1-bc43-0060b0a13dc4` that follows
 the Image Size step it runs, which stays a step of its own. `Wdth` and
 `Hght` (pixel unit floats above 0) and `limit` (Don't Enlarge) play as
-`file.automate.fitImage`, which leaves a document that already fits unchanged.
+`file.automate.fitImage`. With `limit` true it leaves a document that already fits
+unchanged; with `limit` false it enlarges a smaller document to fit the box.
 The descriptor's class is `cjsp` with an empty class name (measured, in two UI
 languages). `Msge` is the script's own text, not a setting: the reference plays the
 step the same with the recorded text, an empty one, unrelated text or the key
