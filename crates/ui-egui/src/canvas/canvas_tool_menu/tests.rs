@@ -2,7 +2,10 @@ use super::*;
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
-fn app() -> PhotocraftApp {
+#[path = "zoom_menu_anchor_tests.rs"]
+mod zoom_menu_anchor_tests;
+
+pub(super) fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app
@@ -20,12 +23,12 @@ fn work_path(app: &mut PhotocraftApp) {
     .unwrap();
 }
 
-fn choose_open(app: &mut PhotocraftApp, command: &str) {
+pub(super) fn choose_open(app: &mut PhotocraftApp, command: &str) {
     assert!(open(app, &Context::default(), Tool::Pen, [10.0, 10.0]));
     choose(app, &Context::default(), command);
 }
 
-fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     app.sync_views();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
@@ -42,7 +45,7 @@ fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
+pub(crate) fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -210,7 +213,9 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([16.0, 16.0])));
     assert_eq!(active(&app), Some(id));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all", FAUX_BOLD, FAUX_ITALIC] {
+    // The text-edit rows belong to the edit menu only; the faux rows act on the whole layer
+    // here since #12043 (the new tests cover them).
+    for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all"] {
         assert!(!available(&app, &menu, edit_row), "{edit_row} belongs to the edit menu only");
     }
     assert!(entry_enabled(&app, &menu, "type.convertToParagraphText") && !entry_enabled(&app, &menu, "type.convertToPointText"));
@@ -399,8 +404,8 @@ fn selection_menus_follow_photoshop_order() {
             Some("Save Selection…"),
             Some("Make Work Path…"),
             None,
-            Some("Layer via Copy"),
-            Some("Layer via Cut"),
+            Some("Layer Via Copy"),
+            Some("Layer Via Cut"),
             Some("New Layer…"),
             None,
             Some("Free Transform"),
@@ -521,7 +526,7 @@ fn zoom_app(w: u32, h: u32) -> PhotocraftApp {
     app
 }
 
-fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
+pub(super) fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
     crate::canvas::ViewXform::active(app).unwrap().to_screen(doc[0], doc[1])
 }
 
@@ -535,7 +540,8 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
         let inside = screen_of(h.state(), [300.0, 100.0]);
         right_click(&mut h, inside, Modifiers::NONE);
         let menu = h.state().ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: right-click opens no menu"));
-        assert!(rows(&menu) == VIEW_MENU, "{tool:?}: the view menu");
+        // The Hand's menu has only the fixed zooms (#12022).
+        assert!(rows(&menu) == if tool == Tool::Hand { HAND_MENU } else { VIEW_MENU }, "{tool:?}: the view menu");
         assert_eq!(h.state().ui.views[0].zoom, zoom, "{tool:?}: the right-click alone does not zoom");
         assert!(entry_enabled(h.state(), &menu, FILL_SCREEN) && entry_enabled(h.state(), &menu, "view.printSize"));
         // Outside the image the pasteboard colour menu wins, as for the other tools.
@@ -546,12 +552,150 @@ fn zoom_and_hand_right_click_opens_the_view_menu() {
     }
 }
 
+/// A zoom harness with a fixed camera: zoom 1.0 centred on the 400×300 document. `animated` is
+/// Preferences › General › Animated Zoom; each step is 0.1 s of egui time, so a hold can pass
+/// `zoom_hold::DELAY` within a few steps.
+fn zoom_harness(animated: bool) -> Harness<'static, PhotocraftApp> {
+    let mut app = zoom_app(400, 300);
+    app.ui.tool = Tool::Zoom;
+    app.run("prefs.set", json!({"values": {"general.animatedZoom": animated, "tools.zoomClickedPointToCenter": false, "tools.overscroll": true}})).unwrap();
+    app.sync_views();
+    app.ui.extras.rulers = false;
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(0.1).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    h.run_steps(4);
+    let view = &mut h.state_mut().ui.views[0];
+    view.zoom = 1.0;
+    view.center = [200.0, 150.0];
+    view.fit_pending = false;
+    view.fill_pending = false;
+    h.run_steps(2);
+    h
+}
+
+/// The menu opens at `[300, 100]` (doc points); this press lands 250 doc px to its left: outside
+/// the 200 px-wide menu, on the canvas.
+fn dismissal_point(h: &Harness<'static, PhotocraftApp>) -> Pos2 {
+    screen_of(h.state(), [50.0, 250.0])
+}
+
+/// #9832: a left press outside the open view menu dismisses it, and the whole gesture is
+/// consumed — the press, the held press, and the release never zoom, and the next ordinary
+/// click zooms again.
 #[test]
-fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
+fn dismissing_the_view_menu_consumes_the_whole_gesture() {
+    let mut h = zoom_harness(false);
+    let zoom = h.state().ui.views[0].zoom;
+    let open_at = screen_of(h.state(), [300.0, 100.0]);
+    right_click(&mut h, open_at, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "right-click opens the view menu");
+    // The dismissal press: the menu goes, the zoom does not.
+    let far = dismissal_point(&h);
+    h.event(egui::Event::PointerMoved(far));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "the outside press dismisses the menu");
+    assert_eq!(h.state().ui.views[0].zoom, zoom, "the dismissal press does not zoom");
+    // Holding it (a long press releases as a click) still does nothing…
+    h.run_steps(2);
+    assert_eq!(h.state().ui.views[0].zoom, zoom, "a held dismissal press does not zoom");
+    // …and the release over the canvas is consumed: no zoom step.
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.views[0].zoom, zoom, "the dismissal release does not zoom");
+    // The next ordinary click zooms again: the gesture flag did not stick.
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.views[0].zoom, crate::zoom_levels::step(zoom, 1, h.state().ui.views[0].doc_size), "the next ordinary click zooms");
+}
+
+/// #9832: a menu-dismissal press held past `zoom_hold::DELAY` must not arm the animated zoom
+/// hold: holding the dismissal click would otherwise zoom continuously.
+#[test]
+fn a_held_menu_dismissal_press_never_arms_the_zoom_hold() {
+    let mut h = zoom_harness(true);
+    let zoom = h.state().ui.views[0].zoom;
+    let open_at = screen_of(h.state(), [300.0, 100.0]);
+    right_click(&mut h, open_at, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "right-click opens the view menu");
+    let far = dismissal_point(&h);
+    h.event(egui::Event::PointerMoved(far));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "the outside press dismisses the menu");
+    // 0.8 s held still, well past the 0.3 s hold delay: every frame stays at the start zoom.
+    for i in 0..8 {
+        h.run_steps(1);
+        assert_eq!(h.state().ui.views[0].zoom, zoom, "held dismissal press frame {i} must not zoom");
+    }
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.views[0].zoom, zoom, "the dismissal release does not zoom either");
+}
+
+/// #9832 (CodeRabbit): while the dismissal press stays down, the temporary Hand (Space) and the
+/// selected Hand must not pan either — the consumed gesture is inert until its release, and the
+/// pans read `response.dragged()` directly, so they need the gate up front.
+#[test]
+fn a_held_menu_dismissal_press_cannot_pan_the_view() {
+    fn key(h: &mut Harness<'static, PhotocraftApp>, k: egui::Key, pressed: bool) {
+        h.event(egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    let mut h = zoom_harness(false);
+    let (zoom, center0) = (h.state().ui.views[0].zoom, h.state().ui.views[0].center);
+    let open_at = screen_of(h.state(), [300.0, 100.0]);
+    right_click(&mut h, open_at, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "right-click opens the view menu");
+    // The dismissal press: the menu goes, and the button stays down.
+    let far = dismissal_point(&h);
+    h.event(egui::Event::PointerMoved(far));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "the outside press dismisses the menu");
+    // Hold Space: the temporary Hand arms, but dragging must not pan the view.
+    key(&mut h, egui::Key::Space, true);
+    assert_eq!(crate::input::hold_keys::held_tool(h.state(), &h.ctx), Some(crate::input::hold_keys::Temporary::Hand), "Space arms the temporary hand");
+    h.event(egui::Event::PointerMoved(far + vec2(120.0, -60.0)));
+    h.run_steps(2);
+    h.event(egui::Event::PointerMoved(far + vec2(240.0, -120.0)));
+    h.run_steps(2);
+    assert_eq!(h.state().ui.views[0].center, center0, "a held dismissal press must not pan the view");
+    assert_eq!(h.state().ui.views[0].zoom, zoom);
+    // Release both: an ordinary Hand drag pans again, the flag did not stick.
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    key(&mut h, egui::Key::Space, false);
+    h.state_mut().ui.tool = Tool::Hand;
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(far + vec2(100.0, 50.0)));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_ne!(h.state().ui.views[0].center, center0, "an ordinary Hand drag pans the view again");
+}
+
+#[test]
+fn view_menu_zoom_in_keeps_the_view_centre() {
     let mut app = zoom_app(400, 300);
     app.ui.tool = Tool::Zoom;
     let mut h = harness(app);
     let zoom = h.state().ui.views[0].zoom;
+    let center = h.state().ui.views[0].center;
     let doc = [300.0, 100.0];
     let p = screen_of(h.state(), doc);
     right_click(&mut h, p, Modifiers::NONE);
@@ -561,8 +705,7 @@ fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
     assert!(h.state().ui.canvas_tool_menu.is_none());
     let after = h.state().ui.views[0].zoom;
     assert_eq!(after, crate::zoom_levels::step(zoom, 1, [400, 300]), "one Zoom In step");
-    let s = screen_of(h.state(), doc);
-    assert!((s - p).length() < 1.0, "the right-clicked point stays put: {s:?} vs {p:?}");
+    assert_eq!(h.state().ui.views[0].center, center);
     assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("view.zoomIn"));
     // Zoom Out returns to where it was.
     right_click(&mut h, p, Modifiers::NONE);
@@ -573,12 +716,13 @@ fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
 }
 
 #[test]
-fn animated_zoom_off_view_menu_keeps_the_anchor_without_a_transition() {
+fn animated_zoom_off_view_menu_keeps_the_centre_without_a_transition() {
     for command in ["view.zoomIn", "view.zoomOut", FILL_SCREEN] {
         let mut app = zoom_app(400, 300);
         app.ui.tool = Tool::Zoom;
         app.run("prefs.set", json!({"values": {"general.animatedZoom": false, "tools.zoomClickedPointToCenter": false}})).unwrap();
         let mut h = harness(app);
+        let center = h.state().ui.views[0].center;
         let doc = [300.0, 100.0];
         let p = screen_of(h.state(), doc);
         right_click(&mut h, p, Modifiers::NONE);
@@ -591,17 +735,18 @@ fn animated_zoom_off_view_menu_keeps_the_anchor_without_a_transition() {
         assert_eq!((xf.zoom, xf.center), (v.zoom, v.center), "{command}");
         assert!(v.zoom_anchor.is_none() && v.zoom_transition.is_none(), "{command}");
         if command != FILL_SCREEN {
-            assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{command}: preserve the clicked point");
+            assert_eq!(v.center, center, "{command}: preserve the view centre");
         }
     }
 }
 
 #[test]
-fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
+fn view_menu_zoom_keeps_its_centre_during_the_animation() {
     let mut app = zoom_app(400, 300);
     app.ui.tool = Tool::Zoom;
     let mut h = harness(app);
     let zoom = h.state().ui.views[0].zoom;
+    let center = h.state().ui.views[0].center;
     let doc = [300.0, 100.0];
     let p = screen_of(h.state(), doc);
     right_click(&mut h, p, Modifiers::NONE);
@@ -613,7 +758,7 @@ fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
     h.step();
     let displayed = crate::canvas::ViewXform::active(h.state()).unwrap();
     assert!(displayed.zoom > zoom && displayed.zoom < h.state().ui.views[0].zoom);
-    assert!(displayed.to_screen(doc[0], doc[1]).distance(p) < 1.0);
+    assert!(displayed.to_screen(center[0], center[1]).distance(displayed.rect.center()) < 1.0);
     h.input_mut().time = Some(ctx.input(|i| i.time) + 0.3);
     h.step();
     assert!(!h.state().ui.views[0].zoom_animating);
@@ -622,7 +767,8 @@ fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
 #[test]
 fn view_menu_zoom_in_centres_the_clicked_point_with_the_preference() {
     let mut app = zoom_app(400, 300);
-    app.ui.tool = Tool::Hand;
+    // Zoom In is on the Zoom tool's menu only (#12022).
+    app.ui.tool = Tool::Zoom;
     app.run("prefs.set", json!({"path": "tools.zoomClickedPointToCenter", "value": true})).unwrap();
     let mut h = harness(app);
     let doc = [300.0, 100.0];
@@ -905,6 +1051,151 @@ fn pen_menu_saved_path_clipping_and_numeric_transform() {
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.transform"));
 }
 
+// #10527: the Stroke Path dialog's Simulate Pressure checkbox keeps the choice the last OK applied.
+
+/// A document with the Pen tool picked and a Work Path. Every route to the Stroke Path dialog (the
+/// Pen canvas menu, the Paths panel context menu, Alt-click on its Stroke button) ends in the same
+/// `pen_dialog`, so driving the menu route covers the other two.
+fn stroke_app() -> PhotocraftApp {
+    let mut app = app();
+    app.ui.tool = Tool::Pen;
+    work_path(&mut app);
+    app.ui.selected_path = Some("work".into());
+    app
+}
+
+/// Open the Stroke Path dialog through the Pen canvas menu and return its id.
+fn open_stroke(app: &mut PhotocraftApp) -> u64 {
+    choose_open(app, "path.stroke");
+    let d = app.ui.dialogs.last().expect("Stroke Path… opens a dialog");
+    assert_eq!(d.fields.get("__command").and_then(Value::as_str), Some("path.stroke"));
+    assert_eq!(d.fields.get("name").and_then(Value::as_str), Some("work"), "the Work Path is stroked");
+    d.id
+}
+
+/// The Simulate Pressure the freshly opened dialog carries, or `None` when it carries none at all.
+/// The spec body draws a missing field as the schema default (off), so `None` and `Some(false)` look
+/// the same on screen; asserting a seeded `Some(bool)` pins the defensive read, which must never
+/// trust a saved value into a non-bool.
+fn pressure_on_open(app: &mut PhotocraftApp) -> Option<bool> {
+    let id = open_stroke(app);
+    let on = app.ui.dialog_mut(id).unwrap().fields.get("simulatePressure").and_then(Value::as_bool);
+    app.ui.close_dialog(id);
+    on
+}
+
+/// Tick or untick Simulate Pressure in the open dialog.
+fn set_pressure(app: &mut PhotocraftApp, id: u64, on: bool) {
+    app.ui.dialog_mut(id).unwrap().fields.insert("simulatePressure".into(), json!(on));
+}
+
+#[test]
+fn stroke_path_reopens_with_the_simulate_pressure_that_was_applied() {
+    let mut app = stroke_app();
+    // The first one opens off: no remembered choice, and Photoshop's default is off.
+    assert_eq!(pressure_on_open(&mut app), Some(false), "the first Stroke Path opens with a seeded, off checkbox");
+    // Tick Simulate Pressure and press OK: the stroke runs with it.
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, true);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.stroke"), "OK stroked the path");
+    // Re-opening shows the choice that was applied (#10527).
+    assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice opens next time");
+    // Unticking it and pressing OK applies off, which is what opens next time.
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, false);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(pressure_on_open(&mut app), Some(false), "an applied off wins over the remembered on");
+}
+
+#[test]
+fn stroke_path_cancel_leaves_the_remembered_simulate_pressure_alone() {
+    let mut app = stroke_app();
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, true);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice opens again");
+    // Untick it and press Cancel: nothing was applied, so the next opening is unchanged.
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, false);
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert!(app.ui.dialogs.is_empty(), "Cancel closes the dialog");
+    assert_eq!(app.session.journal.iter().filter(|(id, _)| id == "path.stroke").count(), 1, "Cancel ran no stroke");
+    assert_eq!(pressure_on_open(&mut app), Some(true), "Cancel leaves the remembered choice alone (#10527)");
+    // Cancel can also be the first thing done: still nothing to remember.
+    let mut fresh = stroke_app();
+    let id = open_stroke(&mut fresh);
+    set_pressure(&mut fresh, id, true);
+    crate::dialogs::cancel(&mut fresh, id).unwrap();
+    assert_eq!(pressure_on_open(&mut fresh), Some(false), "a cancelled on never becomes the remembered choice");
+}
+
+#[test]
+fn stroke_path_falls_back_to_off_for_a_corrupt_saved_simulate_pressure() {
+    let mut app = stroke_app();
+    // Saved data is never trusted: anything but a real bool in the remembered choice reopens the
+    // checkbox off rather than showing or applying it.
+    let corrupt =
+        [json!("not an object"), json!(null), json!({}), json!({"simulatePressure": "yes"}), json!({"simulatePressure": 1}), json!({"simulatePressure": null})];
+    for bad in corrupt {
+        app.session.prefs.edit(|p| p.dialogs.insert("path.stroke".into(), bad.clone()));
+        assert_eq!(pressure_on_open(&mut app), Some(false), "{bad} must reopen the checkbox off");
+    }
+    // No remembered key at all: off as well, and one applied OK writes a clean value back.
+    app.session.prefs.edit(|p| p.dialogs.remove("path.stroke"));
+    assert_eq!(pressure_on_open(&mut app), Some(false), "no remembered choice opens off");
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, true);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "only the checkbox is stored");
+    assert_eq!(pressure_on_open(&mut app), Some(true), "and it comes back after a clean write");
+}
+
+#[test]
+fn stroke_path_failed_confirmation_does_not_remember_simulate_pressure() {
+    let mut app = stroke_app();
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, true);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice is remembered");
+    // Untick it, point the dialog at a path that does not exist and press OK: the stroke fails, so
+    // nothing was applied and nothing may be remembered.
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, false);
+    app.ui.dialog_mut(id).unwrap().fields.insert("name".into(), json!("no such path"));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err(), "stroking a missing path fails");
+    assert_eq!(app.session.journal.iter().filter(|(id, _)| id == "path.stroke").count(), 1, "the failed OK ran no stroke");
+    while let Some(d) = app.ui.dialogs.last().map(|d| d.id) {
+        app.ui.close_dialog(d);
+    }
+    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "a failed OK leaves the memory alone");
+    assert_eq!(pressure_on_open(&mut app), Some(true), "the next opening still shows the last applied choice");
+}
+
+#[test]
+fn stroke_path_does_not_remember_its_tool_choice() {
+    // Only Simulate Pressure sticks (#10527). Nobody asked for the tool to be remembered, so the
+    // dialog keeps opening on the spec's default and the engine keeps defaulting to the brush.
+    let mut app = stroke_app();
+    let id = open_stroke(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("tool".into(), json!("pencil"));
+    set_pressure(&mut app, id, true);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("path.stroke"));
+    let id = open_stroke(&mut app);
+    let (pressure, tool) = {
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        (f.get("simulatePressure").cloned(), f.get("tool").cloned())
+    };
+    app.ui.close_dialog(id);
+    assert_eq!(pressure, Some(json!(true)), "the checkbox is remembered");
+    assert_eq!(tool, None, "the tool is not: the dialog opens on the spec default");
+    // The Paths panel's plain Stroke button strokes without a dialog, so it writes nothing: the
+    // remembered choice is still the one the dialog applied.
+    app.run("path.stroke", json!({"name": "work", "tool": "brush"})).unwrap();
+    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "a dialog-less stroke changes no memory");
+}
+
 #[test]
 fn pen_shape_menu_enables_shape_ops_and_style_copy_only_when_applicable() {
     let mut app = app();
@@ -991,6 +1282,38 @@ fn right_click_on_a_pending_crop_opens_the_crop_menu_and_a_ratio_refits_the_fram
     assert!((aspect(r) - 16.0 / 9.0).abs() < 1e-9, "the frame is 16 : 9 now: {r:?}");
     assert!(r[0] >= frame[0] && r[1] >= frame[1] && r[2] <= frame[2] && r[3] <= frame[3], "fitted inside the old frame: {r:?}");
     assert!(h.state().ui.canvas_tool_menu.is_none());
+}
+
+/// The menu's Crop row, clicked with the mouse, crops; the Crop tool then shows no frame until
+/// the next press, so the applied crop doesn't look still pending.
+#[test]
+fn the_crop_row_crops_and_no_frame_shows_until_the_next_press() {
+    let mut app = crop_app();
+    app.ui.tool_options.crop_shield.classic_mode = false;
+    let mut h = harness(app);
+    // Tall enough for the whole menu, down to its last row.
+    h.set_size(vec2(1000.0, 1400.0));
+    draw_crop(h.state_mut());
+    h.run_steps(2);
+    let r = h.state().ui.crop_rect.unwrap();
+    let center = h.state().last_canvas_rect.center();
+    right_click(&mut h, center, Modifiers::NONE);
+    h.get_by_label("Crop").click();
+    h.run_steps(3);
+    let size = h.state().session.active().unwrap().doc.size;
+    assert_eq!((f64::from(size.width), f64::from(size.height)), ((r[2] - r[0]).round(), (r[3] - r[1]).round()), "cropped to the frame");
+    assert!(h.state().ui.canvas_tool_menu.is_none());
+    assert_eq!(h.state().ui.tool, Tool::Crop);
+    assert_eq!(h.state().ui.crop_rect, None, "no frame around the cropped image");
+    // A click on the canvas brings back a frame around the whole cropped image.
+    let center = h.state().last_canvas_rect.center();
+    h.event(egui::Event::PointerMoved(center));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, f64::from(size.width), f64::from(size.height)]), "the click brings a frame back");
 }
 
 #[test]
@@ -1217,4 +1540,8 @@ fn crop_menu_rows_act_like_the_options_bar() {
     reopen(&mut app);
     choose(&mut app, &ctx, CROP_CANCEL);
     assert!(!crate::crop_ui::pending(&app));
+    // ...and, as Esc does, hides the frame without cropping (#10370).
+    crate::crop_ui::ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert_eq!(app.session.active().unwrap().doc.size, size);
 }

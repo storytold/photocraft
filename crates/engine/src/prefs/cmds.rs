@@ -48,16 +48,29 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         s.color.settings = saved_color;
         return Err(bad(cmd, e));
     }
-    // `colorSettings.blendTextGamma` lives in the compositor too, as `edit.colorSettings` sets it.
-    photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
+    // `colorSettings.blendTextGamma` and `spotDotGain` live in the compositor too, as
+    // `edit.colorSettings` sets them. Process-wide: only a colour change moves them, so another
+    // session's values survive this one's unrelated preferences.
+    if color_changed {
+        photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
+    }
     s.apply_prefs();
     let view = s.prefs_view();
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
     Ok(Value::Object(out))
 }
 
+/// Validate policy-changing resets before mutating either preferences or color settings.
 fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").or_else(|| p.get("section")).and_then(Value::as_str);
+    if !path.is_some_and(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
+        let mut candidate = s.prefs().clone();
+        candidate.reset(path).map_err(|e| bad("prefs.reset", e))?;
+        if candidate.actions.create_single_history_state != s.prefs().actions.create_single_history_state && crate::actions_cmds::history_policy_in_use(s) {
+            return Err(bad("prefs.reset", "cannot change action history settings during playback"));
+        }
+    }
     match path {
         Some("colorSettings") => s.color.settings = Default::default(),
         // One colour setting: `Preferences` has no `colorSettings`, so take the default
@@ -79,7 +92,10 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.prefs.edit(|_| ());
-    photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
+    if path.is_none_or(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
+        photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
+    }
     s.apply_prefs();
     if path.is_some_and(|path| keyed(path).is_some()) {
         // The removed override is absent, so reading its old path would report an error.
@@ -169,10 +185,10 @@ pub fn specs() -> Vec<CommandSpec> {
         section!("edit.preferences.transparencyAndGamut", "Transparency & Gamut…"),
         section!("edit.preferences.unitsAndRulers", "Units & Rulers…"),
         section!("edit.preferences.guidesGridAndSlices", "Guides, Grid & Slices…"),
-        section!("edit.preferences.plugIns", "Plug-ins…"),
+        section!("edit.preferences.plugIns", "Plugins…"),
         section!("edit.preferences.type", "Type…"),
         section!("edit.preferences.enhancedControls", "Enhanced Controls…"),
-        section!("edit.preferences.rawDefaults", "Camera Raw…"),
+        section!("edit.preferences.rawDefaults", "RAW Defaults…"),
         section!("edit.preferences.integrations", "Integrations…"),
         spec!(
             "edit.keyboardShortcuts",

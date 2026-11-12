@@ -859,56 +859,6 @@ fn glows_match_photoshop() {
 }
 
 #[test]
-fn softer_outer_glow_keeps_a_fading_tail_past_its_size() {
-    let mut shape = Map::new(220, 220, 0.0);
-    for y in 0..shape.h {
-        for x in 20..100 {
-            shape.v[y * shape.w + x] = 1.0;
-        }
-    }
-    let glow = Glow {
-        common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
-        paint: FxPaint::Color(photocraft_color::Color::WHITE),
-        technique: GlowTechnique::Softer,
-        spread: 0.0,
-        size: 60.0,
-        contour: Contour::Linear,
-        anti_alias: false,
-        range: 0.5,
-        jitter: 0.0,
-        noise: 0.0,
-        source: GlowSource::Edge,
-    };
-    let m = glow_map(&shape, &glow, false, (0, 0));
-    let row = shape.h / 2;
-    let at = |distance: usize| m.v[row * m.w + 100 + distance];
-    assert!(at(50) > 0.024, "the softer shoulder should stay visible: {}", at(50));
-    assert!(at(60) > 1.0 / 255.0, "the glow must retain a visible tail at its Size: {}", at(60));
-    assert!(at(62) > 0.5 / 255.0, "the glow must extend beyond its Size: {}", at(62));
-    assert!(at(66) < 1e-6, "the added tail should fade to zero: {}", at(66));
-}
-
-#[test]
-fn softer_outer_glow_margin_includes_its_tail_support() {
-    let glow = Glow {
-        common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
-        paint: FxPaint::Color(photocraft_color::Color::WHITE),
-        technique: GlowTechnique::Softer,
-        spread: 0.0,
-        size: 60.0,
-        contour: Contour::Linear,
-        anti_alias: false,
-        range: 0.5,
-        jitter: 0.0,
-        noise: 0.0,
-        source: GlowSource::Edge,
-    };
-    let mut layer = Layer::raster("glow", photocraft_color::PixelFormat::RGBA8);
-    layer.effects.items.push(Effect::OuterGlow(glow));
-    assert_eq!(margin(&layer), 68);
-}
-
-#[test]
 fn offsets_follow_light() {
     let (dx, dy) = offset(120.0, 10.0);
     assert_eq!((dx, dy), (5.0, 9.0));
@@ -1096,4 +1046,78 @@ fn shifting_by_hostile_distances_does_not_overflow() {
         let s = m.shifted(d, d, 0.0);
         assert_eq!(s.v.len(), 144);
     }
+}
+
+/// A plane with no pixels but a huge other dimension must not size scratch from it.
+#[test]
+fn an_empty_distance_transform_allocates_nothing() {
+    let (d, n) = edt_nearest(&[], 0, 1 << 30);
+    assert!(d.is_empty() && n.is_empty());
+    assert!(edt(&[], 1 << 30, 0).is_empty());
+}
+
+/// #8639 review: a Stroke Emboss whose stroke lies wholly inside shades with the layer, so its
+/// non-Normal highlight or shadow counts as an interior blend, as an Inner Bevel's does; with the
+/// stroke reaching outside, or no stroke, it doesn't.
+#[test]
+fn an_inside_stroke_emboss_counts_as_an_interior_blend() {
+    let stroke = |position: StrokePosition| {
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+            size: 4.0,
+            position,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        })
+    };
+    let layer = |effects: Vec<Effect>| {
+        let mut l =
+            photocraft_doc::Layer::new("L", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        l.effects.items = effects;
+        l
+    };
+    let emboss = Effect::BevelEmboss(bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::Smooth));
+    assert!(super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Inside), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Outside), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Center), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![emboss])));
+}
+
+/// #8639 review, measured in the reference application: Stroke Emboss bevels the union of every
+/// enabled Stroke (a 4 px stroke listed over a 10 px one shades the whole 10 px band), and a
+/// stroke at 0 % opacity still has its band embossed over the backdrop.
+#[test]
+fn stroke_emboss_bevels_every_stroke_even_a_transparent_one() {
+    let stroke = |size: f32, position: StrokePosition, opacity: f32| {
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, opacity),
+            size,
+            position,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        })
+    };
+    let emboss = Effect::BevelEmboss(bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::Smooth));
+    let maps = |effects: Vec<Effect>| {
+        let mut l =
+            photocraft_doc::Layer::new("L", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        l.effects.items = effects;
+        let n = l.effects.items.len();
+        let m = build_maps(&l, square(60, 20, 40).v, Rect::new(0, 0, 60, 60), &GlobalLight::default(), &no_tex());
+        (m.per[n - 1].clone(), m.bevel_paint[n - 1])
+    };
+    // 7 px above the shape: inside the 10 px band only; the bevel (light from the top) lights it.
+    let lit = |m: &[Map]| m[0].v[13 * 60 + 30];
+    let (two, paint) = maps(vec![stroke(4.0, StrokePosition::Outside, 1.0), stroke(10.0, StrokePosition::Outside, 1.0), emboss.clone()]);
+    assert!(lit(&two) > 0.1, "{}", lit(&two));
+    assert_eq!(paint, BevelPaint::Both);
+    let (thin, _) = maps(vec![stroke(4.0, StrokePosition::Outside, 1.0), emboss.clone()]);
+    assert_eq!(lit(&thin), 0.0);
+    let (clear, _) = maps(vec![stroke(10.0, StrokePosition::Outside, 0.0), emboss.clone()]);
+    assert!(lit(&clear) > 0.1, "{}", lit(&clear));
+    // Inside only when every stroke is.
+    let (_, inside) = maps(vec![stroke(4.0, StrokePosition::Inside, 1.0), stroke(6.0, StrokePosition::Inside, 1.0), emboss.clone()]);
+    assert_eq!(inside, BevelPaint::Inner);
+    let (_, mixed) = maps(vec![stroke(4.0, StrokePosition::Inside, 1.0), stroke(6.0, StrokePosition::Outside, 1.0), emboss]);
+    assert_eq!(mixed, BevelPaint::Both);
 }

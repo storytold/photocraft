@@ -1,20 +1,24 @@
 use super::{
     CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
-    targa_options_ui,
+    targa_options_ui, tiff_options_ui,
 };
 
 /// The error a save gets while another save waits on its format prompt.
 pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
-/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
-/// `"jpegFormat"`). `None` asks in Save As and takes the default in automation saves, which never
-/// prompt.
+/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
+/// `"jpegFormat"`), TIFF Options (`"tiffCompression"`, `"tiffTransparency"`, `"tiffPyramid"`,
+/// `"tiffLayers"`) and a PSD/PSB's Maximize Compatibility (`"maximizeCompatibility"`). `None`
+/// asks in Save As and takes the default in automation saves, which never prompt (Maximize
+/// Compatibility: Preferences › File Handling decides).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
+    pub tiff: Option<tiff_options_ui::TiffChoice>,
+    pub maximize_compatibility: Option<bool>,
 }
 
 impl FormatChoices {
@@ -24,6 +28,8 @@ impl FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
+            tiff: tiff_options_ui::choice_param(params, cmd)?,
+            maximize_compatibility: maximize_param(params, cmd)?,
         })
     }
 
@@ -34,12 +40,23 @@ impl FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
+            tiff: tiff_options_ui::choice_param(params, cmd)?,
+            maximize_compatibility: maximize_param(params, cmd)?,
         })
     }
 
     /// The export settings with these answers applied.
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
-        let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        let settings = ExportSettings {
+            tga_bits: self.tga_bits.or(settings.tga_bits),
+            dds: self.dds.unwrap_or(settings.dds),
+            psd_maximize_compatibility: self.maximize_compatibility.unwrap_or(settings.psd_maximize_compatibility),
+            ..settings
+        };
+        let settings = match self.tiff {
+            Some(t) => t.apply(settings),
+            None => settings,
+        };
         match self.jpeg {
             Some(j) => j.apply(settings),
             None => settings,
@@ -57,7 +74,18 @@ impl FormatChoices {
         if let Some(j) = self.jpeg {
             j.record(step);
         }
+        if let Some(t) = self.tiff {
+            t.record(step);
+        }
+        if let Some(maximize) = self.maximize_compatibility {
+            step["maximizeCompatibility"] = maximize.into();
+        }
     }
+}
+
+/// `"maximizeCompatibility"` in command or control call `cmd`'s params, read as the engine reads it.
+fn maximize_param(params: &Value, cmd: &str) -> Result<Option<bool>, String> {
+    photocraft_engine::file_cmds::maximize_compatibility_param(params, cmd).map_err(|e| e.to_string())
 }
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
@@ -68,6 +96,9 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Re
 pub struct ExportSettings {
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
+    /// JPEG chroma sampling: `true` is 4:2:0, `false` keeps full 4:4:4 colour detail.
+    /// Export As keeps full chroma above quality 50 so saturated text and graphics stay sharp.
+    pub jpeg_chroma_subsampling: bool,
     /// JPEG Options › Format Options: baseline, baseline optimized or progressive.
     pub jpeg_format: photocraft_codecs::JpegFormat,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
@@ -76,6 +107,13 @@ pub struct ExportSettings {
     pub webp_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
+    /// TIFF Options › Image Compression.
+    pub tiff_compression: photocraft_codecs::TiffCompression,
+    /// TIFF Options › Save Transparency (`None`: kept unless the document has alpha or spot
+    /// channels; see [`photocraft_io::ExportOptions::tiff_transparency`]).
+    pub tiff_transparency: Option<bool>,
+    /// TIFF Options › Save Image Pyramid.
+    pub tiff_pyramid: bool,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
     /// Export As starts at Metadata: None, since the packet can carry the text of every type
     /// layer and one id per placed document (#647).
@@ -92,6 +130,9 @@ pub struct ExportSettings {
     /// PSD/PSB: write the real merged image (Preferences › File Handling › Maximize PSD and PSB
     /// File Compatibility; see [`PhotocraftApp::save_settings`]).
     pub psd_maximize_compatibility: bool,
+    /// `.pcraft`: also write the full-size composite (Preferences › File Handling › Save Full-Size
+    /// Composite in .pcraft Files; see [`PhotocraftApp::save_settings`]). Off by default.
+    pub pcraft_full_composite: bool,
     /// Embed the document's ICC profile when the format supports it. On for Save As and, unless
     /// Export As turns it off, for export.
     pub embed_icc: bool,
@@ -112,15 +153,20 @@ impl Default for ExportSettings {
     fn default() -> Self {
         ExportSettings {
             jpeg_quality: None,
+            jpeg_chroma_subsampling: true,
             jpeg_format: photocraft_codecs::JpegFormat::Baseline,
             webp_lossless: true,
             webp_quality: None,
             tiff_layers: true,
+            tiff_compression: photocraft_codecs::TiffCompression::None,
+            tiff_transparency: None,
+            tiff_pyramid: false,
             xmp_all: true,
             tga_bits: None,
             dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
             psd_maximize_compatibility: true,
+            pcraft_full_composite: false,
             embed_icc: true,
             embed_metadata: true,
             document_path: None,
@@ -138,6 +184,7 @@ impl ExportSettings {
         if let Some(q) = self.jpeg_quality {
             opts.encode.jpeg_quality = q;
         }
+        opts.encode.jpeg_chroma_subsampling = self.jpeg_chroma_subsampling;
         opts.encode.jpeg_format = self.jpeg_format;
         opts.encode.webp_lossless = self.webp_lossless;
         if let Some(q) = self.webp_quality {
@@ -146,11 +193,15 @@ impl ExportSettings {
         opts.encode.embed_icc = self.embed_icc;
         opts.encode.embed_metadata = self.embed_metadata;
         opts.tiff_layers = self.tiff_layers;
+        opts.tiff_transparency = self.tiff_transparency;
+        opts.encode.tiff_compression = self.tiff_compression;
+        opts.encode.tiff_pyramid = self.tiff_pyramid;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
         opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
+        opts.pcraft_full_composite = self.pcraft_full_composite;
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
         opts.read_linked_files = self.read_linked_files;
@@ -158,8 +209,53 @@ impl ExportSettings {
     }
 }
 
+/// Whether File › Save writes straight back to `path`, the flat file (JPEG, PNG, TIFF…) the
+/// document came from, as Photoshop's Save does (#5733): only while that file keeps everything,
+/// i.e. the document is one plain raster layer ([`plain_raster`]) with no extra channels, in RGB
+/// or Grayscale at a depth (and, for Grayscale, a gray layout) the format stores, and either the
+/// format keeps transparency or the layer is opaque (the Background, or a layer made from it with
+/// no pixels deleted, as checked in Photoshop, #2223). The file itself must have held only
+/// this one image (not an animation, a multi-page TIFF or a multi-size icon), and its encoder
+/// must not quantise (GIF's palette and on/off transparency); a JPEG is rewritten at its own
+/// quality (#4032). An embedded colour profile needs a format that keeps one. Anything else still
+/// goes through Save As, so the original is never overwritten with less than the document has.
+pub(crate) fn saves_flat_in_place(doc: &Document, path: &str) -> bool {
+    let Some(layer) = plain_raster(doc) else { return false };
+    let Some(format) = photocraft_engine::file_cmds::extension(path).and_then(|e| photocraft_codecs::from_extension(&e)) else {
+        return false;
+    };
+    let caps = format.caps();
+    // Transparency is kept where the format's plan writes alpha for this document: DPX has no
+    // gray + alpha, and float PNM (PFM) no alpha at all.
+    let keeps_alpha = caps.alpha
+        && !(format == photocraft_codecs::Format::Dpx && doc.mode == photocraft_doc::ColorMode::Grayscale)
+        && !(format == photocraft_codecs::Format::Pnm && doc.depth == photocraft_color::SampleType::F32);
+    !photocraft_engine::file_cmds::saves_in_place(path)
+        && doc.file_encoding.source_images.is_none()
+        && (!caps.lossy || format == photocraft_codecs::Format::Jpeg)
+        && (doc.mode != photocraft_doc::ColorMode::Grayscale || caps.layouts.iter().any(|l| l.is_gray()))
+        && caps.write
+        && caps.depths.contains(&match doc.depth {
+            photocraft_color::SampleType::U8 => photocraft_codecs::SampleType::U8,
+            photocraft_color::SampleType::U16 => photocraft_codecs::SampleType::U16,
+            photocraft_color::SampleType::F32 => photocraft_codecs::SampleType::F32,
+        })
+        && (doc.icc_profile.is_none() || caps.icc)
+        && doc.channels.is_empty()
+        && matches!(doc.mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale)
+        // Last: it may read every tile.
+        && (keeps_alpha || doc.is_background(layer.id) || opaque_layer(doc, layer))
+}
+
+/// Whether `layer` is fully opaque over the canvas, so a format without transparency (JPEG)
+/// keeps all of it. Read from its tiles, stopping at the first transparent pixel (#2223).
+pub(crate) fn opaque_layer(doc: &Document, layer: &photocraft_doc::Layer) -> bool {
+    layer.surface().is_some_and(|s| !s.format().alpha || photocraft_io::opaque_surface(s, doc.bounds()))
+}
+
 /// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
-/// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234).
+/// opacity, in Normal mode, with no masks, effects, clipping, advanced blending, blending
+/// restrictions or video frames (#2234).
 pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
     match doc.layers.as_slice() {
         [layer]
@@ -173,7 +269,10 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
                 && layer.effects.psd_raw.is_none()
                 && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
                 && photocraft_compose::channel_weights(layer, doc.mode).is_none()
-                && !photocraft_compose::blend_if_active(layer, doc.mode) =>
+                && !photocraft_compose::blend_if_active(layer, doc.mode)
+                && !layer.clipped
+                && layer.advanced.is_default()
+                && layer.video.is_none() =>
         {
             Some(layer)
         }
@@ -221,8 +320,15 @@ pub(crate) enum SaveKind {
     Automation,
 }
 
-/// Read bytes through the desktop control session's authorized read root.
-pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
+/// Bytes and save provenance selected together by the automation read capability.
+pub struct AutomationReadResult {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    /// None means an explicit Save As is required, even for a layered document.
+    pub save_path: Option<String>,
+}
+/// Read bytes through the desktop control session's authorized read roots.
+pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<AutomationReadResult, String>>;
 
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
@@ -247,11 +353,63 @@ pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
 /// `Err` means the contents could not be read and must not invalidate the internal copy.
 pub type ClipboardGetFn = Box<dyn FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String>>;
 
+/// Read original SVG markup for an explicit Paste As. A read error preserves the internal copy.
+pub type ClipboardGetSvgFn = Box<dyn FnMut() -> Result<Option<Vec<u8>>, String>>;
+
 /// Whether the last clipboard read found no way to reach the OS clipboard at all.
 pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 
+/// An editor selected by the user, never an executable supplied by document metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalSvgEditor {
+    /// A known VectorCraft installation, found by the desktop shell.
+    VectorCraft,
+    /// A known Adobe Illustrator installation (offered where the shell can discover one).
+    Illustrator,
+    /// The absolute path the user chose with "Other application": an executable, or on macOS
+    /// an application bundle. The shell validates it before starting anything.
+    Program(String),
+}
+
+/// An immutable saved source and optional display-only preview of those exact bytes.
+#[derive(Debug)]
+pub struct ExternalVectorSave {
+    /// The saved file in its original format (SVG, AI, PDF or EPS).
+    pub bytes: Vec<u8>,
+    /// For AI/PDF/EPS, an SVG rendering of `bytes` used only for display; `None` for SVG.
+    pub preview_svg: Option<Vec<u8>>,
+}
+
+/// A native editing session supplies stable saved source snapshots without blocking the UI.
+pub trait ExternalSvgSession {
+    /// Take the next settled save (its bytes) or error, if one is ready; never blocks.
+    fn poll(&mut self) -> Option<Result<Vec<u8>, String>>;
+    /// SVG-only services remain compatible; native services return source and preview together.
+    fn poll_vector(&mut self) -> Option<Result<ExternalVectorSave, String>> {
+        self.poll().map(|result| result.map(|bytes| ExternalVectorSave { bytes, preview_svg: None }))
+    }
+    /// No more snapshots can arrive, for example after the desktop chooser was cancelled.
+    fn finished(&self) -> bool {
+        false
+    }
+}
+
+/// An immutable embedded source. The shell keeps the original format in its owned working directory.
+#[derive(Clone)]
+pub struct ExternalVectorSource {
+    /// The embedded file, shared rather than copied.
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    /// Its whitelisted format: `svg`, `ai`, `pdf` or `eps`.
+    pub extension: String,
+    /// The placed object's source-pixel frame, which a converted preview is fitted to.
+    pub size: Option<(f64, f64)>,
+}
+
+pub type OpenExternalSvgFn = Box<dyn FnMut(ExternalSvgEditor, ExternalVectorSource) -> Result<Box<dyn ExternalSvgSession>, String>>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+/// Shared queue of browser canvas drops with the document captured at the drop event.
+pub type PlaceInbox = std::sync::Arc<std::sync::Mutex<Vec<(photocraft_doc::DocId, String, Vec<u8>)>>>;
 
 /// Read the saved preferences text (`None` when there is none yet).
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
@@ -319,10 +477,26 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Where the pen in range is on the screen, in physical pixels ([`Services::pen_screen_px`]).
+pub type PenScreenFn = Box<dyn Fn() -> Option<[i32; 2]> + Send + Sync>;
+
+/// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
+pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
+
+/// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
+/// whether the app window is focused (to re-assert WinTab overlap priority on activation).
+pub type TabletPollFn = Box<dyn FnMut(bool)>;
+
+/// What the last self-update came to: `Ok` with the version it installed, `Err` with the reason it
+/// could not be installed, `None` when there is nothing to report ([`Services::last_update`]).
+pub type LastUpdateFn = fn() -> Option<Result<String, String>>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
+    pub open_external_svg: Option<OpenExternalSvgFn>,
     /// User-initiated desktop/browser pixel sampling.
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
@@ -368,18 +542,28 @@ pub struct Services {
     /// Preferences ▸ General ▸ Beep When Done: the platform's default beep, played when a
     /// background job finishes successfully. `None` in the web build (and in tests).
     pub beep: Option<fn()>,
+    /// The system's alert sound, played when a key does nothing in a zoom field being typed in
+    /// (Tab, Alt; see `zoom_field`). No platform sets it yet, so the alert falls back to
+    /// [`Self::beep`].
+    pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// What the last self-update came to, read once at the first frame: `Ok` with the version it
+    /// installed, `Err` with the reason it could not be installed (desktop).
+    pub last_update: Option<LastUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
     /// Files delivered asynchronously for a drop onto the active document's canvas (web
     /// drag-and-drop, routed by [`PhotocraftApp::dropped_on_canvas`]): placed as layers like a
     /// desktop canvas drop (Place Embedded, each in Free Transform).
-    pub place_inbox: Option<Inbox>,
+    pub place_inbox: Option<PlaceInbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,
+    /// SVG text copied by another app: imported only by an explicit pixels/path/shape paste,
+    /// and read after an ordinary paste too, only to remember which SVG came with that image.
+    pub clipboard_get_svg: Option<ClipboardGetSvgFn>,
     /// True when the last `clipboard_get_image` read had no clipboard to read, as in a Flatpak on
     /// Wayland (#5031), rather than a clipboard that holds no image. `None` where that can't happen.
     pub clipboard_unreadable: Option<ClipboardUnreadableFn>,
@@ -387,6 +571,11 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Load/save the bounded deterministic GPU compositor failure memo (native only).
+    pub load_gpu_memo: Option<LoadTextFn>,
+    pub save_gpu_memo: Option<SaveTextFn>,
+    /// Compiler identity included in GPU memo keys (for example `fxc` or `dxc:<path>`).
+    pub shader_compiler: Option<String>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
@@ -427,6 +616,14 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// Which end of the pen is in use, where the platform reports it outside the stylus feed
+    /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
+    pub pen_end: Option<PenEndFn>,
+    /// Where the pen is on the screen, independent of where the window is (Windows: the pen's
+    /// pointer messages). A pen moving the window by its title bar follows it (`titlebar`).
+    pub pen_screen_px: Option<PenScreenFn>,
+    /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
+    pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
