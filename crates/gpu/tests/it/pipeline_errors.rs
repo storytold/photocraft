@@ -38,7 +38,8 @@ fn a_pipeline_built_on_another_thread_fails_as_an_error() {
 /// to build stays in the compositor as an invalid handle, so a draw reports GPU errors instead of
 /// panicking on a missing pipeline.
 #[test]
-fn a_compositor_with_failed_pipelines_draws_without_panicking() {    let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+fn a_compositor_with_failed_pipelines_draws_without_panicking() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((_adapter, device, queue)) = device() else { return };
     // As the app does (`DeviceHealth::watch`): GPU errors go to a handler, not wgpu's default panic.
     device.on_uncaptured_error(Arc::new(|_: wgpu::Error| {}));
@@ -65,7 +66,13 @@ fn a_compositor_built_off_the_ui_thread_renders() {
     let format = Compositor::preferred_acc_format(&adapter);
     let mut threaded = match Compositor::try_new_with_format_threads(&device, format, 4) {
         Ok(c) => c,
-        Err(e) => return eprintln!("skipping: {e}"),
+        Err(e) => {
+            // A backend asked for by name must work: the app builds the compositor on a worker
+            // thread there, so a failure is the app's, not the test's.
+            assert!(std::env::var_os("WGPU_BACKEND").is_none(), "WGPU_BACKEND is set but the compositor could not be built: {e}");
+            eprintln!("skipping: {e}");
+            return;
+        }
     };
     let mut sync = Compositor::try_new_with_format(&device, format).unwrap();
     let doc = Document::with_background("t", Size::new(24, 18), ColorMode::Rgb, SampleType::U8, Color::rgba(0.5, 0.5, 0.5, 1.0));
@@ -73,10 +80,7 @@ fn a_compositor_built_off_the_ui_thread_renders() {
     let b = render_to_vec(&mut sync, &device, &queue, &doc, doc.bounds()).unwrap();
     assert_eq!(a, b, "the threaded build renders like the synchronous one");
     let cpu = photocraft_compose::flatten(&doc);
-    assert!(
-        a.iter().zip(&cpu.px).all(|(p, c)| (0..4).all(|k| (p[k] - c[k]).abs() <= 1.0 / 255.0)),
-        "the background is drawn"
-    );
+    assert!(a.iter().zip(&cpu.px).all(|(p, c)| (0..4).all(|k| (p[k] - c[k]).abs() <= 1.0 / 255.0)), "the background is drawn");
 }
 
 /// #9173: the compositor builds its pipelines on several threads (#6419). On Direct3D 12 with FXC,

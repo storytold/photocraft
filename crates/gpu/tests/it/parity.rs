@@ -219,13 +219,16 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
 }
 
 /// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
-/// tolerance, else the stats of the unpaged render. What the app won't draw on this adapter
-/// (on GL, layer effects: the float effect-map targets don't composite correctly there) has
-/// nothing to compare: the document is drawn by the CPU compositor instead.
+/// tolerance, else the stats of the unpaged render.
+///
+/// A document the compositor refuses is a failure here, not a skip: the test would pass without
+/// comparing anything. The fixtures that compare layer effects use [`fx_diff_rect`], which skips
+/// where the effects are drawn by the CPU compositor.
 fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
-    if g.backend == wgpu::Backend::Gl && g.comp.supports(doc).is_err() {
-        eprintln!("skipping GPU comparison on GL: {what} (the app uses the CPU compositor)");
-        return Ok(photocraft_gpu::Stats::default());
+    if g.backend == wgpu::Backend::Gl
+        && let Err(reason) = g.comp.supports(doc)
+    {
+        return Err(format!("{what}: the GPU compositor refuses this document on GL: {reason}"));
     }
     let cpu = timed("CPU reference", || photocraft_compose::render(doc, rect));
     let mut first = None;
@@ -1861,9 +1864,26 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     ]
 }
 
+/// GPU vs CPU over `rect` for a document with layer effects: where the compositor draws the
+/// effects with the CPU (on the GL backend, whose float effect-map targets don't composite
+/// correctly there) there is nothing to compare, so the fixture skips. Any other refusal is a
+/// failure: the test would pass without comparing anything.
+fn fx_diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+    if g.backend == wgpu::Backend::Gl
+        && let Err(reason) = g.comp.supports(doc)
+    {
+        if reason.0.contains("layer effects") {
+            eprintln!("skipping GPU comparison on GL: {what} (the app uses the CPU compositor)");
+            return Ok(photocraft_gpu::Stats::default());
+        }
+        return Err(format!("{what}: the GPU compositor refuses this document on GL: {reason}"));
+    }
+    diff_rect(g, doc, rect, what)
+}
+
 /// GPU vs CPU over the whole document: Err with the worst pixel if over the tolerance.
 fn fx_diff(g: &mut Gpu, doc: &Document, what: &str) -> Result<photocraft_gpu::Stats, String> {
-    diff_rect(g, doc, doc.bounds(), what)
+    fx_diff_rect(g, doc, doc.bounds(), what)
 }
 
 fn fx_check(g: &mut Gpu, doc: &Document, what: &str) -> photocraft_gpu::Stats {
@@ -3266,7 +3286,7 @@ fn dissolve_adjustments_and_effects_match_cpu_in_offset_regions() {
             d.layers.push(layer);
             let label = format!("Dissolve effects={effects} {depth:?}");
             fx_check(&mut g, &d, &label);
-            diff_rect(&mut g, &d, Rect::new(17, 23, 281, 269), &label).unwrap();
+            fx_diff_rect(&mut g, &d, Rect::new(17, 23, 281, 269), &label).unwrap();
         }
     }
 }
@@ -3359,7 +3379,7 @@ fn dissolve_effects_stack_matches_cpu() {
     styled.opacity = 0.5;
     styled.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::BLACK });
     d.layers.push(styled);
-    check(&mut g, &d, "dissolve effects");
+    fx_check(&mut g, &d, "dissolve effects");
 }
 
 #[test]

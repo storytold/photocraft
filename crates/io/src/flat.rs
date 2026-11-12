@@ -1259,8 +1259,30 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
 }
 
 /// [`document_to_image`] with an optional custom [`BandRenderer`].
+///
+/// A renderer that reports the document as unsupported (e.g. the GPU compositor on the GL
+/// backend, where layer effects are drawn by the CPU) is retried on the CPU compositor, as the
+/// export and preview paths do: the caller gets an image either way.
 pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
-    document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, renderer)
+    let Some(r) = renderer else {
+        return document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, None);
+    };
+    match document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, Some(&mut *r)) {
+        Ok(img) => Ok(img),
+        Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+            let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
+            // The fallback reason goes into this conversion's warnings, and the renderer's own
+            // diagnostics beside it: leaving either on the renderer would leak them into a later
+            // successful GPU conversion.
+            let mut cpu_warnings = Vec::new();
+            let img = document_to_image_for_with_renderer(doc, &mut cpu_warnings, true, false, &Interrupt::NONE, None)?;
+            warnings.extend(r.drain_diagnostics());
+            warnings.append(&mut cpu_warnings);
+            warnings.push(fallback_warning);
+            Ok(img)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Reported in the export's own warnings (not through the renderer's diagnostics, which a custom

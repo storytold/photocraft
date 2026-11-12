@@ -238,15 +238,31 @@ fn retry_now(app: &mut PhotocraftApp) -> bool {
 /// error on a working device, also builds a new GPU canvas at once (see [`retry_now`]).
 fn choose_recovery(app: &mut PhotocraftApp, retry: bool) -> Result<(), String> {
     if retry {
+        // The backend the user picked (Preferences > Performance > GPU Backend) survives the
+        // retry: writing "auto" would let the next launch pick a different adapter than the one
+        // that just failed. An untouched preference is "auto", which stays "auto".
+        let performance = app.session.prefs().performance.clone();
         app.run(
             "prefs.set",
             json!({"values": {
                 "performance.renderingMode": "gpu",
                 "performance.useGpu": true,
-                "performance.gpuBackend": "auto"
+                "performance.gpuBackend": performance.gpu_backend.name()
             }}),
         )?;
-        crate::prefs_ui::save_preferences(app)?;
+        if let Err(e) = crate::prefs_ui::save_preferences(app) {
+            // The save failed: put the preferences back, so a later save does not persist a
+            // choice that was never stored.
+            let _ = app.run(
+                "prefs.set",
+                json!({"values": {
+                    "performance.renderingMode": performance.rendering_mode.map(|m| m.name()),
+                    "performance.useGpu": performance.use_gpu,
+                    "performance.gpuBackend": performance.gpu_backend.name()
+                }}),
+            );
+            return Err(e);
+        }
     }
     app.ui.gpu_fallback_notice = None;
     if retry && can_retry_now(app) && retry_now(app) {
@@ -368,6 +384,34 @@ mod tests {
         assert!(choose_recovery(&mut app, true).is_err());
         assert_eq!(app.ui.gpu_fallback_notice.as_deref(), Some("GPU fault"));
         assert!(app.ui.notices.is_empty());
+    }
+
+    /// A retry whose save fails leaves no pending change behind: the next save must not write
+    /// the GPU mode the failed save never stored.
+    #[test]
+    fn failed_retry_save_restores_the_previous_preferences() {
+        let services = crate::Services { save_prefs: Some(Box::new(|_| Err("disk full".into()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("prefs.set", json!({"values": {"performance.useGpu": false}})).unwrap();
+        let before = app.session.prefs().performance.clone();
+        queue_fallback_notice(&mut app, "GPU fault");
+        assert!(choose_recovery(&mut app, true).is_err());
+        assert_eq!(app.session.prefs().performance.use_gpu, before.use_gpu, "the failed retry left its GPU mode behind");
+        assert_eq!(app.session.prefs().performance.rendering_mode, before.rendering_mode);
+        assert_eq!(app.session.prefs().performance.gpu_backend, before.gpu_backend);
+    }
+
+    /// The backend the user picked survives a retry: writing "auto" would let the next launch
+    /// pick a different adapter than the one that just failed.
+    #[test]
+    fn retry_keeps_the_selected_gpu_backend() {
+        let services = crate::Services::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("prefs.set", json!({"values": {"performance.gpuBackend": "gl"}})).unwrap();
+        queue_fallback_notice(&mut app, "device unavailable");
+        choose_recovery(&mut app, true).unwrap();
+        assert_eq!(app.session.prefs().performance.gpu_backend, photocraft_engine::prefs::GpuBackend::Gl);
+        assert_eq!(app.session.prefs().get("performance.renderingMode"), Some(json!("gpu")));
     }
 
     #[test]

@@ -50,6 +50,13 @@ impl Pass {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if photocraft_gpu::device_access_is_exclusive(adapter.get_info().backend) {
+                // The GL backend takes one context lock around every call, and building the
+                // pipeline holds it while the driver compiles the shader: on another thread that
+                // would race the app's own device calls and abort the process. Build here.
+                let _ = slot.set(Self::build_on(device));
+                return;
+            }
             let (on, out) = (device.clone(), slot.clone());
             let spawned = std::thread::Builder::new().name("camera-raw-pipeline".into()).spawn(move || {
                 let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Self::build_on(&on))).unwrap_or_else(|_| {

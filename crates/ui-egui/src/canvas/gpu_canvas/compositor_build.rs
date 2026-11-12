@@ -21,6 +21,16 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
         return;
     }
     *state = BuildState::Building;
+    if builds_on_the_drawing_thread(device) {
+        // Build here: the shaders compile on this thread, where the app's own device calls
+        // (the window's frames, the canvas uploads) are serialized behind them. On a worker
+        // thread they would not be, and the GL backend would abort the process instead.
+        let (result, outcome) = build_here(device, format);
+        *state = result;
+        *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+        ctx.request_repaint();
+        return;
+    }
     let (device, ctx, out) = (device.clone(), ctx.clone(), slot.clone());
     let worker_completion = completion.clone();
     let spawned = std::thread::Builder::new().name("gpu-compositor-build".into()).spawn(move || {
@@ -45,6 +55,29 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
     });
     if let Err(error) = spawned {
         record_spawn_failure(&mut state, completion, &error);
+    }
+}
+
+/// Whether the compositor's pipelines must be built on the thread that draws.
+///
+/// wgpu-hal's GL device takes one context lock around every call and gives up after a second
+/// ("Could not lock adapter context. This is most-likely a deadlock."), so a build on a worker
+/// thread races the window's own frames and aborts the process. The other backends keep the
+/// worker: the UI stays responsive while the shaders compile.
+#[cfg(not(target_arch = "wasm32"))]
+fn builds_on_the_drawing_thread(device: &eframe::wgpu::Device) -> bool {
+    photocraft_gpu::device_access_is_exclusive(device.adapter_info().backend)
+}
+
+/// The compositor built on this thread, and why it could not be built.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_here(device: &eframe::wgpu::Device, format: eframe::wgpu::TextureFormat) -> (BuildState, Result<(), (String, bool)>) {
+    match photocraft_gpu::Compositor::try_new_with_format_classified(device, format) {
+        Ok(comp) => (BuildState::Ready(Box::new(comp)), Ok(())),
+        Err(error) => {
+            let deterministic = error.kind == photocraft_gpu::BuildFailureKind::DeterministicShaderCompilation;
+            (BuildState::Failed(photocraft_gpu::Unsupported(error.message.clone())), Err((error.message, deterministic)))
+        }
     }
 }
 

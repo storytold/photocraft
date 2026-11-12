@@ -1,4 +1,5 @@
-﻿use super::batch::tile_grid;
+use super::EffectMaps;
+use super::batch::tile_grid;
 use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
 use super::kit::{Kit, SHADER, build_jobs, tex_entry, uniform_entry, vertex_shader};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
@@ -77,6 +78,26 @@ impl Compositor {
         Self::try_new_with_format_threads_classified(device, acc_format, threads).map_err(|e| Unsupported(e.message))
     }
 
+    /// [`Compositor::try_new_with_format`], but the failure is classified for callers that cache
+    /// deterministic failures across launches, and the pipelines are built on the calling thread.
+    ///
+    /// The GL backend needs the calling thread: its device takes one context lock around every
+    /// call, and a pipeline build holds that lock while the driver compiles the shader (seconds on
+    /// some drivers), so a build on another thread would race the caller's own device calls and
+    /// abort the process.
+    pub fn try_new_with_format_classified(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Result<Self, BuildFailure> {
+        match first_error(device, || Self::build(device, acc_format, true)) {
+            ((comp, None), None) => Ok(comp),
+            ((_, Some(e)), None) => {
+                let kind = classify_build_diagnostic(&e.to_string());
+                Err(BuildFailure { kind, message: format!("couldn't build the compositor's pipelines: {e}") })
+            }
+            (_, Some(e)) => {
+                Err(BuildFailure { kind: BuildFailureKind::TransientOrUnknown, message: format!("couldn't build the compositor's pipelines: {e}") })
+            }
+        }
+    }
+
     /// Build the compositor pipelines with an explicit failure classification for callers
     /// that cache deterministic failures across launches. Only recognized shader compiler
     /// diagnostics are marked deterministic; all other wgpu errors are transient or unknown.
@@ -132,6 +153,12 @@ impl Compositor {
     fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat, sequential: bool) -> (Self, Option<wgpu::Error>) {
         static BUILDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _building = BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The pipelines are created one after another on a backend whose device calls must not
+        // overlap ([`device_calls`]), so a build holds the device's calls while the driver
+        // compiles the shader: the app's uploads and draws (on the drawing thread) and the Camera
+        // Raw develop (on its worker) wait for it instead of tripping the context lock's
+        // one-second timeout, which panics and aborts the process.
+        let _calls = crate::device_calls::device_calls(device.adapter_info().backend);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let jobs = build_jobs(acc_format);
         let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -190,7 +217,11 @@ impl Compositor {
         };
         // `sequential` is upstream's background-thread build switch; GL is forced through it too,
         // because wgpu-hal's GL device panics after a second on a contended context lock.
-        let built: Vec<_> = if sequential || !parallel_pipelines(device.adapter_info().backend) { jobs.into_iter().map(build_one).collect() } else { fx::par_map(jobs, build_one) };
+        let built: Vec<_> = if sequential || !parallel_pipelines(device.adapter_info().backend) {
+            jobs.into_iter().map(build_one).collect()
+        } else {
+            fx::par_map(jobs, build_one)
+        };
         let built = built.into_iter().flatten();
         let (mut pipelines, mut maps) = (HashMap::new(), Vec::new());
         let (mut error, mut map_error) = (None, None);
@@ -222,7 +253,17 @@ impl Compositor {
         }
         let dummy = Tex::new(device, "pc_compose_dummy", 1, 1, wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureUsages::TEXTURE_BINDING).view;
         let kit = Kit { pipelines, bgl0, bgl1, dummy };
-        let comp = Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, !gl && map_error.is_none());
+        // Why the effect maps are missing: on GL they are never built (their float targets
+        // composite garbage there), elsewhere they failed to build because the adapter has no
+        // float render targets. The reason reaches the user as the CPU fallback's message.
+        let effect_maps = if gl {
+            EffectMaps::GlBackend
+        } else if map_error.is_some() {
+            EffectMaps::NoFloatTargets
+        } else {
+            EffectMaps::Built
+        };
+        let comp = Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, effect_maps);
         (comp, error)
     }
 
@@ -235,7 +276,7 @@ impl Compositor {
         sibling
     }
 
-    fn from_kit(kit: Kit, device_max: u32, acc_format: wgpu::TextureFormat, effect_maps: bool) -> Self {
+    fn from_kit(kit: Kit, device_max: u32, acc_format: wgpu::TextureFormat, effect_maps: EffectMaps) -> Self {
         Self {
             kit,
             pool: Vec::new(),
@@ -344,7 +385,7 @@ impl Compositor {
     ///
     /// Pages that miss their share by less than the effect-map share borrow from it: an evicted
     /// effect map is rebuilt by the next refresh that draws it, but one page too many sends the
-    /// whole refresh to the CPU compositor, 10Ã— slower (#5973, P60: 150 layers of 6 MP on an
+    /// whole refresh to the CPU compositor, 10× slower (#5973, P60: 150 layers of 6 MP on an
     /// integrated GPU missed by 5 % and took 680 ms instead of 62).
     /// The lower-stack share is never lent: it is what keeps a mid-stack edit at half the work.
     /// The loan holds across [`Self::set_memory_budget`] until a later call needs less or more.
@@ -470,8 +511,10 @@ impl Compositor {
     /// Effect maps must fit in textures (per page cell when the region exceeds the limit), and
     /// patterns in one texture.
     pub(crate) fn check_fx(&self, doc: &Document, p: &Plan<'_>) -> Result<(), Unsupported> {
-        if !self.effect_maps && !p.fx.is_empty() {
-            return Err(Unsupported("layer effects need float effect-map render targets, which this GPU lacks".into()));
+        if !p.fx.is_empty()
+            && let Some(reason) = self.effect_maps.unavailable_reason()
+        {
+            return Err(Unsupported(reason.into()));
         }
         for f in &p.fx {
             if self.fx_paged(f.region) {
@@ -609,7 +652,7 @@ impl Compositor {
     pub fn measure_gpu_time(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
         // `PHOTOCRAFT_NO_GPU_TIMING` turns it off: a kill switch for a driver whose timestamp
         // queries misbehave, and the control arm for measuring what the queries themselves
-        // cost â€” the device is identical either way, so only the instrumentation varies.
+        // cost — the device is identical either way, so only the instrumentation varies.
         if std::env::var_os("PHOTOCRAFT_NO_GPU_TIMING").is_some() {
             return false;
         }
@@ -639,11 +682,23 @@ impl Compositor {
 ///
 /// Not on GL: wgpu-hal's GL device puts every call behind one context lock that gives up after a
 /// second ("Could not lock adapter context. This is most-likely a deadlock"), so a second thread
-/// creating a pipeline panics â€” and that panic while another thread drops a pipeline aborts the
+/// creating a pipeline panics — and that panic while another thread drops a pipeline aborts the
 /// process. Elsewhere the parallelism is what keeps startup short: on DX12, FXC compiles one shader
 /// at a time and the ~30 pipelines took about 8 s on one core (#6419).
 pub(crate) fn parallel_pipelines(backend: wgpu::Backend) -> bool {
-    backend != wgpu::Backend::Gl
+    !device_access_is_exclusive(backend)
+}
+
+/// Whether the device's calls must not overlap on `backend`.
+///
+/// On GL, wgpu-hal's device takes one context lock for every call and gives up after a second
+/// ("Could not lock adapter context. This is most-likely a deadlock"): a call that waits longer
+/// panics, and that panic while another thread drops a pipeline aborts the process. A pipeline
+/// build holds the lock for as long as the driver compiles the shader (seconds on some drivers),
+/// so on GL it may not run while another thread calls the device — not beside other builds
+/// ([`parallel_pipelines`]) and not beside the app's uploads and draws.
+pub fn device_access_is_exclusive(backend: wgpu::Backend) -> bool {
+    backend == wgpu::Backend::Gl
 }
 
 #[cfg(test)]
@@ -656,5 +711,31 @@ mod build_failure_tests {
         assert_eq!(classify_build_diagnostic("Validation Error: invalid bind group"), BuildFailureKind::TransientOrUnknown);
         assert_eq!(classify_build_diagnostic("out of memory"), BuildFailureKind::TransientOrUnknown);
         assert_eq!(classify_build_diagnostic("shader compilation failed"), BuildFailureKind::TransientOrUnknown);
+    }
+}
+
+#[cfg(test)]
+mod backend_exclusivity_tests {
+    use super::{device_access_is_exclusive, parallel_pipelines};
+    use wgpu::Backend;
+
+    /// The GL backend takes one context lock for every call and gives up after a second, so a
+    /// second thread that builds a pipeline (or drops one) panics and aborts the process. The
+    /// rule is the one place that decides it: the pipelines are built one thread at a time, and
+    /// the app builds them on the thread that draws.
+    #[test]
+    fn the_gl_backend_keeps_the_device_to_one_thread() {
+        assert!(device_access_is_exclusive(Backend::Gl));
+        assert!(!parallel_pipelines(Backend::Gl));
+    }
+
+    /// The other backends have no such lock, so they keep the parallelism: on DX12, FXC compiles
+    /// one shader at a time and the ~30 pipelines took about 8 s on one core (#6419).
+    #[test]
+    fn the_other_backends_keep_the_parallel_build() {
+        for backend in [Backend::Dx12, Backend::Vulkan, Backend::Metal] {
+            assert!(!device_access_is_exclusive(backend), "{backend:?}");
+            assert!(parallel_pipelines(backend), "{backend:?}");
+        }
     }
 }

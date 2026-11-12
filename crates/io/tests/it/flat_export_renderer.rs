@@ -7,8 +7,8 @@ use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::{
-    BandRenderer, CpuRenderer, ExportOptions, IoError, RenderBand, RenderError, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
-    export_png_streamed_with_renderer, export_preview_png_with_renderer,
+    BandRenderer, CpuRenderer, ExportOptions, IoError, RenderBand, RenderError, document_to_image, document_to_image_with_renderer, export_flat,
+    export_flat_with_renderer, export_png_streamed_with_renderer, export_preview_png_with_renderer,
 };
 use photocraft_raster::{Interrupt, Surface};
 
@@ -346,6 +346,26 @@ fn forced_unsupported_renderer_restarts_complete_export_on_cpu() {
         res.warnings.iter().any(|w| w.contains("custom renderer unavailable") && w.contains("falling back to CPU")),
         "fallback warning must be reported: {:?}",
         res.warnings
+    );
+}
+
+/// The GPU renderer on the GL backend refuses a document with layer effects (the CPU compositor
+/// draws them), so the conversion falls back to the CPU instead of failing.
+#[test]
+fn unsupported_renderer_converts_on_cpu() {
+    let doc = synthetic_doc();
+
+    let mut failing = FailingRenderer::new(0, "unsupported");
+    let mut warnings = Vec::new();
+    let img = document_to_image_with_renderer(&doc, &mut warnings, Some(&mut failing)).expect("conversion should retry and succeed on CPU");
+
+    let mut cpu_warnings = Vec::new();
+    let expected = document_to_image(&doc, &mut cpu_warnings).expect("baseline CPU conversion");
+    assert_eq!(img.dimensions(), expected.dimensions(), "the CPU conversion has the document's size");
+    assert_eq!(img.data(), expected.data(), "the CPU conversion matches the clean CPU output");
+    assert!(
+        warnings.iter().any(|w| w.contains("custom renderer unavailable") && w.contains("falling back to CPU")),
+        "fallback warning must be reported: {warnings:?}"
     );
 }
 

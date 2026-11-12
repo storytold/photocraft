@@ -1,6 +1,6 @@
-﻿# Hardware parity
+# Hardware parity
 
-<> **Last reviewed:** 2026-10-10 Â· **Last updated:** 2026-11-06 Â· **Change:** minor (Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off; Windows `auto` uses a GPU's OpenGL adapter when its driver has no DX12 or Vulkan, instead of software WARP, and composites through it once that adapter is selected, #7331) Â· **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-11 · **Change:** minor (Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off; Windows `auto` uses a GPU's OpenGL adapter when its driver has no DX12 or Vulkan, instead of software WARP, and composites through it once that adapter is selected, #7331) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -12,7 +12,7 @@ strings, Touch Bar resources, pen pressure/tilt strings) and Adobe's GPU FAQ. Ph
 input is uneven by platform (the default Windows Ink path lacks tilt and rotation, Wayland is
 broken; the opt-in WinTab path on Windows supplies tilt only on devices that report orientation
 axes, and rotation only when the pen and driver report twist) and there is no HDR
-output. Remaining: 80â€“150 h (gap G12). Human: tablets (Wacom, XP-Pen, Huion) on each OS and an
+output. Remaining: 80–150 h (gap G12). Human: tablets (Wacom, XP-Pen, Huion) on each OS and an
 HDR display to verify.
 
 ## GPU
@@ -20,13 +20,13 @@ HDR display to verify.
 | Feature | Photoshop | PhotoCraft | Status |
 |---|---|---|---|
 | GPU canvas, zoom/pan, rotate view | Metal (macOS), DirectX/OpenCL (Windows) | wgpu 30: Metal, Vulkan, DX12, GL; backend selectable, `gl` included on Windows | done |
-| GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, â‰¤ 1/255 vs CPU oracle; Multichannel and > texture-limit regions fall back to CPU | done (ahead in places) |
+| GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, ≤ 1/255 vs CPU oracle; Multichannel and > texture-limit regions fall back to CPU | done (ahead in places) |
 | GPU compositor startup | available | Pipeline preparation runs in the background on native hardware; the CPU composites until ready. Windows WARP probe: 0.329 ms p95, 6.860 ms maximum device-work stall during two FXC builds; hardware measurements remain pending (#9157, #9364, #6419) | partial |
-| GPU filters (Blur Gallery, Liquify, Smart Sharpen, Camera Raw) | yes | CPU (rayon) for filters; GPU for compose and effects. Camera Raw's preview runs its per-pixel stages (white balance to grain) in one wgpu pass, about 2-3 ms vs 11-28 ms on the CPU for the 858Ã—572 proxy, depending on the machine; spatial stages, Calibration and OK still develop on the CPU (#6916) | partial |
+| GPU filters (Blur Gallery, Liquify, Smart Sharpen, Camera Raw) | yes | CPU (rayon) for filters; GPU for compose and effects. Camera Raw's preview runs its per-pixel stages (white balance to grain) in one wgpu pass, about 2-3 ms vs 11-28 ms on the CPU for the 858×572 proxy, depending on the machine; spatial stages, Calibration and OK still develop on the CPU (#6916) | partial |
 | Documents larger than the GPU texture limit | yes (tiled) | CPU fallback; tiling in progress (#49) | partial |
 | CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; fails to start without an adapter on some Linux systems (#2519, #2412) | partial |
-| Choosing the GPU on a multi-GPU machine | Preferences â€º Performance â€º Use Graphics Processor | Linux only: Preferences â€º Performance â€º Advanced â€º GPU adapter and `PHOTOCRAFT_GPU_ADAPTER` (#1885); ignored on Windows and macOS | partial |
-| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859), Rgba32Float panic (#2020); on Windows the GPU's OpenGL adapter composites once that adapter is selected (#7331), instead of software WARP; `auto` does not select it yet (#10284); layer effects use the CPU compositor on the GL backend (float effect-map targets don't composite correctly there on the adapters we can test) | partial |
+| Choosing the GPU on a multi-GPU machine | Preferences › Performance › Use Graphics Processor | Linux only: Preferences › Performance › Advanced › GPU adapter and `PHOTOCRAFT_GPU_ADAPTER` (#1885); ignored on Windows and macOS | partial |
+| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859), Rgba32Float panic (#2020); on Windows `auto` selects the GPU's OpenGL adapter ahead of software WARP (#7331); layer effects use the CPU compositor on the GL backend (float effect-map targets don't composite correctly there on the adapters we can test) | partial |
 
 ## Pen tablets
 
@@ -36,7 +36,7 @@ HDR display to verify.
 | Tilt | yes | yes | **no** (WinTab: with orientation axes, opt-in) | yes | no | yes |
 | Barrel rotation | yes | yes (not applied to tip angle, #1301) | no (WinTab: with a twist-reporting pen and driver, opt-in) | partial | no | yes (twist) |
 | Eraser end | yes | yes | yes with Windows Ink, not yet confirmed on hardware (#2285); WinTab: yes (opt-in) | partial | no | partial |
-| WinTab driver mode | yes | â€“ | yes (opt-in; Windows Ink off) | â€“ | â€“ | â€“ |
+| WinTab driver mode | yes | – | yes (opt-in; Windows Ink off) | – | – | – |
 | Pressure curve | Windows Ink / driver | global curve in Preferences (#2195) | same | same | same | same |
 
 Windows: the opt-in WinTab backend (`tools.tabletInput = "winTab"`, with Windows Ink turned off
@@ -49,7 +49,7 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 
 | Feature | Photoshop | PhotoCraft | Status |
 |---|---|---|---|
-| Colour-managed canvas (document â†’ monitor profile) | yes | yes, folded into the GPU 3D LUT | done |
+| Colour-managed canvas (document → monitor profile) | yes | yes, folded into the GPU 3D LUT | done |
 | Monitor profile detection | per display, live | macOS per display at launch; others sRGB or a chosen .icc | partial |
 | HDR / EDR output for 32-bit and HDR images | yes ("Precise Color Management for HDR Display") | no; 8-bit sRGB-encoded canvas texture | missing |
 | High-DPI, physical 100% | yes | yes (#1943) | done |
@@ -71,11 +71,11 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Windows `auto`: a GPU's OpenGL adapter beats software WARP when the driver has no DX12 or Vulkan (#7331) |
+| 2026-11-11 | minor | GPU: that OpenGL adapter composites on Windows (naga/Intel shader and GL pipeline-build fixes) |
 | 2026-11-06 | minor | Windows eraser end: the pointer hooks read `PEN_FLAG_INVERTED` and the Eraser switch follows it (Windows Ink on; #2285) |
 | 2026-11-05 | minor | Optional WinTab driver mode on Windows: pressure and eraser; tilt with orientation axes; rotation with a twist-reporting pen, with Windows Ink off |
 | 2026-10-28 | minor | Build GPU compositor pipelines in the background; benchmark baseline pending (#9157) |
 | 2026-10-10 | major | First version |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |
-| 2026-10-30 | minor | Windows `auto`: a GPU's OpenGL adapter beats software WARP when the driver has no DX12 or Vulkan (#7331) |
-| 2026-10-31 | minor | GPU: that OpenGL adapter composites on Windows (naga/Intel shader and GL pipeline-build fixes) |

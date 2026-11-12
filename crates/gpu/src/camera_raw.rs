@@ -238,6 +238,12 @@ impl CameraRawDevelop {
         size: [u32; 2],
         stages: &PerPixel,
     ) -> Result<Vec<[f32; 4]>, Unsupported> {
+        // The Camera Raw develop runs on a worker thread, so on a backend whose device calls
+        // must not overlap ([`device_calls`]) it waits for a running pipeline build instead of
+        // racing it: the build holds the device's calls while the driver compiles the shader, and
+        // a call that waits longer than the context lock's one-second timeout panics and aborts
+        // the process.
+        let _calls = crate::device_calls::device_calls(device.adapter_info().backend);
         if let Some(f) = health.and_then(crate::DeviceHealth::fault) {
             return Err(Unsupported(f.to_string()));
         }
