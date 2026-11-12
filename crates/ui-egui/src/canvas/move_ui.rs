@@ -174,8 +174,16 @@ pub(crate) struct Snapshot {
     rect: Rect,
     /// The render, until it arrives from its thread.
     rx: Option<std::sync::mpsc::Receiver<photocraft_compose::Buffer>>,
-    texture: Option<egui::TextureHandle>,
+    /// The render once arrived, as composited: each display converts its own texture from it.
+    picture: Option<photocraft_compose::Buffer>,
+    /// Its textures, by display (`CanvasDisplay::key`; 0 unconverted): two views on monitors
+    /// with different profiles each show it in their own colours, and a profile changed
+    /// mid-drag converts it again.
+    textures: Vec<(u64, egui::TextureHandle)>,
 }
+
+/// Displays a snapshot keeps textures for at once (the oldest is dropped past that).
+const SNAPSHOT_DISPLAYS: usize = 2;
 
 /// Longest side of a drag snapshot: enough for the zooms at which a costly drag happens.
 const SNAPSHOT_SIDE: u32 = 2048;
@@ -228,7 +236,7 @@ fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Opti
         let _ = tx.send(picture);
     });
     started.ok()?;
-    Some(Snapshot { rect, rx: Some(rx), texture: None })
+    Some(Snapshot { rect, rx: Some(rx), picture: None, textures: Vec::new() })
 }
 
 /// One drag snapshot renders at a time: a drag released before its picture arrived leaves the
@@ -282,9 +290,7 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
             Ok(buf) => {
                 let size = [buf.rect.width() as usize, buf.rect.height() as usize];
                 if buf.px.len() == size[0] * size[1] {
-                    // Straight alpha, as the canvas's own textures take it.
-                    let image = super::display::display_image(display.as_deref(), &buf);
-                    s.texture = Some(painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR));
+                    s.picture = Some(buf);
                     // The next frame hides the layers under it (`display_doc`), with or without input.
                     painter.ctx().request_repaint();
                 }
@@ -295,7 +301,19 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
             Err(std::sync::mpsc::TryRecvError::Empty) => painter.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
         }
     }
-    let (Some(texture), Some((dx, dy))) = (&s.texture, offset) else { return };
+    let key = display.as_ref().map_or(0, |d| d.key);
+    if let Some(picture) = &s.picture
+        && !s.textures.iter().any(|(k, _)| *k == key)
+    {
+        // Straight alpha, as the canvas's own textures take it.
+        let image = super::display::display_image(display.as_deref(), picture);
+        if s.textures.len() >= SNAPSHOT_DISPLAYS {
+            s.textures.remove(0);
+        }
+        s.textures.push((key, painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR)));
+    }
+    let texture = s.textures.iter().find(|(k, _)| *k == key).map(|(_, t)| t);
+    let (Some(texture), Some((dx, dy))) = (texture, offset) else { return };
     let Some((r, uvs)) = snapshot_quad(s.rect.translate(dx, dy), canvas) else { return };
     let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)];
     let mut mesh = egui::Mesh::with_texture(texture.id());

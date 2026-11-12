@@ -709,6 +709,8 @@ fn a_costly_drag_under_pattern_preview_keeps_its_outline() {
 
 /// One snapshot renders at a time: a costly drag started while another's render still runs keeps
 /// its outline, and once that render is done the next drag gets its snapshot again.
+// Native only: the web build keeps the outline (no thread to render a snapshot on).
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_costly_drag_while_a_snapshot_renders_keeps_its_outline() {
     let mut app = banded();
@@ -724,6 +726,8 @@ fn a_costly_drag_while_a_snapshot_renders_keeps_its_outline() {
 
 /// The picture arrives as straight alpha, converted for the canvas display like the canvas itself:
 /// a half-opaque red texel uploads as half-bright premultiplied red, not full red over half alpha.
+// Native only: the web build keeps the outline (no thread to render a snapshot on).
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_snapshot_uploads_straight_alpha_the_way_the_canvas_does() {
     let mut app = banded();
@@ -777,6 +781,8 @@ fn only_large_moves_in_documents_with_many_layers_are_too_costly_to_redraw_live(
 
 /// A costly drag shows a reduced picture of the moving layers alone at the pointer, over the
 /// canvas with them hidden; the drop redraws only where they landed, not where they were too.
+// Native only: the web build keeps the outline (no thread to render a snapshot on).
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_costly_drag_shows_a_snapshot_and_its_drop_redraws_where_the_layers_land() {
     let mut app = banded();
@@ -903,4 +909,41 @@ fn pattern_preview_drag_wraps_pixels_across_the_canvas_edge() {
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, m);
     let committed = &app.session.active().unwrap().doc;
     assert!(blue(committed, 2) && !blue(committed, 30), "release commits the wrap");
+}
+
+/// Two views on monitors with different profiles each show the snapshot in their own colours,
+/// and a profile changed mid-drag converts it again: the picture is kept, and each display gets a
+/// texture of its own.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn each_display_converts_the_snapshot_itself() {
+    let mut app = banded();
+    start_costly_drag(&mut app);
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()).expect("a snapshot").rx = Some(rx);
+    let mut px = photocraft_raster::scratch::take(1, [0.0; 4]);
+    px[0] = [1.0, 0.0, 0.0, 1.0];
+    tx.send(photocraft_compose::Buffer { rect: Rect::new(0, 0, 1, 1), px }).unwrap();
+    let ctx = egui::Context::default();
+    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)),
+        zoom: 0.1,
+        center: [2048.0, 2048.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let keys = |app: &PhotocraftApp| {
+        app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).map(|s| s.textures.iter().map(|(k, _)| *k).collect::<Vec<_>>()).unwrap()
+    };
+    super::draw_snapshot(&mut app, &painter, &xf);
+    let first = keys(&app);
+    assert_eq!(first.len(), 1, "the first display's texture");
+    app.session.color.settings.monitor_profile = "display-p3".into();
+    super::draw_snapshot(&mut app, &painter, &xf);
+    let both = keys(&app);
+    assert!(both.len() == 2 && both[1] != first[0], "the P3 monitor converts its own: {both:?}");
+    assert!(app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).is_some_and(|s| s.picture.is_some()), "the picture is kept for the next display");
+    ctx.tex_manager().write().take_delta().clear();
 }
