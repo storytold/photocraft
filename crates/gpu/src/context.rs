@@ -1,7 +1,7 @@
 //! Native windowless wgpu context creation for headless composition and export.
 
 use std::fmt;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,8 @@ impl Drop for InitDone {
 pub struct AbandonedInit {
     state: InitState,
     thread: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// Test hook: told each time [`AbandonedInit::wait`] starts waiting for unfinished work.
+    waiting: Option<mpsc::Sender<()>>,
 }
 
 impl fmt::Debug for AbandonedInit {
@@ -39,6 +41,29 @@ impl fmt::Debug for AbandonedInit {
 }
 
 impl AbandonedInit {
+    /// Run `work` on a thread named `name` and track that thread.
+    fn start(name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<Self> {
+        let state: InitState = Arc::new((Mutex::new(false), Condvar::new()));
+        let done = InitDone(state.clone());
+        let handle = std::thread::Builder::new().name(name.into()).spawn(move || {
+            let _done = done;
+            work();
+        })?;
+        Ok(Self { state, thread: Arc::new(Mutex::new(Some(handle))), waiting: None })
+    }
+
+    /// Test hook: run `work` on its own thread and track it as an initialization thread that
+    /// outlived its timeout, so code that waits for one can be tested with a thread the test holds.
+    /// `work` receives a message each time [`AbandonedInit::wait`] starts waiting for it; the
+    /// receiver disconnects once every clone of the returned value is dropped.
+    #[doc(hidden)]
+    pub fn spawn(work: impl FnOnce(mpsc::Receiver<()>) + Send + 'static) -> std::io::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let mut init = Self::start("pc_gpu_init_test", move || work(rx))?;
+        init.waiting = Some(tx);
+        Ok(init)
+    }
+
     /// Whether the thread has exited, after dropping any late result.
     pub fn is_finished(&self) -> bool {
         let mut thread = self.thread.lock().unwrap_or_else(PoisonError::into_inner);
@@ -62,6 +87,9 @@ impl AbandonedInit {
         let start = Instant::now();
         let (finished, changed) = &*self.state;
         let mut done = finished.lock().unwrap_or_else(PoisonError::into_inner);
+        if !*done && let Some(waiting) = &self.waiting {
+            let _ = waiting.send(());
+        }
         while !*done {
             let Some(left) = limit.checked_sub(start.elapsed()).filter(|left| !left.is_zero()) else {
                 return false;
@@ -88,24 +116,21 @@ fn run_with_timeout<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, GpuContextError> + Send + 'static,
 ) -> (Result<T, GpuContextError>, Option<AbandonedInit>) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let state: InitState = Arc::new((Mutex::new(false), Condvar::new()));
-    let done = InitDone(state.clone());
-    let thread_res = std::thread::Builder::new().name(name.into()).spawn(move || {
-        let _done = done;
+    let thread_res = AbandonedInit::start(name, move || {
         let res = work();
-        // A late result is dropped here, before `_done` marks the thread finished.
+        // A late result is dropped here, before the thread is marked finished.
         let _ = tx.send(res);
         drop(tx);
     });
-    let handle = match thread_res {
-        Ok(handle) => handle,
+    let init = match thread_res {
+        Ok(init) => init,
         Err(e) => return (Err(GpuContextError::NoAdapter(format!("failed to spawn GPU initialization thread: {e}"))), None),
     };
     match rx.recv_timeout(timeout) {
         Ok(res) => (res, None),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             let err = GpuContextError::NoAdapter(format!("timed out after {timeout:?} requesting GPU adapter/device"));
-            (Err(err), Some(AbandonedInit { state, thread: Arc::new(Mutex::new(Some(handle))) }))
+            (Err(err), Some(init))
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => (Err(GpuContextError::NoAdapter("GPU initialization thread disconnected".into())), None),
     }
