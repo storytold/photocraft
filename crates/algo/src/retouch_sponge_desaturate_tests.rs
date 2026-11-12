@@ -1,4 +1,4 @@
-use super::sponge_rgb;
+use super::{sponge_affine_scale, sponge_rgb};
 
 const COLORS: [[u8; 3]; 9] =
     [[200, 40, 40], [40, 160, 60], [40, 60, 200], [220, 170, 140], [230, 200, 40], [90, 50, 30], [180, 200, 230], [128, 64, 192], [255, 0, 0]];
@@ -126,6 +126,18 @@ fn vibrance_at_other_spacings_stays_in_gamut_and_preserves_hue() {
                     assert!((v - a - h * (b - a)).abs() < 1e-6, "{input:?} became {out:?}");
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn fractional_vibrance_gain_stays_accurate_near_zero() {
+    for steps in [0.04, 0.5, 0.68, 1.32, 2.0, 3.0, 4.0] {
+        for change in [-0.3, -0.002, -0.0001, 0.0, 0.0001, 0.002, 0.3] {
+            let (x, n) = (f64::from(change), f64::from(steps));
+            let expected = if x == 0.0 { n } else { (n * x.ln_1p()).exp_m1() / x };
+            let actual = f64::from(sponge_affine_scale(change, steps));
+            assert!((actual - expected).abs() < 0.0001, "change {change}, steps {steps}: {actual} vs {expected}");
         }
     }
 }

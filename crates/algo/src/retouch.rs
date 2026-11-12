@@ -109,6 +109,38 @@ pub fn sponge(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [f32;
     compress_gamut([l + (c[0] - l) * k, l + (c[1] - l) * k, l + (c[2] - l) * k], l)
 }
 
+/// Compound a reference dab's gain, with closed forms for common spacings.
+#[inline]
+fn sponge_gain(gain: f32, steps: f32) -> f32 {
+    match steps {
+        0.5 => gain.sqrt(),
+        1.0 => gain,
+        2.0 => gain * gain,
+        4.0 => {
+            let squared = gain * gain;
+            squared * squared
+        }
+        _ => gain.powf(steps),
+    }
+}
+
+/// Sum the local affine response over the dab's fractional number of reference steps.
+#[inline]
+fn sponge_affine_scale(change: f32, steps: f32) -> f32 {
+    let gain = 1.0 + change;
+    match steps {
+        0.5 => 1.0 / (gain.sqrt() + 1.0),
+        2.0 => gain + 1.0,
+        4.0 => (gain + 1.0) * (gain * gain + 1.0),
+        // The first terms of ((1 + change)^steps - 1) / change avoid cancellation near zero.
+        _ if change.abs() < 0.001 => {
+            let second = (steps - 1.0) * (steps - 2.0) / 6.0;
+            steps * (1.0 + change * (0.5 * (steps - 1.0) + change * second))
+        }
+        _ => (gain.powf(steps) - 1.0) / change,
+    }
+}
+
 /// Adjust a normalized RGB dab using the measured RGB Sponge response (#12972, #12973).
 /// `coverage` includes Flow and the brush falloff. `spacing` is in brush diameters.
 pub fn sponge_rgb(c: [f32; 3], coverage: f32, spacing: f32, saturate: bool, vibrance: bool) -> [f32; 3] {
@@ -127,7 +159,7 @@ pub fn sponge_rgb(c: [f32; 3], coverage: f32, spacing: f32, saturate: bool, vibr
     let grey = luma(c);
     if !vibrance {
         let reference_gain = if saturate { 1.0 + 0.4 * flow } else { 1.0 - 0.2 * flow };
-        let mut gain = if steps == 1.0 { reference_gain } else { reference_gain.powf(steps) };
+        let mut gain = sponge_gain(reference_gain, steps);
         if saturate {
             // Limit the gain before applying it to all three channels, using the same luma pivot.
             let shadow = grey - lo;
@@ -156,12 +188,12 @@ pub fn sponge_rgb(c: [f32; 3], coverage: f32, spacing: f32, saturate: bool, vibr
         (lo + flow * shadow, hi - flow * highlight)
     };
     // Compose the measured affine response for this dab's distance, holding its locally
-    // computed coefficients fixed. Use expm1 for small changes and cap at the RGB gamut.
+    // computed coefficients fixed, then cap the endpoints at the RGB gamut.
     let (low, high) = if steps == 1.0 {
         (low, high)
     } else {
         let change = ((high - hi) - (low - lo)) / chroma;
-        let scale = if change == 0.0 { steps } else { (steps * change.ln_1p()).exp_m1() / change };
+        let scale = sponge_affine_scale(change, steps);
         ((lo + (low - lo) * scale).max(0.0), (hi + (high - hi) * scale).min(1.0))
     };
     // One affine map keeps the intermediate channel in the same position within the span.
