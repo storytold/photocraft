@@ -322,8 +322,6 @@ struct ToolSet {
     layer_filter: Option<crate::layer_filter_ui::Filter>,
     path_color: Option<String>,
     path_thickness: Option<f32>,
-    anchor_size: Option<u32>,
-    path_mark_start: Option<bool>,
     pen_mode: Option<String>,
     pen_path_op: Option<String>,
 }
@@ -350,11 +348,9 @@ impl ToolSet {
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?,
-            // The Pen and shape tools' Path Options (#9713).
+            // The Pen and shape tools' Path Options, one display setting (#9713).
             path_color: path_color_param(p)?,
             path_thickness: path_thickness_param(p)?,
-            anchor_size: anchor_size_param(p)?,
-            path_mark_start: bool_field(p, "pathMarkStart")?,
             pen_mode: pen_mode_param(p)?,
             pen_path_op: pen_path_op_param(p)?,
         })
@@ -380,18 +376,12 @@ impl ToolSet {
         if let Some(sides) = self.frame_sides {
             app.ui.frame_tool.sides = sides;
         }
-        let o = &mut app.ui.tool_options;
+        let paths = &mut app.ui.view.path_options;
         if let Some(id) = self.path_color.clone() {
-            o.path_color = id;
+            paths.color = id;
         }
         if let Some(px) = self.path_thickness {
-            o.path_thickness = px;
-        }
-        if let Some(size) = self.anchor_size {
-            o.anchor_size = size;
-        }
-        if let Some(on) = self.path_mark_start {
-            o.path_mark_start = on;
+            paths.thickness = px;
         }
         if let Some(stroke) = &self.shape_stroke {
             if let Some(stroke) = stroke {
@@ -559,16 +549,6 @@ fn path_thickness_param(p: &Value) -> std::result::Result<Option<f32>, String> {
     let Some(px) = num_field(p, "pathThickness")? else { return Ok(None) };
     let px = px as f32;
     range.contains(&px).then_some(Some(px)).ok_or_else(|| format!("pathThickness must be {}..={} px", range.start(), range.end()))
-}
-
-fn anchor_size_param(p: &Value) -> std::result::Result<Option<u32>, String> {
-    let range = crate::vector_ui::ANCHOR_SIZES;
-    let Some(size) = uint_field(p, "anchorSize")? else { return Ok(None) };
-    u32::try_from(size)
-        .ok()
-        .filter(|s| range.contains(s))
-        .map(Some)
-        .ok_or_else(|| format!("anchorSize must be a whole number {}..={}", range.start(), range.end()))
 }
 
 fn eyedropper_sample_param(p: &Value) -> std::result::Result<Option<String>, String> {

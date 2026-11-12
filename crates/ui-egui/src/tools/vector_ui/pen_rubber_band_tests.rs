@@ -30,6 +30,11 @@ fn drawing(tool: Tool) -> PhotocraftApp {
 /// The dashes the vector overlay draws: the preview from the last anchor to the pointer is the
 /// only dashed line of a path being drawn.
 fn dashes(app: &PhotocraftApp) -> usize {
+    segments(app).len()
+}
+
+/// The line segments the vector overlay draws (document = screen px here), with their strokes.
+fn segments(app: &PhotocraftApp) -> Vec<([Pos2; 2], egui::Stroke)> {
     let xf = ViewXform {
         rect: egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(200., 200.)),
         zoom: 1.0,
@@ -43,15 +48,53 @@ fn dashes(app: &PhotocraftApp) -> usize {
     let mut out = ctx.run_ui(Default::default(), |ui| super::draw_overlay(app, ui.painter(), &xf, &doc));
     out.textures_delta.clear();
     let mut stack: Vec<egui::Shape> = out.shapes.into_iter().map(|s| s.shape).collect();
-    let mut n = 0;
+    let mut out = Vec::new();
     while let Some(shape) = stack.pop() {
         match shape {
             egui::Shape::Vec(v) => stack.extend(v),
-            egui::Shape::LineSegment { .. } => n += 1,
+            egui::Shape::LineSegment { points, stroke } => out.push((points, stroke)),
             _ => {}
         }
     }
-    n
+    out
+}
+
+/// #9713: with Rubber Band on, the preview is the segment the next click makes: it leaves the
+/// last anchor along its outgoing handle (a dragged, smooth point), ends at the pointer, and is
+/// drawn in the Path Options' colour and thickness.
+#[test]
+fn rubber_band_previews_the_segment_the_next_click_makes() {
+    let mut app = drawing(Tool::Pen);
+    app.ui.tool_options.pen_rubber_band = true;
+    app.ui.view.path_options = crate::view_cmds::PathOptions { color: "red".into(), thickness: 2.0 };
+    // The last anchor was dragged out: its outgoing handle points right, away from the pointer.
+    let (last, out, to) = ([120.0, 30.0], [170.0, 30.0], [60.0, 150.0]);
+    app.ui.pen.as_mut().unwrap().knots[1] = [last, [70.0, 30.0], out];
+    // Its handle lines are 1 px; the band has the Path Options' 2 px.
+    let band: Vec<([Pos2; 2], egui::Stroke)> = segments(&app).into_iter().filter(|(_, s)| s.width == 2.0).collect();
+    assert!(band.len() > 10, "the dashed preview: {band:?}");
+    assert!(band.iter().all(|(_, s)| s.color == egui::Color32::from_rgb(0xff, 0x2a, 0x2a)), "in the Path Options' colour");
+    let pts: Vec<Pos2> = band.iter().flat_map(|(p, _)| *p).collect();
+    // The click's segment: the cubic from the last anchor over its handle to the pointer.
+    let curve: Vec<Pos2> = (0..=2000)
+        .map(|i| {
+            let t = f64::from(i) / 2000.0;
+            let u = 1.0 - t;
+            let at = |k: usize| u * u * u * last[k] + 3.0 * u * u * t * out[k] + 3.0 * u * t * t * to[k] + t * t * t * to[k];
+            Pos2::new(at(0) as f32, at(1) as f32)
+        })
+        .collect();
+    let off_curve = |p: &Pos2| curve.iter().map(|c| c.distance(*p)).fold(f32::INFINITY, f32::min);
+    assert!(pts.iter().all(|p| off_curve(p) < 0.6), "every dash lies on the segment the click makes");
+    let near = |q: [f64; 2]| pts.iter().map(|p| p.distance(Pos2::new(q[0] as f32, q[1] as f32))).fold(f32::INFINITY, f32::min);
+    assert!(near(last) < 0.5 && near(to) < 4.0, "from the last anchor to the pointer");
+    // It bends with the handle: a straight band would stay on the chord.
+    let chord = |p: &Pos2| ((to[0] - last[0]) * (last[1] - f64::from(p.y)) - (last[0] - f64::from(p.x)) * (to[1] - last[1])).abs() / 120f64.hypot(60.0);
+    assert!(pts.iter().map(chord).fold(0.0, f64::max) > 12.0, "bent by the outgoing handle");
+
+    // Off, nothing follows the pointer.
+    app.ui.tool_options.pen_rubber_band = false;
+    assert!(segments(&app).iter().all(|(_, s)| s.width != 2.0));
 }
 
 #[test]

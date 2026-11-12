@@ -1085,37 +1085,39 @@ fn ui_set_drives_the_eyedropper_options() {
     assert_eq!(app.ui.tool_options.eyedropper_size, 1);
 }
 
-/// #9713: the Pen and shape tools' Path Options over the control channel, reported by `ui.inspect`.
+/// #9713: the Path Options display setting over the control channel, reported by `ui.inspect`
+/// under `view.path_options`. It is not a tool option.
 #[test]
 fn ui_set_drives_the_path_options() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
-    let good = call(&mut app, &ctx, "ui.set", json!({"pathColor": "red", "pathThickness": 2.5, "anchorSize": 7, "pathMarkStart": true}));
+    let good = call(&mut app, &ctx, "ui.set", json!({"pathColor": "red", "pathThickness": 2.5}));
     assert_eq!(good["ok"], true, "{good}");
-    let o = &app.ui.tool_options;
-    assert_eq!((o.path_color.as_str(), o.path_thickness, o.anchor_size, o.path_mark_start), ("red", 2.5, 7, true));
-    let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"];
-    assert_eq!((shown["path_color"].as_str(), shown["anchor_size"].as_u64()), (Some("red"), Some(7)));
-    assert_eq!((shown["path_thickness"].as_f64(), shown["path_mark_start"].as_bool()), (Some(2.5), Some(true)));
+    let o = &app.ui.view.path_options;
+    assert_eq!((o.color.as_str(), o.thickness), ("red", 2.5));
+    let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"];
+    assert_eq!(shown["view"]["path_options"], json!({"color": "red", "thickness": 2.5}));
+    for key in ["path_color", "path_thickness", "anchor_size", "path_mark_start"] {
+        assert!(shown["toolOptions"].get(key).is_none(), "{key} is not a tool option");
+    }
     for bad in [
         json!({"pathColor": "plaid"}),
         json!({"pathColor": 3}),
         json!({"pathThickness": 0.1}),
         json!({"pathThickness": 9}),
         json!({"pathThickness": "thin"}),
-        json!({"anchorSize": 0}),
-        json!({"anchorSize": 8}),
-        json!({"anchorSize": 2.5}),
-        json!({"pathMarkStart": "yes"}),
+        // Anchor Size and Highlight Start Point are not Photoshop's: no such fields.
+        json!({"anchorSize": 3}),
+        json!({"pathMarkStart": true}),
     ] {
         let r = call(&mut app, &ctx, "ui.set", bad.clone());
         assert_eq!(r["ok"], false, "{bad}: {r}");
     }
     // A rejected call applies none of its fields.
-    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "pathThickness": 1.0, "pathMarkStart": false, "anchorSize": 99}));
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "pathThickness": 99}));
     assert_eq!(r["ok"], false, "{r}");
-    let o = &app.ui.tool_options;
-    assert_eq!((o.path_color.as_str(), o.path_thickness, o.path_mark_start, o.anchor_size), ("red", 2.5, true, 7));
+    let o = &app.ui.view.path_options;
+    assert_eq!((o.color.as_str(), o.thickness), ("red", 2.5));
 }
 
 /// #1046: the Color Sampler tool is selectable over the control channel and reported as active.

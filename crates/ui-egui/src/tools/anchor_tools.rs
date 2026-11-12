@@ -305,12 +305,7 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &P
         Hit::Anchor([s, k]) => {
             let Some(kn) = path.subpaths.get(s).and_then(|sp| sp.knots.get(k)) else { return };
             let c = to_scr([kn.anchor.x, kn.anchor.y]);
-            painter.rect_stroke(
-                egui::Rect::from_center_size(c, egui::vec2(look.anchor + 5.0, look.anchor + 5.0)),
-                0.0,
-                Stroke::new(1.5, look.color),
-                egui::StrokeKind::Inside,
-            );
+            painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(11.0, 11.0)), 0.0, Stroke::new(1.5, look.color), egui::StrokeKind::Inside);
             crate::vector_ui::draw_anchor(painter, c, true, look);
         }
         Hit::Handle(..) => {}

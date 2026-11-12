@@ -76,15 +76,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         crate::widgets::vline(ui, 22.0);
         path_operations_menu(app, ui);
-        let o = &mut app.ui.tool_options;
+        let (o, view) = (&mut app.ui.tool_options, &mut app.ui.view);
         if tool == Tool::Pen {
             // The Pen's one gear sits before Auto Add/Delete, as in Photoshop: the Path Options
             // and the Rubber Band check item (#9713, #12900).
             crate::widgets::vline(ui, 22.0);
-            path_options(ui, o, true);
+            path_options(ui, &mut view.path_options, Some(&mut o.pen_rubber_band));
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
         } else {
-            path_options(ui, o, false);
+            path_options(ui, &mut view.path_options, None);
         }
         let enter = crate::shortcuts::pretty("Enter");
         match tool {
@@ -160,39 +160,31 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         .on_hover_text(tl!("Arrowhead options"));
     }
     crate::widgets::vline(ui, 22.0);
-    path_options(ui, &mut app.ui.tool_options, false);
+    path_options(ui, &mut app.ui.view.path_options, None);
     true
 }
 
-/// The options-bar gear of the Pen and shape tools: Photoshop's Path Options (the outline's
-/// Thickness and Color), plus the Anchor Size and a start-point highlight, so anchors and the
-/// end a path began at are easy to find on any image (#9713). One setting for every path tool.
-/// The Pen's gear (`pen`) is Photoshop's "Set additional pen and path options": it also holds the
-/// Rubber Band check item, off by default (#12900).
-pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions, pen: bool) {
-    let name = if pen { "Set additional pen and path options" } else { "Path Options" };
+/// The options-bar gear of the Pen and shape tools: Photoshop's Path Options, the outline's
+/// Thickness and Color (#9713). One display setting shared by every path tool
+/// (`ViewOptions::path_options`), not a tool option. The Pen's gear passes its `rubber_band`: it
+/// is Photoshop's "Set additional pen and path options", with the Rubber Band check item under
+/// Thickness and Color, off by default and the Pen's own tool option (#12900).
+pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::view_cmds::PathOptions, rubber_band: Option<&mut bool>) {
+    let name = if rubber_band.is_some() { "Set additional pen and path options" } else { "Path Options" };
     let resp = crate::icons::button(ui, "settings", 24.0, false, tl!(name));
     let resp = crate::brush_picker::named(resp, name);
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         egui::Grid::new("path-options").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label(tl!("Thickness:"));
-            crate::widgets::value_field(ui, &mut o.path_thickness, super::PATH_THICKNESS, "px", 58.0).accessible_name(tl!("Thickness:"));
+            crate::widgets::value_field(ui, &mut o.thickness, super::PATH_THICKNESS, "px", 58.0).accessible_name(tl!("Thickness:"));
             ui.end_row();
             ui.label(tl!("Color:"));
             let colors: Vec<(String, &str)> = super::PATH_COLORS.iter().map(|c| (c.0.to_string(), tl!(c.1))).collect();
-            crate::widgets::dropdown(ui, "path-color", tl!("Color:"), &mut o.path_color, &colors, 120.0);
-            ui.end_row();
-            ui.label(tl!("Anchor Size:"));
-            // A list of the whole sizes: a value field's arrow and wheel steps are fractions.
-            let sizes: Vec<String> = super::ANCHOR_SIZES.map(|n| n.to_string()).collect();
-            let sizes: Vec<(u32, &str)> = super::ANCHOR_SIZES.zip(sizes.iter().map(String::as_str)).collect();
-            o.anchor_size = o.anchor_size.clamp(*super::ANCHOR_SIZES.start(), *super::ANCHOR_SIZES.end());
-            crate::widgets::dropdown(ui, "path-anchor-size", tl!("Anchor Size:"), &mut o.anchor_size, &sizes, 58.0);
+            crate::widgets::dropdown(ui, "path-color", tl!("Color:"), &mut o.color, &colors, 120.0);
             ui.end_row();
         });
-        crate::widgets::checkbox(ui, &mut o.path_mark_start, tl!("Highlight Start Point"));
-        if pen {
-            ui.checkbox(&mut o.pen_rubber_band, tl!("Rubber Band"));
+        if let Some(on) = rubber_band {
+            ui.checkbox(on, tl!("Rubber Band"));
         }
     });
 }

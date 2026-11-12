@@ -1515,6 +1515,39 @@ fn view_show_items_survive_a_restart() {
     }
 }
 
+/// #9713: Path Options is a display setting, remembered with the View items, not a tool option.
+#[test]
+fn path_options_survive_a_restart() {
+    let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    app.ui.view.path_options.color = "magenta".into();
+    crate::view_cmds::persist(&mut app, &ctx);
+    tick(&mut app, &ctx);
+    assert_eq!(stored(&store)["viewExtras"], json!({"pathOptions": {"color": "magenta"}}), "only what differs from the defaults");
+    app.ui.view.path_options.thickness = 2.5;
+    crate::view_cmds::persist(&mut app, &ctx);
+    tick(&mut app, &ctx);
+    assert_eq!(stored(&store)["viewExtras"], json!({"pathOptions": {"color": "magenta", "thickness": 2.5}}));
+    let saved = store.lock().unwrap().clone().unwrap();
+    let (mut app2, _) = app_with_saved(Some(saved));
+    tick(&mut app2, &ctx);
+    assert_eq!(app2.ui.view.path_options, crate::view_cmds::PathOptions { color: "magenta".into(), thickness: 2.5 });
+    // Back to the defaults: nothing stored.
+    app2.ui.view.path_options = Default::default();
+    crate::view_cmds::persist(&mut app2, &ctx);
+    assert!(app2.session.prefs().view_extras.is_null());
+    // A hand-edited file: an unknown colour or an out-of-range thickness keeps its default.
+    for bad in [json!({"color": "plaid", "thickness": 9}), json!({"color": 3, "thickness": "thick"}), json!([1]), json!({"thickness": f64::NAN})] {
+        let (mut app3, _) = app_with_saved(Some(json!({"viewExtras": {"pathOptions": bad}}).to_string()));
+        tick(&mut app3, &ctx);
+        assert_eq!(app3.ui.view.path_options, crate::view_cmds::PathOptions::default(), "{bad}");
+    }
+    let (mut app4, _) = app_with_saved(Some(json!({"viewExtras": {"pathOptions": {"color": "cyan", "thickness": 0.1}}}).to_string()));
+    tick(&mut app4, &ctx);
+    assert_eq!((app4.ui.view.path_options.color.as_str(), app4.ui.view.path_options.thickness), ("cyan", 1.0), "a good colour still loads");
+}
+
 #[test]
 fn view_snap_off_survives_a_restart() {
     let (mut app, store) = app_with_store();

@@ -1,4 +1,4 @@
-use super::{Map, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
+use super::{Map, PathOptions, PhotocraftApp, Show, SnapTo, Value, ViewOptions};
 
 /// Whether the window was maximized when a screen mode took it full screen (egui temp data).
 pub(super) fn was_maximized_id() -> egui::Id {
@@ -122,9 +122,33 @@ fn changed_flags<T: Copy>(now: T, def: T, keys: &[&str], slot: impl for<'a> Fn(&
     (!diff.is_empty()).then_some(Value::Object(diff))
 }
 
-/// View › Extras, Show and Snap To as remembered across restarts (`Preferences::view_extras`):
-/// only what differs from the defaults, so a default changed in a later release still reaches
-/// users who never touched that item. `Null` when nothing differs.
+/// The Path Options fields that differ from the defaults (#9713), by key (`None` when none do).
+fn changed_path_options(now: &PathOptions) -> Option<Value> {
+    let def = PathOptions::default();
+    let mut m = Map::new();
+    if now.color != def.color {
+        m.insert("color".into(), Value::String(now.color.clone()));
+    }
+    if now.thickness != def.thickness {
+        m.insert("thickness".into(), serde_json::json!(now.thickness));
+    }
+    (!m.is_empty()).then_some(Value::Object(m))
+}
+
+/// Restore the remembered Path Options (#9713): an unknown colour, or a thickness that isn't a
+/// number in `PATH_THICKNESS`, keeps its default.
+fn restore_path_options(o: &mut PathOptions, saved: &Value) {
+    if let Some(id) = saved.get("color").and_then(Value::as_str).filter(|id| crate::vector_ui::PATH_COLORS.iter().any(|c| c.0 == *id)) {
+        o.color = id.to_string();
+    }
+    if let Some(px) = saved.get("thickness").and_then(Value::as_f64).map(|px| px as f32).filter(|px| crate::vector_ui::PATH_THICKNESS.contains(px)) {
+        o.thickness = px;
+    }
+}
+
+/// View › Extras, Show and Snap To, and the Path Options, as remembered across restarts
+/// (`Preferences::view_extras`): only what differs from the defaults, so a default changed in a
+/// later release still reaches users who never touched that item. `Null` when nothing differs.
 fn remembered(app: &PhotocraftApp) -> Value {
     let (v, e, def) = (&app.ui.view, &app.ui.extras, crate::state::Extras::default());
     let mut m = Map::new();
@@ -147,11 +171,14 @@ fn remembered(app: &PhotocraftApp) -> Value {
     if let Some(snap) = changed_flags(v.snap_to, SnapTo::default(), &SNAP_KEYS, snap_slot) {
         m.insert("snapTo".into(), snap);
     }
+    if let Some(paths) = changed_path_options(&v.path_options) {
+        m.insert("pathOptions".into(), paths);
+    }
     if m.is_empty() { Value::Null } else { Value::Object(m) }
 }
 
-/// Remember View › Extras, Show and Snap To in the preferences once the user lets go of the
-/// pointer (#3762). Cheap: a small JSON compare per frame. Run every frame, so items set by the
+/// Remember View › Extras, Show and Snap To and the Path Options in the preferences once the
+/// user lets go of the pointer (#3762). Cheap: a small JSON compare per frame. Run every frame, so items set by the
 /// control channel or the Show Extras Options dialog are remembered too.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if ctx.input(|i| i.pointer.any_down()) {
@@ -163,8 +190,9 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Restore the remembered View › Extras, Show and Snap To items at launch. A hand-edited file
-/// can't break them: an unknown key or a value that isn't a boolean keeps its default.
+/// Restore the remembered View › Extras, Show and Snap To items and the Path Options at launch.
+/// A hand-edited file can't break them: an unknown key or a value that isn't a boolean (for the
+/// Path Options, a valid colour or thickness) keeps its default.
 pub fn restore(app: &mut PhotocraftApp) {
     let saved = app.session.prefs().view_extras.clone();
     if !saved.is_null() && !saved.is_object() {
@@ -193,6 +221,9 @@ pub fn restore(app: &mut PhotocraftApp) {
         if let (Some(slot), Some(on)) = (snap_slot(&mut app.ui.view.snap_to, k), v.as_bool()) {
             *slot = on;
         }
+    }
+    if let Some(paths) = saved.get("pathOptions") {
+        restore_path_options(&mut app.ui.view.path_options, paths);
     }
 }
 

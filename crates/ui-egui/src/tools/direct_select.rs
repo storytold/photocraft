@@ -967,7 +967,6 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
                 crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), look);
             }
         }
-        crate::vector_ui::draw_start_marks(painter, &path, to_scr, look);
     }
     if let Some(Drag::Marquee { start, end, .. }) = &ds.drag {
         let pts = [*start, [end[0], start[1]], *end, [start[0], end[1]]].map(to_scr);

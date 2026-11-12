@@ -35,9 +35,9 @@ pub(crate) use options::{draws_path, enabled_stroke_width, paint_gesture};
 pub use options::{options_bar, shape_properties};
 pub use overlay::draw_overlay;
 pub(crate) use overlay::selected_saved_path_index;
-pub(crate) use overlay::{ANCHOR_SIZES, PATH_COLORS, PATH_THICKNESS, PathLook, draw_anchor, draw_handle, draw_outline, draw_start_marks};
 #[cfg(test)]
 use overlay::{MAX_CURVE_PIECES, bezier};
+pub(crate) use overlay::{PATH_COLORS, PATH_THICKNESS, PathLook, draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
 pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_anchors};
 #[cfg(test)]
