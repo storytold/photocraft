@@ -186,14 +186,15 @@ impl Headless {
 
     /// Open a file with custom import options and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
+        let opts = file_cmds::fresh_import_options(*opts);
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let (mut o, save_path) = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => (files::open_with_options(path, opts)?, Some(requested.to_string())),
+            Filesystem::TrustedLocal => (files::open_with_options(path, &opts)?, Some(requested.to_string())),
             Filesystem::Workspace(workspace) => {
                 let (bytes, save_path) = workspace.read_with_save_path(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                (files::open_bytes_with_options(name, &bytes, opts)?, save_path)
+                (files::open_bytes_with_options(name, &bytes, &opts)?, save_path)
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
@@ -205,9 +206,6 @@ impl Headless {
             }
             None => save_path,
         };
-        if let Some(view) = &o.initial_view {
-            view.validate(&o.document)?;
-        }
         let index = self.install_imported_document(o.document, path, o.source_read_only, o.initial_view)?;
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;
@@ -222,8 +220,7 @@ impl Headless {
         }))
     }
 
-    /// Apply a validated import's one-time view after admission, removing only that new
-    /// document if application fails and restoring the prior active document by identity.
+    /// Admit the source and apply its view through the shared rollback boundary.
     fn install_imported_document(
         &mut self,
         document: photocraft_doc::Document,
@@ -231,18 +228,9 @@ impl Headless {
         source_read_only: bool,
         initial_view: Option<photocraft_io::NativeInitialView>,
     ) -> Result<usize, AutomationError> {
-        let previous = self.session.active().map(|state| state.doc.id);
-        let index = self.session.add_document(document, path.filter(|_| !source_read_only));
-        if let Some(state) = self.session.active_mut() {
-            state.source_read_only = source_read_only;
-        }
-        if let Err(error) = self.session.apply_import_initial_view(initial_view) {
-            self.session.close(index);
-            if let Some(previous) = previous.and_then(|id| self.session.documents().iter().position(|state| state.doc.id == id)) {
-                self.session.set_active(previous);
-            }
-            return Err(error.into());
-        }
+        let (index, ()) = self.session.admit_import_with_initial_view(source_read_only, initial_view, |session| {
+            (session.add_document(document, path.filter(|_| !source_read_only)), ())
+        })?;
         Ok(index)
     }
 
@@ -855,3 +843,6 @@ mod import_initial_view_tests {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32"), target_pointer_width = "64"))]
+mod fresh_source_approval_tests;

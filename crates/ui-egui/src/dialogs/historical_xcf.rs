@@ -106,7 +106,16 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
             result.map(|()| value)
         }
         Err(error) => {
-            complete(app, id, false);
+            if app.session.holds_historical_xcf_open(id) {
+                // Confirm may already have closed the modal. Startup retained the
+                // encoded source, so restore its reservation and recreate the choice.
+                if let Some(front) = app.prompt_order.front_mut() {
+                    *front = PromptKind::Historical(id);
+                }
+                crate::open_prompt::advance(app);
+            } else {
+                complete(app, id, false);
+            }
             Err(error)
         }
     }

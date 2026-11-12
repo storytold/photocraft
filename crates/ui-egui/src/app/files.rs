@@ -113,9 +113,6 @@ impl PhotocraftApp {
             (import(name, bytes, &opts)?, false)
         };
         let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = r;
-        if let Some(view) = &initial_view {
-            view.validate(&doc).map_err(|error| error.to_string())?;
-        }
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -126,7 +123,7 @@ impl PhotocraftApp {
         let developed = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
         let question = self.session.color.open_question(&doc).filter(|_| !developed);
         let wants_raw = camera_raw_ui::wants_open_dialog(self, &warnings);
-        open_prompt::arrive(
+        open_prompt::arrive_checked(
             self,
             open_prompt::Held {
                 doc,
@@ -144,7 +141,7 @@ impl PhotocraftApp {
                 policy_applied: false,
                 smart_object: false,
             },
-        );
+        )?;
         Ok(warnings)
     }
 
@@ -183,26 +180,15 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = *options;
+        let opts = photocraft_engine::file_cmds::fresh_import_options(*options);
         let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        if let Some(view) = &initial_view {
-            view.validate(&doc).map_err(|error| error.to_string())?;
-        }
-        let previous_active = self.session.active_index();
         // The caller records the path it read from.
-        let index = self.session.add_document(doc, None);
-        if let Some(st) = self.session.active_mut() {
-            // The source signature remains authoritative for preview-only Affinity files.
-            st.source_read_only = source_read_only || photocraft_io::affinity::is_affinity(bytes);
-        }
-        if let Err(error) = self.session.apply_import_initial_view(initial_view) {
-            self.session.close(index);
-            if let Some(previous) = previous_active {
-                self.session.set_active(previous);
-            }
-            return Err(error.to_string());
-        }
+        // The source signature remains authoritative for preview-only Affinity files.
+        let read_only = source_read_only || photocraft_io::affinity::is_affinity(bytes);
+        self.session
+            .admit_import_with_initial_view(read_only, initial_view, |session| (session.add_document(doc, None), ()))
+            .map_err(|error| error.to_string())?;
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
         self.ui.status_error = false;
@@ -996,3 +982,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32"), target_pointer_width = "64"))]
+mod fresh_source_approval_tests;

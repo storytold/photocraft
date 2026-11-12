@@ -203,6 +203,7 @@ pub fn open_bytes_as_with_import_options(
     opts: &photocraft_io::ImportOptions,
 ) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
+    let opts = fresh_import_options(*opts);
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
@@ -211,14 +212,11 @@ pub fn open_bytes_as_with_import_options(
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options(&decode_name, bytes, opts).map_err(|e| crate::error::io_open_error(&decode_name, e))?;
+        let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| crate::error::io_open_error(&decode_name, e))?;
         (r, None)
     };
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
         return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
-    }
-    if let Some(view) = &r.initial_view {
-        view.validate(&r.document).map_err(|error| EngineError::Other(error.to_string()))?;
     }
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
@@ -237,17 +235,23 @@ pub fn open_bytes_as_with_import_options(
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.open_document(doc, path.filter(|_| !r.source_read_only));
-    if let Some(st) = s.active_mut() {
-        st.source_read_only = r.source_read_only;
-    }
-    s.apply_import_initial_view(r.initial_view)?;
+    let (i, color) = s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(doc, path.filter(|_| !r.source_read_only)))?;
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
     }
     batch_open_notice(s, name, &r.warnings, &color);
     // Import notes (e.g. how a camera raw was developed, or that only its preview opened).
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
+}
+
+/// A saved estimate authorizes only the verified source in the explicit approval flow.
+/// Fresh-source entry points must request approval again instead of reusing that capability.
+pub fn fresh_import_options(mut options: photocraft_io::ImportOptions) -> photocraft_io::ImportOptions {
+    if options.psd_approved_estimate.take().is_some() {
+        // Clearing only the estimate would turn its bounded approval into an unbounded one.
+        options.psd_high_memory_approved = false;
+    }
+    options
 }
 
 /// Open the selected file with its decoder options and record its Batch source identity.
@@ -512,4 +516,51 @@ pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     // The file is read by the place itself, on the job's worker when it runs in the background.
     let input = PlaceInput::with_file(s, &path, PlaceFile::Path(path.clone()), link, p)?;
     place_input(s, input)
+}
+
+#[cfg(test)]
+mod fresh_source_approval_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn saved_estimate_cannot_approve_a_fresh_foreground_or_background_source() {
+        let gb = 1u64 << 30;
+        let bytes = crate::jobs::psd_open_fixture::make_psd(false);
+        let memory = photocraft_io::memory::MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None };
+        photocraft_io::memory::with_mock_memory(memory, || {
+            photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
+                let stale = photocraft_io::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(u64::MAX), ..Default::default() };
+                for route in 0..3 {
+                    let mut s = Session::new();
+                    s.set_cooperative_jobs(true);
+                    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+                    let previous = s.active().unwrap().doc.clone();
+                    let result = match route {
+                        0 => open_bytes_as_with_import_options(&mut s, "different.psd", &bytes, None, None, &stale),
+                        1 => s.start_open_with_options("different.psd", crate::jobs::OpenSource::Bytes(Arc::new(bytes.clone())), &stale).map(|_| Value::Null),
+                        _ => match s
+                            .start_open_for_user_with_options("different.psd", crate::jobs::OpenSource::Bytes(Arc::new(bytes.clone())), &stale, false)
+                            .unwrap()
+                        {
+                            crate::jobs::Started::Done(value) => {
+                                assert!(value.get("pendingPreflight").is_some(), "fresh approval must be requested: {value}");
+                                Ok(value)
+                            }
+                            other => panic!("expected inline preflight, got {other:?}"),
+                        },
+                    };
+                    if route != 2 {
+                        assert!(matches!(result, Err(EngineError::PsdApprovalRequired { .. })), "route {route}: {result:?}");
+                    }
+                    assert_eq!(s.documents().len(), 1);
+                    assert!(Arc::ptr_eq(&previous, &s.active().unwrap().doc));
+                }
+                // Explicit approval for these fresh bytes remains supported without a saved estimate.
+                let mut s = Session::new();
+                open_bytes_as_with_options(&mut s, "approved.psd", &bytes, None, None, true).unwrap();
+                assert_eq!(s.documents().len(), 1);
+            });
+        });
+    }
 }

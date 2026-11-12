@@ -24,6 +24,8 @@ mod layers;
 mod samples;
 mod wire;
 // Parsed fields stay inert until native mapping slices land.
+#[cfg(test)]
+mod decoder_review_tests;
 #[allow(dead_code)]
 mod effects;
 #[cfg(test)]
@@ -238,29 +240,34 @@ impl<'a> Image<'a> {
                 for px in 0..tw as usize {
                     let src = (py * tw as usize + px) * bpp;
                     let dst = (ty as usize * TILE as usize + py) * stride + (tx as usize * TILE as usize + px) * channels;
-                    let pixel = &raw[src..src + bpp];
+                    let end = src.checked_add(bpp).ok_or_else(|| invalid("pixel byte range overflows"))?;
+                    let pixel = raw.get(src..end).ok_or_else(|| invalid("tile pixel is cut short"))?;
+                    let end = dst.checked_add(channels).ok_or_else(|| invalid("pixel sample range overflows"))?;
+                    let output = data.get_mut(dst..end).ok_or_else(|| invalid("tile pixel exceeds its drawable"))?;
                     if indexed {
-                        let idx = usize::from(pixel[0]);
+                        let idx = usize::from(*pixel.first().ok_or_else(|| invalid("indexed pixel has no palette index"))?);
                         let [r, g, b] = self.colormap.get(idx).copied().ok_or_else(|| invalid(format!("palette index {idx} has no color entry")))?;
-                        data[dst] = f32::from(r) / 255.0;
-                        data[dst + 1] = f32::from(g) / 255.0;
-                        data[dst + 2] = f32::from(b) / 255.0;
+                        let rgb = output.get_mut(..3).ok_or_else(|| invalid("indexed pixel has no RGB destination"))?;
+                        rgb.copy_from_slice(&[f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0]);
                         if source_channels == 2 {
-                            data[dst + 3] = f32::from(pixel[1]) / 255.0;
+                            let alpha = pixel.get(1).ok_or_else(|| invalid("indexed pixel has no alpha sample"))?;
+                            *output.get_mut(3).ok_or_else(|| invalid("indexed pixel has no alpha destination"))? = f32::from(*alpha) / 255.0;
                         }
                     } else {
-                        for ch in 0..channels {
+                        for (ch, destination) in output.iter_mut().enumerate() {
                             let is_coverage = coverage || (matches!(source_channels, 2 | 4) && ch + 1 == source_channels);
-                            let (value, rounded_zero) =
-                                self.precision.sample(&pixel[ch * self.precision.bytes..(ch + 1) * self.precision.bytes], is_coverage).map_err(|error| {
-                                    invalid(format!(
-                                        "{} plane {ch}, pixel ({}, {}): {error}",
-                                        if is_coverage { "coverage" } else { "color" },
-                                        tx as usize * TILE as usize + px,
-                                        ty as usize * TILE as usize + py,
-                                    ))
-                                })?;
-                            data[dst + ch] = value;
+                            let start = ch.checked_mul(self.precision.bytes).ok_or_else(|| invalid("sample byte offset overflows"))?;
+                            let end = start.checked_add(self.precision.bytes).ok_or_else(|| invalid("sample byte range overflows"))?;
+                            let sample = pixel.get(start..end).ok_or_else(|| invalid("pixel sample is cut short"))?;
+                            let (value, rounded_zero) = self.precision.sample(sample, is_coverage).map_err(|error| {
+                                invalid(format!(
+                                    "{} plane {ch}, pixel ({}, {}): {error}",
+                                    if is_coverage { "coverage" } else { "color" },
+                                    tx as usize * TILE as usize + px,
+                                    ty as usize * TILE as usize + py,
+                                ))
+                            })?;
+                            *destination = value;
                             underflow |= rounded_zero;
                         }
                     }
@@ -340,7 +347,7 @@ impl<'a> Image<'a> {
     fn apply_coverage_stack(
         &mut self,
         pointers: &[usize],
-        surface: &mut Surface,
+        _surface: &mut Surface,
         _bounds: Rect,
         depth: usize,
         state: &mut CoverageTranslation<'a>,
@@ -349,7 +356,6 @@ impl<'a> Image<'a> {
         if depth > MAX_DEPTH {
             return Err(invalid("native coverage source nesting exceeds its limit"));
         }
-        let mut omitted = false;
         for &pointer in pointers.iter().rev() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             state.visited = state.visited.checked_add(1).ok_or_else(|| invalid("coverage traversal count overflows"))?;
@@ -364,7 +370,6 @@ impl<'a> Image<'a> {
                         message: "Cyclic source coverage operation was not followed".into(),
                     }),
                 );
-                omitted = true;
                 continue;
             }
             let effect = match effects::decode(&self.c, pointer, self.version, &mut self.meta_budget, ctl) {
@@ -372,7 +377,6 @@ impl<'a> Image<'a> {
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(_) => {
                     state.active_effects.remove(&pointer);
-                    omitted = true;
                     continue;
                 }
             };
@@ -385,30 +389,23 @@ impl<'a> Image<'a> {
             } else {
                 self.coverage_auxiliary(effect.mask_offset, depth + 1, state, ctl).map(|value| value.map(Some))
             };
-            let result: std::result::Result<(Surface, String), effects::MappingFailure> = match auxiliary {
+            let failure = match auxiliary {
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                Err(error) => Err(effects::MappingFailure {
+                Err(error) => effects::MappingFailure {
                     reason: ConversionReason::InvalidOptionalData,
                     message: format!("Source auxiliary coverage could not be converted; operation remains inactive: {error}"),
-                }),
-                Ok(Err(failure)) => Err(failure),
-                Ok(Ok(_mask)) => {
-                    Err(effects::MappingFailure::from("Native coverage conversion is not implemented; original coverage and source records are preserved"))
+                },
+                Ok(Err(failure)) => failure,
+                Ok(Ok(mask)) => {
+                    if let Some((_mask, own_pixel_charge)) = mask {
+                        // No adapter installs this temporary mask. Its cached source
+                        // configuration stays charged; only its discarded pixels return.
+                        self.budget = self.budget.saturating_add(own_pixel_charge);
+                    }
+                    effects::MappingFailure::from("Native coverage conversion is not implemented; original coverage and source records are preserved")
                 }
             };
-            match result {
-                Ok((converted, mut notes)) => {
-                    if omitted {
-                        notes.push_str("; An earlier source coverage stage was omitted; this stage receives preserved native coverage instead of the complete source pipeline");
-                    }
-                    *surface = converted;
-                    state.applied.insert(pointer, Ok(notes));
-                }
-                Err(message) => {
-                    omitted = true;
-                    state.applied.insert(pointer, Err(message));
-                }
-            }
+            state.applied.insert(pointer, Err(failure));
             state.active_effects.remove(&pointer);
         }
         Ok(())
@@ -422,7 +419,7 @@ impl<'a> Image<'a> {
         depth: usize,
         state: &mut CoverageTranslation<'a>,
         ctl: &Interrupt<'_>,
-    ) -> Result<std::result::Result<LayerMask, effects::MappingFailure>> {
+    ) -> Result<std::result::Result<(LayerMask, usize), effects::MappingFailure>> {
         if depth > MAX_DEPTH || !state.active_masks.insert(offset) {
             return Err(invalid("cyclic or excessively nested source auxiliary coverage"));
         }
@@ -459,7 +456,7 @@ impl<'a> Image<'a> {
             self.budget = self.budget.saturating_add(own_pixel_charge);
         }
         state.active_masks.remove(&offset);
-        result
+        result.map(|mask| mask.map(|mask| (mask, own_pixel_charge)))
     }
 
     /// Decodes and inventories nested coverage effects with owner identity, limits and deferred application
@@ -801,13 +798,22 @@ fn sample_order_request(version: u32, precision: Precision) -> Result<Option<cra
     }
 }
 
-/// Inspects an XCF header for unresolved historical sample order without decoding its document pixels.
-pub(crate) fn historical_sample_order_request(bytes: &[u8]) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
+/// Shared validated framing for both bounded probing and complete import.
+struct Header {
+    version: u32,
+    width: u32,
+    height: u32,
+    base_type: u32,
+    precision: Precision,
+}
+
+fn read_header(bytes: &[u8]) -> Result<(Cursor<'_>, Header)> {
     if !is_xcf(bytes) {
         return Err(invalid("not an XCF file"));
     }
     let mut c = Cursor { b: bytes, pos: MAGIC.len(), wide: false };
     let version = read_version(&mut c)?;
+    c.wide = version >= 11;
     let (width, height, base_type) = (c.u32()?, c.u32()?, c.u32()?);
     validate_canvas(width, height)?;
     if base_type > 2 {
@@ -817,7 +823,13 @@ pub(crate) fn historical_sample_order_request(bytes: &[u8]) -> Result<Option<cra
     if base_type == 2 && precision != Precision::GAMMA8 {
         return Err(invalid("indexed pixels require 8-bit nonlinear integer precision"));
     }
-    sample_order_request(version, precision)
+    Ok((c, Header { version, width, height, base_type, precision }))
+}
+
+/// Inspects only the shared fixed header, without decoding document pixels.
+pub(crate) fn historical_sample_order_request(bytes: &[u8]) -> Result<Option<crate::HistoricalXcfSampleOrderRequest>> {
+    let (_, header) = read_header(bytes)?;
+    sample_order_request(header.version, header.precision)
 }
 
 /// Imports unwrapped XCF; ambiguous historical samples require an explicit choice.
@@ -883,24 +895,10 @@ pub(crate) fn import_with_sample_order(
     ctl: &Interrupt<'_>,
 ) -> Result<ImportResult> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if !is_xcf(bytes) {
-        return Err(invalid("not an XCF file"));
-    }
-    let mut c = Cursor { b: bytes, pos: MAGIC.len(), wide: false };
-    let version = read_version(&mut c)?;
-    c.wide = version >= 11;
+    let (mut c, Header { version, width: w, height: h, base_type, precision }) = read_header(bytes)?;
     let mut warnings = Warnings::default();
     if version > KNOWN_VERSION {
         warnings.note(&format!("XCF version {version} is newer than this reader (version {KNOWN_VERSION}); unknown parts were skipped"));
-    }
-    let (w, h, base_type) = (c.u32()?, c.u32()?, c.u32()?);
-    validate_canvas(w, h)?;
-    let precision = if version >= 4 { Precision::from_header(version, c.u32()?)? } else { Precision::GAMMA8 };
-    if base_type > 2 {
-        return Err(invalid(format!("unknown image type {base_type}")));
-    }
-    if base_type == 2 && precision != Precision::GAMMA8 {
-        return Err(invalid("indexed pixels require 8-bit nonlinear integer precision"));
     }
     // Development writers did not define high-depth sample byte order in XCF7–11.
     // Neither source pixels nor producer names establish the original host order.
@@ -1077,7 +1075,6 @@ pub(crate) fn import_with_sample_order(
     text::convert_colors(&mut document)?;
     import_native_effects(&mut document, &mut image, ctl)?;
     add_document_warnings(&mut image, &document, precision, linear_compositing);
-    image.initial_view.validate(&document)?;
     let initial_view = (image.initial_view != Default::default()).then_some(image.initial_view);
     document.metadata.import_conversion = Some(Arc::new(image.outcomes.finish()?));
     ctl.progress(1.0);
@@ -1112,7 +1109,6 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
     for pending in std::mem::take(&mut image.pending_effects) {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let original = document.layer(pending.layer).ok_or_else(|| invalid("native effect owner is missing"))?;
-        let mut omitted = false;
         // GIMP's serialized list is top-first; its last stored filter is the first
         // operation on the drawable. Independently saved stack evidence verifies this.
         for pointer in pending.pointers.iter().rev().copied() {
@@ -1136,7 +1132,6 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                         native_description: "Usable native owner content preserved; malformed optional effect was not applied".into(),
                         attachments: Vec::new(),
                     })?;
-                    omitted = true;
                     continue;
                 }
             };
@@ -1164,40 +1159,19 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                     _ => {}
                 }
             }
-            let result: std::result::Result<(), effects::MappingFailure> =
-                Err(effects::MappingFailure::from("Native effect mapping is not implemented; stored configuration remains inert"));
             if effect.blend_space != 0 || effect.composite_space != 0 || effect.composite_mode != 0 || effect.clip || effect.region != 0 {
                 notes.push(format!("Native document blending/coverage applies; stored blend space {}, composite space {}, composite mode {}, clip {}, region {} are historical", effect.blend_space, effect.composite_space, effect.composite_mode, effect.clip, effect.region));
             }
-            if omitted {
-                notes.push(
-                    "An earlier source stage was omitted; subsequent native stages receive the preserved native result instead of the original source pipeline"
-                        .into(),
-                );
-            }
-            let (disposition, reason, native) = match result {
-                Ok(()) => (
-                    ConversionDisposition::NativeApproximation,
-                    ConversionReason::NativePolicy,
-                    format!("Editable owner-local native smart contents and native filter/style rules. {}", notes.join("; ")),
-                ),
-                Err(failure) => {
-                    omitted = true;
-                    (
-                        ConversionDisposition::RetainedUnapplied,
-                        failure.reason,
-                        format!("Effect not applied; usable separate native content preserved. {} {}", failure.message, notes.join("; ")),
-                    )
-                }
-            };
+            let disposition = ConversionDisposition::RetainedUnapplied;
+            let reason = ConversionReason::MissingMapping;
+            let native = format!(
+                "Effect not applied; usable separate native content preserved. Native effect mapping is not implemented; stored configuration remains inert. {}",
+                notes.join("; ")
+            );
             let outcome = image.outcomes.push(ConversionEntry {
                 feature_code: "xcf.layer_effect".into(),
                 source,
-                targets: vec![NativeTargetRef {
-                    layer_id: Some(pending.layer),
-                    label: "Native owner and embedded filter contents".into(),
-                    ..Default::default()
-                }],
+                targets: vec![NativeTargetRef { layer_id: Some(pending.layer), label: "Native owner".into(), ..Default::default() }],
                 disposition,
                 reason,
                 source_description: format!(
@@ -1238,14 +1212,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 image.outcomes.property(outcome, property.kind, property.offset, property.bytes)?;
             }
         }
-        image.warnings.layer(
-            &original.name,
-            if omitted {
-                "contains source effects that were retained without application; see the conversion report"
-            } else {
-                "uses editable native filter contents with PhotoCraft compositing rules; see the conversion report"
-            },
-        );
+        image.warnings.layer(&original.name, "contains source effects that were retained without application; see the conversion report");
     }
     Ok(())
 }

@@ -107,8 +107,9 @@ fn successful_optional_mask_keeps_its_sample_and_tile_charges() {
     let allowance = 4 + usize::try_from(photocraft_raster::tile_storage_bytes(rect, &format)).unwrap();
     let mut image = image(&bytes, allowance);
     let mut state = CoverageTranslation::default();
-    let mask = image.coverage_auxiliary(channel, 1, &mut state, &Interrupt::NONE).unwrap().unwrap();
+    let (mask, own_pixel_charge) = image.coverage_auxiliary(channel, 1, &mut state, &Interrupt::NONE).unwrap().unwrap();
     assert_eq!(mask.surface.read_region(rect), vec![128. / 255.]);
+    assert_eq!(own_pixel_charge, allowance);
     assert!(state.masks.contains_key(&channel));
     assert!(!state.active_masks.contains(&channel));
     assert_eq!(image.budget, 0, "successful native mask storage must stay charged");
@@ -159,15 +160,14 @@ fn failed_optional_mask_translation_and_report_leave_budget_for_later_layer() {
 }
 
 #[test]
-fn reporting_a_converted_mask_does_not_refund_retained_pixel_charges() {
+fn reporting_a_discarded_mask_leaves_exact_budget_for_later_layer() {
     let (bytes, _, layer, effect) = fixture(true);
     let mask_format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
-    let mask_charge = 4 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &mask_format)).unwrap();
-    let mut image = image(&bytes, later_layer_allowance() + mask_charge);
+    let mut image = image(&bytes, later_layer_allowance());
     let owner = coverage_owner(&mut image);
     let mut surface = Surface::new(mask_format);
     image.translate_coverage_effects(owner, &[effect], &mut surface, Rect::new(0, 0, 1, 1), &Interrupt::NONE).unwrap();
-    assert_eq!(image.budget, later_layer_allowance(), "reporting must reuse the decoded mask without refunding its retained sample/tile charge");
+    assert_eq!(image.budget, later_layer_allowance(), "uninstalled auxiliary mask pixels must not consume the later layer allowance");
     admit_later_layer(&mut image, layer);
 }
 
@@ -258,15 +258,15 @@ fn append_effect(w: &mut W, mask: usize) -> usize {
 fn failed_optional_parent_mask_refunds_only_its_pixels_and_keeps_cached_child_charged() {
     let mut w = W { out: vec![0; 4], wide: true };
     let child = append_mask(&mut w, &[]);
-    let first = append_effect(&mut w, child);
     let second = append_effect(&mut w, 0);
-    // Coverage stages run in reverse source-pointer order. Cache the child first,
-    // then exceed the traversal allowance on the second stage without big fixtures.
-    let parent = append_mask(&mut w, &[second, first]);
+    // Keep an actual child surface alive, then fail the parent before its nested stage.
+    let parent = append_mask(&mut w, &[second]);
     let format = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
     let mask_charge = 4 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &format)).unwrap();
     let mut image = image(&w.out, 2 * mask_charge);
-    let mut state = CoverageTranslation { visited: MAX_LAYERS - 1, ..Default::default() };
+    let mut state = CoverageTranslation::default();
+    let (retained_child, _) = image.coverage_auxiliary(child, 1, &mut state, &Interrupt::NONE).unwrap().unwrap();
+    state.visited = MAX_LAYERS;
     let result = image.coverage_auxiliary(parent, 1, &mut state, &Interrupt::NONE);
     assert!(matches!(result, Err(ref error) if error.to_string().contains("coverage traversal exceeds")));
     assert_eq!(state.visited, MAX_LAYERS + 1);
@@ -275,6 +275,7 @@ fn failed_optional_parent_mask_refunds_only_its_pixels_and_keeps_cached_child_ch
     assert!(!state.masks.contains_key(&parent));
     assert!(state.active_masks.is_empty());
     assert_eq!(image.budget, mask_charge, "refund parent sample/tile storage, never the retained child's charge");
+    assert_eq!(retained_child.surface.read_region(Rect::new(0, 0, 1, 1)), vec![128. / 255.]);
 }
 
 #[test]
@@ -293,4 +294,46 @@ fn optional_mask_metadata_admission_refunds_pixels_without_refunding_metadata_wo
     assert_eq!(image.budget, mask_charge, "unretained pixels are released even when cache metadata cannot fit");
     assert_eq!(image.meta_budget, cache_charge - 1, "channel-name parsing stays charged");
     // This checks ownership accounting, not whole-import success after exhausting metadata.
+}
+
+#[test]
+fn repeated_successful_auxiliary_decodes_refund_discarded_pixels_but_keep_metadata() {
+    let (bytes, _, layer, effect) = fixture(true);
+    let mut image = image(&bytes, later_layer_allowance());
+    let before_metadata = image.meta_budget;
+    let mut state = CoverageTranslation::default();
+    let mut original = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+    image.apply_coverage_stack(&[effect; 8], &mut original, Rect::new(0, 0, 1, 1), 0, &mut state, &Interrupt::NONE).unwrap();
+    assert_eq!(image.budget, later_layer_allowance());
+    assert!(image.meta_budget < before_metadata, "source configuration remains accounted");
+    assert!(matches!(state.applied.get(&effect), Some(Err(failure)) if failure.reason == ConversionReason::MissingMapping));
+    assert_eq!(original.tile_count(), 0);
+    admit_later_layer(&mut image, layer);
+}
+
+#[test]
+fn checked_float_and_indexed_tile_access_preserves_samples_and_rejects_truncation() {
+    let mut float = W { out: vec![0; 4], wide: true };
+    let values = [1.5f32, -0.25, 0.5, 1.0];
+    let bytes: Vec<u8> = values.into_iter().flat_map(f32::to_be_bytes).collect();
+    let offset = hierarchy(&mut float, 1, 1, 16, &bytes, Compression::None);
+    let mut image = image(&float.out, MAX_PIXEL_BYTES);
+    image.precision = Precision::from_header(12, 600).unwrap();
+    assert_eq!(image.hierarchy(offset, 4, false, &Interrupt::NONE).unwrap().data, values);
+    float.out.pop();
+    let mut truncated = self::image(&float.out, MAX_PIXEL_BYTES);
+    truncated.precision = Precision::from_header(12, 600).unwrap();
+    assert!(truncated.hierarchy(offset, 4, false, &Interrupt::NONE).is_err());
+
+    let mut indexed = W { out: vec![0; 4], wide: true };
+    let offset = hierarchy(&mut indexed, 1, 1, 2, &[0, 128], Compression::None);
+    let mut image = self::image(&indexed.out, MAX_PIXEL_BYTES);
+    image.base_type = 2;
+    image.colormap.push([17, 31, 57]);
+    assert_eq!(image.hierarchy(offset, 2, false, &Interrupt::NONE).unwrap().data, [17. / 255., 31. / 255., 57. / 255., 128. / 255.]);
+    indexed.out.pop();
+    let mut truncated = self::image(&indexed.out, MAX_PIXEL_BYTES);
+    truncated.base_type = 2;
+    truncated.colormap.push([17, 31, 57]);
+    assert!(truncated.hierarchy(offset, 2, false, &Interrupt::NONE).is_err());
 }

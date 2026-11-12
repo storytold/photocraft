@@ -92,6 +92,9 @@ pub mod vector_preview;
 mod xcf;
 pub mod xml;
 
+#[cfg(any(unix, windows))]
+use std::sync::Arc;
+
 use craft_psd::{PsdError, PsdFile};
 pub use export_estimate::estimate_export_bytes;
 pub use initial_view::{MAX_INITIAL_SAMPLERS, NativeImportTarget, NativeInitialView};
@@ -196,8 +199,8 @@ impl From<RenderError> for IoError {
 /// Result of [`import`].
 #[derive(Debug, Clone)]
 pub struct ImportResult {
-    /// Optional native view hints. Hosts validate these against the pending document,
-    /// carry them through open prompts, and apply them once after successful admission.
+    /// Optional native view hints. Hosts carry them through open prompts, then validate
+    /// and apply them against the admitted document once. A rejected hint rolls admission back.
     /// Unavailable view affordances must be reported rather than silently discarded.
     pub initial_view: Option<NativeInitialView>,
     /// The imported document.
@@ -918,6 +921,37 @@ pub fn import_file_for_open_verified(
     ctl: &photocraft_raster::Interrupt,
     identity_out: &mut Option<FileIdentity>,
 ) -> Result<(ImportResult, bool), IoError> {
+    import_file_for_open_verified_inner(name, path, expected, opts, ctl, identity_out, None)
+}
+
+/// Verified interactive import that can return the already-read encoded source with a historical-order question.
+/// Only the bounded fixed header is inflated before asking; a later explicit-order import validates the full stream.
+/// The output is published only after rechecking the same opened handle's identity and cancellation.
+#[cfg(any(unix, windows))]
+pub fn import_file_for_open_verified_with_historical_source(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    historical_source_out: &mut Option<Arc<Vec<u8>>>,
+) -> Result<(ImportResult, bool), IoError> {
+    *historical_source_out = None;
+    import_file_for_open_verified_inner(name, path, expected, opts, ctl, identity_out, Some(historical_source_out))
+}
+
+#[cfg(any(unix, windows))]
+fn import_file_for_open_verified_inner(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    historical_source_out: Option<&mut Option<Arc<Vec<u8>>>>,
+) -> Result<(ImportResult, bool), IoError> {
+    let mut historical_source = None;
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
@@ -965,18 +999,30 @@ pub fn import_file_for_open_verified(
             Some(result) => Ok((result, false)),
             None => {
                 let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
-                import_for_open_with(name, &bytes, opts, ctl)
+                if historical_source_out.is_some()
+                    && opts.historical_xcf_sample_order.is_none()
+                    && let Some(question) = historical_xcf_sample_order_request_with(name, &bytes, ctl)?
+                {
+                    historical_source = Some(Arc::new(bytes));
+                    Err(IoError::HistoricalXcfSampleOrderRequired(question))
+                } else {
+                    import_for_open_with(name, &bytes, opts, ctl)
+                }
             }
         }
     };
     // An approval pause must describe a file that still has the identity it was estimated with;
     // an approved resume must have decoded that file, not a rewrite that raced the decode.
-    if expected.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. })) {
+    if expected.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. } | IoError::HistoricalXcfSampleOrderRequired(_))) {
         let after = FileIdentity::of_handle(&watch).map_err(read_failed)?;
         if after != identity {
             return Err(IoError::SourceChanged);
         }
         *identity_out = Some(after);
+    }
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if let Some(output) = historical_source_out {
+        *output = historical_source;
     }
     result
 }
@@ -1771,3 +1817,6 @@ mod tests {
         assert_eq!(result.document.artboards().len(), 1);
     }
 }
+
+#[cfg(all(test, any(unix, windows)))]
+mod historical_source_tests;

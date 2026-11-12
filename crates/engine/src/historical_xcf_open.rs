@@ -98,7 +98,8 @@ pub(super) fn snapshot(_: &str, _: &photocraft_io::FileIdentity, _: &photocraft_
 impl Session {
     /// Open using explicit per-import options. An unset historical order is never inferred.
     pub fn start_open_with_options(&mut self, name: &str, source: OpenSource, options: &photocraft_io::ImportOptions) -> Result<Started> {
-        self.start_open_inner(name, source, false, options.psd_high_memory_approved, options.psd_approved_estimate, None, true, Some(*options))
+        let options = crate::file_cmds::fresh_import_options(*options);
+        self.start_open_inner(name, source, false, options.psd_high_memory_approved, options.psd_approved_estimate, None, true, Some(options))
     }
 
     /// Interactive counterpart: typed historical, memory and profile questions remain pending.
@@ -109,22 +110,33 @@ impl Session {
         options: &photocraft_io::ImportOptions,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, true, options.psd_high_memory_approved, options.psd_approved_estimate, None, background, Some(*options))
+        let options = crate::file_cmds::fresh_import_options(*options);
+        self.start_open_inner(name, source, true, options.psd_high_memory_approved, options.psd_approved_estimate, None, background, Some(options))
     }
 
-    /// Resume the exact retained bytes once. Invalid or missing choices must be rejected by
-    /// the host before this typed API; cancellation or failure releases the job's source.
+    /// Resume the exact retained bytes once. A refused startup keeps the capability
+    /// available for retry; an accepted job owns its source through completion or cancellation.
     pub fn resume_historical_xcf_open(&mut self, id: u64, order: photocraft_io::HistoricalXcfSampleOrder, background: bool) -> Result<Started> {
-        let index = self
+        let held = self
             .jobs
             .historical_xcf
             .iter()
-            .position(|held| held.id == id)
+            .find(|held| held.id == id)
             .ok_or_else(|| EngineError::Other("historical XCF source choice is no longer available".into()))?;
-        let held = self.jobs.historical_xcf.remove(index);
+        // Share the encoded allocation with startup; removing it first would lose
+        // the only retry capability if worker registration or inline startup fails.
+        let name = held.name.clone();
+        let bytes = Arc::clone(&held.bytes);
         let mut options = held.options;
         options.historical_xcf_sample_order = Some(order);
-        self.start_open_for_user_with_options(&held.name, OpenSource::Bytes(held.bytes), &options, background)
+        let started = self.start_open_for_user_with_options(&name, OpenSource::Bytes(bytes), &options, background)?;
+        self.jobs.historical_xcf.retain(|held| held.id != id);
+        Ok(started)
+    }
+
+    /// Whether the session still owns the exact encoded source awaiting its choice.
+    pub fn holds_historical_xcf_open(&self, id: u64) -> bool {
+        self.jobs.historical_xcf.iter().any(|held| held.id == id)
     }
 
     /// Cancel a still-pending encoded source without admitting a document.

@@ -196,3 +196,43 @@ fn automation_open_forwards_choice_before_read_and_preserves_source_protection()
         }
     }
 }
+
+#[test]
+fn refused_historical_start_restores_choice_ahead_of_later_open_then_retries_retained_bytes() {
+    let mut app = app();
+    app.run("file.new", json!({"width":2,"height":2})).unwrap();
+    let original = app.session.active().unwrap().doc.clone();
+    app.session.color.settings.ask_on_missing = false;
+    app.session.color.settings.ask_on_mismatch = false;
+    app.open_file("/source/retained.xcf", &fixture::historical_pixel(false)).unwrap();
+    let source = app.historical_opens[0].id;
+    crate::open_prompt::arrive(&mut app, later_document());
+    let dialog = app.ui.dialogs.iter_mut().find(|dialog| owns(&dialog.fields)).unwrap();
+    dialog.fields.insert("historicalXcfSampleOrder".into(), json!("big-endian"));
+    let dialog_id = dialog.id;
+    let cancelled = photocraft_engine::jobs::JobCtx::new();
+    cancelled.cancel();
+    app.session.set_inline_job_ctx(Some(cancelled));
+    assert!(crate::dialogs::confirm(&mut app, dialog_id).is_err());
+    assert!(app.session.holds_historical_xcf_open(source));
+    assert_eq!(app.historical_opens.len(), 1);
+    assert_eq!(app.historical_opens[0].id, source);
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [PromptKind::Historical(source), PromptKind::Open]);
+    assert_eq!(app.held_opens.len(), 1, "the later decoded file cannot pass the retry choice");
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+    let retry = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap();
+    assert_eq!(retry.fields[FIELD], source);
+    assert_eq!(retry.fields["historicalXcfSampleOrder"], Value::Null, "a recreated choice requires an explicit answer");
+    app.session.set_inline_job_ctx(None);
+    choose(&mut app, "big-endian");
+    assert!(!app.session.holds_historical_xcf_open(source));
+    assert!(app.historical_opens.is_empty());
+    assert!(app.held_opens.is_empty());
+    assert!(app.prompt_order.is_empty());
+    assert_eq!(app.session.documents().len(), 3);
+    assert_eq!(app.session.active().unwrap().doc.name, "later");
+    app.session.set_active(1);
+    assert_pixel(&app);
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
+}

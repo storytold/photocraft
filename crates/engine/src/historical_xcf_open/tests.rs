@@ -1,6 +1,5 @@
+use super::super::historical_xcf_fixture as fixture;
 use super::*;
-#[path = "fixture.rs"]
-mod fixture;
 
 fn pixel(s: &Session) -> [f32; 4] {
     let doc = &s.active().unwrap().doc;
@@ -184,4 +183,40 @@ fn historical_snapshot_observes_cancellation_between_read_chunks() {
     let ctl = photocraft_raster::Interrupt::new(&cancel, &progress);
     assert!(matches!(snapshot(path.to_str().unwrap(), &identity, &ctl), Err(EngineError::Cancelled)));
     assert!(saw_progress.load(Ordering::Relaxed), "cancellation occurs after a read, not at the initial checkpoint");
+}
+
+#[test]
+fn refused_historical_start_retains_exact_source_and_choice_identity_for_retry() {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+    let original = session.active().unwrap().doc.clone();
+    let bytes = Arc::new(fixture::historical_pixel(false));
+    let mut ids = Vec::new();
+    for name in ["retained.xcf", "other.xcf"] {
+        let Started::Done(question) = session.start_open_for_user_with_background(name, OpenSource::Bytes(bytes.clone()), false).unwrap() else {
+            panic!("inline question")
+        };
+        ids.push(question["heldHistoricalXcfOpen"].as_u64().unwrap());
+    }
+    let retained = Arc::strong_count(&bytes);
+    let cancelled = crate::jobs::JobCtx::new();
+    cancelled.cancel();
+    session.set_inline_job_ctx(Some(cancelled));
+    let error = session.resume_historical_xcf_open(ids[0], photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).unwrap_err();
+    assert!(matches!(error, EngineError::Cancelled));
+    assert_eq!(session.jobs.historical_xcf.iter().map(|held| held.id).collect::<Vec<_>>(), ids);
+    assert!(Arc::ptr_eq(&session.jobs.historical_xcf[0].bytes, &bytes));
+    assert_eq!(Arc::strong_count(&bytes), retained, "failed startup must neither lose nor duplicate the retained allocation");
+    assert!(session.jobs.historical_xcf[0].options.historical_xcf_sample_order.is_none(), "the unanswered source options remain unchanged until retry");
+    assert_eq!(session.documents().len(), 1);
+    assert!(Arc::ptr_eq(&original, &session.active().unwrap().doc));
+    session.set_inline_job_ctx(None);
+    session.resume_historical_xcf_open(ids[0], photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).unwrap();
+    assert!(!session.holds_historical_xcf_open(ids[0]));
+    assert!(session.holds_historical_xcf_open(ids[1]));
+    assert_eq!(pixel(&session), [0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]);
+    assert_eq!(session.documents().len(), 2);
+    assert!(Arc::ptr_eq(&original, &session.documents()[0].doc));
+    assert!(session.cancel_historical_xcf_open(ids[1]));
+    assert_eq!(Arc::strong_count(&bytes), 1);
 }

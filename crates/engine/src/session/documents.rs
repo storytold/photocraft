@@ -191,7 +191,8 @@ impl Session {
         self.hold_open_with_view(doc, source_read_only, None)
     }
 
-    /// Hold a validated import and its one-time view hints until the host answers its prompt.
+    /// Hold an import and its one-time view hints until the host answers its prompt.
+    /// Admission validates the hints against the document that is actually installed.
     pub(crate) fn hold_open_with_view(&mut self, doc: Document, source_read_only: bool, initial_view: Option<photocraft_io::NativeInitialView>) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
         self.held_opens.push((self.next_held_open, doc, source_read_only, initial_view));

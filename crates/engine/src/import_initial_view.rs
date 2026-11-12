@@ -5,8 +5,42 @@ use std::sync::Arc;
 use crate::{EngineError, Result, Session};
 
 impl Session {
-    /// Apply a validated import's native view state once, without an edit or history step.
-    /// Callers validate before publishing the pending document; native reopen supplies no hint.
+    /// Admit one imported document with the caller's existing color policy, then apply its view.
+    /// The callback must add exactly one document and return its index plus any policy report.
+    /// A rejected view removes only that admission and restores the previous active identity,
+    /// including sessions that had documents but no active document.
+    pub fn admit_import_with_initial_view<T>(
+        &mut self,
+        source_read_only: bool,
+        view: Option<photocraft_io::NativeInitialView>,
+        admit: impl FnOnce(&mut Session) -> (usize, T),
+    ) -> Result<(usize, T)> {
+        let previous = self.active().map(|state| state.doc.id);
+        let previous_len = self.docs.len();
+        let (index, report) = admit(self);
+        let applied = if index != previous_len || self.docs.len() != previous_len.saturating_add(1) || self.active != Some(index) {
+            Err(EngineError::Other("import admission did not append and activate exactly one document".into()))
+        } else {
+            if let Some(state) = self.docs.get_mut(index) {
+                state.source_read_only = source_read_only;
+            }
+            self.apply_import_initial_view(view)
+        };
+        if let Err(error) = applied {
+            // A bad host callback must never turn a rejected view into closing an existing tab.
+            if index >= previous_len {
+                self.close(index);
+            }
+            self.active = previous.and_then(|id| self.docs.iter().position(|state| state.doc.id == id));
+            self.note_active_change();
+            self.sync_tools_mask_target();
+            return Err(error);
+        }
+        Ok((index, report))
+    }
+
+    /// Validate and apply an import's native view state once, without an edit or history step.
+    /// Admission callers use [`Self::admit_import_with_initial_view`] to roll back invalid hints.
     pub fn apply_import_initial_view(&mut self, view: Option<photocraft_io::NativeInitialView>) -> Result<()> {
         let Some(view) = view else { return Ok(()) };
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
@@ -49,6 +83,108 @@ mod initial_view_tests {
     use photocraft_doc::Document;
     use photocraft_io::{NativeImportTarget, NativeInitialView};
     use serde_json::json;
+
+    #[test]
+    fn rejected_import_admission_restores_exact_active_identity_or_no_active_document() {
+        for (existing, active) in [(0, None), (3, None), (3, Some(0)), (3, Some(1))] {
+            let mut session = Session::new();
+            for index in 0..existing {
+                session.execute("file.new", json!({"width": 8, "height": 6, "name": format!("existing {index}")})).unwrap();
+                session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                let layer = session.active().unwrap().active_layer.unwrap();
+                session
+                    .apply_import_initial_view(Some(NativeInitialView {
+                        selected_layers: vec![layer],
+                        active_layer: Some(layer),
+                        target: NativeImportTarget::LayerMask,
+                        ..Default::default()
+                    }))
+                    .unwrap();
+            }
+            session.active = active;
+            session.note_active_change();
+            session.sync_tools_mask_target();
+            let before = session.documents().to_vec();
+            let order = session.open_document_order.clone();
+            let mask_targeted = session.tools.mask_targeted;
+            let mut imported = Document::new("rejected", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+            if let Some(state) = before.first() {
+                imported.id = state.doc.id; // Admission must remap this collision without changing the prior identity.
+            }
+            let error = session
+                .admit_import_with_initial_view(true, Some(NativeInitialView { selected_path: Some(0), ..Default::default() }), |session| {
+                    (session.add_document(imported, None), ())
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("path"));
+            assert_eq!(session.active_index(), active);
+            assert_eq!(session.documents().len(), before.len());
+            assert_eq!(session.open_document_order, order);
+            assert_eq!(session.tools.mask_targeted, mask_targeted);
+            for (state, previous) in session.documents().iter().zip(before) {
+                assert!(Arc::ptr_eq(&state.doc, &previous.doc));
+                assert_eq!(state.path, previous.path);
+                assert_eq!(state.source_read_only, previous.source_read_only);
+                assert_eq!(state.active_layer, previous.active_layer);
+                assert_eq!(state.selected_layers, previous.selected_layers);
+                assert_eq!(state.channel_view, previous.channel_view);
+                assert_eq!(state.color_samplers, previous.color_samplers);
+                assert_eq!(
+                    (state.revision, state.saved_revision, state.history.past_len()),
+                    (previous.revision, previous.saved_revision, previous.history.past_len())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn import_admission_rejects_a_callback_returning_an_existing_document() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let original = session.active().unwrap().doc.clone();
+        assert!(session.admit_import_with_initial_view(true, Some(NativeInitialView::default()), |_| (0, ())).is_err());
+        assert_eq!(session.documents().len(), 1);
+        assert!(Arc::ptr_eq(&session.active().unwrap().doc, &original));
+        assert!(!session.active().unwrap().source_read_only);
+    }
+
+    #[test]
+    fn import_view_is_validated_against_the_admitted_document_and_rolls_back_late_rejection() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let original = session.active().unwrap().doc.clone();
+        let mut imported = Document::new("pending", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        imported.paths.push(photocraft_doc::vector::NamedPath { name: "Selected saved path".into(), ..Default::default() });
+        let view = NativeInitialView { selected_path: Some(0), ..Default::default() };
+        view.validate(&imported).unwrap();
+        let result = session.admit_import_with_initial_view(true, Some(view), |session| {
+            let index = session.add_document(imported, None);
+            // Admission hooks can change the pending data after a decoder-time check.
+            Arc::make_mut(&mut session.active_mut().unwrap().doc).paths.clear();
+            (index, ())
+        });
+        assert!(result.unwrap_err().to_string().contains("selected path is absent"));
+        assert_eq!(session.documents().len(), 1);
+        assert!(Arc::ptr_eq(&session.active().unwrap().doc, &original));
+    }
+
+    #[test]
+    fn import_admission_preserves_policy_report_read_only_and_native_view() {
+        let mut session = Session::new();
+        let document = Document::new("accepted", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let (index, color) = session
+            .admit_import_with_initial_view(true, Some(NativeInitialView { samplers: vec![[2., 3.]], ..Default::default() }), |session| {
+                session.open_document(document, None)
+            })
+            .unwrap();
+        assert!(color.is_object());
+        assert_eq!(session.active_index(), Some(index));
+        let state = session.active().unwrap();
+        assert!(state.source_read_only);
+        assert!(state.path.is_none());
+        assert_eq!(state.color_samplers, vec![[2., 3.]]);
+        assert_eq!(state.history.past_len(), 0);
+    }
 
     #[test]
     fn imported_mask_and_channel_views_target_existing_native_items_without_edits() {

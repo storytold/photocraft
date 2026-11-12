@@ -92,6 +92,17 @@ pub fn arrive(app: &mut PhotocraftApp, held: Held) {
     advance(app);
 }
 
+/// Preserve synchronous File › Open errors when no earlier file or question delays admission.
+/// Deferred opens report their eventual failure through the existing queue notices.
+pub(crate) fn arrive_checked(app: &mut PhotocraftApp, held: Held) -> Result<(), String> {
+    if !waiting(app) && app.prompt_order.is_empty() && !has_open_dialog(app) && !held.damage_pending && held.question.is_none() {
+        open(app, held, None).map(|_| ())
+    } else {
+        arrive(app, held);
+        Ok(())
+    }
+}
+
 /// Whether any open prompt (damage, profile or high-memory) is currently on screen.
 pub fn has_open_dialog(app: &PhotocraftApp) -> bool {
     app.ui.dialogs.iter().any(|d| owns(&d.fields) || owns_damage(&d.fields) || owns_memory(&d.fields) || super::historical_xcf::owns(&d.fields))
@@ -350,39 +361,32 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
     let Held { mut doc, read_only, initial_view, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
-    if let Some(view) = &initial_view {
-        view.validate(&doc).map_err(|error| error.to_string())?;
+    if (question.is_some() || policy_applied)
+        && let Some(action) = action
+        && let Err(e) = app.session.color.resolve_open(&mut doc, action)
+    {
+        app.open_failed(&name, &e.to_string());
+        return Err(e.to_string());
     }
-    let previous_active = app.session.active_index();
-    let index = if question.is_some() || policy_applied {
-        if let Some(action) = action
-            && let Err(e) = app.session.color.resolve_open(&mut doc, action)
-        {
-            app.open_failed(&name, &e.to_string());
-            return Err(e.to_string());
-        }
-        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
-    } else if smart_object {
-        // A damage-only hold has no colour question: apply the policy as the engine's open does,
-        // then admit it as the smart object document it is (name, history label, snapshot).
-        let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
-        app.session.color.open_policy(&mut doc, ignore_exif);
-        photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
-    } else {
-        app.session.open_document(doc, None).0
-    };
-    if let Err(error) = app.session.apply_import_initial_view(initial_view) {
-        app.session.close(index);
-        if let Some(previous) = previous_active {
-            app.session.set_active(previous);
-        }
-        return Err(error.to_string());
-    }
+    let (index, ()) = app
+        .session
+        .admit_import_with_initial_view(read_only, initial_view, |session| {
+            let index = if question.is_some() || policy_applied {
+                if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(session, doc) } else { session.add_document(doc, None) }
+            } else if smart_object {
+                // A damage-only hold has no colour question: apply the policy as the engine's open does,
+                // then admit it as the smart object document it is (name, history label, snapshot).
+                let ignore_exif = session.prefs().file_handling.ignore_exif_profile_tag;
+                session.color.open_policy(&mut doc, ignore_exif);
+                photocraft_engine::file_cmds::admit_as_smart_object(session, doc)
+            } else {
+                session.open_document(doc, None).0
+            };
+            (index, ())
+        })
+        .map_err(|error| error.to_string())?;
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;
-    if let Some(st) = app.session.active_mut() {
-        st.source_read_only = read_only;
-    }
     let slot = crate::jobs_ui::tab_slot(app, slot, order);
     let index = match slot {
         Some(slot) => app

@@ -713,6 +713,7 @@ fn import_path(
     expected: Option<&SourceFingerprint>,
     ctl: &photocraft_raster::Interrupt,
     opened: &mut Option<photocraft_io::FileIdentity>,
+    historical_source: Option<&mut Option<Arc<Vec<u8>>>>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     let expected = match expected {
         None => None,
@@ -721,7 +722,12 @@ fn import_path(
     };
     // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
     // streamed from the open file instead of being read whole.
-    photocraft_io::import_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened)
+    match historical_source {
+        Some(output) => {
+            photocraft_io::import_file_for_open_verified_with_historical_source(name, std::path::Path::new(path), expected, opts, ctl, opened, output)
+        }
+        None => photocraft_io::import_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -732,6 +738,7 @@ fn import_path(
     _: Option<&SourceFingerprint>,
     _: &photocraft_raster::Interrupt,
     _: &mut Option<photocraft_io::FileIdentity>,
+    _: Option<&mut Option<Arc<Vec<u8>>>>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
 }
@@ -1213,9 +1220,8 @@ impl Session {
     /// completion, since earlier handlers may have moved or closed tabs. When
     /// Color Settings ask about the file's profile, the document is held back instead and the
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
-    /// [`Session::take_held_open_with_view`] once answered. Validate the returned initial view
-    /// before admitting the document, then install it with [`Session::apply_import_initial_view`]
-    /// after admission so saved layer, channel and path selections survive the profile prompt.
+    /// [`Session::take_held_open_with_view`] once answered. Use [`Session::admit_import_with_initial_view`]
+    /// to admit the document and validate/apply its saved view together, rolling back a rejection.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         self.start_open_inner(name, source, false, false, None, None, true, None)
     }
@@ -1307,7 +1313,15 @@ impl Session {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");
-                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
+                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| {
+                            if confirm_damage
+                                && opts.historical_xcf_sample_order.is_none()
+                                && let Some(question) = photocraft_io::historical_xcf_sample_order_request_with(&name_w, &bytes, ctl)?
+                            {
+                                return Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question));
+                            }
+                            photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl)
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
@@ -1328,12 +1342,22 @@ impl Session {
                     }
                     OpenSource::Path(p) => {
                         let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                        let mut historical_source = None;
+                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| {
+                            import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened, confirm_damage.then_some(&mut historical_source))
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
-                                let identity = opened.ok_or_else(|| EngineError::Other("missing historical source identity".into()))?;
-                                let bytes = ctx.stage(0.02, 0.95, "Holding historical source", |ctl| historical_xcf_open::snapshot(&p, &identity, ctl))?;
+                                let bytes = match historical_source {
+                                    Some(bytes) => bytes,
+                                    None => {
+                                        // Defensive compatibility for importers that cannot return encoded bytes.
+                                        // This late fallback must never move progress behind decoding's completed range.
+                                        let identity = opened.ok_or_else(|| EngineError::Other("missing historical source identity".into()))?;
+                                        ctx.stage(0.95, 0.97, "Holding historical source", |ctl| historical_xcf_open::snapshot(&p, &identity, ctl))?
+                                    }
+                                };
                                 WorkResult::Historical(bytes, question)
                             }
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
@@ -1399,9 +1423,6 @@ impl Session {
                 }
                 WorkResult::Decoded(imported) => {
                     let (mut r, damaged) = *imported;
-                    if let Some(view) = &r.initial_view {
-                        view.validate(&r.document).map_err(|error| EngineError::Other(error.to_string()))?;
-                    }
                     crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                     crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
@@ -1415,12 +1436,8 @@ impl Session {
                     // The shell may synchronize another completed job before handling this
                     // open, consuming the pending path. Keep its exact index for queued opens.
                     let initial_path_selection = r.initial_view.as_ref().and_then(|view| view.selected_path);
-                    let (index, color) = s.open_document(r.document, None);
+                    let (index, color) = s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(r.document, None))?;
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
-                    if let Some(st) = s.active_mut() {
-                        st.source_read_only = r.source_read_only;
-                    }
-                    s.apply_import_initial_view(r.initial_view)?;
                     Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color,
                         "hasInitialView": has_initial_view, "initialPathSelection": initial_path_selection}))
                 }
@@ -2280,3 +2297,11 @@ mod psd_open_confirmation_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "historical_xcf_open/fixture.rs"]
+mod historical_xcf_fixture;
+
+#[cfg(test)]
+#[path = "jobs/historical_source_tests.rs"]
+mod historical_source_tests;
