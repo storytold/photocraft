@@ -114,6 +114,7 @@ pub(super) fn edited_object(object: &E, text: &str) -> Option<E> {
     let model = object.get_mut("0").filter(|m| matches!(m, E::Dict(_)))?;
     let total = utf16_len(text) as usize;
     let paragraphs: Vec<usize> = text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect();
+    let sources = model.get("0").and_then(E::as_str).and_then(|old| paragraph_sources(old, text));
     let E::Dict(entries) = model else { return None };
     let (mut nodes, mut bytes) = (MAX_REFIT_RUN_NODES, MAX_REFIT_RUN_BYTES);
     for (key, value) in entries.iter_mut() {
@@ -125,7 +126,7 @@ pub(super) fn edited_object(object: &E, text: &str) -> Option<E> {
             continue;
         };
         let fitted = if key.as_str() == "5" {
-            runs_per(runs, &paragraphs, "1", &mut nodes, &mut bytes)?
+            runs_from(runs, &paragraphs, sources.as_deref(), "1", &mut nodes, &mut bytes)?
         } else {
             runs_to_length(runs, total, "1", &mut nodes, &mut bytes)?
         };
@@ -155,6 +156,7 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
     }
     let total = utf16_len(text) as usize;
     let paragraphs: Vec<usize> = text.split_inclusive('\r').map(|p| p.encode_utf16().count()).collect();
+    let sources = entries.iter().find(|(k, _)| k == "Text").and_then(|(_, v)| v.as_str()).and_then(|old| paragraph_sources(old, text));
     let (mut nodes, mut bytes) = (MAX_REFIT_RUN_NODES, MAX_REFIT_RUN_BYTES);
     for (key, value) in entries.iter_mut() {
         if key.as_str() == "Text" {
@@ -171,7 +173,7 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
         let fitted = match runs {
             E::Array(runs) if runs.iter().all(|x| matches!(x, E::Dict(_)) && x.get("Length").is_some()) => {
                 if key.as_str() == "ParagraphRun" {
-                    runs_per(runs, &paragraphs, "Length", &mut nodes, &mut bytes)?
+                    runs_from(runs, &paragraphs, sources.as_deref(), "Length", &mut nodes, &mut bytes)?
                 } else {
                     runs_to_length(runs, total, "Length", &mut nodes, &mut bytes)?
                 }
@@ -183,15 +185,71 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
     Some(object)
 }
 
+/// For each paragraph of `new` (`\r`-terminated), the paragraph of `old` it came from, when
+/// `new` is `old` with only its spacing and paragraph breaks changed (the same characters
+/// otherwise, in order): baking Dynamic Text splits a paragraph into one per line, and every
+/// piece keeps its own paragraph's style, not the style of whichever paragraph had its index.
+/// An empty paragraph of `new` is the empty paragraph `old` has at the same place, while one is
+/// left there, and keeps its style; a new empty one takes the next character's paragraph.
+/// `None` otherwise (and for unchanged text), and the paragraphs keep the file's by index.
+fn paragraph_sources(old: &str, new: &str) -> Option<Vec<usize>> {
+    let blank = |c: char| matches!(c, ' ' | '\r' | '\n');
+    if old == new || !old.chars().filter(|&c| !blank(c)).eq(new.chars().filter(|&c| !blank(c))) {
+        return None;
+    }
+    // Per old paragraph (not per character): how many non-blank characters come before it, and
+    // how many it holds.
+    let count = |p: &str| p.chars().filter(|&c| !blank(c)).count();
+    let mut old_paras: Vec<(usize, usize)> = Vec::new();
+    let mut before = 0usize;
+    for p in old.split_inclusive('\r') {
+        let n = count(p);
+        old_paras.push((before, n));
+        before = before.saturating_add(n);
+    }
+    // Past the last character: the last old paragraph that holds one.
+    let last_full = old_paras.iter().rposition(|&(_, n)| n > 0).unwrap_or(0);
+    // `owner`: the old paragraph holding the character at `seen`; `empty`: the next old paragraph
+    // an empty new one may be. Both only move forward, as `seen` does.
+    let (mut owner, mut empty, mut seen) = (0usize, 0usize, 0usize);
+    let mut out = Vec::new();
+    for p in new.split_inclusive('\r') {
+        let n = count(p);
+        while old_paras.get(owner).is_some_and(|&(at, len)| len == 0 || at.saturating_add(len) <= seen) {
+            owner += 1;
+        }
+        while old_paras.get(empty).is_some_and(|&(at, len)| if len == 0 { at < seen } else { at.saturating_add(len) <= seen }) {
+            empty += 1;
+        }
+        let src = if n == 0 && old_paras.get(empty).is_some_and(|&(at, len)| len == 0 && at == seen) {
+            empty += 1;
+            empty - 1
+        } else if owner < old_paras.len() {
+            owner
+        } else {
+            last_full
+        };
+        out.push(src);
+        seen = seen.saturating_add(n);
+    }
+    Some(out)
+}
+
 /// `runs` (`<< … /1 length >>`, the length key named `len_key`) remade with the lengths `lens`:
 /// run i keeps the content of the file's run i, else of its last one. `None` for an empty `runs`
 /// or when the cumulative `nodes` / `bytes` budget is exceeded.
 fn runs_per(runs: &[E], lens: &[usize], len_key: &str, nodes: &mut usize, bytes: &mut usize) -> Option<Vec<E>> {
+    runs_from(runs, lens, None, len_key, nodes, bytes)
+}
+
+/// [`runs_per`], run i keeping the content of the file's run `sources[i]` when `sources` is given
+/// (see [`paragraph_sources`]).
+fn runs_from(runs: &[E], lens: &[usize], sources: Option<&[usize]>, len_key: &str, nodes: &mut usize, bytes: &mut usize) -> Option<Vec<E>> {
     let last = runs.last()?;
     lens.iter()
         .enumerate()
         .map(|(i, &len)| {
-            let src = runs.get(i).unwrap_or(last);
+            let src = runs.get(sources.and_then(|s| s.get(i).copied()).unwrap_or(i)).unwrap_or(last);
             if !fits_budget(src, nodes, bytes) {
                 return None;
             }

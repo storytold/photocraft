@@ -23,6 +23,7 @@ mod color_glyphs;
 pub mod craft_fonts;
 mod embolden;
 pub mod engine_data;
+pub mod fit;
 pub mod font_class;
 pub mod fonts;
 pub mod glyphs;

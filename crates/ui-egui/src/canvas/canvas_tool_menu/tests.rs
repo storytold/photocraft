@@ -160,6 +160,26 @@ fn type_edit_menu_rows_act_on_the_text_and_the_layer() {
     assert!(app.ui.text_edit.is_none() && text_of(&app, id).is_none(), "the type layer is pixels now");
 }
 
+/// Convert and Release Dynamic Text from the edit menu end the edit first, as the other Convert
+/// rows do: Release keeping the look writes line breaks into the text, and an edit still running
+/// would type at its old caret offsets.
+#[test]
+fn dynamic_text_rows_end_the_type_edit() {
+    let mut app = app();
+    let id = editing_type(&mut app);
+    let ctx = Context::default();
+    assert!(open(&mut app, &ctx, Tool::Type, [10.0, 10.0]));
+    choose(&mut app, &ctx, "type.convertToDynamicText");
+    assert!(app.ui.text_edit.is_none(), "Convert to Dynamic Text ends the edit");
+    assert!(text_of(&app, id).unwrap().fit.is_some());
+    crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
+    assert!(app.ui.text_edit.is_some());
+    assert!(open(&mut app, &ctx, Tool::Type, [10.0, 10.0]));
+    choose(&mut app, &ctx, "type.releaseDynamicText");
+    assert!(app.ui.text_edit.is_none(), "Release Dynamic Text ends the edit");
+    assert!(text_of(&app, id).unwrap().fit.is_none());
+}
+
 /// A committed type layer reading "Hello" over the middle of the canvas, no edit running.
 fn committed_type(app: &mut PhotocraftApp) -> u64 {
     app.ui.tool = Tool::Type;

@@ -20,6 +20,7 @@ use crate::canvas::ViewXform;
 use crate::state::{BoxResize, TextEdit};
 
 mod defaults;
+mod dynamic_text;
 mod editing;
 mod fonts;
 mod ime;

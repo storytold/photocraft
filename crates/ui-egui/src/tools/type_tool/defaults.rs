@@ -70,7 +70,7 @@ pub(crate) fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
 
 /// Coalesce key while a field is being scrubbed: every step of one drag shares one history step
 /// (Photoshop's single step per scrub, #124). Unique per press, so two drags are two steps.
-fn drag_key(ctx: &egui::Context) -> Option<String> {
+pub(super) fn drag_key(ctx: &egui::Context) -> Option<String> {
     let id = ctx.dragged_id()?;
     let t = ctx.input(|i| i.pointer.press_start_time())?;
     Some(format!("type-drag-{}-{}", id.value(), t.to_bits()))

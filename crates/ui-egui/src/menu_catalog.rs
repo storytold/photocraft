@@ -513,6 +513,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Type"], "---", None, "---"),
     (&["Type"], "Convert to Paragraph Text", None, "type.convertToParagraphText"),
     (&["Type"], "Convert to Point Text", None, "type.convertToPointText"),
+    (&["Type"], "Convert to Dynamic Text", None, "type.convertToDynamicText"),
+    (&["Type"], "Release Dynamic Text", None, "type.releaseDynamicText"),
     (&["Type"], "Warp Text…", None, "type.warpText"),
     (&["Type"], "---", None, "---"),
     (&["Type", "Font Preview Size"], "Small", None, "type.fontPreviewSize.small"),
