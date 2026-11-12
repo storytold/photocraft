@@ -882,3 +882,45 @@ issue = 9329
 bench = "perf_scenarios"
 row = "app frame after Paste Into on 24 MP (CPU canvas)"
 enforce = false  # new; no baseline yet
+
+# ---- #210: Liquify, Puppet Warp and Perspective Warp commits off the UI thread -----------------
+
+[[scenario]]
+id = "P116"
+title = "Commit Liquify on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "Liquify commit 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P117"
+title = "Commit Puppet Warp on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "Puppet Warp commit 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P118"
+title = "Commit Perspective Warp on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "Perspective Warp commit 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P119"
+title = "Cancel a Perspective Warp job on 24 MP (until the worker exits)"
+issue = 210
+bench = "perf_scenarios"
+row = "cancel Perspective Warp job on 24 MP"
+metric = "p95"
+budget_ms = 200
+enforce = false  # new; no baseline yet
