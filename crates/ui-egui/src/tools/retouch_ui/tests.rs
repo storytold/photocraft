@@ -824,6 +824,7 @@ fn waiting_remove_strokes_keep_their_own_brush() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 200, "color": "#808080"})).unwrap();
     app.ui.tool = Tool::Remove;
+    crate::paint_mouse::sync_tool_brush(&mut app);
     app.ui.tool_options.remove_after_each_stroke = false;
     let m = egui::Modifiers::NONE;
     let stroke = |app: &mut PhotocraftApp, x: f64| {
