@@ -1386,3 +1386,20 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
+
+/// #13432: in Hue/Saturation a click on the Saturation slider gives its number keyboard focus,
+/// so Down steps the saturation by one, as after a click on the number itself.
+#[test]
+fn clicking_the_saturation_slider_lets_down_step_it_by_one() {
+    let mut h = app_harness_stepped("hueSaturation", "rgb", 8, 1.0 / 60.0);
+    let saturation = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
+        Adjustment::HueSaturation { saturation, .. } => saturation,
+        other => panic!("{other:?}"),
+    };
+    let label = label_rect(&h, "Saturation").expect("Saturation row");
+    click(&mut h, Pos2::new(label.left() + 60.0, label.bottom() + 14.0));
+    let at = saturation(&h);
+    assert!(at != 0.0, "the click moved the slider");
+    key_with(&mut h, egui::Key::ArrowDown, egui::Modifiers::NONE);
+    assert_eq!(saturation(&h), at - 1.0);
+}

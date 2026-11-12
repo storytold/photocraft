@@ -217,6 +217,15 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     resp
 }
 
+/// A click or the start of a drag on a row's slider hands keyboard focus to the row's number, so
+/// Up and Down then step it as they do after a click on the number itself (#13432). Only the
+/// gesture's first frame asks, so a number being typed in is not pulled back every frame.
+fn focus_field_on_slider_gesture(ui: &Ui, slider: &Response, field: &Response) {
+    if slider.clicked() || slider.drag_started() {
+        ui.memory_mut(|m| m.request_focus(field.id));
+    }
+}
+
 /// Labelled slider row: `Label ........ [value field]` above a full-width thin slider.
 pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, gradient: Option<&[Color32]>) -> Response {
     slider_row_with(ui, label, value, range, suffix, gradient, RowGestures::default())
@@ -276,6 +285,9 @@ pub fn slider_row_prec(
     let s = slider_with(ui, value, range, gradient, g);
     s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), tl!(label)));
     let s = if let Some(id) = label_id { s.labelled_by(id) } else { s };
+    if let Some(v) = &changed_resp {
+        focus_field_on_slider_gesture(ui, &s, v);
+    }
     let mut r = s.clone();
     if let Some(v) = changed_resp {
         if v.changed() {
@@ -321,6 +333,9 @@ pub fn slider_line(ui: &mut Ui, label: &str, label_w: f32, value: &mut f32, rang
         })
         .inner;
     let mut r = s.clone();
+    if let Some(v) = &field {
+        focus_field_on_slider_gesture(ui, &s, v);
+    }
     if let Some(v) = field {
         if v.changed() {
             r.mark_changed();

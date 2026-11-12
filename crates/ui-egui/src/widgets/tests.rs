@@ -2161,3 +2161,67 @@ fn a_grouped_dropdown_list_draws_a_line_above_each_group_and_keeps_its_width() {
     assert!((rows[0].top() - plain[0].top()).abs() < 0.5, "no line above the first row: {rows:?} vs {plain:?}");
     assert_eq!(list.width(), plain_list.width(), "the line doesn't widen the list");
 }
+
+/// A row for the slider-focus tests: -180..=180, starting at 0.
+fn slider_focus_row() -> Harness<'static, f32> {
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut f32| {
+            super::slider_row(ui, "Hue", v, -180.0..=180.0, "°", None);
+        },
+        0.0,
+    );
+    h.run();
+    h
+}
+
+/// #13432: a click on the slider gives the row's number focus, so Up and Down step it.
+#[test]
+fn clicking_a_slider_lets_the_arrow_keys_step_its_number() {
+    let mut h = slider_focus_row();
+    h.get_by_role(egui::accesskit::Role::Slider).click();
+    h.run();
+    let at = *h.state();
+    h.key_press_modifiers(Modifiers::NONE, Key::ArrowUp);
+    h.run();
+    assert_eq!(*h.state(), at + 1.0);
+    h.key_press_modifiers(Modifiers::NONE, Key::ArrowDown);
+    h.key_press_modifiers(Modifiers::NONE, Key::ArrowDown);
+    h.run();
+    assert_eq!(*h.state(), at - 1.0);
+}
+
+/// #13432: the same after a drag on the slider.
+#[test]
+fn dragging_a_slider_lets_the_arrow_keys_step_its_number() {
+    let mut h = slider_focus_row();
+    let r = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let (a, b) = (egui::pos2(r.center().x, r.center().y), egui::pos2(r.center().x + 40.0, r.center().y));
+    h.event(egui::Event::PointerMoved(a));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerMoved(b));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    let at = *h.state();
+    assert!(at > 0.0, "the drag moved the slider");
+    h.key_press_modifiers(Modifiers::NONE, Key::ArrowUp);
+    h.run();
+    assert_eq!(*h.state(), at.round() + 1.0, "a step lands on the whole-number grid, as in the field");
+}
+
+/// #13432: the focus is taken on the click, not every frame, so a number being typed keeps its text.
+#[test]
+fn typing_in_the_number_after_a_slider_click_still_works() {
+    let mut h = slider_focus_row();
+    h.get_by_role(egui::accesskit::Role::Slider).click();
+    h.run();
+    h.get_by_role(egui::accesskit::Role::SpinButton).click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("42".into()));
+    h.run();
+    h.run();
+    assert_eq!(*h.state(), 42.0);
+}
