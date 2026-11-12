@@ -32,6 +32,17 @@ fn target(app: &PhotocraftApp) -> Option<(PathRef, Path)> {
     active_paths(app).into_iter().next()
 }
 
+/// A Path Selection press on a shape layer, off every component of the targeted saved path:
+/// the saved path is no longer the target, so the press and drag act on the shape (#13270).
+/// A press on one of the saved path's components keeps it targeted.
+pub(crate) fn untarget_saved_path_off(app: &mut PhotocraftApp, at: [f64; 2], tol: f64) {
+    if let Some((PathRef::Saved(_), path)) = target(app)
+        && component_at(&path, at, tol).is_none()
+    {
+        app.ui.selected_path = None;
+    }
+}
+
 /// The selected components: their path and the first subpath of each, in order. `None` with
 /// nothing selected, a selection on a path that is not an active one any more, or a tool other
 /// than Path Selection (the only one that shows it, so the only one that acts on it).
