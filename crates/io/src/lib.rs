@@ -93,7 +93,7 @@ pub mod xml;
 
 pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};
-pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
+pub use photocraft_codecs::{DdsCompression, DdsImport, DdsInfo, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 use photocraft_psd::{PsdError, PsdFile};
 
@@ -634,6 +634,8 @@ pub struct ImportOptions {
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
     /// the fresh preflight estimate does not exceed this amount.
     pub psd_approved_estimate: Option<u64>,
+    /// A DDS texture's alpha, mip chain and flip choices (File › Open's DDS prompt answers).
+    pub dds: DdsImport,
 }
 
 impl Default for ImportOptions {
@@ -648,6 +650,7 @@ impl Default for ImportOptions {
             pdf_editable: false,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
+            dds: DdsImport::default(),
         }
     }
 }

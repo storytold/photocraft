@@ -280,8 +280,26 @@ pub fn start_open(
     slot: Option<usize>,
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
+    start_open_opts(app, name, path, source, slot, order, None)
+}
+
+/// [`start_open`] with the DDS Import prompt's answers (`ddsAlphaChannel`/`ddsMipmaps`/
+/// `ddsFlip`); `None` is the plain open.
+pub(crate) fn start_open_opts(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    dds: Option<photocraft_io::DdsImport>,
+) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
+    let mut opts = photocraft_engine::jobs::import_options(app.session.prefs());
+    if let Some(d) = dds {
+        opts.dds = d;
+    }
+    match app.session.start_open_with_options(name, source, opts, app.background_jobs).map_err(|e| e.to_string())? {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
@@ -342,18 +360,24 @@ pub(crate) fn opened_in_order(jobs: &mut JobsUi, order: OpenOrder) {
     }
 }
 
-/// Every member of the set has been started: forget it unless some are still opening, waiting on
-/// their prompt (memory, profile or damage), or waiting for a prompt to clear.
+/// Every member of the set has been started: forget it unless some are still opening, parked
+/// behind the DDS Import prompt, waiting on their prompt (memory, profile or damage), or
+/// waiting for a prompt to clear.
 pub(crate) fn end_batch(app: &mut PhotocraftApp) {
-    let waiting: Vec<u64> =
-        app.held_memory_prompts.iter().filter_map(|m| m.order.map(|o| o.batch)).chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch))).collect();
+    let waiting: Vec<u64> = app
+        .held_memory_prompts
+        .iter()
+        .filter_map(|m| m.order.map(|o| o.batch))
+        .chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch)))
+        .chain(app.dds_imports.iter().filter_map(|p| p.order.map(|o| o.batch)))
+        .collect();
     let JobsUi { opens, batches, .. } = &mut app.jobs;
     batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id)) || waiting.contains(&b.id));
 }
 
 /// The tab position for a member of a set that just opened: after the members before it that
 /// have opened, so the set reads in order whichever order the opens finish in.
-fn batch_slot(jobs: &mut JobsUi, order: OpenOrder) -> Option<usize> {
+pub(crate) fn batch_slot(jobs: &mut JobsUi, order: OpenOrder) -> Option<usize> {
     let batch = jobs.batches.iter_mut().find(|b| b.id == order.batch)?;
     let slot = batch.base + batch.opened.iter().filter(|s| **s < order.seq).count();
     batch.opened.push(order.seq);

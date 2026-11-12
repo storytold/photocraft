@@ -173,10 +173,12 @@ fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
 
 /// Import bytes with an optional format override, retaining source identity and opening diagnostics.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
-    open_bytes_as_with_options(s, name, bytes, as_ext, path, false)
+    open_bytes_as_with_options(s, name, bytes, as_ext, path, None, false)
 }
 
-/// [`open_bytes_as`] with the caller's high-memory approval for these bytes.
+/// [`open_bytes_as`] with the DDS import answers (alpha as channel, mip chain as layers,
+/// flipped rows) a command's `ddsAlphaChannel`/`ddsMipmaps`/`ddsFlip` params chose (`None` is
+/// the plain open) and the caller's high-memory approval for these bytes.
 ///
 /// A one-shot approved estimate is deliberately not forwarded: these bytes may be a fresh copy
 /// whose estimate was never approved, so approval applies only through the boolean flag.
@@ -186,6 +188,7 @@ pub fn open_bytes_as_with_options(
     bytes: &[u8],
     as_ext: Option<&str>,
     path: Option<String>,
+    dds: Option<photocraft_io::DdsImport>,
     approve_high_memory: bool,
 ) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
@@ -194,6 +197,9 @@ pub fn open_bytes_as_with_options(
         None => name.to_string(),
     };
     let mut opts = crate::jobs::import_options(s.prefs());
+    if let Some(dds) = dds {
+        opts.dds = dds;
+    }
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, path.as_deref(), bytes)?;
@@ -247,9 +253,33 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), dds_import_param(p, "file.openAs")?, approve_high_memory)?;
     remember_batch_open(s);
     Ok(result)
+}
+
+/// The DDS import answers in `p`: `"ddsAlphaChannel": bool` (the texture's alpha opens as an
+/// "Alpha 1" document channel, not the layer's transparency), `"ddsMipmaps": bool` (each mip
+/// level a layer) and `"ddsFlip": bool` (rows open bottom-up). `None` when none is given —
+/// File › Open's DDS prompt then asks.
+pub fn dds_import_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::DdsImport>> {
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let channel = match p.get("ddsAlphaChannel") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(format!("`ddsAlphaChannel` must be true or false, got {v}")))?),
+    };
+    let mips = match p.get("ddsMipmaps") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(format!("`ddsMipmaps` must be true or false, got {v}")))?),
+    };
+    let flip = match p.get("ddsFlip") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(format!("`ddsFlip` must be true or false, got {v}")))?),
+    };
+    if channel.is_none() && mips.is_none() && flip.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(photocraft_io::DdsImport { alpha_as_channel: channel.unwrap_or(false), mips_as_layers: mips.unwrap_or(false), flip: flip.unwrap_or(false) }))
 }
 
 /// Answers a pending high-memory preflight: `approve` false cancels it; true rechecks the hard

@@ -885,7 +885,7 @@ fn inline_layered_tiff_prompts_before_decoding_and_opens_or_declines() {
     photocraft_io::psd_budget::with_test_estimate_charge(3 * gb, || {
         photocraft_io::memory::with_mock_memory(snap, || {
             let order = crate::jobs_ui::OpenOrder { batch: crate::jobs_ui::begin_batch(&mut app), seq: 0 };
-            app.open_bytes_placed("layered.tif", &bytes, Some(path), None, Some(order)).unwrap();
+            app.open_bytes_placed("layered.tif", &bytes, Some(path), None, Some(order), None).unwrap();
             // The prompt comes first: nothing is decoded, no tab is opened, and the engine holds
             // the source for the approval. The set order travels with the prompt.
             assert!(app.session.documents().is_empty(), "the layered TIFF waits for approval instead of opening");
@@ -966,7 +966,7 @@ fn inline_drop_slot_survives_the_memory_prompt() {
     let snap = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
     photocraft_io::psd_budget::with_test_estimate_charge(3 * gb, || {
         photocraft_io::memory::with_mock_memory(snap, || {
-            app.open_bytes_placed("dropped.psd", &recovery_psd::make_psd(false), None, Some(0), None).unwrap();
+            app.open_bytes_placed("dropped.psd", &recovery_psd::make_psd(false), None, Some(0), None, None).unwrap();
             assert_eq!(app.held_memory_prompts.len(), 1);
             assert_eq!(app.held_memory_prompts.front().unwrap().slot, Some(0), "the drop slot travels with the prompt");
             let dlg = app.ui.dialogs[0].id;
