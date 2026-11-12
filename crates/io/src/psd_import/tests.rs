@@ -389,6 +389,18 @@ fn layer_bands_end_on_tile_rows_and_cover_the_layer() {
     assert_eq!(band_rows(0, 2000, 8000), vec![(0, 2000)]);
 }
 
+#[test]
+fn the_budget_band_height_is_the_band_the_importer_decodes() {
+    let t = TILE_SIZE as usize;
+    // Narrow, the #11465 layer (7750 px RGBA), and a row wider than a whole band.
+    for (row_bytes, expected) in [(8, BAND_BYTES / 8 / t * t), (31_000, 1024), (BAND_BYTES + 1, t)] {
+        assert_eq!(band_height(row_bytes), expected, "{row_bytes}");
+        let bands = band_rows(0, expected * 3 + 5, row_bytes);
+        assert_eq!(bands.len(), 4, "{row_bytes}");
+        assert!(bands[..3].iter().all(|&(a, b)| b - a == expected), "{row_bytes}: {bands:?}");
+    }
+}
+
 // Tall, narrow masks cross tile bands while keeping these cases only a few KiB.
 fn banded_mask_file(depth: u16, compression: Compression, version: Version, real: bool) -> (PsdFile, Vec<u8>, photocraft_psd::Rect) {
     use photocraft_psd::{ChannelData, LayerMask as PsdMask, MaskData, MaskParameters, RealMask};

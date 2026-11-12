@@ -80,25 +80,56 @@ fn user_mask_bounds_count_even_when_the_layer_is_small() {
     assert!(matches!(check(&file, before), Err(IoError::PsdImportBudget { .. })));
 }
 
+/// One layer of `w` x `h` 8-bit RGBA, every channel stored with `compression`.
+fn one_layer(w: u32, h: u32, compression: Compression) -> PsdMemoryEstimate {
+    let mut file = testgen::small(Version::Psd, compression);
+    let record = file.layers()[0].clone();
+    file.layer_info.as_mut().unwrap().layers = vec![record];
+    file.layers_mut()[0].rect = Rect::from_xywh(0, 0, w, h);
+    for channel in &mut file.layers_mut()[0].channels {
+        channel.compression = Some(compression);
+    }
+    super::estimate(&file).unwrap()
+}
+
+/// The workspace `estimate` should charge an 8-bit RGBA layer: one band of `band_height` rows
+/// (planes + interleave + float pixels), the inflate scratch, `zip_planes` whole planes and the
+/// RLE row indexes.
+fn expected_layer_workspace(w: u64, h: u64, zip_planes: u64) -> u64 {
+    let rows = (crate::psd_import::band_height((w * 4) as usize) as u64).min(h);
+    let plane = w * h;
+    w * rows * 4 * 7 + inflate_scratch(plane, 4).unwrap() + zip_planes * plane + (h + 1) * 4 * 8
+}
+
 #[test]
 fn a_layer_decoded_in_bands_is_not_charged_for_whole_layer_buffers() {
     // #11465: a 7750x10963 8-bit layer was charged 2.4 GB of workspace the band decoder never uses.
-    let layer = |compression| {
-        let mut file = testgen::small(Version::Psd, compression);
-        let record = file.layers()[0].clone();
-        file.layer_info.as_mut().unwrap().layers = vec![record];
-        file.layers_mut()[0].rect = Rect::from_xywh(0, 0, 7750, 10963);
-        for channel in &mut file.layers_mut()[0].channels {
-            channel.compression = Some(compression);
-        }
-        super::estimate(&file).unwrap()
-    };
-    let rle = layer(Compression::Rle);
-    assert!(rle.workspace_bytes < 256 << 20, "{rle:?}");
+    let rle = one_layer(7750, 10963, Compression::Rle);
+    assert_eq!(rle.workspace_bytes, expected_layer_workspace(7750, 10963, 0), "{rle:?}");
     assert!(rle.total_bytes < 1 << 30, "{rle:?}");
     // A ZIP channel is inflated whole, so it still pays for its planes.
-    let zip = layer(Compression::Zip);
-    assert_eq!(zip.workspace_bytes, rle.workspace_bytes + 4 * 7750 * 10963, "{zip:?}");
+    let zip = one_layer(7750, 10963, Compression::Zip);
+    assert_eq!(zip.workspace_bytes, expected_layer_workspace(7750, 10963, 4), "{zip:?}");
+}
+
+#[test]
+fn a_layer_shorter_than_a_band_is_charged_for_its_own_rows() {
+    let short = one_layer(7750, 300, Compression::Rle);
+    assert_eq!(short.workspace_bytes, expected_layer_workspace(7750, 300, 0), "{short:?}");
+}
+
+#[test]
+fn only_zip_channels_pay_for_a_whole_plane() {
+    let source = |len: u64| Some(photocraft_psd::Stored { source: photocraft_psd::Source::new(vec![0; 4]), offset: 0, len });
+    let channel = |compression, stored| photocraft_psd::layer::ChannelData { stored, ..photocraft_psd::layer::ChannelData::new(0, compression, Vec::new()) };
+    for (compression, expected) in
+        [(Some(Compression::Zip), 1000), (Some(Compression::ZipPrediction), 1000), (Some(Compression::Rle), 0), (Some(Compression::Raw), 0), (None, 0)]
+    {
+        assert_eq!(whole_plane_bytes(Some(&channel(compression, None)), 1000), expected, "{compression:?}");
+        // Left in the source, a ZIP channel also reads its encoded bytes in; others are banded.
+        assert_eq!(whole_plane_bytes(Some(&channel(compression, source(77))), 1000), if expected > 0 { 1077 } else { 0 }, "{compression:?}");
+    }
+    assert_eq!(whole_plane_bytes(None, 1000), 0, "a missing channel pays nothing");
 }
 
 #[test]
@@ -112,15 +143,28 @@ fn a_zip_mask_pays_for_its_whole_plane() {
         }
         super::estimate(&file).unwrap().workspace_bytes
     };
-    assert_eq!(mask(Compression::Zip), mask(Compression::Rle) + 4000 * 4000);
+    // One tile row of planes + interleave + float pixels, plus the inflate scratch.
+    let band = 4000 * TILE_SIZE as u64 * 7 + inflate_scratch(4000 * 4000, 1).unwrap();
+    assert_eq!(mask(Compression::Rle), band);
+    assert_eq!(mask(Compression::Zip), band + 4000 * 4000);
 }
 
 #[test]
 fn zip_channels_left_in_the_source_pay_for_their_encoded_bytes() {
+    // The exact per-channel charge is `only_zip_channels_pay_for_a_whole_plane`; this checks a real
+    // lazily parsed file reaches it.
     let bytes = testgen::small(Version::Psd, Compression::Zip).to_bytes().unwrap();
     let in_memory = PsdFile::from_bytes(&bytes).unwrap();
     let from_source = PsdFile::from_source(photocraft_psd::Source::new(bytes)).unwrap();
     assert!(super::estimate(&from_source).unwrap().workspace_bytes > super::estimate(&in_memory).unwrap().workspace_bytes);
+}
+
+#[test]
+fn a_huge_layer_with_tiny_data_is_still_charged_for_its_tiles() {
+    // Banding cuts the workspace, not the tiles the layer will keep.
+    let huge = one_layer(100_000, 100_000, Compression::Rle);
+    assert!(huge.retained_bytes >= 100_000 * 100_000 * 4, "{huge:?}");
+    assert!(huge.total_bytes > 10 * huge.workspace_bytes, "{huge:?}");
 }
 
 #[test]
