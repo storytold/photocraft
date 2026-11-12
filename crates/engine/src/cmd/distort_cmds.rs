@@ -368,10 +368,13 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Lifts the selected pixels (when there is a selection), deforms them with `f` and puts them
 /// back over the rest; without a selection deforms the whole surface.
-fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -> Result<Surface>) -> Result<Surface> {
+fn deform_selected(cmd: &str, label: &str, surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -> Result<Surface>) -> Result<Surface> {
     match sel {
         Some(sel) => {
             let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel)?;
+            if lifted.content_bounds().is_empty() {
+                return Err(bad(cmd, format!("Could not use {label} because the selected area is empty.")));
+            }
             let moved = f(&lifted)?;
             crate::transform_cmds::composite_over(&mut rest, &moved);
             rest.prune();
@@ -399,7 +402,7 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let linked = s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.mask.as_ref()).filter(|m| m.linked).map(|m| m.surface.clone());
     let moved_mask: RefCell<Option<Surface>> = RefCell::new(None);
     let layer_fn = |surf: &Surface, sel: Option<&Surface>, _: Rect| {
-        deform_selected(surf, sel, &|x| {
+        deform_selected(cmd, "Puppet Warp", surf, sel, &|x| {
             let b = x.content_bounds();
             if b.is_empty() {
                 return Ok(x.clone());
@@ -437,7 +440,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         "Perspective Warp",
         p,
         true,
-        &|surf, sel, _| deform_selected(surf, sel, &|x| Ok(perspective_surface(x, &planes, it))),
+        &|surf, sel, _| deform_selected(cmd, "Perspective Warp", surf, sel, &|x| Ok(perspective_surface(x, &planes, it))),
         Some(&mask_fn),
     )?;
     r["planes"] = json!(planes);
