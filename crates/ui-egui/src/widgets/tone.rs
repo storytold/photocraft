@@ -184,17 +184,25 @@ pub fn compute_histograms_at(doc: &Document, source: HistSource, space: ToneSpac
     match source {
         HistSource::Colors { layer, colors } => {
             h = vec![[0; 256]; 1 + doc.pixel_format().mode.color_channels()];
-            if let Some(surface) = doc.layer(layer).and_then(Layer::surface) {
+            let sel = match scope {
+                HistScope::WholeInput => None,
+                HistScope::Selection => doc.selection.as_ref(),
+            };
+            let area = match sel {
+                Some(m) if m.default_pixel().iter().all(|&v| v < 0.5) => m.content_bounds().intersect(&doc.bounds()),
+                _ => doc.bounds(),
+            };
+            if !area.is_empty()
+                && let Some(surface) = doc.layer(layer).and_then(Layer::surface)
+            {
                 for k in colors.indices() {
-                    {
-                        let bins = component_bins(surface, doc.bounds(), k);
-                        if let Some(channel) = h.get_mut(k + 1) {
-                            *channel = bins;
-                        }
-                        if let Some(combined) = h.first_mut() {
-                            for (a, b) in combined.iter_mut().zip(bins) {
-                                *a = a.saturating_add(b);
-                            }
+                    let bins = component_bins(surface, area, k, sel);
+                    if let Some(channel) = h.get_mut(k + 1) {
+                        *channel = bins;
+                    }
+                    if let Some(combined) = h.first_mut() {
+                        for (a, b) in combined.iter_mut().zip(bins) {
+                            *a = a.saturating_add(b);
                         }
                     }
                 }
@@ -435,12 +443,25 @@ fn gray_sample_step(area: photocraft_geom::Rect) -> u32 {
 
 /// 256-bin histogram of a gray plane: its levels in 0–255, sampled like the engine's auto-tone
 /// histograms so a big canvas costs no more than about a megapixel here (#5335).
-fn component_bins(surface: &photocraft_raster::Surface, area: photocraft_geom::Rect, component: usize) -> [u32; 256] {
+fn component_bins(
+    surface: &photocraft_raster::Surface,
+    area: photocraft_geom::Rect,
+    component: usize,
+    selection: Option<&photocraft_raster::Surface>,
+) -> [u32; 256] {
     let mut bins = [0u32; 256];
+    if area.is_empty() {
+        return bins;
+    }
     let format = surface.format();
     let step = ((u64::from(area.width()) * u64::from(area.height())) / 1_000_000).max(1).isqrt().max(1) as usize;
     for y in (area.y0..area.y1).step_by(step) {
         for x in (area.x0..area.x1).step_by(step) {
+            if let Some(m) = selection
+                && m.sample_channel(x, y, 0) < 0.5
+            {
+                continue;
+            }
             if format.alpha {
                 let alpha = surface.sample_channel(x, y, format.mode.color_channels());
                 if alpha.is_nan() || alpha <= 0.0 {
@@ -580,14 +601,38 @@ mod tests {
         let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
         let area = photocraft_geom::Rect::new(0, 0, 32, 24);
         surface.fill_rect(photocraft_geom::Rect::new(0, 0, 16, 24), &[0.5, 0.4, 0.3, 1.0]);
-        let bins = component_bins(&surface, area, 0);
+        let bins = component_bins(&surface, area, 0, None);
         assert_eq!(bins.iter().sum::<u32>(), 16 * 24);
         assert_eq!(bins[0], 0);
         let nan = photocraft_raster::Surface::with_default(
             photocraft_color::PixelFormat::new(photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F32, true),
             &[0.5, 0.4, 0.3, f32::NAN],
         );
-        assert_eq!(component_bins(&nan, area, 0), [0; 256]);
+        assert_eq!(component_bins(&nan, area, 0, None), [0; 256]);
+    }
+
+    #[test]
+    fn subset_histograms_follow_the_selection() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap(); // white background
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 32})).unwrap();
+        s.execute("edit.fill", json!({"color": "#000000"})).unwrap(); // left half black, right half white
+        let st = s.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let colors = photocraft_engine::color_channels::ColorChannels::from_indices([0, 2], 3).unwrap();
+        let src = HistSource::Colors { layer, colors };
+
+        let selected = compute_histograms(&st.doc, src, ToneSpace::Rgb, HistScope::Selection);
+        assert_eq!(selected.ch[1][0], 16 * 32, "selected half is black on red channel");
+        assert_eq!(selected.ch[1][255], 0, "unselected white half is excluded");
+        assert_eq!(selected.ch[3][0], 16 * 32, "selected half is black on blue channel");
+        assert_eq!(selected.ch[3][255], 0, "unselected white half is excluded");
+        assert_eq!(selected.ch[0][0], 2 * 16 * 32, "combined channel sums the selected subset");
+        assert_eq!(selected.ch[0][255], 0);
+
+        let whole = compute_histograms(&st.doc, src, ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(whole.ch[1][0], 16 * 32);
+        assert_eq!(whole.ch[1][255], 16 * 32);
     }
 
     #[test]
