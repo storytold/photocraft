@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-08 · **Change:** minor (G10: PDF writes spot channels as overprinting `/Separation` plates and a Multichannel document as plates alone, FILE-215-17's PDF Separation part) · **Target:** Adobe Photoshop 2026)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (G10: JPEG Options shows the size the file will have; FILE-215-19 stays partial (Matte, Scans)) · **Target:** Adobe Photoshop 2026)
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -116,6 +116,7 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
+- **Done 2026-11-10:** Image Processor accepts the current document or all open documents as its source, including unsaved edits and untitled documents. Resize/export runs on copies; original pixels, history and source files stay intact. Folder processing is still available.
 - **Partial 2026-11-02 (#4579):** Batch accepts recursive folders with flat output and
   last-result-wins names, as measured in Photoshop 2026. It also accepts live open documents,
   extended naming components, stop-on-error, UTF-16 LE logs, and job cancellation. The CLI
@@ -411,7 +412,7 @@ what an agent can't finish alone.
 
 ### G10. Missing and partial file formats
 - **Progress (2026-10-26):** Embedded SVG/PDF-compatible AI/PDF/EPS smart objects can be edited in VectorCraft, including nested PSD payloads. AI/PDF/EPS working copies retain their format with a separate source-bound SVG display preview; native bytes and previews persist through .pcraft and PSD/PSB saves. This does not add standalone EPS/DCS import or establish lossless Adobe round-trip compatibility. See [workflow and limits](embedded-vector-editing.md); estimates and parity percentages are unchanged.
-- **Missing:** JPEG Options' Matte, progressive Scans and size preview (FILE-215-19 partial), TIFF Options' JPEG compression, Pixel Order and Byte Order (the rest landed 2026-11-02, #8827), Photoshop PDF read and its vector/text/multi-page
+- **Missing:** JPEG Options' Matte and progressive Scans (FILE-215-19 partial), TIFF Options' JPEG compression, Pixel Order and Byte Order (the rest landed 2026-11-02, #8827), Photoshop PDF read and its vector/text/multi-page
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
   2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
   DICOM, EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
@@ -436,7 +437,7 @@ what an agent can't finish alone.
   `.cin`), sharing the DPX header/packing (`crates/codecs/src/codecs/dpx.rs`); a Cineon frame saved
   back keeps its code values.
 - **Progress (2026-10-23):** Amiga IFF/ILBM (`FORM ... ILBM`/`PBM `) 1–8-plane paletted and
-  24-plane RGB bitmaps open, stored or ByteRun1-compressed (`crates/codecs/src/codecs/iff.rs`);
+  24-plane RGB bitmaps open, stored or ByteRun1-compressed (craft-libs' `craft-raster-codecs`, `iff`);
   Save As `.iff` writes a 24-plane ILBM with a 1-bit mask plane for alpha.
 - **Estimate:** 120–220 h.
 
@@ -498,6 +499,7 @@ what an agent can't finish alone.
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |
 | 2026-11-06 | minor | G12: eraser end of flipped pens on Windows (Windows Ink on) selects the Eraser (#2285); no estimate changed |
 | 2026-10-29 | minor | G17: web build memory handling (#10024): up-front memory checks for Place, Image Size, smart-object re-render and Save; a low-memory warning; a stopped message when the module traps; PSD save reserves its whole output; no estimate changed |
+| 2026-11-10 | minor | Image Processor: current-document and all-open-document sources process in-memory copies, preserving originals and history; folder input remains available; percentages and estimates unchanged |
 | 2026-11-02 | minor | G11: Batch Esc Continue/Stop, one plan and error log across interruptions, and read-only input previews without a progress bar (#4579); live tab parity remains open, AUTO-219-5 partial; readiness and estimate unchanged |
 | 2026-11-02 | minor | Action recording folds Move-tool nudge runs, records keyboard document switches by opening-order offset and places point text by canvas percentage; paragraph boxes remain absolute (AUTO-219-1, #4514); parity percentages unchanged |
 | 2026-11-01 | minor | Action recording stores portable layer targets and whole-text Type steps where unambiguous (AUTO-219-1, #4514); duplicate names remain ambiguous; parity percentages unchanged |
@@ -509,6 +511,7 @@ what an agent can't finish alone.
 | 2026-11-05 | minor | G8: Type > OpenType > Stylistic Sets submenu (Set 1–20) landed (TYPE-218-5, #10285); font-capability greying still missing; PhotoCraft-native PSDs already keep the sets since #10308 |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-28 | minor | G2: prepare the GPU compositor in the background; startup performance baseline pending (#9157) |
+| 2026-10-28 | minor | G10: JPEG Options shows the size the file will have ("152.3K"), worked out as Quality and Format Options change (on a worker thread on desktop, in the frame on the web); FILE-215-19 stays partial (Matte, progressive Scans); no readiness percentage or estimate changed |
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-11-01 | minor | G9: 11 of 183 preferences do nothing (was 12): Graphics Adapter (`performance.gpuAdapter`) always worked, but startup read it by raw JSON key, which the scorecard prefs audit can't see; it now reads the typed Performance section; no estimate changed |
 | 2026-10-30 | minor | G10: visible spot channels of RGB and CMYK documents overprint the canvas composite and the PSD thumbnail, and open visible (#10249); FILE-215-17 stays partial, narrowed to PDF Separation; estimate unchanged |

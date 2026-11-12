@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-08 · **Change:** trivial (languages are measured with `cargo xtask i18n-report` over the craft-i18n catalogs) · **Target:** Adobe Photoshop 2026; Print: Japanese paper sizes — はがき, 往復はがき, JIS B5/B4, A6, L判, 2L判, KG判, 六切, 四切;
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-10 · **Change:** minor (JPEG Options shows the size the file will have, FILE-215-19 partial) · **Target:** Adobe Photoshop 2026; Print: Japanese paper sizes — はがき, 往復はがき, JIS B5/B4, A6, L判, 2L判, KG判, 六切, 四切;
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -184,7 +184,7 @@ parity for the area and are already contained in the dimension rows above.
 | Camera Raw and computational photo (Photomerge, HDR, lens) | 45% | 120–200 | Raw for DNG/CR2/NEF/ARW/RW2/ORF/RAF(uncompressed)/PEF; no CR3; ACR dialog partial (no masking; no per-camera colour for non-DNG cameras); generic lens profiles only |
 | Automation, actions, batch, scripting | 45% | 120–200 | CLI/MCP/control channel ahead of Photoshop; recording uses implicit active layers, unique layer names, whole-text Type steps, bundled Move-tool nudges, relative keyboard document switches and canvas-relative point text (AUTO-219-1, #4514; duplicate names and paragraph boxes remain open); Actions panel remains partial (AUTO-219-2); `.atn` load/save since 2026-10-12 (112 events mapped, the rest kept verbatim); compound layer properties export as separate Set events with rename last (#8304, 2026-10-21; independent Photoshop replay pending); no ExtendScript/UXP |
 | File I/O | 60% | 300–500 | See [file-format-parity.md](file-format-parity.md) |
-| Print, export, Save for Web | 50% | 60–100 | Paper sizes include the Japanese ones (はがき 100×148 mm, 往復はがき 148×200, JIS B5/B4, A6, L判 89×127, 2L判 127×178, KG判 102×152, 六切 203×254, 四切 254×305) by their customary names; JPEG Options without Matte, progressive Scans or size preview (FILE-215-19), no Photoshop PDF, no separations, Save for Web settings not remembered |
+| Print, export, Save for Web | 50% | 60–100 | Paper sizes include the Japanese ones (はがき 100×148 mm, 往復はがき 148×200, JIS B5/B4, A6, L判 89×127, 2L判 127×178, KG判 102×152, 六切 203×254, 四切 254×305) by their customary names; JPEG Options without Matte, or progressive Scans (FILE-215-19), no Photoshop PDF, no separations, Save for Web settings not remembered |
 | Video / timeline, data-driven graphics | 30% | 100–200 | Menu items live; frame model persists in `.pcraft`; no PSD video-layer mapping |
 | Workspace, panels, preferences | 40% | 150–250 | 11 of 183 prefs do nothing (scorecard, 2026-11-01); no floating/OS-window panel groups; Libraries, Comments, Contextual Task Bar missing |
 | AI / generative | 10% | 300–600 | See the dimension row |
@@ -194,6 +194,11 @@ headless cancellation, stop-on-error and error logs](batch-naming.md); measured 
 UTF-16 logs match Photoshop 2026. The desktop shows each folder input as a read-only canvas
 snapshot while its action runs, with no progress bar. Full live tabs and Layers panel content for
 those inputs remain different. AUTO-219-5 is partial (#4579).
+
+Image Processor also accepts the current document or all open documents as its source
+(2026-11-10). It processes in-memory copies, including unsaved edits and untitled images,
+without changing the open documents or overwriting their source files. Folder input stays
+available. This does not change the overall automation estimate.
 
 ## Remaining effort and calibration
 
@@ -595,6 +600,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Image Processor: current-document and all-open-document sources process in-memory copies, preserving originals and history; folder input remains available; percentages and estimates unchanged |
 | 2026-11-02 | minor | Automation Batch: Esc Continue/Stop preserves one file plan and error log; a read-only input preview replaces the progress bar; full live tabs remain open, AUTO-219-5 partial (#4579); percentages and estimates unchanged |
 | 2026-11-02 | minor | AUTO-219-1: action recording folds Move-tool nudges, records relative document switches and scales point text placement to the playback canvas; duplicate names and paragraph box placement remain open; Automation parity estimate unchanged |
 | 2026-11-01 | minor | AUTO-219-1: action recording uses implicit or uniquely named layers and folds Type keystrokes into whole-text steps; duplicate names remain ambiguous; Automation parity estimate unchanged |
@@ -603,6 +609,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 | 2026-11-01 | minor | UI / UX and Workspace rows: 11 of 183 preferences do nothing (was 12); Graphics Adapter always worked, but startup read it by raw JSON key, which the scorecard audit can't see. Percentages and estimates unchanged |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-30 | minor | Colour management: RGB and CMYK spot channels preview as inks over the composite and in the PSD thumbnail (#10249); FILE-215-17 narrows to PDF Separation; percentages unchanged |
+| 2026-10-28 | minor | JPEG Options shows the size the file will have (FILE-215-19 partial: no Matte or progressive Scans); percentages unchanged |
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |
 | 2026-10-23 | minor | Frame Tool interaction and persistence work (#8864); documented remaining native Photoshop frame metadata and independent-oracle limits; no percentage changed |
