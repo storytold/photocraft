@@ -724,8 +724,8 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         crate::shape_bounds_box::cancel(app);
         return true;
     }
-    // An anchor selected with the Add Anchor Point tool: ⌫/Delete removes it and its two segments,
-    // as in Photoshop (#12703), never the active layer.
+    // An anchor selected with an anchor point tool, Convert Point or the Curvature Pen: ⌫/Delete
+    // removes it and its two segments, as in Photoshop (#12703, #12734, #12695), never the active layer.
     if focus != crate::shortcut_dispatch::Focus::DeletingWidget
         && let Some((target, [s, k])) = crate::vector_ui::delete_key_deletes_anchor(app)
     {
@@ -747,8 +747,8 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
     }
-    // A finished work path shown by the Pen or Path Selection: ⌫/Delete deletes it, as in
-    // Photoshop (#5702), never Edit › Clear on the pixels under it.
+    // A finished work path shown by a Pen or Path Selection: ⌫/Delete deletes it, as in
+    // Photoshop (#5702, #12695), never Edit › Clear on the pixels under it.
     if focus != crate::shortcut_dispatch::Focus::DeletingWidget && crate::vector_ui::delete_key_deletes_work_path(app) {
         let mods = ctx.input(|i| i.modifiers);
         if !mods.command && !mods.ctrl && !mods.shift && !mods.alt && ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete))
