@@ -511,6 +511,10 @@ struct Running {
     started_in_take: Option<u64>,
     /// The take eligible to receive this job's step under the mode at dispatch.
     recorded_by: Option<u64>,
+    /// The request that started the job ran under an automation gate (`Session::authorize`, set
+    /// by `dispatch`). Applied, its step marks the recording that owns it as automation's,
+    /// whoever polls the job then (`actions_cmds::note_step_origin`).
+    automation: bool,
     pre_selected: Option<Vec<LayerId>>,
     before: crate::actions_record::Before,
     doc: Option<DocId>,
@@ -865,6 +869,7 @@ fn new_job<T: Send + 'static>(
         journal: true,
         started_in_take: None,
         recorded_by: None,
+        automation: false,
         pre_selected: None,
         before: crate::actions_record::Before::capture(s),
         doc,
@@ -1726,6 +1731,9 @@ impl Session {
         if let Some(gate) = self.authorize {
             gate(id, &params)?;
         }
+        // Whether this request runs under automation's gate: its step, journaled now or when its
+        // job is applied, marks the recording that owns it as automation's.
+        let automation = self.authorize.is_some();
         let _authorization = AuthorizationScope::enter(self.authorize);
         let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
         // Last Filter runs as the filter it repeats: journaled, recorded in an action, faded and
@@ -1790,7 +1798,7 @@ impl Session {
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
         let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
-        let before = self.active().map(|st| st.doc.clone());
+        let before = self.active().map(|st| (st.doc.clone(), st.revision));
         let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
@@ -1811,6 +1819,11 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        if pending.is_none()
+            && let Some((doc, revision)) = &before
+        {
+            self.note_command_damage(id, doc, *revision);
+        }
         // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
         // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
         // replays where that shape is not installed. The run resolved it already, so it can't fail.
@@ -1830,6 +1843,7 @@ impl Session {
                 job.journal = spec.journal;
                 job.started_in_take = self.actions.recording.map(|_| self.actions.take);
                 job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id));
+                job.automation = automation;
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
@@ -1837,7 +1851,7 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                if let Some(before) = &before {
+                if let Some((before, _)) = &before {
                     self.add_relayout_damage(before);
                 }
                 if let Some((doc_id, layer_id)) = new_fx_target
@@ -1851,7 +1865,7 @@ impl Session {
                         st.fx_collapsed.push(layer_id);
                     }
                 }
-                self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref(), &record_before);
+                self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))
             }
         };
@@ -1864,6 +1878,29 @@ impl Session {
             photocraft_raster::scratch::release();
         }
         out
+    }
+
+    /// The one place a command's redraw area spans more than one revision. A command that moved
+    /// the active document's revision more than once (Paste Into, Stroke Path, a compound, a
+    /// script) reports what changed since it began, [`layer_multi_cmds::step_damage`] of the
+    /// document before and after, measured from the revision before it. A single-revision command
+    /// keeps the damage it reported. Debug and test builds also count a whole-document redraw of
+    /// a small change ([`Session::whole_redraws`]).
+    pub(crate) fn note_command_damage(&mut self, id: &str, before: &Arc<Document>, from: u64) {
+        let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && st.revision > from) else { return };
+        if st.revision - from > 1 {
+            st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
+            st.damage_span = Some((from, st.revision));
+        }
+        #[cfg(any(test, debug_assertions))]
+        if st.last_damage.is_none()
+            && let Some(pct) = crate::layer_multi_cmds::small_change_pct(before, &st.doc)
+        {
+            eprintln!("warning: {id}: redraws the whole document but changed {pct}% of it");
+            self.whole_redraws += 1;
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        let _ = id;
     }
 
     /// Grows the damage a command reported for the pixels it changed by what effects laid out
@@ -1897,12 +1934,15 @@ impl Session {
     /// for the commands it ran itself (Straighten runs Image Rotation and Crop): their entries are
     /// dropped, so a recorded action replays the command once, not its steps as well (#3067).
     /// Edit › Transform › Again (and Again on a Copy) is not replayable and keeps the concrete
-    /// steps it ran instead.
+    /// steps it ran instead. `automation` says the step is automation's (its request ran under an
+    /// automation gate), which marks the action being recorded.
+    #[allow(clippy::too_many_arguments)]
     fn after_command(
         &mut self,
         id: &str,
         params: Value,
         journal: bool,
+        automation: bool,
         nested_from: Option<usize>,
         pre_selected: Option<&[LayerId]>,
         before: &crate::actions_record::Before,
@@ -1930,6 +1970,8 @@ impl Session {
         };
         let params = crate::actions_cmds::recorded_params(self, id, params);
         let params = crate::actions_record::portable(self, id, params, before);
+        // A step a control client runs while the user records keeps automation's gate.
+        crate::actions_cmds::note_step_origin(self, automation, id, &params);
         match crate::actions_record::fold_keystroke(self, id, &params, self.typed_layer) {
             crate::actions_record::Keystroke::Folded => {}
             crate::actions_record::Keystroke::None => {
@@ -1975,6 +2017,8 @@ impl Session {
         self.end_job_with_error(&job, outcome, error);
     }
 
+    /// Apply a finished job's `payload` on this thread and do the command's bookkeeping, journaling
+    /// its step into the recording that owns it with the origin the job was admitted with.
     fn apply_job(&mut self, job: &Running, apply: Option<Apply>, payload: Payload) -> Result<Value> {
         let Running {
             label,
@@ -1988,6 +2032,7 @@ impl Session {
             params,
             journal,
             recorded_by,
+            automation,
             pre_selected,
             before,
             ..
@@ -2052,7 +2097,10 @@ impl Session {
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
-            self.after_command(command, params.clone(), *journal, Some(nested_from), pre_selected.as_deref(), before);
+            // The step is automation's when the job's own request was gated, not the caller
+            // polling it now, and only for the recording that owns it: a foreign recording does
+            // not get the step.
+            self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
             if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
                 *start = self.journal.len();
             }
