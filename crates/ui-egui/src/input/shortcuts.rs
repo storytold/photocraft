@@ -693,9 +693,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     // Backspace/Delete. Once the last anchor is removed, regular Undo works again.
     if app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         let mods = ctx.input(|i| i.modifiers);
-        let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
-            .and_then(|shortcut| parse(&shortcut))
-            .is_some_and(|shortcut| consume(ctx, &shortcut));
+        // Not while a Free Transform or Crop box owns Undo: Edit › Undo steps the box.
+        let command_undo = !crate::vector_ui::box_steps(app, "edit.undo")
+            && effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+                .and_then(|shortcut| parse(&shortcut))
+                .is_some_and(|shortcut| consume(ctx, &shortcut));
         let remove = !mods.command
             && !mods.ctrl
             && !mods.shift
@@ -893,6 +895,9 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Rotate View, Adaptive Wide Angle, the Filter Gallery, the TIFF prompt, any open egui popup
     // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
+        // A Direct Selection drag (a Cmd-drag on an anchor) never reaches `app.drag`: Esc must not
+        // leave full screen or deselect pixels while its release is still to come (#13072).
+        || (app.ui.tool == Tool::DeleteAnchorPoint && app.ui.direct_selection.drag.is_some())
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
         || app.ui.layer_menu.is_some()
@@ -921,22 +926,31 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Delete Anchor Point (#12773): Esc first clears anchors selected on the saved path targeted in
-    // the Paths panel, then deselects that path, so clicks edit nothing. Not while its name is typed
-    // in the panel: egui has already dropped the field's focus, and the panel cancels on Esc.
+    // Delete Anchor Point (#12773): Esc first hides the anchors of the saved path targeted in the
+    // Paths panel, then deselects that path, so clicks edit nothing. The first Esc leaves the path
+    // targeted whether or not an anchor was selected (#13072), and clears only anchors selected on
+    // that path, never another path's. Not while its name is typed in the panel: egui has already
+    // dropped the field's focus, and the panel cancels on Esc. A Direct Selection drag keeps Esc
+    // away through `esc_taken` above, so its release still moves the anchors (#13072).
     if !esc_taken
         && app.ui.tool == Tool::DeleteAnchorPoint
         && !crate::vector_ui::path_renaming(app, ctx)
         && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
     {
         let ds = &app.ui.direct_selection;
-        let selected = ds.target == Some(crate::direct_select::PathRef::Saved(index)) && (!ds.anchors.is_empty() || ds.segment.is_some());
+        let on_this_path = ds.target == Some(crate::direct_select::PathRef::Saved(index));
+        let selected = on_this_path && (!ds.anchors.is_empty() || ds.segment.is_some());
         if pressed(Key::Escape) {
-            if selected {
-                app.ui.direct_selection.anchors.clear();
-                app.ui.direct_selection.segment = None;
+            // The stage belongs to this path: choosing another one starts at the first Esc again.
+            if selected || app.ui.direct_selection.escape_hidden != Some(index) {
+                if selected {
+                    app.ui.direct_selection.anchors.clear();
+                    app.ui.direct_selection.segment = None;
+                }
+                app.ui.direct_selection.escape_hidden = Some(index);
             } else {
                 app.ui.selected_path = None;
+                app.ui.direct_selection.escape_hidden = None;
             }
             return;
         }
