@@ -8,9 +8,9 @@ type Callback = Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>>;
 
 #[derive(Default)]
 struct Decision {
-    ready: Option<Result<bool, String>>,
+    ready: Option<Result<bool, WriteError>>,
     stopped: bool,
-    error: Option<String>,
+    error: Option<WriteError>,
 }
 
 pub(super) struct Scope {
@@ -20,7 +20,7 @@ pub(super) struct Scope {
 }
 
 impl Scope {
-    pub(super) fn error(&self) -> Option<String> {
+    pub(super) fn error(&self) -> Option<WriteError> {
         self.decision.borrow().error.clone()
     }
 }
@@ -49,13 +49,17 @@ fn next(store: &web_sys::IdbObjectStore, current: &Rc<RefCell<Option<IdbRequest>
 }
 
 /// Compare bounded Blob bytes before the shared deadline; only undefined means absent.
-async fn bytes(value: JsValue, deadline: f64) -> Result<Option<Vec<u8>>, String> {
+async fn bytes(value: JsValue, deadline: f64) -> Result<Option<Vec<u8>>, WriteError> {
     if value.is_undefined() {
         return Ok(None);
     }
-    let blob = value.dyn_into::<Blob>().map_err(|_| "migration record is not a Blob")?;
+    let blob = value
+        .dyn_into::<Blob>()
+        .map_err(|_| WriteError::Stale("Actions migration record is not a Blob; retained unchanged. Reopen this tab before saving Actions.".into()))?;
     if blob.size() > photocraft_engine::preset_store::MAX_ACTIONS_BYTES as f64 {
-        return Err("migration record exceeds the Actions file limit".into());
+        return Err(WriteError::Stale(
+            "Actions migration record exceeds the Actions file limit; retained unchanged. Reopen this tab before saving Actions.".into(),
+        ));
     }
     let buffer = before(&blob.array_buffer(), deadline).await?;
     Ok(Some(Uint8Array::new(&buffer).to_vec()))
@@ -94,9 +98,13 @@ pub(super) fn start(tx: &web_sys::IdbTransaction, store: &web_sys::IdbObjectStor
             Some(result) => {
                 // This callback is an active IDB request event. No Blob future issues writes.
                 state.borrow_mut().stopped = true;
-                result.and_then(|committed| queue_batch(&files, &owned, committed))
+                result.and_then(|committed| queue_batch(&files, &owned, committed).map_err(WriteError::Failed))
             }
-            None => weak.upgrade().ok_or_else(|| "migration callback was released".to_string()).and_then(|callback| next(&files, &active, &callback)),
+            None => weak
+                .upgrade()
+                .ok_or_else(|| "migration callback was released".to_string())
+                .and_then(|callback| next(&files, &active, &callback))
+                .map_err(WriteError::Failed),
         };
         if let Err(error) = result {
             let mut state = state.borrow_mut();

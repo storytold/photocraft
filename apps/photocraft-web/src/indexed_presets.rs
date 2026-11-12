@@ -5,7 +5,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, Event, EventTarget, IdbDatabase, IdbRequest, IdbTransactionMode};
 
-use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, record_limit};
+use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, WriteError, record_limit};
 use photocraft_engine::preset_store::{ACTIONS_FILE, LEGACY_ACTIONS_FILE, MAX_STORE_BYTES, MIGRATED_ACTIONS_FILE};
 
 const DATABASE: &str = "photocraft.presets";
@@ -270,7 +270,7 @@ fn queue_batch(store: &web_sys::IdbObjectStore, batch: &Batch, committed: bool) 
 
 /// Acknowledge only transaction completion; migration comparisons and writes share one bounded transaction.
 /// A closed connection is replaced without rehydrating over newer unsaved bridge edits.
-pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Batch) -> Result<(), String> {
+pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Batch) -> Result<(), WriteError> {
     if let Some(migration) = &batch.migration {
         if !matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None))
             || batch.get(MIGRATED_ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.legacy.as_ref())
@@ -290,7 +290,7 @@ pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Ba
             *db.borrow_mut() = connection.clone();
             connection.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?
         }
-        Err(error) => return Err(js(error)),
+        Err(error) => return Err(js(error).into()),
     };
     let store = tx.object_store(FILES).map_err(js)?;
     let mut listeners = Listeners::new();
@@ -318,10 +318,10 @@ pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Ba
         Ok(scope) => scope,
         Err(error) => {
             let _ = tx.abort();
-            return Err(error);
+            return Err(error.into());
         }
     };
-    let result = before(&promise, deadline).await.map(|_| ());
+    let result = before(&promise, deadline).await.map(|_| ()).map_err(WriteError::Failed);
     if result.is_err() {
         let _ = tx.abort();
     }

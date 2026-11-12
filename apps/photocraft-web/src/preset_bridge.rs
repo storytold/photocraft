@@ -8,6 +8,30 @@ use photocraft_engine::{
     preset_store::{self, PresetBackend, *},
 };
 
+/// A changed migration tuple must hold Actions without blocking unrelated preset writes.
+#[derive(Clone, Debug)]
+pub enum WriteError {
+    Failed(String),
+    Stale(String),
+}
+impl From<String> for WriteError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+impl From<&str> for WriteError {
+    fn from(message: &str) -> Self {
+        Self::Failed(message.into())
+    }
+}
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(message) | Self::Stale(message) => f.write_str(message),
+        }
+    }
+}
+
 pub type Files = BTreeMap<String, Option<Arc<[u8]>>>;
 #[derive(Clone)]
 pub struct Migration {
@@ -17,14 +41,14 @@ pub struct Migration {
 }
 impl Migration {
     /// Called only with bytes read under the writer's single readwrite transaction.
-    pub fn already_committed(&self, atn: Option<&[u8]>, legacy: Option<&[u8]>, backup: Option<&[u8]>) -> Result<bool, String> {
+    pub fn already_committed(&self, atn: Option<&[u8]>, legacy: Option<&[u8]>, backup: Option<&[u8]>) -> Result<bool, WriteError> {
         if atn == Some(self.atn.as_ref()) && legacy.is_none() && backup == Some(self.legacy.as_ref()) {
             return Ok(true);
         }
         if legacy == Some(self.legacy.as_ref()) && backup.is_none() && atn == self.published.then_some(self.atn.as_ref()) {
             return Ok(false);
         }
-        Err("Actions migration records changed; original, ATN and backup retained unchanged".into())
+        Err(WriteError::Stale("Actions migration records changed; original, ATN and backup retained unchanged. Reopen this tab before saving Actions.".into()))
     }
 }
 #[derive(Clone)]
@@ -56,6 +80,7 @@ struct State {
     writing: bool,
     migration: Option<Migration>,
     error: Option<String>,
+    action_error: Option<String>,
     rejected: BTreeMap<String, String>,
     preserve_tips: bool,
 }
@@ -122,15 +147,28 @@ impl Bridge {
         if s.writing || s.error.is_some() || s.dirty.is_empty() {
             return None;
         }
+        let actions_held = s.action_error.is_some();
+        let names: Vec<_> = s
+            .dirty
+            .iter()
+            .filter(|name| !actions_held || !matches!(name.as_str(), ACTIONS_FILE | LEGACY_ACTIONS_FILE | MIGRATED_ACTIONS_FILE))
+            .cloned()
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
         s.writing = true;
-        let mut files: Files = std::mem::take(&mut s.dirty)
+        let mut files: Files = names
             .into_iter()
             .map(|name| {
+                s.dirty.remove(&name);
                 let bytes = s.files.get(&name).cloned();
                 (name, bytes)
             })
             .collect();
-        if let Some(migration) = s.migration.clone() {
+        // An unrelated batch cannot borrow a quarantined migration's retirement authority.
+        let migration = if actions_held { None } else { s.migration.clone() };
+        if let Some(migration) = migration.clone() {
             // Every ambiguous retry has the same exact identity. Newer live edits wait
             // for this migration's acknowledgement, then get their own ordinary batch.
             if s.files.get(ACTIONS_FILE).map(AsRef::as_ref) != Some(migration.atn.as_ref()) {
@@ -140,18 +178,21 @@ impl Bridge {
             files.insert(MIGRATED_ACTIONS_FILE.into(), Some(migration.legacy));
             files.insert(LEGACY_ACTIONS_FILE.into(), None);
         }
-        Some(Batch { files, migration: s.migration.clone() })
+        Some(Batch { files, migration })
     }
 
     /// Apply a transaction completion result without clearing edits staged while it ran.
     /// Failure requeues the batch; only success retires the migration identity.
-    pub fn finish(&self, batch: Batch, result: Result<(), String>) {
+    pub fn finish(&self, batch: Batch, result: Result<(), WriteError>) {
         let mut s = self.state();
         s.writing = false;
         if let Err(error) = result {
             // Requeue the whole migration and current bytes, including edits made in flight.
             s.dirty.extend(batch.files.into_keys());
-            s.error = Some(error);
+            match error {
+                WriteError::Stale(message) => s.action_error = Some(message),
+                WriteError::Failed(message) => s.error = Some(message),
+            }
         } else if batch.migration.is_some() {
             // Only transaction completion retires the pending migration. Any newer ATN edit
             // remains in dirty and gets its own acknowledged transaction.
@@ -163,6 +204,7 @@ impl Bridge {
         self.state().error = Some(error);
     }
 
+    /// Retry transient storage failures; a stale Actions snapshot requires a fresh startup.
     pub fn retry(&self) {
         self.state().error = None;
     }
@@ -170,13 +212,13 @@ impl Bridge {
     /// Show a rejected current edit before a transaction error; an older successful batch cannot erase it.
     pub fn error(&self) -> Option<String> {
         let s = self.state();
-        s.rejected.values().next().cloned().or_else(|| s.error.clone())
+        s.rejected.values().next().cloned().or_else(|| s.action_error.clone()).or_else(|| s.error.clone())
     }
 
     /// Include in-flight writes, queued edits and rejected replacements in the unsaved indicator.
     pub fn unsaved(&self) -> bool {
         let s = self.state();
-        s.writing || !s.dirty.is_empty() || !s.rejected.is_empty()
+        s.writing || !s.dirty.is_empty() || !s.rejected.is_empty() || s.action_error.is_some()
     }
 }
 
@@ -247,6 +289,12 @@ impl PresetBackend for Bridge {
             return Err("legacy Actions records are migration-only".into());
         }
         let mut s = self.state();
+        if name == ACTIONS_FILE
+            && let Some(error) = s.action_error.clone()
+        {
+            s.rejected.insert(name.into(), error.clone());
+            return Err(error);
+        }
         if s.files.get(name).is_some_and(|old| old.as_ref() == bytes) {
             s.rejected.remove(name);
             return Ok(());
@@ -274,6 +322,12 @@ impl PresetBackend for Bridge {
         }
         record_limit(name)?;
         let mut s = self.state();
+        if name == ACTIONS_FILE
+            && let Some(error) = s.action_error.clone()
+        {
+            s.rejected.insert(name.into(), error.clone());
+            return Err(error);
+        }
         if s.preserve_tips && name.starts_with("tips/") {
             s.rejected.remove(name);
             return Ok(());

@@ -274,17 +274,28 @@ fn a_filter_dialog_inside_a_called_action_continues_its_callers_after_ok() {
 
 #[test]
 fn a_caller_chain_is_bounded() {
-    let mut app = stop_app(true, true);
-    let v = play(&mut app, &json!({"action": "Stop Test"})).unwrap();
+    let mut app = nested_app(true);
+    let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
     let dialog = v["paused"]["dialog"].clone();
     let token = paused_token(&mut app, &dialog).unwrap();
-    app.paused_playbacks.paused.get_mut(&token).unwrap().callers = vec![("Missing".into(), 1); MAX_CALLERS];
-    let r = called(&mut app, "One more", 0, "actions.play", &json!({"paused": v["paused"].clone()}), None);
-    assert!(matches!(r, Called::Failed(_)), "a caller past the bound fails the call");
+    let paused = app.paused_playbacks.paused.get_mut(&token).unwrap();
+    let parent = paused.parents.first().cloned().expect("the paused child retains its caller frame");
+    paused.parents = vec![parent; 16];
+    let before_resume = names(&app);
+    let error = crate::dialogs::confirm(&mut app, dialog.as_u64().unwrap()).unwrap_err();
+    assert!(error.contains("action nesting exceeds 16 levels"), "a caller past the bound fails the call: {error}");
+    assert_eq!(names(&app), before_resume, "no child or caller tail runs past the depth bound");
+    assert_eq!(count(&app, "Suffix"), 0);
+    assert_idle(&app);
+
     // A caller that no longer exists ends the resumed playback with an error, nothing else runs.
-    app.paused_playbacks.paused.get_mut(&token).unwrap().callers = vec![("Missing".into(), 1)];
-    let id = dialog.as_u64().unwrap();
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    let mut app = nested_app(true);
+    let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
+    app.session.execute("actions.delete", json!({"action": "Parent"})).unwrap();
+    let before_resume = names(&app);
+    let error = crate::dialogs::confirm(&mut app, v["paused"]["dialog"].as_u64().unwrap()).unwrap_err();
+    assert!(error.contains("the paused action no longer exists"), "{error}");
+    assert_eq!(names(&app), before_resume, "a missing caller cannot run the child or another caller's tail");
     assert_eq!(count(&app, "Suffix"), 0);
     assert_idle(&app);
 }
