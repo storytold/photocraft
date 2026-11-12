@@ -3,7 +3,7 @@
 PhotoCraft loads and saves action sets in the reference application's `.atn` format: Load Actions and
 Save Actions in the Actions panel menu, `actions.load` / `actions.save` for agents, and
 `photocraft batch --actions set.atn` on the command line. Reading and writing the file lives in
-`photocraft-psd` (`crates/psd/src/atn.rs`, version 16 sets, exact round trip); the mapping between the
+`craft-psd` (`crates/psd/src/atn.rs`, version 16 sets, exact round trip); the mapping between the
 application's events and PhotoCraft commands lives in `photocraft-engine`
 (`crates/engine/src/cmd/atn_cmds/`, table `EVENTS` in `events.rs`).
 
@@ -239,6 +239,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | textSaveDefaultTypeStyles | Save Default Type Styles | `type.saveDefaultTypeStyles` |
 | (string ID only) | recordMeasurements | Record Measurements | `image.analysis.recordMeasurements` |
 | (string ID only) | CropPhotosAuto0001 | Crop and Straighten Photos | `file.automate.cropAndStraightenPhotos` |
+| (string ID only) | 3caa3434-cb67-11d1-bc43-0060b0a13dc4 | Fit Image (script event; pixel box sides) | `file.automate.fitImage` |
 | (string ID only) | placedLayerExportContents | Export Contents | `layer.smartObjects.exportContents` |
 | (string ID only) | placedLayerConvertToLinked | Convert to Linked | `layer.smartObjects.convertToLinked` |
 | (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
@@ -329,6 +330,22 @@ inherited group state, and remains unavailable for Indexed Color documents.
 The separate `CropPhotos0001` helper remains a complete kept Photoshop step.
 Playback stops at that enabled helper before subsequent duplicate/crop steps can
 run. This covers the parent event, not complete recordings with generated helpers.
+
+Fit Image is the script event `3caa3434-cb67-11d1-bc43-0060b0a13dc4` that follows
+the Image Size step it runs, which stays a step of its own. `Wdth` and
+`Hght` (pixel unit floats above 0) and `limit` (Don't Enlarge) play as
+`file.automate.fitImage`. With `limit` true it leaves a document that already fits
+unchanged; with `limit` false it enlarges a smaller document to fit the box.
+The descriptor's class is `cjsp` with an empty class name (measured, in two UI
+languages). `Msge` is the script's own text, not a setting: the reference plays the
+step the same with the recorded text, an empty one, unrelated text or the key
+removed, so the three-key form without `Msge` maps too. A loaded step saves back
+with its recorded descriptor (message or none, class, key order), and once its
+settings change it saves them into that descriptor. A step recorded in PhotoCraft
+saves class `cjsp` and an empty `Msge`. Another unit, a side of 0, a repeated `Msge`,
+a missing `Wdth`, `Hght` or `limit`, or an extra key stays a kept step. A native
+step with a missing or 0 side (the document's own size) or a resampling method
+other than the default refuses export, because the event has no key for it.
 
 Set Measurement Scale › Custom is a Set of the target document's `measurementScale`
 property. `T   ` holds `pixelLength` (a long above 0), `logicalLength` (a double
