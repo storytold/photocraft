@@ -384,4 +384,6 @@ mod delete_anchor_escape_tests;
 
 #[cfg(test)]
 mod delete_anchor_shown_anchors_tests;
+
+#[cfg(test)]
 mod delete_anchor_alt_tests;
