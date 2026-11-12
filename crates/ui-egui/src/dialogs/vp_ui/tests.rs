@@ -412,3 +412,39 @@ fn selecting_another_layer_keeps_the_stamp_preview() {
     assert!(Arc::ptr_eq(&after.0, &before.0));
     assert_eq!(after.1, before.1);
 }
+
+#[test]
+fn a_cancelled_vanishing_point_job_keeps_the_planes_and_strokes() {
+    let (ctx, mut app) = app_with_layer();
+    app.background_jobs = true;
+    // Something to paste: a red square on the clipboard.
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("edit.copy", json!({})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+    let planes = app.distort.vanishing.as_ref().unwrap().planes.clone();
+    let params = app.distort.vanishing.as_ref().unwrap().params();
+    let steps = app.session.active().unwrap().history.past_len();
+
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["result"]["pending"], true, "a background job: {r}");
+    assert!(app.distort.vanishing.is_none(), "the mode closes while the job runs");
+    let job = photocraft_engine::jobs::JobId(r["result"]["job"].as_u64().unwrap());
+    // Cancelled before the result is polled, so it never lands whatever the worker has done.
+    assert!(app.session.cancel_job(job));
+    app.session.join_cancelled_jobs();
+    for _ in 0..200 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.distort.vanishing.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let s = app.distort.vanishing.as_ref().expect("the mode comes back after the cancel");
+    assert_eq!(s.planes, planes);
+    assert_eq!(s.params(), params, "the same planes and paste, ready to retry");
+    assert!(app.distort.vanishing_committing.is_none());
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing applied");
+}

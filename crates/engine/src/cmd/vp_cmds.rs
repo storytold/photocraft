@@ -242,48 +242,6 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
     let new_layer = p.get("newLayer").and_then(Value::as_bool).unwrap_or(false);
     // The layer the mode was opened on (the UI passes it: other layers can be picked meanwhile).
     let layer = crate::commands::explicit_layer(s, p)?;
-    let mut dabs = 0usize;
-    let target = s.edit("Vanishing Point", |doc: &mut Document, active| {
-        if let Some(l) = layer
-            && doc.layer(l).is_none()
-        {
-            return Err(EngineError::NoLayer(l));
-        }
-        let on = layer.or(*active);
-        let id = if new_layer {
-            let l = Layer::raster(doc.next_layer_name("Vanishing Point"), doc.pixel_format());
-            let nid = crate::layer_place::insert_new(doc, on, l, crate::layer_place::Place::AutoEditable);
-            *active = Some(nid);
-            nid
-        } else {
-            // The painted layer becomes active, so Fade and a colour-channel target follow it.
-            let id = on.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-            *active = Some(id);
-            id
-        };
-        // A new layer clones from the visible image; otherwise from the layer itself.
-        let base: Option<Surface> = new_layer.then(|| visible_image(doc));
-        let locks = doc.effective_locks(id);
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if locks.all || locks.pixels {
-            return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
-        }
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
-        for (plane, src, rect, at, width) in &pastes {
-            paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
-        }
-        // A new layer samples the visible image (merged with what's been pasted) and takes only
-        // the pixels the strokes change; otherwise the strokes paint the layer itself.
-        let mut work = base.map(|mut w| {
-            over(&mut w, surf);
-            w
-        });
-        for c in &clones {
-            dabs += clone_into(&sc, surf, work.as_mut(), c, canvas);
-        }
-        surf.prune();
-        Ok(id)
-    })?;
     let planes: Vec<Value> = sc
         .planes
         .iter()
@@ -293,7 +251,81 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             json!({"corners": pl.corners, "aspect": lu / lv})
         })
         .collect();
-    Ok(json!({"layer": target.0, "focal": sc.focal, "planes": planes, "pasted": pastes.len(), "dabs": dabs}))
+    let (focal, pasted) = (sc.focal, pastes.len());
+    // What the edit refuses, in its order, refused from `start` rather than from the job; the edit
+    // checks again, since the document can change before the job runs. A new layer's own locks
+    // are known only once it is inserted.
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(l) = layer
+        && st.doc.layer(l).is_none()
+    {
+        return Err(EngineError::NoLayer(l));
+    }
+    if !new_layer {
+        let id = layer.or(st.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?;
+        let locks = st.doc.effective_locks(id);
+        let l = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        if locks.all || locks.pixels {
+            return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
+        }
+        if !matches!(l.content, LayerContent::Raster(_)) {
+            return Err(EngineError::Other("Vanishing Point needs a pixel layer".into()));
+        }
+    }
+    // A background job when started with `Session::start` (#210): the pastes and the strokes run
+    // on a worker against a copy of the document, and can be cancelled between them; the result
+    // applies as one undo step.
+    crate::jobs::edit_job(
+        s,
+        "Vanishing Point",
+        move |doc, active, ctx| {
+            ctx.check()?;
+            let mut dabs = 0usize;
+            if let Some(l) = layer
+                && doc.layer(l).is_none()
+            {
+                return Err(EngineError::NoLayer(l));
+            }
+            let on = layer.or(*active);
+            let id = if new_layer {
+                let l = Layer::raster(doc.next_layer_name("Vanishing Point"), doc.pixel_format());
+                let nid = crate::layer_place::insert_new(doc, on, l, crate::layer_place::Place::AutoEditable);
+                *active = Some(nid);
+                nid
+            } else {
+                // The painted layer becomes active, so Fade and a colour-channel target follow it.
+                let id = on.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+                *active = Some(id);
+                id
+            };
+            // A new layer clones from the visible image; otherwise from the layer itself.
+            let base: Option<Surface> = new_layer.then(|| visible_image(doc));
+            let locks = doc.effective_locks(id);
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            if locks.all || locks.pixels {
+                return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
+            }
+            let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
+            for (plane, src, rect, at, width) in &pastes {
+                paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
+            }
+            ctx.check()?;
+            // A new layer samples the visible image (merged with what's been pasted) and takes only
+            // the pixels the strokes change; otherwise the strokes paint the layer itself.
+            let mut work = base.map(|mut w| {
+                over(&mut w, surf);
+                w
+            });
+            for c in &clones {
+                ctx.check()?;
+                dabs += clone_into(&sc, surf, work.as_mut(), c, canvas);
+            }
+            surf.prune();
+            ctx.check()?;
+            Ok((id, dabs))
+        },
+        move |(target, dabs)| json!({"layer": target.0, "focal": focal, "planes": planes, "pasted": pasted, "dabs": dabs}),
+    )
 }
 
 pub fn specs() -> Vec<CommandSpec> {

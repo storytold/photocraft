@@ -609,6 +609,8 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     });
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
+    // A Vanishing Point commit's session comes back when its job fails or is cancelled.
+    crate::vp_ui::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }

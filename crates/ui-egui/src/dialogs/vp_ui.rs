@@ -869,12 +869,39 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         return Ok(json!({"committed": false}));
     }
     match app.run(VP, params) {
-        Ok(r) => Ok(json!({"committed": true, "result": r})),
+        Ok(r) => {
+            // A background job: the session waits for it, so a failure or a cancel can give it back.
+            if r.get("pending").and_then(Value::as_bool) == Some(true)
+                && let Some(job) = r.get("job").and_then(Value::as_u64)
+            {
+                app.distort.vanishing_committing = session.map(|s| (photocraft_engine::jobs::JobId(job), s));
+            }
+            Ok(json!({"committed": true, "result": r}))
+        }
         Err(e) => {
             // Keep the planes, source and strokes so the user can fix the cause and retry.
             app.distort.vanishing = session;
             Err(e)
         }
+    }
+}
+
+/// A job ended (see [`crate::jobs_ui`]): when it was a Vanishing Point commit that failed or was
+/// cancelled, the mode comes back with its planes, source and strokes, as after an inline error,
+/// so the user can fix the cause and retry. Only when the mode is closed, the document is still
+/// the active one and the layer still exists. Its status and errors are reported like any job's.
+pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) {
+    if app.distort.vanishing_committing.as_ref().is_none_or(|(job, _)| *job != e.id) {
+        return;
+    }
+    let Some((_, session)) = app.distort.vanishing_committing.take() else { return };
+    if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
+        return;
+    }
+    let back = app.distort.vanishing.is_none()
+        && app.session.active().is_some_and(|st| st.doc.id == session.document && st.doc.layer(session.layer).is_some());
+    if back {
+        app.distort.vanishing = Some(session);
     }
 }
 
