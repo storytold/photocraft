@@ -6,10 +6,10 @@
 //! a preserved block is written back byte-identical while it still decodes to the layer's
 //! current model; otherwise it is regenerated from the model.
 
+use craft_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
+use craft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
 use photocraft_doc::{Fill, FillRule, Knot, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
 use photocraft_geom::Point;
-use photocraft_psd::descriptor::{Descriptor, Id, Value, VersionedDescriptor};
-use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
 
 use crate::blocks::{bool_of, enum_of, fill_from_desc, fill_to_desc, get_desc, num, parse_prefix_versioned};
 
