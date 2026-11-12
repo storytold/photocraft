@@ -550,6 +550,14 @@ fn warp_keeps_the_placement_of_a_smart_object_under_any_transform() {
         let LayerContent::Smart(sm) = &layer.content else { panic!("smart") };
         let place = crate::smart_cmds::placement(sm);
         let inv = place.inverse().unwrap();
+        // The transform really took, so the non-upright cases do exercise the non-upright path.
+        if !matches!(case, "upright" | "rotate 0") {
+            let changed = sc.iter().any(|&p| {
+                let (a, b) = (hom_apply(&place0, p), hom_apply(&place, p));
+                (a[0] - b[0]).abs() + (a[1] - b[1]).abs() > 0.5
+            });
+            assert!(changed, "{case}: the placement didn't change");
+        }
         // The document warp box: the bounds of the placed layer.
         let pc = [[src_box[0], src_box[1]], [src_box[2], src_box[1]], [src_box[2], src_box[3]], [src_box[0], src_box[3]]].map(|p| hom_apply(&place, p));
         let bb = pc.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
