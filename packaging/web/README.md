@@ -26,7 +26,7 @@ From the repository root (Docker is the only build prerequisite):
 ```sh
 docker build --load -t photocraft-web:local .
 docker run -d --name photocraft-web --restart unless-stopped \
-  -p 8080:8080 photocraft-web:local
+  -p 127.0.0.1:8080:8080 photocraft-web:local
 ```
 
 Open **http://localhost:8080/**. The multi-stage `Dockerfile` builds the existing Rust/Wasm
@@ -35,8 +35,8 @@ app with Trunk, including HEIF support, then copies only the static site into NG
 ### Docker Compose
 
 If you prefer Compose, run these commands from the repository root. Docker Compose builds the
-image from the local source tree, publishes port `8080`, and restarts the container unless it
-has been explicitly stopped:
+image from the local source tree, binds port `8080` to `127.0.0.1` on the host, and restarts the
+container unless it has been explicitly stopped:
 
 ```sh
 docker compose up --build -d
@@ -58,9 +58,9 @@ docker compose down
 The included `compose.yaml` uses the local image name `photocraft-web:local` and maps host port
 `8080` to container port `8080`. If port 8080 is already in use, change the host side of the
 mapping (the value before the colon) in `compose.yaml`, for example `"8081:8080"`, and then
-open **http://localhost:8081/**. The first build downloads the Rust and WebAssembly toolchain
-and dependencies, so it can take several minutes. The
-runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint and Docker
+open **http://localhost:8081/**.
+
+The runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint and Docker
 health check. It serves precompressed gzip assets, the Wasm MIME type, immutable hashed
 assets, and an HTML page that revalidates after deployments. No Rust installation, Node.js,
 database, GPU passthrough, or document volume is needed on the host.
