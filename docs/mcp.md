@@ -2,7 +2,7 @@
 
 ## Connecting the desktop app (no terminal)
 
-1. In PhotoCraft, open **Edit › Preferences › AI Integrations** and turn on **Let AI agents
+1. In PhotoCraft, open **Edit › Preferences › MCP** and turn on **Let AI agents
    connect (MCP)**. Optionally choose the folders agents can open from and save to, and what
    happens when an agent needs PhotoCraft while it is closed (open it, work without a window,
    or ask the user to open it). Click **Apply** or **OK**.

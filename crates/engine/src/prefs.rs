@@ -121,7 +121,7 @@ choice!(
     RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
 );
 choice!(
-    /// AI Integrations › When PhotoCraft Is Closed: what `photocraft-cli mcp --live` does when an
+    /// MCP › When PhotoCraft Is Closed: what `photocraft-cli mcp --live` does when an
     /// agent calls a tool and the app isn't running.
     WhenAppClosed { Launch = "launch", Headless = "headless", Error = "error" } default Launch
 );

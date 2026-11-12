@@ -344,7 +344,7 @@ pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 pub type AutomationAuthorizeFn = fn(&str, &Value) -> photocraft_engine::Result<()>;
 
 /// The automation half of [`Services`]: what control and MCP requests may read, write and run.
-/// Replaced as a whole when Preferences › AI Integrations starts the agent connection or
+/// Replaced as a whole when Preferences › MCP starts the agent connection or
 /// changes its folders ([`Services::set_automation`]).
 #[derive(Default)]
 pub struct AutomationServices {
@@ -356,7 +356,7 @@ pub struct AutomationServices {
     pub authorize: Option<AutomationAuthorizeFn>,
 }
 
-/// Preferences › AI Integrations: the agent connection as the dialog and `ui.inspect` show it.
+/// Preferences › MCP: the agent connection as the dialog and `ui.inspect` show it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLinkStatus {
@@ -370,7 +370,7 @@ pub struct AgentLinkStatus {
     pub mcp_command: Option<String>,
 }
 
-/// What [`Services::agent_link`] did after the AI Integrations settings changed.
+/// What [`Services::agent_link`] did after the MCP settings changed.
 #[derive(Default)]
 pub struct AgentLink {
     /// Requests from agents on a connection that just started (or moved to another port).
@@ -382,7 +382,7 @@ pub struct AgentLink {
     pub status: AgentLinkStatus,
 }
 
-/// Starts, moves or stops the agent connection to match Preferences › AI Integrations.
+/// Starts, moves or stops the agent connection to match Preferences › MCP.
 pub type AgentLinkFn = Box<dyn FnMut(&photocraft_engine::prefs::Integrations, &egui::Context) -> AgentLink>;
 /// Adds PhotoCraft to an MCP client (`claude-desktop`, `claude-code`, `cursor`), returning what
 /// was done, or returns the configuration to paste into any client (`json`).
@@ -582,10 +582,10 @@ pub struct Services {
     /// each step of `actions.play`. Installed on the session only while a control request or
     /// an automation-driven [`PhotocraftApp::run`] runs, so a local play of a recorded `file.*` step still works.
     pub automation_authorize: Option<AutomationAuthorizeFn>,
-    /// Preferences › AI Integrations (desktop): starts, moves or stops the agent connection when
+    /// Preferences › MCP (desktop): starts, moves or stops the agent connection when
     /// its settings change. `None` on the web, and when `--control` manages the connection.
     pub agent_link: Option<AgentLinkFn>,
-    /// Preferences › AI Integrations' buttons that add PhotoCraft to MCP clients (desktop).
+    /// Preferences › MCP' buttons that add PhotoCraft to MCP clients (desktop).
     pub agent_clients: Option<AgentClientFn>,
     /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
     pub encode_png: Option<EncodePngFn>,

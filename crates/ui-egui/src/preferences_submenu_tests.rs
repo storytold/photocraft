@@ -16,7 +16,7 @@ fn preferences_submenu_reads_in_the_reference_order_with_two_separators() {
         &labels[1..],
         [
             "---",
-            "AI Integrations…",
+            "MCP…",
             "Interface…",
             "Workspace…",
             "Tools…",

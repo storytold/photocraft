@@ -2031,7 +2031,7 @@ fn info_detail_adds_text_runs_and_antialiasing() {
 }
 
 /// `mcp install --client json` prints the configuration MCP clients start `mcp --live` with;
-/// Cursor's file gets the same entry, other servers kept (Preferences › AI Integrations).
+/// Cursor's file gets the same entry, other servers kept (Preferences › MCP).
 #[test]
 fn mcp_install_writes_the_live_entry() {
     let home = tmp("mcp-install");
@@ -2110,7 +2110,7 @@ fn mcp_live_without_the_app_explains_what_to_do() {
     send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ui_inspect","arguments":{}}}));
     let r = recv(2);
     assert_eq!(r["result"]["isError"], true, "{r}");
-    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("AI Integrations"), "{r}");
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("MCP"), "{r}");
     drop(stdin);
     let _ = child.kill();
     let _ = child.wait();

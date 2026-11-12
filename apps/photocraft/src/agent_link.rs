@@ -1,4 +1,4 @@
-//! Preferences › AI Integrations on the desktop: while *Let AI agents connect* is on, the app
+//! Preferences › MCP on the desktop: while *Let AI agents connect* is on, the app
 //! serves the control protocol by itself (no `--control`) and publishes the connection file
 //! `photocraft-cli mcp --live` finds it by ([`photocraft_automation::agent_link`]). Turning it on
 //! or off, or changing the port or folders, applies at once. The token stays in the settings
@@ -119,9 +119,14 @@ pub fn mcp_launch() -> Option<McpLaunch> {
     (appimage.is_some() || dir.join(agent_link::cli_file_name()).is_file()).then_some(launch)
 }
 
-/// The "Add to …" buttons: add `mcp` to a client, or return the configuration to paste.
+/// The "Add to …" buttons: add `mcp` to a client, or return the configuration to paste; and
+/// "Copy Prompt for an Agent" (`prompt`): the text an agent with a terminal sets itself up from.
 pub fn clients(mcp: Option<McpLaunch>) -> AgentClientFn {
     Box::new(move |id: &str| {
+        if id == "prompt" {
+            let launch = mcp.as_ref().ok_or("photocraft-cli isn't installed beside PhotoCraft, so an agent can't start it")?;
+            return Ok(launch.agent_prompt());
+        }
         let client = Client::parse(id).ok_or_else(|| format!("unknown MCP client `{id}`"))?;
         let launch = mcp.as_ref().ok_or_else(|| format!("photocraft-cli isn't installed beside PhotoCraft, so {} can't start it", client.name()))?;
         agent_link::install(client, launch, &ClientEnv::from_env()).map(|done| done.message(client)).map_err(|e| e.to_string())
@@ -261,5 +266,8 @@ mod tests {
         let mut add = clients(None);
         assert!(add("cursor").unwrap_err().contains("photocraft-cli"));
         assert!(add("nope").unwrap_err().contains("unknown"));
+        assert!(add("prompt").unwrap_err().contains("photocraft-cli"));
+        let mut add = clients(Some(McpLaunch::cli(Path::new("/x/photocraft-cli"))));
+        assert!(add("prompt").unwrap().contains("mcp --live"));
     }
 }

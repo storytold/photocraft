@@ -276,7 +276,7 @@ pub(crate) struct CommandsArgs {
 /// Headless: each automation root grants that direction of file access; an omitted root denies it.
 /// Prefer absolute root paths in MCP client configurations. Bridge: set the roots on the desktop
 /// app; root flags are refused. The token flags require --bridge (or PHOTOCRAFT_CONTROL_PORT).
-/// Live: the desktop app with Edit › Preferences › AI Integrations › Let AI agents connect on,
+/// Live: the desktop app with Edit › Preferences › MCP › Let AI agents connect on,
 /// found again on every call (no port or token to configure); the roots are for a headless session
 /// while the app is closed.
 #[derive(Args)]
@@ -284,7 +284,7 @@ pub(crate) struct CommandsArgs {
 pub(crate) struct McpArgs {
     #[command(subcommand)]
     pub(crate) action: Option<McpCommand>,
-    /// Find the desktop app by itself on every call (Edit › Preferences › AI Integrations ›
+    /// Find the desktop app by itself on every call (Edit › Preferences › MCP ›
     /// Let AI agents connect), with no port or token to configure
     #[arg(long)]
     pub(crate) live: bool,

@@ -170,7 +170,7 @@ fn read_small(path: &Path) -> Result<Option<String>, AutomationError> {
     }
 }
 
-/// The AI Integrations preferences saved in `dir/preferences.json` (defaults when the file or
+/// The MCP preferences saved in `dir/preferences.json` (defaults when the file or
 /// the section is missing or unreadable: the CLI must not fail over the app's settings).
 pub fn read_integrations(dir: &Path) -> Integrations {
     read_small(&dir.join("preferences.json"))
@@ -216,6 +216,29 @@ impl McpLaunch {
     pub fn config_json(&self) -> String {
         let v = json!({"mcpServers": {SERVER_NAME: self.entry()}});
         serde_json::to_string_pretty(&v).unwrap_or_default()
+    }
+
+    /// A prompt to paste into an agent that has a terminal (Claude Code, Codex, Cursor's agent):
+    /// it registers PhotoCraft as its own MCP server, then checks the connection. Claude Desktop
+    /// has no terminal, so it is set up by [`install`] instead. Holds no port and no token.
+    pub fn agent_prompt(&self) -> String {
+        let line = self.shell_line();
+        let config = self.config_json();
+        format!(
+            "Please connect yourself to PhotoCraft, the image editor running on this computer, as an MCP server, then check that it works.
+             
+             1. Register a stdio MCP server named \"{SERVER_NAME}\" that runs this command:
+                {line}
+                - Claude Code: claude mcp add --scope user {SERVER_NAME} -- {line}
+                - Codex: codex mcp add {SERVER_NAME} -- {line}
+                - Any other client: add this to its MCP configuration:
+             {config}
+             2. Reload your MCP servers if your client needs that (or tell me to restart you).
+             3. Call the {SERVER_NAME} tool `ui_inspect` and tell me which document is open.
+             
+             PhotoCraft must be running with Edit › Preferences › MCP › Let AI agents connect turned on.              The command needs no port or token: it finds the app by itself on every call.
+"
+        )
     }
 
     /// The command line, quoted for a POSIX shell (Windows paths are double-quoted).
@@ -767,6 +790,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// The prompt an agent pastes names the exact command, the Claude Code and Codex lines and a
+    /// configuration for any other client, and no token.
+    #[test]
+    fn the_agent_prompt_registers_the_live_command() {
+        let launch = McpLaunch::cli(Path::new("/x/photocraft-cli"));
+        let prompt = launch.agent_prompt();
+        assert!(prompt.contains("claude mcp add --scope user photocraft -- /x/photocraft-cli mcp --live"), "{prompt}");
+        assert!(prompt.contains("codex mcp add photocraft -- /x/photocraft-cli mcp --live"), "{prompt}");
+        assert!(prompt.contains(&launch.config_json()), "{prompt}");
+        assert!(prompt.contains("Edit › Preferences › MCP › Let AI agents connect"), "{prompt}");
+        assert!(!prompt.contains(TOKEN_FILE) && !prompt.contains("token\":"), "{prompt}");
+    }
+
     #[test]
     fn claude_command_is_found_where_its_installers_put_it() {
         let home = temp("claude-find");
@@ -843,7 +879,7 @@ mod tests {
         assert!(install(Client::Cursor, &launch, &env).is_err(), "no home folder: an error, not a panic");
     }
 
-    // ---- connection file (Preferences › Integrations) ----
+    // ---- connection file (Preferences › MCP) ----
 
     #[test]
     fn a_published_connection_reads_back_in_the_documented_shape() {

@@ -3,7 +3,7 @@
 //! quit or move to another port while the MCP client stays connected, and the MCP client's own
 //! start never opens a window.
 //!
-//! While the app is closed, AI Integrations › When PhotoCraft Is Closed (or `--when-closed`)
+//! While the app is closed, MCP › When PhotoCraft Is Closed (or `--when-closed`)
 //! decides: start the app and wait for it, serve a headless session with the folders chosen in
 //! the app (then for the rest of the MCP session, so documents don't move under the agent), or
 //! report an error that says what to do.
@@ -122,7 +122,7 @@ impl Live {
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "PhotoCraft didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check Edit › Preferences › AI Integrations.",
+                    "PhotoCraft didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check Edit › Preferences › MCP.",
                     self.cfg.launch_timeout.as_secs()
                 ));
             }
@@ -160,7 +160,7 @@ fn closed(integrations: &Integrations) -> String {
     if integrations.connect_agents {
         "PhotoCraft isn't running: open it, then try again.".into()
     } else {
-        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › AI Integrations › Let AI agents connect, then try again.".into()
+        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › MCP › Let AI agents connect, then try again.".into()
     }
 }
 

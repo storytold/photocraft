@@ -1,4 +1,4 @@
-//! Preferences › AI Integrations (`agents.rs`): the live agent connection and its buttons.
+//! Preferences › MCP (`agents.rs`): the live agent connection and its buttons.
 
 use super::tests::app_with_store;
 use super::*;
@@ -72,13 +72,18 @@ fn ai_integrations_offer_the_client_buttons_only_when_agents_may_connect() {
     assert!(h.query_by_label("Copy Configuration").is_none());
     h.get_by_label("Let AI agents connect (MCP)").click();
     h.run_steps(3);
-    for label in ["Add to Claude Desktop", "Add to Claude Code", "Add to Cursor", "Copy Configuration"] {
+    for label in ["Add to Claude Desktop", "Add to Claude Code", "Add to Cursor", "Copy Configuration", "Copy Prompt for an Agent"] {
         assert!(h.query_by_label(label).is_some(), "{label}");
     }
     h.get_by_label("Add to Cursor").click();
     h.run_steps(3);
     assert_eq!(*clicked.lock().unwrap(), ["cursor"]);
     assert!(h.query_by_label("Added PhotoCraft to cursor.").is_some(), "the answer is shown");
+    // The prompt for an agent with a terminal goes to the clipboard, with a note saying so.
+    h.get_by_label("Copy Prompt for an Agent").click();
+    h.run_steps(3);
+    assert_eq!(*clicked.lock().unwrap(), ["cursor", "prompt"]);
+    assert!(h.query_by_label_contains("Prompt copied").is_some(), "the copy is confirmed");
     // Unticked again: the buttons go.
     h.get_by_label("Let AI agents connect (MCP)").click();
     h.run_steps(3);

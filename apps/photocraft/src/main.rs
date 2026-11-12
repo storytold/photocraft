@@ -95,7 +95,7 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
     CUSTOM_TITLEBAR && !prefs.interface.system_title_bar
 }
 
-/// Preferences › Integrations, read before the window opens the way [`custom_titlebar`] is:
+/// Preferences › MCP, read before the window opens the way [`custom_titlebar`] is:
 /// whether agents may drive this launch at all, the port to listen on when no `--control`
 /// was given (0 = only with `--control`) and the automation folders used when no
 /// `--automation-read-root` / `--automation-write-root` was given. A missing or unreadable file
@@ -147,7 +147,7 @@ fn integration_fields(section: &serde_json::Value, out: &mut photocraft_engine::
 }
 
 /// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
-/// variables) win; a direction without one takes Preferences › Integrations' folder. A flag's
+/// variables) win; a direction without one takes Preferences › MCP' folder. A flag's
 /// root that can't be opened stops the launch (exit status 2) as before. A preference's root that
 /// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
 /// from), is left out, so that direction fails closed, and the warning says why: a folder moved
@@ -177,7 +177,7 @@ fn automation_workspace(
             Ok(w) => workspace = w,
             Err(e) => {
                 let which = if read { "Automation Read Folder" } else { "Automation Write Folder" };
-                warnings.push(format!("Preferences › Integrations › {which} is not used: {e}"));
+                warnings.push(format!("Preferences › MCP › {which} is not used: {e}"));
             }
         }
     }
@@ -192,7 +192,7 @@ fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrat
     if !prefs.allow_agent_control {
         let warning = cli.map(|p| {
             format!(
-                "photocraft: Preferences › Integrations › Allow Agent Control is off: not listening on port {p}
+                "photocraft: Preferences › MCP › Allow Agent Control is off: not listening on port {p}
 "
             )
         });
@@ -359,7 +359,7 @@ struct ControlNotice {
 }
 
 /// The `--control` server's port, token and workspace, when it is on (exits 2 on a bad
-/// configuration). Preferences › Integrations' folders stand in for automation roots no flag
+/// configuration). Preferences › MCP' folders stand in for automation roots no flag
 /// names. The server Preferences start (*Let AI agents connect*) is `agent_link`'s, not this.
 fn control_setup(
     cli_port: Option<u16>,
@@ -369,7 +369,7 @@ fn control_setup(
     control_setup_in(services::config_dir(), &integrations(services::prefs_file().as_deref()), cli_port, auth, automation)
 }
 
-/// [`control_setup`] with the settings folder and Preferences › Integrations given.
+/// [`control_setup`] with the settings folder and Preferences › MCP given.
 fn control_setup_in(
     settings: Option<std::path::PathBuf>,
     prefs: &photocraft_engine::prefs::Integrations,
@@ -720,7 +720,7 @@ fn main() -> eframe::Result {
                     log::warn!("couldn't remember GPU backend {}: {e}", b.name());
                 }
             });
-            // Preferences › AI Integrations: agents connect without a terminal, unless the launch
+            // Preferences › MCP: agents connect without a terminal, unless the launch
             // flags (`--control`) manage the connection.
             let mcp = agent_link::mcp_launch();
             app.agent_link.mcp_command = mcp.as_ref().map(photocraft_automation::agent_link::McpLaunch::shell_line);
@@ -1197,7 +1197,7 @@ mod tests {
         }
     }
 
-    /// Preferences › Integrations' folders are the automation roots when no flag names one, and
+    /// Preferences › MCP' folders are the automation roots when no flag names one, and
     /// a flag wins over its preference, direction by direction.
     #[test]
     fn automation_folders_come_from_the_preferences_unless_a_flag_names_one() {

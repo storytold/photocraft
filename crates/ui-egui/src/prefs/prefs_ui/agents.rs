@@ -1,4 +1,4 @@
-//! Preferences › AI Integrations: the agent connection (`integrations.connectAgents`), the folders
+//! Preferences › MCP: the agent connection (`integrations.connectAgents`), the folders
 //! agents may use, what `photocraft-cli mcp --live` does while the app is closed, and the buttons
 //! that add PhotoCraft to MCP clients. Changes apply at once, without a restart.
 
@@ -98,6 +98,14 @@ pub(super) fn integration_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, 
                 }
             }
         });
+        // Agents with a terminal (Claude Code, Codex, Cursor's agent) can set themselves up.
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            if crate::widgets::secondary_button(ui, tl!("Copy Prompt for an Agent"), 120.0).clicked() {
+                f.insert("__agentAction".into(), json!("prompt"));
+            }
+            ui.label(RichText::new(tl!("Paste it into an agent with a terminal; it registers PhotoCraft by itself.")).color(t.text_faint));
+        });
     }
     if let Some(result) = f.get("__agentResult").and_then(Value::as_object) {
         let ok = result.get("ok").and_then(Value::as_bool) == Some(true);
@@ -133,6 +141,10 @@ pub(super) fn agent_action(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut
         Ok(text) if action == "json" => {
             ctx.copy_text(text);
             json!({"ok": true, "message": tl!("Configuration copied.")})
+        }
+        Ok(text) if action == "prompt" => {
+            ctx.copy_text(text);
+            json!({"ok": true, "message": tl!("Prompt copied. Paste it into Claude Code, Codex or another agent with a terminal.")})
         }
         Ok(message) => json!({"ok": true, "message": message}),
         Err(e) => json!({"ok": false, "message": e}),

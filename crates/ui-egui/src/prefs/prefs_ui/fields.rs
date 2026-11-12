@@ -54,7 +54,7 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "notificationAutoHide" {
         return "Auto Hide Notifications".into();
     }
-    // AI Integrations: the labels its own rows show (`agents::integration_rows`), also for search.
+    // MCP: the labels its own rows show (`agents::integration_rows`), also for search.
     match key {
         "connectAgents" => return "Let AI agents connect (MCP)".into(),
         "readRoot" => return "Folder agents can open from".into(),
@@ -136,7 +136,7 @@ pub(super) fn choice_label(v: &str) -> String {
         "ahd" => "AHD (adaptive homogeneity)".into(),
         "mhc" => "Malvar–He–Cutler".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
-        // AI Integrations › When PhotoCraft is closed.
+        // MCP › When PhotoCraft is closed.
         "launch" => "Open PhotoCraft".into(),
         "headless" => "Work without a window".into(),
         "error" => "Ask to open PhotoCraft".into(),

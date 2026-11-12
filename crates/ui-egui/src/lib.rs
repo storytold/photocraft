@@ -460,7 +460,7 @@ pub struct PhotocraftApp {
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
-    /// Preferences › AI Integrations: the agent connection's state (see [`Services::agent_link`]).
+    /// Preferences › MCP: the agent connection's state (see [`Services::agent_link`]).
     pub agent_link: AgentLinkStatus,
     /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
     /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).

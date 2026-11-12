@@ -52,7 +52,7 @@ pub struct Runtime {
     show_rulers: Option<bool>,
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
-    /// AI Integrations settings the agent connection was last set up for (`agents::sync_agent_link`).
+    /// MCP settings the agent connection was last set up for (`agents::sync_agent_link`).
     agent_link: Option<prefs::Integrations>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
     pub(crate) tool_colors: Option<[[[f32; 4]; 2]; 2]>,
