@@ -1538,6 +1538,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-psd"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=09dcbc225b95232998498a40ca56e24716571d53#09dcbc225b95232998498a40ca56e24716571d53"
+dependencies = [
+ "encoding_rs",
+ "flate2",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-raster-codecs"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=09dcbc225b95232998498a40ca56e24716571d53#09dcbc225b95232998498a40ca56e24716571d53"
@@ -5513,6 +5524,7 @@ dependencies = [
  "base64 0.23.1",
  "cap-std",
  "clap",
+ "craft-psd",
  "getrandom 0.3.4",
  "hmac",
  "photocraft-codecs",
@@ -5524,7 +5536,6 @@ dependencies = [
  "photocraft-geom",
  "photocraft-gpu",
  "photocraft-io",
- "photocraft-psd",
  "photocraft-raster",
  "photocraft-raw",
  "pollster 1.0.1",
@@ -5546,6 +5557,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "craft-psd",
  "photocraft-automation",
  "photocraft-cms",
  "photocraft-codecs",
@@ -5553,7 +5565,6 @@ dependencies = [
  "photocraft-engine",
  "photocraft-format",
  "photocraft-io",
- "photocraft-psd",
  "photocraft-raster",
  "photocraft-raw",
  "serde",
@@ -5645,6 +5656,7 @@ dependencies = [
  "blake3",
  "chrono",
  "craft-print",
+ "craft-psd",
  "exr",
  "flate2",
  "photocraft-affinity",
@@ -5661,7 +5673,6 @@ dependencies = [
  "photocraft-ops",
  "photocraft-paint",
  "photocraft-plugins",
- "photocraft-psd",
  "photocraft-raster",
  "photocraft-raw",
  "photocraft-testkit",
@@ -5740,6 +5751,7 @@ dependencies = [
  "craft-docpath",
  "craft-pdf",
  "craft-svg",
+ "craft-psd",
  "crc32fast",
  "flate2",
  "imagesize 0.13.0",
@@ -5756,7 +5768,6 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-paint",
- "photocraft-psd",
  "photocraft-raster",
  "photocraft-raw",
  "photocraft-testkit",
@@ -5812,18 +5823,6 @@ dependencies = [
  "thiserror 2.0.21",
  "wasmi",
  "wat",
-]
-
-[[package]]
-name = "photocraft-psd"
-version = "0.23.1"
-dependencies = [
- "encoding_rs",
- "flate2",
- "photocraft-psd",
- "proptest",
- "serde",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5884,12 +5883,12 @@ dependencies = [
 name = "photocraft-text"
 version = "0.23.1"
 dependencies = [
+ "craft-psd",
  "flate2",
  "parley",
  "photocraft-color",
  "photocraft-doc",
  "photocraft-geom",
- "photocraft-psd",
  "photocraft-raster",
  "rayon",
  "skrifa 0.47.0",
@@ -5903,6 +5902,7 @@ dependencies = [
  "chrono",
  "craft-i18n",
  "craft-print",
+ "craft-psd",
  "craft-ui",
  "craft-update",
  "eframe",
@@ -5927,7 +5927,6 @@ dependencies = [
  "photocraft-io",
  "photocraft-paint",
  "photocraft-plugins",
- "photocraft-psd",
  "photocraft-raster",
  "photocraft-raw",
  "photocraft-testkit",
@@ -5959,6 +5958,7 @@ dependencies = [
 name = "photocraft-web"
 version = "0.23.1"
 dependencies = [
+ "craft-psd",
  "eframe",
  "egui",
  "js-sys",
@@ -5968,7 +5968,6 @@ dependencies = [
  "photocraft-engine",
  "photocraft-io",
  "photocraft-paint",
- "photocraft-psd",
  "photocraft-raster",
  "photocraft-ui-egui",
  "rfd",
