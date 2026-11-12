@@ -862,6 +862,7 @@ fn unknown_imported_resources_survive_a_save_that_rewrites_the_markers() {
         snapshot: vec![0u8; 48 * 48 * 4],
         snapshot_size: [48, 48],
         done: false,
+        manual_done: false,
         note: String::new(),
     });
     let file = document_to_psd(&doc);

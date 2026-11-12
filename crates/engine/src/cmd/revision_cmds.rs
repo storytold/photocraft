@@ -45,6 +45,7 @@ pub fn marker_json(i: usize, m: &RevisionMarker) -> Value {
         "height": m.size[1],
         "layerId": m.layer_id.map(|id| id.0),
         "done": m.done,
+        "manualDone": m.manual_done,
         "note": m.note,
         "hasSnapshot": !m.snapshot.is_empty(),
     })
@@ -257,6 +258,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         let done = done.as_bool().ok_or_else(|| bad(CMD, "`done` must be true or false"))?;
         marked = Some(done);
         m.done = done;
+        // The hand mark decides who owns the colour from now on: a manual green survives detection,
+        // a manual red hands the marker back to it.
+        m.manual_done = done;
     }
     if m == d0.revision_markers[i] {
         return Ok(json!({"index": i, "marker": marker_json(i, &m), "changed": false}));
@@ -275,6 +279,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if reframe {
             m.snapshot = snapshot_for(d, &m)?;
             m.done = false;
+            m.manual_done = false;
         }
         d.revision_markers[i] = m.clone();
         Ok(())
@@ -342,6 +347,7 @@ fn align(s: &mut Session, p: &Value) -> Result<Value> {
                 m.pos = [x, y];
                 m.snapshot = snapshot_for(d, &m)?;
                 m.done = false;
+                m.manual_done = false;
                 d.revision_markers[i] = m;
             }
             Ok(())
@@ -370,6 +376,7 @@ fn snapshot(s: &mut Session, p: &Value) -> Result<Value> {
             let m = &mut d.revision_markers[i];
             m.snapshot = snap;
             m.done = false;
+            m.manual_done = false;
         }
         Ok(())
     })?;
@@ -457,8 +464,11 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
             }
             // Re-render the framed area (snapshot_for samples to the marker's own grid, which a
             // file may carry at another size than the current default) and compare.
+            // A hand-marked green stays green: the author's statement that the frame is done
+            // outranks a pixel comparison that finds nothing changed. Every other marker is
+            // compared as usual, including one the author handed back with a manual red.
             let cur = snapshot_for(d, &m)?;
-            let done = changed(&cur, &m.snapshot);
+            let done = m.manual_done || changed(&cur, &m.snapshot);
             d.revision_markers[i].done = done;
         }
         Ok(())
@@ -822,5 +832,20 @@ mod tests {
         let d = &s.active().unwrap().doc;
         let middle = |i: usize| d.revision_markers[i].pos[0] + d.revision_markers[i].size[0] / 2.0;
         assert_eq!(middle(0), middle(1), "both frames share their centre");
+    }
+
+    /// A marker marked green by hand keeps that green through the next check instead of being
+    /// compared and turned red again; marking it red hands it back to detection.
+    #[test]
+    fn manual_green_survives_detection() {
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0})).unwrap();
+        s.execute("revision.set", json!({"index": 0, "done": true})).unwrap();
+        let v = s.execute("revision.detect", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(true), "the hand-marked green survives the check");
+        assert_eq!(v["markers"][0]["manualDone"], json!(true), "and stays owned by the hand mark");
+        s.execute("revision.set", json!({"index": 0, "done": false})).unwrap();
+        let v = s.execute("revision.detect", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(false), "a manual red is checked again");
     }
 }

@@ -15,7 +15,7 @@
 //!   u8  has_layer, u64 layer_id   (box follows this layer when it moves; 0/absent = fixed)
 //!   u32 snap_w, u32 snap_h        (snapshot grid)
 //!   u32 snap_len, RGBA8 snapshot
-//!   u8  done                      (green box)
+//!   u8  flags                     (bit 0: green box; bit 1: green marked by hand)
 //!   u16 note_len, UTF-8 note
 //! ```
 
@@ -77,7 +77,9 @@ pub fn encode(doc: &Document) -> Option<Vec<u8>> {
         put_u32(&mut out, m.snapshot_size[1]);
         put_u32(&mut out, m.snapshot.len() as u32);
         out.extend_from_slice(&m.snapshot);
-        out.push(u8::from(m.done));
+        // Bit 0 is the green box, bit 1 the author's hand mark. A reader that predates bit 1 tests
+        // the byte with `!= 0`, so a hand-marked green still reads as green there.
+        out.push(u8::from(m.done) | (u8::from(m.manual_done) << 1));
         put_str(&mut out, &m.note);
     }
     Some(out)
@@ -154,7 +156,11 @@ pub fn decode(data: &[u8]) -> Option<Vec<RevisionMarker>> {
             return None;
         }
         let snapshot = r.take(snap_len)?.to_vec();
-        let done = r.u8()? != 0;
+        // Bit 0 is the green box, bit 1 the author's hand mark; a block written before the flag
+        // existed carries only bit 0, which reads as a detected green.
+        let flags = r.u8()?;
+        let done = flags & 1 != 0;
+        let manual_done = flags & 2 != 0;
         let note = r.str()?;
         out.push(RevisionMarker {
             name,
@@ -164,6 +170,7 @@ pub fn decode(data: &[u8]) -> Option<Vec<RevisionMarker>> {
             snapshot,
             snapshot_size: [snap_w, snap_h],
             done,
+            manual_done,
             note,
         });
     }
@@ -194,6 +201,7 @@ mod tests {
             snapshot: vec![0u8; 48 * 48 * 4],
             snapshot_size: [48, 48],
             done: false,
+            manual_done: false,
             note: "改这里".into(),
         }
     }
@@ -214,6 +222,18 @@ mod tests {
     fn empty_is_none() {
         let d = Document::new("m", photocraft_geom::Size::new(10, 10), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
         assert!(encode(&d).is_none());
+    }
+
+    /// A green marked by hand round-trips as a hand-marked green, so reopening the file does not
+    /// turn it back into one that detection owns.
+    #[test]
+    fn manual_green_roundtrips() {
+        let mut d = Document::new("m", photocraft_geom::Size::new(100, 100), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        d.revision_markers.push(RevisionMarker { done: true, manual_done: true, ..marker("A") });
+        let data = encode(&d).unwrap();
+        let back = decode(&data).unwrap();
+        assert!(back[0].manual_done, "the hand-marked flag survives the resource");
+        assert_eq!(back, d.revision_markers);
     }
 
     /// Bytes that are not a marker block, and a truncated one, are rejected rather than panicking.

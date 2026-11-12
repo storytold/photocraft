@@ -37,6 +37,10 @@ pub struct RevisionMarker {
     /// Detection result: `false` = content unchanged (red box), `true` = content changed since the
     /// snapshot (green box).
     pub done: bool,
+    /// The author marked this marker green by hand, without editing the content. Detection keeps
+    /// such a marker green instead of comparing its pixels again, so the author's "done" is not
+    /// undone by the next check; moving or resizing the frame, or taking a fresh snapshot, clears it.
+    pub manual_done: bool,
     /// Free-form note the author leaves on the marker.
     pub note: String,
 }
@@ -68,6 +72,7 @@ impl Default for RevisionMarker {
             snapshot: Vec::new(),
             snapshot_size: Self::SNAPSHOT_GRID,
             done: false,
+            manual_done: false,
             note: String::new(),
         }
     }
