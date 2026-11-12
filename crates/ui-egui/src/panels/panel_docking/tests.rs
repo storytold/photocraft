@@ -2541,3 +2541,66 @@ fn an_empty_dock_on_the_dock_edge_does_not_fill_over_the_bars() {
         }
     }
 }
+
+/// A dock with an iconic column (the Color group) beside an expanded column holding two stacked
+/// groups (Properties over Layers).
+fn iconic_beside_stacked_dock() -> PhotocraftApp {
+    let mut a = app();
+    let Some(Node::Split { second, .. }) = legacy(&a).root else { panic!("the dock is beside the canvas") };
+    let Node::Dock { mut columns, side } = *second else { panic!("the dock") };
+    let mut icon = columns[0].clone();
+    icon.groups.truncate(1);
+    icon.iconic = true;
+    icon.iconic_width = Some(36.0);
+    columns[0].groups.remove(0);
+    columns.insert(0, icon);
+    let canvas = Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 };
+    let root = Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::FixedSecond(360.0),
+        first: Box::new(canvas),
+        second: Box::new(Node::Dock { side, columns }),
+    };
+    a.ui.docking = Some(Workspace::new(Layout { root: Some(root), floating: Vec::new() }));
+    a
+}
+
+/// A pixel the frame covers with an opaque fill other than the window clear colour.
+fn assert_covered(h: &Harness<'static, PhotocraftApp>, at: Pos2, what: &str) {
+    let got = painted_at(h, at);
+    assert!(got.is_some() && got != Some(CLEAR), "{what} at {at:?} shows the window clear colour ({got:?})");
+}
+
+#[test]
+fn the_gaps_beside_an_iconic_column_and_between_stacked_groups_are_not_the_clear_colour() {
+    let h = harness_in(iconic_beside_stacked_dock(), vec2(1280.0, 800.0), crate::theme::ThemeKind::Studio, Some(CLEAR));
+    let t = crate::theme::Tokens::get(&h.ctx);
+    let bodies = last_bodies(&h.ctx);
+    let body = |name: &str| bodies.iter().find(|(p, _)| p == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("no body for {name}: {bodies:?}"));
+    let (canvas, props, layers) = (body("canvas"), body("properties"), body("layers"));
+    // The canvas | dock seam is the dock colour.
+    let seam = pos2((canvas.max.x + props.min.x) / 2.0, 400.0);
+    assert_eq!(painted_at(&h, seam), Some(t.dock), "canvas | dock gap at {seam:?}");
+    // Between the two stacked groups, across the whole width of the column.
+    for x in [props.min.x + 1.0, props.center().x, props.max.x - 1.0] {
+        assert_covered(&h, pos2(x, (props.max.y + layers.min.y) / 2.0), "the gap between Properties and Layers");
+    }
+    // Between the expanded column and the iconic one (the iconic column sits past `props.max.x`).
+    for y in [100.0, 400.0, 700.0] {
+        assert_covered(&h, pos2(props.max.x + 2.0, y), "the gap beside the iconic column");
+    }
+}
+
+#[test]
+fn the_gap_between_stacked_groups_is_not_the_clear_colour_with_the_default_three_groups() {
+    let h = harness_in(app(), vec2(1280.0, 800.0), crate::theme::ThemeKind::Studio, Some(CLEAR));
+    let t = crate::theme::Tokens::get(&h.ctx);
+    let bodies = last_bodies(&h.ctx);
+    let body = |name: &str| bodies.iter().find(|(p, _)| p == name).map(|(_, r)| *r).unwrap_or_else(|| panic!("no body for {name}: {bodies:?}"));
+    let (canvas, color, props, layers) = (body("canvas"), body("color"), body("properties"), body("layers"));
+    assert_eq!(painted_at(&h, pos2((canvas.max.x + color.min.x) / 2.0, 400.0)), Some(t.dock), "canvas | dock gap");
+    for (above, below) in [(color, props), (props, layers)] {
+        let y = (above.max.y + below.min.y) / 2.0;
+        assert_covered(&h, pos2(above.center().x, y), "the gap between stacked groups");
+    }
+}
