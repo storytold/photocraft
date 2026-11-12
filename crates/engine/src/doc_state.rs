@@ -214,9 +214,11 @@ pub struct ToolState {
     /// CMYK ink associations for the current foreground/background pair
     /// and the alternate pair used while targeting masks.
     /// Each association also records its RGB stand-in.
-    pub cmyk_roles: [[Option<([f32; 3], [f32; 4])>; 2]; 2],
+    pub cmyk_roles: CmykRoles,
 }
 
+/// Native CMYK inks associated with each color role.
+pub type CmykRoles = [[Option<([f32; 3], [f32; 4])>; 2]; 2];
 impl ToolState {
     /// How many CMYK picks are remembered.
     pub const CMYK_PICKS: usize = 8;

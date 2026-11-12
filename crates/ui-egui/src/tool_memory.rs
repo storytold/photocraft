@@ -27,6 +27,7 @@ pub(crate) type ToolBrushes = (Tool, Vec<(Tool, BrushSettings)>);
 
 /// The sRGB stand-ins and exact inks of recently picked CMYK colours, oldest first.
 pub(crate) type CmykPicks = Vec<([f32; 3], [f32; 4])>;
+pub(crate) type CmykRoles = [[Option<([f32; 3], [f32; 4])>; 2]; 2];
 
 /// Explicit choices override temporary pen and held-key tools, even when selecting the same tool.
 pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
@@ -113,7 +114,7 @@ fn colors(app: &PhotocraftApp) -> [[[f32; 4]; 2]; 2] {
 
 /// Associations in persistent order: pixel foreground/background, then mask
 /// foreground/background, regardless of the currently selected target.
-fn cmyk_roles(app: &PhotocraftApp) -> [[Option<([f32; 3], [f32; 4])>; 2]; 2] {
+fn cmyk_roles(app: &PhotocraftApp) -> CmykRoles {
     let roles = app.session.tools.cmyk_roles;
     if app.session.tools.mask_targeted { [roles[1], roles[0]] } else { roles }
 }
@@ -133,7 +134,7 @@ fn persist_colors(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
-fn color_value(pairs: [[[f32; 4]; 2]; 2], cmyk_picks: &CmykPicks, cmyk_roles: [[Option<([f32; 3], [f32; 4])>; 2]; 2]) -> Value {
+fn color_value(pairs: [[[f32; 4]; 2]; 2], cmyk_picks: &CmykPicks, cmyk_roles: CmykRoles) -> Value {
     let [[foreground, background], [mask_foreground, mask_background]] = pairs;
     json!({
         "foreground": foreground, "background": background,
@@ -195,7 +196,7 @@ fn restore_colors(app: &mut PhotocraftApp) {
         })
     };
 
-    let stored_roles = saved.get("cmykRoles").and_then(|v| serde_json::from_value::<[[Option<([f32; 3], [f32; 4])>; 2]; 2]>(v.clone()).ok());
+    let stored_roles = saved.get("cmykRoles").and_then(|v| serde_json::from_value::<CmykRoles>(v.clone()).ok());
 
     let mut roles = [[None; 2]; 2];
     if let Some(stored) = stored_roles {
