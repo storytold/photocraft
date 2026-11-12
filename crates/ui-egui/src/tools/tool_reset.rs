@@ -250,6 +250,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
         Tool::Line => reset!(
             shape_mode,
+            shape_path_op,
             shape_fill,
             stroke_width,
             shape_stroke,
@@ -265,7 +266,18 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_concavity,
         ),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
-            reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
+            reset!(
+                shape_mode,
+                shape_path_op,
+                shape_fill,
+                stroke_width,
+                shape_stroke,
+                shape_fill_gradient,
+                shape_stroke_gradient,
+                corner_radius,
+                polygon_sides,
+                line_weight
+            )
         }
         Tool::MixerBrush => reset!(mixer_combination),
         Tool::ColorSampler
