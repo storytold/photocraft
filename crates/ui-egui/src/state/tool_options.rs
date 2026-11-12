@@ -94,6 +94,8 @@ pub struct ToolOptions {
     pub strength: f32,
     pub protect_detail: bool,
     pub finger_painting: bool,
+    /// Smudge › Mode (#12959): Normal, Darken, Lighten, Hue, Saturation, Color or Luminosity.
+    pub smudge_mode: photocraft_color::BlendMode,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
@@ -132,6 +134,10 @@ pub struct ToolOptions {
     /// on one of its anchors deletes it (#4144).
     #[serde(default = "yes")]
     pub pen_auto_add_delete: bool,
+    /// Pen › gear › Rubber Band: while drawing, preview the next segment from the last anchor to
+    /// the pointer. Off by default, as in Photoshop (#12900).
+    #[serde(default)]
+    pub pen_rubber_band: bool,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -247,6 +253,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Zoom tool › Zoom In / Zoom Out: which way a click steps (⌥ turns it around). Reset Tool
+    /// leaves it, as in Photoshop.
+    #[serde(default = "yes")]
+    pub zoom_in: bool,
     /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
     /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
     #[serde(default)]
@@ -491,6 +501,7 @@ impl Default for ToolOptions {
             strength: 50.0,
             protect_detail: true,
             finger_painting: false,
+            smudge_mode: photocraft_color::BlendMode::Normal,
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
@@ -502,14 +513,15 @@ impl Default for ToolOptions {
             shape_stroke_gradient: None,
             corner_radius: 0.0,
             polygon_sides: 5,
-            line_weight: 3.0,
+            line_weight: 1.0,
             arrow_start: false,
             arrow_end: false,
-            arrow_width: 52.0,
-            arrow_length: 50.0,
+            arrow_width: 5.0,
+            arrow_length: 10.0,
             arrow_concavity: 0.0,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
+            pen_rubber_band: false,
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,
@@ -552,6 +564,7 @@ impl Default for ToolOptions {
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            zoom_in: true,
             hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,

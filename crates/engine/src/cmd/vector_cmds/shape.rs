@@ -106,6 +106,12 @@ pub fn preview_shape_stroke(doc: &Document, id: LayerId, params: &Value) -> Resu
 /// Moves a layer's vector content by `(dx, dy)`: shape paths (re-rendered) and linked vector
 /// masks, recursing into groups. For the Move tool / `layer.move`.
 pub fn translate_vectors(doc: &Document, l: &mut Layer, dx: f64, dy: f64) {
+    translate_vectors_wrapped(doc, l, dx, dy, None);
+}
+
+/// [`translate_vectors`]. `wrap` is the canvas when View › Pattern Preview is on: a linked vector
+/// mask on a wrapping layer folds with the raster pixels. Shape paths keep the raw delta.
+pub(crate) fn translate_vectors_wrapped(doc: &Document, l: &mut Layer, dx: f64, dy: f64, wrap: Option<photocraft_geom::Rect>) {
     let a = Affine::translate(dx, dy);
     if let Some(f) = &mut l.frame {
         f.transform = a.mul(&f.transform);
@@ -115,16 +121,20 @@ pub fn translate_vectors(doc: &Document, l: &mut Layer, dx: f64, dy: f64) {
             l.frame = None;
         }
     }
+    let mask_wrap = wrap.filter(|_| crate::layer_multi_cmds::wraps_linked_masks(&l.content));
     if let Some(vm) = l.vector_mask.as_mut()
         && vm.linked
     {
-        vm.path = vm.path.transform(&a);
+        vm.path = match mask_wrap {
+            Some(tile) => crate::layer_multi_cmds::wrap_path(&vm.path, dx as i32, dy as i32, tile),
+            None => vm.path.transform(&a),
+        };
     }
     match &mut l.content {
         LayerContent::Shape(sh) => shift_shape(doc, sh, dx, dy),
         LayerContent::Group(g) => {
             for c in &mut g.children {
-                translate_vectors(doc, c, dx, dy);
+                translate_vectors_wrapped(doc, c, dx, dy, wrap);
             }
         }
         _ => {}
@@ -423,7 +433,8 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// The Freeform Pen history override labels new layers; additions retain the Add Shape label.
+/// The Freeform Pen or Line Tool history override labels new layers; additions retain the Add
+/// Shape label.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
