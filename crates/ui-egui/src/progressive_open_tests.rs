@@ -150,14 +150,22 @@ fn a_later_preview_does_not_take_the_focus_from_the_tab_the_user_switched_to() {
     let first = app.jobs.previews[0].1;
     // The user goes back to the first document while the raw keeps developing.
     app.session.set_active(0);
+    let ctx = egui::Context::default();
     let end = Instant::now() + Duration::from_secs(20);
-    // Each later preview replaces the first one in place; the focus stays where it is.
+    // Each later preview replaces the first one in place; the focus stays where it is. On a busy
+    // machine the half-size preview can be ready before the first one is drawn, so the first may
+    // be the last: the loop also ends when the full document lands (`tick` collects it).
     while app.jobs.previews.first().is_some_and(|(_, id)| *id == first) && app.session.has_jobs() {
         assert!(Instant::now() < end, "no second preview and no end of the open within 20 s");
-        show_previews(&mut app);
-        assert_eq!(app.session.active_index(), Some(0));
+        tick(&mut app, &ctx);
+        // Once the full document has landed it may take the focus, as any finished open does.
+        if !app.jobs.previews.is_empty() {
+            assert_eq!(app.session.active_index(), Some(0));
+        }
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert_eq!(app.session.active_index(), Some(0));
+    if !app.jobs.previews.is_empty() {
+        assert_eq!(app.session.active_index(), Some(0));
+    }
     until_opened(&mut app);
 }
