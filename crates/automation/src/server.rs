@@ -56,6 +56,9 @@ pub struct OpenParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// Explicit order for ambiguous XCF 7–11 samples: little-endian or big-endian. No default is inferred.
+    #[serde(default)]
+    pub historical_xcf_sample_order: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -217,6 +220,10 @@ pub struct SaveParams {
     /// DDS: also write the full mip chain, each level a box filter of the one above.
     #[serde(default, rename = "ddsMipmaps")]
     pub dds_mipmaps: bool,
+    /// PDF: write the spot channels as overprinting Separation plates after the flattened image
+    /// (a Multichannel document as plates alone). On by default; false writes the image only.
+    #[serde(default, rename = "pdfSpotPlates")]
+    pub pdf_spot_plates: Option<bool>,
     /// .pcraft: request the flattened document at its canvas size as `composite/full.png`.
     /// The save may omit it; check the manifest's `full_composite` member. Off by default.
     #[serde(default, rename = "pcraftFullComposite")]
@@ -738,17 +745,21 @@ impl PhotocraftMcp {
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        let mut params = json!({"path": p.path, "approveHighMemory": p.approve_high_memory});
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        // Validate even bridge-mode requests before sending them to an import host.
+        if let Err(error) = crate::files::import_options_from_params(&params) {
+            return to_result(Err(error));
+        }
+        let headless_params = params.clone();
+        if let Some(r) = self.headless_op(move |h| h.open_with_parameters(&path, &headless_params)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        let mut params = json!({"path": p.path});
-        if approve {
-            params["approveHighMemory"] = json!(true);
-        }
         to_result(b.call("app.open", params).await)
     }
 
@@ -1213,6 +1224,7 @@ impl PhotocraftMcp {
                 p.tiff_layers.then_some("tiffLayers"),
                 p.pcraft_full_composite.is_some().then_some("pcraftFullComposite"),
                 dpx_bits.is_some().then_some("dpxBits"),
+                p.pdf_spot_plates.is_some().then_some("pdfSpotPlates"),
                 p.index.is_some().then_some("index"),
             ]
             .into_iter()
@@ -1255,6 +1267,7 @@ impl PhotocraftMcp {
                     tiff_layers: p.tiff_layers,
                     tiff_transparency: p.tiff_transparency,
                     tga_bits,
+                    pdf_spot_plates: p.pdf_spot_plates.unwrap_or(true),
                     pcraft_full_composite: p.pcraft_full_composite.unwrap_or(false),
                     ..Default::default()
                 };
@@ -1432,8 +1445,24 @@ mod tests {
         .unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        // Keep the real 36 MP filter below the memory-admission limit even after earlier
+        // tests retained allocator pages. Progress 0.1 is reported only after its reservation,
+        // so cancellation targets admitted work instead of depending on a 100 ms delay.
+        let mut waited = Box::pin(mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 32}), &mut waiter, (0, 1)));
+        let started = std::time::Instant::now();
+        loop {
+            tokio::select! {
+                outcome = &mut waited => panic!("the blur ended before it was dropped: {outcome:?}"),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            }
+            let admitted =
+                mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|job| job.state == "running" && job.progress >= 0.1))).await.unwrap().unwrap();
+            if admitted {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 30, "the blur was not admitted");
+        }
+        drop(waited);
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
@@ -1546,6 +1575,25 @@ mod tests {
         server.await.unwrap().unwrap();
     }
 
+    /// Answer the bridge's challenge authentication on one fake-app connection, frame by frame,
+    /// as the real control servers do. Returns whether the connection authenticated.
+    async fn fake_app_handshake<R, W>(lines: &mut tokio::io::Lines<R>, write: &mut W, token: &str) -> bool
+    where
+        R: tokio::io::AsyncBufRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut handshake = crate::security::ServerHandshake::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let (reply, step) = handshake.reply(&line, token);
+            write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            if step != crate::security::AuthStep::Challenged {
+                return step == crate::security::AuthStep::Authenticated;
+            }
+        }
+        false
+    }
+
     /// The same over the bridge (#8130): a dropped wait sends `jobs.cancel` for the app's job.
     #[tokio::test(flavor = "multi_thread")]
     async fn dropping_a_bridged_wait_cancels_the_apps_job() {
@@ -1563,8 +1611,7 @@ mod tests {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (read, mut write) = socket.into_split();
                 let mut lines = tokio::io::BufReader::new(read).lines();
-                let (auth, _) = crate::security::authentication_reply(&lines.next_line().await.unwrap().unwrap(), TOKEN);
-                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
+                fake_app_handshake(&mut lines, &mut write, TOKEN).await;
                 while let Ok(Some(line)) = lines.next_line().await {
                     let request: Value = serde_json::from_str(&line).unwrap();
                     let result = match request["method"].as_str().unwrap() {
@@ -1622,6 +1669,19 @@ mod tests {
         assert_eq!(v["soft"], 3000);
         assert_eq!(v["hard"], 9000);
         assert_eq!(v["available"], 12000);
+    }
+
+    #[test]
+    fn mcp_open_order_parameter_remains_explicit_and_strict() {
+        for order in ["little-endian", "big-endian"] {
+            let parsed: OpenParams = serde_json::from_value(json!({"path":"source.xcf","historical_xcf_sample_order":order})).unwrap();
+            let opts = crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":parsed.historical_xcf_sample_order})).unwrap();
+            assert_eq!(opts.historical_xcf_sample_order.unwrap().to_string(), order);
+        }
+        let omitted: OpenParams = serde_json::from_value(json!({"path":"source.xcf"})).unwrap();
+        assert!(omitted.historical_xcf_sample_order.is_none());
+        assert!(serde_json::from_value::<OpenParams>(json!({"path":"source.xcf","historical_xcf_sample_order":1})).is_err());
+        assert!(crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":"native"})).is_err());
     }
 
     /// #10897: the MCP `doc_place` tool takes the same strict, defaulted approval as `doc_open`

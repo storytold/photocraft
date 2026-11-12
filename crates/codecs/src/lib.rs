@@ -45,7 +45,7 @@ pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 /// `steelblue4` and applies its Pango/CSS overrides before calling this lookup. XPM parsing keeps
 /// its separate existing normalization and alias policy.
 pub fn x11_color_rgb(name: &str) -> Option<[f32; 3]> {
-    crate::codecs::xpm::x11_color_rgb(name)
+    craft_raster_codecs::xpm::x11_color_rgb(name)
 }
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
@@ -218,7 +218,7 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the
 /// entry its Graphic Control Extension makes transparent, read without decoding pixels.
 pub fn gif_palette(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, Option<u8>)> {
-    crate::codecs::gif_palette::palette(bytes)
+    craft_gif::palette(bytes)
 }
 
 /// Returns the embedded colour table for an indexed BMP, if it has one.

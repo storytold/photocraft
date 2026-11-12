@@ -11,6 +11,9 @@ use photocraft_color::ColorMode;
 
 use super::{Precision, Result, invalid};
 
+#[cfg(test)]
+mod review_tests;
+
 /// Combines source sample encoding with assigned primaries into a usable native ICC profile, rejecting
 /// incompatible profiles or inseparable transfer-curve rewrites.
 pub(super) fn profile(mode: ColorMode, precision: Precision, assigned: Option<Vec<u8>>) -> Result<Arc<Vec<u8>>> {
@@ -37,6 +40,11 @@ pub(super) fn profile(mode: ColorMode, precision: Precision, assigned: Option<Ve
         }
         let curve = if precision.linear { Curve::Identity } else { photocraft_cms::curve::srgb_trc() };
         if expected == ColorSpace::Gray {
+            // A Lab-PCS Gray TRC encodes L*, not luminance. Until a PCS-aware
+            // rewrite is available, refuse to persist a silently mislabelled curve.
+            if profile.pcs == photocraft_cms::Pcs::Lab {
+                return Err(invalid("assigned Gray Lab PCS requires a PCS-aware sample transfer-curve conversion"));
+            }
             profile.gray_trc = Some(curve);
         } else {
             profile.trc = Some([curve.clone(), curve.clone(), curve]);

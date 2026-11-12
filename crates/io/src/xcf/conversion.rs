@@ -9,6 +9,9 @@ use photocraft_doc::import_conversion::{
 
 use super::{Result, invalid};
 
+#[cfg(test)]
+mod review_tests;
+
 pub(super) struct Outcomes<'a> {
     report: ConversionReport,
     /// Count JSON incrementally without allocating an escaped copy of each source string.
@@ -60,7 +63,10 @@ impl<'a> Outcomes<'a> {
             return Err(invalid("XCF conversion report exceeds 65,536 entries"));
         }
         // Includes conservative native struct overhead as well as owned strings/paths.
+        // Schema-v1 validation uses fixed 256/128-byte entry/target costs.
+        // Admission must cover those portable costs as well as actual Rust storage.
         let bytes = std::mem::size_of::<ConversionEntry>()
+            .max(256)
             .saturating_add(entry.feature_code.len())
             .saturating_add(entry.source.kind.len())
             .saturating_add(entry.source.name.len())
@@ -71,7 +77,7 @@ impl<'a> Outcomes<'a> {
                 entry
                     .targets
                     .iter()
-                    .map(|t| std::mem::size_of::<NativeTargetRef>() + t.label.len() + std::mem::size_of_val(t.item_path.as_slice()))
+                    .map(|t| std::mem::size_of::<NativeTargetRef>().max(128) + t.label.len() + std::mem::size_of_val(t.item_path.as_slice()))
                     .sum::<usize>(),
             );
         let retained = self
@@ -195,7 +201,10 @@ impl<'a> Outcomes<'a> {
                 encoding: "xcf-property-payload".into(),
                 bytes: std::sync::Arc::new(Vec::new()),
             };
+            // Cover the validator's fixed attachment cost and its u32 owner reference
+            // before optional bytes can change a successful import into a failure.
             let memory = std::mem::size_of::<RetainedImportData>()
+                .max(160)
                 .saturating_add(attachment.owner.kind.len())
                 .saturating_add(attachment.owner.name.len())
                 .saturating_add(std::mem::size_of_val(attachment.owner.item_path.as_slice()))

@@ -159,7 +159,13 @@ fn old_font_description_beats_stale_gdyntext_at_the_full_parasite_boundary() {
         assert_eq!(text.text, "Current hé");
         assert_eq!(text.font_family, "Historical Serif");
         assert_eq!(text.size_pt, 18.);
-        assert_eq!(text.transform, Affine::translate(-3., 7.));
+        let source = Affine::translate(-3., 7.);
+        assert_eq!(&text.transform.m[..4], &source.m[..4]);
+        let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let [left, top, _, _] = engine.layout(text, doc.resolution_dpi).bounds().expect("native logical historical text bounds");
+        let origin = text.transform.apply(Point::new(f64::from(left), f64::from(top)));
+        assert!((origin.x + 3.).abs() < 0.0001 && (origin.y - 7.).abs() < 0.0001, "{origin:?} versus {source:?}");
+        drop(engine);
         assert_eq!(text.runs[0].style.weight, 700);
         assert!(text.runs[0].style.italic);
         assert!(text.cache.is_none());

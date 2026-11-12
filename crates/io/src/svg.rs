@@ -24,6 +24,8 @@ use resvg::usvg;
 
 use crate::{ImportResult, IoError};
 
+mod limits;
+
 /// Largest canvas side an SVG opens at; a larger drawing is scaled down to fit.
 pub const MAX_SIDE: u32 = 16_384;
 /// A rasterised fallback layer or a smart-object render never exceeds this many pixels.
@@ -1288,6 +1290,7 @@ fn import_parsed_with_limits(
         }
         let (w, h) = (cv.size.width, cv.size.height);
         if let Some(mut pixmap) = pixmap(w, h) {
+            check_render_memory(&tree, global, w, h)?;
             if guarded(|| resvg::render(&tree, global, &mut pixmap.as_mut())).is_some() {
                 doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&pixmap, doc.bounds(), fmt))));
             } else {
@@ -1376,9 +1379,15 @@ fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     let side = |v: f32| ((v * k).ceil() as u32).max(1);
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
     let mut pixmap = pixmap(w, h).ok_or_else(|| IoError::Svg(format!("{w} × {h} px is too large to rasterise")))?;
-    guarded(|| resvg::render(tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut()))
-        .ok_or_else(|| IoError::Svg("the drawing could not be rendered".into()))?;
+    let ts = tiny_skia::Transform::from_scale(k, k);
+    check_render_memory(tree, ts, w, h)?;
+    guarded(|| resvg::render(tree, ts, &mut pixmap.as_mut())).ok_or_else(|| IoError::Svg("the drawing could not be rendered".into()))?;
     Ok(pixmap)
+}
+
+/// An error when drawing the whole `tree` at `ts` onto a `w × h` pixmap would break a [`limits`] cap.
+fn check_render_memory(tree: &usvg::Tree, ts: tiny_skia::Transform, w: u32, h: u32) -> Result<(), IoError> {
+    limits::check(tree.root().children(), ts, w, h, 0).map_err(|r| IoError::Svg(format!("can't rasterise this drawing: {}", r.message)))
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -1549,7 +1558,9 @@ impl Conv {
     }
 
     /// Check both retained and transient memory before rendering; charge only retained output.
-    fn can_retain_pixels(&mut self, pixels: u64) -> bool {
+    /// `pixels` are the output's whole-tile pixels; `scratch_pixels` are those of the temporary
+    /// pixmap and f32 buffers, which cover only the logical box.
+    fn can_retain_pixels(&mut self, pixels: u64, scratch_pixels: u64) -> bool {
         let bytes = pixels.saturating_mul(self.fmt.bytes_per_pixel() as u64);
         if bytes > self.pixel_budget {
             self.note("pixel-budget", "SVG: some rasterised elements were omitted because they exceeded the remaining pixel memory budget".into());
@@ -1557,7 +1568,7 @@ impl Conv {
         }
         // surface() converts the RGBA8 pixmap into f32 scratch space before writing
         // sample-format tiles. All three buffers briefly coexist with retained layers.
-        let temporary = pixels.saturating_mul(4 + self.fmt.channels() as u64 * 4 + self.fmt.bytes_per_pixel() as u64);
+        let temporary = scratch_pixels.saturating_mul(4 + self.fmt.channels() as u64 * 4) + pixels.saturating_mul(self.fmt.bytes_per_pixel() as u64);
         if self.retained_pixel_bytes.saturating_add(temporary) > MAX_PEAK_PIXEL_BYTES {
             self.note("pixel-peak", "SVG: some rasterised elements were omitted to bound temporary conversion memory".into());
             return false;
@@ -1761,11 +1772,14 @@ impl Conv {
             (b.bottom() + reach).ceil() as i32,
         )
         .intersect(&self.canvas);
-        let pixels = u64::from(area.width()) * u64::from(area.height());
-        if self.can_retain_pixels(pixels) {
-            sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
-            let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
-            self.pixel_budget -= bytes;
+        // Whole tiles, as the cache stores them: a narrow shape keeps far more than its area.
+        let pixels = area.tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
+        if self.can_retain_pixels(pixels, pixels) {
+            let cache = photocraft_vector::render_shape(&sh, self.fmt, self.canvas);
+            // The preflight above assumed every tile of the box; the cache keeps the ones it drew.
+            let bytes = photocraft_raster::stored_tiles_bytes(cache.tile_count() as u64, &self.fmt);
+            sh.cache = Some(cache);
+            self.pixel_budget = self.pixel_budget.saturating_sub(bytes);
             self.retained_pixel_bytes += bytes;
         }
         Some(Layer::new(self.name(p.id(), 0), LayerContent::Shape(sh)))
@@ -1836,25 +1850,51 @@ impl Conv {
             self.note("raster-size", "SVG: an element too large to rasterise was dropped".to_string());
             return None;
         }
-        if !self.can_retain_pixels(pixels) {
+        // The layer keeps whole tiles over its box, however narrow the box.
+        let logical = pixels;
+        let pixels = Rect::new(x0, y0, x1, y1).tile_count() * (photocraft_geom::TILE_SIZE as u64).pow(2);
+        if !self.can_retain_pixels(pixels, logical) {
             return None;
         }
         let Some(mut pixmap) = pixmap(w, h) else {
             self.note("raster-alloc", "SVG: a rasterised element could not be allocated".to_string());
             return None;
         };
+        let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
+        let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
+        // resvg's own buffers for this element (nested layers, filters, clips, pattern tiles) come on
+        // top of the layers already kept.
+        if let Err(refusal) = limits::check(std::slice::from_ref(node), ts, w, h, self.retained_pixel_bytes) {
+            let why = if refusal.complex {
+                "is too complex to check"
+            } else if refusal.memory {
+                "needs too much memory to rasterise"
+            } else {
+                "exceeds a rasterising limit"
+            };
+            // one key per reason: a refusal for one reason must not hide a later one for another
+            let key = if refusal.complex {
+                "raster-scratch-complex"
+            } else if refusal.memory {
+                "raster-scratch-memory"
+            } else {
+                "raster-scratch-limit"
+            };
+            self.note(key, format!("SVG: an element was dropped because it {why}: {}", refusal.message));
+            return None;
+        }
         // resvg renders the node in its parent's space after shifting its absolute bounding box
         // to the origin: undo that shift, apply the parent's transform, then scale to the canvas
         // and shift so the pixmap starts at (x0, y0).
-        let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
-        let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
         let Some(rendered) = guarded(|| resvg::render_node(node, ts, &mut pixmap.as_mut())) else {
             self.note("raster-panic", "SVG: an element that could not be rendered was dropped".to_string());
             return None;
         };
         rendered?;
-        let layer = Layer::new(name, LayerContent::Raster(surface(&pixmap, Rect::new(x0, y0, x1, y1), self.fmt)));
-        let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
+        let surf = surface(&pixmap, Rect::new(x0, y0, x1, y1), self.fmt);
+        // Charge what the layer keeps: surface() prunes transparent tiles.
+        let bytes = photocraft_raster::stored_tiles_bytes(surf.tile_count() as u64, &self.fmt);
+        let layer = Layer::new(name, LayerContent::Raster(surf));
         self.pixel_budget -= bytes;
         self.retained_pixel_bytes += bytes;
         Some(layer)

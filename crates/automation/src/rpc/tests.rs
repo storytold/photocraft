@@ -312,7 +312,7 @@ fn doc_save_takes_maximize_compatibility() {
     let mut h = Headless::trusted_local();
     h.handle("doc.new", json!({"width": 64, "height": 32})).unwrap();
     h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
-    let real_merged = |p: &std::path::Path| photocraft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |p: &std::path::Path| craft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
     for (name, maximize, real) in [("default.psd", json!(null), true), ("off.psd", json!(false), false), ("on.psd", json!(true), true)] {
         let path = dir.join(name);
         h.handle("doc.save", json!({"path": path.to_string_lossy(), "maximizeCompatibility": maximize})).unwrap();
@@ -1155,7 +1155,7 @@ fn doc_place_forwards_high_memory_approval() {
     let gb = 1u64 << 30;
     let root = std::env::temp_dir().join(format!("pc-doc-place-approval-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let psd = photocraft_psd::testgen::small(photocraft_psd::Version::Psd, photocraft_psd::Compression::Zip).to_bytes().unwrap();
+    let psd = craft_psd::testgen::small(craft_psd::Version::Psd, craft_psd::Compression::Zip).to_bytes().unwrap();
     std::fs::write(root.join("high.psd"), &psd).unwrap();
     // Known 5 GiB RAM: S = 2.5 GiB, H = 3.75 GiB. A 3 GiB estimate charge lands in (S, H].
     let snap = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
@@ -1183,4 +1183,29 @@ fn doc_place_forwards_high_memory_approval() {
     trial(&mut t, &absolute);
     drop(t);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn historical_order_doc_open_is_explicit_and_preserves_source_protection() {
+    let path = std::env::temp_dir().join(format!("photocraft-rpc-historical-{}.xcf", std::process::id()));
+    let mut bytes = b"gimp xcf v007\0".to_vec();
+    for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    std::fs::write(&path, bytes).unwrap();
+    let path_text = path.to_str().unwrap();
+    let mut headless = Headless::trusted_local();
+    assert!(headless.handle("doc.open", json!({"path":path_text})).is_err());
+    assert!(headless.session.documents().is_empty());
+    for order in ["little-endian", "big-endian"] {
+        headless.handle("doc.open", json!({"path":path_text,"historicalXcfSampleOrder":order})).unwrap();
+        let state = headless.session.active().unwrap();
+        assert!(state.source_read_only);
+        assert!(state.path.is_none());
+    }
+    let mut denied = Headless::new();
+    let error = denied.handle("doc.open", json!({"path":path_text,"historicalXcfSampleOrder":"native"})).unwrap_err().to_string();
+    assert!(error.contains("historicalXcfSampleOrder"), "validation precedes missing read authority: {error}");
+    assert!(denied.session.documents().is_empty());
+    let _ = std::fs::remove_file(path);
 }

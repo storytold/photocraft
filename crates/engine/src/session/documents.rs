@@ -188,22 +188,34 @@ impl Session {
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
     pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool) -> u64 {
+        self.hold_open_with_view(doc, source_read_only, None)
+    }
+
+    /// Hold a validated import and its one-time view hints until the host answers its prompt.
+    pub(crate) fn hold_open_with_view(&mut self, doc: Document, source_read_only: bool, initial_view: Option<photocraft_io::NativeInitialView>) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
-        self.held_opens.push((self.next_held_open, doc, source_read_only));
+        self.held_opens.push((self.next_held_open, doc, source_read_only, initial_view));
         self.next_held_open
     }
 
     /// Whether a document held back for its prompt already has `name`.
     pub(crate) fn held_open_named(&self, name: &str) -> bool {
-        self.held_opens.iter().any(|(_, d, _)| d.name == name)
+        self.held_opens.iter().any(|(_, d, _, _)| d.name == name)
     }
 
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
+    /// This legacy method discards the saved initial view. Import hosts should use
+    /// [`Self::take_held_open_with_view`] to preserve native layer, channel and path selections.
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
-        let i = self.held_opens.iter().position(|(h, _, _)| *h == id)?;
-        let (_, doc, read_only) = self.held_opens.remove(i);
-        Some((doc, read_only))
+        self.take_held_open_with_view(id).map(|(doc, read_only, _)| (doc, read_only))
+    }
+
+    /// Consume a pending document together with its source protection and initial view exactly once.
+    pub fn take_held_open_with_view(&mut self, id: u64) -> Option<(Document, bool, Option<photocraft_io::NativeInitialView>)> {
+        let i = self.held_opens.iter().position(|(h, _, _, _)| *h == id)?;
+        let (_, doc, read_only, initial_view) = self.held_opens.remove(i);
+        Some((doc, read_only, initial_view))
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {
