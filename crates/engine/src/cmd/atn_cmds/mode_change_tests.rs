@@ -31,8 +31,12 @@ fn target(class: &str) -> D {
 /// The measured descriptor, built here independently of the converter: `Msge`, then `SrcM` with
 /// the given `Cndn` values, then `DstM`.
 fn recorded(message: &str, sources: &[&str], dst: D) -> Descriptor {
-    let src = sources.iter().map(|c| D::Enumerated { type_id: Id::new("Cndn"), value: Id::new(c) }).collect();
-    Descriptor::new("cjsp").with("Msge", D::Text(UnicodeString::new_nul(message))).with("SrcM", D::List(src)).with("DstM", dst)
+    Descriptor::new("cjsp").with("Msge", D::Text(UnicodeString::new_nul(message))).with("SrcM", src_m(sources)).with("DstM", dst)
+}
+
+/// A measured `SrcM`: a list of `Cndn` enums with the given values.
+fn src_m(sources: &[&str]) -> D {
+    D::List(sources.iter().map(|c| D::Enumerated { type_id: Id::new("Cndn"), value: Id::new(c) }).collect())
 }
 
 /// A Conditional Mode Change step as the reference application records it.
@@ -175,7 +179,10 @@ fn other_forms_keep_the_photoshop_step() {
         recorded("m", &["URGB", "URGB"], gray()),
         recorded("m", &["UXYZ"], gray()),
         recorded("m", &["URGB"], gray()).with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: 72.0 }),
-        Descriptor::new("cjsp").with("Msge", D::Integer(1)).with("SrcM", D::List(vec![])).with("DstM", gray()),
+        Descriptor::new("cjsp").with("Msge", D::Integer(1)).with("SrcM", src_m(&["URGB"])).with("DstM", gray()),
+        // A repeated `Msge` or `SrcM`, each otherwise in the measured form.
+        recorded("m", &["URGB"], gray()).with("Msge", D::Text(UnicodeString::new_nul("again"))),
+        Descriptor::new("cjsp").with("SrcM", src_m(&["URGB"])).with("SrcM", src_m(&["UGry"])).with("DstM", gray()),
         Descriptor::new("cjsp").with("Msge", D::Text(UnicodeString::new_nul("m"))).with("DstM", gray()),
         Descriptor::new("cjsp").with("SrcM", D::List(vec![D::Enumerated { type_id: Id::new("Cndn"), value: Id::new("URGB") }])),
         repeated_dst,
@@ -190,6 +197,7 @@ fn other_forms_keep_the_photoshop_step() {
         assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{d:?}");
         let back = saved_items(&mut s);
         assert_eq!((&back[0].event, back[0].descriptor.as_ref().map(Descriptor::to_bytes)), (&AtnEvent::name(EVENT), Some(d.to_bytes())));
+        assert_eq!(back[0].dictionary, b"Conditional Mode Change", "{d:?}");
     }
 }
 
@@ -237,6 +245,17 @@ fn changed_settings_save_into_the_recorded_descriptor() {
         p["to"] = json!("lab");
         assert_eq!(exported(&p), Some(changed));
     }
+    // Another key order (`DstM`, `SrcM`, `Msge`) stays that order with the new settings.
+    let reordered = |sources: &[&str], dst: &str| {
+        Descriptor::new("cjsp").with("DstM", target(dst)).with("SrcM", src_m(sources)).with("Msge", D::Text(UnicodeString::new_nul("Recorded message")))
+    };
+    let s = load_items(vec![item(reordered(&["UGry"], "RGBM"))]);
+    let mut p = s.actions.list[0].steps[0].1.clone();
+    assert_eq!((&p["from"], &p["to"]), (&json!(["grayscale"]), &json!("rgb")), "{p}");
+    assert_eq!(exported(&p), Some(reordered(&["UGry"], "RGBM")));
+    p["from"] = json!(["cmyk", "rgb"]);
+    p["to"] = json!("lab");
+    assert_eq!(exported(&p), Some(reordered(&["URGB", "UCMY"], "LbCM")));
     let mut missing_dst = recorded("Recorded message", &["UGry"], target("RGBM"));
     missing_dst.items.retain(|(k, _)| !k.is("DstM"));
     for damaged in [
