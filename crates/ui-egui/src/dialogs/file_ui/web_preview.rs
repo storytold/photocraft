@@ -324,7 +324,7 @@ pub fn slices(
         && let Some(pos) = response.interact_pointer_pos()
     {
         let hit = all.iter().find(|r| to_screen(r.rect).contains(pos)).map(|r| r.number as u64);
-        handled = hit.is_some();
+        handled = hit.is_some_and(|n| all.iter().any(|r| r.number as u64 == n && r.origin != SliceOrigin::Auto));
         let mut selected = selected_slices(f);
         match hit {
             Some(n) if ui.input(|i| i.modifiers.shift) => {

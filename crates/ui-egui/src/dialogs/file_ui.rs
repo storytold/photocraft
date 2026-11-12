@@ -433,6 +433,10 @@ mod web_playback_tests {
 
     fn click_pane(h: &mut Harness<'static, (PhotocraftApp, Map<String, Value>)>, pane: usize) {
         let at = pane_center(h, pane);
+        click_at(h, at);
+    }
+
+    fn click_at(h: &mut Harness<'static, (PhotocraftApp, Map<String, Value>)>, at: egui::Pos2) {
         h.drag_at(at);
         h.run_steps(1);
         h.drop_at(at);
@@ -465,23 +469,61 @@ mod web_playback_tests {
         assert_eq!(h.state().1["quality"].as_f64(), Some(8.0));
     }
 
-    /// A double-click (select, then a second press) must not select a second time: after the
-    /// layout regenerates around the first choice, the same pane would otherwise halve again.
-    #[test]
-    fn four_up_double_click_selects_once() {
-        let mut h = four_up_harness();
-        let at = pane_center(&h, 2);
-        // Three quick presses at one spot, without the pointer leaving in between: a double, then a triple click.
+    /// Presses `n` times at one spot without the pointer leaving in between.
+    fn press_repeatedly(h: &mut Harness<'static, (PhotocraftApp, Map<String, Value>)>, at: egui::Pos2, n: usize) {
         h.hover_at(at);
         h.run_steps(1);
-        for _ in 0..3 {
+        for _ in 0..n {
             for pressed in [true, false] {
                 h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
                 h.run_steps(1);
             }
         }
         h.run_steps(3);
-        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the later clicks of a double or triple click do not select again");
+    }
+
+    /// A double-click (select, then a second press) must not select a second time: after the
+    /// layout regenerates around the first choice, the same pane would otherwise halve again.
+    #[test]
+    fn four_up_double_click_selects_once() {
+        let mut h = four_up_harness();
+        let at = pane_center(&h, 2);
+        press_repeatedly(&mut h, at, 2);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the second click of a double-click does not select again");
+    }
+
+    /// The same for a triple-click.
+    #[test]
+    fn four_up_triple_click_selects_once() {
+        let mut h = four_up_harness();
+        let at = pane_center(&h, 2);
+        press_repeatedly(&mut h, at, 3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the third click does not select again");
+    }
+
+    /// With one small user slice, a click inside it picks the slice; a click in the automatic
+    /// region around it still chooses the pane (auto slices cover the rest of the canvas).
+    #[test]
+    fn four_up_user_slice_blocks_the_choice_but_auto_slices_do_not() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("jpeg"));
+        fields.insert("quality".into(), json!(60));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        let c = pane_center(&h, 2);
+        let r = &h.state().1["__previewRects"][2];
+        let (w, ht) = (r[2].as_f64().unwrap() as f32 - r[0].as_f64().unwrap() as f32, r[3].as_f64().unwrap() as f32 - r[1].as_f64().unwrap() as f32);
+        let dx = w.min(ht * 4.0 / 3.0) * 0.25;
+        click_at(&mut h, egui::pos2(c.x - dx, c.y));
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]), "inside the user slice");
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "the settings stay");
+        click_at(&mut h, egui::pos2(c.x + dx, c.y));
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the auto region chooses the pane");
     }
 
     /// A click that picks a slice in the pane is a slice selection, not a 4-Up choice.
