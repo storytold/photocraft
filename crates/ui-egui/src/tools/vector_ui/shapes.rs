@@ -152,7 +152,8 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             .unwrap_or_else(|| photocraft_doc::vector::Path { fill_rule: outline.fill_rule, ..Default::default() });
         let outline = as_one_component(&outline, path.fill_rule).unwrap_or(outline);
         path.subpaths.extend(outline.subpaths);
-        let r = app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path)}));
+        let path = photocraft_engine::vector_cmds::path_json(&path);
+        let r = app.run("path.set", json!({"name": "work", "path": path, "historyName": line_history_name(tool)}));
         match r {
             Ok(_) => app.ui.selected_path = Some("work".into()),
             Err(e) => {
@@ -171,10 +172,17 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         }
         return;
     }
+    p["historyName"] = json!(line_history_name(tool));
     if let Err(e) = create_shape(app, p) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+/// A Line tool drag is one History step named after the tool, as in Photoshop (#13244); the
+/// other Shape tools keep the commands' own names.
+fn line_history_name(tool: Tool) -> Option<&'static str> {
+    (tool == Tool::Line).then_some("Line Tool")
 }
 
 pub(super) fn fill_param(app: &PhotocraftApp) -> Value {

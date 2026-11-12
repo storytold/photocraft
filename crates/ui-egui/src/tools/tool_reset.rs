@@ -134,11 +134,12 @@ fn is_selection_tool(tool: Tool) -> bool {
 }
 
 /// The fields of [`option_keys`] that Reset Tool leaves as they are, as the reference app does
-/// (the Patch tool's Structure and Color, #12127; the Content-Aware Move tool's Mode, #12183).
+/// (Zoom Out, #12066; Patch Structure and Color, #12127; Content-Aware Move Mode, #12183).
 /// They stay in [`option_keys`], so a tool preset still stores them, and Reset All Tools still
 /// resets them (it starts from the defaults).
 fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
     match tool {
+        Tool::Zoom => &["zoom_in"],
         Tool::Patch => &["patch_structure", "patch_color"],
         Tool::ContentAwareMove => &["cam_mode"],
         _ => &[],
@@ -147,14 +148,15 @@ fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
 
 /// Put `tool`'s fields of `o` back to their defaults, except those Reset Tool keeps.
 pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
+    let keys = option_keys(tool);
     let kept = kept_by_reset_tool(tool);
-    if option_keys(tool).is_empty() {
+    if keys.is_empty() {
         return;
     }
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
-    for k in option_keys(tool).iter().filter(|k| !kept.contains(k)) {
+    for k in keys.iter().filter(|k| !kept.contains(k)) {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
         }
@@ -239,7 +241,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }
-        Tool::Zoom => reset!(zoom_scrubby),
+        Tool::Zoom => reset!(zoom_scrubby, zoom_in),
         Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
