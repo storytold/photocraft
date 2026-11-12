@@ -2,7 +2,8 @@
 //! layer, on a layer with Lock All, or with a group active (its pixels, not its mask) opens a
 //! modal alert with OK instead of a status-bar message, and paints nothing. Only the tools whose
 //! wording was measured have a name here ([`tool_name`]); the others keep today's status bar. The
-//! Classic gradient has the same three alerts (#12017); the live Gradient keeps today's.
+//! Classic gradient has the same three alerts (#12017); the live Gradient keeps today's. The Remove
+//! tool has one alert, without the tool's name: Lock All on a pixel layer (#12552).
 
 use serde_json::json;
 
@@ -13,6 +14,8 @@ use crate::state::{DialogKind, Tool};
 pub const HIDDEN: &str = "Could not use the {tool} because the target layer is hidden.";
 pub const LOCKED: &str = "Could not use the {tool} because the layer is locked.";
 pub const GROUP: &str = "Could not use the {tool} because the pixels in a group cannot be edited without merging the group.";
+/// The Remove tool's one measured alert, Lock All (#12552): it doesn't name the tool.
+pub const REMOVE_LOCKED: &str = "Can't use the tool because the layer is locked.";
 
 /// The colour-mode alerts (#12686); `{tool}` is [`mode_tool_name`]. The engine refuses the
 /// command with the same words.
@@ -57,24 +60,31 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
     {
         return Some(crate::i18n::fmt(tl!(template), &[("tool", name)]));
     }
-    let name = tool_name(app, tool)?;
-    let template = if hidden {
-        HIDDEN
-    } else {
+    if tool == Tool::Remove {
+        // Measured on a pixel layer only: a hidden target, a group, a type, shape, Smart Object or
+        // fill layer keep today's behaviour.
         let st = app.session.active()?;
-        let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
-        if crate::canvas::paint_target(app) != json!("pixels") {
-            return None;
-        }
-        if layer.is_group() {
-            GROUP
-        } else if locked(st.doc.effective_locks(layer.id), tool) {
-            LOCKED
-        } else {
-            return None;
-        }
-    };
+        let pixel_layer = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
+        return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
+    }
+    let name = tool_name(app, tool)?;
+    let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
+}
+
+/// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels.
+fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
+    let st = app.session.active()?;
+    let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
+    if crate::canvas::paint_target(app) != json!("pixels") {
+        None
+    } else if layer.is_group() {
+        Some(GROUP)
+    } else if locked(st.doc.effective_locks(layer.id), tool) {
+        Some(LOCKED)
+    } else {
+        None
+    }
 }
 
 /// Whether `locks` refuse `tool`: Lock All, and for the Sharpen and Sponge tools Lock Image Pixels
@@ -103,3 +113,7 @@ mod sponge_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../bucket_bitmap_alert_tests.rs"]
 mod bucket_bitmap_alert_tests;
+
+#[cfg(test)]
+#[path = "remove_locked_alert_tests.rs"]
+mod remove_locked_alert_tests;

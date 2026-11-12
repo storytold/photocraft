@@ -35,7 +35,7 @@ pub(super) fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: 
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
 }
 
-fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
+pub(super) fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
     drag(app, at, at, mods);
 }
 
@@ -44,7 +44,7 @@ fn names(app: &PhotocraftApp) -> Vec<String> {
 }
 
 /// Runs `gesture` and returns the History steps it added.
-fn added(app: &mut PhotocraftApp, gesture: impl FnOnce(&mut PhotocraftApp)) -> Vec<String> {
+pub(super) fn added(app: &mut PhotocraftApp, gesture: impl FnOnce(&mut PhotocraftApp)) -> Vec<String> {
     let n = names(app).len();
     gesture(app);
     names(app).split_off(n)
