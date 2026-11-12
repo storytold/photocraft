@@ -67,7 +67,8 @@ pub mod zoom_window_fit;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{
-    alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor, precise_other_cursor,
+    alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
+    precise_other_cursor, sampler_hover_cursor,
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
@@ -881,7 +882,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         }
         let b = crate::dialogs::free_buttons(input.ctx, input.rect);
         let pointer = input.ctx.input(|i| i.pointer.latest_pos());
-        crate::zoom_tool::drag(app, input.ctx, input.view, input.xf, &b, pointer);
+        crate::zoom_tool::drag(app, input.ctx, input.view, input.xf, &b, pointer, &zoom_out);
         if b.clicked
             && let Some(p) = pointer
         {
@@ -1000,6 +1001,8 @@ struct CanvasToolInput<'a> {
     under_dialog: bool,
     menu_dismiss_press: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
+    /// The Animated Zoom direction for ⌥ held or not: `zoom_out` without the Zoom Out mode.
+    hold_zoom_out: &'a dyn Fn(bool) -> bool,
     display_zoom: f32,
 }
 
@@ -1042,7 +1045,10 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     let capture_press =
         tool.is_type() || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
     let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
+    // Read from the raw events, so a dialog's modal layer doesn't block it: gated here, or a ⌘-press
+    // under a dialog would start a type transform (#12896).
     if capture_press
+        && !under_dialog
         && !input.menu_dismiss_press
         && let Some((p, press_mods)) = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
@@ -1202,7 +1208,7 @@ fn handle_canvas_tool_navigation(
     // it owns the press: no scrub, and its release is no click step. A menu-dismissal press
     // must not arm it: holding the dismissal click would zoom (CodeRabbit, #9841).
     if tool == Tool::Zoom && !transform_owns_pointer {
-        let out = zoom_out(ui.input(|i| i.modifiers.alt));
+        let out = (input.hold_zoom_out)(ui.input(|i| i.modifiers.alt));
         let on_canvas = !input.menu_dismiss_press && !input.under_dialog && !over_compass && response.is_pointer_button_down_on();
         let hold = crate::zoom_hold::hold_id(idx, primary, ctx.viewport_id());
         if crate::zoom_hold::update(ctx, view, xf, app.session.prefs().general.animated_zoom, out, ppp, on_canvas, hold) {
@@ -1211,7 +1217,7 @@ fn handle_canvas_tool_navigation(
     }
     // Zoom tool drags: scrubby zoom or a zoom rectangle (zoom_tool.rs); clicks step below.
     // Like the Hand, the selected Zoom yields to an open Free Transform box (#4799).
-    if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos()) {
+    if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos(), zoom_out) {
         (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
     }
 }
@@ -1891,15 +1897,10 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 && !app.services.right_button_down.as_ref().is_some_and(|f| f())
                 && alt_picks(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
         {
-            // While it samples (button held), the comparison ring replaces the cursor (#213).
-            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
-                icon
-            } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-                egui::CursorIcon::Crosshair
-            } else {
-                pipette_cursor(ui.ctx(), p)
-            }
+            cursors::alt_pick_cursor(app, painter, xf, p, response.is_pointer_button_down_on(), t)
         }
+        // Over a layer it can't paint (Lock All), the Mixer Brush shows a no-entry sign (#11957).
+        Tool::MixerBrush if cursors::mixer_target_locked(app) => cursors::no_entry_cursor(painter, p),
         t if t.is_brushlike() || t == Tool::QuickSelection => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
@@ -1954,12 +1955,21 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             let over = crate::analysis_ui::count_marker_at(app, xf.to_doc(p)).is_some();
             crate::tool_cursor::count(ui.ctx(), p, crate::tool_cursor::CountCursor::pick(over, alt))
         }
-        // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
+        // The Color Sampler (#11744):
+        // - Over a sampler: arrow with the sampler target, or with Alt the arrow with scissors.
+        //   Dragging one keeps the arrow with the sampler target until release, though the stored
+        //   point stays behind, and without scissors: Alt removes only on the press (#13063).
+        // - Off a sampler: eyedropper with the sampler target at its top-left, or the crosshair
+        //   for precise Other Cursors.
         Tool::ColorSampler => {
-            if precise_other_cursor(app) {
+            let [x, y] = xf.to_doc(p);
+            let dragging = matches!(app.ui.analysis.drag, Some(crate::analysis_ui::Drag::Sampler(..)));
+            if dragging || crate::analysis_ui::sampler_at(app, [x, y]).is_some() {
+                sampler_hover_cursor(ui.ctx(), p, !dragging && (alt || app.ui.shell.sticky_alt))
+            } else if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
             } else {
-                pipette_cursor(ui.ctx(), p)
+                color_sampler_cursor(ui.ctx(), p)
             }
         }
         // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
@@ -2379,10 +2389,20 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
-    // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
-    // Window › Modifier Keys (the way around a desktop that takes Alt+click, `alt_grab`).
+    // Zoom direction: the temporary zoom key decides, else the Zoom tool's Zoom In / Zoom Out
+    // mode, turned around by ⌥ held or latched in Window › Modifier Keys (the way around a
+    // desktop that takes Alt+click, `alt_grab`). A held Z is a temporary zoom key too: in, out
+    // with ⌥, whatever the mode (#12066).
     let sticky_alt = app.ui.shell.sticky_alt;
+    let out_mode = !app.ui.tool_options.zoom_in && !crate::spring_tools::holds(app, Tool::Zoom);
     let zoom_out = |alt: bool| match temporary {
+        Some(crate::hold_keys::Temporary::ZoomOut) => true,
+        Some(crate::hold_keys::Temporary::ZoomIn) => false,
+        _ => (alt || sticky_alt) != out_mode,
+    };
+    // Animated Zoom (press and hold) keeps its direction in either mode: in, out with ⌥. Zoom
+    // Out mode was not measured for it (#12066).
+    let hold_zoom_out = |alt: bool| match temporary {
         Some(crate::hold_keys::Temporary::ZoomOut) => true,
         Some(crate::hold_keys::Temporary::ZoomIn) => false,
         _ => alt || sticky_alt,
@@ -2501,6 +2521,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             under_dialog,
             menu_dismiss_press,
             zoom_out: &zoom_out,
+            hold_zoom_out: &hold_zoom_out,
             display_zoom: display_view.zoom,
         };
         handle_primary_canvas_input(app, ui, &mut view, &input);
@@ -2615,6 +2636,9 @@ mod pattern_drag_tests;
 mod tabs_tests;
 
 #[cfg(test)]
+mod doc_window_dialog_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -2628,6 +2652,9 @@ mod guide_ants_tests;
 
 #[cfg(test)]
 mod live_frame_tests;
+
+#[cfg(test)]
+mod sampler_cursor_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {

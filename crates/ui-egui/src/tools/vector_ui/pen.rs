@@ -374,9 +374,11 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
     let mut original = pen.clone();
     original.dragging = false;
     original.adjusting_last = false;
+    let draft = super::pen_resume::draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, closed);
     }
+    let before = super::pen_resume::current_doc(app);
     if let Err(e) = commit_path(app, &pen, closed) {
         app.ui.pen = Some(PenPath { commit_failed: true, ..original });
         app.ui.status = e.clone();
@@ -384,6 +386,8 @@ pub(super) fn try_pen_commit(app: &mut PhotocraftApp, closed: bool) -> Result<()
         return Err(e);
     }
     app.ui.pen_doc = None;
+    // Undo back to this finish gives the path back to the Pen (`pen_resume_on_undo`).
+    super::pen_resume::remember_finish(app, draft, &before);
     Ok(())
 }
 
@@ -419,13 +423,17 @@ pub fn pen_end(app: &mut PhotocraftApp) {
     if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
         app.ui.direct_selection = Default::default();
     }
+    let draft = super::pen_resume::draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, false);
     }
     let refused = std::mem::take(&mut app.ui.status);
+    let before = super::pen_resume::current_doc(app);
     let kept = app.run("path.set", json!({"name": "work", "op": "combine", "path": pen_to_json(&pen, false)})).is_ok();
     if kept {
         app.ui.selected_path = Some("work".into());
+        // Undo gives the path back to the Pen here too (`pen_resume_on_undo`).
+        super::pen_resume::remember_finish(app, draft, &before);
     }
     let outcome = if kept { tl!("The path was kept as the Work Path") } else { tl!("The path was discarded") };
     app.ui.status = format!("{refused} ({outcome})");
@@ -810,9 +818,13 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
     }
     let trace: Vec<[f64; 2]> = points.iter().map(|p| [p[0], p[1]]).collect();
     let (Some(first), Some(last)) = (trace.first(), trace.last()) else { return };
-    let tol = 6.0 / app.point_zoom().max(0.01) as f64;
+    let zoom = app.point_zoom().max(0.01) as f64;
+    // Photoshop closes a release within 3 screen px of the start on each axis, a square (#12830).
+    let reach = 3.0 / zoom;
+    // The trace must still be longer than the former 4 × 6 screen px to close: unchanged.
+    let min_length = 24.0 / zoom;
     let length: f64 = trace.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
-    let closed = (first[0] - last[0]).hypot(first[1] - last[1]) < tol && length > 4.0 * tol;
+    let closed = near_start(first, last, reach) && length > min_length;
     let fit = f64::from(app.ui.tool_options.curve_fit);
     let pen = if straight.is_empty() {
         let Some(sub) = photocraft_vector::trace::fit_trace(&trace, fit, closed) else { return };
@@ -820,7 +832,7 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
         let unlinked = sub.knots.iter().enumerate().filter(|(_, k)| !k.smooth).map(|(i, _)| i).collect();
         (PenPath { knots, unlinked, ..Default::default() }, sub.closed)
     } else {
-        fit_with_straight_segments(&trace, straight, fit, closed.then_some(tol))
+        fit_with_straight_segments(&trace, straight, fit, closed)
     };
     let (mut pen, closed) = pen;
     pen.owner = Some(owner);
@@ -831,14 +843,22 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
     }
 }
 
+/// Is the Freeform Pen's `end` within `reach` of its `start` on both axes?
+fn near_start(start: &[f64; 2], end: &[f64; 2], reach: f64) -> bool {
+    // The screen-to-document conversion runs in f32, so a release exactly `reach` off can land a hair past it.
+    let reach = reach + 1e-3;
+    (start[0] - end[0]).abs() <= reach && (start[1] - end[1]).abs() <= reach
+}
+
 fn knot_points(k: &photocraft_doc::Knot) -> [[f64; 2]; 3] {
     [[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]]
 }
 
 /// A Freeform Pen trace with ⌥-clicked straight segments (into the points at `straight`): each
 /// freehand run between them is fitted on its own, and the runs are joined by straight lines
-/// between corner anchors. `close` (a reach) closes the path when it ends on its start point.
-fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, close: Option<f64>) -> (PenPath, bool) {
+/// between corner anchors. `close`: the release was near the start, so the last anchor becomes
+/// the first one. The fitted last anchor is not tested again: fitting can move it past the reach.
+fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, close: bool) -> (PenPath, bool) {
     let mut cuts: Vec<usize> = straight.iter().copied().filter(|&i| i > 0 && i < trace.len()).collect();
     cuts.sort_unstable();
     cuts.dedup();
@@ -869,12 +889,7 @@ fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, 
         }
         start = end;
     }
-    // Ended on the start point: the last anchor is the first one.
-    let ends_on_start = |k: &[[[f64; 2]; 3]], reach: f64| match (k.first(), k.last()) {
-        (Some(a), Some(b)) => k.len() > 3 && (a[0][0] - b[0][0]).hypot(a[0][1] - b[0][1]) < reach,
-        _ => false,
-    };
-    let closed = close.is_some_and(|reach| ends_on_start(&knots, reach));
+    let closed = close && knots.len() > 3;
     if closed && let Some(last) = knots.pop() {
         if let Some(k) = knots.first_mut() {
             k[1] = [last[1][0] - last[0][0] + k[0][0], last[1][1] - last[0][1] + k[0][1]];
@@ -978,3 +993,7 @@ mod freeform_history_name_tests;
 #[cfg(test)]
 #[path = "pen_alt_drag_segment_tests.rs"]
 mod pen_alt_drag_segment_tests;
+
+#[cfg(test)]
+#[path = "freeform_close_tolerance_tests.rs"]
+mod freeform_close_tolerance_tests;
