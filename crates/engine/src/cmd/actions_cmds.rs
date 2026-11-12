@@ -58,8 +58,9 @@ pub struct Action {
     /// [`Session::authorize`] was installed (a control, MCP or synthetic-input request).
     /// Playback keeps automation's gate ([`Session::automation_gate`]) for it even when the user
     /// starts it (a key, the Actions panel), so a client confined to its automation roots
-    /// can't plant steps that later run with the user's file access. Batch and droplets copy
-    /// steps instead of the action, so they do not keep the gate yet.
+    /// can't plant steps that later run with the user's file access. Batch keeps it for the
+    /// action it runs by name; droplets copy steps instead of the action, so they do not keep
+    /// the gate yet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automation: bool,
 }
