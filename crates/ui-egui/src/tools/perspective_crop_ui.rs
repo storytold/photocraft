@@ -151,6 +151,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     let tol = crate::distort_ui::tolerance(app);
     match ev {
         ToolEvent::Down { .. } => {
+            // A new quad's first press drops an active selection as its own "Deselect" step, as in
+            // Photoshop (#11975): it is gone after the commit and after Esc too. Refused (a job
+            // locks the document, its reason in the status bar), the press starts no quad.
+            if app.ui.perspective_crop.is_none()
+                && app.pcrop.clicks.is_empty()
+                && app.session.active().is_some_and(|d| d.doc.selection.is_some())
+                && app.run("select.deselect", json!({})).is_err()
+            {
+                return true;
+            }
             app.pcrop.drag = match app.ui.perspective_crop {
                 Some(q) => {
                     let near = (0..4)
@@ -179,9 +189,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         app.ui.perspective_crop = Some(ordered([a, b, c, d]));
                         app.pcrop.clicks.clear();
                     }
-                } else {
+                } else if let Some(quad) = new_box(start, cur, square, centred) {
+                    // Only a drag that built a box replaces the corners clicked so far. One that
+                    // made none (a start the snap moved onto its release point) leaves them, so the
+                    // next click still finishes the quad (#13065).
                     app.pcrop.clicks.clear();
-                    app.ui.perspective_crop = new_box(start, cur, square, centred);
+                    app.ui.perspective_crop = Some(quad);
                 }
             }
             app.pcrop.drag = None;
@@ -491,6 +504,10 @@ mod perspective_crop_modifiers_tests;
 #[cfg(test)]
 #[path = "perspective_crop_shield_tests.rs"]
 mod perspective_crop_shield_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_deselect_tests.rs"]
+mod perspective_crop_deselect_tests;
 
 #[cfg(test)]
 mod tests {

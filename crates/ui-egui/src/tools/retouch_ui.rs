@@ -4,6 +4,7 @@
 //! and the clone-source marker.
 
 use egui::{Color32, Stroke, vec2};
+use photocraft_color::BlendMode;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -26,6 +27,10 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// `points` and `target`): shared by the live preview and the commit. `None` when no source
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
+    // Refused there (`healing_refused`): no live preview either.
+    if healing_in_indexed(app, app.ui.tool) {
+        return None;
+    }
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
@@ -106,7 +111,10 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
     Some(match tool {
         Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
         Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
-        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge})),
+        Tool::Smudge => (
+            "paint.smudge",
+            json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge, "mode": o.smudge_mode.label()}),
+        ),
         Tool::Dodge | Tool::Burn => (
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
@@ -115,6 +123,26 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
         Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "flow": crate::eraser_ui::stored_tolerance(o.sponge_flow), "vibrance": o.vibrance})),
         _ => return None,
     })
+}
+
+/// The Smudge tool's Painting Modes in the reference application's order (#12959); its list draws
+/// a line above Darken and above Hue.
+pub(crate) const SMUDGE_MODES: [BlendMode; 7] =
+    [BlendMode::Normal, BlendMode::Darken, BlendMode::Lighten, BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity];
+
+/// Whether the Smudge Mode list draws a line above `mode`.
+pub(crate) fn smudge_mode_starts_group(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::Darken | BlendMode::Hue)
+}
+
+/// The Smudge options bar's Mode dropdown (#12959), first in the bar after the brush controls.
+fn smudge_mode_dropdown(ui: &mut egui::Ui, mode: &mut BlendMode) {
+    opt(ui, tl!("Mode:"));
+    let opts: Vec<(BlendMode, &str)> = SMUDGE_MODES.iter().map(|m| (*m, m.label())).collect();
+    crate::widgets::dropdown_wheel_grouped(ui, "smudge-mode", tl!("Mode"), mode, &opts, 100.0, |m| smudge_mode_starts_group(*m));
+    if let Some(button) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("smudge-mode"))) {
+        button.on_hover_text(tl!("Painting Mode"));
+    }
 }
 
 /// `paint.colorReplacement` params from the options bar (without `points`): shared by the live
@@ -147,8 +175,8 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
         "scale": o.pattern_stamp_scale,
         "angle": o.pattern_stamp_angle,
         "seed": stroke_seed(points),
-        // The options bar's Mode is the tool's own brush's.
-        "mode": app.session.tools.brush.mode.label(),
+        // The options bar's Mode is the tool's own brush's; Behind is a mode of that list.
+        "mode": if app.session.tools.brush.behind { "Behind" } else { app.session.tools.brush.mode.label() },
     });
     if o.pattern_stamp_aligned
         && let Some(ph) = app.ui.pattern_stamp_phase
@@ -168,6 +196,21 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
     // Position only: a pen tap raises the first point's pressure on release (#1798).
     let first = points.first().map(|p| json!([p[0], p[1]]).to_string()).unwrap_or_default();
     photocraft_engine::paint::rng::seed_from_bytes(first.as_bytes())
+}
+
+/// A Clone Stamp press with no source point yet: the reference application's alert, opened at
+/// the press (#12609) and once while it is up. Returns whether it refused the stroke.
+pub(crate) fn clone_stamp_without_source(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if tool != Tool::CloneStamp || clone_params(app).is_some() {
+        return false;
+    }
+    let message = if cfg!(target_os = "macos") {
+        tl!("Could not use the clone stamp tool because the area to clone has not been defined (Option-click to define a source point).")
+    } else {
+        tl!("Could not use the clone stamp tool because the area to clone has not been defined (Alt-click to define a source point).")
+    };
+    open_alert_once(app, message);
+    true
 }
 
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
@@ -192,7 +235,13 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
         Tool::PatternStamp => ("paint.patternStamp", pattern_stamp_params(app, points)),
         Tool::Healing | Tool::CloneStamp => {
+            if healing_refused(app, tool) {
+                return true;
+            }
             let Some(p) = clone_params(app) else {
+                if clone_stamp_without_source(app, tool) {
+                    return true;
+                }
                 // Option-click on the Mac, Alt-click on Windows.
                 app.ui.status = if cfg!(target_os = "macos") {
                     tl!("Option-click to define a source point to clone from")
@@ -626,8 +675,28 @@ pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, 
     }
 }
 
+/// The Healing Brush in an Indexed Color document: the reference's alert with OK at the ⌥-click
+/// and at a stroke, and nothing changes (#12112). The engine refuses the stroke with the same words.
+fn healing_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if !healing_in_indexed(app, tool) {
+        return false;
+    }
+    crate::brush_refusal::prompt(
+        app,
+        tl!("Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
+    );
+    true
+}
+
+fn healing_in_indexed(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::Healing && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
+}
+
 /// ⌥-click with Clone Stamp / Healing Brush sets the source.
 pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if healing_refused(app, app.active_tool()) {
+        return;
+    }
     app.ui.clone_source = Some([x.round(), y.round()]);
     app.ui.clone_offset = None;
     let _ = app.run("cloneSource.set", json!({"source": [x.round(), y.round()]}));
@@ -732,7 +801,8 @@ fn cam_amount_slider(ui: &mut egui::Ui, name: &str, value: &mut f32, lo: f32, hi
     });
 }
 
-fn open_cam_range_alert(app: &mut PhotocraftApp, message: &str) {
+/// Opens the alert with `message` (English, translated here) unless it is already up.
+fn open_alert_once(app: &mut PhotocraftApp, message: &str) {
     let message = tl!(message).to_owned();
     let shown =
         app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(message.as_str()));
@@ -756,11 +826,11 @@ fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         opt(ui, tl!("Structure:"));
         if cam_integer_popup(ui, "cam-structure", "Structure", &mut app.ui.tool_options.cam_structure, 1.0, 7.0, STRUCTURE_TIP) {
-            open_cam_range_alert(app, STRUCTURE_RANGE_ALERT);
+            open_alert_once(app, STRUCTURE_RANGE_ALERT);
         }
         opt(ui, tl!("Color:"));
         if cam_integer_popup(ui, "cam-color", "Color", &mut app.ui.tool_options.cam_color, 0.0, 10.0, COLOR_TIP) {
-            open_cam_range_alert(app, COLOR_RANGE_ALERT);
+            open_alert_once(app, COLOR_RANGE_ALERT);
         }
         crate::widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.content_aware_move, tl!("Sample All Layers"))
             .on_hover_text(tl!("Enable to remix all layers"));
@@ -956,6 +1026,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
+            if tool == Tool::Smudge {
+                smudge_mode_dropdown(ui, &mut o.smudge_mode);
+            }
             let label = tl!("Strength:");
             opt(ui, label);
             // Measured for Blur (#12650), Sharpen (#12949) and Smudge (#12962); a copy, so a shared fraction is not rounded.
@@ -1143,5 +1216,17 @@ mod cam_options_bar_tests;
 mod burn_bar_tooltips_tests;
 
 #[cfg(test)]
+#[path = "../smudge_mode_bar_tests.rs"]
+mod smudge_mode_bar_tests;
+
+#[cfg(test)]
 #[path = "../sponge_flow_field_tests.rs"]
 mod sponge_flow_field_tests;
+
+#[cfg(test)]
+#[path = "../healing_indexed_alert_tests.rs"]
+mod healing_indexed_alert_tests;
+
+#[cfg(test)]
+#[path = "../clone_stamp_no_source_alert_tests.rs"]
+mod clone_stamp_no_source_alert_tests;
