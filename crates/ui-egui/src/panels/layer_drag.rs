@@ -96,7 +96,9 @@ pub(super) fn layer_drag_and_drop(
     let key = egui::Id::unique("layer-drag");
     // A drag from the mask thumbnail (`starts_mask_drag`) moves the mask, not the layer.
     let mask_drag = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key())).is_some_and(|(id, _)| id == l.id.0);
-    if resp.drag_started() && !mask_drag {
+    let source = app.stylus.feed.source();
+    let item = egui::Id::unique(("layer-row", l.id.0));
+    if crate::list_drag::may_begin_drag(ctx, source, item, resp) && !mask_drag {
         ctx.data_mut(|d| d.insert_temp(key, l.id.0));
     }
     let Some(dragged) = ctx.data(|d| d.get_temp::<u64>(key)) else { return };
@@ -335,6 +337,7 @@ pub(super) fn mask_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rec
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
 pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
     let t = Tokens::get(ui.ctx());
+    let source = app.stylus.feed.source();
     let indent = 30.0 + depth as f32 * 14.0 + 34.0;
     // English `Effect::label` keys stay for kind matching; display goes through `tl!` (catalogs
     // already have Drop Shadow → 投影, Effects → 效果, …).
@@ -344,9 +347,13 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         rows.push((tl!(e.label()).into(), e.enabled(), kind));
     }
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+        let item = ui.scope_id().with(("layer-fx-row", l.id.0, i));
+        let sense = crate::list_drag::row_sense(ui.ctx(), source, item);
+        let (rect, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), sense);
+        let resp = crate::list_drag::after_row(ui.ctx(), source, item, &raw_resp);
+        let can_drag = !crate::list_drag::prefers_scroll(source) || crate::list_drag::is_armed(ui.ctx(), item);
         // Drag the row onto another layer to move its effects there, ⌥-drag to copy them.
-        if resp.drag_started() {
+        if can_drag && resp.drag_started() {
             start_fx_drag(ui.ctx(), l.id, i.checked_sub(1));
         }
         if !ui.is_rect_visible(rect) {

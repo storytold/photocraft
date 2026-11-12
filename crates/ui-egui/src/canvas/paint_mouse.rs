@@ -520,7 +520,15 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 crate::bg_eraser_popup::body(ui, &mut b, &mut app.ui.tool_options.bg_tolerance_control);
                 Vec::new()
             } else {
-                crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content)
+                crate::brush_picker::body(
+                    ui,
+                    &mut b,
+                    &app.session.tools.presets,
+                    app.session.tools.current_preset.as_deref(),
+                    list,
+                    content,
+                    app.stylus.feed.source(),
+                )
             }
         });
         let picks = frame.inner;

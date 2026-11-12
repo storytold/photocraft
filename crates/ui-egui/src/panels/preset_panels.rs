@@ -362,6 +362,8 @@ pub(crate) struct Place<'a> {
     pub(crate) canvas: Rect,
     pub(crate) max_h: f32,
     pub(crate) new_tip: &'a str,
+    /// Mouse keeps press-drag reorder; touch/pen scroll unless double-press-and-hold.
+    pub(crate) pointer: crate::stylus::PointerSource,
     pub(crate) flush: bool,
 }
 
@@ -371,15 +373,23 @@ const GRID_INSET: f32 = 8.0;
 
 struct GroupHeaderContext<'a> {
     panel: &'a str,
+    /// The group's index, which names its row for the touch/pen drag gate.
+    index: usize,
     open: bool,
+    /// Mouse keeps press-drag reorder; touch/pen scroll unless double-press-and-hold.
+    pointer: crate::stylus::PointerSource,
     state: &'a mut PresetUi,
     tokens: &'a Tokens,
     events: &'a mut Vec<Ev>,
 }
 
 fn draw_group_header(ui: &mut egui::Ui, group: &GroupView, context: GroupHeaderContext<'_>) -> (Rect, Option<Pos2>, Option<Pos2>) {
-    let GroupHeaderContext { panel, open, state, tokens, events } = context;
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+    let GroupHeaderContext { panel, index, open, pointer, state, tokens, events } = context;
+    let item = egui::Id::unique(("preset-group-row", panel, index));
+    let sense = crate::list_drag::row_sense(ui.ctx(), pointer, item);
+    let (rect, raw_response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), sense);
+    let response = crate::list_drag::after_row(ui.ctx(), pointer, item, &raw_response);
+    let can_drag = !crate::list_drag::prefers_scroll(pointer) || crate::list_drag::is_armed(ui.ctx(), item);
     if response.hovered() || response.dragged() {
         ui.painter().rect_filled(rect, 2.0, tokens.hover.gamma_multiply(0.5));
     }
@@ -405,11 +415,11 @@ fn draw_group_header(ui: &mut egui::Ui, group: &GroupView, context: GroupHeaderC
             ui.close();
         }
     });
-    let drag = if response.dragged() { ui.ctx().pointer_interact_pos() } else { None };
+    let drag = if can_drag && response.dragged() { ui.ctx().pointer_interact_pos() } else { None };
     if drag.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
-    let released = if response.drag_stopped() { ui.ctx().pointer_interact_pos() } else { None };
+    let released = if can_drag && response.drag_stopped() { ui.ctx().pointer_interact_pos() } else { None };
     (rect, drag, released)
 }
 
@@ -422,7 +432,7 @@ pub(crate) fn browser(
     thumb: &mut dyn FnMut(&egui::Ui, Rect, usize, usize),
 ) -> Vec<Ev> {
     let t = Tokens::get(ui.ctx());
-    let Place { canvas, max_h, new_tip, flush } = place;
+    let Place { canvas, max_h, new_tip, pointer, flush } = place;
     let mut ev = Vec::new();
     let size = *st.sizes.get(panel).unwrap_or(&40.0);
     let list = size <= MIN_THUMB + 0.5;
@@ -471,7 +481,8 @@ pub(crate) fn browser(
             for &gi in &display {
                 let Some(g) = groups.get(gi) else { continue };
                 let open = group_open(st, panel, gi, &g.name);
-                let (hr, header_drag, header_release) = draw_group_header(ui, g, GroupHeaderContext { panel, open, state: st, tokens: &t, events: &mut ev });
+                let (hr, header_drag, header_release) =
+                    draw_group_header(ui, g, GroupHeaderContext { panel, index: gi, open, pointer, state: st, tokens: &t, events: &mut ev });
                 if let Some(position) = header_drag {
                     drag = Some((gi, position));
                 }
@@ -496,7 +507,10 @@ pub(crate) fn browser(
                 for (ii, it) in g.items.iter().enumerate() {
                     let (cx, cy) = ((ii % cols) as f32, (ii / cols) as f32);
                     let r = Rect::from_min_size(area.min + vec2(pad + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
-                    let resp = ui.interact(r, ui.scope_id().with((panel, gi, ii)), Sense::click_and_drag());
+                    let item = ui.scope_id().with((panel, gi, ii));
+                    let sense = crate::list_drag::row_sense(ui.ctx(), pointer, item);
+                    let resp = ui.interact(r, item, sense);
+                    let resp = crate::list_drag::after_row(ui.ctx(), pointer, item, &resp);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &it.name));
                     let is_sel = selected.as_deref() == Some(&it.key);
                     if list {
@@ -531,7 +545,9 @@ pub(crate) fn browser(
                     } else if resp.clicked() {
                         ev.push(Ev::Select(it.key.clone()));
                     }
-                    if resp.dragged()
+                    let can_drag = !crate::list_drag::prefers_scroll(pointer) || crate::list_drag::is_armed(ui.ctx(), item);
+                    if can_drag
+                        && resp.dragged()
                         && let Some(pp) = ui.ctx().pointer_interact_pos()
                     {
                         // A ghost of the swatch follows the pointer.
@@ -541,7 +557,8 @@ pub(crate) fn browser(
                         lp.rect_stroke(gr, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
                         lp.text(gr.center(), Align2::CENTER_CENTER, "+", FontId::proportional(16.0), t.accent);
                     }
-                    if resp.drag_stopped()
+                    if can_drag
+                        && resp.drag_stopped()
                         && let Some(pp) = ui.ctx().pointer_interact_pos()
                         && !r.contains(pp)
                     {

@@ -1975,7 +1975,11 @@ fn brush_picker_footer_slider_stays_inside_the_dragged_height() {
         |ui, height: &mut f32| {
             let mut brush = photocraft_engine::BrushSettings::default();
             let mut list = crate::brush_picker::list_state();
-            *height = ui.scope(|ui| crate::brush_picker::body(ui, &mut brush, &[], None, &mut list, size)).response.rect.height();
+            *height = ui
+                .scope(|ui| crate::brush_picker::body(ui, &mut brush, &[], None, &mut list, size, crate::stylus::PointerSource::Mouse))
+                .response
+                .rect
+                .height();
         },
         0.0,
     );

@@ -196,6 +196,7 @@ use input::blend_keys;
 use input::control_click;
 pub use input::hold_keys;
 use input::layout_keys;
+pub use input::list_drag;
 pub use input::nudge_bundle;
 use input::opacity_keys;
 use input::page_keys;

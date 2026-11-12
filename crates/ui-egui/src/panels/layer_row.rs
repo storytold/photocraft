@@ -194,7 +194,11 @@ pub(super) fn layer_row(
     // view, what carries the target brackets, and what spaces the mask's chain from the triangle.
     let compact = l.artboard().is_some() && l.mask.is_none() && l.vector_mask.is_none();
     let (base, row_h) = if compact { (0.0, row_h.min(ARTBOARD_ROW_H)) } else { (base, row_h) };
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    let source = app.stylus.feed.source();
+    let item = egui::Id::unique(("layer-row", l.id.0));
+    let sense = crate::list_drag::row_sense(ctx, source, item);
+    let (rect, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), sense);
+    let resp = crate::list_drag::after_row(ctx, source, item, &raw_resp);
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
         crate::mask_thumbs_ui::forget(ctx, l.id.0);
@@ -209,7 +213,7 @@ pub(super) fn layer_row(
     fx_drop(ctx, ui, l, rect, actions);
     mask_drop(ctx, ui, l, rect, actions);
     crate::smart_ui::drop_on_row(ctx, ui, l, rect, actions);
-    if resp.drag_started() && !mask_drag {
+    if crate::list_drag::may_begin_drag(ctx, source, item, &resp) && !mask_drag {
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
     }
     // Rows are painted: name them for screen readers and UI tests.
@@ -266,10 +270,11 @@ pub(super) fn layer_row(
     let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
     // Dragging the fx badge drags all the layer's effects, not the layer (Photoshop). Like the eye,
     // it takes the drag from the row; clicks still reach the row.
-    if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx)
-        && ui.interact(badge, ui.scope_id().with(("fx-badge", l.id.0)), Sense::drag()).drag_started()
-    {
-        start_fx_drag(ctx, l.id, None);
+    if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx) {
+        let fx_resp = ui.interact(badge, ui.scope_id().with(("fx-badge", l.id.0)), crate::list_drag::row_sense(ctx, source, item));
+        if crate::list_drag::may_begin_drag(ctx, source, item, &fx_resp) {
+            start_fx_drag(ctx, l.id, None);
+        }
     }
     // Clicking the lock icon unlocks the layer, and makes the Background a normal one (Photoshop,
     // #4723). It takes the click from the row, so the row isn't selected.
@@ -393,9 +398,11 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
     let t = Tokens::get(ctx);
     let selected = row.selected;
     let eye_cell = eye_cell(rect);
+    let source = app.stylus.feed.source();
     // The whole eye column takes drags too (so a drag starting on it never reorders the row): dragging down
     // the eyes gives every row swept over the visibility the first eye toggled to (#8467).
-    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), Sense::click_and_drag());
+    let eye_sense = if crate::list_drag::prefers_scroll(source) { Sense::click() } else { Sense::click_and_drag() };
+    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), eye_sense);
     // A hidden layer's eye box is left empty (still clickable; the whole column takes the click, #8467).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.

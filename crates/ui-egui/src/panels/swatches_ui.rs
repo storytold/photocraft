@@ -72,10 +72,17 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     st.sizes.entry(PANEL.to_string()).or_insert(DEFAULT_SIZE);
     let max_h = (ui.available_height() - 30.0).max(60.0);
     // Flat, touching squares, as in Photoshop's Swatches panel (#5103).
-    let events = browser(ui, &mut st, PANEL, &groups, Place { canvas, max_h, new_tip: tl!("Create new swatch"), flush: true }, &mut |ui, r: Rect, gi, ii| {
-        let c = table.get(gi).and_then(|g| g.get(ii)).copied().unwrap_or(Color32::GRAY);
-        ui.painter().rect_filled(r, CornerRadius::ZERO, c);
-    });
+    let events = browser(
+        ui,
+        &mut st,
+        PANEL,
+        &groups,
+        Place { canvas, max_h, new_tip: tl!("Create new swatch"), pointer: app.stylus.feed.source(), flush: true },
+        &mut |ui, r: Rect, gi, ii| {
+            let c = table.get(gi).and_then(|g| g.get(ii)).copied().unwrap_or(Color32::GRAY);
+            ui.painter().rect_filled(r, CornerRadius::ZERO, c);
+        },
+    );
     app.ui.presets_ui = st;
     let mods = ui.input(|i| i.modifiers);
     for e in events {
@@ -535,5 +542,43 @@ mod tests {
         assert_eq!(names.get(order[1]).map(String::as_str), Some(first.as_str()));
         // The reorder is remembered by name (not by the positions it happened to have).
         assert_eq!(h.state().ui.presets_ui.group_order.get(PANEL).and_then(|o| o.first()), Some(last));
+    }
+
+    #[test]
+    fn touch_swipe_scrolls_swatches_without_moving_or_selecting_them() {
+        use egui_kittest::kittest::Queryable;
+
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let first_name = app.session.presets.swatches[0].items[0].name.clone();
+        let initial_order: Vec<Vec<String>> = app.session.presets.swatches.iter().map(|g| g.items.iter().map(|s| s.name.clone()).collect()).collect();
+        let mut h = Harness::builder().with_size(vec2(300.0, 180.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        h.run_steps(2);
+        let before = h.get_by_label(&first_name).rect();
+        let selected = h.state().ui.presets_ui.selected.get(PANEL).cloned();
+        let from = first_cell(&h) + vec2(DEFAULT_SIZE / 2.0, DEFAULT_SIZE / 2.0);
+        let to = from - vec2(0.0, 24.0);
+
+        // The pointer events model the host's emulated pointer; the feed records its touch source.
+        h.state_mut().stylus.feed.report(crate::stylus::PointerSource::Touch, None);
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase: egui::TouchPhase::Start, pos: from, force: None });
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for i in 1..=6 {
+            let pos = from + (to - from) * (i as f32 / 6.0);
+            h.event(egui::Event::PointerMoved(pos));
+            h.event(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase: egui::TouchPhase::Move, pos, force: None });
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.event(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase: egui::TouchPhase::End, pos: to, force: None });
+        h.run_steps(2);
+
+        let after = h.get_by_label(&first_name).rect();
+        let final_order: Vec<Vec<String>> = h.state().session.presets.swatches.iter().map(|g| g.items.iter().map(|s| s.name.clone()).collect()).collect();
+        assert!(after.top() < before.top() - 5.0, "the list content scrolls with the finger: {before:?} -> {after:?}");
+        assert_eq!(h.state().ui.presets_ui.selected.get(PANEL).cloned(), selected, "a swipe does not select a swatch");
+        assert_eq!(final_order, initial_order, "a swipe does not reorder swatches");
     }
 }
