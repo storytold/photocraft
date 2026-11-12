@@ -26,11 +26,7 @@ pub(super) fn clone_from(s: &Session, map: &crate::presets::clone_source::Mappin
     if s.active().is_some_and(|st| st.doc.id == src.id) {
         return Ok(CloneFrom::Here);
     }
-    let st = s
-        .documents()
-        .iter()
-        .find(|st| st.doc.id == src.id)
-        .ok_or_else(|| bad(cmd, "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)"))?;
+    let st = s.documents().iter().find(|st| st.doc.id == src.id).ok_or_else(|| bad(cmd, crate::presets::clone_source::SOURCE_CLOSED))?;
     let layer = src.layer.filter(|l| st.doc.layer(*l).is_some()).or(st.active_layer);
     Ok(CloneFrom::Other { doc: st.doc.clone(), layer, revision: st.revision })
 }

@@ -708,7 +708,8 @@ pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.active_tool(), Tool::CloneStamp | Tool::Healing) {
         return None;
     }
-    if app.session.presets.clone.active().source_doc(app.session.active().map(|d| d.doc.id)).is_some() {
+    let slot = app.session.presets.clone.active();
+    if slot.document_closed || slot.source_doc(app.session.active().map(|d| d.doc.id)).is_some() {
         return None;
     }
     let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;

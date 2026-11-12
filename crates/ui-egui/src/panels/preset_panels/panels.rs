@@ -579,7 +579,7 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     // The document the source was set in (the active one for slots set before slots remembered it).
     let source_doc = match slot.document {
-        Some(id) => app.session.documents().iter().find(|d| d.doc.id == id),
+        Some(id) => slot.open_document().and_then(|_| app.session.documents().iter().find(|d| d.doc.id == id)),
         None => app.session.active(),
     };
     let src_line = match (slot.source, source_doc) {

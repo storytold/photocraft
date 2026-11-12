@@ -23,6 +23,9 @@ use crate::{Result, Session};
 
 pub const SLOTS: usize = 5;
 
+/// A stroke from a slot whose source document was closed.
+pub(crate) const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CloneSource {
     /// Sample point (document px) set by ⌥-click.
@@ -35,6 +38,10 @@ pub struct CloneSource {
     /// Document the source was set in. Painting in another open document samples this one.
     #[serde(default)]
     pub document: Option<DocId>,
+    /// `document` was closed. Kept apart from the ID, because a document opened later can carry
+    /// the same one (a native copy keeps its original's), and it must not become the source.
+    #[serde(default)]
+    pub document_closed: bool,
     /// W and H in percent.
     pub scale: [f64; 2],
     /// Degrees, counter-clockwise.
@@ -54,6 +61,7 @@ impl Default for CloneSource {
             anchor: None,
             layer: None,
             document: None,
+            document_closed: false,
             scale: [100.0, 100.0],
             rotation: 0.0,
             flip_h: false,
@@ -80,6 +88,11 @@ impl CloneSource {
     pub fn source_doc(&self, painting: Option<DocId>) -> Option<SourceDoc> {
         let id = self.document.filter(|d| Some(*d) != painting)?;
         Some(SourceDoc { id, layer: self.layer.map(LayerId) })
+    }
+    /// The source document's ID while it is still open: `None` once it was closed, even when a
+    /// document with the same ID was opened since.
+    pub fn open_document(&self) -> Option<DocId> {
+        self.document.filter(|_| !self.document_closed)
     }
     /// `document` is the source document's index among the open documents (`null` when it was
     /// closed or never recorded).
@@ -120,6 +133,13 @@ pub struct CloneSources {
 impl CloneSources {
     pub fn active(&self) -> &CloneSource {
         &self.slots[self.active.min(SLOTS - 1)]
+    }
+    /// Document `id` is closing: the slots set in it keep their point, but no longer read it or
+    /// a document opened later with the same ID ([`Session::close`]).
+    pub fn forget_doc(&mut self, id: DocId) {
+        for slot in self.slots.iter_mut().filter(|s| s.document == Some(id)) {
+            slot.document_closed = true;
+        }
     }
     pub fn active_mut(&mut self) -> &mut CloneSource {
         &mut self.slots[self.active.min(SLOTS - 1)]
@@ -223,6 +243,9 @@ pub fn resolve(s: &Session, p: &Value, first: (f64, f64), cmd: &str) -> Result<(
         (true, Some(a)) => (a[0], a[1]),
         _ => first,
     };
+    if slot.document_closed {
+        return Err(bad(cmd, SOURCE_CLOSED));
+    }
     let document = slot.source_doc(s.active().map(|d| d.doc.id));
     Ok((Mapping { source: src, anchor, m, document }, aligned.then_some([anchor.0, anchor.1])))
 }
@@ -308,7 +331,7 @@ fn index(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
 /// Slot `i` as JSON, its document given as an index among the open documents.
 fn slot_json(s: &Session, i: usize) -> Value {
     let slot = &s.presets.clone.slots[i.min(SLOTS - 1)];
-    let document = slot.document.and_then(|id| s.documents().iter().position(|d| d.doc.id == id));
+    let document = slot.open_document().and_then(|id| s.documents().iter().position(|d| d.doc.id == id));
     slot.to_json(i, document)
 }
 
@@ -350,6 +373,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         slot.anchor = None;
         slot.layer = p.get("layer").and_then(Value::as_u64).or(doc_layer);
         slot.document = document;
+        slot.document_closed = false;
     }
     if let Some((dx, dy)) = pt(p, "offset") {
         // Offset X/Y fields: keep the anchor (or the source as anchor) and move the source.

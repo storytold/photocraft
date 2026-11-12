@@ -2985,6 +2985,31 @@ fn clone_source_document_closed_or_invalid_is_an_error() {
 }
 
 #[test]
+fn a_copy_opened_after_the_clone_source_document_closed_is_not_the_source() {
+    // A native copy keeps its document's ID. Opening one after the source document was closed
+    // must not make the slot read the copy.
+    let mut s = two_documents(8, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [10, 12]);
+    let source = s.documents()[0].doc.id;
+    let copy = (*s.close(0).unwrap().doc).clone();
+    let i = s.add_document(copy, None);
+    assert_eq!(s.documents()[i].doc.id, source, "the copy keeps the closed document's ID");
+    assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["document"], Value::Null);
+    // Neither in the other document nor in the copy itself does the stroke read the copy.
+    for painted in [0, i] {
+        assert!(s.set_active(painted));
+        let before = s.active().unwrap().doc.clone();
+        let e = s.execute("paint.cloneStamp", json!({"points": [[20, 20]], "size": 4})).unwrap_err();
+        assert!(e.to_string().contains("closed"), "document {painted}: {e}");
+        assert!(LiveRetouch::begin(&s, "paint.cloneStamp", &json!({"points": [[20, 20]], "size": 4})).is_err());
+        assert_eq!(s.active().unwrap().doc, before, "document {painted}: nothing painted");
+    }
+    // Setting a source in the copy makes it the source again.
+    s.execute("cloneSource.set", json!({"source": [10, 12]})).unwrap();
+    assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["document"], json!(i));
+    s.execute("paint.cloneStamp", json!({"points": [[20, 20]], "size": 4})).unwrap();
+}
+
+#[test]
 fn clone_source_set_names_the_source_document() {
     let mut s = two_documents(8, ramp, |_, _| [0.0, 0.0, 1.0, 1.0], [0, 0]);
     // From document 1, set a source in document 0 by index.

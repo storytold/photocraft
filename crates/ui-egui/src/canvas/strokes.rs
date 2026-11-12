@@ -77,7 +77,8 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
         return;
     }
     let slot = app.session.presets.clone.active().clone();
-    let Some(source) = slot.source else { return };
+    // A source whose document was closed has nothing to show, whatever has its ID now.
+    let Some(source) = slot.source.filter(|_| !slot.document_closed) else { return };
     let radius = f64::from(app.session.tools.brush.size) / 2.0;
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
         return;
