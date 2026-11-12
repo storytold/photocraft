@@ -86,14 +86,27 @@ pub(super) fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64, keep_angle
 pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
-        if mods.shift {
-            // Snap to 45°.
-            let a = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
-            let len = dx.hypot(dy);
-            (dx, dy) = (len * a.cos(), len * a.sin());
-        }
+        // Too short a drag draws nothing. Measured before ⇧ shortens a diagonal, so a short
+        // fractional drag still reaches `align_line_edges`, which rounds it to whole pixels.
         if dx.hypot(dy) < 1.0 {
             return None;
+        }
+        if mods.shift {
+            // Snap to a multiple of 45°, as Photoshop does (#13243): a horizontal or vertical
+            // line keeps the drag's distance along its axis, a diagonal one the shorter of the two
+            // distances on both axes. A drag within 30° of an axis snaps to it: Photoshop flattens
+            // a 26.6° drag and keeps a 39.8° one diagonal; the exact boundary is not measured.
+            // An axis line is at least a pixel long: a drag of a pixel or more can keep as little
+            // as 0.87 px along its axis, and `align_line_edges` could round both ends together.
+            let tan30 = std::f64::consts::FRAC_PI_6.tan();
+            (dx, dy) = if dy.abs() < dx.abs() * tan30 {
+                (dx.abs().max(1.0).copysign(dx), 0.0)
+            } else if dx.abs() < dy.abs() * tan30 {
+                (0.0, dy.abs().max(1.0).copysign(dy))
+            } else {
+                let m = dx.abs().min(dy.abs());
+                (m.copysign(dx), m.copysign(dy))
+            };
         }
         let (from, to, weight) = align_line_edges(start, [start[0] + dx, start[1] + dy], f64::from(o.line_weight.max(1.0)), mods.shift)?;
         json!({"kind": "line", "from": from, "to": to, "weight": weight,
