@@ -16,7 +16,7 @@
 //! helper thread, and the closest finer level already uploaded is shown until it is ready
 //! (#11103): halving a 24 MP layer took a whole frame or more on the UI thread.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{Color32, ColorImage, TextureHandle, TextureId, TextureOptions};
@@ -48,6 +48,9 @@ pub struct PreviewTextures {
     /// Held by a test to pause the workers just before they check `alive`.
     #[cfg(test)]
     gate: Arc<Mutex<()>>,
+    /// How many levels the workers have uploaded, for tests.
+    #[cfg(test)]
+    uploads: Arc<AtomicUsize>,
 }
 
 impl Drop for PreviewTextures {
@@ -80,6 +83,8 @@ impl PreviewTextures {
             alive: Arc::new(AtomicBool::new(true)),
             #[cfg(test)]
             gate: Arc::new(Mutex::new(())),
+            #[cfg(test)]
+            uploads: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -96,11 +101,12 @@ impl PreviewTextures {
     }
 
     /// What a test locks to pause the workers just before they check that the preview is open,
-    /// and what tells it they are all done, which still works once the preview is gone.
+    /// what tells it they are all done, and how many levels they uploaded; the last two still work
+    /// once the preview is gone.
     #[cfg(test)]
-    pub(crate) fn worker_hooks(&self) -> (Arc<Mutex<()>>, impl Fn() -> bool + use<>) {
+    pub(crate) fn worker_hooks(&self) -> (Arc<Mutex<()>>, impl Fn() -> bool + use<>, Arc<AtomicUsize>) {
         let building = Arc::clone(&self.building);
-        (Arc::clone(&self.gate), move || building.lock().unwrap_or_else(PoisonError::into_inner).is_empty())
+        (Arc::clone(&self.gate), move || building.lock().unwrap_or_else(PoisonError::into_inner).is_empty(), Arc::clone(&self.uploads))
     }
 
     /// Size of the full-resolution level in texels.
@@ -191,7 +197,7 @@ impl PreviewTextures {
         let (ctx, base_uv, name) = (ctx.clone(), self.base_uv, format!("{}-{level}-linear", self.name));
         let display = display.map(share_display);
         #[cfg(test)]
-        let gate = Arc::clone(&self.gate);
+        let (gate, uploads) = (Arc::clone(&self.gate), Arc::clone(&self.uploads));
         let job = move || {
             let built = level_of(&images, base_uv, level);
             #[cfg(test)]
@@ -204,6 +210,8 @@ impl PreviewTextures {
                 // change meanwhile released this display's uploads: drop it then too.
                 if alive.load(Ordering::Acquire) && up.iter().all(|l| l.display_key == display_key) && !up.iter().any(|l| l.level == level && !l.nearest) {
                     let tex = ctx.load_texture(name, img, TextureOptions::LINEAR);
+                    #[cfg(test)]
+                    uploads.fetch_add(1, Ordering::Relaxed);
                     up.push(Level { level, display_key, nearest: false, tex, uv });
                 }
             }
