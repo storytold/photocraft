@@ -3,13 +3,9 @@ use super::sponge_rgb;
 const COLORS: [[u8; 3]; 9] =
     [[200, 40, 40], [40, 160, 60], [40, 60, 200], [220, 170, 140], [230, 200, 40], [90, 50, 30], [180, 200, 230], [128, 64, 192], [255, 0, 0]];
 
-fn dab_amount(flow: f32) -> f32 {
-    1.0 - (1.0 - flow * 0.5).powf(0.25)
-}
-
 pub(super) fn check_reference(saturate: bool, vibrance: bool, flow: f32, expected: [[u8; 3]; 9]) {
     for (input, expected) in COLORS.into_iter().zip(expected) {
-        let actual = sponge_rgb(input.map(|v| f32::from(v) / 255.0), dab_amount(flow), saturate, vibrance).map(|v| (v * 255.0).round() as u8);
+        let actual = sponge_rgb(input.map(|v| f32::from(v) / 255.0), flow, 0.25, saturate, vibrance).map(|v| (v * 255.0).round() as u8);
         assert!(
             actual.into_iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 2),
             "RGB {input:?}, Flow {flow}, Vibrance {vibrance}: {actual:?} vs {expected:?}"
@@ -53,7 +49,7 @@ fn greys_are_fixed_for_both_modes_and_every_flow() {
         for flow in 0..=100u8 {
             for saturate in [false, true] {
                 for vibrance in [false, true] {
-                    assert_eq!(sponge_rgb(grey, dab_amount(f32::from(flow) / 100.0), saturate, vibrance), grey);
+                    assert_eq!(sponge_rgb(grey, f32::from(flow) / 100.0, 0.25, saturate, vibrance), grey);
                 }
             }
         }
@@ -76,10 +72,10 @@ fn flow_changes_chroma_monotonically_and_preserves_hue_in_the_rgb_gamut() {
                 let hue = input.map(|v| (v - lo) / chroma);
                 for saturate in [false, true] {
                     for vibrance in [false, true] {
-                        assert_eq!(sponge_rgb(input, 0.0, saturate, vibrance), input);
+                        assert_eq!(sponge_rgb(input, 0.0, 0.25, saturate, vibrance), input);
                         let mut previous = chroma;
-                        for amount in [dab_amount(0.1), dab_amount(0.5), dab_amount(1.0), 0.5, 1.0] {
-                            let actual = sponge_rgb(input, amount, saturate, vibrance);
+                        for amount in [0.1, 0.5, 1.0] {
+                            let actual = sponge_rgb(input, amount, 0.25, saturate, vibrance);
                             assert!(actual.into_iter().all(|v| (-1e-6..=1.0 + 1e-6).contains(&v)), "{input:?} became {actual:?}");
                             let lo = actual.into_iter().fold(1.0, f32::min);
                             let hi = actual.into_iter().fold(0.0, f32::max);
@@ -91,6 +87,43 @@ fn flow_changes_chroma_monotonically_and_preserves_hue_in_the_rgb_gamut() {
                             previous = span;
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn equal_distance_non_vibrance_passes_have_equal_strength() {
+    let input = [0.58, 0.51, 0.42];
+    for flow in [0.2, 0.5, 1.0] {
+        for saturate in [false, true] {
+            let pass = |spacing, dabs| (0..dabs).fold(input, |rgb, _| sponge_rgb(rgb, flow, spacing, saturate, false));
+            let reference = pass(0.25, 4);
+            for (spacing, dabs) in [(0.125, 8), (0.5, 2), (1.0, 1)] {
+                for (actual, expected) in pass(spacing, dabs).into_iter().zip(reference) {
+                    assert!((actual - expected).abs() < 1e-6, "Flow {flow}, spacing {spacing}, saturate {saturate}: {actual} vs {expected}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn vibrance_at_other_spacings_stays_in_gamut_and_preserves_hue() {
+    for input in COLORS.map(|rgb| rgb.map(|v| f32::from(v) / 255.0)) {
+        let lo = input.into_iter().fold(1.0, f32::min);
+        let hi = input.into_iter().fold(0.0, f32::max);
+        let hue = input.map(|v| (v - lo) / (hi - lo));
+        for spacing in [0.01, 0.125, 0.5, 1.0] {
+            for saturate in [false, true] {
+                let out = sponge_rgb(input, 1.0, spacing, saturate, true);
+                let a = out.into_iter().fold(1.0, f32::min);
+                let b = out.into_iter().fold(0.0, f32::max);
+                assert!(out.into_iter().all(|v| (-1e-6..=1.0 + 1e-6).contains(&v)), "{input:?} became {out:?}");
+                assert!(if saturate { b - a >= hi - lo - 1e-6 } else { b - a <= hi - lo + 1e-6 });
+                for (v, h) in out.into_iter().zip(hue) {
+                    assert!((v - a - h * (b - a)).abs() < 1e-6, "{input:?} became {out:?}");
                 }
             }
         }

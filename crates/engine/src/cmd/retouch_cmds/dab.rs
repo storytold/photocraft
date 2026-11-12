@@ -20,13 +20,13 @@ fn per_dab(e: f32, spacing: f32) -> f32 {
 
 /// Apply an RGB colour transform `f(rgb, strength)` to each covered pixel of a dab (through straight
 /// RGBA, so it works for Gray/CMYK/Lab too; untouched pixels are never round-tripped).
-fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32, spacing: f32, f: impl Fn([f32; 3], f32) -> [f32; 3]) {
+fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: impl Fn(f32) -> f32, f: impl Fn([f32; 3], f32) -> [f32; 3]) {
     let r = fp.rect.intersect(&work.rect);
     let n = fmt.channels();
     let mut enc = [0.0f32; 8];
     for y in r.y0..r.y1 {
         for x in r.x0..r.x1 {
-            let k = per_dab(fp.at(x, y) * strength, spacing);
+            let k = strength(fp.at(x, y));
             if k <= 0.0 {
                 continue;
             }
@@ -237,9 +237,11 @@ impl DabTool {
             // Flow is already in the dab's coverage. The reference RGB response applies to integer
             // RGB surfaces, including 16-bit. Float RGB and the other models use the legacy curve.
             Self::Sponge { saturate, vibrance } if fmt.mode == ColorMode::Rgb && fmt.sample != SampleType::F32 => {
-                Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge_rgb(c, k, saturate, vibrance)))
+                Box::new(move |work, fp| color_dab(&fmt, work, fp, |k| k, |c, k| sponge_rgb(c, k, sp, saturate, vibrance)))
             }
-            Self::Sponge { saturate, vibrance } => Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge(c, k, saturate, vibrance))),
+            Self::Sponge { saturate, vibrance } => {
+                Box::new(move |work, fp| color_dab(&fmt, work, fp, |k| per_dab(k * 0.5, sp), |c, k| sponge(c, k, saturate, vibrance)))
+            }
             Self::Focus { sharpen, strength, protect, sigma } => {
                 let a = alpha_index(&fmt);
                 Box::new(move |work, fp| {

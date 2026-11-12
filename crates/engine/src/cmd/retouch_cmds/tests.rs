@@ -503,6 +503,26 @@ fn sponge_rgb_single_dab_matches_reference_at_integer_depths() {
 }
 
 #[test]
+fn sponge_single_dab_uses_the_requested_spacing() {
+    for depth in [8, 16] {
+        for spacing in [25, 50, 100] {
+            let mut s = session(64, 64, depth, "rgb");
+            paint_layer(&mut s, |_, _| [0.8, 0.4, 0.2, 1.0]);
+            let [r0, _, b0, a0] = rgba(&s, 32, 32);
+            s.execute(
+                "paint.sponge",
+                json!({"points": [[32, 32]], "size": 40, "hardness": 100, "spacing": spacing, "flow": 100, "mode": "desaturate", "vibrance": false}),
+            )
+            .unwrap();
+            let [r, _, b, a] = rgba(&s, 32, 32);
+            let expected = (r0 - b0) * 0.8f32.powf(spacing as f32 / 25.0);
+            assert!(((r - b) - expected).abs() < 2.0 / 255.0, "{depth}-bit, spacing {spacing}: {} vs {expected}", r - b);
+            assert_eq!(a, a0);
+        }
+    }
+}
+
+#[test]
 fn sponge_float_rgb_and_lab_keep_the_existing_transfer() {
     for (depth, mode) in [(32, "rgb"), (8, "lab")] {
         let mut s = session(64, 64, depth, mode);

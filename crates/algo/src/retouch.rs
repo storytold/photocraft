@@ -110,26 +110,25 @@ pub fn sponge(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [f32;
 }
 
 /// Adjust a normalized RGB dab using the measured RGB Sponge response (#12972, #12973).
-/// `amount` is the spacing-adjusted dab coverage from the brush engine.
-pub fn sponge_rgb(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [f32; 3] {
+/// `coverage` includes Flow and the brush falloff. `spacing` is in brush diameters.
+pub fn sponge_rgb(c: [f32; 3], coverage: f32, spacing: f32, saturate: bool, vibrance: bool) -> [f32; 3] {
     let [r, g, b] = c;
     let lo = r.min(g).min(b);
     let hi = r.max(g).max(b);
     let chroma = hi - lo;
-    if amount <= 0.0 || chroma <= f32::EPSILON {
+    if coverage <= 0.0 || chroma <= f32::EPSILON {
         return c;
     }
 
-    // Express the dab in units of the reference 25%-spacing brush. At that spacing the brush
-    // passes 1 - (1 - flow / 2)^(1/4). Factor its inverse to retain precision at low coverage.
-    let amount = amount.min(1.0);
-    let remaining = 1.0 - amount;
-    let flow = 2.0 * amount * (1.0 + remaining) * (1.0 + remaining * remaining);
+    let flow = coverage.min(1.0);
+    // The measured dab covers a quarter of a brush diameter along the stroke. Scale its gain
+    // multiplicatively so the same distance gets the same strength from more or fewer dabs.
+    let steps = 4.0 * spacing.clamp(0.01, 1.0);
     let grey = luma(c);
     if !vibrance {
-        let mut gain = 1.0 - 0.2 * flow;
+        let reference_gain = if saturate { 1.0 + 0.4 * flow } else { 1.0 - 0.2 * flow };
+        let mut gain = if steps == 1.0 { reference_gain } else { reference_gain.powf(steps) };
         if saturate {
-            gain = 1.0 + 0.4 * flow;
             // Limit the gain before applying it to all three channels, using the same luma pivot.
             let shadow = grey - lo;
             if gain * shadow > grey {
@@ -155,6 +154,15 @@ pub fn sponge_rgb(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [
         let weight = (0.5 * lo / hi).max(0.2);
         let highlight = (0.06 * hi + 0.03 * lo).min(weight * (hi - grey));
         (lo + flow * shadow, hi - flow * highlight)
+    };
+    // Compose the measured affine response for this dab's distance, holding its locally
+    // computed coefficients fixed. Use expm1 for small changes and cap at the RGB gamut.
+    let (low, high) = if steps == 1.0 {
+        (low, high)
+    } else {
+        let change = ((high - hi) - (low - lo)) / chroma;
+        let scale = if change == 0.0 { steps } else { (steps * change.ln_1p()).exp_m1() / change };
+        ((lo + (low - lo) * scale).max(0.0), (hi + (high - hi) * scale).min(1.0))
     };
     // One affine map keeps the intermediate channel in the same position within the span.
     let gain = (high - low).max(0.0) / chroma;
