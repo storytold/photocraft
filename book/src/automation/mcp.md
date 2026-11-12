@@ -4,7 +4,7 @@
 
 - **Headless:** an in-process `Headless` session owns the engine and performs file I/O.
 - **Bridge:** `BridgeClient` forwards tools to a desktop application started with `photocraft --control <port>`.
-- **Live:** `photocraft-cli mcp --live` finds the desktop application through the connection file it publishes while Edit › Preferences › MCP › *Let AI agents connect* is on, before every tool call; while the app is closed it starts it, serves a headless session, or reports an error, as chosen there.
+- **Live:** `photocraft-cli mcp --live` finds the desktop application through the connection file it publishes while Edit › Preferences › AI Integrations › *Let AI agents connect* is on, before every tool call; while the app is closed it starts it, serves a headless session, or reports an error, as chosen there.
 
 The simplest setup needs no terminal: turn on *Let AI agents connect* in PhotoCraft, then click *Add to Claude Desktop* (or Claude Code, or Cursor) in the same panel. See [`docs/mcp.md`](../../../docs/mcp.md#connecting-the-desktop-app-no-terminal).
 

@@ -1,4 +1,4 @@
-//! Preferences › MCP: the agent connection (`integrations.connectAgents`), the folders
+//! Preferences › AI Integrations: the agent connection (`integrations.connectAgents`), the folders
 //! agents may use, what `photocraft-cli mcp --live` does while the app is closed, and the buttons
 //! that add PhotoCraft to MCP clients. Changes apply at once, without a restart.
 

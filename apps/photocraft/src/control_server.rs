@@ -1,7 +1,7 @@
 //! Localhost JSON-lines control server (one request per line, one reply per line).
 //! Loopback only. This is the transport the MCP server will wrap.
 //!
-//! `--control` starts it for the whole run ([`start`]); Preferences › MCP starts and
+//! `--control` starts it for the whole run ([`start`]); Preferences › AI Integrations starts and
 //! stops it while the app runs ([`listen`], see `agent_link`).
 
 use std::io::{BufReader, Write};

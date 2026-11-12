@@ -246,7 +246,7 @@ photocraft-cli batch --help
 photocraft-cli mcp
 ```
 
-To let Claude or another AI app drive the open PhotoCraft window without a terminal, turn on **Edit › Preferences › MCP › Let AI agents connect**, then click **Add to Claude Desktop** (or Claude Code, or Cursor) in the same panel. See [`docs/mcp.md`](docs/mcp.md).
+To let Claude or another AI app drive the open PhotoCraft window without a terminal, turn on **Edit › Preferences › AI Integrations › Let AI agents connect**, then click **Add to Claude Desktop** (or Claude Code, or Cursor) in the same panel. See [`docs/mcp.md`](docs/mcp.md).
 
 The desktop app also offers an authenticated, loopback-only control channel (`photocraft --control`) for inspecting UI state, driving tools with pointer events, and taking offscreen screenshots. Every image in this README was rendered that way. See [`docs/control-protocol.md`](docs/control-protocol.md).
 

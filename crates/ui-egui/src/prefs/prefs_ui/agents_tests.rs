@@ -1,4 +1,4 @@
-//! Preferences › MCP (`agents.rs`): the live agent connection and its buttons.
+//! Preferences › AI Integrations (`agents.rs`): the live agent connection and its buttons.
 
 use super::tests::app_with_store;
 use super::*;

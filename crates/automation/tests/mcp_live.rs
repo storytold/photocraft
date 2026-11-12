@@ -1,4 +1,4 @@
-//! `photocraft-cli mcp --live` (Preferences › MCP): the MCP server finds the desktop
+//! `photocraft-cli mcp --live` (Preferences › AI Integrations): the MCP server finds the desktop
 //! app through its connection file before every call, follows it to a new port and token, and
 //! applies the closed-app choice (start it, headless, or an error) when no app answers.
 

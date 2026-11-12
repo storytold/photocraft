@@ -240,7 +240,7 @@ impl McpLaunch {
              2. Reload your MCP servers if your client needs that (or tell me to restart you).
              3. Call the {SERVER_NAME} tool `ui_inspect` and tell me which document is open.
              
-             PhotoCraft must be running with Edit › Preferences › MCP › Let AI agents connect turned on.              The command needs no port or token: it finds the app by itself on every call.
+             PhotoCraft must be running with Edit › Preferences › AI Integrations › Let AI agents connect turned on.              The command needs no port or token: it finds the app by itself on every call.
 "
         )
     }
@@ -852,7 +852,7 @@ mod tests {
         assert!(prompt.contains("claude mcp add --scope user photocraft -- /x/photocraft-cli mcp --live"), "{prompt}");
         assert!(prompt.contains("codex mcp add photocraft -- /x/photocraft-cli mcp --live"), "{prompt}");
         assert!(prompt.contains(&launch.config_json()), "{prompt}");
-        assert!(prompt.contains("Edit › Preferences › MCP › Let AI agents connect"), "{prompt}");
+        assert!(prompt.contains("Edit › Preferences › AI Integrations › Let AI agents connect"), "{prompt}");
         assert!(!prompt.contains(TOKEN_FILE) && !prompt.contains("token\":"), "{prompt}");
     }
 
@@ -976,7 +976,7 @@ mod tests {
         assert!(install(Client::Cursor, &launch, &env).is_err(), "no home folder: an error, not a panic");
     }
 
-    // ---- connection file (Preferences › MCP) ----
+    // ---- connection file (Preferences › AI Integrations) ----
 
     #[test]
     fn a_published_connection_reads_back_in_the_documented_shape() {

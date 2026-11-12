@@ -17,9 +17,9 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
 
 If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents. A flag wins over its variable and an empty variable counts as unset; with `--control` (or `PHOTOCRAFT_CONTROL_PORT`), a token together with a token file, from flags or variables, is a usage error (exit status 2). Without it no token is read, so the pair is ignored.
 
-### Without `--control`: Preferences › MCP
+### Without `--control`: Preferences › AI Integrations
 
-An app started from the Dock, the Start menu or a file manager has no command line. Edit › Preferences › MCP starts and stops the control server while the app runs: turning *Let AI agents connect* on or off, or changing its port or folders, applies at once, with no restart.
+An app started from the Dock, the Start menu or a file manager has no command line. Edit › Preferences › AI Integrations starts and stops the control server while the app runs: turning *Let AI agents connect* on or off, or changing its port or folders, applies at once, with no restart.
 
 | Preference | What it does |
 |---|---|
@@ -418,7 +418,7 @@ magenta alignment lines. `ui.pointer` drives the same code, so agents get identi
 - **Headless** (`photocraft-cli mcp`): an in-process `photocraft_engine::Session`. There is no window. CPU composition is the default; `--gpu` or `PHOTOCRAFT_GPU=1` enables optional GPU rendering with automatic CPU fallback.
 - **Bridge** (`photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <path>`): every tool is forwarded to a running `photocraft --control 7878 --control-token-file <path>` over this protocol, so agents see and drive the live app. Explicit `--gpu` / `--no-gpu` flags are rejected with a usage error because the desktop controls rendering; `PHOTOCRAFT_GPU` is ignored in bridge mode. `--bridge 7878` is short for `--bridge 127.0.0.1:7878`. With no `--bridge`, `PHOTOCRAFT_CONTROL_PORT` selects the bridge port (`127.0.0.1:<port>`), and the CLI says so on standard error; with neither (or the variable empty), the MCP runs headless. A value that is not a port is a usage error naming the variable. `--automation-read-root` or `--automation-write-root` with the variable set is a usage error, since the bridge would drop the roots.
 
-- **Live** (`photocraft-cli mcp --live`): the bridge, with the address and token read before every tool call from `agent-connection.json` in the app's settings folder. The app publishes that file while Edit › Preferences › MCP › *Let AI agents connect* is on (not with `--control`), and removes it when the connection stops; a file left by a crash fails the connection probe and counts as no app. See [MCP conventions](mcp.md#connecting-the-desktop-app-no-terminal).
+- **Live** (`photocraft-cli mcp --live`): the bridge, with the address and token read before every tool call from `agent-connection.json` in the app's settings folder. The app publishes that file while Edit › Preferences › AI Integrations › *Let AI agents connect* is on (not with `--control`), and removes it when the connection stops; a file left by a crash fails the connection probe and counts as no app. See [MCP conventions](mcp.md#connecting-the-desktop-app-no-terminal).
 
 `ui.inspect` reports the connection as `agentLink`: `port` while agents can connect, `launchFlags` when `--control` manages it, `error`, and `mcpCommand` (how MCP clients start the CLI).
 
@@ -488,7 +488,7 @@ One explicit write-root flag overrides `PHOTOCRAFT_AUTOMATION_WRITE_ROOT`. These
 variables are not supported by headless `photocraft-cli mcp` or `serve`; supply flags explicitly.
 In MCP bridge mode, configure roots on the desktop process. Supplying root flags to
 `photocraft-cli mcp --bridge` is a usage error; a bridge client cannot grant filesystem access.
-With *Let AI agents connect*, the folders chosen in Preferences › MCP (`readRoot` /
+With *Let AI agents connect*, the folders chosen in Preferences › AI Integrations (`readRoot` /
 `writeRoot`) are the agents' roots; `mcp --live` uses them for a headless session only when the
 app's *When PhotoCraft is closed* choice (or `--when-closed headless`) asks for one.
 

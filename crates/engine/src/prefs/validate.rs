@@ -25,7 +25,7 @@ pub const SECTIONS: [(&str, &str); 18] = [
     ("type", "Type"),
     ("enhancedControls", "Enhanced Controls"),
     ("rawDefaults", "RAW Defaults"),
-    ("integrations", "MCP"),
+    ("integrations", "Integrations"),
 ];
 
 /// Preferences that nothing reads yet, so Edit › Preferences doesn't show them: a control that

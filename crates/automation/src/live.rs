@@ -122,7 +122,7 @@ impl Live {
             }
             if Instant::now() >= deadline {
                 return Err(format!(
-                    "PhotoCraft didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check Edit › Preferences › MCP.",
+                    "PhotoCraft didn't accept agents within {} s of starting. If it's still opening, try again in a moment; otherwise check Edit › Preferences › AI Integrations.",
                     self.cfg.launch_timeout.as_secs()
                 ));
             }
@@ -161,7 +161,7 @@ fn closed(integrations: &Integrations) -> String {
     if integrations.connect_agents {
         "PhotoCraft isn't running: open it, then try again.".into()
     } else {
-        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › MCP › Let AI agents connect, then try again.".into()
+        "PhotoCraft doesn't accept AI agents: open it, turn on Edit › Preferences › AI Integrations › Let AI agents connect, then try again.".into()
     }
 }
 

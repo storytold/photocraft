@@ -1,4 +1,4 @@
-//! Preferences › MCP on the desktop: while *Let AI agents connect* is on, the app
+//! Preferences › AI Integrations on the desktop: while *Let AI agents connect* is on, the app
 //! serves the control protocol by itself (no `--control`) and publishes the connection file
 //! `photocraft-cli mcp --live` finds it by ([`photocraft_automation::agent_link`]). Turning it on
 //! or off, or changing the port or folders, applies at once. The token stays in the settings

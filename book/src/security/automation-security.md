@@ -29,7 +29,7 @@ Automation is a privilege boundary because requests can cause filesystem access,
   Screenshots are decoded under separate dimension, pixel, and allocation ceilings before
   downscaling; the 5 MiB PNG limit applies to the returned image.
 - MCP normally uses stdio and can optionally bridge to loopback control TCP.
-- Edit › Preferences › MCP › *Let AI agents connect* (off by default) opens that loopback
+- Edit › Preferences › AI Integrations › *Let AI agents connect* (off by default) opens that loopback
   listener without launch flags. Its token is kept in a user-only file in the settings folder
   (`agent-control.token`) and stays the same across restarts and port changes: restarting does
   not revoke it. To revoke an exposed token, delete that file; the next start creates a new one.

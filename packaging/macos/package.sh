@@ -120,7 +120,7 @@ echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
-# The CLI too, beside the app: Preferences › MCP points MCP clients at it
+# The CLI too, beside the app: Preferences › AI Integrations points MCP clients at it
 # (`photocraft-cli mcp --live`), and it starts the app when an agent needs it.
 cp "$WORK/bin/photocraft-cli" "$APP/Contents/MacOS/photocraft-cli"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
