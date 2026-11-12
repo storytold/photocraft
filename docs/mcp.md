@@ -2,9 +2,10 @@
 
 ## Connecting the desktop app (no terminal)
 
-These settings are behind the Craft suite's `AI-MCP` feature flag (`craft-flags`): turn it on in
-ArtCraft Launcher › Settings › Experimental features, which writes `ArtCraft/flags.toml` for every
-Craft app, or start PhotoCraft with `CRAFT_FLAGS=AI-MCP`. Without it the page shows only Allow
+These settings are behind the Craft suite's `AI-MCP` feature flag (`craft-flags`). Flags are set
+only in the per-user `ArtCraft/flags.toml` (`AI-MCP = true` under `[flags]`; on Windows in
+`%LOCALAPPDATA%\ArtCraft`), which every Craft app and the launcher read, or for one run with
+`CRAFT_FLAGS=AI-MCP`; no app or launcher setting switches them. Without it the page shows only Allow
 Agent Control and Control Port, as before; a Control Port already set keeps its connection.
 
 **With the ArtCraft Launcher** there is nothing to do in PhotoCraft: turning on Settings › AI
