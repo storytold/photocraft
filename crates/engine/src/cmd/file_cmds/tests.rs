@@ -1785,6 +1785,17 @@ fn dds_params_are_none_until_one_is_given() {
     assert_eq!(dds_param(&json!({"ddsCompression": "bc2"}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::Bc2, mipmaps: false }));
 }
 
+/// The layer export's `format` is an extension, never a path: separators and `..` are refused.
+#[test]
+fn layer_export_format_cannot_carry_path_components() {
+    let dir = tmp("fmt-path");
+    let mut s = session(8, 8, 8);
+    for bad in ["png/../../x", "..\\x", "a/b", ""] {
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+    }
+}
+
 /// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
 #[test]
 fn bad_targa_bits_are_refused_before_writing() {
@@ -1860,8 +1871,8 @@ fn image_previews_preference_controls_the_psd_thumbnail() {
     let dir = tmp("previews");
     let mut s = session(300, 200, 16);
     let has_thumbnail = |path: &str| {
-        let file = photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
-        file.resources.iter().any(|r| r.id == photocraft_psd::resources::ids::THUMBNAIL)
+        let file = craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+        file.resources.iter().any(|r| r.id == craft_psd::resources::ids::THUMBNAIL)
     };
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.image_previews = ask);
@@ -1882,7 +1893,7 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     let dir = tmp("maximize");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
         s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask);
         for ext in ["psd", "psb"] {
@@ -1933,7 +1944,7 @@ fn maximize_compatibility_param_overrides_the_preference_for_one_save() {
     let dir = tmp("maximize-param");
     let mut s = session(300, 200, 16);
     s.execute("layer.new.layer", json!({})).unwrap();
-    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |path: &str| craft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, param, expect) in [
         (Ask::Always, json!(false), false),
         (Ask::Never, json!(true), true),
@@ -2736,6 +2747,41 @@ fn trimming_an_empty_layer_keeps_a_valid_nonzero_canvas() {
     let bytes = std::fs::read(result["files"][0].as_str().unwrap()).unwrap();
     let back = photocraft_io::import("empty.png", &bytes).unwrap().document;
     assert_eq!((back.size.width, back.size.height), (6, 7));
+}
+
+#[test]
+fn image_processor_scratch_sessions_answer_to_the_authorization_gate() {
+    fn deny_image(id: &str, _: &Value) -> Result<()> {
+        if id.starts_with("image.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("proc-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 40, 20, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_image);
+    let out = join(&dir, "out");
+    let r = s.execute("file.scripts.imageProcessor", json!({"input": input, "output": out, "format": "jpg", "width": 20, "height": 20})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+}
+
+#[test]
+fn batch_save_points_answer_to_the_authorization_gate() {
+    fn deny_save(id: &str, _: &Value) -> Result<()> {
+        if id == "file.save" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let dir = tmp("batch-save-gate");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    png(&input, "a.png", 8, 8, "#ff0000");
+    let mut s = Session::new();
+    s.authorize = Some(deny_save);
+    let out = join(&dir, "out");
+    let r = s.execute("file.automate.batch", json!({"steps": [["file.save", {}]], "input": input, "output": out, "format": "png"})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
+    assert!(!std::path::Path::new(&join(&out, "a.png")).exists());
 }
 
 #[test]
@@ -3913,6 +3959,33 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
     for name in ["console", "normal", "com10", "lpt0", "nullify", "con_", "com⁴", "com¹¹"] {
         assert_eq!(sanitize(name), name);
     }
+}
+
+/// A droplet whose steps run the same droplet stops at the nesting limit with an error for the
+/// input, rather than opening documents until the stack or memory runs out.
+#[test]
+fn a_droplet_that_runs_itself_stops_at_the_nesting_limit() {
+    let dir = tmp("droplet-recursion");
+    let input = png(&dir, "a.png", 4, 4, "#ff0000");
+    let droplet = join(&dir, "self.pcdroplet");
+    let out = join(&dir, "out");
+    let step = json!(["file.automate.runDroplet", {"droplet": droplet, "input": [input], "output": out}]);
+    std::fs::write(&droplet, json!({"photocraftDroplet": 1, "name": "self", "action": {"steps": [step]}, "options": {"format": "png"}}).to_string()).unwrap();
+    let mut s = Session::new();
+    // Each level runs the next in a scratch session; the innermost is refused, so this returns.
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [input], "output": out})).unwrap();
+    assert_eq!(s.actions.batch_depth, 0);
+    // The limit reaches the outermost result: the input failed, nothing was saved unprocessed.
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("nested more than"), "{r}");
+    assert_eq!(r["files"], json!([]), "{r}");
+    assert!(!std::path::Path::new(&out).join("a.png").exists());
+    // At the limit, the droplet is refused before its file is read (this one doesn't exist).
+    s.actions.batch_depth = crate::actions_cmds::MAX_BATCH_DEPTH;
+    let missing = join(&dir, "missing.pcdroplet");
+    let e = s.execute("file.automate.runDroplet", json!({"droplet": missing, "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
+    let e = s.execute("file.automate.batch", json!({"steps": [], "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
 }
 
 #[test]

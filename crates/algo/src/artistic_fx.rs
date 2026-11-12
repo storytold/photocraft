@@ -1367,6 +1367,17 @@ mod tests {
     }
 
     #[test]
+    fn gallery_window_budget_counts_working_temporaries() {
+        // A 6300 px square RGBA window is 159 M samples for the source read alone, 476 M with the old
+        // 3x factor, and over the 512 Mi-sample budget once the working window and temporaries count.
+        // The check runs before any window is read, so nothing that large is allocated.
+        let s = pattern(SampleType::F32);
+        let big = Rect::new(0, 0, 6300, 6300);
+        let fp = FilterParams::FilterGallery { effects: vec![GalleryEffect::new(crate::GalleryFilter::ALL[0])] };
+        assert!(crate::apply_tiled_with(&s, &fp, big, big, None, 6300, None, &photocraft_raster::Interrupt::NONE).is_none());
+    }
+
+    #[test]
     fn every_effect_changes_pixels_and_is_tile_independent() {
         let b = Rect::new(0, 0, 56, 40);
         for st in [SampleType::U8, SampleType::U16, SampleType::F32] {
