@@ -16,12 +16,17 @@ pub fn info() -> Value {
 
 /// [`info`] with the document the session is showing: a host that opened a file can check that
 /// the document it was told about (`open`'s `doc.id`) is the one the app has active now.
+///
+/// The versions come from the constants every frontend reports — `build_info::VERSION` in the
+/// engine crate (the workspace version `cargo xtask version` manages, which a release build may
+/// override) and the format crate's `FORMAT_VERSION` — the same pair the About dialog and
+/// `--version` give.
 pub fn info_with(doc: Option<&DocInfo>) -> Value {
     let doc = match doc {
         None => Value::Null,
         Some(d) => json!({ "id": d.id, "name": d.name }),
     };
-    json!({ "app": env!("CARGO_PKG_VERSION"), "format": photocraft_format::FORMAT_VERSION, "doc": doc })
+    json!({ "app": photocraft_engine::build_info::VERSION, "format": photocraft_format::FORMAT_VERSION, "doc": doc })
 }
 
 /// The active document as `info()` reports it.
@@ -405,15 +410,22 @@ mod tests {
 
     #[test]
     fn info_gives_the_versions_and_the_active_document() {
+        // #1614's requirement 5: a host checks a `.pcraft` against `FormatError::TooNew` with
+        // these two fields, so both are locked against the constants every other frontend
+        // reports (the About dialog, `--version`) — not against literals that could drift.
+        assert_eq!(info()["app"], json!(photocraft_engine::build_info::VERSION), "the app version, from the engine's build_info");
+        assert_eq!(info()["format"], json!(photocraft_format::FORMAT_VERSION), "the .pcraft format version, from the format crate");
+        assert!(info()["app"].as_str().is_some_and(|v| !v.is_empty()), "a version a host can compare");
+        assert!(info()["format"].is_u64(), "the format version is the number FormatError::TooNew compares against");
         assert_eq!(
             info(),
-            json!({"app": env!("CARGO_PKG_VERSION"), "format": photocraft_format::FORMAT_VERSION, "doc": null}),
+            json!({"app": photocraft_engine::build_info::VERSION, "format": photocraft_format::FORMAT_VERSION, "doc": null}),
             "the key is always there, so a host can read info().doc without checking"
         );
         let doc = DocInfo { id: 7, name: "Poster.psd".into() };
         assert_eq!(
             info_with(Some(&doc)),
-            json!({"app": env!("CARGO_PKG_VERSION"), "format": photocraft_format::FORMAT_VERSION, "doc": {"id": 7, "name": "Poster.psd"}})
+            json!({"app": photocraft_engine::build_info::VERSION, "format": photocraft_format::FORMAT_VERSION, "doc": {"id": 7, "name": "Poster.psd"}})
         );
     }
 
@@ -682,7 +694,11 @@ mod tests {
         let call = |v: Value| parse_call(&v).map(|(id, c)| (id, c.map_err(|_| ())));
         assert_eq!(call(json!({"type": "something else"})), None, "not for the app");
         assert_eq!(call(json!({"photocraft": 1, "method": "save", "format": "psd"})), Some((json!(1), Ok(Call::Save { format: "psd".into() }))));
-        assert_eq!(call(json!({"photocraft": "a", "method": "save"})), Some((json!("a"), Ok(Call::Save { format: "pcraft".into() }))));
+        assert_eq!(
+            call(json!({"photocraft": "a", "method": "save"})),
+            Some((json!("a"), Ok(Call::Save { format: photocraft_format::EXTENSION.into() }))),
+            "no format: the app's own .pcraft, the layered default"
+        );
         assert_eq!(call(json!({"photocraft": 2, "method": "open", "name": "x.psd"})), Some((json!(2), Ok(Call::Open { name: Some("x.psd".into()) }))));
         assert_eq!(call(json!({"photocraft": 2, "method": "open"})), Some((json!(2), Ok(Call::Open { name: None }))), "no name: the open is \"document\"");
         assert_eq!(
@@ -701,7 +717,31 @@ mod tests {
         assert_eq!(export_name("Poster.psd", "png"), Ok("Poster.png".into()));
         assert_eq!(export_name("Untitled-1", ".PSD"), Ok("Untitled-1.psd".into()));
         assert_eq!(export_name("", "pcraft"), Ok("document.pcraft".into()));
+        assert_eq!(export_name("Poster.psd", photocraft_format::EXTENSION), Ok("Poster.pcraft".into()), "the save default keeps the layers");
         assert!(export_name("a.psd", "../x").is_err());
         assert!(export_name("a.psd", "").is_err());
+    }
+
+    /// #1614's requirement 2, the `.pcraft` half: a bridge save without a `format` asks for the
+    /// app's own format, and the exact export the web shell runs for it (`export_name` for the
+    /// name, `photocraft_io::export` for the bytes) answers with a `.pcraft` that loads back.
+    #[test]
+    fn a_pcraft_save_round_trips_through_the_embed_export_path() {
+        use photocraft_doc::{ColorMode, Document, Layer, LayerContent, SampleType, Size};
+        use photocraft_io::{ExportOptions, export};
+        use photocraft_raster::Surface;
+
+        let mut doc = Document::new("Poster.psd", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let mut surface = Surface::new(doc.pixel_format());
+        surface.fill_rect(doc.bounds(), &[1.0, 0.5, 0.25, 1.0]);
+        doc.layers.push(Layer::new("Background", LayerContent::Raster(surface)));
+        let name = export_name(&doc.name, photocraft_format::EXTENSION).expect("a name");
+        assert_eq!(name, "Poster.pcraft");
+        let saved = export(&doc, &name, &ExportOptions::default()).expect("the .pcraft export the bridge's save asks for");
+        assert!(photocraft_format::is_pcraft(&saved.bytes), "a .pcraft, not a download of some other format");
+        let loaded = photocraft_format::load_from_bytes(&saved.bytes).expect("the saved bytes load back");
+        // A `.pcraft` manifest reports the file it lives in (#3312), so the loaded document is
+        // named after the export, with the canvas intact.
+        assert_eq!((loaded.name.as_str(), loaded.size.width, loaded.size.height), ("Poster.pcraft", 8, 8), "the document survives the round trip");
     }
 }

@@ -224,8 +224,8 @@ photocraft.info()                       // {app: "<version>", format: <the .pcra
 photocraft.isDirty()                    // unsaved changes in an open document?
 await photocraft.open(bytes, "a.psd")   // ArrayBuffer, typed array or Blob, at most 64 MiB
                                         //   → {warnings, doc: {id, name}} once the document is in the session
-await photocraft.save("psd")            // the active document as a Uint8Array (default "pcraft"),
-                                        //   its export warnings on it as .warnings
+await photocraft.save("psd")            // the active document as a Uint8Array (default "pcraft",
+                                        //   the app's own layered format), its export warnings on it as .warnings
 await photocraft.request("ui.inspect")  // a control-channel method (docs/control-protocol.md)
 window.addEventListener("photocraft-dirty", e => e.detail)   // true / false as it changes
 ```
