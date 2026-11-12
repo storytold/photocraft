@@ -37,6 +37,10 @@ pub enum EngineError {
     SourceChanged { name: String },
     #[error("{0}")]
     Other(String),
+    /// A batch or droplet stopped at its nesting or shared playback-step limit. A batch whose
+    /// step hits one fails that input instead of saving it unprocessed.
+    #[error("{0}")]
+    BatchLimit(String),
     /// A background job was cancelled (see [`jobs`]); nothing changed.
     #[error("cancelled")]
     Cancelled,
