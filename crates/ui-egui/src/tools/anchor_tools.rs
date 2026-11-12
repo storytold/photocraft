@@ -9,13 +9,15 @@
 //!   direction handles showing, and a drag from the click moves it, as in Photoshop (#8653).
 //! * Delete Anchor Point: hovering an anchor highlights it; a click removes it
 //!   (`path.deleteAnchor`), joining its neighbours.
-//! * ⌥ swaps the two tools and ⌘/Ctrl is Direct Selection (`direct_select`) while held.
+//! * ⌥ swaps the two tools and ⌘/Ctrl is Direct Selection (`direct_select`) while held; ⌥-click
+//!   with Delete Anchor Point on an anchor selects its whole subpath instead.
 //! * The Pen does both with Auto Add/Delete on (its options bar, on by default, #4144): a click on
 //!   a segment adds, a click on an anchor deletes, except an open subpath's end points; ⇧ turns it
 //!   off while held. It edits the active path, or while a path is being drawn that path (#6140),
 //!   and drawing carries on from its last anchor.
 //!
-//! Each click (or add and drag) is one history step; a click on nothing it can edit does nothing.
+//! Each click (or add and drag) is one history step; a click on nothing it can edit does nothing;
+//! ⌥-click on an anchor with Delete Anchor Point only selects.
 
 use egui::{Color32, Modifiers, Pos2, Stroke};
 use photocraft_doc::vector::Path;
@@ -25,7 +27,7 @@ use photocraft_vector::edit::{self, Hit};
 
 use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
-use crate::direct_select::{DirectSelection, PathRef};
+use crate::direct_select::{DirectSelection, Owner, PathRef};
 use crate::state::Tool;
 
 /// The anchor tool in effect, if the current tool is one: ⌥ swaps Add and Delete.
@@ -109,7 +111,7 @@ pub fn pen_auto(app: &PhotocraftApp, tool: Tool, mods: Modifiers, p: [f64; 2]) -
 /// opposite it (`path.convertPoint` on release, through Direct Selection's drag). Both are one
 /// History step, Add Anchor Point. False when the press is not that, so ⌥ stays Convert Point.
 pub fn pen_alt_segment_press(app: &mut PhotocraftApp, mods: Modifiers, p: [f64; 2]) -> bool {
-    use crate::direct_select::{Drag, Edit, Owner, active_paths};
+    use crate::direct_select::{Drag, Edit, active_paths};
     if !mods.alt {
         return false;
     }
@@ -158,10 +160,45 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         return true;
     }
     let Some(tool) = effective(app.ui.tool, mods) else { return false };
-    if let ToolEvent::Down { x, y, .. } = ev {
-        click(app, tool, [x, y]);
+    match ev {
+        ToolEvent::Down { x, y, .. } => {
+            app.ui.direct_selection.subpath_press = None;
+            if app.ui.tool == Tool::DeleteAnchorPoint && mods.alt && subpath_at(app, [x, y]).is_some() {
+                let owner = Owner::current(app);
+                let ds = &mut app.ui.direct_selection;
+                ds.subpath_press = Some([x, y]);
+                // A stale press is dropped with the selection (`cancel_stale`).
+                ds.owner = owner;
+            } else {
+                click(app, tool, [x, y]);
+            }
+        }
+        ToolEvent::Up { x, y } => {
+            if let Some(start) = app.ui.direct_selection.subpath_press.take()
+                && !crate::direct_select::moved(app, start, [x, y])
+                && let Some((r, anchors)) = subpath_at(app, start)
+            {
+                let owner = Owner::current(app);
+                app.ui.direct_selection = DirectSelection { target: Some(r), anchors, owner, ..Default::default() };
+            }
+        }
+        // Once the pointer has moved off the press it is a drag, even if it comes back.
+        ToolEvent::Move { x, y, .. } => {
+            if app.ui.direct_selection.subpath_press.is_some_and(|start| crate::direct_select::moved(app, start, [x, y])) {
+                app.ui.direct_selection.subpath_press = None;
+            }
+        }
     }
     true
+}
+
+/// ⌥-click with Delete Anchor Point on an anchor of a targeted path selects its whole subpath, as
+/// in Photoshop (#12770); ⌥ is Add Anchor Point only on a segment. The path and that subpath's
+/// anchors, or `None` when the press hits no anchor of a targeted path (a shape in a group that
+/// is not active is hit as before but is not targeted).
+fn subpath_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Vec<[usize; 2]>)> {
+    let (r, path, Hit::Anchor([s, _])) = target(app, Tool::DeleteAnchorPoint, p)? else { return None };
+    crate::direct_select::active_paths(app).iter().any(|(a, _)| *a == r).then(|| (r, edit::subpath_anchors(&path, s)))
 }
 
 fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
@@ -295,3 +332,6 @@ mod delete_anchor_delete_key_tests;
 
 #[cfg(test)]
 mod delete_anchor_escape_tests;
+
+#[cfg(test)]
+mod delete_anchor_alt_tests;
