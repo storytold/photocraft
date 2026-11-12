@@ -1,6 +1,6 @@
 use super::*;
-use photocraft_psd::abr::{LegacyBrush, write_v6, write_v6_folders, write_v12};
-use photocraft_psd::descriptor::{Id, UnicodeString};
+use craft_psd::abr::{LegacyBrush, write_v6, write_v6_folders, write_v12};
+use craft_psd::descriptor::{Id, UnicodeString};
 
 fn sample(id: &str, w: u32, h: u32, depth: u16) -> AbrSample {
     let bpp = usize::from(depth / 8);
@@ -487,40 +487,4 @@ fn dual_brush_spacing_comes_from_its_tip() {
     let tip = Descriptor::new("computedBrush").with("Dmtr", u(b"#Pxl", 40.0));
     assert!((spacing(dual(tip.clone().with("Spcn", prc(10.0)))) - 0.10).abs() < 1e-6, "the tip's 10 %, not the outer 100 %");
     assert!((spacing(dual(tip)) - 1.0).abs() < 1e-6, "no tip spacing: the outer value");
-}
-
-#[test]
-fn read_abr_owned_drains_samples_and_shares_tips() {
-    let s8 = sample("$shared", 12, 6, 8);
-    let s16 = sample("$sixteen", 5, 7, 16);
-    let big = AbrSample { id: "$big".into(), width: 2600, height: 1300, depth: 8, data: vec![180; 2600 * 1300] };
-    let p1 = Descriptor::new("brushPreset").with("Nm  ", t("First")).with("Brsh", Value::Descriptor(sampled_tip("$shared")));
-    let p2 = Descriptor::new("brushPreset").with("Nm  ", t("Second")).with("Brsh", Value::Descriptor(sampled_tip("$sixteen"))).with(
-        "dualBrush",
-        Value::Descriptor(Descriptor::new("dualBrush").with("useDualBrush", Value::Boolean(true)).with("Brsh", Value::Descriptor(sampled_tip("$shared")))),
-    );
-    let p3 = Descriptor::new("brushPreset").with("Nm  ", t("Big")).with("Brsh", Value::Descriptor(sampled_tip("$big")));
-    let bytes = write_v6(2, &[s8.clone(), s16.clone(), big], &[], &[p1, p2, p3], true).unwrap();
-
-    let borrowed = read_abr(&bytes, "Set").unwrap();
-    let owned = read_abr_owned(bytes, "Set", &photocraft_raster::Interrupt::NONE).unwrap();
-    assert_eq!(owned.version, borrowed.version);
-    assert_eq!(owned.warnings, borrowed.warnings);
-    assert_eq!(owned.presets.len(), borrowed.presets.len());
-    for (a, b) in owned.presets.iter().zip(&borrowed.presets) {
-        assert_eq!((&a.name, &a.group, &a.folder, &a.brush), (&b.name, &b.group, &b.folder, &b.brush));
-    }
-    let TipShape::Sampled(t1) = &owned.presets[0].brush.tip else { panic!("sampled") };
-    let TipShape::Sampled(t2) = &owned.presets[1].brush.dual_brush.tip else { panic!("sampled dual") };
-    assert!(std::sync::Arc::ptr_eq(&t1.data, &t2.data), "presets reusing a sample share one GrayTile");
-
-    // Mapping with SampleSource::Owned drains each sample's raw byte buffer once converted.
-    let mut samples = vec![s8, s16];
-    let mut m =
-        Mapper { samples: SampleSource::Owned(&mut samples), patterns: &[], warnings: BTreeSet::new(), unknown: BTreeSet::new(), tips: Default::default() };
-    assert!(m.tip_index(0).is_ok());
-    assert!(m.tip_index(0).is_ok(), "second lookup hits the tile cache even after draining raw bytes");
-    drop(m);
-    assert!(samples[0].data.is_empty(), "converted sample's raw bytes are released immediately");
-    assert!(!samples[1].data.is_empty(), "unconverted sample stays intact until needed");
 }

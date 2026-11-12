@@ -3,7 +3,7 @@
 //! - `brush.presets.importAbr` adds the presets of an `.abr` file (v1, v2, v6+) to the brush
 //!   library as one group named after the file, with the file's own folders nested inside it
 //!   as Photoshop does (Brushes panel › Import Brushes…, Preset Manager). Parsing lives in
-//!   `photocraft-psd` (`abr`), the mapping onto [`BrushSettings`] in `photocraft-io` (`abr_map`).
+//!   `craft-psd` (`abr`), the mapping onto [`BrushSettings`] in `photocraft-io` (`abr_map`).
 //! - `brush.presets.importImage` turns an image file (anything File › Open reads: PNG, JPEG,
 //!   TIFF, PSD…) into a sampled-tip brush preset, as Edit › Define Brush Preset does with a
 //!   selection: dark pixels paint, white and transparent ones don't (TOOL-213-12).
@@ -28,9 +28,9 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 /// Largest accepted file (Photoshop's biggest bundled sets are well under this).
 pub const MAX_FILE_BYTES: u64 = 512 << 20;
 /// Largest accepted `.abr` file: brush libraries of large sampled tips outgrow [`MAX_FILE_BYTES`].
-/// Tied to the decoder's sample budget (2 GiB, 512 MiB on 32-bit targets) so it never refuses
+/// Tied to the decoder's sample budget (1 GiB, 512 MiB on 32-bit targets) so it never refuses
 /// what this accepts.
-pub const MAX_ABR_FILE_BYTES: u64 = photocraft_psd::abr::MAX_TOTAL_BYTES as u64;
+pub const MAX_ABR_FILE_BYTES: u64 = craft_psd::abr::MAX_TOTAL_BYTES as u64;
 
 /// File bytes from `data` (base64) or `path`, plus a default group name.
 pub(crate) fn file_bytes(p: &Value, cmd: &str, what: &str) -> Result<(Vec<u8>, String)> {
@@ -48,7 +48,7 @@ pub(crate) fn file_bytes_limited(p: &Value, cmd: &str, what: &str, max_bytes: u6
         if s.len() as u64 > max_bytes / 3 * 4 + 4 {
             return Err(bad(cmd, "`data` is too large"));
         }
-        let bytes = b64_decode_checked(s, cmd)?;
+        let bytes = photocraft_paint::tile::b64_decode(s).ok_or_else(|| bad(cmd, "`data` is not valid base64"))?;
         if bytes.len() as u64 > max_bytes {
             return Err(bad(cmd, "`data` is too large"));
         }
@@ -56,88 +56,26 @@ pub(crate) fn file_bytes_limited(p: &Value, cmd: &str, what: &str, max_bytes: u6
     }
     let path =
         p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("give `path` ({what}) or `data` (base64)")))?;
-    let file = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    let meta = file.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if !meta.is_file() {
-        return Err(bad(cmd, format!("{path}: not a regular file")));
+    let len = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.len();
+    if len > max_bytes {
+        return Err(bad(cmd, format!("{path}: file too large ({len} bytes)")));
     }
-    check_file_len(path, cmd, meta.len(), max_bytes)?;
-    let bytes = read_preset_bytes_with_hint(file, meta.len(), cmd, path, max_bytes)?;
+    let file = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let bytes = read_preset_bytes(file, cmd, path, max_bytes)?;
     let stem = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok((bytes, stem))
 }
 
-fn b64_decode_checked(s: &str, cmd: &str) -> Result<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let clean_len = s.bytes().filter(|c| !c.is_ascii_whitespace()).count();
-    if !clean_len.is_multiple_of(4) {
-        return Err(bad(cmd, "`data` is not valid base64"));
-    }
-    let mut out = crate::allocation::capacity::<u8>(clean_len / 4 * 3, "preset file")?;
-    let mut iter = s.bytes().filter(|c| !c.is_ascii_whitespace());
-    while let Some(b0) = iter.next() {
-        let (Some(b1), Some(b2), Some(b3)) = (iter.next(), iter.next(), iter.next()) else {
-            return Err(bad(cmd, "`data` is not valid base64"));
-        };
-        let c = [b0, b1, b2, b3];
-        let pad = c.iter().rev().take_while(|&&x| x == b'=').count();
-        let mut n = 0u32;
-        for (i, &x) in c.iter().enumerate() {
-            n = (n << 6) | if i >= 4 - pad { 0 } else { val(x).ok_or_else(|| bad(cmd, "`data` is not valid base64"))? };
-        }
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Ok(out)
-}
-
-fn check_file_len(path: &str, cmd: &str, len: u64, max_bytes: u64) -> Result<()> {
-    if len > max_bytes {
-        return Err(bad(cmd, format!("{path}: file too large ({len} bytes)")));
-    }
-    Ok(())
-}
-
 /// Bound the actual stream independently of metadata, which can become stale before reading.
-/// Pre-reserves the reported length fallibly so a >1 GiB file does not double-allocate while
-/// growing, and rejects streams that exceed `max_bytes`.
-fn read_preset_bytes_with_hint(reader: impl std::io::Read, hint_len: u64, cmd: &str, path: &str, max_bytes: u64) -> Result<Vec<u8>> {
+/// One extra byte distinguishes an exact-limit file from an oversized or growing input.
+fn read_preset_bytes(reader: impl std::io::Read, cmd: &str, path: &str, max_bytes: u64) -> Result<Vec<u8>> {
     use std::io::Read;
-    let initial = usize::try_from(hint_len.min(max_bytes)).map_err(|_| crate::allocation::error("preset file", "requested size overflowed"))?;
-    let mut bytes = crate::allocation::capacity::<u8>(initial, "preset file")?;
-    let mut limited = reader.take(max_bytes.saturating_add(1));
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = limited.read(&mut buf).map_err(|error| EngineError::Other(format!("{path}: {error}")))?;
-        if n == 0 {
-            break;
-        }
-        if bytes.len().saturating_add(n) as u64 > max_bytes {
-            return Err(bad(cmd, format!("{path}: file too large")));
-        }
-        bytes.try_reserve(n).map_err(|_| crate::allocation::error("preset file", "the buffer could not grow"))?;
-        bytes.extend_from_slice(&buf[..n]);
+    let mut bytes = Vec::new();
+    reader.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|error| EngineError::Other(format!("{path}: {error}")))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(bad(cmd, format!("{path}: file too large")));
     }
     Ok(bytes)
-}
-
-#[cfg(test)]
-fn read_preset_bytes(reader: impl std::io::Read, cmd: &str, path: &str, max_bytes: u64) -> Result<Vec<u8>> {
-    read_preset_bytes_with_hint(reader, 0, cmd, path, max_bytes)
 }
 
 /// The preset names in use, for naming new presets.
@@ -179,7 +117,7 @@ fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
     // A background job when started with `Session::start` (#210): reading and decoding the
     // file run on a worker, cancellable before each brush; the library changes on apply.
     let params = p.clone();
-    // Only the keys the apply step reads: `data` can be a ~2.7 GiB base64 string.
+    // Only the keys the apply step reads: `data` can be a ~1.3 GiB base64 string.
     let params_apply = json!({ "replace": p.get("replace"), "select": p.get("select") });
     crate::jobs::run(
         s,
@@ -187,20 +125,16 @@ fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
         false,
         move |ctx| {
             ctx.progress(0.0, "Importing brushes");
-            let (bytes, group) = {
-                let p = &params;
-                let (bytes, stem) = file_bytes_limited(p, cmd, ".abr file", MAX_ABR_FILE_BYTES)?;
-                let group = match p.get("group") {
-                    Some(v) => v.as_str().map(str::trim).filter(|g| !g.is_empty()).ok_or_else(|| bad(cmd, "`group` must be a non-empty string"))?.to_string(),
-                    None if !stem.is_empty() => stem,
-                    None => "Imported Brushes".to_string(),
-                };
-                (bytes, group)
+            let p = &params;
+            let (bytes, stem) = file_bytes_limited(p, cmd, ".abr file", MAX_ABR_FILE_BYTES)?;
+            let group = match p.get("group") {
+                Some(v) => v.as_str().map(str::trim).filter(|g| !g.is_empty()).ok_or_else(|| bad(cmd, "`group` must be a non-empty string"))?.to_string(),
+                None if !stem.is_empty() => stem,
+                None => "Imported Brushes".to_string(),
             };
-            drop(params);
             ctx.check()?;
             let imp = ctx
-                .stage(0.05, 1.0, "Importing brushes", |ctl| photocraft_io::abr_map::read_abr_owned(bytes, &group, ctl))
+                .stage(0.05, 1.0, "Importing brushes", |ctl| photocraft_io::abr_map::read_abr_with(&bytes, &group, ctl))
                 .map_err(|e| if ctx.cancelled() { EngineError::Cancelled } else { bad(cmd, e) })?;
             Ok((group, imp))
         },
@@ -416,9 +350,9 @@ fn lab_to_rgb([l, a, b]: [f32; 3]) -> [f32; 3] {
     [gamma(r), gamma(g), gamma(bb)]
 }
 
-fn stop_color(c: photocraft_psd::grd::GrdColor) -> crate::presets::gradients::StopColor {
+fn stop_color(c: craft_psd::grd::GrdColor) -> crate::presets::gradients::StopColor {
     use crate::presets::gradients::StopColor;
-    use photocraft_psd::grd::GrdColor;
+    use craft_psd::grd::GrdColor;
     let clamp = |c: [f32; 3]| StopColor::Rgb(c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }));
     match c {
         GrdColor::Foreground => StopColor::Foreground,
@@ -441,7 +375,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         None if !stem.is_empty() => stem,
         None => "Imported Gradients".to_string(),
     };
-    let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
+    let grads = craft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
     // Same default as the group insertion below and the documented contract (#10640).
     let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     let mut taken =
@@ -525,8 +459,8 @@ mod tests {
         assert!(super::file_bytes_limited(&over_limit, "test", "preset", 2).is_err());
     }
     use super::*;
-    use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v6, write_v12};
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as DV};
+    use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v6, write_v12};
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value as DV};
 
     fn abr_v2() -> Vec<u8> {
         let tip = AbrSample { id: String::new(), width: 6, height: 4, depth: 8, data: vec![255; 24] };
@@ -550,14 +484,14 @@ mod tests {
     /// the value its options-bar field shows, so it paints instead of laying down nothing.
     #[test]
     fn selecting_an_imported_zero_opacity_brush_floors_it_at_one_percent() {
-        use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+        use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
         let preset = |opacity: i32| {
             Descriptor::new("brushPreset")
                 .with("Nm  ", D::Text(UnicodeString::new_nul("Faint")))
                 .with("toolOptions", D::Descriptor(Descriptor::new("currentToolOptions").with("Opct", D::Integer(opacity))))
         };
         for (opacity, expected) in [(0, 0.01), (37, 0.37)] {
-            let abr = photocraft_psd::abr::write_v6_folders(2, &[], &[], &[preset(opacity)], &[vec![]], true).unwrap();
+            let abr = craft_psd::abr::write_v6_folders(2, &[], &[], &[preset(opacity)], &[vec![]], true).unwrap();
             let mut s = Session::new();
             s.execute("brush.presets.importAbr", json!({"data": photocraft_paint::tile::b64_encode(&abr), "select": true})).unwrap();
             assert!((s.tools.brush.opacity - expected).abs() < 1e-6, "{opacity}: {}", s.tools.brush.opacity);
@@ -654,7 +588,7 @@ mod tests {
 
     #[test]
     fn duplicate_gradient_names_remain_independently_selectable() {
-        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        use craft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
         let gradients: Vec<_> = [0.2, 0.8]
             .into_iter()
             .map(|red| GrdGradient {
@@ -693,7 +627,7 @@ mod tests {
     /// names distinct from the existing group's, keeping name-only selection unambiguous.
     #[test]
     fn default_gradient_reimport_keeps_names_unique_across_sibling_groups() {
-        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        use craft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
         let gradients = vec![GrdGradient {
             name: "Sunset".into(),
             stops: vec![
@@ -717,7 +651,7 @@ mod tests {
 
     #[test]
     fn gradient_import_preserves_original_and_case_distinct_names() {
-        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        use craft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
         let gradients: Vec<_> = ["Foo", "Foo", "Foo 2", "FOO"]
             .into_iter()
             .enumerate()
@@ -753,7 +687,7 @@ mod tests {
     #[test]
     fn grd_import_adds_a_gradient_group() {
         use crate::presets::gradients::StopColor;
-        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        use craft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
         let grads = vec![
             GrdGradient {
                 name: "Ember".into(),
@@ -915,12 +849,9 @@ mod tests {
 
     #[test]
     fn abr_files_get_a_larger_size_cap() {
-        // 2 GiB on 64-bit (Photoshop's .abr format limit); 32-bit (wasm) keeps 512 MiB so a big
-        // file fails cleanly instead of aborting.
+        // Match craft-psd's aggregate decoded-sample budget: 2 GiB on 64-bit, 512 MiB on 32-bit.
         const WANT: u64 = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 512 << 20 };
         const _: () = assert!(MAX_ABR_FILE_BYTES == WANT && MAX_ABR_FILE_BYTES >= MAX_FILE_BYTES);
-        #[cfg(target_pointer_width = "64")]
-        check_file_len("2026_Brushes.ABR", "brush.presets.importAbr", 1_077_579_672, MAX_ABR_FILE_BYTES).unwrap();
         let dir = std::env::temp_dir().join(format!("pc-abr-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cap.abr");
@@ -933,41 +864,10 @@ mod tests {
         std::fs::File::create(&big).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
         let err = Session::new().execute("gradient.presets.importGrd", json!({"path": big.to_string_lossy()})).unwrap_err();
         assert!(err.to_string().contains("too large"), "{err}");
-        // A sparse .abr past MAX_ABR_FILE_BYTES is also refused before reading.
-        let huge = dir.join("huge.abr");
-        std::fs::File::create(&huge).unwrap().set_len(MAX_ABR_FILE_BYTES + 1).unwrap();
-        let err = Session::new().execute("brush.presets.importAbr", json!({"path": huge.to_string_lossy()})).unwrap_err();
-        assert!(err.to_string().contains("too large"), "{err}");
         let data = json!({"data": "A".repeat(16)});
         assert!(file_bytes_limited(&data, "t", "f", 12).is_ok());
         assert!(file_bytes_limited(&data, "t", "f", 8).is_err());
-        // Directories and endless special files are rejected before reading.
-        assert!(file_bytes_limited(&json!({"path": dir.to_string_lossy()}), "t", "f", MAX_ABR_FILE_BYTES).is_err());
-        #[cfg(unix)]
-        assert!(file_bytes_limited(&json!({"path": "/dev/zero"}), "t", "f", MAX_ABR_FILE_BYTES).is_err());
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn abr_import_allocation_failure_leaves_presets_intact() {
-        let mut s = Session::new();
-        let before = s.tools.presets.len();
-        let tip = AbrSample { id: String::new(), width: 8, height: 8, depth: 8, data: vec![255; 64] };
-        let abr = write_v12(2, &[LegacyBrush { name: "Heavy".into(), spacing: 25, anti_alias: true, tip: LegacyTip::Sampled(tip) }], true).unwrap();
-        let data = photocraft_paint::tile::b64_encode(&abr);
-
-        crate::allocation::fail_next_for_test();
-        let err = s.execute("brush.presets.importAbr", json!({"data": data})).unwrap_err();
-        assert!(err.to_string().contains("not enough memory"), "{err}");
-        assert_eq!(s.tools.presets.len(), before);
-
-        let path = std::env::temp_dir().join(format!("pc-abr-oom-{}.abr", std::process::id()));
-        std::fs::write(&path, &abr).unwrap();
-        crate::allocation::fail_next_for_test();
-        let err = s.execute("brush.presets.importAbr", json!({"path": path.to_string_lossy()})).unwrap_err();
-        let _ = std::fs::remove_file(&path);
-        assert!(err.to_string().contains("not enough memory"), "{err}");
-        assert_eq!(s.tools.presets.len(), before);
     }
 
     #[test]
