@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn recorded_first_duplicate_keeps_its_target_after_dialog_pause_and_reorder() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    let mut first =
+        Action::new("Same", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1.5})), ("layer.new.layer".into(), json!({"name":"selected first"}))]);
+    first.dialogs.insert(0);
+    app.session.actions.list.extend([first, Action::new("Same", vec![("layer.new.layer".into(), json!({"name":"wrong namesake"}))])]);
+    app.run("actions.record", json!({"name":"Recorder"})).unwrap();
+    let played = play(&mut app, &json!({"action":0})).unwrap();
+    let dialog = played["paused"]["dialog"].as_u64().unwrap();
+    let id = app.session.actions.list[0].action_id.clone().expect("the first duplicate is bound before the call pauses");
+    assert!(app.session.actions.recording.is_none());
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    app.run("actions.stop", json!({})).unwrap();
+    assert_eq!(app.session.actions.list[2].steps, [("actions.play".to_string(), json!({"action":"Same","actionId":id}))]);
+
+    app.run("actions.move", json!({"action":0,"to":1})).unwrap();
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    app.automation_input = true;
+    let replayed = play(&mut app, &json!({"action":"Recorder"})).unwrap();
+    assert!(replayed.get("failed").is_none(), "{replayed}");
+    assert!(replayed.get("paused").is_none(), "headless replay uses the recorded values: {replayed}");
+    assert_eq!(layer_names(&app), ["selected first"]);
+    assert_eq!(app.session.actions.playing, 0);
+    assert!(app.session.actions.playback_stack.is_empty());
+}
+
 /// The real confirmation route keeps its library revision and shares Edit Undo with the keyboard.
 #[test]
 fn library_dialog_cancel_stale_and_undo_leave_document_history_untouched() {

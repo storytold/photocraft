@@ -2409,6 +2409,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
+    let shortcuts: Vec<_> = actions_cmds::action_shortcuts(&app.session).into_iter().map(|key| key.map(str::to_owned)).collect();
     let rows: Vec<Row> = app
         .session
         .actions
@@ -2534,7 +2535,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().text(
                     pos2(rect.right() - 8.0, rect.center().y),
                     Align2::RIGHT_CENTER,
-                    actions_cmds::action_shortcut(&app.session, i)
+                    shortcuts
+                        .get(i)
+                        .and_then(Option::as_deref)
                         .filter(|key| !key.is_empty())
                         .map_or_else(|| step_count(nsteps, disabled.len()), |key| format!("{key} · {}", step_count(nsteps, disabled.len()))),
                     egui::FontId::proportional(11.0),

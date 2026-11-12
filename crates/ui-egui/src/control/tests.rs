@@ -30,7 +30,14 @@ fn batch_occurrence_fields_are_read_only_through_control() {
     assert_eq!(app.ui.dialog_mut(id).unwrap().fields[crate::actions::BATCH_OCCURRENCE], original[crate::actions::BATCH_OCCURRENCE]);
     assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "__command", "value": "file.automate.batch"}))["ok"], true);
 
-    for (field, value) in [(crate::actions::BATCH_OCCURRENCE, json!(1)), (crate::actions::BATCH_OCCURRENCES, json!([{"action": "Forged", "row": 1}]))] {
+    let mut forged_reset = original["__formOrig"].as_object().unwrap().clone();
+    forged_reset.insert(crate::actions::BATCH_OCCURRENCE.into(), json!(1));
+    forged_reset.insert(crate::actions::BATCH_OCCURRENCES.into(), json!([{"action": "Forged", "row": 1}]));
+    for (field, value) in [
+        ("__formOrig", Value::Object(forged_reset)),
+        (crate::actions::BATCH_OCCURRENCE, json!(1)),
+        (crate::actions::BATCH_OCCURRENCES, json!([{"action": "Forged", "row": 1}])),
+    ] {
         let reply = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}));
         assert_eq!(reply["ok"], false, "{reply}");
         assert!(reply["error"].as_str().unwrap().contains("Batch occurrence fields are read-only"));
@@ -42,6 +49,14 @@ fn batch_occurrence_fields_are_read_only_through_control() {
     assert_eq!(fields["input"], input, "ordinary Batch form fields remain editable");
     for field in [crate::actions::BATCH_OCCURRENCE, crate::actions::BATCH_OCCURRENCES] {
         assert_eq!(fields[field], original[field]);
+    }
+
+    // The legitimate Reset still restores ordinary fields and keeps the captured occurrence.
+    crate::view_cmds::reset_form(&mut app.ui.dialog_mut(id).unwrap().fields);
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields.get("input"), original.get("input"));
+    for field in [crate::actions::BATCH_OCCURRENCE, crate::actions::BATCH_OCCURRENCES] {
+        assert_eq!(fields.get(field), original.get(field));
     }
 
     // An unrelated, real dialog still accepts its ordinary fields.

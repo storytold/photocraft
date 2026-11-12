@@ -28,7 +28,7 @@ mod identity;
 pub(crate) use history::ActionHistory;
 pub use history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
 pub(crate) use history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
-pub use identity::{action_shortcut, commit_action_id, is_action_key, occurrence_key, playback_row, prepare_action_id, shortcut_row};
+pub use identity::{action_shortcut, action_shortcuts, commit_action_id, is_action_key, occurrence_key, playback_row, prepare_action_id, shortcut_row};
 pub(crate) use identity::{has_legacy_shortcut, invalidate_duplicate_ids, remove_shortcuts, resolve_action_id, valid_action_id};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -994,7 +994,7 @@ pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Res
     push_playback(s, target, action, from)
 }
 
-/// Begin a resolved library row. A recorded call to a later same-name row needs a durable ID.
+/// Begin a resolved library row. A recorded call to either same-name row needs a durable ID.
 pub fn begin_playback_at(s: &mut Session, row: usize, action: &mut Action) -> Result<Option<(usize, usize)>> {
     begin_playback_at_from(s, row, action, 0)
 }
@@ -1005,7 +1005,7 @@ pub fn begin_playback_at_from(s: &mut Session, row: usize, action: &mut Action, 
         return Err(bad("actions.play", "action selection changed"));
     }
     flush_recording(s)?;
-    if s.actions.recording.is_some() && s.actions.list.iter().position(|other| other.name == action.name) != Some(row) {
+    if s.actions.recording.is_some() && s.actions.list.iter().filter(|other| other.name == action.name).take(2).count() > 1 {
         let id = prepare_action_id(&s.actions.list, row)?;
         commit_action_id(s, row, id.clone())?;
         action.action_id = Some(id);
@@ -1061,9 +1061,7 @@ pub fn restore_recording(s: &mut Session, idx: usize, params: Value) {
 
 pub fn recorded_target(s: &Session, action: &Action, from: usize) -> Value {
     let mut params = json!({"action": action.name});
-    if let Some(id) = action.action_id.as_deref().filter(|id| resolve_action_id(&s.actions.list, id).is_some())
-        && s.actions.list.iter().filter(|other| other.name == action.name).take(2).count() > 1
-    {
+    if let Some(id) = action.action_id.as_deref().filter(|id| resolve_action_id(&s.actions.list, id).is_some()) {
         params["actionId"] = json!(id);
     }
     if from > 0 {

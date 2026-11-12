@@ -6,6 +6,58 @@ use craft_psd::descriptor::UnicodeString;
 use serde_json::json;
 
 #[test]
+fn attachment_keeps_reset_undo_only_when_disk_has_no_actions_content() {
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    for disk in [
+        json!({"version":1,"actions":[]}),
+        json!({"version":1,"actions":[{"name":"Disk"}]}),
+        json!({"version":1,"actions":[],"sets":["Saved empty set"]}),
+        json!({"version":1,"actions":[],"set_rows":["Saved physical folder"]}),
+    ] {
+        let empty = disk["actions"].as_array().unwrap().is_empty() && disk.get("sets").is_none() && disk.get("set_rows").is_none();
+        let store = MemBackend::default();
+        store.write(ACTIONS_FILE, disk.to_string().as_bytes()).unwrap();
+        let mut s = Session::new();
+        s.actions.list.push(Action::new("Early", Vec::new()));
+        s.actions.sets.push("Early empty set".into());
+        s.actions.set_rows.push("Early physical folder".into());
+        let original = s.actions.clone();
+        s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+        let undo = s.actions.library_undo.clone();
+        assert!(undo.is_some());
+
+        assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+        if empty {
+            assert_eq!(s.actions.library_undo, undo, "an empty disk adds nothing to the undo snapshot");
+            assert_eq!(super::undo_library_label(&s), Some("Undo Reset Actions"));
+            s.execute("actions.undoLibrary", json!({})).unwrap();
+            assert_eq!(s.actions.list, original.list);
+            assert_eq!(s.actions.sets, original.sets);
+            assert_eq!(s.actions.set_rows, original.set_rows);
+            let mut reopened = Session::new();
+            assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
+            assert_eq!(reopened.actions.list, s.actions.list);
+            assert_eq!(reopened.actions.sets, s.actions.sets);
+            assert_eq!(reopened.actions.set_rows, s.actions.set_rows);
+        } else {
+            assert!(s.actions.library_undo.is_none(), "a snapshot without merged disk content cannot safely undo: {disk}");
+            assert!(s.execute("actions.undoLibrary", json!({})).is_err());
+            assert!(s.actions.list.iter().any(|action| action.name == "Early"));
+            if let Some(action) = disk["actions"].as_array().unwrap().first() {
+                assert!(s.actions.list.iter().any(|saved| saved.name == action["name"].as_str().unwrap()));
+            }
+            if let Some(sets) = disk.get("sets") {
+                assert!(s.actions.sets.contains(&sets[0].as_str().unwrap().to_string()));
+            }
+            if let Some(rows) = disk.get("set_rows") {
+                assert!(s.actions.set_rows.contains(&rows[0].as_str().unwrap().to_string()));
+            }
+        }
+    }
+}
+
+#[test]
 fn confirmed_clear_restores_both_shortcut_maps_without_document_history() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":8,"height":8})).unwrap();

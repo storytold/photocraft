@@ -1777,3 +1777,107 @@ fn playback_stops_when_a_nested_batch_cannot_write_its_error_log() {
     assert_eq!(s.active().unwrap().doc.layers.len(), layers, "the step after the Batch must not run");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn recording_a_first_legacy_occurrence_survives_reorder_and_reload() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.actions.list = vec![
+        Action::new("Same", vec![("layer.new.layer".into(), json!({"name": "selected first"}))]),
+        Action::new("Same", vec![("layer.new.layer".into(), json!({"name": "wrong namesake"}))]),
+    ];
+    s.execute("actions.record", json!({"name": "Recorder"})).unwrap();
+    s.execute("actions.play", json!({"action": 0})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let id = s.actions.list[0].action_id.clone().unwrap();
+    assert_eq!(s.actions.list[2].steps, [("actions.play".to_string(), json!({"action": "Same", "actionId": id}))]);
+    s.execute("actions.move", json!({"action": 0, "to": 1})).unwrap();
+    let saved = serde_json::to_string(&s.actions.list).unwrap();
+    let mut replay = Session::new();
+    replay.actions.list = serde_json::from_str(&saved).unwrap();
+    replay.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let result = replay.execute("actions.play", json!({"action": "Recorder"})).unwrap();
+    assert_eq!(result["ran"], 1, "{result}");
+    assert!(replay.active().unwrap().doc.layers.iter().any(|layer| layer.name == "selected first"));
+    assert!(!replay.active().unwrap().doc.layers.iter().any(|layer| layer.name == "wrong namesake"));
+}
+
+#[test]
+fn recording_a_unique_identified_action_keeps_its_id_after_namesake_reload() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let id = "0123456789abcdef0123456789abcdef";
+    let mut target = Action::new("Same", vec![("layer.new.layer".into(), json!({"name": "identified target"}))]);
+    target.action_id = Some(id.into());
+    s.actions.list = vec![target];
+    s.execute("actions.record", json!({"name": "Recorder"})).unwrap();
+    s.execute("actions.play", json!({"action": 0})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[1].steps, [("actions.play".to_string(), json!({"action": "Same", "actionId": id}))]);
+    s.actions.list.insert(0, Action::new("Same", vec![("layer.new.layer".into(), json!({"name": "new first namesake"}))]));
+    let saved = serde_json::to_string(&s.actions.list).unwrap();
+    let mut replay = Session::new();
+    replay.actions.list = serde_json::from_str(&saved).unwrap();
+    replay.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let result = replay.execute("actions.play", json!({"action": "Recorder"})).unwrap();
+    assert_eq!(result["ran"], 1, "{result}");
+    assert!(replay.active().unwrap().doc.layers.iter().any(|layer| layer.name == "identified target"));
+    assert!(!replay.active().unwrap().doc.layers.iter().any(|layer| layer.name == "new first namesake"));
+}
+
+#[test]
+fn recording_a_unique_idless_action_keeps_plain_name_calls() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.actions.list = vec![Action::new("Plain", vec![("layer.new.layer".into(), json!({"name": "plain target"}))])];
+    s.execute("actions.record", json!({"name": "Recorder"})).unwrap();
+    s.execute("actions.play", json!({"action": 0})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].action_id, None);
+    assert_eq!(s.actions.list[1].steps, [("actions.play".to_string(), json!({"action": "Plain"}))]);
+    s.actions.list.insert(0, Action::new("Plain", vec![("layer.new.layer".into(), json!({"name": "plain first"}))]));
+    let result = s.execute("actions.play", json!({"action": "Plain"})).unwrap();
+    assert_eq!(result["ran"], 1, "{result}");
+    assert!(s.active().unwrap().doc.layers.iter().any(|layer| layer.name == "plain first"));
+}
+
+#[test]
+fn panel_shortcut_labels_preserve_identity_empty_and_legacy_owner_rules() {
+    let mut s = Session::new();
+    let unique = "0123456789abcdef0123456789abcdef";
+    let duplicate = "11111111111111111111111111111111";
+    s.actions.list = ["Named", "Named", "Repeated ID", "Repeated ID", "Pinned", "Pinned", "Ambiguous", "Ambiguous", "Invalid"]
+        .into_iter()
+        .map(|name| Action::new(name, vec![]))
+        .collect();
+    s.actions.list[0].action_id = Some(unique.into());
+    s.actions.list[2].action_id = Some(duplicate.into());
+    s.actions.list[3].action_id = Some(duplicate.into());
+    s.actions.list[5].legacy_shortcut_owner = true;
+    s.actions.list[6].legacy_shortcut_owner = true;
+    s.actions.list[7].legacy_shortcut_owner = true;
+    s.actions.list[8].action_id = Some("invalid".into());
+    s.edit_prefs(|prefs| {
+        for (key, value) in [
+            (occurrence_key(unique), ""),
+            (occurrence_key(duplicate), "must not bind duplicate IDs"),
+            (occurrence_key("invalid"), "must not bind invalid IDs"),
+            ("actions.play:Named".into(), "legacy named"),
+            ("actions.play:Repeated ID".into(), "legacy repeated"),
+            ("actions.play:Pinned".into(), "legacy pinned"),
+            ("actions.play:Ambiguous".into(), "must not bind ambiguous owners"),
+            ("actions.play:Invalid".into(), "legacy invalid"),
+        ] {
+            prefs.shortcuts.insert(key, value.into());
+        }
+    });
+    assert_eq!(action_shortcuts(&s), [Some(""), None, Some("legacy repeated"), None, None, Some("legacy pinned"), None, None, Some("legacy invalid")]);
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(occurrence_key(unique), "explicit named".into());
+    });
+    assert_eq!(action_shortcuts(&s)[0], Some("explicit named"));
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.remove(&occurrence_key(unique));
+    });
+    assert_eq!(action_shortcuts(&s)[0], Some("legacy named"));
+}

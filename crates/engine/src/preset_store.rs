@@ -1243,6 +1243,7 @@ impl Session {
                 st.actions_rev = 1;
             }
         } else {
+            let merges_disk = !disk.is_empty() || !action_sets.is_empty() || !action_set_rows.is_empty();
             actions::pin_disk_targets(self, &mut disk, &mut warnings);
             let offset = self.actions.set_rows.len();
             self.actions.set_rows.extend(action_set_rows);
@@ -1262,7 +1263,9 @@ impl Session {
                 }
             }
             crate::actions_cmds::invalidate_duplicate_ids(&mut self.actions.list);
-            self.actions.library_undo = None;
+            if merges_disk {
+                self.actions.library_undo = None;
+            }
             self.actions.rev = self.actions.rev.saturating_add(1).max(1);
         }
         self.brush_presets_changed();

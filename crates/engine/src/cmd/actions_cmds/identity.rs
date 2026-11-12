@@ -1,5 +1,5 @@
 //! Persisted action occurrences are independent of name, list order, and folder position.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{Action, PLAY_SHORTCUT_PREFIX, bad};
 use crate::{Result, Session};
@@ -115,6 +115,40 @@ pub fn action_shortcut(s: &Session, index: usize) -> Option<&str> {
     let legacy = format!("{PLAY_SHORTCUT_PREFIX}{}", action.name);
     let key = keys.get(&legacy)?;
     (shortcut_row(list, &legacy) == Some(index)).then_some(key.as_str())
+}
+
+/// Resolve all panel shortcut labels in one library pass, with explicit empty keys retained.
+pub fn action_shortcuts(s: &Session) -> Vec<Option<&str>> {
+    let list = &s.actions.list;
+    let mut ids: HashMap<&str, Option<usize>> = HashMap::new();
+    let mut first = HashMap::new();
+    let mut pinned: HashMap<&str, Option<usize>> = HashMap::new();
+    for (row, action) in list.iter().enumerate() {
+        first.entry(action.name.as_str()).or_insert(row);
+        if action.legacy_shortcut_owner {
+            pinned.entry(action.name.as_str()).and_modify(|owner| *owner = None).or_insert(Some(row));
+        }
+        if let Some(id) = action.action_id.as_deref().filter(|id| valid_action_id(id)) {
+            ids.entry(id).and_modify(|owner| *owner = None).or_insert(Some(row));
+        }
+    }
+    let keys = &s.prefs().shortcuts;
+    list.iter()
+        .enumerate()
+        .map(|(row, action)| {
+            if let Some(id) = action.action_id.as_deref()
+                && ids.get(id) == Some(&Some(row))
+                && let Some(key) = keys.get(&occurrence_key(id))
+            {
+                return Some(key.as_str());
+            }
+            let owner = pinned.get(action.name.as_str()).copied().unwrap_or_else(|| first.get(action.name.as_str()).copied());
+            if owner != Some(row) {
+                return None;
+            }
+            keys.get(&format!("{PLAY_SHORTCUT_PREFIX}{}", action.name)).map(String::as_str)
+        })
+        .collect()
 }
 
 pub(crate) fn has_legacy_shortcut(s: &Session, name: &str) -> bool {

@@ -1126,7 +1126,7 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // action has a valid token. Replacing it would resume or cancel that action.
         Some(_) if field == crate::actions::RESUME => err("the paused action token is read-only"),
         Some(_) if field == crate::filter_dialog::MATCH_COLOR_DESTINATION => err("the Match Color destination is read-only"),
-        Some(_) if matches!(field, crate::actions::BATCH_OCCURRENCE | crate::actions::BATCH_OCCURRENCES) && batch_dialog => {
+        Some(_) if matches!(field, "__formOrig" | crate::actions::BATCH_OCCURRENCE | crate::actions::BATCH_OCCURRENCES) && batch_dialog => {
             err("Batch occurrence fields are read-only")
         }
         Some(_) if previewed => err("confirm or cancel the color picker first"),
