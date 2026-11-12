@@ -252,8 +252,17 @@ pub const FAUX_ITALIC: &str = "type.fauxItalic";
 pub const LAYER_STYLE: &str = "layer.layerStyle.blendingOptions";
 
 /// Type edit rows that act on the whole layer (it may stop being type): the edit ends first.
-const ENDS_TYPE_EDIT: [&str; 5] =
-    ["type.rasterizeTypeLayer", "type.createWorkPath", "type.convertToShape", "type.convertToParagraphText", "type.convertToPointText"];
+/// Convert and Release Dynamic Text are here too: keeping the look on Release writes line breaks
+/// into the text, which would leave a running edit's caret at offsets of the old text.
+const ENDS_TYPE_EDIT: [&str; 7] = [
+    "type.rasterizeTypeLayer",
+    "type.createWorkPath",
+    "type.convertToShape",
+    "type.convertToParagraphText",
+    "type.convertToPointText",
+    "type.convertToDynamicText",
+    "type.releaseDynamicText",
+];
 
 /// The pasteboard menu's Select Custom Color… row.
 pub const PASTEBOARD_PICK: &str = "pasteboard.selectCustomColor";
