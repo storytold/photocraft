@@ -134,7 +134,7 @@ fn valid_floating_rect(r: [f32; 4]) -> bool {
 
 impl CameraRawDialog {
     fn pixels(&self) -> &[[f32; 4]] {
-        if self.show_before { &self.proxy } else { &self.processed }
+        if self.show_before { &self.proxy } else { self.processed.pixels() }
     }
     fn pixel(&self, p: [f32; 2]) -> Option<[f32; 4]> {
         if !p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) || self.pw == 0 || self.ph == 0 {

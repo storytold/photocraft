@@ -306,7 +306,13 @@ impl GpuCanvas {
         if matches!(self.camera_raw.get(), Some(None)) {
             return None;
         }
-        Some(crate::camera_raw_gpu::CameraRawGpu::new(self.rs.device.clone(), self.rs.queue.clone(), self.health.clone(), self.camera_raw.clone()))
+        Some(crate::camera_raw_gpu::CameraRawGpu::new(
+            self.rs.device.clone(),
+            self.rs.queue.clone(),
+            self.health.clone(),
+            self.camera_raw.clone(),
+            self.rs.renderer.clone(),
+        ))
     }
 
     /// Whether [`Self::camera_raw`] started building the pass.

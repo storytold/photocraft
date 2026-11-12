@@ -1,13 +1,17 @@
 //! Camera Raw's preview develop on the GPU (#6916). The proxy develops in wgpu passes
-//! (`photocraft_gpu::CameraRawDevelop`) on the canvas's device and is read back once for the
-//! histogram, scopes and display conversion. Calibration, Rendering Mode CPU,
+//! (`photocraft_gpu::CameraRawDevelop`) on the canvas's device. Without a selection or the
+//! open-time re-tone, and with a display transform the GPU can apply, the frame stays there: it is
+//! converted for the preview into a texture egui draws and counted into the histogram, and its
+//! pixels are read back only when the scopes, clipping warnings or samplers need them
+//! ([`CameraRawGpu::develop_view`]). Otherwise it is read back once for the histogram, scopes and
+//! display conversion. Calibration, Rendering Mode CPU,
 //! `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software adapter, a device fault or a failed
 //! develop all keep the CPU develop on the worker.
 //!
 //! The pipelines build on a thread the first time a dialog opens (DX12's shader compiler takes
 //! about a second, #6419); frames develop on the CPU until they are ready.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::wgpu;
@@ -110,11 +114,168 @@ pub(crate) struct CameraRawGpu {
     failed: Arc<AtomicBool>,
     /// Whites and Blacks adapt to the image; its points change only with these settings.
     points: Arc<Mutex<Points>>,
+    /// The pass's slot the preview shows ([`NONE_SHOWN`] when it shows a CPU image): the next
+    /// frame develops into the other one.
+    shown: Arc<AtomicUsize>,
+    /// The display transform as the GPU applies it, for the display key it was made for.
+    shaper: Arc<Mutex<Shaper>>,
+    textures: Arc<Textures>,
+}
+
+/// A frame kept on the GPU ([`CameraRawGpu::develop_view`]); none on the web, which has no
+/// blocking readback for its pixels.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type GpuFrame = photocraft_gpu::CameraRawFrame;
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+pub(crate) enum GpuFrame {}
+
+/// The pass's slot `frame` is in.
+pub(crate) fn slot(frame: &GpuFrame) -> usize {
+    #[cfg(target_arch = "wasm32")]
+    match *frame {}
+    #[cfg(not(target_arch = "wasm32"))]
+    frame.slot
+}
+
+/// egui's renderer, shared with the canvas.
+pub(crate) type Renderer = Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>;
+
+/// The display key and its transform's matrix/shaper (`None`: not one).
+type Shaper = Option<(u64, Option<photocraft_cms::GpuMatrixShaper>)>;
+
+/// [`CameraRawGpu::shown`] when no slot is on screen.
+const NONE_SHOWN: usize = usize::MAX;
+
+/// The pass's slots registered with egui, with the generation of the slot's textures. Freed
+/// with the dialog's last handle.
+struct Textures {
+    renderer: Renderer,
+    ids: Mutex<[Option<(u64, egui::TextureId)>; 2]>,
+}
+
+impl Drop for Textures {
+    fn drop(&mut self) {
+        let ids = self.ids.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut renderer = self.renderer.write();
+        for (_, id) in ids.iter().flatten() {
+            renderer.free_texture(id);
+        }
+    }
 }
 
 impl CameraRawGpu {
-    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue, health: DeviceHealth, pass: Slot) -> Self {
-        CameraRawGpu { device, queue, health, pass, failed: Arc::default(), points: Arc::default() }
+    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue, health: DeviceHealth, pass: Slot, renderer: Renderer) -> Self {
+        CameraRawGpu {
+            device,
+            queue,
+            health,
+            pass,
+            failed: Arc::default(),
+            points: Arc::default(),
+            shown: Arc::new(AtomicUsize::new(NONE_SHOWN)),
+            shaper: Arc::default(),
+            textures: Arc::new(Textures { renderer, ids: Mutex::new([None, None]) }),
+        }
+    }
+
+    /// Develops `px` like [`Self::develop`] but keeps the frame on the GPU, shown through
+    /// `display`. `None` when [`Self::develop`] would be, and when `display`'s transform isn't a
+    /// matrix/shaper (a CLUT or proofing profile): then the frame is read back and converted on
+    /// the CPU. Native only: the web can't read a frame back when the scopes need it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn develop_view(
+        &self,
+        px: &[[f32; 4]],
+        key: Option<u64>,
+        w: usize,
+        h: usize,
+        p: &CameraRaw,
+        float: bool,
+        display: &photocraft_engine::display_color::CanvasDisplay,
+    ) -> Option<GpuFrame> {
+        if p.is_identity() || self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
+            return None;
+        }
+        let Some(Some(pass)) = self.pass.get() else { return None };
+        let shaper = {
+            let mut cache = self.shaper.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.as_ref().is_none_or(|(k, _)| *k != display.key) {
+                *cache = Some((display.key, display.transform.as_ref().and_then(|t| t.gpu_matrix_shaper())));
+            }
+            match (&display.transform, cache.as_ref().and_then(|(_, s)| s.clone())) {
+                (None, _) => None,
+                (Some(_), Some(s)) => Some(s),
+                (Some(_), None) => return None,
+            }
+        };
+        let view = photocraft_gpu::CameraRawDisplay {
+            encode_srgb: display.encode_srgb,
+            shaper: shaper.as_ref().map(|s| photocraft_gpu::CameraRawShaper { matrix: s.matrix_rows(), input: s.input_table(), output: s.output_table() }),
+            key: display.key,
+        };
+        let points = self.points(px, key, w, h, p);
+        let stages = photocraft_algo::camera_raw::per_pixel(p, w, h, float, points)?;
+        let size = [u32::try_from(w).ok()?, u32::try_from(h).ok()?];
+        let avoid = Some(self.shown.load(Ordering::Acquire)).filter(|s| *s != NONE_SHOWN);
+        let mut pass = pass.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match pass.develop_view(&self.device, &self.queue, Some(&self.health), px, key, size, &stages, &view, avoid) {
+            Ok(frame) => Some(frame),
+            Err(e) => {
+                log::warn!("{}; RAW Develop develops on the CPU", e.0);
+                self.failed.store(true, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Notes which slot the preview shows (`None`: a CPU image), so the next frame develops into
+    /// the other.
+    pub(crate) fn show(&self, slot: Option<usize>) {
+        self.shown.store(slot.unwrap_or(NONE_SHOWN), Ordering::Release);
+    }
+
+    /// `frame`'s display texture as egui knows it, registered the first time its slot is shown
+    /// and again when the slot's textures are new.
+    pub(crate) fn texture_id(&self, frame: &GpuFrame) -> egui::TextureId {
+        #[cfg(target_arch = "wasm32")]
+        match *frame {}
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut ids = self.textures.ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut renderer = self.textures.renderer.write();
+            let filter = wgpu::FilterMode::Linear;
+            match ids.get_mut(frame.slot) {
+                Some(Some((generation, id))) => {
+                    if *generation != frame.generation {
+                        renderer.update_egui_texture_from_wgpu_texture(&self.device, &frame.shown, filter, *id);
+                        *generation = frame.generation;
+                    }
+                    *id
+                }
+                Some(entry) => {
+                    let id = renderer.register_native_texture(&self.device, &frame.shown, filter);
+                    *entry = Some((frame.generation, id));
+                    id
+                }
+                None => renderer.register_native_texture(&self.device, &frame.shown, filter),
+            }
+        }
+    }
+
+    /// A frame's developed pixels (blocking), or `None` after a GPU error.
+    pub(crate) fn read(&self, frame: &GpuFrame) -> Option<Vec<[f32; 4]>> {
+        #[cfg(target_arch = "wasm32")]
+        match *frame {}
+        #[cfg(not(target_arch = "wasm32"))]
+        match photocraft_gpu::read_camera_raw_pixels(&self.device, &self.queue, Some(&self.health), &frame.pixels) {
+            Ok(px) => Some(px),
+            Err(e) => {
+                log::warn!("{}; RAW Develop develops this frame on the CPU", e.0);
+                None
+            }
+        }
     }
 
     /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Calibration, the pass still
@@ -210,7 +371,7 @@ mod tests {
         let mut q = d.params.clone();
         q.pixel_scale = (d.pw as f32 / d.full_w.max(1) as f32).min(1.0);
         develop(&mut cpu, d.pw, d.ph, &q, d.float);
-        (d.develop_backend, d.processed.clone(), cpu)
+        (d.develop_backend, d.processed.pixels().to_vec(), cpu)
     }
 
     #[test]
@@ -341,5 +502,144 @@ mod tests {
         crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
         let (backend, shown, cpu) = developed(&mut app, &ctx, CameraRaw { exposure: 0.5, ..Default::default() });
         assert_eq!((backend, shown == cpu), ("cpu", true));
+    }
+
+    /// Reads a frame's display texture back (`Rgba8Unorm`: the bytes egui samples as sRGB).
+    fn display_bytes(gpu: &CameraRawGpu, frame: &GpuFrame) -> Vec<[u8; 4]> {
+        let texture = &frame.display;
+        let (w, h) = (texture.width(), texture.height());
+        let row = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(row) * u64::from(h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let index = gpu.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).unwrap();
+        let data = buffer.slice(..).get_mapped_range().unwrap();
+        (0..h as usize).flat_map(|y| data[y * row as usize..][..w as usize * 4].as_chunks::<4>().0.to_vec()).collect()
+    }
+
+    /// Without a selection the frame stays on the GPU: its histogram is the CPU's count of its
+    /// pixels, its display texture holds exactly the bytes the CPU conversion makes, and the pixels
+    /// come back only when a readout asks, at each depth.
+    #[test]
+    fn the_preview_shows_and_counts_on_the_gpu_like_the_cpu() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        for depth in [8, 16, 32] {
+            let Some((mut app, ctx)) = gpu_app(depth) else { return };
+            force_pass(&app);
+            crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+            if app.camera_raw.as_ref().is_some_and(|d| d.gpu.is_none()) {
+                eprintln!("skipping: the device can't run the RAW Develop pass");
+                return;
+            }
+            for p in [
+                CameraRaw { temperature: 20.0, exposure: 0.4, contrast: 30.0, whites: 25.0, blacks: -20.0, vibrance: 40.0, ..Default::default() },
+                CameraRaw { shadows: 40.0, highlights: -35.0, clarity: 30.0, sharpen_amount: 60.0, noise_color: 40.0, ..Default::default() },
+            ] {
+                let d = app.camera_raw.as_mut().expect("dialog");
+                d.params = p.clone();
+                d.render(&ctx);
+                let described = d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+                assert_eq!(
+                    (&described["developBackend"], &described["previewOnGpu"], &described["pixelsOnGpu"]),
+                    (&json!("gpu"), &json!(true), &json!(true)),
+                    "{depth}-bit {p:?}"
+                );
+                let gpu = d.gpu.clone().expect("GPU");
+                let frame = d.processed.gpu_frame().expect("a frame on the GPU").clone();
+                let shown = display_bytes(&gpu, &frame);
+                let px = d.processed.pixels().to_vec();
+                assert!(!d.processed.on_gpu(), "read back once asked");
+                assert_eq!(d.after_histogram, photocraft_algo::histogram::RgbHistogram::from_rgba(&px), "{depth}-bit {p:?}");
+                let image = crate::camera_raw_ui::CameraRawDialog::image(&px, d.pw, d.ph, &d.display);
+                assert_eq!(shown.len(), image.pixels.len());
+                for (i, (got, want)) in shown.iter().zip(&image.pixels).enumerate() {
+                    assert_eq!(*got, want.to_array(), "{depth}-bit {p:?}: pixel {i}");
+                }
+                let mut cpu = d.proxy.to_vec();
+                let q = CameraRaw { pixel_scale: (d.pw as f32 / d.full_w.max(1) as f32).min(1.0), ..p.clone() };
+                develop(&mut cpu, d.pw, d.ph, &q, d.float);
+                let worst = px.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                assert!(worst <= TOL, "{depth}-bit {p:?}: off by {worst}");
+            }
+            // A sampler's readout reads the frame back too.
+            let d = app.camera_raw.as_mut().expect("dialog");
+            d.params.exposure = -0.3;
+            d.render(&ctx);
+            assert!(d.processed.on_gpu());
+            let readout = d.readout([0.5, 0.5], false).expect("a readout");
+            assert!(!d.processed.on_gpu());
+            let (x, y) = ((0.5 * d.pw as f32) as usize, (0.5 * d.ph as f32) as usize);
+            let q = d.processed.pixels()[y * d.pw + x];
+            assert_eq!(readout["values"], json!([q[0] * 255.0, q[1] * 255.0, q[2] * 255.0]));
+        }
+    }
+
+    /// The slots take turns: the next frame develops beside the one on screen, which keeps its
+    /// pixels.
+    #[test]
+    fn the_next_frame_develops_beside_the_one_on_screen() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Some((mut app, ctx)) = gpu_app(8) else { return };
+        force_pass(&app);
+        crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+        let d = app.camera_raw.as_mut().expect("dialog");
+        let Some(gpu) = d.gpu.clone() else { return };
+        let first = CameraRaw { exposure: 0.8, ..Default::default() };
+        d.params = first.clone();
+        d.render(&ctx);
+        let shown = d.processed.gpu_frame().expect("on the GPU").clone();
+        d.params = CameraRaw { exposure: -0.8, ..Default::default() };
+        d.render(&ctx);
+        let next = d.processed.gpu_frame().expect("on the GPU").clone();
+        assert_ne!(shown.slot, next.slot);
+        let kept = gpu.read(&shown).expect("the first frame");
+        let mut cpu = d.proxy.to_vec();
+        develop(&mut cpu, d.pw, d.ph, &CameraRaw { pixel_scale: (d.pw as f32 / d.full_w.max(1) as f32).min(1.0), ..first }, d.float);
+        let worst = kept.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+        assert!(worst <= TOL, "the first frame kept its pixels: off by {worst}");
+    }
+
+    /// A selection blends on the CPU, so that frame is read back and converted there; a failed
+    /// readback of a frame kept on the GPU develops it on the CPU instead.
+    #[test]
+    fn a_selection_reads_back_and_a_failed_readback_develops_on_the_cpu() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Some((mut app, ctx)) = gpu_app(8) else { return };
+        force_pass(&app);
+        app.run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 80})).unwrap();
+        crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+        if app.camera_raw.as_ref().is_some_and(|d| d.gpu.is_none()) {
+            return;
+        }
+        let p = CameraRaw { exposure: 0.5, contrast: 20.0, ..Default::default() };
+        let d = app.camera_raw.as_mut().expect("dialog");
+        d.params = p.clone();
+        d.render(&ctx);
+        let described = d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+        assert_eq!((&described["developBackend"], &described["previewOnGpu"]), (&json!("gpu"), &json!(false)));
+        app.run("select.deselect", json!({})).unwrap();
+        let mut app = gpu_app(8).map(|(a, _)| a).expect("app");
+        force_pass(&app);
+        crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+        let d = app.camera_raw.as_mut().expect("dialog");
+        d.params = p.clone();
+        d.render(&ctx);
+        assert!(d.processed.on_gpu());
+        app.gpu.as_ref().unwrap().health().mark(photocraft_gpu::Fault::Lost("test".into()));
+        let d = app.camera_raw.as_mut().expect("dialog");
+        let mut cpu = d.proxy.to_vec();
+        develop(&mut cpu, d.pw, d.ph, &CameraRaw { pixel_scale: (d.pw as f32 / d.full_w.max(1) as f32).min(1.0), ..p }, d.float);
+        assert_eq!(d.processed.pixels(), &cpu[..], "the CPU develops the frame the GPU can't read back");
     }
 }
