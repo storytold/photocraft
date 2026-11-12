@@ -548,7 +548,16 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    with_shape(s, id, "Edit Shape", |sh, layer| {
+    // Rounding a live triangle is "Change Rounded Triangle" in the History; every other edit,
+    // and the same edit on any other shape, is "Edit Shape" (#13354).
+    let radius_only =
+        p.as_object().is_some_and(|o| o.keys().all(|k| matches!(k.as_str(), "layer" | "cornerRadius" | "coalesce"))) && p.get("cornerRadius").is_some();
+    let is_triangle = s.active().and_then(|st| st.doc.layer(id)).is_some_and(|l| match &l.content {
+        LayerContent::Shape(sh) => matches!(sh.live, Some(LiveShape::Polygon { sides: 3, .. })),
+        _ => false,
+    });
+    let label = if radius_only && is_triangle { "Change Rounded Triangle" } else { "Edit Shape" };
+    with_shape(s, id, label, |sh, layer| {
         if let Some(v) = p.get("path") {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
             sh.live = None;

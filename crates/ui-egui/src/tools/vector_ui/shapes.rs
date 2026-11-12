@@ -179,10 +179,14 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     }
 }
 
-/// A Line tool drag is one History step named after the tool, as in Photoshop (#13244); the
-/// other Shape tools keep the commands' own names.
+/// A Line (#13244) or Triangle (#13354) tool drag is one History step named after the tool, as
+/// in Photoshop; the other Shape tools keep the commands' own names.
 fn line_history_name(tool: Tool) -> Option<&'static str> {
-    (tool == Tool::Line).then_some("Line Tool")
+    match tool {
+        Tool::Line => Some("Line Tool"),
+        Tool::Triangle => Some("Triangle Tool"),
+        _ => None,
+    }
 }
 
 pub(super) fn fill_param(app: &PhotocraftApp) -> Value {

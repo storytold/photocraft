@@ -375,3 +375,6 @@ mod tests;
 
 #[cfg(test)]
 mod line_tool_history_name_tests;
+
+#[cfg(test)]
+mod triangle_history_names_tests;
