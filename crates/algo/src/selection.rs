@@ -488,7 +488,7 @@ pub fn combine_region(old: Option<&Surface>, new: Option<&Region>, mode: Selecti
         s.prune();
         Some(s)
     };
-    let nonempty = |s: Surface| -> Option<Surface> { (!s.content_bounds().is_empty()).then_some(s) };
+    let nonempty = |s: Surface| -> Option<Surface> { (combine_mask::default_selected(&s) || !s.content_bounds().is_empty()).then_some(s) };
     match (mode, old) {
         (SelectionMode::Replace, _) | (SelectionMode::Add, None) => from_bytes(&new.mask),
         (SelectionMode::Subtract | SelectionMode::Intersect, None) => None,
