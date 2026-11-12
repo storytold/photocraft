@@ -59,6 +59,9 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4.6.11"
 clap_mangen = { version = "0.3.3", features = ["env"] }
 arc-swap = "1"
+# Raw develop: LightCraft's settings model and geometry, shared through craft-libs (Camera Raw).
+craft-geom = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+craft-develop-model = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 encoding_rs = { version = "0.8", default-features = false, features = ["alloc"] }
@@ -92,6 +95,11 @@ too_many_arguments = "deny"
 wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
+
+# Local build only: the develop crates come from a craft-libs checkout until they are released.
+[patch."https://github.com/storytold/craft-libs"]
+craft-geom = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/geom" }
+craft-develop-model = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/develop-model" }
 
 # Dependencies carry no debug info: their frames in a backtrace lose file:line, and the target dir
 # and link times shrink. The test profile inherits both settings.

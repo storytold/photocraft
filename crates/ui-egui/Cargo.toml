@@ -13,6 +13,9 @@ craft-print = { workspace = true }
 craft-ui = { workspace = true }
 # Interface translations over the embedded craft-i18n catalogs (`build.rs`, `src/i18n.rs`).
 craft-i18n = { workspace = true }
+# Camera Raw renders through the shared develop model (craft-libs).
+craft-develop-model = { workspace = true }
+craft-geom = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-cms = { workspace = true }

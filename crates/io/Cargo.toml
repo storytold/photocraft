@@ -37,6 +37,9 @@ photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-format = { path = "../format" }
 craft-docpath = { workspace = true }
+# Camera Raw settings <-> the shared develop model (develop_bridge.rs).
+craft-develop-model = { workspace = true }
+craft-geom = { workspace = true }
 thiserror = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
