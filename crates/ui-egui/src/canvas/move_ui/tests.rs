@@ -2,7 +2,7 @@ use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ToolEvent;
+use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::Tool;
 
 #[test]
@@ -670,6 +670,93 @@ fn costly(app: &PhotocraftApp, bounds: Option<Rect>) -> bool {
     super::costly_to_redraw(&app.session.active().unwrap().doc, bounds)
 }
 
+/// A document costly to drag in, the Move tool picked: many layers, and on the active one two
+/// bands, top and bottom, between which the white background shows unless it's hidden.
+fn banded() -> PhotocraftApp {
+    let mut app = many_layers(4096);
+    app.session
+        .edit("paint", |doc, a| {
+            let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+            s.fill_rect(Rect::new(0, 0, 4096, 128), &[1.0, 0.0, 0.0, 1.0]);
+            s.fill_rect(Rect::new(0, 3968, 4096, 4096), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    app
+}
+
+/// Starts a costly drag of the band layer.
+fn start_costly_drag(app: &mut PhotocraftApp) {
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(app, ToolEvent::Down { x: 2048.0, y: 64.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Move { x: 2148.0, y: 94.0, pressure: 1.0 }, m);
+    let _ = super::display_doc(app, 0);
+}
+
+/// Pattern Preview tiles the canvas, which one picture can't follow: a costly drag there keeps its
+/// outline and arrow, and the layers stay in every copy.
+#[test]
+fn a_costly_drag_under_pattern_preview_keeps_its_outline() {
+    let mut app = banded();
+    app.ui.view.pattern_preview = true;
+    start_costly_drag(&mut app);
+    assert!(app.move_preview.as_ref().is_some_and(|p| p.too_big), "too costly to follow live");
+    assert!(!super::snapshot_drag(&app), "no snapshot: the outline and arrow");
+}
+
+/// One snapshot renders at a time: a costly drag started while another's render still runs keeps
+/// its outline, and once that render is done the next drag gets its snapshot again.
+#[test]
+fn a_costly_drag_while_a_snapshot_renders_keeps_its_outline() {
+    let mut app = banded();
+    let held = super::SnapshotSlot::take().expect("no render running");
+    start_costly_drag(&mut app);
+    assert!(!super::snapshot_drag(&app), "another render runs: the outline and arrow");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 2148.0, y: 94.0 }, egui::Modifiers::NONE);
+    drop(held);
+    app.session.execute("edit.undo", json!({})).unwrap();
+    start_costly_drag(&mut app);
+    assert!(super::snapshot_drag(&app), "free again: a snapshot");
+}
+
+/// The picture arrives as straight alpha, converted for the canvas display like the canvas itself:
+/// a half-opaque red texel uploads as half-bright premultiplied red, not full red over half alpha.
+#[test]
+fn a_snapshot_uploads_straight_alpha_the_way_the_canvas_does() {
+    let mut app = banded();
+    start_costly_drag(&mut app);
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()).expect("a snapshot").rx = Some(rx);
+    let mut px = photocraft_raster::scratch::take(1, [0.0; 4]);
+    px[0] = [1.0, 0.0, 0.0, 0.5];
+    tx.send(photocraft_compose::Buffer { rect: Rect::new(0, 0, 1, 1), px }).unwrap();
+    let ctx = egui::Context::default();
+    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)),
+        zoom: 0.1,
+        center: [2048.0, 2048.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    super::draw_snapshot(&mut app, &painter, &xf);
+    let delta = ctx.tex_manager().write().take_delta();
+    let texel = delta
+        .set
+        .values()
+        .flatten()
+        .find_map(|d| {
+            let egui::ImageData::Color(img) = &d.image;
+            (img.size == [1, 1]).then(|| img.pixels[0])
+        })
+        .expect("the snapshot uploaded");
+    assert!(texel.a().abs_diff(128) <= 1 && texel.r().abs_diff(128) <= 1, "premultiplied half red: {texel:?}");
+}
+
 /// Only a drag over a large area of a document with many layers is too costly to redraw live:
 /// a storyboard's photo (#12841), not an ordinary photo or a small layer.
 #[test]
@@ -690,19 +777,7 @@ fn only_large_moves_in_documents_with_many_layers_are_too_costly_to_redraw_live(
 /// canvas with them hidden; the drop redraws only where they landed, not where they were too.
 #[test]
 fn a_costly_drag_shows_a_snapshot_and_its_drop_redraws_where_the_layers_land() {
-    let mut app = many_layers(4096);
-    // Two bands, top and bottom: between them the white background shows unless it's hidden.
-    app.session
-        .edit("paint", |doc, a| {
-            let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
-            s.fill_rect(Rect::new(0, 0, 4096, 128), &[1.0, 0.0, 0.0, 1.0]);
-            s.fill_rect(Rect::new(0, 3968, 4096, 4096), &[1.0, 0.0, 0.0, 1.0]);
-            Ok(())
-        })
-        .unwrap();
-    app.ui.tool = Tool::Move;
-    app.ui.extras.snap = false;
-    app.ui.view.show.smart_guides = false;
+    let mut app = banded();
     let moving = app.session.active().unwrap().active_layer.unwrap();
     let m = egui::Modifiers::NONE;
     crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 2048.0, y: 64.0, pressure: 1.0 }, m);

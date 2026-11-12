@@ -2561,6 +2561,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         };
         paint_primary_overlays(app, ui, &mut view, &input, ants);
     } else {
+        // Another view of the active document shows the layers hidden too: the picture follows.
+        if app.session.active_index() == Some(idx) {
+            crate::move_ui::draw_snapshot(app, &painter, &xf);
+        }
         painter.extend(ants);
     }
     let tail = CanvasTailInput {

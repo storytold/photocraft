@@ -181,11 +181,26 @@ pub(crate) struct Snapshot {
 const SNAPSHOT_SIDE: u32 = 2048;
 
 /// Starts rendering the layers `moving` of `doc` (and nothing else) over `rect`, reduced, on a
-/// thread. `None` when the area is empty or the thread can't start.
+/// thread. `None` (the drag shows its outline and arrow) when the area is empty, the thread can't
+/// start, another drag's render is still running ([`SnapshotSlot`]), or on the web, which has no
+/// thread to render it on without stopping the pointer.
 fn start_snapshot(doc: &Document, moving: &[LayerId], rect: Rect) -> Option<Snapshot> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (doc, moving, rect);
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    start_snapshot_thread(doc, moving, rect)
+}
+
+/// [`start_snapshot`] off the web.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Option<Snapshot> {
     if rect.is_empty() {
         return None;
     }
+    let slot = SnapshotSlot::take()?;
     // The moving layers and the groups holding them stay visible; every other layer is hidden.
     let walk = doc.walk();
     let paths: Vec<_> = walk.iter().filter(|(_, _, l)| moving.contains(&l.id)).map(|(p, _, _)| p.clone()).collect();
@@ -201,24 +216,44 @@ fn start_snapshot(doc: &Document, moving: &[LayerId], rect: Rect) -> Option<Snap
     let k = longest.div_ceil(SNAPSHOT_SIDE).max(1);
     let (w, h) = (rect.width().div_ceil(k).max(1), rect.height().div_ceil(k).max(1));
     let (tx, rx) = std::sync::mpsc::channel();
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let started = std::thread::Builder::new().name("photocraft-drag-snapshot".into()).spawn(move || {
-            // On a small pool of its own: in the shared one its tiles queued ahead of the redraw
-            // thread's uploads, and the canvas blocks drawn meanwhile took 100–260 ms each.
-            let picture = match snapshot_pool() {
-                Some(pool) => pool.install(|| photocraft_compose::render_reduced_rect(&only, rect, w, h)),
-                None => photocraft_compose::render_reduced_rect(&only, rect, w, h),
-            };
-            let _ = tx.send(picture);
-        });
-        started.ok()?;
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = tx.send(photocraft_compose::render_reduced_rect(&only, rect, w, h));
-    }
+    let started = std::thread::Builder::new().name("photocraft-drag-snapshot".into()).spawn(move || {
+        // On a small pool of its own: in the shared one its tiles queued ahead of the redraw
+        // thread's uploads, and the canvas blocks drawn meanwhile took 100–260 ms each.
+        let picture = match snapshot_pool() {
+            Some(pool) => pool.install(|| photocraft_compose::render_reduced_rect(&only, rect, w, h)),
+            None => photocraft_compose::render_reduced_rect(&only, rect, w, h),
+        };
+        // Freed once rendered, whether or not its drag still wants it.
+        drop(slot);
+        let _ = tx.send(picture);
+    });
+    started.ok()?;
     Some(Snapshot { rect, rx: Some(rx), texture: None })
+}
+
+/// One drag snapshot renders at a time: a drag released before its picture arrived leaves the
+/// render running to its end, and repeated short drags would otherwise stack renders of the whole
+/// area nobody will see. A drag starting meanwhile shows its outline and arrow. Per UI thread
+/// (each test runs its own).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct SnapshotSlot(Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SnapshotSlot {
+    /// The slot, unless a render holds it.
+    pub(super) fn take() -> Option<Self> {
+        thread_local! {
+            static BUSY: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        }
+        BUSY.with(|busy| (!busy.swap(true, std::sync::atomic::Ordering::AcqRel)).then(|| SnapshotSlot(Arc::clone(busy))))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for SnapshotSlot {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
 }
 
 /// The thread pool drag snapshots render on: half the cores, so the redraw thread's work on the
@@ -236,6 +271,9 @@ fn snapshot_pool() -> Option<&'static rayon::ThreadPool> {
 /// Draws a costly drag's snapshot at the pointer, once its render has arrived (taking it).
 pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &crate::canvas::ViewXform) {
     let offset = drag_offset(app);
+    // Converted for the monitor the way the canvas is, so the layers keep their colours in the drag.
+    let doc = app.move_preview.as_ref().and_then(|p| app.session.documents().iter().find(|st| st.doc.id == p.doc)).map(|st| st.doc.clone());
+    let display = doc.and_then(|d| super::display::canvas_display(app, &d, crate::monitor_status::view_display(app, painter.ctx())).0);
     let Some(p) = app.move_preview.as_mut() else { return };
     let canvas = p.canvas;
     let Some(s) = p.snapshot.as_mut() else { return };
@@ -243,16 +281,9 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
         match rx.try_recv() {
             Ok(buf) => {
                 let size = [buf.rect.width() as usize, buf.rect.height() as usize];
-                let px: Vec<egui::Color32> = buf
-                    .px
-                    .iter()
-                    .map(|p| {
-                        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                        egui::Color32::from_rgba_premultiplied(c(p[0]), c(p[1]), c(p[2]), c(p[3]))
-                    })
-                    .collect();
-                if px.len() == size[0] * size[1] {
-                    let image = egui::ColorImage::new(size, px);
+                if buf.px.len() == size[0] * size[1] {
+                    // Straight alpha, as the canvas's own textures take it.
+                    let image = super::display::display_image(display.as_deref(), &buf);
                     s.texture = Some(painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR));
                     // The next frame hides the layers under it (`display_doc`), with or without input.
                     painter.ctx().request_repaint();
@@ -384,8 +415,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         if too_big {
             log::info!("move: dragging {} layer(s) as an outline (too costly to redraw live), the release redraws once", ids.len());
         }
-        // The drag's snapshot: the layers' area as they paint it, wherever it reaches.
-        let snapshot = if too_big && !mask_target { bounds.and_then(|b| start_snapshot(&doc, &moving, b)) } else { None };
+        // The drag's snapshot: the layers' area as they paint it, wherever it reaches. Pattern
+        // Preview tiles the canvas, which one picture can't follow: those drags keep the outline.
+        let snapshot = if too_big && !mask_target && !pattern { bounds.and_then(|b| start_snapshot(&doc, &moving, b)) } else { None };
         app.move_preview = Some(MovePreview {
             doc: doc_id,
             revision,
