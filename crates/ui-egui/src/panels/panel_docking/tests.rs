@@ -113,11 +113,15 @@ fn invalid_panel_requests_are_atomic_and_do_not_enter_a_custom_workspace() {
 }
 
 fn harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
+    harness_themed(app, size, crate::theme::ThemeKind::ProMedium)
+}
+
+fn harness_themed(app: PhotocraftApp, size: egui::Vec2, theme: crate::theme::ThemeKind) -> Harness<'static, PhotocraftApp> {
     let mut ready = false;
     let mut harness = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
             if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                PhotocraftApp::setup_context(ui.ctx(), theme);
                 ready = true;
                 return;
             }
@@ -2368,4 +2372,38 @@ fn native_migration_still_waits_and_runs_without_an_accepted_explicit_request() 
         assert!(h.state().ui.docking.is_some());
         assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "the unchanged native migration consumes its state once");
     }
+}
+
+/// Every rect the frame filled with `fill` that is a thin, long band (a divider's width).
+fn divider_bands(h: &Harness<'static, PhotocraftApp>, fill: egui::Color32) -> Vec<egui::Rect> {
+    let mut bands = Vec::new();
+    for clipped in &h.output().shapes {
+        let mut stack = vec![&clipped.shape];
+        while let Some(shape) = stack.pop() {
+            match shape {
+                egui::Shape::Vec(inner) => stack.extend(inner.iter()),
+                egui::Shape::Rect(r) if r.fill == fill => {
+                    let (w, h) = (r.rect.width(), r.rect.height());
+                    if w.min(h) > 1.0 && w.min(h) < 8.0 && w.max(h) > 100.0 {
+                        bands.push(r.rect);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    bands
+}
+
+#[test]
+fn the_gap_between_the_canvas_and_the_dock_is_filled_not_a_black_stripe() {
+    let mut h = harness_themed(app(), vec2(1280.0, 800.0), crate::theme::ThemeKind::ProLight);
+    h.run_steps(2);
+    let card = crate::theme::Tokens::get(&h.ctx).card;
+    assert!(card.a() == 255, "the card fill is opaque");
+    let bands = divider_bands(&h, card);
+    assert!(
+        bands.iter().any(|r| r.width() < r.height() && r.height() > 300.0),
+        "the band between the canvas side and the dock is painted with the card fill (#9819, #13460): {bands:?}"
+    );
 }
