@@ -58,7 +58,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let which = sample_layers(p, CMD)?;
     let mode = blend_param(p, CMD)?;
     let aligned = flag(p, "aligned", true);
-    let map = clone_mapping(s, p, &stroke, CMD)?;
+    let (map, from) = clone_mapping(s, p, &stroke, CMD)?;
     let off = map.offset();
     let dmg = run_stroke(s, "Healing Brush", id, p, |pre, surf, sel, lock| {
         // Pattern Preview: source and destination repeat across the canvas edges, so a stroke over
@@ -67,7 +67,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let (g, cov) = pad_coverage(bounds, &cov, 2);
         let fmt = surf.format();
-        let src = clone_sample(pre, id, surf, which, g, &map, wrap, CMD)?;
+        let src = clone_sample(pre, id, surf, &from, which, g, &map, wrap, CMD)?;
         // The destination the texture is fitted to: the layer itself, or what the user sees when
         // sampling several layers (so healing onto an empty layer matches the composite).
         let dst = if wrap {
