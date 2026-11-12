@@ -23,6 +23,8 @@ use photocraft_algo::camera_raw::{CURVE_LUT, Dehaze, PerPixel, VignetteStyle, WB
 
 use crate::Unsupported;
 use crate::camera_raw_tone::{Segment, ToneFrame, TonePipelines, WB_ROW};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::camera_raw_view::{CameraRawDisplay, CameraRawFrame, ViewPasses};
 
 /// The pass's WGSL source.
 pub const CAMERA_RAW_SHADER: &str = include_str!("camera_raw.wgsl");
@@ -80,6 +82,9 @@ pub struct CameraRawDevelop {
     target: Option<Image>,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
+    /// The preview's display and histogram passes ([`Self::develop_view`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    view: ViewPasses,
 }
 
 impl CameraRawDevelop {
@@ -197,6 +202,8 @@ impl CameraRawDevelop {
             target: None,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            view: ViewPasses::build(device),
         }
     }
 
@@ -264,7 +271,12 @@ impl CameraRawDevelop {
         );
         let target = match self.target.take() {
             Some(t) if t.size == size => t,
-            _ => Image::new(device, "pc_camera_raw_target", size, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC),
+            _ => Image::new(
+                device,
+                "pc_camera_raw_target",
+                size,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+            ),
         };
         let target = self.target.insert(target);
         let (dummy, dummy_uint) = (self.tone.dummy(), self.tone.dummy_uint());
@@ -403,52 +415,144 @@ impl CameraRawDevelop {
         stages: &PerPixel,
     ) -> Result<Vec<[f32; 4]>, Unsupported> {
         check_size(device, source, size)?;
-        let [w, h] = size;
-        let row = (w * BYTES_PER_PIXEL).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let bytes = u64::from(row) * u64::from(h);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_camera_raw") });
         self.encode(device, queue, &mut encoder, source, key, size, stages)?;
         let Some(target) = self.target.as_ref().map(|t| &t.texture) else { return Err(Unsupported("no RAW Develop target".into())) };
         let buffer = match self.readback.take() {
-            Some(b) if b.size() == bytes => b,
-            _ => device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("pc_camera_raw_readback"),
-                size: bytes,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            }),
+            Some(b) if b.size() == readback_bytes(size) => b,
+            _ => readback_buffer(device, size),
         };
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
+        copy_out(&mut encoder, target, &buffer, size);
         let index = queue.submit([encoder.finish()]);
-        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        match health {
-            Some(hl) => {
-                if !hl.wait(device, Some(index)) {
-                    return Err(Unsupported(hl.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
-                }
-            }
-            None => {
-                device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).map_err(|e| Unsupported(format!("GPU wait failed: {e}")))?;
-            }
-        }
-        let mut out = Vec::with_capacity(source.len());
-        {
-            let data = buffer.slice(..).get_mapped_range().map_err(|e| Unsupported(format!("GPU readback failed: {e:?}")))?;
-            let width = w as usize * BYTES_PER_PIXEL as usize;
-            for y in 0..h as usize {
-                let start = y * row as usize;
-                let line = data.get(start..start + width).ok_or_else(|| Unsupported("short GPU readback".into()))?;
-                out.extend(bytemuck::pod_collect_to_vec::<u8, [f32; 4]>(line));
-            }
-        }
-        buffer.unmap();
+        let out = read_out(device, health, &buffer, index, size)?;
         self.readback = Some(buffer);
         Ok(out)
     }
+
+    /// Develops `source` like [`Self::develop`], but keeps the result on the GPU: converted for
+    /// the dialog's preview and counted into a histogram, in slot `1 - avoid` (the slot on screen
+    /// is `avoid`; 0 when `None`). Only the histogram is read back (blocking; native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn develop_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        health: Option<&crate::DeviceHealth>,
+        source: &[[f32; 4]],
+        key: Option<u64>,
+        size: [u32; 2],
+        stages: &PerPixel,
+        display: &CameraRawDisplay,
+        avoid: Option<usize>,
+    ) -> Result<CameraRawFrame, Unsupported> {
+        if let Some(f) = health.and_then(crate::DeviceHealth::fault) {
+            return Err(Unsupported(f.to_string()));
+        }
+        let slot = avoid.map_or(0, |s| usize::from(s == 0));
+        let (result, error) = crate::first_error(device, || {
+            check_size(device, source, size)?;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_camera_raw_view") });
+            self.encode(device, queue, &mut encoder, source, key, size, stages)?;
+            let Some(target) = self.target.as_ref().map(|t| t.texture.clone()) else { return Err(Unsupported("no RAW Develop target".into())) };
+            let view = &mut self.view;
+            view.record(device, queue, &mut encoder, &target, size, display, slot)?;
+            let index = queue.submit([encoder.finish()]);
+            let buffer = view.sums_buffer();
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            wait(device, health, index)?;
+            view.frame(slot)
+        });
+        match error {
+            Some(e) => {
+                self.source = None;
+                if let Some(f) = &mut self.tone_frame {
+                    f.forget_cells();
+                }
+                self.view.forget();
+                Err(Unsupported(format!("GPU RAW Develop failed: {e}")))
+            }
+            None => result,
+        }
+    }
+}
+
+/// Bytes of a `size` readback, its rows aligned for the copy.
+#[cfg(not(target_arch = "wasm32"))]
+fn readback_row(size: [u32; 2]) -> u32 {
+    (size[0] * BYTES_PER_PIXEL).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn readback_bytes(size: [u32; 2]) -> u64 {
+    u64::from(readback_row(size)) * u64::from(size[1])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn readback_buffer(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("pc_camera_raw_readback"),
+        size: readback_bytes(size),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    })
+}
+
+/// Records the copy of `texture` (`size`, `Rgba32Float`) into `buffer`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn copy_out(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture, buffer: &wgpu::Buffer, size: [u32; 2]) {
+    let [w, h] = size;
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo {
+            buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(readback_row(size)), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+}
+
+/// Waits for submission `index`; a lost device or failed wait is `Err`.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait(device: &wgpu::Device, health: Option<&crate::DeviceHealth>, index: wgpu::SubmissionIndex) -> Result<(), Unsupported> {
+    match health {
+        Some(hl) => {
+            if !hl.wait(device, Some(index)) {
+                return Err(Unsupported(hl.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
+            }
+        }
+        None => {
+            device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).map_err(|e| Unsupported(format!("GPU wait failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// Maps `buffer` once submission `index` is done and returns its `size` pixels.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_out(
+    device: &wgpu::Device,
+    health: Option<&crate::DeviceHealth>,
+    buffer: &wgpu::Buffer,
+    index: wgpu::SubmissionIndex,
+    size: [u32; 2],
+) -> Result<Vec<[f32; 4]>, Unsupported> {
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    wait(device, health, index)?;
+    let (w, h) = (size[0] as usize, size[1] as usize);
+    let row = readback_row(size) as usize;
+    let mut out = Vec::with_capacity(w.saturating_mul(h));
+    {
+        let data = buffer.slice(..).get_mapped_range().map_err(|e| Unsupported(format!("GPU readback failed: {e:?}")))?;
+        let width = w * BYTES_PER_PIXEL as usize;
+        for y in 0..h {
+            let start = y * row;
+            let line = data.get(start..start + width).ok_or_else(|| Unsupported("short GPU readback".into()))?;
+            out.extend(bytemuck::pod_collect_to_vec::<u8, [f32; 4]>(line));
+        }
+    }
+    buffer.unmap();
+    Ok(out)
 }
 
 /// The textures a pass of `camera_raw.wgsl` reads besides the source and tables (dummies where

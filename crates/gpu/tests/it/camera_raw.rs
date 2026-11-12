@@ -62,7 +62,7 @@ fn gpu() -> Option<Gpu> {
 #[test]
 fn the_shaders_validate_without_a_gpu() {
     let tone = format!("{}\n{}", photocraft_gpu::CAMERA_RAW_TONE_SHADER, photocraft_gpu::CAMERA_RAW_FILTERS_SHADER);
-    for src in [photocraft_gpu::CAMERA_RAW_SHADER, tone.as_str()] {
+    for src in [photocraft_gpu::CAMERA_RAW_SHADER, tone.as_str(), photocraft_gpu::CAMERA_RAW_VIEW_SHADER] {
         let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
         wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
             .validate(&module)
@@ -751,4 +751,206 @@ fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
         let d = out.iter().zip(&cpu).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
         assert!(d <= TOL, "temperature {temperature}: off by {d}");
     }
+}
+
+// The preview shown from the GPU (`develop_view`): its pixels, display texture and histogram.
+
+/// Reads an `Rgba8Unorm` texture back.
+fn read_bytes(g: &Gpu, texture: &wgpu::Texture) -> Vec<[u8; 4]> {
+    let (w, h) = (texture.width(), texture.height());
+    let row = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = g.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row) * u64::from(h),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = g.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    let index = g.queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    g.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).unwrap();
+    let data = buffer.slice(..).get_mapped_range().unwrap();
+    (0..h as usize).flat_map(|y| data[y * row as usize..][..w as usize * 4].as_chunks::<4>().0.to_vec()).collect()
+}
+
+/// egui's `Color32::from_rgba_unmultiplied`, as bytes.
+fn premultiplied([r, g, b, a]: [u8; 4]) -> [u8; 4] {
+    let mul = |v: u8| {
+        let p = u16::from(v) * u16::from(a) + 128;
+        ((p + (p >> 8)) >> 8) as u8
+    };
+    match a {
+        0 => [0; 4],
+        255 => [r, g, b, 255],
+        _ => [mul(r), mul(g), mul(b), a],
+    }
+}
+
+/// `CanvasDisplay::to_rgba8`'s 8-bit codes (`photocraft-engine`'s `display_color`): plain, or
+/// through the sRGB-encoding table.
+fn codes(p: [f32; 4], srgb: bool) -> [u8; 4] {
+    let plain = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let encoded = |v: f32| {
+        let i = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u32;
+        (photocraft_color::convert::linear_to_srgb(i as f32 / 65535.0) * 255.0 + 0.5) as u8
+    };
+    if srgb { [encoded(p[0]), encoded(p[1]), encoded(p[2]), plain(p[3])] } else { [plain(p[0]), plain(p[1]), plain(p[2]), plain(p[3])] }
+}
+
+/// Develops `p` with `develop_view` and checks it against `develop`: the same pixels, a histogram
+/// equal to the CPU's count of them, and display bytes equal to the CPU's conversion of them.
+/// `false` when the frame doesn't develop on the GPU (Shadows and Highlights 2 pixels or less on
+/// the short side; Whites and Blacks without points).
+fn check_view(g: &mut Gpu, p: &CameraRaw, src: &[[f32; 4]], (w, h): (usize, usize), srgb: bool) -> bool {
+    let Some(stages) = per_pixel(p, w, h, false, white_black_points(src, w, h, p)) else { return false };
+    let size = [w as u32, h as u32];
+    let read = g.dev.develop(&g.device, &g.queue, None, src, None, size, &stages).unwrap();
+    let display = photocraft_gpu::CameraRawDisplay { encode_srgb: srgb, shaper: None, key: 1 };
+    let frame = g.dev.develop_view(&g.device, &g.queue, None, src, None, size, &stages, &display, None).unwrap();
+    assert_eq!((frame.slot, frame.size), (0, size));
+    let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels).unwrap();
+    let same = px.len() == read.len() && px.iter().zip(&read).all(|(a, b)| a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits()));
+    assert!(same, "{w}×{h} {p:?}: the view's pixels are the develop's");
+    assert_eq!(frame.histogram, photocraft_algo::histogram::RgbHistogram::from_rgba(&px), "{w}×{h} {p:?}");
+    let shown = read_bytes(g, &frame.display);
+    for (i, (got, q)) in shown.iter().zip(&px).enumerate() {
+        assert_eq!(*got, premultiplied(codes(*q, srgb)), "{w}×{h} srgb {srgb}: pixel {i} {q:?}");
+    }
+    true
+}
+
+/// Every stage kind at each depth, plain and sRGB-encoded, at the proxy's size and on tiny and
+/// odd frames: exact pixels, histogram and display bytes.
+#[test]
+fn the_view_shows_and_counts_the_developed_frame() {
+    let Some(mut g) = gpu() else { return };
+    let sets = [
+        CameraRaw::default(),
+        CameraRaw { temperature: 20.0, exposure: 0.6, contrast: 30.0, whites: 40.0, blacks: -30.0, vibrance: 40.0, ..Default::default() },
+        CameraRaw { shadows: 50.0, highlights: -50.0, clarity: 30.0, sharpen_amount: 60.0, noise_color: 30.0, ..Default::default() },
+    ];
+    for depth in DEPTHS {
+        for (w, h) in [(858, 572), (171, 113), (1, 1), (3, 2)] {
+            let src = image(w, h, depth);
+            for p in &sets {
+                for srgb in [false, true] {
+                    let checked = check_view(&mut g, p, &src, (w, h), srgb);
+                    assert!(checked || w.min(h) <= 2, "{w}×{h} {p:?} develops on the GPU");
+                }
+            }
+        }
+    }
+}
+
+/// Transparent, out-of-range and non-finite pixels count where `RgbHistogram` counts them, and
+/// show as egui would draw them: the identity develop passes them through.
+#[test]
+fn the_view_counts_transparent_out_of_range_and_non_finite_pixels() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (64, 33);
+    let mut src = image(w, h, Depth::Float);
+    let odd = [
+        [0.5, 0.5, 0.5, 0.0],
+        [0.2, 0.3, 0.4, 0.5],
+        [1.5, -0.25, 1.0, 1.0],
+        [0.0, 1.0, 0.0, 0.25],
+        [f32::NAN, 0.5, 0.5, 1.0],
+        [0.5, f32::INFINITY, 0.5, 1.0],
+        [0.5, 0.5, f32::NEG_INFINITY, 1.0],
+        [0.5, 0.5, 0.5, f32::NAN],
+        [0.5 / 255.0, 1.5 / 255.0, 254.5 / 255.0, 1.0],
+    ];
+    for (i, p) in src.iter_mut().enumerate() {
+        if i % 5 == 0 {
+            *p = odd[(i / 5) % odd.len()];
+        }
+    }
+    for srgb in [false, true] {
+        assert!(check_view(&mut g, &CameraRaw::default(), &src, (w, h), srgb));
+    }
+}
+
+/// A matrix/shaper display transform (Display P3 to sRGB) matches `Transform::convert_u8` on the
+/// CPU codes within one 8-bit step.
+#[test]
+fn the_view_applies_a_matrix_shaper_display_transform() {
+    use photocraft_cms::{Builtin, Intent, Transform};
+    let Some(mut g) = gpu() else { return };
+    let t = Transform::new(Builtin::DisplayP3.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, false).unwrap();
+    let shaper = t.gpu_matrix_shaper().expect("a matrix/shaper transform");
+    let (w, h) = (171, 113);
+    let p = CameraRaw { exposure: 0.3, vibrance: 30.0, ..Default::default() };
+    let mut worst = 0u8;
+    for depth in DEPTHS {
+        let mut src = image(w, h, depth);
+        src.iter_mut().step_by(7).for_each(|p| p[3] = 0.5);
+        let stages = per_pixel(&p, w, h, false, None).unwrap();
+        let display = photocraft_gpu::CameraRawDisplay {
+            encode_srgb: false,
+            shaper: Some(photocraft_gpu::CameraRawShaper { matrix: shaper.matrix_rows(), input: shaper.input_table(), output: shaper.output_table() }),
+            key: 7,
+        };
+        let frame = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], &stages, &display, None).unwrap();
+        let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels).unwrap();
+        let src8: Vec<u8> = px.iter().flat_map(|q| codes(*q, false)).collect();
+        let mut cpu = src8.clone();
+        t.convert_u8(&src8, 4, &mut cpu, 4, true);
+        for (got, want) in read_bytes(&g, &frame.display).iter().zip(cpu.as_chunks::<4>().0) {
+            let want = premultiplied(*want);
+            worst = worst.max(got.iter().zip(&want).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0));
+        }
+    }
+    eprintln!("matrix/shaper display: max |GPU - CPU| = {worst} of 255");
+    assert!(worst <= 1, "off by {worst} of 255");
+}
+
+/// The slots take turns around the one on screen, and each keeps its frame.
+#[test]
+fn the_view_develops_into_the_slot_not_on_screen() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (40, 30);
+    let src = image(w, h, Depth::Eight);
+    let size = [w as u32, h as u32];
+    let display = photocraft_gpu::CameraRawDisplay { encode_srgb: false, shaper: None, key: 0 };
+    let develop = |g: &mut Gpu, exposure: f32, avoid: Option<usize>| {
+        let stages = per_pixel(&CameraRaw { exposure, ..Default::default() }, w, h, false, None).unwrap();
+        g.dev.develop_view(&g.device, &g.queue, None, &src, None, size, &stages, &display, avoid).unwrap()
+    };
+    let a = develop(&mut g, -1.0, None);
+    let b = develop(&mut g, 1.0, Some(a.slot));
+    let c = develop(&mut g, 0.5, Some(b.slot));
+    assert_eq!((a.slot, b.slot, c.slot), (0, 1, 0));
+    let read = |f: &photocraft_gpu::CameraRawFrame| photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &f.pixels).unwrap();
+    let (rb, rc) = (read(&b), read(&c));
+    assert_ne!(rb, rc, "slot 1 still holds the +1 frame");
+    assert_eq!(b.histogram, photocraft_algo::histogram::RgbHistogram::from_rgba(&rb));
+    assert_eq!(a.generation, c.generation, "the same size keeps the slot's textures");
+}
+
+/// A faulted device, a bad display transform and an impossible size are errors, not panics.
+#[test]
+fn the_view_rejects_bad_sizes_tables_and_faulted_devices() {
+    let Some(mut g) = gpu() else { return };
+    let stages = per_pixel(&CameraRaw::default(), 4, 4, false, None).unwrap();
+    let display = photocraft_gpu::CameraRawDisplay { encode_srgb: false, shaper: None, key: 0 };
+    let src = vec![[0.5; 4]; 16];
+    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [5, 4], &stages, &display, None).is_err());
+    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [0, 0], &stages, &display, None).is_err());
+    let nan = [[f32::NAN; 4]; 3];
+    let bad = photocraft_gpu::CameraRawDisplay {
+        encode_srgb: false,
+        shaper: Some(photocraft_gpu::CameraRawShaper { matrix: nan, input: &[[0.0; 4]; 2], output: &[[1.0; 4]; 2] }),
+        key: 9,
+    };
+    assert!(g.dev.develop_view(&g.device, &g.queue, None, &src, None, [4, 4], &stages, &bad, None).is_err());
+    let ok = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [4, 4], &stages, &display, None).unwrap();
+    let health = DeviceHealth::new();
+    health.mark(Fault::Lost("test".into()));
+    assert!(g.dev.develop_view(&g.device, &g.queue, Some(&health), &src, None, [4, 4], &stages, &display, None).is_err());
+    assert!(photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, Some(&health), &ok.pixels).is_err());
 }
