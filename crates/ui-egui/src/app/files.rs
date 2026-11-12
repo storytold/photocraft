@@ -90,16 +90,16 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        // A raw for the open-time Camera Raw dialog develops with the engine the dialog previews
-        // with (`photocraft_io::raw_develop`).
-        let raw = &self.session.prefs().raw_defaults;
-        opts.raw_develop = raw.open_in_camera_raw && raw.shared_engine;
+        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
         // string. Every other format keeps the shell's import service.
         let typed_open = photocraft_io::is_psd(bytes) || photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff);
+        // A raw for the open-time Camera Raw dialog develops with the engine the dialog previews
+        // with (`photocraft_io::raw_develop`).
+        let raw = &self.session.prefs().raw_defaults;
+        let opts = photocraft_io::ImportOptions { raw_develop: raw.open_in_camera_raw && raw.shared_engine, ..opts };
         let (mut doc, warnings, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never

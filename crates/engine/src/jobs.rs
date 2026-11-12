@@ -1262,13 +1262,13 @@ impl Session {
         let name_w = name.to_string();
         let name_a = name.to_string();
         let mut opts = import_options(self.prefs());
+        opts.psd_high_memory_approved = approve_high_memory;
+        opts.psd_approved_estimate = approved_estimate;
+        let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         // A raw opened by the user for the open-time Camera Raw dialog develops with the engine the
         // dialog previews with (`photocraft_io::raw_develop`).
         let raw = &self.prefs().raw_defaults;
         opts.raw_develop = confirm_damage && raw.open_in_camera_raw && raw.shared_engine;
-        opts.psd_high_memory_approved = approve_high_memory;
-        opts.psd_approved_estimate = approved_estimate;
-        let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),
             PreflightNeeded { required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64>, source: OpenSource, fingerprint: SourceFingerprint },
