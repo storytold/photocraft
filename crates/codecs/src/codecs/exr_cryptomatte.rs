@@ -20,84 +20,23 @@ use crate::options::Limits;
 
 const F: Format = Format::OpenExr;
 
-/// A Cryptomatte stream channel (`crypto_asset00.red`) splits into its stream name
-/// (`crypto_asset00`), the stream index, whether it is a coverage channel (green/alpha)
-/// instead of an ID (red/blue), and its rank within the set (0 for red/green, 1 for
-/// blue/alpha).
-pub(crate) struct StreamChannel {
-    pub stream: String,
-    pub index: u32,
-    pub coverage: bool,
-    pub rank: usize,
-}
-
-/// `<name>NN` where NN is one or more digits (the reference readers match `\d+`), with a
-/// `.red`/`.r` or `.blue`/`.b` (ID) or `.green`/`.g` or `.alpha`/`.a` (coverage) suffix,
-/// in any case (Blender writes `.R`/`.G`/`.B`/`.A`).
-pub(crate) fn split_stream(channel: &str) -> Option<StreamChannel> {
-    let (stream, suffix) = channel.rsplit_once('.')?;
-    let (coverage, rank) = match suffix.to_ascii_lowercase().as_str() {
-        "red" | "r" => (false, 0),
-        "green" | "g" => (true, 0),
-        "blue" | "b" => (false, 1),
-        "alpha" | "a" => (true, 1),
-        _ => return None,
-    };
-    let digits = stream.chars().rev().take_while(|c| c.is_ascii_digit()).count();
-    if digits == 0 || digits == stream.len() {
-        return None;
-    }
-    let split = stream.len() - digits;
-    let index = stream[split..].parse().ok()?;
-    Some(StreamChannel { stream: stream.to_string(), index, coverage, rank })
-}
-
-/// MurmurHash3, x86-32 bit variant, seed 0 (public-domain algorithm, Austin Appleby).
-fn murmur3_32(data: &[u8]) -> u32 {
-    const C1: u32 = 0xcc9e_2d51;
-    const C2: u32 = 0x1b87_3593;
-    let mut h = 0u32;
-    let (chunks, rest) = data.as_chunks::<4>();
-    for c in chunks {
-        let mut k = u32::from_le_bytes(*c);
-        k = k.wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
-        h ^= k;
-        h = h.rotate_left(13).wrapping_mul(5).wrapping_add(0xe654_6b64);
-    }
-    if !rest.is_empty() {
-        let mut k = [0u8; 4];
-        k[..rest.len()].copy_from_slice(rest);
-        let mut k = u32::from_le_bytes(k);
-        k = k.wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
-        h ^= k;
-    }
-    h ^= data.len() as u32;
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x85eb_ca6b);
-    h ^= h >> 13;
-    h = h.wrapping_mul(0xc2b2_ae35);
-    h ^ (h >> 16)
-}
+pub(crate) use craft_exr::cryptomatte::split_stream;
 
 /// The Cryptomatte ID of a name: the MurmurHash3 bits with the exponent fixed away from
 /// 0 and 255, as an f32 value.
 pub fn cryptomatte_id(name: &str) -> f32 {
-    let bits = murmur3_32(name.as_bytes());
-    let exp = (bits >> 23) & 0xff;
-    let bits = if exp == 0 || exp == 255 { bits ^ (1 << 23) } else { bits };
-    f32::from_bits(bits)
+    craft_exr::cryptomatte::id(name)
 }
 
 /// The 7-hex-digit metadata key of a layer name (the ID bits without their last digit).
 pub fn cryptomatte_key(name: &str) -> String {
-    format!("{:08x}", cryptomatte_id(name).to_bits())[..7].to_string()
+    craft_exr::cryptomatte::key(name)
 }
 
 /// The preview colour of an ID (the reference formula): green and blue channels shifted
 /// out of the ID's bit pattern, red unused.
 pub fn cryptomatte_preview_color(id: f32) -> [f32; 3] {
-    let bits = id.to_bits();
-    [0.0, f32::from_bits(bits << 8), f32::from_bits(bits << 16)]
+    craft_exr::cryptomatte::preview_color(id)
 }
 
 /// The `cryptomatte/<key>/<field>` text attribute of a header, if present.
@@ -109,19 +48,10 @@ fn attribute(other: &std::collections::HashMap<exr::meta::attribute::Text, Attri
     }
 }
 
-/// Parse a manifest JSON (`{"object name": "<8-hex ID bits>"}`) into (ID value, name)
-/// pairs. Entries that are not strings of up to eight hex digits are skipped, like the
-/// reference readers tolerate a partially broken manifest; a broken document yields none.
+/// A manifest JSON (`{"object name": "<8-hex ID bits>"}`) as (ID value, name) pairs, by name.
+/// Entries that are not hex strings are skipped; a broken document yields none.
 fn parse_manifest(json: &str) -> Vec<(f32, String)> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else { return Vec::new() };
-    let Some(map) = value.as_object() else { return Vec::new() };
-    let mut out = Vec::with_capacity(map.len().min(1 << 20));
-    for (name, hex) in map {
-        let Some(hex) = hex.as_str() else { continue };
-        let Some(bits) = u32::from_str_radix(hex.trim_start_matches("0x"), 16).ok() else { continue };
-        out.push((f32::from_bits(bits), name.clone()));
-    }
-    out
+    craft_exr::cryptomatte::parse_manifest(json).into_iter().map(|(name, bits)| (f32::from_bits(bits), name)).collect()
 }
 
 /// How a layer name compares with a stream's channel prefix: the channel prefix and the `name`
@@ -211,19 +141,8 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
 
 /// Every `cryptomatte/<key>/` key of a header, sorted, without duplicates.
 fn cryptomatte_keys(other: &std::collections::HashMap<exr::meta::attribute::Text, exr::meta::attribute::AttributeValue>) -> Vec<String> {
-    let mut keys = Vec::new();
-    // Track seen keys in a set: the attribute names are file-controlled, so membership with
-    // keys.iter().any() is O(n^2) in the number of distinct `cryptomatte/<key>/<field>`
-    // groups. The set only answers "seen before"; the result is sorted below.
-    let mut seen = std::collections::HashSet::new();
-    for name in other.keys() {
-        let full = name.to_string();
-        let Some(rest) = full.strip_prefix("cryptomatte/") else { continue };
-        let Some((key, _field)) = rest.split_once('/') else { continue };
-        if !key.is_empty() && seen.insert(key.to_string()) {
-            keys.push(key.to_string());
-        }
-    }
+    let names: Vec<String> = other.keys().map(|name| name.to_string()).collect();
+    let mut keys = craft_exr::cryptomatte::keys(names.iter().map(String::as_str));
     keys.sort(); // HashMap order varies per call; layer names must stay stable
     keys
 }
