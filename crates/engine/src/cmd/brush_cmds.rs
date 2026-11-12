@@ -341,12 +341,23 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
 /// background colour instead (Photoshop). The match is exact (#11966): the foreground as the
 /// layer would store it (its mode and depth) against the pixel, its alpha aside, so one level
-/// off paints the foreground.
+/// off paints the foreground. In a CMYK layer a foreground picked as CMYK is probed as the inks
+/// the stroke paints (#13060), not as its RGB stand-in converted back.
 fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&StrokePoint>, fg: [f32; 4], bg: [f32; 4]) {
     let Some(p0) = start else { return };
     let c = surf.rgba(p0.x.floor() as i32, p0.y.floor() as i32);
-    let mut probe = Surface::new(surf.format());
-    probe.write_pixel(0, 0, &photocraft_raster::from_rgba(&surf.format(), [fg[0], fg[1], fg[2], 1.0]));
+    let format = surf.format();
+    let mut px = photocraft_raster::from_rgba(&format, [fg[0], fg[1], fg[2], 1.0]);
+    // The renderer's condition for painting the picked inks (`StrokeRenderer::composite`), keyed
+    // on the foreground being probed.
+    if let (photocraft_color::ColorMode::Cmyk, Some((rgb, inks))) = (format.mode, brush.color_cmyk)
+        && rgb == [fg[0], fg[1], fg[2]]
+        && let Some(channels) = px.get_mut(..4)
+    {
+        channels.copy_from_slice(&inks);
+    }
+    let mut probe = Surface::new(format);
+    probe.write_pixel(0, 0, &px);
     let stored = probe.rgba(0, 0);
     // Far below one 8-bit level: only the float noise of the conversion.
     if c[3] > 0.0 && (0..3).all(|i| (c[i] - stored[i]).abs() < 1e-5) {
@@ -913,7 +924,7 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
         let surf = paint_surface(doc, id, &json!({}))?;
-        Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
+        apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock).map_err(|e| bad("paint.colorReplacement", e.to_string()))
     })?;
     Ok(damage_json(s, dmg))
 }

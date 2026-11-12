@@ -592,6 +592,10 @@ pub struct PhotocraftApp {
     pub(crate) hist_job: Option<histogram_panel::HistJob>,
     /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
     pub(crate) hist_uncached: Option<(DocId, u64)>,
+    /// Memoized `tone::selection_key` of the active document's current revision
+    /// (`histogram_panel::update` refreshes it once per frame; the hash walks every tile of the
+    /// selection mask, while any change to the selection arrives as a new document revision).
+    pub(crate) hist_sel_key: Option<(DocId, u64, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// The canvas area the last Free Transform box's preview changes (`transform_tool::damage`).
@@ -665,6 +669,9 @@ pub struct PhotocraftApp {
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
+    /// Pen paths finished, which Undo back to their finish gives back to the Pen
+    /// (`vector_ui::pen_resume_on_undo`).
+    pub(crate) finished_pens: Vec<vector_ui::FinishedPen>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     /// Perspective Crop tool gesture and clicked corners (see `perspective_crop_ui`).
@@ -1029,6 +1036,10 @@ mod status_bar_tests;
 mod stroke_timing_tests;
 
 #[cfg(test)]
+mod cam_reset_tool_mode_tests;
+#[cfg(test)]
+mod patch_reset_tool_tests;
+#[cfg(test)]
 mod patch_tool_history_names_tests;
 #[cfg(test)]
 mod polygon_lasso_step_snap_tests;
@@ -1062,6 +1073,8 @@ mod background_eraser_bar_angle_tests;
 #[cfg(test)]
 mod brush_alt_digit_smoothing_tests;
 #[cfg(test)]
+mod brush_hud_rate_tests;
+#[cfg(test)]
 mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod burn_default_tip_tests;
@@ -1089,3 +1102,8 @@ mod background_eraser_digit_keys_tests;
 
 #[cfg(test)]
 mod clone_stamp_reset_tip_tests;
+#[cfg(test)]
+mod sponge_default_tip_tests;
+
+#[cfg(test)]
+mod red_eye_context_menu_tests;

@@ -27,6 +27,10 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// `points` and `target`): shared by the live preview and the commit. `None` when no source
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
+    // Refused there (`healing_refused`): no live preview either.
+    if healing_in_indexed(app, app.ui.tool) {
+        return None;
+    }
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
@@ -37,14 +41,10 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
-    // the aligned pairing and applies the slot's scale/rotation/flip.
-    let slot = app.session.presets.clone.active().source.is_some();
-    match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
-        _ if slot => {}
-        (Some(off), _) => p["offset"] = json!(off),
-        (None, Some(src)) => p["source"] = json!(src),
-        (None, None) => return None,
-    }
+    // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
+    // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
+    // so falling back to them would read another document's coordinates from this one's pixels.
+    app.session.presets.clone.active().source?;
     Some(p)
 }
 
@@ -194,6 +194,21 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
     photocraft_engine::paint::rng::seed_from_bytes(first.as_bytes())
 }
 
+/// A Clone Stamp press with no source point yet: the reference application's alert, opened at
+/// the press (#12609) and once while it is up. Returns whether it refused the stroke.
+pub(crate) fn clone_stamp_without_source(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if tool != Tool::CloneStamp || clone_params(app).is_some() {
+        return false;
+    }
+    let message = if cfg!(target_os = "macos") {
+        tl!("Could not use the clone stamp tool because the area to clone has not been defined (Option-click to define a source point).")
+    } else {
+        tl!("Could not use the clone stamp tool because the area to clone has not been defined (Alt-click to define a source point).")
+    };
+    open_alert_once(app, message);
+    true
+}
+
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers, line: bool) -> bool {
     finish_stroke_with(app, tool, points, mods, line, None)
@@ -216,7 +231,13 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
         Tool::PatternStamp => ("paint.patternStamp", pattern_stamp_params(app, points)),
         Tool::Healing | Tool::CloneStamp => {
+            if healing_refused(app, tool) {
+                return true;
+            }
             let Some(p) = clone_params(app) else {
+                if clone_stamp_without_source(app, tool) {
+                    return true;
+                }
                 // Option-click on the Mac, Alt-click on Windows.
                 app.ui.status = if cfg!(target_os = "macos") {
                     tl!("Option-click to define a source point to clone from")
@@ -594,10 +615,10 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 
 /// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
 /// rectangle: with Object Finder on it selects the object under the pointer, the one hovering
-/// highlighted (#4087; ⇧ adds, ⌥ subtracts, ⇧⌥ intersects, otherwise replaces). With it off it
-/// falls back to a Quick Selection dab at
-/// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
-/// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
+/// highlighted (#4087). With it off it falls back to a Quick Selection dab at the brush size
+/// instead of looking dead (⌥ or Subtract mode subtracts, otherwise it adds). Larger drags
+/// run the rectangle GrabCut. Both combine as the options bar's New / Add / Subtract /
+/// Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥ intersecting (#12853).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
     if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
@@ -608,14 +629,9 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all.object_selection;
+    let mode = crate::tool_feedback::selection_mode(Tool::ObjectSelection, app.ui.selection_mode, mods);
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
-        let mode = match (mods.shift, mods.alt) {
-            (true, true) => "intersect",
-            (true, false) => "add",
-            (false, true) => "subtract",
-            (false, false) => "replace",
-        };
         let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all}));
         crate::object_finder::clear(app);
         report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
@@ -623,18 +639,11 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     }
     if w < 2.0 || h < 2.0 {
         let size = app.session.tools.brush.size;
-        let mode = if mods.alt { "subtract" } else { "add" };
+        let mode = if mods.alt || mode == "subtract" { "subtract" } else { "add" };
         let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
         report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
-    let mode = if mods.alt {
-        "subtract"
-    } else if mods.shift {
-        "add"
-    } else {
-        "replace"
-    };
     let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
     report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
 }
@@ -650,8 +659,28 @@ pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, 
     }
 }
 
+/// The Healing Brush in an Indexed Color document: the reference's alert with OK at the ⌥-click
+/// and at a stroke, and nothing changes (#12112). The engine refuses the stroke with the same words.
+fn healing_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if !healing_in_indexed(app, tool) {
+        return false;
+    }
+    crate::brush_refusal::prompt(
+        app,
+        tl!("Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
+    );
+    true
+}
+
+fn healing_in_indexed(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::Healing && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
+}
+
 /// ⌥-click with Clone Stamp / Healing Brush sets the source.
 pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if healing_refused(app, app.active_tool()) {
+        return;
+    }
     app.ui.clone_source = Some([x.round(), y.round()]);
     app.ui.clone_offset = None;
     let _ = app.run("cloneSource.set", json!({"source": [x.round(), y.round()]}));
@@ -662,8 +691,13 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
 
 /// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
 /// is painted, as in Photoshop: setting the source (⌥-click) leaves nothing on the canvas (#668).
+/// A source in another open document has no point on this canvas.
 pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.active_tool(), Tool::CloneStamp | Tool::Healing) {
+        return None;
+    }
+    let slot = app.session.presets.clone.active();
+    if slot.document_closed || slot.source_doc(app.session.active().map(|d| d.doc.id)).is_some() {
         return None;
     }
     let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;
@@ -756,7 +790,8 @@ fn cam_amount_slider(ui: &mut egui::Ui, name: &str, value: &mut f32, lo: f32, hi
     });
 }
 
-fn open_cam_range_alert(app: &mut PhotocraftApp, message: &str) {
+/// Opens the alert with `message` (English, translated here) unless it is already up.
+fn open_alert_once(app: &mut PhotocraftApp, message: &str) {
     let message = tl!(message).to_owned();
     let shown =
         app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(message.as_str()));
@@ -780,11 +815,11 @@ fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         opt(ui, tl!("Structure:"));
         if cam_integer_popup(ui, "cam-structure", "Structure", &mut app.ui.tool_options.cam_structure, 1.0, 7.0, STRUCTURE_TIP) {
-            open_cam_range_alert(app, STRUCTURE_RANGE_ALERT);
+            open_alert_once(app, STRUCTURE_RANGE_ALERT);
         }
         opt(ui, tl!("Color:"));
         if cam_integer_popup(ui, "cam-color", "Color", &mut app.ui.tool_options.cam_color, 0.0, 10.0, COLOR_TIP) {
-            open_cam_range_alert(app, COLOR_RANGE_ALERT);
+            open_alert_once(app, COLOR_RANGE_ALERT);
         }
         crate::widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.content_aware_move, tl!("Sample All Layers"))
             .on_hover_text(tl!("Enable to remix all layers"));
@@ -1108,6 +1143,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::ObjectSelection => {
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));
             crate::widgets::checkbox(ui, &mut o.sample_all.object_selection, tl!("Sample All Layers"));
             opt(ui, tl!("Drag a rectangle around the object"));
@@ -1176,3 +1213,11 @@ mod smudge_mode_bar_tests;
 #[cfg(test)]
 #[path = "../sponge_flow_field_tests.rs"]
 mod sponge_flow_field_tests;
+
+#[cfg(test)]
+#[path = "../healing_indexed_alert_tests.rs"]
+mod healing_indexed_alert_tests;
+
+#[cfg(test)]
+#[path = "../clone_stamp_no_source_alert_tests.rs"]
+mod clone_stamp_no_source_alert_tests;
