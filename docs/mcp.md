@@ -106,10 +106,12 @@ not put the CLI on `PATH`.
 
 ## Start a session
 
-PhotoCraft follows the same conventions as FilmCraft #28. Start a headless session:
+PhotoCraft follows the same conventions as FilmCraft #28. Start a headless session (`--headless`:
+without it, `mcp` works in the open PhotoCraft window while the ArtCraft Launcher's agents switch is
+on, and may start the app; scripts, tests and agents pass it):
 
 ```sh
-photocraft-cli mcp \
+photocraft-cli mcp --headless \
   --automation-read-root /work/project \
   --automation-read-root /library/reference \
   --automation-write-root /work/project

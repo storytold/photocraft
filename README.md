@@ -242,8 +242,10 @@ photocraft-cli batch --actions grade.json --in ./raw --out ./graded
 # Every subcommand explains itself
 photocraft-cli batch --help
 
-# Let an agent drive it over MCP (headless, or bridged to the running app)
+# Let an agent drive it over MCP: the open window while agents are allowed, otherwise headless
 photocraft-cli mcp
+# Always without a window (scripts, tests)
+photocraft-cli mcp --headless
 ```
 
 To let Claude or another AI app drive the open PhotoCraft window without a terminal, turn on **ArtCraft Launcher › Settings › AI agents** and click **Add** next to the AI app (one entry for every Craft app). See [`docs/mcp.md`](docs/mcp.md). These settings are behind the Craft suite's `AI-MCP` feature flag: set `AI-MCP = true` in `ArtCraft/flags.toml`, or start PhotoCraft with `CRAFT_FLAGS=AI-MCP`.

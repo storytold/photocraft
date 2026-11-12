@@ -11,10 +11,11 @@ The simplest setup needs no terminal: turn on ArtCraft Launcher › Settings ›
 For a source checkout, first [install the CLI on PATH and register the server](../../../docs/mcp.md#install-and-register).
 The installed binary survives `cargo clean`; a symlink into `target/release` does not.
 
-Start the headless server with:
+Start the headless server with (without `--headless`, `mcp` works in the open PhotoCraft window
+while the ArtCraft Launcher's agents switch is on):
 
 ```sh
-photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project
+photocraft-cli mcp --headless --automation-read-root /work/project --automation-write-root /work/project
 ```
 
 Bridge to a running desktop application with the same private token file used by the app:
