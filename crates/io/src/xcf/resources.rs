@@ -271,7 +271,7 @@ mod tests {
         assert!(gray_to_rgb(pixels, &mut 7, &Interrupt::NONE).is_err());
         let mut image = TestImage::rgb8(1, 1);
         image.precision = 650;
-        let mut floating = TestLayer::rgba("Invalid floating coverage", 1, 1, [1.25f32, 1.0].into_iter().flat_map(f32::to_be_bytes).collect());
+        let mut floating = TestLayer::rgba("Invalid floating coverage", 1, 1, [0.5f32, 1.25].into_iter().flat_map(f32::to_be_bytes).collect());
         floating.kind = 3;
         floating.props.push((5, 97u64.to_be_bytes().to_vec()));
         image.layers.push(floating);

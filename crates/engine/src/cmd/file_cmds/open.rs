@@ -180,19 +180,6 @@ pub(crate) fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) 
     }
 }
 
-/// Parse an explicit per-open historical XCF sample choice. It is never a preference.
-pub fn historical_xcf_sample_order(params: &Value, command: &str) -> Result<Option<photocraft_io::HistoricalXcfSampleOrder>> {
-    match params.get("historicalXcfSampleOrder") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) => match value.as_str() {
-            "little-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian)),
-            "big-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::BigEndian)),
-            _ => Err(EngineError::Other(format!("{command}: historicalXcfSampleOrder must be little-endian or big-endian"))),
-        },
-        _ => Err(EngineError::Other(format!("{command}: historicalXcfSampleOrder must be a string"))),
-    }
-}
-
 /// Import bytes with an optional format override, retaining source identity and opening diagnostics.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
     open_bytes_as_with_options(s, name, bytes, as_ext, path, false)
@@ -210,10 +197,12 @@ pub fn open_bytes_as_with_options(
     path: Option<String>,
     approve_high_memory: bool,
 ) -> Result<Value> {
-    open_bytes_as_with_policy(s, name, bytes, as_ext, path, approve_high_memory, None)
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.psd_high_memory_approved = approve_high_memory;
+    open_bytes_as_with_import_options(s, name, bytes, as_ext, path, &opts)
 }
 
-/// Decode with the explicit historical sample order, without granting high-memory approval.
+/// Decode with an explicit historical sample order without granting high-memory approval.
 pub fn open_bytes_as_with_sample_order(
     s: &mut Session,
     name: &str,
@@ -222,44 +211,41 @@ pub fn open_bytes_as_with_sample_order(
     path: Option<String>,
     sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
 ) -> Result<Value> {
-    open_bytes_as_with_policy(s, name, bytes, as_ext, path, false, sample_order)
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.historical_xcf_sample_order = sample_order;
+    open_bytes_as_with_import_options(s, name, bytes, as_ext, path, &opts)
 }
 
-/// Keep independent per-open sample interpretation and high-memory consent on the shared decoder.
-fn open_bytes_as_with_policy(
+/// Decode this import with explicit per-source options, including ambiguous historical XCF samples.
+pub fn open_bytes_as_with_import_options(
     s: &mut Session,
     name: &str,
     bytes: &[u8],
     as_ext: Option<&str>,
     path: Option<String>,
-    approve_high_memory: bool,
-    sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+    opts: &photocraft_io::ImportOptions,
 ) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let mut opts = crate::jobs::import_options(s.prefs());
-    opts.historical_xcf_sample_order = sample_order;
-    opts.psd_high_memory_approved = approve_high_memory;
-    opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, path.as_deref(), bytes)?;
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| crate::error::io_open_error(&decode_name, e))?;
+        let r = photocraft_io::import_with_options(&decode_name, bytes, opts).map_err(|e| crate::error::io_open_error(&decode_name, e))?;
         (r, None)
     };
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
         return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
     }
+    if let Some(view) = &r.initial_view {
+        view.validate(&r.document).map_err(|error| EngineError::Other(error.to_string()))?;
+    }
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
     raw_defaults(s, &r.warnings, &mut doc);
-    if let Some(view) = &r.initial_view {
-        view.validate(&doc).map_err(|e| EngineError::Other(e.to_string()))?;
-    }
     let path = match template_name(s, name) {
         Some(untitled) => {
             doc.name = untitled;
@@ -275,11 +261,21 @@ fn open_bytes_as_with_policy(
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
     let protected = path.as_ref().filter(|_| r.source_read_only).cloned();
+    let previous_active = s.active().map(|state| state.doc.id);
     let (i, color) = s.open_imported_document(doc, path.filter(|_| !r.source_read_only), &crate::jobs::JobCtx::new())?;
-    s.apply_import_initial_view(r.initial_view)?;
     if let Some(st) = s.active_mut() {
         st.source_read_only = r.source_read_only;
         st.protected_import_source = protected;
+    }
+    if let Err(error) = s.apply_import_initial_view(r.initial_view) {
+        s.close(i);
+        if let Some(previous) = previous_active
+            && let Some(index) = s.documents().iter().position(|state| state.doc.id == previous)
+        {
+            s.set_active(index);
+        }
+        s.sync_tools_mask_target();
+        return Err(error);
     }
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
@@ -292,6 +288,7 @@ fn open_bytes_as_with_policy(
 
 /// Open the selected file with its decoder options and record its Batch source identity.
 pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
+    let order = historical_xcf_sample_order(p, "file.openAs")?;
     let path = str_param(p, "path", "file.openAs")?.to_string();
     let as_ext = p.get("as").or_else(|| p.get("format")).and_then(Value::as_str);
     let approve_high_memory = match p.get("approveHighMemory") {
@@ -302,10 +299,22 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let bytes = read_file(&path)?;
-    let sample_order = historical_xcf_sample_order(p, "file.openAs")?;
-    let result = open_bytes_as_with_policy(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory, sample_order)?;
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.psd_high_memory_approved = approve_high_memory;
+    opts.historical_xcf_sample_order = order;
+    let result = open_bytes_as_with_import_options(s, &path, &bytes, as_ext, Some(path.clone()), &opts)?;
     remember_batch_open(s);
     Ok(result)
+}
+
+/// Parse an explicit per-import choice. Neither a missing value nor null infers an order.
+pub fn historical_xcf_sample_order(p: &Value, cmd: &str) -> Result<Option<photocraft_io::HistoricalXcfSampleOrder>> {
+    match p.get("historicalXcfSampleOrder") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if value == "little-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian)),
+        Some(Value::String(value)) if value == "big-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::BigEndian)),
+        _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: "historicalXcfSampleOrder must be little-endian or big-endian".into() }),
+    }
 }
 
 /// Answers a pending high-memory preflight: `approve` false cancels it; true rechecks the hard

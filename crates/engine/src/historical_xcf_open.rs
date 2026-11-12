@@ -1,4 +1,4 @@
-//! Per-open historical sample decisions. Encoded sources remain inert until answered.
+//! Bounded encoded sources awaiting an explicit historical XCF sample-order choice.
 use super::{JobCtx, OPEN_JOB, OpenSource, Started};
 use crate::{EngineError, Result, Session};
 use serde_json::{Value, json};
@@ -7,27 +7,188 @@ use std::sync::Arc;
 const MAX_HELD: usize = 16;
 const MAX_HELD_BYTES: usize = 1024 * 1024 * 1024;
 
-#[derive(Clone)]
 pub(super) struct Held {
     id: u64,
     name: String,
-    path: Option<String>,
     bytes: Arc<Vec<u8>>,
-}
-
-struct Request {
-    name: String,
-    source: OpenSource,
+    options: photocraft_io::ImportOptions,
     path: Option<String>,
-    interactive: bool,
-    order: Option<photocraft_io::HistoricalXcfSampleOrder>,
-    held: Option<u64>,
 }
 
-enum Read {
-    Decoded(Box<photocraft_io::ImportResult>, Decision, JobCtx),
-    Choice(Arc<Vec<u8>>, photocraft_io::HistoricalXcfSampleOrderRequest, JobCtx),
-    Preflight(super::PendingPsdPreflight, JobCtx),
+pub(super) fn hold(
+    s: &mut Session,
+    name: String,
+    bytes: Arc<Vec<u8>>,
+    question: photocraft_io::HistoricalXcfSampleOrderRequest,
+    options: photocraft_io::ImportOptions,
+) -> Result<Value> {
+    hold_with_budget(s, name, bytes, question, options, MAX_HELD_BYTES)
+}
+
+/// Retain the source identity alongside the exact options and bounded encoded allocation.
+pub(super) fn hold_with_path(
+    s: &mut Session,
+    name: String,
+    bytes: Arc<Vec<u8>>,
+    question: photocraft_io::HistoricalXcfSampleOrderRequest,
+    options: photocraft_io::ImportOptions,
+    path: Option<String>,
+) -> Result<Value> {
+    let result = hold(s, name, bytes, question, options)?;
+    if let Some(held) = s.jobs.historical_xcf.last_mut() {
+        held.path = path;
+    }
+    Ok(result)
+}
+
+fn hold_with_budget(
+    s: &mut Session,
+    name: String,
+    bytes: Arc<Vec<u8>>,
+    question: photocraft_io::HistoricalXcfSampleOrderRequest,
+    options: photocraft_io::ImportOptions,
+    byte_budget: usize,
+) -> Result<Value> {
+    // A truncated Vec still owns its allocation. Charging its length would let retained
+    // source capabilities exceed the pending-choice memory budget without changing the file.
+    let retained = s.jobs.historical_xcf.iter().try_fold(bytes.capacity(), |total, held| total.checked_add(held.bytes.capacity()));
+    if s.jobs.historical_xcf.len() >= MAX_HELD || retained.is_none_or(|total| total > byte_budget) {
+        return Err(EngineError::Other("too many historical XCF sources await a sample-order choice; finish or cancel an earlier choice".into()));
+    }
+    let id = s.jobs.next_historical_xcf.checked_add(1).ok_or_else(|| EngineError::Other("historical source identity limit reached".into()))?;
+    s.jobs.next_historical_xcf = id;
+    s.jobs.historical_xcf.push(Held { id, name, bytes, options, path: None });
+    Ok(json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrderRequired":{"version":question.version,"bitsPerSample":question.bits_per_sample}}))
+}
+
+/// Retain exactly the file that produced the typed requirement. Reopening is safe only after
+/// checking its handle identity against that import, and again after the bounded snapshot.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn snapshot(path: &str, expected: &photocraft_io::FileIdentity, ctl: &photocraft_raster::Interrupt) -> Result<Arc<Vec<u8>>> {
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
+    let failed = |error: std::io::Error| EngineError::Other(format!("{path}: {error}"));
+    let mut file = std::fs::File::open(path).map_err(failed)?;
+    if &photocraft_io::FileIdentity::of_handle(&file).map_err(failed)? != expected {
+        return Err(EngineError::SourceChanged { name: path.into() });
+    }
+    let size = file.metadata().map_err(failed)?.len();
+    if size > MAX_HELD_BYTES as u64 {
+        return Err(EngineError::Other("historical XCF source exceeds the pending-choice byte budget".into()));
+    }
+    let reader = SnapshotReader { file: &mut file, ctl, read: 0, size };
+    let bytes = photocraft_format::read::read_all(&mut std::io::Read::take(reader, MAX_HELD_BYTES as u64 + 1), size)
+        .map_err(|error| if ctl.check().is_err() { EngineError::Cancelled } else { failed(error) })?;
+    if bytes.len() as u64 != size || bytes.len() > MAX_HELD_BYTES || &photocraft_io::FileIdentity::of_handle(&file).map_err(failed)? != expected {
+        return Err(EngineError::SourceChanged { name: path.into() });
+    }
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
+    Ok(Arc::new(bytes))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct SnapshotReader<'a, 'b> {
+    file: &'a mut std::fs::File,
+    ctl: &'a photocraft_raster::Interrupt<'b>,
+    read: u64,
+    size: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Read for SnapshotReader<'_, '_> {
+    fn read(&mut self, destination: &mut [u8]) -> std::io::Result<usize> {
+        self.ctl.check().map_err(|_| std::io::Error::other("cancelled historical source snapshot"))?;
+        // Keep cancellation latency bounded even when read_all requests a large remainder.
+        let length = destination.len().min(256 * 1024);
+        let destination = destination.get_mut(..length).ok_or_else(|| std::io::Error::other("invalid historical snapshot buffer"))?;
+        let count = std::io::Read::read(self.file, destination)?;
+        self.read = self.read.saturating_add(count as u64);
+        self.ctl.progress((self.read as f64 / self.size.max(1) as f64).min(1.0) as f32);
+        Ok(count)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn snapshot(_: &str, _: &photocraft_io::FileIdentity, _: &photocraft_raster::Interrupt) -> Result<Arc<Vec<u8>>> {
+    Err(EngineError::Other("cannot open filesystem paths on the web".into()))
+}
+
+impl Session {
+    /// Open using explicit per-import options. An unset historical order is never inferred.
+    pub fn start_open_with_options(&mut self, name: &str, source: OpenSource, options: &photocraft_io::ImportOptions) -> Result<Started> {
+        self.start_open_inner(name, source, false, options.psd_high_memory_approved, options.psd_approved_estimate, None, true, Some(*options))
+    }
+
+    /// Interactive counterpart: typed historical, memory and profile questions remain pending.
+    pub fn start_open_for_user_with_options(
+        &mut self,
+        name: &str,
+        source: OpenSource,
+        options: &photocraft_io::ImportOptions,
+        background: bool,
+    ) -> Result<Started> {
+        self.start_open_transaction(
+            name,
+            source,
+            true,
+            options.psd_high_memory_approved,
+            options.psd_approved_estimate,
+            None,
+            background,
+            Some(*options),
+            None,
+            false,
+        )
+    }
+
+    /// Resume the exact retained bytes once. Invalid or missing choices must be rejected by
+    /// the host before this typed API; cancellation or failure releases the job's source.
+    pub fn resume_historical_xcf_open(&mut self, id: u64, order: photocraft_io::HistoricalXcfSampleOrder, background: bool) -> Result<Started> {
+        self.resume_historical_xcf_open_inner(id, order, background, false)
+    }
+
+    fn resume_historical_xcf_open_inner(
+        &mut self,
+        id: u64,
+        order: photocraft_io::HistoricalXcfSampleOrder,
+        background: bool,
+        in_command: bool,
+    ) -> Result<Started> {
+        let index = self
+            .jobs
+            .historical_xcf
+            .iter()
+            .position(|held| held.id == id)
+            .ok_or_else(|| EngineError::Other("historical XCF source choice is no longer available".into()))?;
+        let held = self.jobs.historical_xcf.remove(index);
+        let mut options = held.options;
+        options.historical_xcf_sample_order = Some(order);
+        self.start_open_transaction(
+            &held.name,
+            OpenSource::Bytes(held.bytes),
+            true,
+            options.psd_high_memory_approved,
+            options.psd_approved_estimate,
+            None,
+            background,
+            Some(options),
+            held.path,
+            in_command,
+        )
+    }
+
+    /// Cancel a still-pending encoded source without admitting a document.
+    pub fn cancel_historical_xcf_open(&mut self, id: u64) -> bool {
+        let before = self.jobs.historical_xcf.len();
+        self.jobs.historical_xcf.retain(|held| held.id != id);
+        before != self.jobs.historical_xcf.len()
+    }
+}
+
+/// Prepared worker data stays private until the transaction admits it atomically.
+pub(super) struct PreparedOpen {
+    imported: photocraft_io::ImportResult,
+    decision: Decision,
+    ctx: JobCtx,
 }
 
 enum Decision {
@@ -36,7 +197,7 @@ enum Decision {
 }
 
 /// Immutable request-time policy inputs; worker preparation never borrows the live session.
-struct WorkerPolicy {
+pub(super) struct WorkerPolicy {
     color: crate::color_cmds::ColorSettings,
     ignore_exif: bool,
     exr_aces_cg: bool,
@@ -47,7 +208,7 @@ struct WorkerPolicy {
 
 impl WorkerPolicy {
     /// Snapshot only settings used by native open policy and preparation authority.
-    fn capture(s: &Session) -> Self {
+    pub(super) fn capture(s: &Session) -> Self {
         Self {
             color: s.color.settings.clone(),
             ignore_exif: s.prefs().file_handling.ignore_exif_profile_tag,
@@ -59,7 +220,7 @@ impl WorkerPolicy {
     }
 
     /// Finish color policy and native caches on the execution thread, or retain an unprepared color/damage hold.
-    fn prepare(self, name: &str, mut imported: photocraft_io::ImportResult, damaged: bool, interactive: bool, ctx: &JobCtx) -> Result<Read> {
+    pub(super) fn prepare(self, name: &str, mut imported: photocraft_io::ImportResult, damaged: bool, interactive: bool, ctx: &JobCtx) -> Result<PreparedOpen> {
         ctx.check()?;
         if self.refuse_preview && imported.preview_only {
             return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
@@ -110,7 +271,7 @@ impl WorkerPolicy {
             Decision::Prepared { color: report }
         };
         ctx.check()?;
-        Ok(Read::Decoded(Box::new(imported), decision, ctx.clone()))
+        Ok(PreparedOpen { imported, decision, ctx: ctx.clone() })
     }
 }
 
@@ -127,7 +288,7 @@ fn install_prepared(
     if let Some(view) = &view {
         view.validate(&document).map_err(|error| EngineError::Other(error.to_string()))?;
     }
-    let previous = s.active_index();
+    let previous = s.active().map(|state| state.doc.id);
     let index = s.add_document(document, path.clone().filter(|_| !source_read_only));
     if let Some(state) = s.active_mut() {
         state.source_read_only = source_read_only;
@@ -142,7 +303,7 @@ fn install_prepared(
     })();
     if result.is_err() {
         let _ = s.close(index);
-        if let Some(previous) = previous {
+        if let Some(previous) = previous.and_then(|id| s.documents().iter().position(|state| state.doc.id == id)) {
             s.set_active(previous);
         }
         s.sync_tools_mask_target();
@@ -150,69 +311,72 @@ fn install_prepared(
     result
 }
 
-/// Start an open request with its source path identity and optional interactive historical sample-order handoff.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn start(
-    s: &mut Session,
-    name: &str,
-    source: OpenSource,
-    interactive: bool,
-    approve_high_memory: bool,
-    approved_estimate: Option<u64>,
-    expected_fingerprint: Option<super::SourceFingerprint>,
-    background: bool,
-) -> Result<Started> {
-    let path = match &source {
-        OpenSource::Path(path) => Some(path.clone()),
-        OpenSource::Bytes(_) => None,
+/// Install only prepared data, retaining captured prompt policy and one-time view state.
+pub(super) fn install(s: &mut Session, name: &str, path: Option<String>, prepared: PreparedOpen) -> Result<Value> {
+    let PreparedOpen { mut imported, decision, ctx } = prepared;
+    ctx.check()?;
+    let path = match crate::file_cmds::template_name(s, name) {
+        Some(untitled) => {
+            imported.document.name = untitled;
+            None
+        }
+        None => {
+            imported.document.name = crate::file_cmds::file_name(name);
+            path
+        }
     };
-    run_with_approval(
-        s,
-        Request { name: name.into(), source, path, interactive, order: None, held: None },
-        background,
-        approve_high_memory,
-        approved_estimate,
-        expected_fingerprint,
-        false,
-    )
+    let has_initial_view = imported.initial_view.is_some();
+    let initial_path_selection = imported.initial_view.as_ref().and_then(|view| view.selected_path);
+    let value = if let Decision::Held { question, damaged, color_settings, ignore_exif } = decision {
+        let conversion = crate::import_report_cmds::summary(imported.document.metadata.import_conversion.as_ref());
+        let held = s.hold_open_with_policy(imported.document, imported.source_read_only, imported.initial_view, Some(*color_settings), Some(ignore_exif));
+        if let Err(error) = ctx.check() {
+            let _ = s.take_held_open_with_view(held);
+            return Err(error);
+        }
+        json!({"held":held,"name":name,"warnings":imported.warnings,"color":question,"damaged":damaged,"importConversion":conversion,"hasInitialView":has_initial_view,"initialPathSelection":initial_path_selection})
+    } else {
+        let Decision::Prepared { color } = decision else { return Err(EngineError::Other("invalid prepared open decision".into())) };
+        let (index, id) = install_prepared(s, imported.document, path, imported.source_read_only, imported.initial_view, &ctx)?;
+        crate::file_cmds::batch_open_notice(s, name, &imported.warnings, &color);
+        crate::file_cmds::remember_batch_open(s);
+        let conversion = s.active().map(|state| crate::import_report_cmds::summary(state.doc.metadata.import_conversion.as_ref())).unwrap_or(Value::Null);
+        json!({"document":index,"docId":id.0,"name":name,"warnings":imported.warnings,"color":color,"importConversion":conversion,"hasInitialView":has_initial_view,"initialPathSelection":initial_path_selection})
+    };
+    Ok(value)
 }
 
-/// Open on the selected execution path while allowing an explicit user choice for ambiguous historical sample bytes.
+/// The shared transaction owns decoding, approval and historical source admission.
 pub(super) fn interactive(s: &mut Session, name: &str, source: OpenSource, path: Option<String>, background: bool) -> Result<Started> {
-    run(s, Request { name: name.into(), source, path, interactive: true, order: None, held: None }, background)
+    s.start_open_transaction(name, source, true, false, None, None, background, None, path, false)
 }
 
-/// Validate typed open/resume/cancel controls, consume held bytes on valid attempts and preserve invalid-choice
-/// retries.
+/// Validate every control before consuming a retained source. A valid resume is one attempt.
 pub(crate) fn command(s: &mut Session, params: &Value) -> Result<Value> {
     let order = crate::file_cmds::historical_xcf_sample_order(params, OPEN_JOB)?;
-    let cancel = match params.get("cancel") {
-        None => false,
-        Some(Value::Bool(value)) => *value,
-        _ => return Err(EngineError::Other("file.open: cancel must be boolean".into())),
+    let boolean = |name: &str| -> Result<bool> {
+        match params.get(name) {
+            None => Ok(false),
+            Some(Value::Bool(value)) => Ok(*value),
+            _ => Err(EngineError::Other(format!("file.open: {name} must be boolean"))),
+        }
     };
-    let interactive = match params.get("interactive") {
-        None => false,
-        Some(Value::Bool(value)) => *value,
-        _ => return Err(EngineError::Other("file.open: interactive must be boolean".into())),
-    };
-    let request = if let Some(id) = params.get("heldHistoricalXcfOpen") {
+    let cancel = boolean("cancel")?;
+    let interactive = boolean("interactive")?;
+    let approve = boolean("approveHighMemory")?;
+    let background = s.jobs.spawn;
+    let started = if let Some(id) = params.get("heldHistoricalXcfOpen") {
         let id = id.as_u64().ok_or_else(|| EngineError::Other("file.open: heldHistoricalXcfOpen must be an unsigned identity".into()))?;
-        let index = s
-            .jobs
-            .historical_xcf
-            .iter()
-            .position(|held| held.id == id)
-            .ok_or_else(|| EngineError::Other("file.open: historical source choice is no longer available".into()))?;
+        if !s.holds_historical_xcf_open(id) {
+            return Err(EngineError::Other("historical XCF source choice is no longer available".into()));
+        }
         if cancel {
-            s.jobs.historical_xcf.remove(index);
-            return Ok(json!({"cancelled": true, "heldHistoricalXcfOpen": id}));
+            s.cancel_historical_xcf_open(id);
+            return Ok(json!({"cancelled":true,"heldHistoricalXcfOpen":id}));
         }
-        if order.is_none() {
-            return Err(EngineError::Other("file.open: choose historicalXcfSampleOrder before resuming this file".into()));
-        }
-        let held = s.jobs.historical_xcf.get(index).cloned().ok_or_else(|| EngineError::Other("historical source choice is gone".into()))?;
-        Request { name: held.name, source: OpenSource::Bytes(held.bytes), path: held.path, interactive, order, held: Some(id) }
+        let order = order.ok_or_else(|| EngineError::Other("file.open: choose historicalXcfSampleOrder before resuming this file".into()))?;
+        // Dispatch must retain ownership of its pending worker metadata on resume too.
+        s.resume_historical_xcf_open_inner(id, order, background, true)?
     } else {
         if cancel {
             return Err(EngineError::Other("file.open: cancel requires a held historical source".into()));
@@ -223,33 +387,25 @@ pub(crate) fn command(s: &mut Session, params: &Value) -> Result<Value> {
             .filter(|path| !path.is_empty())
             .ok_or_else(|| EngineError::Other("file.open: path is required".into()))?
             .to_string();
-        Request { name: path.clone(), source: OpenSource::Path(path.clone()), path: Some(path), interactive, order, held: None }
+        let mut options = super::import_options(s.prefs());
+        options.historical_xcf_sample_order = order;
+        s.start_open_transaction(&path, OpenSource::Path(path.clone()), interactive, approve, None, None, background, Some(options), Some(path.clone()), true)?
     };
-    let approve_high_memory = match params.get("approveHighMemory") {
-        None => false,
-        Some(Value::Bool(value)) => *value,
-        _ => return Err(EngineError::Other("file.open: approveHighMemory must be boolean".into())),
-    };
-    let background = s.jobs.spawn;
-    let started = run_with_approval(s, request, background, approve_high_memory, None, None, true);
-    // Successful installation consumes the held identity in `run`'s apply step.
-    // Failed authorization, decoding or cancellation keeps the capability retryable.
-    match started? {
+    match started {
         Started::Done(value) => Ok(value),
         Started::Job(id) => Ok(json!({"job":id.0})),
     }
 }
 
 impl Session {
-    /// Whether this session still owns the encoded source for an unanswered historical XCF choice.
+    /// Whether this session still owns the inert encoded source capability.
     pub fn holds_historical_xcf_open(&self, id: u64) -> bool {
         self.jobs.historical_xcf.iter().any(|held| held.id == id)
     }
 
-    /// Revoke only existing inert historical sources, validating the entire set before releasing any of them.
-    /// This cleanup capability accepts no path or decoding policy and performs no file access.
+    /// Validate the entire set before releasing any retained source; this never opens files.
     pub fn cancel_held_historical_xcf_opens(&mut self, ids: &[u64]) -> Result<()> {
-        if ids.len() > MAX_HELD || ids.iter().any(|id| !self.jobs.historical_xcf.iter().any(|held| held.id == *id)) {
+        if ids.len() > MAX_HELD || ids.iter().any(|id| !self.holds_historical_xcf_open(*id)) {
             return Err(EngineError::Other("historical source choice is no longer available".into()));
         }
         self.jobs.historical_xcf.retain(|held| !ids.contains(&held.id));
@@ -257,213 +413,39 @@ impl Session {
     }
 }
 
-/// Decode before installation or hold bounded encoded bytes for a required choice; cancellation and failure publish no
-/// partial document.
-fn run(s: &mut Session, request: Request, background: bool) -> Result<Started> {
-    run_with_approval(s, request, background, false, None, None, false)
-}
-
-fn run_with_approval(
-    s: &mut Session,
-    request: Request,
-    background: bool,
-    approve_high_memory: bool,
-    approved_estimate: Option<u64>,
-    expected_fingerprint: Option<super::SourceFingerprint>,
-    in_command: bool,
-) -> Result<Started> {
-    let Request { name, source, path, interactive, order, held } = request;
-    let label = format!("Opening {name}");
-    let job_params = json!({"name":name});
-    let name_w = name.clone();
-    let mut options = super::import_options(s.prefs());
-    options.historical_xcf_sample_order = order;
-    options.psd_high_memory_approved = approve_high_memory;
-    options.psd_approved_estimate = approved_estimate;
-    let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
-    let policy = WorkerPolicy::capture(s);
-    let work = move |ctx: &JobCtx| {
-        let _test_memory = test_memory_scope.enter();
-        ctx.progress(0., "Reading");
-        let initial_fingerprint = match &source {
-            OpenSource::Bytes(_) => Some(super::SourceFingerprint::of(&source)?),
-            OpenSource::Path(_) => None,
-        };
-        if let Some(expected) = &expected_fingerprint
-            && let Some(current) = &initial_fingerprint
-            && !expected.matches(current)
-        {
-            return Err(EngineError::SourceChanged { name: name_w.clone() });
-        }
-        let pause = |required, soft_limit, hard_limit, available_ram, source, fingerprint| {
-            Read::Preflight(
-                super::PendingPsdPreflight {
-                    id: 0,
-                    name: name_w.clone(),
-                    source,
-                    fingerprint,
-                    required,
-                    soft_limit,
-                    hard_limit,
-                    available_ram,
-                    confirm_damage: interactive,
-                },
-                ctx.clone(),
-            )
-        };
-        ctx.check()?;
-        let imported = match source {
-            OpenSource::Bytes(bytes) => {
-                let result = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &options, ctl));
-                match result {
-                    Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if interactive => {
-                        ctx.check()?;
-                        return Ok(Read::Choice(bytes, question, ctx.clone()));
-                    }
-                    Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if interactive => {
-                        let fingerprint = initial_fingerprint.ok_or_else(|| EngineError::Other("missing source identity".into()))?;
-                        return Ok(pause(required, soft_limit, hard_limit, available_ram, OpenSource::Bytes(bytes), fingerprint));
-                    }
-                    result => result,
-                }
-            }
-            OpenSource::Path(path) => {
-                let mut opened = None;
-                let result =
-                    ctx.stage(0.0, 0.95, "Decoding", |ctl| super::import_path(&name_w, &path, &options, expected_fingerprint.as_ref(), ctl, &mut opened));
-                match result {
-                    Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(_)) if interactive => {
-                        // Retain the exact bounded snapshot used for the choice. Check the
-                        // original decoded handle's identity before reading a replacement handle.
-                        let acquired = ctx.stage(0.0, 0.02, "Reading", |ctl| super::acquire_open_path(&name_w, &path, ctl, opened.as_ref())).map_err(
-                            |error| match error {
-                                photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                                error => crate::error::io_open_error(&name_w, error),
-                            },
-                        )?;
-                        let bytes = match acquired {
-                            super::AcquiredOpenSource::Bytes(bytes) => bytes,
-                            #[cfg(any(unix, windows))]
-                            super::AcquiredOpenSource::Psd(source) => {
-                                drop(source);
-                                return Err(EngineError::SourceChanged { name: name_w.clone() });
-                            }
-                        };
-                        match ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &options, ctl)) {
-                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) => {
-                                ctx.check()?;
-                                return Ok(Read::Choice(bytes, question, ctx.clone()));
-                            }
-                            result => result,
-                        }
-                    }
-                    Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if interactive => {
-                        let identity = opened.ok_or_else(|| EngineError::Other(format!("{path}: the file's identity could not be read")))?;
-                        let fingerprint = super::SourceFingerprint::path(path.clone(), identity);
-                        return Ok(pause(required, soft_limit, hard_limit, available_ram, OpenSource::Path(path), fingerprint));
-                    }
-                    result => result,
-                }
-            }
-        }
-        .map_err(|error| match error {
-            photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-            photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram } => {
-                EngineError::PsdApprovalRequired { name: name_w.clone(), required, soft_limit, hard_limit, available_ram }
-            }
-            error => crate::error::io_open_error(&name_w, error),
-        })?;
-        policy.prepare(&name_w, imported.0, imported.1, interactive, ctx)
-    };
-    let apply = move |s: &mut Session, result: Read| {
-        let result = match result {
-            Read::Preflight(pending, ctx) => {
-                ctx.check()?;
-                let (required, soft_limit, hard_limit, available_ram) = (pending.required, pending.soft_limit, pending.hard_limit, pending.available_ram);
-                let capacity_unknown = available_ram.is_none();
-                let uncertain_capacity = photocraft_io::memory::uncertain_capacity_warning(required, available_ram);
-                let id = s.store_pending_preflight(pending)?;
-                return Ok(json!({
-                    "pendingPreflight": id,
-                    "name": name,
-                    "estimated": required,
-                    "softLimit": soft_limit,
-                    "hardLimit": hard_limit,
-                    "availableRam": available_ram,
-                    "capacityUnknown": capacity_unknown,
-                    "uncertainCapacityWarning": uncertain_capacity,
-                }));
-            }
-            result => result,
-        };
-        let Read::Decoded(imported, decision, ctx) = result else {
-            let Read::Choice(bytes, question, ctx) = result else { return Err(EngineError::Other("invalid historical open result".into())) };
-            ctx.check()?;
-            let retained = s
-                .jobs
-                .historical_xcf
-                .iter()
-                .try_fold(bytes.len(), |total, held| total.checked_add(held.bytes.len()))
-                .ok_or_else(|| EngineError::Other("held historical source bytes overflow".into()))?;
-            if s.jobs.historical_xcf.len() >= MAX_HELD || retained > MAX_HELD_BYTES {
-                return Err(EngineError::Other("too many historical XCF sources await a sample-order choice; finish or cancel an earlier choice".into()));
-            }
-            let id = s.jobs.next_historical_xcf.checked_add(1).ok_or_else(|| EngineError::Other("historical source identity limit reached".into()))?;
-            s.jobs.next_historical_xcf = id;
-            s.jobs.historical_xcf.push(Held { id, name: name.clone(), path, bytes });
-            if let Err(error) = ctx.check() {
-                s.jobs.historical_xcf.retain(|pending| pending.id != id);
-                return Err(error);
-            }
-            return Ok(
-                json!({"heldHistoricalXcfOpen":id,"name":name,"historicalXcfSampleOrderRequired":{"version":question.version,"bitsPerSample":question.bits_per_sample}}),
-            );
-        };
-        ctx.check()?;
-        let mut imported = *imported;
-        let path = match crate::file_cmds::template_name(s, &name) {
-            Some(untitled) => {
-                imported.document.name = untitled;
-                None
-            }
-            None => {
-                imported.document.name = crate::file_cmds::file_name(&name);
-                path
-            }
-        };
-        let value = if let Decision::Held { question, damaged, color_settings, ignore_exif } = decision {
-            let conversion = crate::import_report_cmds::summary(imported.document.metadata.import_conversion.as_ref());
-            let held = s.hold_open_with_policy(imported.document, imported.source_read_only, imported.initial_view, Some(*color_settings), Some(ignore_exif));
-            if let Err(error) = ctx.check() {
-                let _ = s.take_held_open_with_view(held);
-                return Err(error);
-            }
-            json!({"held":held,"name":name,"warnings":imported.warnings,"color":question,"damaged":damaged,"importConversion":conversion})
-        } else {
-            let Decision::Prepared { color } = decision else { return Err(EngineError::Other("invalid prepared open decision".into())) };
-            let (index, id) = install_prepared(s, imported.document, path, imported.source_read_only, imported.initial_view, &ctx)?;
-            crate::file_cmds::batch_open_notice(s, &name, &imported.warnings, &color);
-            crate::file_cmds::remember_batch_open(s);
-            let conversion = s.active().map(|state| crate::import_report_cmds::summary(state.doc.metadata.import_conversion.as_ref())).unwrap_or(Value::Null);
-            json!({"document":index,"docId":id.0,"name":name,"warnings":imported.warnings,"color":color,"importConversion":conversion})
-        };
-        if let Some(id) = held {
-            s.jobs.historical_xcf.retain(|pending| pending.id != id);
-        }
-        Ok(value)
-    };
-    if in_command {
-        // Session::dispatch owns this command's execution mode and pending job metadata.
-        // Leave its pending worker for dispatch to register instead of consuming it here.
-        super::run(s, &label, false, work, apply).map(Started::Done)
-    } else {
-        s.start_job_with_spawn(OPEN_JOB, job_params, &label, false, background, work, apply)
-    }
-}
+#[cfg(test)]
+#[path = "historical_xcf_open/tests.rs"]
+mod tests;
 
 #[cfg(test)]
-mod tests {
+mod preparation_tests {
     use super::*;
+
+    #[test]
+    fn historical_command_validation_and_bulk_cancel_do_not_partially_consume_sources() {
+        let mut session = Session::new();
+        let mut ids = Vec::new();
+        for name in ["first.xcf", "second.xcf"] {
+            let bytes = source();
+            let question = photocraft_io::historical_xcf_sample_order_request(name, &bytes).unwrap().unwrap();
+            let result = super::hold(&mut session, name.into(), bytes, question, Default::default()).unwrap();
+            ids.push(result["heldHistoricalXcfOpen"].as_u64().unwrap());
+        }
+        for params in [
+            json!({"heldHistoricalXcfOpen":ids[0]}),
+            json!({"heldHistoricalXcfOpen":ids[0],"historicalXcfSampleOrder":"native"}),
+            json!({"heldHistoricalXcfOpen":ids[0],"historicalXcfSampleOrder":"big-endian","interactive":17}),
+            json!({"heldHistoricalXcfOpen":ids[0],"cancel":true,"approveHighMemory":"yes"}),
+        ] {
+            assert!(command(&mut session, &params).is_err());
+            assert!(ids.iter().all(|id| session.holds_historical_xcf_open(*id)));
+        }
+        assert!(session.cancel_held_historical_xcf_opens(&[ids[0], u64::MAX]).is_err());
+        assert!(ids.iter().all(|id| session.holds_historical_xcf_open(*id)));
+        session.cancel_held_historical_xcf_opens(&ids).unwrap();
+        assert!(session.jobs.historical_xcf.is_empty());
+        assert!(session.documents().is_empty());
+    }
 
     #[test]
     fn approved_native_open_rejects_a_different_byte_snapshot_before_preparation() {
@@ -471,7 +453,7 @@ mod tests {
         let expected = super::super::SourceFingerprint::of(&OpenSource::Bytes(Arc::new(bytes.as_ref().clone()))).unwrap();
         let mut session = Session::new();
         assert!(matches!(
-            start(&mut session, "native.pcraft", OpenSource::Bytes(bytes), false, true, None, Some(expected), false),
+            session.start_open_transaction("native.pcraft", OpenSource::Bytes(bytes), false, true, None, Some(expected), false, None, None, false),
             Err(EngineError::SourceChanged { .. })
         ));
         assert!(session.documents().is_empty());
@@ -676,7 +658,7 @@ mod tests {
         let make = || photocraft_io::import("native.pcraft", &native_source()).unwrap();
         let mut s = Session::new();
         s.color.settings.ask_on_missing = true;
-        let Read::Decoded(imported, Decision::Held { question: Some(_), damaged: false, .. }, _) =
+        let PreparedOpen { imported, decision: Decision::Held { question: Some(_), damaged: false, .. }, .. } =
             WorkerPolicy::capture(&s).prepare("native.pcraft", make(), false, true, &JobCtx::new()).unwrap()
         else {
             panic!("color hold expected")
@@ -684,7 +666,7 @@ mod tests {
         let photocraft_doc::LayerContent::Smart(smart) = &imported.document.layers[0].content else { panic!("native Smart") };
         assert!(smart.cache.is_none(), "pending color choice must precede native preparation");
         s.color.settings.ask_on_missing = false;
-        let Read::Decoded(_, Decision::Held { question: None, damaged: true, .. }, _) =
+        let PreparedOpen { decision: Decision::Held { question: None, damaged: true, .. }, .. } =
             WorkerPolicy::capture(&s).prepare("native.pcraft", make(), true, true, &JobCtx::new()).unwrap()
         else {
             panic!("damage hold expected")
@@ -693,7 +675,8 @@ mod tests {
         raw.warnings.push(photocraft_io::raw::DEVELOPED_NOTE.into());
         let mut policy = WorkerPolicy::capture(&s);
         policy.raw_resolution = 123.;
-        let Read::Decoded(imported, Decision::Prepared { color }, _) = policy.prepare("native.pcraft", raw, false, false, &JobCtx::new()).unwrap() else {
+        let PreparedOpen { imported, decision: Decision::Prepared { color }, .. } = policy.prepare("native.pcraft", raw, false, false, &JobCtx::new()).unwrap()
+        else {
             panic!("prepared raw expected")
         };
         assert_eq!(imported.document.resolution_dpi, 123.);
@@ -706,7 +689,8 @@ mod tests {
         s.color.settings.ask_on_mismatch = false;
         let mut policy = WorkerPolicy::capture(&s);
         policy.exr_aces_cg = true;
-        let Read::Decoded(imported, Decision::Prepared { .. }, _) = policy.prepare("source.exr", exr, false, false, &JobCtx::new()).unwrap() else {
+        let PreparedOpen { imported, decision: Decision::Prepared { .. }, .. } = policy.prepare("source.exr", exr, false, false, &JobCtx::new()).unwrap()
+        else {
             panic!("prepared EXR expected")
         };
         assert_eq!(imported.document.icc_profile, Some(photocraft_cms::Builtin::AcesCg.profile().to_bytes()));
@@ -716,7 +700,7 @@ mod tests {
             input.document.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
             let mut expected = input.document.clone();
             let expected_color = s.color.open_policy(&mut expected, s.prefs().file_handling.ignore_exif_profile_tag);
-            let Read::Decoded(imported, Decision::Prepared { color }, _) =
+            let PreparedOpen { imported, decision: Decision::Prepared { color }, .. } =
                 WorkerPolicy::capture(&s).prepare("native.pcraft", input, false, false, &JobCtx::new()).unwrap()
             else {
                 panic!("prepared policy expected")
@@ -752,286 +736,6 @@ mod tests {
             bytes.extend_from_slice(&value.to_be_bytes());
         }
         Arc::new(bytes)
-    }
-
-    /// Start the inline interactive fixture and extract its one-shot held-source identifier after verifying the
-    /// requested precision.
-    fn hold(s: &mut Session) -> u64 {
-        let Started::Done(value) = interactive(s, "source.bin", OpenSource::Bytes(source()), Some("source.bin".into()), false).unwrap() else {
-            panic!("inline open started a job")
-        };
-        assert_eq!(value["historicalXcfSampleOrderRequired"]["bitsPerSample"], 16);
-        value["heldHistoricalXcfOpen"].as_u64().unwrap()
-    }
-
-    #[test]
-    #[cfg(any(unix, windows))]
-    /// Keep PSD channels file-backed despite a misleading suffix, while native names retain upstream dispatch priority.
-    fn path_acquisition_streams_psd_magic_and_preserves_native_name_priority() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("source.bin");
-        let mut seed = Session::new();
-        seed.execute("file.new", json!({"width":2,"height":3})).unwrap();
-        let bytes = photocraft_io::export(&seed.active().unwrap().doc, "source.psd", &Default::default()).unwrap().bytes;
-        std::fs::write(&path, &bytes).unwrap();
-        let path = path.to_str().unwrap();
-        let super::super::AcquiredOpenSource::Psd(source) =
-            super::super::acquire_open_path("source.bin", path, &photocraft_raster::Interrupt::NONE, None).unwrap()
-        else {
-            panic!("PSD magic must select file-backed parsing")
-        };
-        assert_eq!(source.read_vec(0, 4).unwrap(), b"8BPS");
-        for name in ["folder/source.PcRaFt", "folder\\source.pcraft"] {
-            let super::super::AcquiredOpenSource::Bytes(retained) =
-                super::super::acquire_open_path(name, path, &photocraft_raster::Interrupt::NONE, None).unwrap()
-            else {
-                panic!("native extension must retain native decoder priority")
-            };
-            assert_eq!(retained.as_slice(), bytes.as_slice());
-        }
-        let mut opened = Session::new();
-        opened.color.settings.ask_on_missing = false;
-        opened.execute("file.open", json!({"path":path})).unwrap();
-        assert_eq!(opened.active().unwrap().doc.size, seed.active().unwrap().doc.size);
-        assert!(opened.jobs.historical_xcf.is_empty());
-    }
-
-    #[test]
-    #[cfg(any(unix, windows))]
-    /// A held XCF decision uses the original acquired bytes even if the named file changes before resuming.
-    fn historical_path_choice_reuses_original_bytes_after_file_changes() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("original.bin");
-        let original = source();
-        std::fs::write(&path, original.as_slice()).unwrap();
-        let path = path.to_str().unwrap();
-        let mut session = Session::new();
-        session.color.settings.ask_on_missing = false;
-        let Started::Done(value) = interactive(&mut session, path, OpenSource::Path(path.into()), Some(path.into()), false).unwrap() else {
-            panic!("inline interactive open started a job")
-        };
-        let id = value["heldHistoricalXcfOpen"].as_u64().unwrap();
-        assert!(session.documents().is_empty());
-        assert_eq!(session.jobs.historical_xcf[0].bytes.as_slice(), original.as_slice());
-        std::fs::write(path, b"replacement is not an image").unwrap();
-        session.execute("file.open", json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrder":"big-endian"})).unwrap();
-        assert!(session.jobs.historical_xcf.is_empty());
-        let state = session.active().unwrap();
-        assert_eq!(state.doc.size, photocraft_geom::Size::new(1, 1));
-        assert!(state.source_read_only);
-        assert_eq!(state.protected_import_source.as_deref(), Some(path));
-    }
-
-    #[test]
-    /// Require an unanswered historical import to leave the active document intact and cancel to release its encoded
-    /// bytes exactly once.
-    fn historical_choice_holds_original_without_installing_and_cancel_releases_it() {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width":2,"height":2})).unwrap();
-        let original = s.active().unwrap().doc.clone();
-        let id = hold(&mut s);
-        assert_eq!(s.documents().len(), 1);
-        assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
-        assert!(command(&mut s, &json!({"heldHistoricalXcfOpen":id})).is_err());
-        assert!(command(&mut s, &json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrder":"native"})).is_err());
-        assert_eq!(s.jobs.historical_xcf.len(), 1);
-        s.execute("file.open", json!({"heldHistoricalXcfOpen":id,"cancel":true})).unwrap();
-        assert!(s.jobs.historical_xcf.is_empty());
-        assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
-        assert!(command(&mut s, &json!({"heldHistoricalXcfOpen":id,"cancel":true})).is_err());
-    }
-
-    #[test]
-    /// Exercise both explicit byte orders and verify native serialization removes the need for a repeated historical
-    /// choice.
-    fn historical_explicit_choices_open_read_only_and_native_reopen_needs_no_choice() {
-        for order in ["little-endian", "big-endian"] {
-            let mut s = Session::new();
-            s.color.settings.ask_on_missing = false;
-            let id = hold(&mut s);
-            s.execute("file.open", json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrder":order})).unwrap();
-            assert!(s.jobs.historical_xcf.is_empty());
-            let state = s.active().unwrap();
-            assert!(state.source_read_only);
-            assert_eq!(state.protected_import_source.as_deref(), Some("source.bin"));
-            assert!(state.path.is_none());
-            let bytes = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
-            let native = photocraft_io::import("reopened.pcraft", &bytes).unwrap();
-            assert_eq!(native.document.size, state.doc.size);
-        }
-    }
-
-    #[test]
-    /// Reject noninteractive ambiguity, malformed controls and excess held sources without installing a document.
-    fn historical_headless_and_invalid_params_refuse_without_document_mutation() {
-        let mut s = Session::new();
-        assert!(
-            run(
-                &mut s,
-                Request { name: "source.bin".into(), source: OpenSource::Bytes(source()), path: None, interactive: false, order: None, held: None },
-                false
-            )
-            .is_err()
-        );
-        for params in [json!({"historicalXcfSampleOrder":17}), json!({"cancel":"yes"}), json!({"heldHistoricalXcfOpen":-1}), json!({})] {
-            assert!(s.execute("file.open", params).is_err());
-        }
-        assert!(s.documents().is_empty());
-        assert!(s.jobs.historical_xcf.is_empty());
-        for _ in 0..MAX_HELD {
-            hold(&mut s);
-        }
-        assert!(interactive(&mut s, "overflow", OpenSource::Bytes(source()), None, false).is_err());
-        assert_eq!(s.jobs.historical_xcf.len(), MAX_HELD);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    /// Observe completed worker threads without receiving or applying their queued payloads; yield only until a bounded deadline.
-    fn historical_workers_finished_without_poll(s: &Session) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !s.jobs.running.iter().all(|job| job.handle.as_ref().is_some_and(std::thread::JoinHandle::is_finished)) {
-            assert!(std::time::Instant::now() < deadline, "tiny historical-source workers must finish before the test deadline");
-            std::thread::yield_now();
-        }
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    /// Apply simultaneous ready choices under the held-source count limit and release rejected or cancelled payloads without installing a document.
-    fn asynchronous_historical_choices_enforce_admission_when_ready_payloads_are_polled() {
-        use crate::jobs::JobOutcome;
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width":2,"height":2})).unwrap();
-        let original = s.active().unwrap().doc.clone();
-        let mut identities = Vec::new();
-        let mut sources = Vec::new();
-        let source_len = source().len();
-        // Upstream admits at most 16 background jobs, including completed ready payloads.
-        // Start with one admitted choice so 16 ready workers still cross the independent
-        // held-choice boundary by exactly one when their results are polled together.
-        let existing = hold(&mut s);
-        sources.push(Arc::downgrade(&s.jobs.historical_xcf[0].bytes));
-        for index in 0..MAX_HELD {
-            let bytes = source();
-            sources.push(Arc::downgrade(&bytes));
-            let Started::Job(id) = s.start_open_for_user_with_path(&format!("queued-{index}.xcf"), OpenSource::Bytes(bytes), None).unwrap() else {
-                panic!("historical fixture must start a native worker")
-            };
-            identities.push(id);
-        }
-        historical_workers_finished_without_poll(&s);
-        assert_eq!(s.jobs.running.len(), MAX_HELD);
-        assert_eq!(s.jobs.historical_xcf.len(), 1, "worker completion alone does not admit a held choice");
-        assert_eq!(s.jobs.historical_xcf[0].id, existing);
-        let extra = source();
-        let extra_weak = Arc::downgrade(&extra);
-        let refused = s.start_open_for_user_with_path("worker-cap.xcf", OpenSource::Bytes(extra), None).unwrap_err();
-        assert!(refused.to_string().contains("too many background jobs"), "{refused}");
-        assert!(extra_weak.upgrade().is_none(), "background admission rejection releases the attempted source");
-        assert_eq!(s.jobs.running.len(), MAX_HELD, "ready payloads still count against upstream worker admission");
-        assert!(sources.iter().all(|bytes| bytes.strong_count() == 1), "each ready payload alone owns its distinct encoded source");
-        assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
-        let events = s.poll_jobs();
-        assert_eq!(events.len(), MAX_HELD);
-        assert_eq!(events.iter().filter(|event| matches!(event.outcome, JobOutcome::Done(_))).count(), MAX_HELD - 1);
-        let failed: Vec<_> = events
-            .iter()
-            .filter_map(|event| match &event.outcome {
-                JobOutcome::Failed(error) => Some((event.id, error)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].0, *identities.last().unwrap());
-        assert!(failed[0].1.contains("too many historical XCF sources"));
-        assert_eq!(s.jobs.historical_xcf.len(), MAX_HELD);
-        assert!(s.jobs.historical_xcf.iter().any(|held| held.id == existing), "polling retains the previously admitted choice");
-        assert_eq!(s.jobs.historical_xcf.iter().map(|held| held.bytes.len()).sum::<usize>(), MAX_HELD * source_len);
-        assert!(sources.iter().take(MAX_HELD).all(|bytes| bytes.strong_count() == 1));
-        assert!(sources.last().unwrap().upgrade().is_none(), "capacity rejection releases its ready source payload");
-        assert!(s.jobs.running.is_empty());
-        assert!(s.held_opens.is_empty());
-        assert_eq!(s.documents().len(), 1);
-        assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
-        let held_ids: Vec<_> = s.jobs.historical_xcf.iter().map(|held| held.id).collect();
-        for id in held_ids {
-            assert_eq!(s.execute("file.open", json!({"heldHistoricalXcfOpen":id,"cancel":true})).unwrap()["cancelled"], true);
-        }
-        assert!(sources.iter().all(|bytes| bytes.upgrade().is_none()), "cancelling admitted choices releases every retained source");
-    }
-
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    /// Cancel a completed but unapplied choice and prove its queued encoded bytes are dropped without creating any hold.
-    fn cancelling_ready_historical_choice_releases_payload_before_polling() {
-        use crate::jobs::JobOutcome;
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width":2,"height":2})).unwrap();
-        let original = s.active().unwrap().doc.clone();
-        let bytes = source();
-        let weak = Arc::downgrade(&bytes);
-        let Started::Job(id) = s.start_open_for_user_with_path("cancel-ready.xcf", OpenSource::Bytes(bytes), None).unwrap() else {
-            panic!("historical fixture must start a native worker")
-        };
-        historical_workers_finished_without_poll(&s);
-        assert_eq!(weak.strong_count(), 1, "completed ready payload retains its source before cancellation");
-        assert!(s.jobs.historical_xcf.is_empty());
-        assert!(s.cancel_job(id));
-        s.join_cancelled_jobs();
-        assert!(weak.upgrade().is_none(), "discarding the receiver drops the completed source payload");
-        assert!(!s.cancel_job(id), "a cancelled ready job cannot be consumed twice");
-        let events = s.poll_jobs();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].id, id);
-        assert_eq!(events[0].outcome, JobOutcome::Cancelled);
-        assert!(s.jobs.running.is_empty());
-        assert!(s.jobs.historical_xcf.is_empty());
-        assert!(s.held_opens.is_empty());
-        assert_eq!(s.documents().len(), 1);
-        assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
-    }
-
-    #[test]
-    /// Failed or cancelled continuation remains recoverable until an explicit held-only cancellation releases it.
-    fn historical_failed_and_cancelled_resume_keep_source_until_explicit_cancel() {
-        for cancelled in [false, true] {
-            let mut s = Session::new();
-            s.execute("file.new", json!({"width":2,"height":2})).unwrap();
-            let original = s.active().unwrap().doc.clone();
-            let mut malformed = (*source()).clone();
-            malformed.truncate(30); // Valid precision header; missing properties/pointers.
-            let Started::Done(value) = interactive(&mut s, "broken.bin", OpenSource::Bytes(Arc::new(malformed)), None, false).unwrap() else {
-                panic!("inline")
-            };
-            let id = value["heldHistoricalXcfOpen"].as_u64().unwrap();
-            if cancelled {
-                let ctx = JobCtx::new();
-                ctx.cancel();
-                s.set_inline_job_ctx(Some(ctx));
-            }
-            assert!(s.execute("file.open", json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrder":"little-endian"})).is_err());
-            assert_eq!(s.jobs.historical_xcf.len(), 1);
-            assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
-            assert_eq!(s.documents().len(), 1);
-            s.set_inline_job_ctx(None);
-            s.cancel_held_historical_xcf_opens(&[id]).unwrap();
-            assert!(s.jobs.historical_xcf.is_empty());
-        }
-    }
-
-    #[test]
-    /// A stale member cannot partially cancel a held set, and cleanup never admits any of its source documents.
-    fn historical_batch_cancel_validates_every_capability_before_releasing_sources() {
-        let mut session = Session::new();
-        let first = hold(&mut session);
-        let second = hold(&mut session);
-        assert!(session.cancel_held_historical_xcf_opens(&[first, u64::MAX]).is_err());
-        assert_eq!(session.jobs.historical_xcf.len(), 2);
-        assert!(session.jobs.historical_xcf.iter().any(|held| held.id == first));
-        assert!(session.jobs.historical_xcf.iter().any(|held| held.id == second));
-        session.cancel_held_historical_xcf_opens(&[first, second]).unwrap();
-        assert!(session.jobs.historical_xcf.is_empty());
-        assert!(session.documents().is_empty());
     }
 
     #[test]
@@ -1070,5 +774,30 @@ mod tests {
         assert_eq!(state.doc.name, "original.bin");
         assert!(state.source_read_only);
         assert_eq!(state.protected_import_source.as_deref(), Some(path.as_str()));
+    }
+    #[test]
+    #[cfg(any(unix, windows))]
+    /// A held XCF decision uses the original acquired bytes even if the named file changes before resuming.
+    fn historical_path_choice_reuses_original_bytes_after_file_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("original.bin");
+        let original = source();
+        std::fs::write(&path, original.as_slice()).unwrap();
+        let path = path.to_str().unwrap();
+        let mut session = Session::new();
+        session.color.settings.ask_on_missing = false;
+        let Started::Done(value) = interactive(&mut session, path, OpenSource::Path(path.into()), Some(path.into()), false).unwrap() else {
+            panic!("inline interactive open started a job")
+        };
+        let id = value["heldHistoricalXcfOpen"].as_u64().unwrap();
+        assert!(session.documents().is_empty());
+        assert_eq!(session.jobs.historical_xcf[0].bytes.as_slice(), original.as_slice());
+        std::fs::write(path, b"replacement is not an image").unwrap();
+        session.execute("file.open", json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+        assert!(session.jobs.historical_xcf.is_empty());
+        let state = session.active().unwrap();
+        assert_eq!(state.doc.size, photocraft_geom::Size::new(1, 1));
+        assert!(state.source_read_only);
+        assert_eq!(state.protected_import_source.as_deref(), Some(path));
     }
 }

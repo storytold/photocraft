@@ -1,6 +1,16 @@
 //! Public corpus typography counterpart and independent synthetic source schemas.
 //! The synthetic cases never depend on unpublished research fixtures.
 
+/// The source offset names the logical top-left, while native point text is baseline-anchored.
+/// Check the original affine coefficients and its origin independently of any imported translation.
+fn assert_source_origin(layer: &photocraft_doc::TextLayer, dpi: f32, source: photocraft_geom::Affine) {
+    assert_eq!(&layer.transform.m[..4], &source.m[..4]);
+    let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let [left, top, _, _] = engine.layout(layer, dpi).bounds().expect("native logical text bounds");
+    let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(left), f64::from(top)));
+    assert!((origin.x - source.m[4]).abs() < 0.0001 && (origin.y - source.m[5]).abs() < 0.0001, "{origin:?} versus {source:?}");
+}
+
 #[cfg(feature = "corpus")]
 mod published {
     use photocraft_color::Color;
@@ -22,7 +32,9 @@ mod published {
                 font_style: "Book".into(),
                 postscript_name: Some("DejaVuSans".into()),
                 size_pt: 24. * 72. / 300.,
-                kerning: Kerning::Off,
+                // Both pinned fixtures omit the inactive source kerning flag;
+                // default font shaping still applies metrics kerning.
+                kerning: Kerning::Metrics,
                 language: Some("en-US".into()),
                 ..Default::default()
             };
@@ -34,16 +46,31 @@ mod published {
                 ..Default::default()
             };
             expected.sync_summary();
+            let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+            // Compute the native baseline from independently constructed typography and the
+            // font metrics resolved on this host, never from the imported affine translation.
+            let expected_layout = engine.layout(&expected, doc.resolution_dpi);
+            let [left, top, _, _] = expected_layout.bounds().expect("native logical source typography");
+            expected.transform = Affine::translate(10. - f64::from(left), 10. - f64::from(top));
             assert_eq!(actual, &expected, "native source mapping for {name}");
             assert_eq!(actual.color, Color::BLACK);
-            let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
             let actual_layout = engine.layout(actual, doc.resolution_dpi);
-            let expected_layout = engine.layout(&expected, doc.resolution_dpi);
             let actual_pixels = photocraft_text::render::rasterize_warped(&actual_layout, &actual.transform, doc.pixel_format(), actual.antialias, None);
             let expected_pixels =
                 photocraft_text::render::rasterize_warped(&expected_layout, &expected.transform, doc.pixel_format(), expected.antialias, None);
             assert_eq!(actual_pixels.surface, expected_pixels.surface, "normal native text renderer");
+            if engine.fonts.has_family("DejaVu Sans") {
+                let ink = photocraft_text::render::ink_bounds(&expected_layout).expect("known source font has visible ink");
+                assert!(!actual_pixels.surface.content_bounds().is_empty());
+                // The normal renderer adds a one-pixel apron and rounds its ink rectangle.
+                // Its visible position must track the independently predicted source placement,
+                // rather than merely matching another render at the same wrong baseline.
+                let predicted = [10. + ink[0] - f64::from(left), 10. + ink[1] - f64::from(top)];
+                assert!((f64::from(actual_pixels.rect.x0) - predicted[0]).abs() <= 2.);
+                assert!((f64::from(actual_pixels.rect.y0) - predicted[1]).abs() <= 2.);
+            }
             drop(engine);
+            super::assert_source_origin(actual, doc.resolution_dpi, Affine::translate(10., 10.));
             let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).expect("save");
             let reopened = photocraft_format::load_from_bytes(&saved).expect("reopen");
             let LayerContent::Text(text) = &reopened.layers[1].content else { panic!("native text on reopen") };
@@ -190,7 +217,7 @@ mod synthetic {
         let doc = photocraft_io::import("legacy-rotation.xcf", &bytes).unwrap().document;
         let LayerContent::Text(text) = &doc.layers[0].content else { panic!("editable legacy text") };
         assert_eq!(text.text, "héλ");
-        assert_eq!(text.transform, photocraft_geom::Affine::IDENTITY);
+        super::assert_source_origin(text, doc.resolution_dpi, photocraft_geom::Affine::IDENTITY);
         let photocraft_doc::import_conversion::ImportConversion::Report(report) = doc.metadata.import_conversion.as_deref().unwrap() else {
             panic!("known report")
         };
@@ -210,7 +237,7 @@ mod synthetic {
             source_config(false, true, false, br#"(text "Position") (font-size 20) (transformation (matrix 1.2 0.3 -0.2 0.9)) (offset-x 20) (offset-y 10)"#);
         let doc = photocraft_io::import("text-position.xcf", &bytes).unwrap().document;
         let LayerContent::Text(text) = &doc.layers[0].content else { panic!("native affine text") };
-        assert_eq!(text.transform.m, [1.2, -0.2, 0.3, 0.9, 0., 0.]);
+        super::assert_source_origin(text, doc.resolution_dpi, photocraft_geom::Affine { m: [1.2, -0.2, 0.3, 0.9, 0., 0.] });
         let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
         assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap().layers, doc.layers);
     }

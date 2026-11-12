@@ -809,13 +809,13 @@ fn import_gradients_from_picker(h: &mut Harness<'_, PhotocraftApp>) {
 
 #[test]
 fn gradient_map_picker_imports_grd_without_editing_the_map() {
-    use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop};
+    use craft_psd::grd::{GrdColor, GrdGradient, GrdStop};
     let mut h = app_harness("gradientMap", "rgb", 16);
     h.state_mut().session.presets.gradients.truncate(1);
     let before = layer(&h);
     let history = h.state().session.active().unwrap().history.past_len();
     let tool = h.state().session.presets.gradient.clone();
-    let bytes = photocraft_psd::grd::write(&[GrdGradient {
+    let bytes = craft_psd::grd::write(&[GrdGradient {
         name: "Imported Teal".into(),
         stops: vec![
             GrdStop { location: 0.0, midpoint: 0.5, color: GrdColor::Rgb([0.0, 0.5, 0.5]) },
@@ -851,10 +851,7 @@ fn gradient_map_picker_import_cancel_and_errors_preserve_state() {
         None,
         Some(FileDialogAnswer::Contents("broken.grd".into(), b"invalid".to_vec())),
         Some(FileDialogAnswer::Contents("old.grd".into(), b"8BGR\0\x03".to_vec())),
-        Some(FileDialogAnswer::Contents(
-            "noise.grd".into(),
-            photocraft_psd::grd::write(&[photocraft_psd::grd::GrdGradient { noise: true, ..Default::default() }]),
-        )),
+        Some(FileDialogAnswer::Contents("noise.grd".into(), craft_psd::grd::write(&[craft_psd::grd::GrdGradient { noise: true, ..Default::default() }]))),
         Some(FileDialogAnswer::Contents("wrong.abr".into(), Vec::new())),
         Some(FileDialogAnswer::Paths(vec!["/nonexistent/photocraft-gradients.grd".into()])),
         Some(FileDialogAnswer::Unavailable("dialog unavailable".into())),

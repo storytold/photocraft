@@ -514,6 +514,10 @@ struct Running {
     started_in_take: Option<u64>,
     /// The take eligible to receive this job's step under the mode at dispatch.
     recorded_by: Option<u64>,
+    /// The request that started the job ran under an automation gate (`Session::authorize`, set
+    /// by `dispatch`). Applied, its step marks the recording that owns it as automation's,
+    /// whoever polls the job then (`actions_cmds::note_step_origin`).
+    automation: bool,
     pre_selected: Option<Vec<LayerId>>,
     before: crate::actions_record::Before,
     doc: Option<DocId>,
@@ -655,15 +659,15 @@ impl Default for Jobs {
     }
 }
 
+#[path = "historical_xcf_open.rs"]
+mod historical_xcf_open;
+
 impl Jobs {
     /// Does a job started now run on a worker thread? (Not inline, and not stepped on this thread.)
     fn threaded(&self) -> bool {
         self.spawn && !self.cooperative && !cfg!(target_arch = "wasm32")
     }
 }
-
-#[path = "historical_xcf_open.rs"]
-mod historical_xcf_open;
 
 pub(crate) use historical_xcf_open::command as open_command;
 
@@ -736,59 +740,6 @@ fn import_path(
     _: &mut Option<photocraft_io::FileIdentity>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
-}
-
-/// An open source either keeps encoded bytes for a possible XCF decision or streams PSD channels.
-enum AcquiredOpenSource {
-    Bytes(Arc<Vec<u8>>),
-    #[cfg(any(unix, windows))]
-    Psd(photocraft_psd::Source),
-}
-
-/// Sniff exactly the upstream PSD signature without retaining the entire PSD file. Other formats
-/// keep one bounded byte snapshot, which a historical XCF decision can reuse without reopening.
-#[cfg(any(unix, windows))]
-fn acquire_open_path(
-    name: &str,
-    path: &str,
-    ctl: &Interrupt,
-    expected: Option<&photocraft_io::FileIdentity>,
-) -> std::result::Result<AcquiredOpenSource, photocraft_io::IoError> {
-    let read_failed = |error: std::io::Error| photocraft_io::IoError::Read(format!("{path}: {error}"));
-    ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
-    let source = photocraft_psd::FileSource::open(std::path::Path::new(path)).map_err(read_failed)?;
-    let identity = photocraft_io::FileIdentity::of_handle(source.file()).map_err(read_failed)?;
-    if expected.is_some_and(|expected| expected != &identity) {
-        return Err(photocraft_io::IoError::SourceChanged);
-    }
-    let native = name
-        .rsplit(['/', '\\'])
-        .next()
-        .and_then(|name| name.rsplit_once('.'))
-        .is_some_and(|(base, ext)| !base.is_empty() && ext.eq_ignore_ascii_case(photocraft_format::EXTENSION));
-    let mut magic = [0u8; 4];
-    if !native && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && photocraft_io::is_psd(&magic) {
-        return Ok(AcquiredOpenSource::Psd(photocraft_psd::Source::new(source)));
-    }
-    let mut file = source.file();
-    std::io::Seek::rewind(&mut file).map_err(read_failed)?;
-    let bytes = photocraft_format::read::read_all(&mut file, photocraft_psd::ReadAt::len(&source)).map_err(read_failed)?;
-    if photocraft_io::FileIdentity::of_handle(source.file()).map_err(read_failed)? != identity {
-        return Err(photocraft_io::IoError::SourceChanged);
-    }
-    ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
-    Ok(AcquiredOpenSource::Bytes(Arc::new(bytes)))
-}
-
-/// Filesystem paths are unavailable in browser builds; callers must supply encoded bytes.
-#[cfg(not(any(unix, windows)))]
-fn acquire_open_path(
-    _: &str,
-    path: &str,
-    _: &Interrupt,
-    _: Option<&photocraft_io::FileIdentity>,
-) -> std::result::Result<AcquiredOpenSource, photocraft_io::IoError> {
-    Err(photocraft_io::IoError::Read(format!("cannot open paths on this platform: {path}")))
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -931,6 +882,7 @@ fn new_job<T: Send + 'static>(
         journal: true,
         started_in_take: None,
         recorded_by: None,
+        automation: false,
         pre_selected: None,
         before: crate::actions_record::Before::capture(s),
         doc,
@@ -1256,7 +1208,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1267,9 +1219,11 @@ impl Session {
     /// completion, since earlier handlers may have moved or closed tabs. When
     /// Color Settings ask about the file's profile, the document is held back instead and the
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
-    /// [`Session::take_held_open`] once answered.
+    /// [`Session::take_held_open_with_view`] once answered. Validate the returned initial view
+    /// before admitting the document, then install it with [`Session::apply_import_initial_view`]
+    /// after admission so saved layer, channel and path selections survive the profile prompt.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true)
+        self.start_open_inner(name, source, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1282,7 +1236,7 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background)
+        self.start_open_inner(name, source, true, false, None, None, background, None)
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1330,9 +1284,182 @@ impl Session {
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        options: Option<photocraft_io::ImportOptions>,
     ) -> Result<Started> {
-        historical_xcf_open::start(self, name, source, confirm_damage, approve_high_memory, approved_estimate, expected_fingerprint, background)
+        self.start_open_transaction(
+            name,
+            source,
+            confirm_damage,
+            approve_high_memory,
+            approved_estimate,
+            expected_fingerprint,
+            background,
+            options,
+            None,
+            false,
+        )
     }
+
+    // Command dispatch owns pending worker registration; public Open helpers register themselves.
+    #[allow(clippy::too_many_arguments)]
+    fn start_open_transaction(
+        &mut self,
+        name: &str,
+        source: OpenSource,
+        confirm_damage: bool,
+        approve_high_memory: bool,
+        approved_estimate: Option<u64>,
+        expected_fingerprint: Option<SourceFingerprint>,
+        background: bool,
+        options: Option<photocraft_io::ImportOptions>,
+        path: Option<String>,
+        in_command: bool,
+    ) -> Result<Started> {
+        let label = format!("Opening {name}");
+        let name_w = name.to_string();
+        let name_a = name.to_string();
+        let mut opts = options.unwrap_or_else(|| import_options(self.prefs()));
+        opts.psd_high_memory_approved = approve_high_memory;
+        opts.psd_approved_estimate = approved_estimate;
+        let source_path = path.or_else(|| match &source {
+            OpenSource::Path(path) => Some(path.clone()),
+            OpenSource::Bytes(_) => None,
+        });
+        let policy = historical_xcf_open::WorkerPolicy::capture(self);
+        let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
+        enum WorkResult {
+            Decoded(Box<(photocraft_io::ImportResult, bool)>),
+            Prepared(Box<historical_xcf_open::PreparedOpen>),
+            Historical(Arc<Vec<u8>>, photocraft_io::HistoricalXcfSampleOrderRequest, JobCtx),
+            PreflightNeeded { required: u64, soft_limit: u64, hard_limit: u64, available_ram: Option<u64>, source: OpenSource, fingerprint: SourceFingerprint },
+        }
+        let work = move |ctx: &JobCtx| {
+            let _test_memory = test_memory_scope.enter();
+            ctx.progress(0.0, "Reading");
+
+            // An in-memory source's identity is its shared buffer, known before decoding. A
+            // path's identity can only come from the handle the verified import opens, so
+            // that import compares it against `expected_fingerprint` itself, before reading
+            // any pixel and again after its memory preflight.
+            let initial_fingerprint = match &source {
+                OpenSource::Bytes(_) => Some(SourceFingerprint::of(&source)?),
+                OpenSource::Path(_) => None,
+            };
+            if let Some(expected) = &expected_fingerprint
+                && let Some(current) = &initial_fingerprint
+                && !expected.matches(current)
+            {
+                return Err(EngineError::SourceChanged { name: name_w.clone() });
+            }
+
+            let outcome = match source {
+                OpenSource::Bytes(bytes) => {
+                    ctx.check()?;
+                    ctx.progress(0.02, "Decoding");
+                    let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
+                    match res {
+                        Ok(imported) => WorkResult::Decoded(Box::new(imported)),
+                        Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
+                            WorkResult::Historical(bytes, question, ctx.clone())
+                        }
+                        Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
+                            // The buffer cannot change while it is decoded, so the identity
+                            // captured before reading is still exact.
+                            let fingerprint = initial_fingerprint.clone().ok_or_else(|| EngineError::Other("missing source identity".into()))?;
+                            WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source: OpenSource::Bytes(bytes), fingerprint }
+                        }
+                        Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) => {
+                            return Err(EngineError::PsdApprovalRequired { name: name_w.clone(), required, soft_limit, hard_limit, available_ram });
+                        }
+                        Err(photocraft_io::IoError::Cancelled) => return Err(EngineError::Cancelled),
+                        Err(e) => return Err(crate::error::io_open_error(&name_w, e)),
+                    }
+                }
+                OpenSource::Path(p) => {
+                    let mut opened = None;
+                    let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                    match res {
+                        Ok(imported) => WorkResult::Decoded(Box::new(imported)),
+                        Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
+                            let identity = opened.ok_or_else(|| EngineError::Other("missing historical source identity".into()))?;
+                            let bytes = ctx.stage(0.02, 0.95, "Holding historical source", |ctl| historical_xcf_open::snapshot(&p, &identity, ctl))?;
+                            WorkResult::Historical(bytes, question, ctx.clone())
+                        }
+                        Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
+                            // This identity is the one read from the handle that was
+                            // estimated, and the verified import refused a handle that is
+                            // not the approved file or changed while preflighting.
+                            let identity = opened.ok_or_else(|| EngineError::Other(format!("{p}: the file's identity could not be read")))?;
+                            let fingerprint = SourceFingerprint::path(p.clone(), identity);
+                            WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source: OpenSource::Path(p), fingerprint }
+                        }
+                        Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) => {
+                            return Err(EngineError::PsdApprovalRequired { name: name_w.clone(), required, soft_limit, hard_limit, available_ram });
+                        }
+                        Err(photocraft_io::IoError::Cancelled) => return Err(EngineError::Cancelled),
+                        Err(e) => return Err(crate::error::io_open_error(&name_w, e)),
+                    }
+                }
+            };
+
+            match outcome {
+                WorkResult::Decoded(imported) => {
+                    let (imported, damaged) = *imported;
+                    policy.prepare(&name_w, imported, damaged, confirm_damage, ctx).map(|prepared| WorkResult::Prepared(Box::new(prepared)))
+                }
+                other => Ok(other),
+            }
+        };
+        let apply = move |s: &mut Session, outcome| match outcome {
+            WorkResult::Historical(bytes, question, ctx) => {
+                ctx.check()?;
+                let held = historical_xcf_open::hold_with_path(s, name_a, bytes, question, opts, source_path)?;
+                if let Err(error) = ctx.check() {
+                    if let Some(id) = held.get("heldHistoricalXcfOpen").and_then(Value::as_u64) {
+                        s.cancel_historical_xcf_open(id);
+                    }
+                    return Err(error);
+                }
+                Ok(held)
+            }
+            WorkResult::PreflightNeeded { required, soft_limit, hard_limit, available_ram, source, fingerprint } => {
+                // The warning follows the capacity measured for this estimate: an unknown
+                // capacity carries no fabricated number, and above the threshold it also
+                // says the process or tab may run out of memory. The UI shows both.
+                let capacity_unknown = available_ram.is_none();
+                let uncertain_capacity = photocraft_io::memory::uncertain_capacity_warning(required, available_ram);
+                let id = s.store_pending_preflight(PendingPsdPreflight {
+                    id: 0,
+                    name: name_a.clone(),
+                    source,
+                    fingerprint,
+                    required,
+                    soft_limit,
+                    hard_limit,
+                    available_ram,
+                    confirm_damage,
+                })?;
+                Ok(json!({
+                    "pendingPreflight": id,
+                    "name": name_a,
+                    "estimated": required,
+                    "softLimit": soft_limit,
+                    "hardLimit": hard_limit,
+                    "availableRam": available_ram,
+                    "capacityUnknown": capacity_unknown,
+                    "uncertainCapacityWarning": uncertain_capacity,
+                }))
+            }
+            WorkResult::Prepared(prepared) => historical_xcf_open::install(s, &name_a, source_path, *prepared),
+            WorkResult::Decoded(_) => Err(EngineError::Other("decoded Open result did not complete native preparation".into())),
+        };
+        if in_command {
+            run(self, &label, false, work, apply).map(Started::Done)
+        } else {
+            self.start_job_with_spawn(OPEN_JOB, json!({"name": name}), &label, false, background, work, apply)
+        }
+    }
+
     /// Start a job that isn't an engine command (opening a file, a shell operation, a test's fake
     /// job): `work` runs on a worker, `apply` on this thread when [`Session::poll_jobs`] or
     /// [`Session::wait_job`] picks the result up. `command` and `params` identify it in
@@ -1665,6 +1792,9 @@ impl Session {
         if let Some(gate) = self.authorize {
             gate(id, &params)?;
         }
+        // Whether this request runs under automation's gate: its step, journaled now or when its
+        // job is applied, marks the recording that owns it as automation's.
+        let automation = self.authorize.is_some();
         let _authorization = AuthorizationScope::enter(self.authorize);
         let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
         // Last Filter runs as the filter it repeats: journaled, recorded in an action, faded and
@@ -1774,6 +1904,7 @@ impl Session {
                 job.journal = spec.journal;
                 job.started_in_take = self.actions.recording.map(|_| self.actions.take);
                 job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id));
+                job.automation = automation;
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
@@ -1795,7 +1926,7 @@ impl Session {
                         st.fx_collapsed.push(layer_id);
                     }
                 }
-                self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref(), &record_before);
+                self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))
             }
         };
@@ -1864,12 +1995,15 @@ impl Session {
     /// for the commands it ran itself (Straighten runs Image Rotation and Crop): their entries are
     /// dropped, so a recorded action replays the command once, not its steps as well (#3067).
     /// Edit › Transform › Again (and Again on a Copy) is not replayable and keeps the concrete
-    /// steps it ran instead.
+    /// steps it ran instead. `automation` says the step is automation's (its request ran under an
+    /// automation gate), which marks the action being recorded.
+    #[allow(clippy::too_many_arguments)]
     fn after_command(
         &mut self,
         id: &str,
         params: Value,
         journal: bool,
+        automation: bool,
         nested_from: Option<usize>,
         pre_selected: Option<&[LayerId]>,
         before: &crate::actions_record::Before,
@@ -1897,6 +2031,8 @@ impl Session {
         };
         let params = crate::actions_cmds::recorded_params(self, id, params);
         let params = crate::actions_record::portable(self, id, params, before);
+        // A step a control client runs while the user records keeps automation's gate.
+        crate::actions_cmds::note_step_origin(self, automation, id, &params);
         match crate::actions_record::fold_keystroke(self, id, &params, self.typed_layer) {
             crate::actions_record::Keystroke::Folded => {}
             crate::actions_record::Keystroke::None => {
@@ -1942,6 +2078,8 @@ impl Session {
         self.end_job_with_error(&job, outcome, error);
     }
 
+    /// Apply a finished job's `payload` on this thread and do the command's bookkeeping, journaling
+    /// its step into the recording that owns it with the origin the job was admitted with.
     fn apply_job(&mut self, job: &Running, apply: Option<Apply>, payload: Payload) -> Result<Value> {
         let Running {
             label,
@@ -1955,6 +2093,7 @@ impl Session {
             params,
             journal,
             recorded_by,
+            automation,
             pre_selected,
             before,
             ..
@@ -2019,7 +2158,10 @@ impl Session {
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
-            self.after_command(command, params.clone(), *journal, Some(nested_from), pre_selected.as_deref(), before);
+            // The step is automation's when the job's own request was gated, not the caller
+            // polling it now, and only for the recording that owns it: a foreign recording does
+            // not get the step.
+            self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
             if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
                 *start = self.journal.len();
             }

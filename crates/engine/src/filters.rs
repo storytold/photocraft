@@ -258,7 +258,7 @@ fn replay_with_interrupt(
     }
     // Image › Adjustments recorded as smart filters (Levels, Curves, Shadows/Highlights… from PSD).
     if let Some(kind) = id.strip_prefix("image.adjustments.") {
-        return Ok(crate::adjust_cmds::adjust_as_filter(kind, params, surf));
+        return crate::adjust_cmds::adjust_as_filter(kind, params, surf);
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {

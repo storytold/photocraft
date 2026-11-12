@@ -120,9 +120,11 @@ impl PhotocraftApp {
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
         // the tab strip can follow the pointer.
-        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+        let hovering = ctx.input(|i| i.raw.hovered_files.len());
+        if hovering > 0 {
             ctx.request_repaint();
         }
+        crate::file_open::log_drag_over(ctx, hovering);
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         if !dropped.is_empty() {
             let at = self.cursor_pos(ctx);
@@ -246,6 +248,8 @@ impl PhotocraftApp {
     /// wait modal took the frame (its input, IME and window check already handled).
     fn ui_body(&mut self, ui: &mut egui::Ui) -> bool {
         let ctx = ui.ctx().clone();
+        // Where a pen dragging the window is on the screen, before the title bar reads it.
+        titlebar::note_os_pointer(self, &ctx);
         // A text field's right-click menu, before any field is drawn (text_field_menu.rs).
         text_field_menu::show(&ctx);
         // The wheel goes to a focused value field before the canvas or a panel sees it (#5473).

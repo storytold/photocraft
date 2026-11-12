@@ -188,7 +188,12 @@ impl Session {
     }
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
-    pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool, initial_view: Option<photocraft_io::NativeInitialView>) -> u64 {
+    pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool) -> u64 {
+        self.hold_open_with_view(doc, source_read_only, None)
+    }
+
+    /// Hold a validated import and its one-time view hints until the host answers its prompt.
+    pub(crate) fn hold_open_with_view(&mut self, doc: Document, source_read_only: bool, initial_view: Option<photocraft_io::NativeInitialView>) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
         self.held_opens.push((
             self.next_held_open,
@@ -212,7 +217,7 @@ impl Session {
         color_settings: Option<color_cmds::ColorSettings>,
         ignore_exif_profile_tag: Option<bool>,
     ) -> u64 {
-        let id = self.hold_open(doc, source_read_only, initial_view);
+        let id = self.hold_open_with_view(doc, source_read_only, initial_view);
         // The entry just appended above is the only one this call updates.
         if let Some((_, held)) = self.held_opens.last_mut() {
             held.color_settings = color_settings;
@@ -223,11 +228,15 @@ impl Session {
 
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
+    /// This legacy method discards the saved initial view. Import hosts should use
+    /// [`Self::take_held_open_with_view`] to preserve native layer, channel and path selections.
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
         self.take_held_open_with_view(id).map(|(doc, read_only, _)| (doc, read_only))
     }
 
     /// Take a pending open with its validated, one-time native view handoff.
+    /// Hosts answering a captured color question should use [`Self::take_held_open_with_policy`]
+    /// to retain the request-time settings as well.
     pub fn take_held_open_with_view(&mut self, id: u64) -> Option<(Document, bool, Option<photocraft_io::NativeInitialView>)> {
         self.take_held_open_with_policy(id).map(|held| (held.document, held.source_read_only, held.initial_view))
     }

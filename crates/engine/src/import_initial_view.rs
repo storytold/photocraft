@@ -1,0 +1,218 @@
+//! One-time native import view handoff, independent of document preparation or editing.
+
+use std::sync::Arc;
+
+use crate::{EngineError, Result, Session};
+
+impl Session {
+    /// Apply a validated import's native view state once, without an edit or history step.
+    /// Callers validate before publishing the pending document; native reopen supplies no hint.
+    pub fn apply_import_initial_view(&mut self, view: Option<photocraft_io::NativeInitialView>) -> Result<()> {
+        let Some(view) = view else { return Ok(()) };
+        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        view.validate(&st.doc).map_err(|e| EngineError::Other(e.to_string()))?;
+        if !view.selected_layers.is_empty() {
+            st.active_layer = view.active_layer;
+            st.selected_layers = view.selected_layers;
+            st.layer_anchor = st.active_layer;
+            let target = crate::LayerTarget { active: st.active_layer, selected: st.selected_layers.clone() };
+            st.history.set_current_layers(target.clone());
+            // The opened snapshot predates this one-time view handoff. Update its target only
+            // while it still holds this exact admitted document, never an older edited state.
+            if let Some(snapshot) = st.snapshots.iter_mut().find(|snapshot| snapshot.id == 0 && Arc::ptr_eq(&snapshot.doc, &st.doc)) {
+                snapshot.layers = target;
+            }
+        }
+        st.channel_view.target = match view.target {
+            photocraft_io::NativeImportTarget::Composite => crate::channel_cmds::ChannelTarget::Composite,
+            photocraft_io::NativeImportTarget::LayerMask => crate::channel_cmds::ChannelTarget::LayerMask,
+            photocraft_io::NativeImportTarget::AlphaChannel(index) => crate::channel_cmds::ChannelTarget::Alpha(index),
+        };
+        st.color_samplers = view.samplers;
+        for index in view.visible_alpha_channels {
+            st.channel_view.set_alpha_visible(index, true);
+        }
+        st.channel_view.layer_mask = if view.show_layer_mask {
+            st.active_layer.map(|layer| crate::mask_view_cmds::LayerMaskView { layer, mode: crate::mask_view_cmds::MaskViewMode::Gray, filter: false })
+        } else {
+            None
+        };
+        st.initial_path_selection = view.selected_path;
+        self.sync_tools_mask_target();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod initial_view_tests {
+    use super::*;
+    use photocraft_doc::Document;
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+    use serde_json::json;
+
+    #[test]
+    fn imported_mask_and_channel_views_target_existing_native_items_without_edits() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        session.execute("channel.new", json!({})).unwrap();
+        session.execute("channel.new", json!({})).unwrap();
+        let state = session.active().unwrap();
+        let layer = state.active_layer.unwrap();
+        let before = (state.revision, state.history.past_len(), state.doc.clone());
+        session
+            .apply_import_initial_view(Some(NativeInitialView {
+                selected_layers: vec![layer],
+                active_layer: Some(layer),
+                target: NativeImportTarget::LayerMask,
+                show_layer_mask: true,
+                visible_alpha_channels: vec![1],
+                samplers: vec![[2.5, 3.5]],
+                ..Default::default()
+            }))
+            .unwrap();
+        let state = session.active().unwrap();
+        assert_eq!(state.channel_view.target, crate::channel_cmds::ChannelTarget::LayerMask);
+        assert_eq!(state.channel_view.layer_mask.as_ref().unwrap().layer, layer);
+        assert!(state.channel_view.alpha_shown(1));
+        assert!(session.tools.mask_targeted);
+        assert_eq!((state.revision, state.history.past_len()), (before.0, before.1));
+        assert!(Arc::ptr_eq(&state.doc, &before.2));
+        session.apply_import_initial_view(Some(NativeInitialView { target: NativeImportTarget::AlphaChannel(0), ..Default::default() })).unwrap();
+        assert_eq!(session.active().unwrap().channel_view.target, crate::channel_cmds::ChannelTarget::Alpha(0));
+        assert!(!session.tools.mask_targeted);
+    }
+
+    /// Original XCFv3 image properties: one modern sampler at (2,3), no drawable layers.
+    fn sampler_xcf() -> Vec<u8> {
+        let mut wire = b"gimp xcf v003\0".to_vec();
+        for word in [8u32, 6, 0, 39, 20, 2, 3, 0, 0, 0, 0, 0, 0, 0] {
+            wire.extend_from_slice(&word.to_be_bytes());
+        }
+        wire
+    }
+
+    #[test]
+    fn foreground_and_background_open_apply_the_import_hint_once_and_keep_source_protection() {
+        let bytes = sampler_xcf();
+        assert_eq!(photocraft_io::import("samplers.xcf", &bytes).unwrap().initial_view.unwrap().samplers, vec![[2., 3.]]);
+        for background in [false, true] {
+            let mut session = Session::new();
+            if background {
+                let result = match session.start_open("samplers.xcf", crate::jobs::OpenSource::Bytes(Arc::new(bytes.clone()))).unwrap() {
+                    crate::jobs::Started::Done(result) => result,
+                    crate::jobs::Started::Job(job) => session.wait_job(job).unwrap(),
+                };
+                assert_eq!(result["hasInitialView"], true, "a requeue must retain the original handoff's presence");
+            } else {
+                crate::file_cmds::open_bytes_as(&mut session, "samplers.xcf", &bytes, None, Some("samplers.xcf".into())).unwrap();
+            }
+            let state = session.active().unwrap();
+            assert_eq!(state.color_samplers, vec![[2., 3.]], "background={background}");
+            assert!(state.source_read_only);
+            assert!(state.path.is_none());
+            assert_eq!((state.revision, state.history.past_len()), (1, 0));
+            let native = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+            let mut reopened = Session::new();
+            crate::file_cmds::open_bytes_as(&mut reopened, "reopened.pcraft", &native, None, None).unwrap();
+            assert!(reopened.active().unwrap().color_samplers.is_empty(), "native reopen must not replay historical hints");
+        }
+    }
+
+    #[test]
+    fn opened_snapshot_restores_the_imported_layer_target() {
+        let mut source = Session::new();
+        source.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let first = source.active().unwrap().active_layer.unwrap();
+        source.execute("layer.new.layer", json!({"name": "second"})).unwrap();
+        let second = source.active().unwrap().active_layer.unwrap();
+        let mut session = Session::new();
+        session.add_document((*source.active().unwrap().doc).clone(), None);
+        let before = session.active().unwrap().revision;
+        session
+            .apply_import_initial_view(Some(NativeInitialView { selected_layers: vec![first, second], active_layer: Some(first), ..Default::default() }))
+            .unwrap();
+        assert_eq!(session.active().unwrap().revision, before);
+        session.execute("layer.select", json!({"layer": second.0})).unwrap();
+        session.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        session.execute("history.selectSnapshot", json!({"snapshot": 0})).unwrap();
+        let state = session.active().unwrap();
+        assert_eq!(state.active_layer, Some(first));
+        assert_eq!(state.selected_layers, vec![first, second]);
+    }
+
+    #[test]
+    fn initial_view_does_not_retarget_an_older_snapshot() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let original = session.active().unwrap().active_layer.unwrap();
+        session.execute("layer.new.layer", json!({"name": "later"})).unwrap();
+        let later = session.active().unwrap().active_layer.unwrap();
+        session.apply_import_initial_view(Some(NativeInitialView { selected_layers: vec![later], active_layer: Some(later), ..Default::default() })).unwrap();
+        session.execute("history.selectSnapshot", json!({"snapshot": 0})).unwrap();
+        let state = session.active().unwrap();
+        assert_eq!(state.active_layer, Some(original));
+        assert_eq!(state.selected_layers, vec![original]);
+        assert!(state.doc.layer(later).is_none());
+    }
+
+    #[test]
+    /// Apply imported view hints without history or revision changes and verify native reopen does not replay them.
+    fn native_initial_view_is_atomic_view_state_and_not_restored_by_reopen() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let first = session.active().unwrap().active_layer.unwrap();
+        session.execute("layer.new.layer", json!({"name": "second"})).unwrap();
+        let before = session.active().unwrap().revision;
+        let view = NativeInitialView { selected_layers: vec![first], active_layer: Some(first), samplers: vec![[2.5, 3.5]], ..Default::default() };
+        session.apply_import_initial_view(Some(view)).unwrap();
+        let st = session.active().unwrap();
+        assert_eq!(st.active_layer, Some(first));
+        assert_eq!(st.color_samplers, vec![[2.5, 3.5]]);
+        assert_eq!(st.revision, before);
+        let bytes = photocraft_format::save_to_bytes(&st.doc, &Default::default()).unwrap();
+        let imported = photocraft_io::import("view.pcraft", &bytes).unwrap();
+        assert!(imported.initial_view.is_none());
+        let mut reopened = Session::new();
+        reopened.add_document(imported.document, None);
+        assert!(reopened.active().unwrap().color_samplers.is_empty());
+        assert!(reopened.active().unwrap().initial_path_selection.is_none());
+    }
+
+    #[test]
+    /// Reject invalid view references and nonfinite samplers without changing document identity, selection or revision.
+    fn invalid_native_initial_view_leaves_all_existing_state_unchanged() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+        let before = session.active().unwrap().clone();
+        for view in [
+            NativeInitialView { samplers: vec![[f64::NAN, 0.0]], ..Default::default() },
+            NativeInitialView { target: NativeImportTarget::AlphaChannel(0), ..Default::default() },
+            NativeInitialView { selected_path: Some(0), ..Default::default() },
+        ] {
+            assert!(session.apply_import_initial_view(Some(view)).is_err());
+            let st = session.active().unwrap();
+            assert!(Arc::ptr_eq(&before.doc, &st.doc));
+            assert_eq!(st.active_layer, before.active_layer);
+            assert_eq!(st.selected_layers, before.selected_layers);
+            assert_eq!(st.channel_view, before.channel_view);
+            assert_eq!(st.color_samplers, before.color_samplers);
+            assert_eq!(st.revision, before.revision);
+        }
+    }
+
+    #[test]
+    /// Keep the source view with a held import and verify taking it consumes the handoff exactly once without
+    /// installing a tab.
+    fn held_native_initial_view_is_kept_until_taken_once() {
+        let doc = Document::new("held", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut session = Session::new();
+        let view = NativeInitialView { samplers: vec![[1.0, 2.0]], ..Default::default() };
+        let id = session.hold_open_with_view(doc, true, Some(view.clone()));
+        let (_, read_only, pending) = session.take_held_open_with_view(id).unwrap();
+        assert!(read_only);
+        assert_eq!(pending, Some(view));
+        assert!(session.take_held_open_with_view(id).is_none());
+        assert!(session.documents().is_empty());
+    }
+}

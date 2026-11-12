@@ -293,6 +293,26 @@ fn gradient_overlay_interpolation_roundtrips_in_native_documents() {
     }
 }
 
+/// #8351: a Gradient Map layer keeps Photoshop's own gradient (stops, midpoints, Smoothness,
+/// method) through a native save, and a file without one still loads.
+#[test]
+fn gradient_map_source_roundtrips_in_native_documents() {
+    use photocraft_doc::Adjustment;
+    use photocraft_doc::adjust::GradientSource;
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let source =
+        GradientSource { stops: vec![(0.0, [0.1, 0.2, 0.6]), (1.0, [1.0, 0.8, 0.2])], midpoints: vec![0.3], smoothness: 0.8, method: "perceptual".into() };
+    let map = Adjustment::GradientMap {
+        stops: vec![(0.0, [0.1, 0.2, 0.6]), (0.5, [0.7, 0.4, 0.4]), (1.0, [1.0, 0.8, 0.2])],
+        reverse: false,
+        dither: true,
+        source: Some(source),
+    };
+    doc.insert_above(None, Layer::new("map", LayerContent::Adjustment(map)));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+}
+
 #[test]
 fn old_effect_snapshots_need_no_interpolation_record() {
     let effect = photocraft_doc::Effect::GradientOverlay {
@@ -1345,4 +1365,27 @@ fn arrow_document_is_backward_compatible() {
     // The new reader restores full parametric editability.
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
+}
+
+/// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
+/// the crash-recovery autosave is a `.pcraft` bundle reopened at the document's original path, so
+/// dropping the count would let Save write one frame over a multi-image file. A manifest written
+/// before the key existed loads with no count.
+#[test]
+fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
+    for count in [3, u32::MAX] {
+        let mut doc = Document::new("anim", photocraft_doc::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        doc.file_encoding = photocraft_doc::FileEncoding { jpeg_quality: Some(80), source_images: Some(count), ..Default::default() };
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let loaded = load_from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.file_encoding.source_images, Some(count));
+        assert_eq!(loaded, doc);
+
+        // The same manifest without the key, as an older build wrote it.
+        let mut json = serde_json::to_value(read_manifest(&bytes).unwrap().document).unwrap();
+        let encoding = json["file_encoding"].as_object_mut().unwrap();
+        assert_eq!(encoding.remove("sourceImages"), Some(serde_json::json!(count)));
+        let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
+        assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
+    }
 }
