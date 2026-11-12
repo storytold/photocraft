@@ -268,25 +268,31 @@ pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: b
     let inner = (size * (1.0 - notch * (1.0 - (hw / half).min(1.0)))).min(if start && end { distance / 2.0 } else { distance });
     let shaft_a = if start { (a.0 + ux * inner, a.1 + uy * inner) } else { a };
     let shaft_b = if end { (b.0 - ux * inner, b.1 - uy * inner) } else { b };
-    let mut pieces = vec![Subpath::polygon(&[
-        (shaft_a.0 + vx * hw, shaft_a.1 + vy * hw),
-        (shaft_b.0 + vx * hw, shaft_b.1 + vy * hw),
-        (shaft_b.0 - vx * hw, shaft_b.1 - vy * hw),
-        (shaft_a.0 - vx * hw, shaft_a.1 - vy * hw),
-    ])];
-    // The tip, both outer corners of the head and the recessed midpoint.
-    // Positive `sign` points towards the tail of the head (away from its tip).
-    let mut head = |tip: (f64, f64), sign: f64| {
+    let side = |p: (f64, f64), d: f64| (p.0 + vx * d, p.1 + vy * d);
+    // A head's tip, both outer corners and its rear edge's bent middle. Positive `sign` points
+    // toward the tail of the head (away from its tip).
+    let head = |tip: (f64, f64), sign: f64| {
         let base = (tip.0 + ux * sign * size, tip.1 + uy * sign * size);
         let rear_middle = (base.0 - ux * sign * size * notch, base.1 - uy * sign * size * notch);
-        pieces.push(Subpath::polygon(&[tip, (base.0 + vx * half, base.1 + vy * half), rear_middle, (base.0 - vx * half, base.1 - vy * half)]));
+        [tip, side(base, half), rear_middle, side(base, -half)]
     };
-    if start {
-        head(a, 1.0);
-    }
-    if end {
-        head(b, -1.0);
-    }
+    let (start_head, end_head) = (start.then(|| head(a, 1.0)), end.then(|| head(b, -1.0)));
+    // A base bent toward the tip leaves a wedge between the shaft's end and the head that the
+    // reference fills: the shaft's end follows the bent base to its middle, so it fills the wedge
+    // without reaching past the head's flanks. A base bent away lies under the head already.
+    let wedge = |h: [(f64, f64); 4], from: usize, to: usize| -> Vec<(f64, f64)> {
+        if notch <= 0.0 {
+            return Vec::new();
+        }
+        let corners = hw > half;
+        [(corners, h[from]), (true, h[2]), (corners, h[to])].into_iter().filter_map(|(keep, p)| keep.then_some(p)).collect()
+    };
+    let mut shaft = vec![side(shaft_a, hw), side(shaft_b, hw)];
+    shaft.extend(end_head.map_or_else(Vec::new, |h| wedge(h, 1, 3)));
+    shaft.extend([side(shaft_b, -hw), side(shaft_a, -hw)]);
+    shaft.extend(start_head.map_or_else(Vec::new, |h| wedge(h, 3, 1)));
+    let mut pieces = vec![Subpath::polygon(&shaft)];
+    pieces.extend([start_head, end_head].into_iter().flatten().map(|h| Subpath::polygon(&h)));
     // Never return non-finite arrow geometry.
     // Large but valid scaled arrowheads remain unchanged.
     if pieces.iter().flat_map(|sp| &sp.knots).any(|k| !k.anchor.x.is_finite() || !k.anchor.y.is_finite()) {

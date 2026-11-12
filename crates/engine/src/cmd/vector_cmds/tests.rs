@@ -1502,6 +1502,9 @@ fn arrow_concavity_takes_minus_fifty_to_fifty() {
     assert_eq!(concavity(&s, id), -50.0);
     s.execute("shape.edit", json!({"layer": id, "arrowConcavity": 50})).unwrap();
     assert_eq!(concavity(&s, id), 50.0);
+    // Whole percents only, as the fields take them.
+    s.execute("shape.edit", json!({"layer": id, "arrowConcavity": -20.6})).unwrap();
+    assert_eq!(concavity(&s, id), -21.0);
 
     if let Some(LayerContent::Shape(sh)) = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(LayerId(id)).map(|l| &mut l.content)
         && let Some(LiveShape::ArrowLine { concavity, .. }) = &mut sh.live
