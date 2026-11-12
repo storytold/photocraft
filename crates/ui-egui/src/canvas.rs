@@ -1615,6 +1615,16 @@ struct CanvasOverlayInput<'a> {
     zoom_out: &'a dyn Fn(bool) -> bool,
 }
 
+/// What a view other than the primary one draws over its canvas: the selection's ants, and a
+/// costly Move drag's picture of the layers when it shows the active document (its canvas hides
+/// them too).
+fn paint_secondary_overlays(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, idx: usize, ants: Vec<egui::Shape>) {
+    if app.session.active_index() == Some(idx) {
+        crate::move_ui::draw_snapshot(app, painter, xf);
+    }
+    painter.extend(ants);
+}
+
 /// Paints what sits over the canvas image: the grid, guides, selection ants, and the active tool's previews and handles.
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
     let ctx = input.ctx;
@@ -2561,11 +2571,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         };
         paint_primary_overlays(app, ui, &mut view, &input, ants);
     } else {
-        // Another view of the active document shows the layers hidden too: the picture follows.
-        if app.session.active_index() == Some(idx) {
-            crate::move_ui::draw_snapshot(app, &painter, &xf);
-        }
-        painter.extend(ants);
+        paint_secondary_overlays(app, &painter, &xf, idx, ants);
     }
     let tail = CanvasTailInput {
         ctx: &ctx,
