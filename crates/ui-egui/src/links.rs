@@ -75,7 +75,7 @@ fn pending_id() -> egui::Id {
 
 fn open_issues(app: &mut PhotocraftApp, ctx: &egui::Context) -> Value {
     let r = open(app, ctx, ISSUES);
-    let template = "Opened {url}. System Info was copied to the clipboard: paste it into the issue.";
+    let template = "Opened {url}. System Info (graphics adapter, render path, slow frames) was copied to the clipboard: paste it into the issue.";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("url", ISSUES)]);
     r
 }
@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(opened.lock().unwrap().as_slice(), [ISSUES.to_string()], "the URL is unchanged, opened once");
         ctx.run_ui(Default::default(), |ui| open_pending(&mut app, ui.ctx())).textures_delta.clear();
         assert_eq!(opened.lock().unwrap().len(), 1);
-        assert!(app.ui.status.contains("System Info was copied to the clipboard"), "{}", app.ui.status);
+        assert!(app.ui.status.contains("System Info (graphics adapter, render path, slow frames) was copied to the clipboard"), "{}", app.ui.status);
 
         // Hidden window: eframe runs `logic` alone (`run_logic`), no UI pass and no new frame. An
         // agent's `help.reportIssue` there copies in that call's output and opens on the next call.
