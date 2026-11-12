@@ -120,7 +120,7 @@ Baseline: 2026-10-05, 1 run, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Appl
 | Id | Scenario | Target | Why | Issue |
 |---|---|---|---|---|
 | P15 | Zoom / pan frame time on a 15000×10000 16-bit document | ≤ 16 ms per frame | no headless canvas frame harness yet (zoom and pan sample the GPU texture in the egui paint callback) | [#209](https://github.com/storytold/photocraft/issues/209) |
-| P23 | Warp / Puppet / Perspective preview at 4K | ≤ 16 ms per frame, commit in the background | the previews run inside the UI tools; no headless frame harness, no background commit | [#210](https://github.com/storytold/photocraft/issues/210) |
+| P23 | Warp / Puppet / Perspective preview at 4K | ≤ 16 ms per frame, commit in the background | the previews run inside the UI tools; no headless frame harness (the commits are P116-P118) | [#210](https://github.com/storytold/photocraft/issues/210) |
 | P34 | Brush preview memory, small dab on an 8K viewport | ≤ 2 MiB | the live brush preview buffers are UI-side; no headless counter yet | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P35 | Marquee drag on 24 MP with Alt/Shift | ≤ 17 ms p95 | Shift/Alt marquee modifiers don't exist yet (#208) and the drag preview is UI-side | [#211](https://github.com/storytold/photocraft/issues/211) |
 

@@ -342,7 +342,7 @@ id = "P23"
 title = "Warp / Puppet / Perspective preview at 4K"
 issue = 210
 target = "≤ 16 ms per frame, commit in the background"
-not_measurable = "the previews run inside the UI tools; no headless frame harness, no background commit"
+not_measurable = "the previews run inside the UI tools; no headless frame harness (the commits are P116-P118)"
 
 [[scenario]]
 id = "P24"
