@@ -669,6 +669,9 @@ pub struct PhotocraftApp {
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
+    /// Pen paths finished, which Undo back to their finish gives back to the Pen
+    /// (`vector_ui::pen_resume_on_undo`).
+    pub(crate) finished_pens: Vec<vector_ui::FinishedPen>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     /// Perspective Crop tool gesture and clicked corners (see `perspective_crop_ui`).
@@ -1097,3 +1100,6 @@ mod background_eraser_digit_keys_tests;
 mod clone_stamp_reset_tip_tests;
 #[cfg(test)]
 mod sponge_default_tip_tests;
+
+#[cfg(test)]
+mod red_eye_context_menu_tests;
