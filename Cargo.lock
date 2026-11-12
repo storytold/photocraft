@@ -1409,9 +1409,30 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b#6e03f65bf45181db77ba6229716e6624db9eb25b"
 
 [[package]]
+name = "craft-dpx"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=55d120f201771acbb32b2cf122d4a6dc82593a57#55d120f201771acbb32b2cf122d4a6dc82593a57"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-exr"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=55d120f201771acbb32b2cf122d4a6dc82593a57#55d120f201771acbb32b2cf122d4a6dc82593a57"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b#6e03f65bf45181db77ba6229716e6624db9eb25b"
+
+[[package]]
+name = "craft-gif"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=55d120f201771acbb32b2cf122d4a6dc82593a57#55d120f201771acbb32b2cf122d4a6dc82593a57"
 
 [[package]]
 name = "craft-heif"
@@ -1487,6 +1508,23 @@ dependencies = [
  "tempfile",
  "winprint",
  "winsafe",
+]
+
+[[package]]
+name = "craft-raster-codecs"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=55d120f201771acbb32b2cf122d4a6dc82593a57#55d120f201771acbb32b2cf122d4a6dc82593a57"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-tga"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=55d120f201771acbb32b2cf122d4a6dc82593a57#55d120f201771acbb32b2cf122d4a6dc82593a57"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5473,8 +5511,13 @@ dependencies = [
 name = "photocraft-codecs"
 version = "0.23.0"
 dependencies = [
+ "craft-dpx",
+ "craft-exr",
+ "craft-gif",
  "craft-heif",
  "craft-jpeg",
+ "craft-raster-codecs",
+ "craft-tga",
  "exr",
  "flate2",
  "half",
