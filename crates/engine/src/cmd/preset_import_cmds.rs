@@ -849,8 +849,8 @@ mod tests {
 
     #[test]
     fn abr_files_get_a_larger_size_cap() {
-        // 1 GiB on 64-bit; 32-bit (wasm) keeps 512 MiB so a big file fails cleanly instead of aborting.
-        const WANT: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 512 << 20 };
+        // Match craft-psd's aggregate decoded-sample budget: 2 GiB on 64-bit, 512 MiB on 32-bit.
+        const WANT: u64 = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 512 << 20 };
         const _: () = assert!(MAX_ABR_FILE_BYTES == WANT && MAX_ABR_FILE_BYTES >= MAX_FILE_BYTES);
         let dir = std::env::temp_dir().join(format!("pc-abr-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
