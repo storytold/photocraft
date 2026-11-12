@@ -600,7 +600,7 @@ fn puppet_command_warps_white_and_black_clear_pixels_alike() {
         s.edit("paint", |doc, active| {
             let l = doc.layer_mut(active.unwrap()).unwrap();
             let surf = l.surface_mut().unwrap();
-            surf.fill_rect(Rect::new(0, 0, 32, 32), &[clear, clear, clear, 0.0]);
+            surf.fill_rect(Rect::new(0, 0, 80, 60), &[clear, clear, clear, 0.0]);
             surf.fill_rect(Rect::new(12, 12, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
             Ok(())
         })

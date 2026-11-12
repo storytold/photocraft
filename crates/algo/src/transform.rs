@@ -363,7 +363,8 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
 /// default pixel is clear only the covered part of the rect matters. An opaque or translucent default
 /// is content everywhere in the rect (it is not stored in any tile), so the rect is kept whole.
 /// A row-order mesh warp ([`crate::warp::warp_mesh_surface`]) keeps the rect it is given, so callers that
-/// size it by their content pass it through this first.
+/// size it by their content pass it through this first. `warp_source_rect(s, s.content_bounds())` is
+/// `s.covered_bounds()`, so a caller sizing by the whole content uses that directly.
 pub fn warp_source_rect(src: &Surface, src_rect: Rect) -> Rect {
     if src.default_is_clear() { src_rect.intersect(&src.covered_bounds()) } else { src_rect }
 }

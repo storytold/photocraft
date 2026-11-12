@@ -129,7 +129,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
     let (layer, surface, _) = crate::distort_ui::active_pixels(app)?;
     let st = app.session.active().ok_or("no document")?;
     let l = st.doc.layer(layer).ok_or("no layer")?;
-    let bounds = surface.content_bounds();
+    // Sized as the command sizes it: by what is covered (#10639).
+    let bounds = surface.covered_bounds();
     if bounds.is_empty() {
         return Err("Could not use Perspective Warp: the layer is empty".into());
     }
@@ -394,6 +395,26 @@ mod tests {
         let before = app.session.active().unwrap().history.past_len();
         commit(&mut app);
         assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
+    }
+
+    #[test]
+    fn a_layer_of_only_clear_white_pixels_is_empty_for_the_preview_as_for_the_command() {
+        // #10678: the preview sized by content_bounds, which counts a clear pixel stored white,
+        // so the tool opened and Commit then did nothing.
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 60, "height": 40, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 60, 40), &[1.0, 1.0, 1.0, 0.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        let err = begin(&mut app, &ctx, "edit.perspectiveWarp").unwrap_err();
+        assert!(err.contains("empty"), "{err}");
+        assert!(app.distort.perspective.is_none());
     }
 
     #[test]
