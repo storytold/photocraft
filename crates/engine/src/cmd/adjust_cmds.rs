@@ -102,7 +102,7 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 
 /// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
 /// .look path, native only) or `"data"` (file text, or base64 with `"dataEncoding":"base64"`).
-/// `"lutFormat":"cube|3dl|look"` can supply the format when the file name doesn't identify it.
+/// `"lutFormat":"cube|3dl|look"` (`"auto"`: detect) can supply the format when the file name doesn't identify it.
 /// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
 /// layer, as Photoshop does. Unspecified fields keep `base`'s values; a key of the wrong type is an
 /// error.
@@ -119,11 +119,11 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         return Err(bad(CMD, "`dataEncoding` must be \"text\" or \"base64\""));
     }
     let format = match opt_str(CMD, p, "lutFormat")? {
-        None => None,
+        None | Some("auto") => None,
         Some("cube") => Some(photocraft_cms::lutfile::Format::Cube),
         Some("3dl") => Some(photocraft_cms::lutfile::Format::ThreeDl),
         Some("look") => Some(photocraft_cms::lutfile::Format::Look),
-        Some(_) => return Err(bad(CMD, "`lutFormat` must be \"cube\", \"3dl\" or \"look\"")),
+        Some(_) => return Err(bad(CMD, "`lutFormat` must be \"auto\", \"cube\", \"3dl\" or \"look\"")),
     };
     // The parsed table, its label and (for a file) the file as loaded, which a PSD save embeds.
     let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String, Option<LutSource>)> = None;
@@ -139,8 +139,8 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             loaded = Some((f, label, None));
         }
     }
-    let file_name = opt_str(CMD, p, "fileName")?;
-    if let Some(text) = opt_str(CMD, p, "data")? {
+    let file_name = opt_str(CMD, p, "fileName")?.filter(|s| !s.is_empty());
+    if let Some(text) = opt_str(CMD, p, "data")?.filter(|s| !s.is_empty()) {
         let file_name = file_name.unwrap_or("lut.cube");
         let bytes = if encoding == "base64" {
             photocraft_paint::tile::b64_decode(text).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?
@@ -245,7 +245,7 @@ pub fn folder_luts(_: &str) -> Vec<(String, String)> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &str) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
+    crate::allocation::read_file_within(path, MAX_FOLDER_LUT_BYTES).ok()
 }
 #[cfg(target_arch = "wasm32")]
 fn read_file(_: &str) -> Option<Vec<u8>> {
@@ -266,19 +266,23 @@ pub fn update_adjustment(existing: &Adjustment, p: &Value) -> Option<Result<Adju
 // ---------- destructive helpers ----------
 
 /// Runs `f` on the target surface's content as straight RGBA (`w × h` = content bounds), blending
-/// the result through the selection.
-fn process_surface(surf: &mut Surface, selection: Option<&Surface>, f: &mut dyn FnMut(&mut Vec<[f32; 4]>, Rect)) {
+/// the result through the selection. Refused before reading when the dense buffers over the
+/// content bounds (which span the gaps between distant tiles) would pass the working budget.
+fn process_surface(surf: &mut Surface, selection: Option<&Surface>, f: &mut dyn FnMut(&mut Vec<[f32; 4]>, Rect)) -> Result<()> {
     let r = surf.content_bounds();
     if r.is_empty() {
-        return;
+        return Ok(());
     }
     let fmt = surf.format();
     let n = fmt.channels();
+    // The native read and the blended output (`n` f32 each), and the edited and original RGBA.
+    crate::allocation::check_dense(r, (n as u64).saturating_mul(8).saturating_add(32), "this adjustment")?;
     let raw = surf.read_region(r);
     let mut px: Vec<[f32; 4]> = raw.chunks_exact(n).map(|q| to_rgba(&fmt, q)).collect();
     let orig = px.clone();
     f(&mut px, r);
     surf.write_region(r, &crate::pixels::mix_through_selection(&fmt, r, &orig, &px, selection));
+    Ok(())
 }
 
 /// One history step running `f` on the active pixel layer (or targeted channel or layer mask).
@@ -288,7 +292,7 @@ fn rgba_edit(s: &mut Session, label: &str, p: &Value, mut f: impl FnMut(&mut Vec
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, id, p)? {
-                process_surface(surf, sel.as_ref(), &mut f);
+                process_surface(surf, sel.as_ref(), &mut f)?;
                 surf.prune();
             }
             Ok(Value::Null)
@@ -298,7 +302,7 @@ fn rgba_edit(s: &mut Session, label: &str, p: &Value, mut f: impl FnMut(&mut Vec
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        process_surface(surf, sel.as_ref(), &mut f);
+        process_surface(surf, sel.as_ref(), &mut f)?;
         Ok(Value::Null)
     })
 }
@@ -372,14 +376,15 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
 /// object): the adjustment applied to a copy of `surf`. `None` for kinds or params it can't run.
-pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<Surface> {
+pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Result<Option<Surface>> {
     // A Color Lookup filter re-reads its LUT `file`, a path stored in the document: followed only
     // as `doc_path` allows, else the filter can't run (like a missing file).
     let resolved;
     let p = match p.get("file").and_then(Value::as_str).filter(|f| kind == "colorLookup" && !f.is_empty()) {
         Some(file) => {
             let mut q = p.clone();
-            q["file"] = json!(crate::doc_path::resolve(file).ok()?.to_str()?);
+            let Some(path) = crate::doc_path::resolve(file).ok().and_then(|p| p.to_str().map(str::to_owned)) else { return Ok(None) };
+            q["file"] = json!(path);
             resolved = q;
             &resolved
         }
@@ -388,14 +393,16 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
     let mut out = surf.clone();
     if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);
-        process_surface(&mut out, None, &mut |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh));
+        process_surface(&mut out, None, &mut |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh))?;
     } else {
         let mode = surf.format().mode;
-        let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
-        crate::pixels::adjust_surface(&mut out, &adj, None, mode).ok()?;
+        let Ok(adj) = crate::adjust_params::from_params(kind, p, None, mode) else { return Ok(None) };
+        if crate::pixels::adjust_surface(&mut out, &adj, None, mode).is_err() {
+            return Ok(None);
+        }
     }
     out.prune();
-    Some(out)
+    Ok(Some(out))
 }
 
 fn shadows_highlights(s: &mut Session, p: &Value) -> Result<Value> {
