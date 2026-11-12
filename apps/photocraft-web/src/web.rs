@@ -59,6 +59,9 @@ pub fn start() {
             return;
         };
         let q = query();
+        // The Photopea-compatible config in the URL hash, on an `?embed=` page (crate::embed).
+        let photopea = crate::embed::photopea_config(&q);
+        let embed_query = q.clone();
         let force_cpu = q.contains("cpu");
         // `?free-mb=N`: the memory gates and the low-memory warning see only N MiB (diagnostics).
         if let Some(mb) = crate::diagnostics::free_mb(&q) {
@@ -102,7 +105,13 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let control = crate::embed::install(&embed_query, cc.egui_ctx.clone());
+                    let mut app =
+                        PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag), photopea.clone()))
+                            .with_control(control);
+                    if let Some(config) = &photopea {
+                        crate::embed::open_config_files(config);
+                    }
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -371,7 +380,7 @@ impl WebShell {
                 wake.request_repaint();
             });
         }
-        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved(), Ordering::Relaxed);
+        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved() || crate::embed::upload_unconfirmed(), Ordering::Relaxed);
     }
 
     /// Fetches the served families asked for (picked in a font menu, or needed by a layout) and
@@ -465,6 +474,7 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
+        crate::embed::process(&mut self.app);
         self.save_presets(ctx);
         self.app.finish_type_reset_logic(ctx);
     }
@@ -499,7 +509,12 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
+fn services(
+    inbox: Inbox,
+    place_inbox: PlaceInbox,
+    cursor_pos: photocraft_ui_egui::CursorPosFn,
+    photopea: Option<crate::embed_protocol::PhotopeaConfig>,
+) -> Services {
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -544,8 +559,13 @@ fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egu
                 reply.send(Some(FileDialogAnswer::SaveTo(name)));
             }
         })),
-        write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
-        // A download may be cancelled and never reports back: it doesn't save the document.
+        // Embedded in Photopea's way with a save server: documents in its formats go there.
+        write: Some(Box::new(move |path: &str, bytes: &[u8]| match &photopea {
+            Some(config) if config.saves(path) => crate::embed::upload(config, path, bytes),
+            _ => download(path, bytes),
+        })),
+        // A download may be cancelled and never reports back, and an upload only answers later:
+        // neither saves the document.
         write_unconfirmed: true,
         encode_png: Some(Box::new(|w, h, rgba| {
             let img = Image::from_u8(w, h, ChannelLayout::Rgba, rgba.to_vec()).map_err(|e| e.to_string())?;
