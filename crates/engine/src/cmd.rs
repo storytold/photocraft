@@ -889,7 +889,7 @@ fn build() -> Vec<CommandSpec> {
                 // of what its sRGB stand-in converts back to through the document profile (#8568).
                 let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
                     Some(k) => Some(k),
-                    None if p.get("color").is_none() => s.tools.picked_role_cmyk(0),
+                    None if p.get("color").is_none_or(Value::is_null) => s.tools.picked_role_cmyk(0),
                     None => None,
                 };
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
@@ -1062,7 +1062,7 @@ fn build() -> Vec<CommandSpec> {
                 s.tools.foreground = foreground;
                 s.tools.background = background;
 
-                if p.get("foreground").is_some() || fg_cmyk.is_some() {
+                if p.get("foreground").is_some_and(|v| !v.is_null()) || fg_cmyk.is_some() {
                     s.tools.clear_role_cmyk(0);
                     if let Some(inks) = fg_cmyk {
                         s.tools.remember_role_cmyk(0, inks);
@@ -1070,7 +1070,7 @@ fn build() -> Vec<CommandSpec> {
                     }
                 }
 
-                if p.get("background").is_some() || bg_cmyk.is_some() {
+                if p.get("background").is_some_and(|v| !v.is_null()) || bg_cmyk.is_some() {
                     s.tools.clear_role_cmyk(1);
                     if let Some(inks) = bg_cmyk {
                         s.tools.remember_role_cmyk(1, inks);

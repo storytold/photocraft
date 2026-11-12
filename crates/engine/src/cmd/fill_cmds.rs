@@ -113,7 +113,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             match cmyk_param(CMD, p, "colorCmyk")? {
                 Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
                 Some(_) => return Err(bad("`colorCmyk` requires an opaque color")),
-                None if p.get("color").is_none() => color_source(s, rgba, 0),
+                None if p.get("color").is_none_or(Value::is_null) => color_source(s, rgba, 0),
                 None => match s.tools.matching_cmyk([rgba[0], rgba[1], rgba[2]]) {
                     Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
                     _ => Source::Color(rgba),
