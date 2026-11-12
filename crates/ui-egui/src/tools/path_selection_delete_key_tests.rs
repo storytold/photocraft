@@ -35,11 +35,14 @@ fn click(app: &mut PhotocraftApp, x: f64, y: f64, mods: Modifiers) {
 }
 
 fn press(app: &mut PhotocraftApp, key: Key) {
-    let ctx = egui::Context::default();
+    key_event(app, &egui::Context::default(), key, true);
+}
+
+fn key_event(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, pressed: bool) {
     let mods = Modifiers::NONE;
-    let events = vec![egui::Event::ModifiersChanged(mods), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods }];
+    let events = vec![egui::Event::ModifiersChanged(mods), egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods }];
     ctx.begin_pass(egui::RawInput { events, ..Default::default() });
-    crate::shortcuts::handle(app, &ctx);
+    crate::shortcuts::handle(app, ctx);
     ctx.end_pass().textures_delta.clear();
 }
 
@@ -207,4 +210,73 @@ fn the_finished_work_path_still_uses_delete_path_even_with_a_selection() {
     assert!(active.doc.work_path.is_none());
     assert_eq!(active.doc.layers, layers);
     assert_eq!(active.history.undo_label(), Some("Delete Path"));
+}
+
+#[test]
+fn deleting_with_type_path_components_selected_keeps_the_type_layer() {
+    for key in [Key::Delete, Key::Backspace] {
+        let mut app = app();
+        app.run("path.set", json!({"path": geometry()})).unwrap();
+        let id = app.run("type.create", json!({"x": 20, "y": 70, "text": "On a path", "size": 18})).unwrap()["layer"].as_u64().unwrap();
+        app.run("type.attachToPath", json!({})).unwrap();
+        app.ui.tool = Tool::PathSelection;
+        let (target, path) = crate::vector_ui::active_type_path(&app).unwrap();
+        assert_eq!(target, id);
+        let anchor = path.subpaths[0].knots[0].anchor;
+        super::press(&mut app, [anchor.x, anchor.y], false);
+        assert_eq!(super::selected(&app).unwrap().0, crate::direct_select::PathRef::TypePath(id));
+        for locked in [false, true] {
+            if locked {
+                app.session
+                    .edit("Lock type layer", |doc, _| {
+                        doc.layer_mut(LayerId(id)).unwrap().locks.pixels = true;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            let active = app.session.active().unwrap();
+            let (doc, steps) = (active.doc.clone(), active.history.past_len());
+            press(&mut app, key);
+            let active = app.session.active().unwrap();
+            assert_eq!(active.doc, doc);
+            assert_eq!(active.history.past_len(), steps);
+        }
+    }
+}
+
+#[test]
+fn a_held_path_delete_preserves_the_remaining_path_and_layers() {
+    for key in [Key::Delete, Key::Backspace] {
+        for target in ["saved component", "saved path", "shape"] {
+            let mut app = app();
+            if target == "shape" {
+                shape_or_mask(&mut app, false);
+            } else {
+                saved(&mut app, "Path 1");
+            }
+            if target != "saved path" {
+                click(&mut app, 20.0, 20.0, Modifiers::NONE);
+                assert_eq!(super::selected(&app).unwrap().2, [0]);
+            }
+            let ctx = egui::Context::default();
+            let steps = app.session.active().unwrap().history.past_len();
+            key_event(&mut app, &ctx, key, true);
+            let active = app.session.active().unwrap();
+            let after_press = active.doc.clone();
+            assert_eq!(active.history.past_len(), steps + 1, "{key:?}, {target}");
+            // egui marks presses of a key it already has down as repeats.
+            for _ in 0..2 {
+                key_event(&mut app, &ctx, key, true);
+                let active = app.session.active().unwrap();
+                assert_eq!(active.doc, after_press, "{key:?}, {target}");
+                assert_eq!(active.history.past_len(), steps + 1, "{key:?}, {target}");
+            }
+            key_event(&mut app, &ctx, key, false);
+            saved(&mut app, "Next");
+            key_event(&mut app, &ctx, key, true);
+            let active = app.session.active().unwrap();
+            assert_eq!(active.history.undo_label(), Some("Delete Path"));
+            assert!(active.doc.paths.iter().all(|p| p.name != "Next"));
+        }
+    }
 }

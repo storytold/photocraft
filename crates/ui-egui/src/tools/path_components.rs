@@ -7,7 +7,9 @@
 //! combines, so it keeps its operation. The selection is Direct Selection's: every anchor of a
 //! selected component.
 
-use egui::{Event, Key};
+use std::collections::BTreeSet;
+
+use egui::{Event, Id, Key};
 use photocraft_doc::{Path, PathOp};
 use photocraft_geom::Point;
 use serde_json::json;
@@ -52,8 +54,37 @@ pub(crate) fn selected(app: &PhotocraftApp) -> Option<(PathRef, Path, Vec<usize>
     (!heads.is_empty()).then_some((r, path, heads))
 }
 
+fn held_delete_id() -> Id {
+    Id::unique("path_selection_held_delete")
+}
+
+/// Keep a held key with the path action that owned its first press, even after the selection clears.
+fn discard_owned_delete_repeats(ctx: &egui::Context) {
+    let id = held_delete_id();
+    let Some(mut held) = ctx.data(|data| data.get_temp::<BTreeSet<Key>>(id)) else { return };
+    ctx.input_mut(|input| {
+        input.events.retain(|event| {
+            let Event::Key { key, pressed, repeat, .. } = event else { return true };
+            if *pressed && *repeat {
+                return !held.contains(key);
+            }
+            held.remove(key);
+            true
+        });
+        held.retain(|key| input.key_down(*key));
+    });
+    ctx.data_mut(|data| {
+        if held.is_empty() {
+            data.remove_temp::<BTreeSet<Key>>(id);
+        } else {
+            data.insert_temp(id, held);
+        }
+    });
+}
+
 /// Delete the Path Selection tool's saved path or selected components before Edit › Clear can run.
 pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    discard_owned_delete_repeats(ctx);
     if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.drag.is_some() {
         return false;
     }
@@ -68,19 +99,24 @@ pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) ->
             params["subpaths"] = json!(heads);
             Some(("path.deleteComponents", params))
         }
+        // Type paths carry text placement. Keep their components and the owning type layer intact.
+        Some((PathRef::TypePath(_), _, _)) => None,
         // The finished Work Path keeps its existing Delete shortcut.
         Some(_) => return false,
-        None if !app.ui.direct_selection.anchors.is_empty() && matches!(app.ui.direct_selection.target, Some(PathRef::Layer(_) | PathRef::Saved(_))) => None,
+        None if !app.ui.direct_selection.anchors.is_empty()
+            && matches!(app.ui.direct_selection.target, Some(PathRef::Layer(_) | PathRef::Saved(_) | PathRef::TypePath(_))) =>
+        {
+            None
+        }
         None if !visible => return false,
         None => {
             let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app) else { return false };
             Some(("path.delete", PathRef::Saved(index).params(app)))
         }
     };
-    if !ctx.input_mut(|i| i.consume_key(mods, Key::Backspace) || i.consume_key(mods, Key::Delete)) {
-        return false;
-    }
-    // A stale or newly locked selection still owns the key, but cannot change the document.
+    let Some(key) = ctx.input_mut(|i| [Key::Backspace, Key::Delete].into_iter().find(|key| i.consume_key(mods, *key))) else { return false };
+    ctx.data_mut(|data| data.get_temp_mut_or_default::<BTreeSet<Key>>(held_delete_id()).insert(key));
+    // A stale, locked or unsupported selection still owns the key.
     if let Some((command, params)) = action {
         match app.run(command, params) {
             Ok(_) => app.ui.direct_selection = DirectSelection::default(),
