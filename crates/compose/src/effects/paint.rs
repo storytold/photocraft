@@ -179,6 +179,7 @@ struct PreparedGradient {
 }
 
 impl PreparedGradient {
+    /// A gradient's colour and opacity stops, ready to sample.
     fn new(g: &Gradient) -> Self {
         let mut color: Vec<_> = g.stops.iter().map(|(p, c)| (*p, rgb(c))).collect();
         color.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -187,6 +188,7 @@ impl PreparedGradient {
         Self { color, opacity }
     }
 
+    /// The RGBA colour at `t` along the gradient.
     fn sample(&self, t: f32) -> [f32; 4] {
         let color = sample_stops(&self.color, t);
         let alpha = if self.opacity.is_empty() { 1.0 } else { sample_stops(&self.opacity, t)[0] };

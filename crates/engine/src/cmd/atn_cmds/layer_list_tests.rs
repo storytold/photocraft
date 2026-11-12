@@ -51,7 +51,7 @@ fn the_layers_list_survives_a_strict_roundtrip() {
         let [ReferenceItem::Identifier { class, id: target }] = get_ref(d, "null").unwrap() else { panic!("{d:?}") };
         assert!(class.class_id.is("Lyr "), "{class:?}");
         assert_eq!(*target as u64, id);
-        let props = get_obj(d, "T   ").unwrap();
+        let props = d.get_object("T   ").unwrap();
         assert!(props.class_id.is("Lyr "));
         assert_eq!(props.items.len(), 1);
         assert_eq!(props.get("Opct"), Some(&pct(50.0)));
@@ -167,7 +167,7 @@ fn a_list_with_properties_exports_exact_targets_in_order() {
         let [ReferenceItem::Identifier { class, id: target }] = get_ref(d, "null").unwrap() else { panic!("{d:?}") };
         assert!(class.class_id.is("Lyr "), "{class:?}");
         assert_eq!(*target as u64, id, "each property event pitches its own layer by id");
-        let props = get_obj(d, "T   ").unwrap();
+        let props = d.get_object("T   ").unwrap();
         assert_eq!(props.items.len(), 1);
         let (k, v) = props.items.first().unwrap();
         assert!(k.is(key), "{k:?} not {key:?}");

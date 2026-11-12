@@ -244,6 +244,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layers": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "style": style.name}))
 }
 
+/// Saves a layer's effects as a new style preset.
 fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "style.presets.new";
     let id = crate::commands::layer_param(s, p)?;
@@ -291,6 +292,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// Renames, moves, groups or deletes style presets.
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let action = req_str(p, "action", "style.presets.edit")?.to_string();
     let r = edit_groups(&mut s.presets.styles, &action, p, "style.presets.edit")?;
@@ -298,18 +300,11 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Restores the default style groups, or appends them with `append`.
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut b = builtin();
-    if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
-        for g in &mut b {
-            g.name = super::gradients::unique_group(&s.presets.styles, &g.name);
-        }
-        s.presets.styles.extend(b);
-    } else {
-        s.presets.styles = b;
-    }
+    let r = super::gradients::reset_groups(&mut s.presets.styles, builtin(), p);
     s.presets_changed();
-    Ok(json!({"groups": s.presets.styles.len()}))
+    Ok(r)
 }
 
 /// Swatch for the Styles panel: the style on a rounded square, `size`² RGBA8 (straight alpha,

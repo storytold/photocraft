@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::document_preset_cmds::checked_name;
 use crate::presets::{always, bad, req_str};
 use crate::{Result, Session};
 
@@ -142,14 +143,6 @@ impl ExportPresetSettings {
 pub struct ExportPreset {
     pub name: String,
     pub settings: ExportPresetSettings,
-}
-
-fn checked_name(name: &str) -> std::result::Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > crate::brush_preset_cmds::MAX_NAME {
-        return Err("Preset names must contain 1–255 characters after trimming".into());
-    }
-    Ok(name.into())
 }
 
 /// Read entries independently so a damaged preset cannot discard other presets or preferences.

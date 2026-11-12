@@ -1,4 +1,4 @@
-use super::descriptors::{desc, get_obj, jstr};
+use super::descriptors::{desc, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
 use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
@@ -223,7 +223,7 @@ fn layer_set_items(ids: &[Value], params: &Value, set: &str) -> Option<Vec<AtnIt
 /// when the whole Set replays (#8304).
 fn item_property_split(item: AtnItem) -> Option<Vec<AtnItem>> {
     let descriptor = item.descriptor.as_ref()?;
-    let properties = get_obj(descriptor, "T   ")?;
+    let properties = descriptor.get_object("T   ")?;
     if properties.items.len() <= 1 {
         return Some(vec![item]);
     }
