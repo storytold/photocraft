@@ -3141,8 +3141,9 @@ fn retouch_drags_show_the_footprint_without_wedges() {
         let ctx = egui::Context::default();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
-        app.run("tools.setBrush", json!({"brush": {"size": 30, "hardness": hardness}})).unwrap();
         app.ui.tool = Tool::Remove;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 30, "hardness": hardness}})).unwrap();
         tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
         for i in 1..80 {
             let t = f64::from(i) * 0.5;
