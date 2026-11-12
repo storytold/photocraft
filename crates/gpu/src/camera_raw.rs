@@ -484,7 +484,7 @@ fn readback_row(size: [u32; 2]) -> u32 {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn readback_bytes(size: [u32; 2]) -> u64 {
+pub(crate) fn readback_bytes(size: [u32; 2]) -> u64 {
     u64::from(readback_row(size)) * u64::from(size[1])
 }
 

@@ -163,6 +163,7 @@ pub(super) fn open_pixels(
         target,
         before_histogram: RgbHistogram::from_rgba(&proxy),
         processed: Default::default(),
+        wants_pixels: false,
         lab_transform,
         scope_transform,
         scope: Default::default(),

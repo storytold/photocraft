@@ -20,6 +20,11 @@ pub(super) struct ProxyJob {
     /// pixels at once (another develop may then reuse the frame's slot).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) view: bool,
+    /// Read a frame kept on the GPU back here too: the dialog shows something that reads its
+    /// pixels (the vectorscope, a clipping warning, samplers, the pointer over the preview), and
+    /// the UI thread shouldn't wait for them.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) pixels: bool,
 }
 
 /// What the preview draws: an image converted on the CPU, or a frame converted on the GPU.
@@ -103,6 +108,9 @@ impl ProxyJob {
                     px
                 };
                 let px = Processed { px: std::sync::OnceLock::new(), gpu: Some(OnGpu { gpu: gpu.clone(), frame: frame.clone(), cpu: Box::new(cpu) }) };
+                if self.pixels {
+                    px.pixels();
+                }
                 return ProxyFrame {
                     px,
                     histogram,

@@ -612,6 +612,7 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
     } else {
         ClippingMode::None
     };
+    d.wants_pixels = view.vectorscope || mode != ClippingMode::None || !view.samplers.is_empty() || d.scope.pointer_sample.is_some();
     let key = (d.preview_revision, d.show_before, mode, t.kind);
     if mode != ClippingMode::None && d.detail.overlay(ui, rect, d.preview_revision, mode) {
         d.scope.overlay_key = Some(key);

@@ -813,7 +813,7 @@ fn check_view(g: &mut Gpu, p: &CameraRaw, src: &[[f32; 4]], (w, h): (usize, usiz
     let display = photocraft_gpu::CameraRawDisplay { encode_srgb: srgb, shaper: None, key: 1 };
     let frame = g.dev.develop_view(&g.device, &g.queue, None, src, None, size, &stages, &display, None).unwrap();
     assert_eq!((frame.slot, frame.size), (0, size));
-    let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels).unwrap();
+    let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels, &mut None).unwrap();
     let same = px.len() == read.len() && px.iter().zip(&read).all(|(a, b)| a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits()));
     assert!(same, "{w}×{h} {p:?}: the view's pixels are the develop's");
     assert_eq!(frame.histogram, photocraft_algo::histogram::RgbHistogram::from_rgba(&px), "{w}×{h} {p:?}");
@@ -896,7 +896,7 @@ fn the_view_applies_a_matrix_shaper_display_transform() {
             key: 7,
         };
         let frame = g.dev.develop_view(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], &stages, &display, None).unwrap();
-        let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels).unwrap();
+        let px = photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &frame.pixels, &mut None).unwrap();
         let src8: Vec<u8> = px.iter().flat_map(|q| codes(*q, false)).collect();
         let mut cpu = src8.clone();
         t.convert_u8(&src8, 4, &mut cpu, 4, true);
@@ -925,8 +925,11 @@ fn the_view_develops_into_the_slot_not_on_screen() {
     let b = develop(&mut g, 1.0, Some(a.slot));
     let c = develop(&mut g, 0.5, Some(b.slot));
     assert_eq!((a.slot, b.slot, c.slot), (0, 1, 0));
-    let read = |f: &photocraft_gpu::CameraRawFrame| photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &f.pixels).unwrap();
+    // One buffer for every read, as the dialog keeps it.
+    let mut buffer = None;
+    let mut read = |f: &photocraft_gpu::CameraRawFrame| photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, None, &f.pixels, &mut buffer).unwrap();
     let (rb, rc) = (read(&b), read(&c));
+    assert_eq!(read(&b), rb, "a reused buffer reads the frame again");
     assert_ne!(rb, rc, "slot 1 still holds the +1 frame");
     assert_eq!(b.histogram, photocraft_algo::histogram::RgbHistogram::from_rgba(&rb));
     assert_eq!(a.generation, c.generation, "the same size keeps the slot's textures");
@@ -952,5 +955,5 @@ fn the_view_rejects_bad_sizes_tables_and_faulted_devices() {
     let health = DeviceHealth::new();
     health.mark(Fault::Lost("test".into()));
     assert!(g.dev.develop_view(&g.device, &g.queue, Some(&health), &src, None, [4, 4], &stages, &display, None).is_err());
-    assert!(photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, Some(&health), &ok.pixels).is_err());
+    assert!(photocraft_gpu::read_camera_raw_pixels(&g.device, &g.queue, Some(&health), &ok.pixels, &mut None).is_err());
 }

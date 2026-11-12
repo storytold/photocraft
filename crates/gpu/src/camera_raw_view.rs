@@ -497,13 +497,15 @@ fn histogram(sums: &[[u32; 4]]) -> Option<RgbHistogram> {
     Some(h)
 }
 
-/// Reads `texture` (`Rgba32Float`, `size`) back, blocking: the developed pixels of a
-/// [`CameraRawFrame`] when something needs them. GPU errors and a lost device are `Err`.
+/// Reads `texture` (`Rgba32Float`) back, blocking: the developed pixels of a [`CameraRawFrame`]
+/// when something needs them. `buffer` keeps the readback buffer between calls (one is made
+/// when it is `None` or another size). GPU errors and a lost device are `Err`.
 pub fn read_camera_raw_pixels(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     health: Option<&crate::DeviceHealth>,
     texture: &wgpu::Texture,
+    buffer: &mut Option<wgpu::Buffer>,
 ) -> Result<Vec<[f32; 4]>, Unsupported> {
     if let Some(f) = health.and_then(crate::DeviceHealth::fault) {
         return Err(Unsupported(f.to_string()));
@@ -513,15 +515,23 @@ pub fn read_camera_raw_pixels(
     }
     let (result, error) = crate::first_error(device, || {
         let size = [texture.width(), texture.height()];
-        let buffer = crate::camera_raw::readback_buffer(device, size);
+        let reused = buffer.take().filter(|b| b.size() == crate::camera_raw::readback_bytes(size));
+        let out = reused.unwrap_or_else(|| crate::camera_raw::readback_buffer(device, size));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_camera_raw_view_read") });
-        crate::camera_raw::copy_out(&mut encoder, texture, &buffer, size);
+        crate::camera_raw::copy_out(&mut encoder, texture, &out, size);
         let index = queue.submit([encoder.finish()]);
-        crate::camera_raw::read_out(device, health, &buffer, index, size)
+        let px = crate::camera_raw::read_out(device, health, &out, index, size);
+        (px, out)
     });
-    match error {
-        Some(e) => Err(Unsupported(format!("GPU RAW Develop readback failed: {e}"))),
-        None => result,
+    match (error, result) {
+        (Some(e), _) => Err(Unsupported(format!("GPU RAW Develop readback failed: {e}"))),
+        (None, (px, out)) => {
+            // A buffer left mapped by a failed read isn't reused.
+            if px.is_ok() {
+                *buffer = Some(out);
+            }
+            px
+        }
     }
 }
 

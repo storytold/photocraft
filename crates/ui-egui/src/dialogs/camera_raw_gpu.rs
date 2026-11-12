@@ -120,6 +120,8 @@ pub(crate) struct CameraRawGpu {
     /// The display transform as the GPU applies it, for the display key it was made for.
     shaper: Arc<Mutex<Shaper>>,
     textures: Arc<Textures>,
+    /// The buffer frames kept on the GPU are read back through.
+    readback: Arc<Mutex<Option<wgpu::Buffer>>>,
 }
 
 /// A frame kept on the GPU ([`CameraRawGpu::develop_view`]); none on the web, which has no
@@ -176,6 +178,7 @@ impl CameraRawGpu {
             shown: Arc::new(AtomicUsize::new(NONE_SHOWN)),
             shaper: Arc::default(),
             textures: Arc::new(Textures { renderer, ids: Mutex::new([None, None]) }),
+            readback: Arc::default(),
         }
     }
 
@@ -269,11 +272,14 @@ impl CameraRawGpu {
         #[cfg(target_arch = "wasm32")]
         match *frame {}
         #[cfg(not(target_arch = "wasm32"))]
-        match photocraft_gpu::read_camera_raw_pixels(&self.device, &self.queue, Some(&self.health), &frame.pixels) {
-            Ok(px) => Some(px),
-            Err(e) => {
-                log::warn!("{}; RAW Develop develops this frame on the CPU", e.0);
-                None
+        {
+            let mut buffer = self.readback.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match photocraft_gpu::read_camera_raw_pixels(&self.device, &self.queue, Some(&self.health), &frame.pixels, &mut buffer) {
+                Ok(px) => Some(px),
+                Err(e) => {
+                    log::warn!("{}; RAW Develop develops this frame on the CPU", e.0);
+                    None
+                }
             }
         }
     }
@@ -582,6 +588,13 @@ mod tests {
             let (x, y) = ((0.5 * d.pw as f32) as usize, (0.5 * d.ph as f32) as usize);
             let q = d.processed.pixels()[y * d.pw + x];
             assert_eq!(readout["values"], json!([q[0] * 255.0, q[1] * 255.0, q[2] * 255.0]));
+            // While something on screen reads the pixels, the develop reads them back with the
+            // frame (on the worker), and still draws it from the GPU.
+            d.wants_pixels = true;
+            d.params.exposure = 0.2;
+            d.render(&ctx);
+            let described = d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+            assert_eq!((&described["previewOnGpu"], &described["pixelsOnGpu"]), (&json!(true), &json!(false)), "{depth}-bit: read back with the frame");
         }
     }
 

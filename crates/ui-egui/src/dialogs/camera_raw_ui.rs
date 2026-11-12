@@ -92,6 +92,9 @@ pub struct CameraRawDialog {
     before_display_key: Option<u64>,
     pub(crate) before_histogram: RgbHistogram,
     pub(crate) processed: proxy::Processed,
+    /// Something on screen reads the developed pixels (set as the preview draws), so the worker
+    /// reads a frame kept on the GPU back with it.
+    pub(crate) wants_pixels: bool,
     pub(crate) lab_transform: std::sync::Arc<photocraft_cms::Transform>,
     pub(crate) scope_transform: std::sync::Arc<photocraft_cms::Transform>,
     pub(crate) scope: crate::camera_raw_scope_ui::ScopeView,
@@ -214,6 +217,7 @@ impl CameraRawDialog {
             gpu: self.gpu.clone(),
             source_key: self.source_key,
             view: true,
+            pixels: self.wants_pixels,
         }
     }
 
