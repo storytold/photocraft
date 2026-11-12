@@ -4382,3 +4382,22 @@ fn vertical_path_decoration_clipping_and_warp() {
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
 }
+
+/// UAX #9 P2 skips the text inside directional isolates when it looks for a paragraph's first
+/// strong character, as the layout's bidi pass does. A paragraph opening with an isolated Latin
+/// name before its Hebrew text is right-to-left: read without isolates, it looked left-to-right,
+/// so Dynamic Text accepted it and forced a left-to-right mark on its lines.
+#[test]
+fn first_strong_rtl_skips_directional_isolates() {
+    use crate::layout::first_strong_rtl;
+    let (lri, rli, fsi, pdi) = ('\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}');
+    assert_eq!(first_strong_rtl(&format!("{lri}Latin{pdi} \u{5e9}\u{5dc}\u{5d5}\u{5dd}")), Some(true));
+    assert_eq!(first_strong_rtl(&format!("{rli}\u{5e9}\u{5dc}\u{5d5}\u{5dd}{pdi} Latin")), Some(false));
+    assert_eq!(first_strong_rtl(&format!("{fsi}Latin{pdi}")), None, "only isolated text: no direction of its own");
+    // Nested isolates close one at a time; an unmatched initiator runs to the end.
+    assert_eq!(first_strong_rtl(&format!("{lri}a{rli}b{pdi}c{pdi}\u{5d0}")), Some(true));
+    assert_eq!(first_strong_rtl(&format!("{lri}Latin \u{5d0}")), None);
+    // A stray PDI changes nothing.
+    assert_eq!(first_strong_rtl(&format!("{pdi}Latin")), Some(false));
+    assert_eq!(first_strong_rtl("\u{5d0}bc"), Some(true));
+}
