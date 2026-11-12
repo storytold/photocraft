@@ -2162,40 +2162,122 @@ fn a_grouped_dropdown_list_draws_a_line_above_each_group_and_keeps_its_width() {
     assert_eq!(list.width(), plain_list.width(), "the line doesn't widen the list");
 }
 
-/// A row for the slider-focus tests: -180..=180, starting at 0.
-fn slider_focus_row() -> Harness<'static, f32> {
+/// Where a slider-focus row is drawn: a dialog (Foreground), a modal, a floating panel (Middle) or a
+/// docked one (Background).
+#[derive(Clone, Copy)]
+enum Host {
+    Dialog,
+    Modal,
+    Floating,
+    Docked,
+}
+
+/// A `slider_row` (or `slider_line`) over -180..=180, starting at `start`, in `host`. The state is
+/// the value and how many frames the row reported `changed()`.
+fn slider_focus_row(host: Host, line: bool, start: f32) -> Harness<'static, (f32, u32)> {
+    let body = move |ui: &mut egui::Ui, st: &mut (f32, u32)| {
+        let r = if line {
+            super::slider_line(ui, "Hue", 60.0, &mut st.0, -180.0..=180.0, "")
+        } else {
+            super::slider_row(ui, "Hue", &mut st.0, -180.0..=180.0, "", None)
+        };
+        if r.changed() {
+            st.1 += 1;
+        }
+    };
     let mut h = Harness::new_ui_state(
-        |ui, v: &mut f32| {
-            super::slider_row(ui, "Hue", v, -180.0..=180.0, "°", None);
+        move |hui, st: &mut (f32, u32)| {
+            let ctx = hui.ctx().clone();
+            match host {
+                Host::Dialog => {
+                    egui::Area::new(egui::Id::unique("dlg")).order(egui::Order::Foreground).show(&ctx, |ui| body(ui, st));
+                }
+                Host::Modal => {
+                    egui::Modal::new(egui::Id::unique("modal")).show(&ctx, |ui| body(ui, st));
+                }
+                Host::Floating => {
+                    egui::Area::new(egui::Id::unique("card")).order(egui::Order::Middle).show(&ctx, |ui| body(ui, st));
+                }
+                Host::Docked => {
+                    body(hui, st);
+                }
+            }
         },
-        0.0,
+        (start, 0),
     );
     h.run();
     h
 }
 
-/// #13432: a click on the slider gives the row's number focus, so Up and Down step it.
-#[test]
-fn clicking_a_slider_lets_the_arrow_keys_step_its_number() {
-    let mut h = slider_focus_row();
-    h.get_by_role(egui::accesskit::Role::Slider).click();
+fn click_here(h: &mut Harness<'_, (f32, u32)>, pos: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(pos));
     h.run();
-    let at = *h.state();
-    h.key_press_modifiers(Modifiers::NONE, Key::ArrowUp);
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run();
-    assert_eq!(*h.state(), at + 1.0);
-    h.key_press_modifiers(Modifiers::NONE, Key::ArrowDown);
-    h.key_press_modifiers(Modifiers::NONE, Key::ArrowDown);
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run();
-    assert_eq!(*h.state(), at - 1.0);
 }
 
-/// #13432: the same after a drag on the slider.
+/// Clicks the slider off its middle, so the value lands between whole numbers (`slider_line`'s has no
+/// accessibility node, so it is found by position, left of the number).
+fn click_slider(h: &mut Harness<'_, (f32, u32)>, line: bool) {
+    if line {
+        let r = h.get_by_role(egui::accesskit::Role::SpinButton).rect();
+        click_here(h, egui::pos2(r.left() - 60.0, r.center().y));
+    } else {
+        let r = h.get_by_role(egui::accesskit::Role::Slider).rect();
+        click_here(h, egui::pos2(r.center().x + 17.0, r.center().y));
+    }
+}
+
+fn number_has_focus(h: &Harness<'_, (f32, u32)>) -> bool {
+    h.get_by_role(egui::accesskit::Role::SpinButton).is_focused()
+}
+
+/// #13432: typing straight after a slider click replaces the number, with no click on it.
+#[test]
+fn typing_right_after_a_slider_click_replaces_the_number() {
+    for (host, line) in [(Host::Dialog, false), (Host::Modal, false), (Host::Dialog, true), (Host::Modal, true)] {
+        let mut h = slider_focus_row(host, line, 0.0);
+        click_slider(&mut h, line);
+        h.run();
+        h.event(egui::Event::Text("4".into()));
+        h.event(egui::Event::Text("2".into()));
+        h.run();
+        h.key_press_modifiers(Modifiers::NONE, Key::Enter);
+        h.run();
+        h.run();
+        assert_eq!(h.state().0, 42.0, "line: {line}");
+    }
+}
+
+/// #13432: Up and Down step the number after a slider click, and the focus stays on it.
+#[test]
+fn arrow_keys_step_the_number_after_a_slider_click_and_keep_focus() {
+    for line in [false, true] {
+        let mut h = slider_focus_row(Host::Dialog, line, 0.0);
+        click_slider(&mut h, line);
+        h.run();
+        h.run();
+        let at = h.state().0;
+        h.key_press_modifiers(Modifiers::NONE, Key::ArrowUp);
+        h.run();
+        h.key_press_modifiers(Modifiers::NONE, Key::ArrowUp);
+        h.run();
+        assert_eq!(h.state().0, at.round() + 2.0, "a step lands on the whole-number grid, line: {line}");
+        assert!(number_has_focus(&h), "the number keeps the focus, line: {line}");
+        h.key_press_modifiers(Modifiers::NONE, Key::ArrowDown);
+        h.run();
+        assert_eq!(h.state().0, at.round() + 1.0, "line: {line}");
+    }
+}
+
+/// #13432: after a drag on the slider the number takes the focus too.
 #[test]
 fn dragging_a_slider_lets_the_arrow_keys_step_its_number() {
-    let mut h = slider_focus_row();
+    let mut h = slider_focus_row(Host::Dialog, false, 0.0);
     let r = h.get_by_role(egui::accesskit::Role::Slider).rect();
-    let (a, b) = (egui::pos2(r.center().x, r.center().y), egui::pos2(r.center().x + 40.0, r.center().y));
+    let (a, b) = (r.center(), egui::pos2(r.center().x + 40.0, r.center().y));
     h.event(egui::Event::PointerMoved(a));
     h.run();
     h.event(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -2204,24 +2286,60 @@ fn dragging_a_slider_lets_the_arrow_keys_step_its_number() {
     h.run();
     h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run();
-    let at = *h.state();
+    h.run();
+    let at = h.state().0;
     assert!(at > 0.0, "the drag moved the slider");
     h.key_press_modifiers(Modifiers::NONE, Key::ArrowUp);
     h.run();
-    assert_eq!(*h.state(), at.round() + 1.0, "a step lands on the whole-number grid, as in the field");
+    assert_eq!(h.state().0, at.round() + 1.0, "a step lands on the whole-number grid, as in the field");
 }
 
-/// #13432: the focus is taken on the click, not every frame, so a number being typed keeps its text.
+/// #13432: the focus is asked for once, so a click elsewhere takes it away and it stays away.
 #[test]
-fn typing_in_the_number_after_a_slider_click_still_works() {
-    let mut h = slider_focus_row();
-    h.get_by_role(egui::accesskit::Role::Slider).click();
+fn the_slider_hand_off_is_not_repeated_every_frame() {
+    let mut h = slider_focus_row(Host::Dialog, false, 0.0);
+    click_slider(&mut h, false);
     h.run();
-    h.get_by_role(egui::accesskit::Role::SpinButton).click();
-    h.run();
-    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.event(egui::Event::Text("42".into()));
-    h.run();
-    h.run();
-    assert_eq!(*h.state(), 42.0);
+    assert!(number_has_focus(&h), "the click handed the focus over");
+    click_here(&mut h, egui::pos2(700.0, 500.0));
+    for _ in 0..5 {
+        h.run();
+    }
+    assert!(!number_has_focus(&h), "a later click elsewhere took it away and it stayed away");
+}
+
+/// #13432: the number losing the focus without typing changes nothing: no rounding, no `changed()`.
+#[test]
+fn leaving_the_handed_off_number_untouched_does_not_snap_the_value() {
+    for line in [false, true] {
+        let mut h = slider_focus_row(Host::Dialog, line, 12.5);
+        click_slider(&mut h, line);
+        h.run();
+        h.run();
+        let (value, changes) = *h.state();
+        assert!(number_has_focus(&h), "line: {line}");
+        click_here(&mut h, egui::pos2(700.0, 500.0));
+        for _ in 0..3 {
+            h.run();
+        }
+        let (after, changes_after) = *h.state();
+        assert_eq!(after.to_bits(), value.to_bits(), "the value is not rounded, line: {line}");
+        assert_eq!(changes_after, changes, "no change reported by the focus leaving, line: {line}");
+    }
+}
+
+/// #13432: in a docked or floating panel the slider click leaves nothing focused, so tool
+/// shortcuts, Space-to-pan and the hold keys keep working.
+#[test]
+fn a_slider_click_in_a_panel_leaves_nothing_focused() {
+    for host in [Host::Docked, Host::Floating] {
+        for line in [false, true] {
+            let mut h = slider_focus_row(host, line, 0.0);
+            click_slider(&mut h, line);
+            h.run();
+            h.run();
+            assert!(!number_has_focus(&h), "line: {line}");
+            assert!(!h.ctx.text_edit_focused(), "line: {line}");
+        }
+    }
 }

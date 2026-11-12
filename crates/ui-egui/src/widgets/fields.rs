@@ -615,6 +615,11 @@ fn number_edit(
                 v
             }),
     );
+    // Leaving the number without typing re-reads its shown text, which rounds a value the slider set
+    // between two shown digits (#13432): when nothing shown differs, the value is what it was.
+    if !hold_typed && resp.lost_focus() && *value != before && format(f64::from(*value)) == format(f64::from(before)) {
+        *value = before;
+    }
     if hold_typed {
         // A scrub always applies; a typed value applies unless this frame's guard vetoes it.
         let scrub = resp.dragged() || resp.drag_started() || resp.drag_stopped();
