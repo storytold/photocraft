@@ -679,6 +679,7 @@ fn text_replacement_drops_solved_fit_lines() {
     s.edit("fit", |doc, _| {
         if let Some(LayerContent::Text(t)) = doc.layer_mut(title).map(|l| &mut l.content) {
             t.text = "Old wording".into();
+            t.shape = photocraft_doc::text::TextShape::Box { x: 0.0, y: 0.0, width: 60.0, height: 40.0 };
             t.fit = Some(TextFit { lines: vec![FitLine { start: 0, scale: 1.0 }, FitLine { start: 4, scale: 1.5 }], ..Default::default() });
         }
         Ok(())
