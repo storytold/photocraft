@@ -880,3 +880,21 @@ fn scaled_wave_smart_filter_survives_psd_and_re_renders() {
         assert!(worst <= tolerance, "depth {depth}: re-render differs by {worst}");
     }
 }
+
+/// A fractional Wave scale, even just below a half percent, renders as the whole percent the PSD
+/// stores: after a save and open the filter's parameters build the same filter as before.
+#[test]
+fn fractional_wave_scales_render_the_same_after_psd() {
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let wave = json!({"generators": 3, "amplitudeMin": 3, "amplitudeMax": 6, "seed": 11, "scaleHorizontal": 40.4999999, "scaleVertical": 15.5});
+    s.execute("filter.distort.wave", wave).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let before = smart(&doc).1.smart_filters[0].params.clone();
+    let out = photocraft_io::export(&doc, "psd", &Default::default()).unwrap();
+    let back = photocraft_io::import("wave.psd", &out.bytes).unwrap().document;
+    let after = smart(&back).1.smart_filters[0].params.clone();
+    assert_eq!((&after["scaleHorizontal"], &after["scaleVertical"]), (&json!(40), &json!(16)), "{after}");
+    let params = |p: &serde_json::Value| photocraft_engine::filters::params_for("filter.distort.wave", p);
+    assert_eq!(params(&after), params(&before), "{before} -> {after}");
+}

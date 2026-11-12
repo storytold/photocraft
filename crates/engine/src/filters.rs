@@ -19,6 +19,12 @@ pub(crate) use validation::validate_params;
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
 }
+/// A Wave scale as the whole percent (1–100, default 100) Photoshop's dialog takes and a PSD
+/// smart filter stores in `SclH` / `SclV`: rounded from the JSON number itself, as PSD export
+/// rounds it, so a fraction renders as the value the file reopens with, even just below a half.
+fn whole_percent(p: &Value, k: &str) -> f32 {
+    p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(100.0, |v| v.round().clamp(1.0, 100.0)) as f32
+}
 fn i(p: &Value, k: &str, d: i32) -> i32 {
     // Clamped like the neighbouring filter params: an out-of-range value saturates instead of
     // wrapping through `as i32` (`3e9` used to come back as a negative offset).
@@ -149,10 +155,8 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             wavelength_max: f(p, "wavelengthMax", 120.0).clamp(2.0, 999.0),
             amplitude_min: f(p, "amplitudeMin", 5.0).clamp(1.0, 998.0),
             amplitude_max: f(p, "amplitudeMax", 35.0).clamp(1.0, 999.0),
-            // Whole percents, as Photoshop's dialog and the PSD and .atn descriptors hold them, so a
-            // fraction renders as the value those files store and reopen with.
-            scale_horizontal: f(p, "scaleHorizontal", 100.0).round().clamp(1.0, 100.0),
-            scale_vertical: f(p, "scaleVertical", 100.0).round().clamp(1.0, 100.0),
+            scale_horizontal: whole_percent(p, "scaleHorizontal"),
+            scale_vertical: whole_percent(p, "scaleVertical"),
             wave_type: match s(p, "type", "sine") {
                 "triangle" => WaveType::Triangle,
                 "square" => WaveType::Square,

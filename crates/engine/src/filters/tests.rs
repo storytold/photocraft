@@ -709,5 +709,7 @@ fn fractional_wave_scales_render_as_the_whole_percent_files_store() {
     let wave = |h: f64, v: f64| params_for("filter.distort.wave", &json!({"scaleHorizontal": h, "scaleVertical": v}));
     assert_eq!(wave(40.4, 15.6), wave(40.0, 16.0));
     assert_eq!(wave(0.6, 99.5), wave(1.0, 100.0));
+    // Just below a half, rounded as the JSON number (as PSD export rounds it), not after f32.
+    assert_eq!(wave(40.4999999, 15.4999999), wave(40.0, 15.0));
     assert_ne!(wave(40.0, 16.0), wave(41.0, 16.0), "whole percents stay distinct");
 }
