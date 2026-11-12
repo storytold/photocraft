@@ -482,6 +482,75 @@ fn placed_cylinder_quad_frames_its_control_box() {
     assert!((px - 400.0).abs() < 1e-6 && (py - 480.0).abs() < 1e-6);
 }
 
+/// Photoshop reference (Photoshop 2026, `persp-warp.psd` attached to #8139): a 400 × 300 embedded
+/// smart object, custom-warped with control points past the source, then Edit › Transform ›
+/// Distort by hand. The values below are the file's `SoLd`, verbatim. The warp's four mesh corners
+/// must land where Photoshop's composite draws them (measured on its 1000 × 800 PNG, to about 3 px:
+/// the corner pixels of a 3 px border). They do when the corners frame the warp's control-point
+/// box, and miss by up to about 300 px when they frame the source rect.
+#[test]
+fn photoshop_distort_over_a_custom_warp_frames_the_control_box() {
+    use photocraft_psd::descriptor::ObjectArray;
+    let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+    let trnf = [186.30859375000006, 133.22796875, 778.359375, 133.22796875, 778.359375, 747.1015625, 186.30859375000006, 747.1015625];
+    let non_affine = [186.30859375000006, 133.22796875, 760.0, 190.0, 778.359375, 747.1015625, 355.53125, 519.640625];
+    // The 4 × 4 mesh, row by row.
+    let (a, b) = (133.33333333333337, 266.66666666666674);
+    let xs = [[0.0, a, b, 460.0], [0.0, a, b, 400.0], [0.0, a, 296.66666666666674, 400.0], [0.0, a, b, 400.0]].concat();
+    let top = 7.105427357601002e-15;
+    let ys = [[top, -59.99999999999999, top, -49.99999999999999], [100.0; 4], [200.0, 200.0, 220.0, 200.0], [300.0; 4]].concat();
+    let mesh =
+        Descriptor::new("null").with("Hrzn", Value::UnitFloats { unit: *b"#Pxl", values: xs }).with("Vrtc", Value::UnitFloats { unit: *b"#Pxl", values: ys });
+    let bounds = Descriptor::new("classFloatRect")
+        .with("Top ", Value::Double(0.0))
+        .with("Left", Value::Double(0.0))
+        .with("Btom", Value::Double(300.0))
+        .with("Rght", Value::Double(400.0));
+    let warp = Descriptor::new("warp")
+        .with("warpStyle", e("warpStyle", "warpCustom"))
+        .with("warpValue", Value::Double(0.0))
+        .with("warpPerspective", Value::Double(0.0))
+        .with("warpPerspectiveOther", Value::Double(0.0))
+        .with("warpRotate", e("Ornt", "Hrzn"))
+        .with("bounds", Value::Descriptor(bounds))
+        .with("uOrder", Value::Integer(4))
+        .with("vOrder", Value::Integer(4))
+        .with(
+            "customEnvelopeWarp",
+            Value::Descriptor(Descriptor::new("customEnvelopeWarp").with("meshPoints", Value::ObjectArray(ObjectArray { prefix: 16, body: mesh }))),
+        );
+    let d = Descriptor::new("null")
+        .with("Trnf", doubles(&trnf))
+        .with("nonAffineTransform", doubles(&non_affine))
+        .with("Sz  ", Value::Descriptor(Descriptor::new("Pnt ").with("Wdth", Value::Double(400.0)).with("Hght", Value::Double(300.0))))
+        .with("warp", Value::Descriptor(warp));
+    let mut data = b"soLD".to_vec();
+    data.extend_from_slice(&4u32.to_be_bytes());
+    data.extend(VersionedDescriptor::new(d).to_bytes());
+
+    let w = parse_placed_warp(b"SoLd", &data).expect("the custom warp");
+    let frame = placed_frame(Some(&w), 400.0, 300.0);
+    assert!(frame.iter().zip([0.0, -60.0, 460.0, 300.0]).all(|(a, b)| (a - b).abs() < 1e-9), "control-point box {frame:?}");
+    let h = photocraft_algo::transform::Homography(parse_smart_perspective(b"SoLd", &data).expect("projective"));
+    // Mesh corners (source px) and where Photoshop's composite draws them (document px).
+    let corners = [((0.0, 0.0), (224.5, 216.5)), ((460.0, -50.0), (757.5, 217.5)), ((400.0, 300.0), (699.5, 703.5)), ((0.0, 300.0), (355.5, 517.5))];
+    for ((x, y), (cx, cy)) in corners {
+        let (u, v) = h.apply(x, y);
+        assert!((u - cx).hypot(v - cy) < 4.0, "mesh corner ({x}, {y}) → ({u:.1}, {v:.1}), Photoshop draws it at ({cx}, {cy})");
+    }
+    // Framed by the source rect instead, the warped layer lands far off Photoshop's.
+    let rect = photocraft_algo::transform::Homography(
+        corners_perspective_in(non_affine.as_chunks::<2>().0.try_into().expect("four corners"), [0.0, 0.0, 400.0, 300.0]).expect("projective"),
+    );
+    let worst = corners.iter().map(|&((x, y), (cx, cy))| {
+        let (u, v) = rect.apply(x, y);
+        (u - cx).hypot(v - cy)
+    });
+    assert!(worst.fold(0.0f64, f64::max) > 100.0);
+    // The `PlLd` record (same corners) reads the same placement.
+    assert_eq!(plld_transform(&non_affine, Some((400.0, 300.0)), Some(&w)).1, Some(h.0));
+}
+
 #[test]
 fn effects_switch() {
     let mut lfx = vec![0, 0, 0, 0];
