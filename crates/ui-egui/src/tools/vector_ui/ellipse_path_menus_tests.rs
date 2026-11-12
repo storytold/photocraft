@@ -156,3 +156,19 @@ fn options_bar_shows_the_three_buttons_and_greys_the_entries_without_a_shape() {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
     }
 }
+
+/// #13442 review: the Custom Shape tool also adds to the active shape layer, as one component
+/// whose hole stays joined to it.
+#[test]
+fn a_custom_shape_with_an_operation_joins_the_active_shape_layer() {
+    let mut app = app();
+    drag(&mut app, [50.0, 50.0], [200.0, 200.0]);
+    let layers = layer_count(&app);
+    app.ui.tool = Tool::CustomShape;
+    app.ui.presets_ui.custom_shape = "Ring".into();
+    app.ui.tool_options.shape_path_op = "subtract".into();
+    drag(&mut app, [100.0, 100.0], [250.0, 250.0]);
+    assert_eq!(layer_count(&app), layers, "no new layer");
+    let ops: Vec<PathOp> = active_shape(&app).path.subpaths.iter().map(|s| s.op).collect();
+    assert_eq!(ops, [PathOp::Combine, PathOp::Subtract, PathOp::Join], "the ellipse, the ring and its hole");
+}

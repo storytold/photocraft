@@ -173,6 +173,20 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     }
     let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
     if tool == Tool::CustomShape {
+        // With an operation other than New Layer the shape joins the active shape layer as one
+        // component, its holes joined to it as in Path mode.
+        if let Some(op) = drag_path_op(app)
+            && let Some(id) = super::options::selected_shape(&app.session)
+            && let Some(outline) = shape_outline(app, tool, start, end, mods)
+        {
+            let outline = as_one_component(&outline, outline.fill_rule).unwrap_or(outline);
+            let path = photocraft_engine::vector_cmds::path_json(&outline);
+            if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op})) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            return;
+        }
         // ⇧ keeps the shape's proportions (the rect is already squared).
         if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
             let (fill, stroke) = (fill_param(app), stroke_param(app));
