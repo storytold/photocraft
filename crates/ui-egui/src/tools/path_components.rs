@@ -64,7 +64,7 @@ pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
 /// for the next path. New Layer is not an operation a component can have: it only sets the tool.
 /// The first component always combines (it is what the others act on), so it keeps its operation.
 pub(crate) fn set_op(app: &mut PhotocraftApp, op: &str) -> Result<(), String> {
-    app.ui.tool_options.pen_path_op = op.into();
+    *crate::vector_ui::path_op_field(app) = op.into();
     if op == "newLayer" {
         return Ok(());
     }
