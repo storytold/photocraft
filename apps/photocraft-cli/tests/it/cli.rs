@@ -163,7 +163,9 @@ fn server_usage_error(args: &[&str], expected: &str) {
 #[test]
 fn server_modes_reject_ignored_or_conflicting_options() {
     for sub in ["mcp", "serve"] {
-        server_usage_error(&[sub, "stray.psd"], "unexpected argument 'stray.psd'");
+        // `mcp` has a subcommand (`mcp install`), so clap reads a stray word there as one.
+        let stray = if sub == "mcp" { "unrecognized subcommand 'stray.psd'" } else { "unexpected argument 'stray.psd'" };
+        server_usage_error(&[sub, "stray.psd"], stray);
         for flag in ["--control-token", "--control-token-file"] {
             server_usage_error(&[sub, flag, "unused"], if sub == "mcp" { "requires --bridge" } else { "requires --port" });
         }

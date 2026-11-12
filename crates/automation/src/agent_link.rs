@@ -595,7 +595,18 @@ fn install_claude_code(launch: &McpLaunch, env: &ClientEnv) -> Result<Installed,
     let mut replaced = false;
     let exists = || run(&["mcp", "get", SERVER_NAME]).is_ok_and(|out| out.status.success());
     if result.as_ref().is_ok_and(|out| !out.status.success()) && exists() {
-        let _ = run(&["mcp", "remove", "--scope", "user", SERVER_NAME]);
+        // Say so when the older entry could not be removed: adding again would only fail with
+        // "already exists", and the message must not claim the entry is gone.
+        let why_not = match run(&["mcp", "remove", "--scope", "user", SERVER_NAME]) {
+            Ok(out) if out.status.success() => None,
+            Ok(out) => Some(String::from_utf8_lossy(if out.stderr.is_empty() { &out.stdout } else { &out.stderr }).trim().to_string()),
+            Err(e) => Some(format!("{}: {e}", claude.display())),
+        };
+        if let Some(why) = why_not {
+            return Err(AutomationError::Other(format!(
+                "Claude Code already has a `{SERVER_NAME}` entry and removing it failed ({why}); run this in a terminal to replace it: claude mcp remove --scope user {SERVER_NAME} && {by_hand}"
+            )));
+        }
         replaced = true;
         result = run(&add);
     }
@@ -882,10 +893,12 @@ mod tests {
         let log = home.join("calls.txt");
         let fail = home.join("fail");
         let exists = home.join("exists");
+        let keep = home.join("keep");
         // `add` fails while an entry exists (as claude's does) or while `fail` is there; `remove`
-        // removes the entry.
+        // removes the entry, or fails while `keep` is there.
         let script = format!(
             "#!/bin/sh\nprintf 'PATH=%s\\n' \"$PATH\" >> '{log}'\nprintf '%s ' \"$@\" >> '{log}'\nprintf '\\n' >> '{log}'\n\
+             if [ \"$2\" = remove ] && [ -e '{keep}' ]; then echo 'locked' >&2; exit 1; fi\n\
              if [ \"$2\" = remove ]; then rm -f '{exists}'; exit 0; fi\n\
              if [ \"$2\" = get ]; then [ -e '{exists}' ]; exit $?; fi\n\
              if [ \"$2\" = add ] && [ -e '{exists}' ]; then echo 'already exists' >&2; exit 1; fi\n\
@@ -893,7 +906,8 @@ mod tests {
              if [ \"$2\" = add ]; then : > '{exists}'; fi\n",
             log = log.display(),
             fail = fail.display(),
-            exists = exists.display()
+            exists = exists.display(),
+            keep = keep.display()
         );
         let claude = bin.join("claude");
         std::fs::write(&claude, script).unwrap();
@@ -929,6 +943,14 @@ mod tests {
         let e = run().unwrap_err().to_string();
         assert!(e.contains("boom") && !e.contains("was removed"), "{e}");
         assert!(!std::fs::read_to_string(&log).unwrap().contains("mcp remove"));
+        // An entry exists and removing it fails: the error says so, and does not claim it went.
+        std::fs::remove_file(&fail).unwrap();
+        std::fs::write(&exists, "").unwrap();
+        std::fs::write(&keep, "").unwrap();
+        let e = run().unwrap_err().to_string();
+        assert!(e.contains("removing it failed (locked)") && !e.contains("was removed"), "{e}");
+        assert!(e.contains("claude mcp remove --scope user photocraft && claude mcp add"), "{e}");
+        assert!(exists.exists(), "the older entry is still there");
         let _ = std::fs::remove_dir_all(&home);
     }
 
