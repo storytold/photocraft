@@ -378,8 +378,21 @@ fn dialog_drives_the_engine() {
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
 }
 
-/// An app whose importer is the real one, opening a synthetic DNG.
+/// An app whose importer is the real one, opening a synthetic DNG. Raws opened for the dialog
+/// develop with the shared engine (`photocraft_io::raw_develop`).
 fn raw_app() -> (PhotocraftApp, Vec<u8>) {
+    raw_app_with(true)
+}
+
+/// [`raw_app`] whose importer develops every raw with `photocraft-raw` (`develop` false): the
+/// engine before the shared one, still what a raw the shared engine can't develop opens with. Tests
+/// of that engine's own behaviour (its demosaic choice, raw-stage settings developed from the
+/// sensor data and the rest as a Camera Raw step) use it.
+fn raw_app_classic() -> (PhotocraftApp, Vec<u8>) {
+    raw_app_with(false)
+}
+
+fn raw_app_with(develop: bool) -> (PhotocraftApp, Vec<u8>) {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
     let services = crate::Services {
         import: Some(Box::new(|name: &str, b: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -394,6 +407,7 @@ fn raw_app() -> (PhotocraftApp, Vec<u8>) {
     // The pixel comparisons below read the developed ProPhoto values: no conversion on open
     // (Camera Raw Defaults › Color space is Adobe RGB otherwise).
     app.run("prefs.set", json!({"path": "rawDefaults.colorSpace", "value": "proPhoto"})).unwrap();
+    app.run("prefs.set", json!({"path": "rawDefaults.sharedEngine", "value": develop})).unwrap();
     (app, spec.build())
 }
 
@@ -431,13 +445,96 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["redeveloped"], true, "{r}");
-    assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
+    // (with the shared engine every setting goes into the develop: no RAW Develop step follows;
+    // `photocraft-raw`'s open applies Contrast as one, see `the_classic_develop_applies_the_rest_as_a_step`)
+    assert!(r.get("filter").is_none(), "contrast goes into the develop: {r}");
     assert!(app.camera_raw.is_none());
     assert_eq!(app.session.documents().len(), 1);
     let st = app.session.active().unwrap();
     assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
     assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
     assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
+}
+
+/// `photocraft-raw`'s open (a raw the shared engine can't develop): raw-stage settings develop
+/// from the sensor data, the rest (Contrast) follows as a RAW Develop step.
+#[test]
+fn the_classic_develop_applies_the_rest_as_a_step() {
+    let (mut app, dng) = raw_app_classic();
+    let ctx = egui::Context::default();
+    let warnings = app.open_bytes("IMG_0001.dng", &dng).unwrap();
+    assert!(!photocraft_io::raw_develop::developed_here(&warnings), "{warnings:?}");
+    let raw = take_queued(&mut app).unwrap();
+    assert!(!raw.develop);
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().develop_source.is_none());
+    let before = mean_red(&app);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], true, "{r}");
+    assert!(r.get("filter").is_some(), "contrast is applied as a RAW Develop step: {r}");
+    assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
+}
+
+/// A raw opened for the dialog is developed, previewed and opened by the shared engine.
+#[test]
+fn a_raw_for_the_dialog_develops_previews_and_opens_with_the_shared_engine() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    let warnings = app.open_bytes("IMG_0001.dng", &dng).unwrap();
+    assert!(photocraft_io::raw_develop::developed_here(&warnings), "{warnings:?}");
+    let raw = take_queued(&mut app).unwrap();
+    assert!(raw.develop);
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    assert!(d.develop_source.is_some() && d.raw_source.is_none() && d.detail.develop.is_some());
+    d.render(&ctx);
+    assert_eq!(d.develop_backend, "craft-develop");
+    // At the defaults the preview is the document it previews (up to the proxy's binning: none here).
+    let doc = shown_doc(&app);
+    let surf = doc.layers.iter().find_map(|l| l.surface()).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    let (area, w, h) = super::convert::preview_area(doc.bounds(), surf).unwrap();
+    let (open, ..) = super::convert::box_proxy(surf, area, w, h);
+    let (mean, max) = proxy_difference(&d.processed, &open);
+    assert!(mean < 0.01 && max < 0.08, "the default preview differs from the document by {mean} on average, {max} at most");
+    // Open with settings unchanged admits the document as it is.
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], false, "{r}");
+    assert!(r.get("filter").is_none(), "{r}");
+}
+
+/// With the shared engine, the preview of any setting is what Open develops: both render the
+/// whole develop, the preview from a proxy-sized copy (binned by 3 here).
+#[test]
+fn the_shared_engines_preview_matches_what_open_develops() {
+    let (mut app, _) = raw_app();
+    let ctx = egui::Context::default();
+    let dng = bright_raw();
+    for set in [
+        json!({"exposure": -1.0}),
+        json!({"exposure": -0.5, "highlights": -60, "shadows": 40, "temperature": 25, "tint": -10, "contrast": 15, "saturation": 20}),
+    ] {
+        app.open_bytes("bright.dng", &dng).unwrap();
+        let raw = take_queued(&mut app).unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set.clone()}})).unwrap().unwrap();
+        let d = app.camera_raw.as_mut().unwrap();
+        d.render(&ctx);
+        assert_eq!(d.develop_backend, "craft-develop");
+        let (preview, pw, ph) = (d.processed.clone(), d.pw, d.ph);
+        assert_eq!((pw, ph, d.full_w), (601, 400, 1802), "binned by 3");
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+        assert_eq!(r["redeveloped"], true, "{r}");
+        assert!(r.get("filter").is_none(), "every setting is in the develop: {r}");
+        let st = app.session.active().unwrap();
+        let surf = st.doc.layers.iter().find_map(|l| l.surface()).unwrap();
+        let (area, w, h) = super::convert::preview_area(st.doc.bounds(), surf).unwrap();
+        let (open, ow, oh, _) = super::convert::box_proxy(surf, area, w, h);
+        assert_eq!((ow, oh), (pw, ph));
+        let (mean, max) = proxy_difference(&preview, &open);
+        assert!(mean < 0.01 && max < 0.08, "{set}: the preview differs from Open by {mean} on average, {max} at most");
+    }
 }
 
 fn pixels(app: &PhotocraftApp) -> Vec<f32> {
@@ -448,7 +545,7 @@ fn pixels(app: &PhotocraftApp) -> Vec<f32> {
 
 #[test]
 fn the_demosaic_method_is_chosen_at_open() {
-    let (mut app, dng) = raw_app();
+    let (mut app, dng) = raw_app_classic();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0002.dng", &dng).unwrap();
     let ahd = pixels(&app);
@@ -513,7 +610,7 @@ fn proxy_difference(a: &[[f32; 4]], b: &[[f32; 4]]) -> (f32, f32) {
 /// re-develops the sensor data and keeps their gradation and colour.
 #[test]
 fn the_preview_of_a_raw_stage_setting_matches_what_open_develops() {
-    let (mut app, _) = raw_app();
+    let (mut app, _) = raw_app_classic();
     let ctx = egui::Context::default();
     let dng = bright_raw();
     for set in [json!({"exposure": -4.0}), json!({"exposure": -3.0, "highlights": -60, "shadows": 40, "temperature": 25, "contrast": 15})] {
@@ -542,7 +639,7 @@ fn the_preview_of_a_raw_stage_setting_matches_what_open_develops() {
 
 #[test]
 fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
-    let (mut app, dng) = raw_app();
+    let (mut app, dng) = raw_app_classic();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0002.dng", &dng).unwrap();
     let raw = take_queued(&mut app).unwrap();
@@ -817,7 +914,17 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, held: None, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method, crop: None };
+    let raw = RawOpen {
+        document,
+        held: None,
+        name: "pattern.dng".into(),
+        path: None,
+        bytes: None,
+        developed_with: method,
+        demosaic: method,
+        crop: None,
+        develop: false,
+    };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
@@ -859,7 +966,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 bytes: None,
                 developed_with: Default::default(),
                 demosaic: Default::default(),
-                crop: None
+                crop: None,
+                develop: false
             }
         )
         .is_err()
@@ -1708,7 +1816,9 @@ fn open_develops_each_raw_with_its_synced_settings() {
     // The shown raw (one, which Shift-click showed) first, then zero; two wasn't selected.
     let opened = r["opened"].as_array().unwrap().clone();
     assert_eq!(opened.len(), 2, "{r}");
-    assert!(opened.iter().all(|o| o.get("filter").is_some()), "both selected raws take the Camera Raw step, zero from the synced Contrast: {r}");
+    // (with the shared engine the synced Contrast goes into each raw's develop, not a later Camera
+    // Raw step as with `photocraft-raw`)
+    assert!(opened.iter().all(|o| o["redeveloped"] == true && o.get("filter").is_none()), "both selected raws develop with the synced Contrast: {r}");
     let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
     assert!(!names.contains(&"IMG_2.dng".to_string()), "{names:?}");
     let mut developed = opened.iter().map(|o| {

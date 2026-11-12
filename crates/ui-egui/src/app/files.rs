@@ -90,7 +90,11 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        // A raw for the open-time Camera Raw dialog develops with the engine the dialog previews
+        // with (`photocraft_io::raw_develop`).
+        let raw = &self.session.prefs().raw_defaults;
+        opts.raw_develop = raw.open_in_camera_raw && raw.shared_engine;
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal

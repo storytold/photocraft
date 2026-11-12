@@ -10,6 +10,10 @@ pub(super) struct ProxyJob {
     pub(super) selection: Option<std::sync::Arc<Vec<f32>>>,
     pub(super) raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
     pub(super) raw_source: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// A raw the shared develop engine developed: every setting renders from it
+    /// ([`photocraft_io::raw_develop::DevelopSource`]), and the rest of this job's sources are
+    /// not used.
+    pub(super) develop: Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>>,
     pub(super) params: CameraRaw,
     pub(super) float: bool,
     pub(super) size: (usize, usize),
@@ -35,7 +39,22 @@ impl ProxyJob {
     pub(super) fn run(self) -> ProxyFrame {
         let t0 = crate::gpu_canvas::now_ms();
         let (pw, ph) = self.size;
-        let mut p = self.params;
+        let develop_start = crate::gpu_canvas::now_ms();
+        // The shared engine renders the whole develop at the proxy's size; if it fails, the proxy
+        // is adjusted as for any layer.
+        let (px, backend) = match self.develop.as_ref().and_then(|d| d.develop_proxy(&self.params, pw, ph).ok()) {
+            Some(px) => (px, "craft-develop"),
+            None => self.develop_classic(),
+        };
+        let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
+        self.finish(px, backend, t0, develop_ms)
+    }
+
+    /// The develop before the shared engine: raw-stage settings from the sensor data (or by
+    /// retoning), the rest by Camera Raw's own pipeline on the GPU or CPU.
+    fn develop_classic(&self) -> (Vec<[f32; 4]>, &'static str) {
+        let (pw, ph) = self.size;
+        let mut p = self.params.clone();
         p.pixel_scale = (pw as f32 / self.full_w.max(1) as f32).min(1.0);
         // The open-time dialog develops its raw-stage settings from the binned sensor data, as
         // Open develops them from the whole frame: highlights the default develop clipped keep
@@ -58,18 +77,21 @@ impl ProxyJob {
         if retoned.is_some() {
             (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
         }
-        let develop_start = crate::gpu_canvas::now_ms();
         let key = retoned.is_none().then_some(self.source_key);
         let input = retoned.as_deref().unwrap_or(&self.proxy);
-        let (mut px, backend) = match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
+        match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
             Some(out) => (out, "gpu"),
             None => {
                 let mut px = retoned.unwrap_or_else(|| self.proxy.to_vec());
                 photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
                 (px, "cpu")
             }
-        };
-        let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
+        }
+    }
+
+    /// The selection blend, histogram and image of a developed proxy `px`.
+    fn finish(self, mut px: Vec<[f32; 4]>, backend: &'static str, t0: f64, develop_ms: f64) -> ProxyFrame {
+        let (pw, ph) = self.size;
         if let Some(mask) = &self.selection {
             let blend = |(out, (original, coverage)): (&mut [f32; 4], (&[f32; 4], &f32))| {
                 for (out, original) in out.iter_mut().zip(original) {

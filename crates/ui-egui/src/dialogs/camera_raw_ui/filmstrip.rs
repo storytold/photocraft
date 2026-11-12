@@ -56,6 +56,9 @@ struct ThumbSource {
     /// The raw file binned to the thumbnail's size: synced raw-stage settings develop from the
     /// sensor data, as Open does ([`super::ProxyJob`]). `None`: the file can't be read again.
     raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// A raw the shared develop engine developed, decoded at the thumbnail's size: every setting
+    /// renders from it ([`super::ProxyJob::develop`]).
+    develop: Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>>,
     encoding_gamma: f32,
 }
 
@@ -617,6 +620,7 @@ fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::Color
         selection: None,
         raw_curve: source.curve.clone(),
         raw_source: source.raw.clone(),
+        develop: source.develop.clone(),
         params,
         float: source.float,
         size: source.size,
@@ -659,12 +663,31 @@ fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect
     // The raw binned straight to the thumbnail's size, as the dialog's proxy is to its own.
     let k = w.max(h).div_ceil(THUMB_SIDE).max(1);
     let (tw, th) = (w.div_ceil(k), h.div_ceil(k));
-    let bytes = match (&raw.bytes, &raw.path) {
-        (Some(b), _) => Some(b.as_ref().clone()),
-        #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok(),
-        _ => None,
-    };
+    let bytes = super::open::raw_bytes(raw);
+    // A raw the shared engine developed: its thumbnail renders with it, from a copy decoded at
+    // the thumbnail's size (not the other engine, whose colour differs).
+    if raw.develop {
+        let develop = bytes.and_then(|b| photocraft_io::raw_develop::DevelopSource::new(b, tw.max(th), w.max(h)).ok());
+        let developed = develop.as_ref().and_then(|d| d.develop_proxy(&CameraRaw::default(), tw, th).ok());
+        let (px, size, develop) = match (developed, develop) {
+            (Some(px), Some(d)) => (px, (tw, th), Some(std::sync::Arc::new(d))),
+            _ => {
+                let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);
+                let (px, tw, th) = shrink(&proxy, pw, ph);
+                (px, (tw, th), None)
+            }
+        };
+        return Some(ThumbSource {
+            px: std::sync::Arc::new(px),
+            size,
+            full_w: w,
+            float: surf.format().sample == photocraft_color::SampleType::F32,
+            curve: None,
+            raw: None,
+            develop,
+            encoding_gamma,
+        });
+    }
     let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok());
     let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &Default::default(), tw, th));
     let (px, size, raw_source, curve) = match (developed, source) {
@@ -685,6 +708,7 @@ fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect
         float: surf.format().sample == photocraft_color::SampleType::F32,
         curve,
         raw: raw_source,
+        develop: None,
         encoding_gamma,
     })
 }

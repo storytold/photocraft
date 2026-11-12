@@ -98,6 +98,9 @@ pub(super) struct Source {
     pub(super) surf: photocraft_raster::Surface,
     /// The raw file the open-time dialog develops its raw-stage settings from ([`ProxyJob`](super::ProxyJob)).
     pub(super) raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// The raw decoded for the shared develop engine, when the document was developed by it
+    /// ([`super::RawOpen::develop`]): the preview renders every setting from it.
+    pub(super) develop: Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>>,
     /// The document the pixels belong to: a held raw's, which is not in the session. `None`: the
     /// active document.
     pub(super) doc: Option<std::sync::Arc<photocraft_doc::Document>>,
@@ -105,7 +108,7 @@ pub(super) struct Source {
 
 impl From<photocraft_raster::Surface> for Source {
     fn from(surf: photocraft_raster::Surface) -> Self {
-        Source { surf, raw: None, doc: None }
+        Source { surf, raw: None, develop: None, doc: None }
     }
 }
 
@@ -127,7 +130,7 @@ pub(super) fn open_pixels(
     coverage: Coverage,
     target: Target,
 ) -> Result<(), String> {
-    let Source { surf, raw, doc } = source;
+    let Source { surf, raw, develop, doc } = source;
     let doc = match doc {
         Some(doc) => doc,
         None => app.session.active().ok_or("no document")?.doc.clone(),
@@ -142,8 +145,14 @@ pub(super) fn open_pixels(
     // A raw being opened: the proxy is its binned sensor data developed as the document was, so
     // the preview of a raw-stage setting starts from the same pixels Open develops from.
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
-    let developed = raw.as_ref().and_then(|r| raw_proxy(r, &Default::default(), w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px));
-    let raw = raw.filter(|_| developed.is_some());
+    // Developed by the shared engine: its proxy, rendered with the defaults the document was.
+    let from_develop = develop.as_ref().and_then(|d| d.develop_proxy(&CameraRaw::default(), w.div_ceil(k), h.div_ceil(k)).ok());
+    let develop = develop.filter(|_| from_develop.is_some());
+    let developed = match from_develop {
+        Some(px) => Some(px),
+        None => raw.as_ref().and_then(|r| raw_proxy(r, &Default::default(), w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px)),
+    };
+    let raw = raw.filter(|_| developed.is_some() && develop.is_none());
     let (proxy, pw, ph, k) = match developed {
         Some(px) => (px, w.div_ceil(k), h.div_ceil(k), k),
         None => box_proxy(&surf, area, w, h),
@@ -230,6 +239,7 @@ pub(super) fn open_pixels(
         raw_open: None,
         raw_curve: None,
         raw_source: raw,
+        develop_source: develop,
         pending: None,
         preview_error: None,
         gpu,

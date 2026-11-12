@@ -1109,6 +1109,9 @@ pub struct RawDefaults {
     /// Photoshop does; off develops it with the defaults straight away. Automation opens never
     /// show the dialog.
     pub open_in_camera_raw: bool,
+    /// A raw opened for the open-time Camera Raw dialog is developed, previewed and opened by the
+    /// shared develop engine (`photocraft_io::raw_develop`); off, by `photocraft-raw` as before.
+    pub shared_engine: bool,
     /// The demosaic method raws are developed with; the open-time Camera Raw dialog starts from it.
     pub demosaic: RawDemosaic,
     /// Keep a raw file's develop settings in a sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`),
@@ -1163,6 +1166,7 @@ impl Default for RawDefaults {
             open_as_smart_object: false,
             apply_auto_tone: false,
             open_in_camera_raw: true,
+            shared_engine: true,
             demosaic: RawDemosaic::Ahd,
             write_xmp_sidecars: true,
         }

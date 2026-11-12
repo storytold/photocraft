@@ -110,6 +110,9 @@ pub struct CameraRawDialog {
     /// from its sensor data, as Open does, and [`Self::proxy`] is its binned frame developed with
     /// the defaults.
     raw_source: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// The open-time dialog's raw decoded for the shared develop engine (a raw it developed,
+    /// [`RawOpen::develop`]): the preview renders every setting from it, and Open develops with it.
+    develop_source: Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>>,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
@@ -219,6 +222,7 @@ impl CameraRawDialog {
             selection: self.selection.clone(),
             raw_curve: self.raw_curve.clone(),
             raw_source: self.raw_source.clone(),
+            develop: self.develop_source.clone(),
             params: self.params.clone(),
             float: self.float,
             size: (self.pw, self.ph),

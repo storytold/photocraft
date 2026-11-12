@@ -27,6 +27,9 @@ pub(crate) struct DetailPreview {
     pub(crate) raw_curve: Option<Arc<Vec<[f32; 2]>>>,
     /// The open-time dialog's raw file: the raw-stage settings develop from its sensor data.
     pub(crate) raw: Option<RawDetail>,
+    /// The open-time dialog's raw decoded for the shared develop engine (a raw it developed): the
+    /// whole develop renders from it at full size.
+    pub(crate) develop: Option<Arc<photocraft_io::raw_develop::DevelopSource>>,
     area: PixelRect,
     coverage: Coverage,
     result: Option<(u64, Surface)>,
@@ -53,6 +56,7 @@ impl DetailPreview {
             source,
             raw_curve: None,
             raw: None,
+            develop: None,
             area,
             coverage,
             result: None,
@@ -114,6 +118,7 @@ impl DetailPreview {
         let source = self.source.clone();
         let raw_curve = self.raw_curve.clone();
         let raw = self.raw.clone();
+        let engine = self.develop.clone();
         let area = self.area;
         let coverage = self.coverage.clone();
         let mut params = params.clone();
@@ -126,7 +131,10 @@ impl DetailPreview {
                 return;
             }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                develop(&source, raw_curve.as_deref().map(Vec::as_slice), raw.as_ref(), area, &params, &coverage)
+                match engine.as_deref().and_then(|e| develop_with_engine(&source, e, area, &params, &coverage)) {
+                    Some(surface) => surface,
+                    None => develop(&source, raw_curve.as_deref().map(Vec::as_slice), raw.as_ref(), area, &params, &coverage),
+                }
             }))
             .map(|surface| (revision, surface))
             .map_err(|_| "RAW Develop detail preview failed; the proxy remains available".into());
@@ -333,6 +341,22 @@ fn with_pixels(source: &Surface, area: PixelRect, px: impl Fn(usize) -> [f32; 4]
     out
 }
 
+/// The full-size result of `params` over `area` rendered by the shared develop engine from
+/// `engine` (a raw it developed: `area` is the developed frame), as Open will develop it. `None`
+/// when it can't render (the caller adjusts the developed pixels instead).
+fn develop_with_engine(
+    source: &Surface,
+    engine: &photocraft_io::raw_develop::DevelopSource,
+    area: PixelRect,
+    params: &CameraRaw,
+    coverage: &Coverage,
+) -> Option<Surface> {
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let px = engine.develop_full(params, w, h).ok()?;
+    let result = with_pixels(source, area, |i| px.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]));
+    Some(blend_coverage(source, result, area, coverage))
+}
+
 /// The open-time dialog's raw file and the demosaic method the document was developed with.
 pub(crate) type RawDetail = (Arc<photocraft_io::raw::RawSource>, photocraft_io::raw::Demosaic);
 
@@ -378,7 +402,12 @@ fn develop(source: &Surface, curve: Option<&[[f32; 2]]>, raw: Option<&RawDetail>
         _ => (None, params.clone()),
     };
     let base = retoned.as_ref().unwrap_or(source);
-    let mut result = photocraft_engine::lens_cmds::camera_raw_surface(base, area, &params);
+    let result = photocraft_engine::lens_cmds::camera_raw_surface(base, area, &params);
+    blend_coverage(source, result, area, coverage)
+}
+
+/// `result` over `area` kept only where `coverage` selects, `source` elsewhere.
+fn blend_coverage(source: &Surface, mut result: Surface, area: PixelRect, coverage: &Coverage) -> Surface {
     if matches!(coverage, Coverage::None) {
         return result;
     }

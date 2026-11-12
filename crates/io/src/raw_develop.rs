@@ -32,6 +32,15 @@ use crate::{ImportResult, IoError};
 /// dialog a document came from this module, so it previews with the same engine.
 pub const DEVELOP_ENGINE: &str = "craft-develop";
 
+/// Opens a note of a raw [`import_raw_developed`] could not develop with the engine (it was
+/// developed by [`crate::raw`] instead).
+pub const NOT_DEVELOPED: &str = "not developed with craft-develop";
+
+/// Whether [`import_raw_developed`]'s `warnings` say it fell back to [`crate::raw`]'s develop.
+pub fn fell_back(warnings: &[String]) -> bool {
+    warnings.iter().any(|w| w.contains(NOT_DEVELOPED))
+}
+
 /// Whether a raw's import `warnings` say this module developed it ([`DEVELOP_ENGINE`]).
 pub fn developed_here(warnings: &[String]) -> bool {
     warnings.iter().any(|w| w.contains(DEVELOPED_NOTE) && w.contains(DEVELOP_ENGINE))
@@ -200,7 +209,10 @@ fn fallback(name: &str, bytes: &[u8], cr: &CameraRaw, crop: Option<Crop>, why: &
         };
         crate::raw::import_raw_tuned(name, bytes, &tuning)?
     };
-    r.warnings.push(format!("not developed with {DEVELOP_ENGINE} ({why}); developed as before"));
+    // (a file opened as its embedded preview keeps the preview's own note, as before)
+    if r.warnings.iter().any(|w| w.contains(photocraft_raw::OUTPUT_SPACE)) {
+        r.warnings.push(format!("{NOT_DEVELOPED} ({why}); developed as before"));
+    }
     Ok((r, wb))
 }
 
@@ -238,7 +250,7 @@ mod tests {
         assert!(developed_here(&r.warnings), "{:?}", r.warnings);
         assert_eq!(r.document.icc_profile.as_deref().map(Vec::as_slice), Some(&photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]));
         assert_eq!((r.document.size.width, r.document.size.height), (96, 64));
-        assert!(!r.warnings.iter().any(|w| w.contains("developed as before")), "{:?}", r.warnings);
+        assert!(!fell_back(&r.warnings), "{:?}", r.warnings);
     }
 
     #[test]
