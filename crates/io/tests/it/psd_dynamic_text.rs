@@ -60,3 +60,34 @@ fn unsolved_dynamic_text_is_solved_for_the_file() {
     let LayerContent::Text(kept) = &doc.layers[0].content else { panic!("text layer") };
     assert!(kept.fit.as_ref().is_some_and(|f| f.lines.is_empty()), "the document is left alone");
 }
+
+/// The pixels of a layer whose lines are solved for the file show its solved look, as its baked
+/// text does: the layer's channels and the merged image are those of the same layer solved
+/// before the save. They were drawn from the layer's cache, laid out at its base sizes.
+#[test]
+fn unsolved_dynamic_text_is_saved_with_its_solved_pixels() {
+    let text = "Hello dynamic world of text";
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, kerning: Kerning::Metrics, ..Default::default() };
+    let mut t = TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() };
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 150.0 };
+    t.sync_summary();
+    t.fit = Some(TextFit::default());
+    let mut solved = t.clone();
+    photocraft_text::fit::refit(&mut photocraft_text::TextEngine::new(), &mut solved, 72.0);
+    assert!(photocraft_text::fit::is_fitted_lines(&solved));
+    let file = |t: &TextLayer| {
+        let bytes = photocraft_io::export(&doc_with(t.clone()), "d.psd", &Default::default()).unwrap().bytes;
+        photocraft_psd::PsdFile::from_bytes(&bytes).unwrap()
+    };
+    let pixels = |f: &photocraft_psd::PsdFile| {
+        let layer = &f.layer_info.as_ref().expect("layers").layers[0];
+        (layer.rect, layer.channels.iter().map(|c| c.data.clone()).collect::<Vec<_>>())
+    };
+    let (unsolved, solved) = (file(&t), file(&solved));
+    assert_eq!(pixels(&unsolved), pixels(&solved), "the layer's channels");
+    assert_eq!(unsolved.image_data.data, solved.image_data.data, "the merged image");
+    let mut plain = t.clone();
+    plain.fit = None;
+    assert_ne!(pixels(&file(&plain)), pixels(&solved), "the solved look differs from the base sizes");
+}
+
