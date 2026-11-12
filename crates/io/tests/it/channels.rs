@@ -47,7 +47,7 @@ fn channel_options_spot_and_quick_mask_roundtrip() {
     full.quick_mask = Some(AlphaChannel::new("Quick Mask", Surface::new(PixelFormat::GRAY8)));
     let out = photocraft_io::export(&full, "full.psd", &Default::default()).unwrap();
     assert!(out.warnings.iter().any(|warning| warning.contains("Quick Mask")), "{:?}", out.warnings);
-    let file = photocraft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
     assert_eq!(file.header.channels, 56);
     assert!(file.resources.iter().all(|resource| resource.id != 1022));
 }
