@@ -91,11 +91,9 @@ fn with_no_selection_the_menu_lists_the_layer_rows() {
 }
 
 /// The rows greyed without a selection, as measured over each layer kind (#12866). Load
-/// Selection… and Reselect follow the document, not the layer, and are left out. The reference
-/// also greys Group from Layers… over the Background; here it stays on, because the engine's
-/// `layer.new.groupFromLayers` groups the Background, which this item does not change.
+/// Selection… and Reselect follow the document, not the layer, and are left out.
 const GREYED: [(&str, &[&str]); 3] = [
-    ("Background", &["Blending Options…", "Convert to Layers", "Rasterize Layer", "Rasterize Layer Style", "Free Transform"]),
+    ("Background", &["Blending Options…", "Group from Layers…", "Convert to Layers", "Rasterize Layer", "Rasterize Layer Style", "Free Transform"]),
     ("Type", &["Convert to Layers", "Rasterize Layer Style"]),
     ("Shape", &["Convert to Layers", "Rasterize Layer Style"]),
 ];
@@ -131,6 +129,25 @@ fn background_type_and_shape_layers_get_the_layer_menu_greyed_as_measured() {
             .collect();
         assert!(wrong.is_empty(), "{kind}: enabled or greyed unlike the reference: {wrong:?}");
     }
+}
+
+/// The reference application greys Group from Layers… whenever the Background is selected, also
+/// beside a pixel layer that is the active one.
+#[test]
+fn group_from_layers_is_greyed_with_the_background_among_the_selected_layers() {
+    let mut app = pixel_layer(&[]);
+    let st = app.session.active().unwrap();
+    let pixel = st.active_layer.unwrap();
+    let background = st.doc.layers.iter().map(|l| l.id).find(|id| st.doc.is_background(*id)).unwrap();
+    assert!(open(&mut app, &Context::default(), Tool::ObjectSelection, [10.0, 10.0]));
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    assert!(available(&app, &menu, "layer.new.groupFromLayers"), "a pixel layer alone can be grouped");
+    app.run("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
+    app.session.set_active_layer(Some(pixel));
+    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+    assert!(open(&mut app, &Context::default(), Tool::ObjectSelection, [10.0, 10.0]));
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    assert!(!available(&app, &menu, "layer.new.groupFromLayers"), "the Background is selected too");
 }
 
 #[test]
