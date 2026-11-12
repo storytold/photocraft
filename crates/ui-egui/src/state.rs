@@ -89,6 +89,10 @@ pub struct Panels {
     /// or malformed value reads as `Start`, so it never discards the other panel flags.
     #[serde(default, deserialize_with = "toolbar_side_or_default")]
     pub toolbar_side: ToolbarSide,
+    /// Where a floating tool palette was left, when the user dragged its grip out of the dock.
+    /// `None` keeps it docked; a saved layout reopens it where it was dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolbar_float: Option<[f32; 2]>,
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).
     #[serde(default = "yes")]
     pub dock: bool,
@@ -149,6 +153,7 @@ impl Default for Panels {
             character: false,
             toolbar_double: false,
             toolbar_side: ToolbarSide::Start,
+            toolbar_float: None,
             dock: true,
             hidden_by_tab: None,
             full_screen_chrome: false,
