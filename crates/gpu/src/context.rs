@@ -87,7 +87,10 @@ impl AbandonedInit {
         let start = Instant::now();
         let (finished, changed) = &*self.state;
         let mut done = finished.lock().unwrap_or_else(PoisonError::into_inner);
-        if !*done && let Some(waiting) = &self.waiting {
+        if !*done
+            && !limit.is_zero()
+            && let Some(waiting) = &self.waiting
+        {
             let _ = waiting.send(());
         }
         while !*done {
@@ -115,7 +118,9 @@ fn run_with_timeout<T: Send + 'static>(
     timeout: Duration,
     work: impl FnOnce() -> Result<T, GpuContextError> + Send + 'static,
 ) -> (Result<T, GpuContextError>, Option<AbandonedInit>) {
-    let (tx, rx) = std::sync::mpsc::channel();
+    // With no buffer, a send completes only when the receiver takes the value, so a late result is
+    // never queued for the requesting thread to drop.
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
     let thread_res = AbandonedInit::start(name, move || {
         let res = work();
         // A late result is dropped here, before the thread is marked finished.
@@ -351,11 +356,14 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    /// Sets its flag when it is dropped on the initialization thread.
     struct Late(Arc<AtomicBool>);
 
     impl Drop for Late {
         fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
+            if std::thread::current().name() == Some("pc_gpu_init_test") {
+                self.0.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -377,6 +385,19 @@ mod tests {
         assert!(abandoned.wait(Duration::MAX));
         assert!(abandoned.is_finished());
         assert!(dropped.load(Ordering::SeqCst), "the thread drops the late result before it is finished");
+    }
+
+    #[test]
+    fn a_wait_with_no_time_left_does_not_release_the_thread() {
+        let (told_tx, told) = std::sync::mpsc::channel();
+        let init = AbandonedInit::spawn(move |waiting| {
+            let _ = told_tx.send(waiting.recv().is_ok());
+        })
+        .unwrap();
+        assert!(!init.wait(Duration::ZERO));
+        // Dropping the last handle disconnects the thread's receiver.
+        drop(init);
+        assert_eq!(told.recv().ok(), Some(false), "a wait with no time left does not tell the thread it started waiting");
     }
 
     #[test]
