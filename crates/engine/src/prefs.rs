@@ -1423,6 +1423,11 @@ impl Preferences {
 
     /// Set a value by dotted path, validating it. Unknown paths and wrong types are errors.
     pub fn set(&mut self, path: &str, value: Value) -> std::result::Result<(), String> {
+        // `set_path` skips empty segments, so `.alternateShortcuts.x` would reach the typed state
+        // below the per-path validators above; refuse such paths instead.
+        if path.split('.').any(str::is_empty) {
+            return Err(format!("invalid preference path `{path}`"));
+        }
         if path == "alternateShortcuts" {
             let obj = value.as_object().ok_or("`alternateShortcuts` maps command ids to lists of shortcuts")?;
             let mut map = BTreeMap::new();
@@ -1517,7 +1522,8 @@ impl Preferences {
     pub fn alternates(&self, id: &str, primary: Option<&str>) -> Vec<String> {
         let main = primary.and_then(normalize_shortcut);
         let keys: Vec<String> = match self.alternate_shortcuts.get(id) {
-            Some(list) => list.iter().filter_map(|s| normalize_shortcut(s)).collect(),
+            // A hand-edited settings file can hold more than `alternate_keys` admits.
+            Some(list) => list.iter().take(MAX_ALTERNATES).filter_map(|s| normalize_shortcut(s)).collect(),
             None => default_alternates(id).filter_map(normalize_shortcut).collect(),
         };
         let mut out: Vec<String> = Vec::with_capacity(keys.len());

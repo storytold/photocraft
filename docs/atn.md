@@ -147,7 +147,7 @@ row; the action still adds only one Undo entry.
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
-| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath` |
+| `Mk  ` | make | Make | `image.calculations`, `layer.layerStyle.createLayer`, `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newFillLayer.gradient`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot`, `type.convertToShape`, `type.createWorkPath`, `layer.new.artboard` (Layer › New › Artboard), `layer.new.artboardFromLayers` (Layer › New › Artboard from Layers) |
 | (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
 | (string ID only) | matchColor | Match Color | `image.adjustments.matchColor` |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
@@ -306,6 +306,21 @@ radius uses the native factory value 10) and the recorded custom-shape form belo
 Custom-shape playback requires the asset selected by its ID to be installed.
 Other unsupported dialog fields or origin values remain kept. Native explicit
 shape choices cannot be saved as radius-only descriptors.
+
+Layer › New › Artboard and Layer › New › Artboard from Layers are a Make with
+`null` = the class `artboardSection`. With `artboardRect` (`Top `, `Left`,
+`Btom`, `Rght`: doubles holding whole pixels, a board of positive size in the
+32-bit range) the step plays as `layer.new.artboard` with that `rect`; with `From`
+= the target layer it plays as `layer.new.artboardFromLayers` on the selected
+layers, at their bounds. `Nm  ` is the board's name. `layerSectionStart` and
+`layerSectionEnd` are ids of the recording session: a loaded step saves back its
+recorded descriptor, session ids included, while it still makes the same board,
+and a step recorded in PhotoCraft writes the other keys without them (`Nm  ` only
+for a name of its own). Both or neither of `artboardRect` and `From`, another
+`From` target, a repeated or extra key, or a value of another type stays a kept
+step. The step records no background, preset or size of the dialog's own, so a
+native step that sets one of those, takes the Background into the first board, or
+(New Artboard) has no position of its own refuses export.
 
 Crop and Straighten Photos executes the native scan operation once, creating one
 document per photo found inside the selection and leaving the source unchanged.
