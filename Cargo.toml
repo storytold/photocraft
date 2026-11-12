@@ -18,7 +18,8 @@ photocraft-cms = { path = "crates/cms" }
 photocraft-raster = { path = "crates/raster" }
 photocraft-doc = { path = "crates/doc" }
 photocraft-ops = { path = "crates/ops" }
-photocraft-psd = { path = "crates/psd" }
+# PSD/PSB and the Photoshop resource files (ABR, ASL, ACO, ATN, ...): the shared reader and writer (craft-libs#875).
+craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "2b35d243241bc4c1aaa7a1cc89657c1aad5b3d02" }
 photocraft-codecs = { path = "crates/codecs" }
 photocraft-raw = { path = "crates/raw" }
 photocraft-affinity = { path = "crates/affinity" }
@@ -151,7 +152,7 @@ opt-level = "s"
 # (runs when a pipeline is created). "z" keeps the wasm well under the size gate.
 [profile.wasm-release.package.photocraft-doc]
 opt-level = "z"
-[profile.wasm-release.package.photocraft-psd]
+[profile.wasm-release.package.craft-psd]
 opt-level = "z"
 [profile.wasm-release.package.photocraft-format]
 opt-level = "z"
