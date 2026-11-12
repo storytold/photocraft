@@ -312,6 +312,23 @@ fn reapplying_unchanged_live_rectangle_keeps_nonuniformly_scaled_corners() {
     }
 }
 
+/// #13442 review: a component added with `addTo` takes `op` on its first subpath; its joined
+/// subpaths (holes) stay joined instead of turning into components of their own.
+#[test]
+fn shape_add_to_keeps_joined_subpaths() {
+    use photocraft_doc::vector::{Path, PathOp, Subpath};
+    let mut s = session(100, 100, 8);
+    let id = s.execute("shape.create", json!({"kind": "rect", "rect": [0, 0, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
+    let ring = Path::new(vec![
+        Subpath::polygon(&[(50.0, 50.0), (90.0, 50.0), (90.0, 90.0), (50.0, 90.0)]),
+        Subpath::polygon(&[(60.0, 60.0), (60.0, 80.0), (80.0, 80.0), (80.0, 60.0)]).with_op(PathOp::Join),
+    ]);
+    let path = crate::vector_cmds::path_json(&ring);
+    s.execute("shape.create", json!({"kind": "path", "path": path, "addTo": id, "op": "subtract"})).unwrap();
+    let ops: Vec<PathOp> = shape(&s, id).path.subpaths.iter().map(|sp| sp.op).collect();
+    assert_eq!(ops, [PathOp::Combine, PathOp::Subtract, PathOp::Join]);
+}
+
 #[test]
 fn shape_add_to_with_path_ops() {
     let mut s = session(100, 100, 8);
