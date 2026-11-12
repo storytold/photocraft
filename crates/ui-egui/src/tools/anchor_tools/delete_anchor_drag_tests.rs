@@ -97,3 +97,37 @@ fn a_drag_from_an_anchor_whose_join_is_curved_does_what_the_press_did_before() {
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
 }
+
+#[test]
+fn alt_with_add_anchor_point_bends_the_join_like_delete_anchor_point() {
+    let mut app = app();
+    app.ui.tool = crate::state::Tool::AddAnchorPoint;
+    let (n, alt) = (steps(&app), Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 300.0, pressure: 1.0 }, alt);
+    for at in [[315.0, 290.0], [330.0, 280.0]] {
+        tool_event(&mut app, ToolEvent::Move { x: at[0], y: at[1], pressure: 1.0 }, alt);
+    }
+    tool_event(&mut app, ToolEvent::Up { x: 330.0, y: 280.0 }, alt);
+    let k = knots(&app);
+    assert_eq!(k.len(), 3);
+    assert!(near(k[0].out_ctrl, 273.3333, 140.0) && near(k[1].in_ctrl, 473.3333, 340.0), "{k:?}");
+    assert!(k[0].smooth && k[1].smooth);
+    assert_eq!(steps(&app), n + 1);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
+}
+
+#[test]
+fn a_bend_past_the_coordinate_limit_runs_no_command_and_keeps_the_straight_join() {
+    let mut app = app();
+    let long = json!({"subpaths": [{"closed": true, "knots": [[998900, 100], [999800, 100], [999900, 100], [999400, 500]]}]});
+    app.run("path.set", json!({"name": "Path 1", "path": long})).unwrap();
+    app.sync_views();
+    let n = steps(&app);
+    // The mirrored handle would land at x > 1,000,000 (the release is left of 999,775).
+    drag(&mut app, [999800.0, 100.0], [999700.0, 100.0]);
+    let k = knots(&app);
+    assert_eq!(k.len(), 3);
+    assert_eq!((k[0], k[1]), (Knot::corner(998900.0, 100.0), Knot::corner(999900.0, 100.0)), "no partial bend: {k:?}");
+    assert_eq!(steps(&app), n + 1, "only the deletion");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
+}

@@ -798,6 +798,14 @@ fn release_join(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Ed
         ("path.convertPoint", json!({"subpath": sb, "knot": kb, "out": xy(mirror)})),
         ("path.moveHandle", json!({"subpath": sb, "knot": kb, "handle": "out", "to": xy(b.anchor)})),
     ];
+    // All four commands or none: a coordinate past the engine's limit (the mirrored handle can reach
+    // it near the canvas edge) would fail a later command after the earlier ones ran, leaving a half bend.
+    let limit = photocraft_engine::PATH_COORD_LIMIT;
+    let coords = [a.out_ctrl, a.anchor, mirror, b.anchor];
+    if !coords.iter().all(|p| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= limit && p.y.abs() <= limit) {
+        // The press's straight join stays, as when `bend_join` refuses.
+        return;
+    }
     let key = app.ui.direct_selection.coalesce.take();
     let selection = std::mem::take(&mut app.ui.direct_selection);
     for (id, mut params) in steps {
