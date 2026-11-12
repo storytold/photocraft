@@ -29,8 +29,9 @@ struct Press {
     alt: bool,
 }
 
-/// The tool's live state between a press and its release, plus the marker the options bar edits.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The tool's live state between a press and its release, plus the markers the options bar edits.
+/// The picked set is a `Vec`, so the state is cloned rather than copied.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct State {
     press: Option<Press>,
     /// The marker under the pointer, highlighted on the canvas.

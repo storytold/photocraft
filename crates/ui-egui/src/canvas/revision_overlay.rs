@@ -45,7 +45,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &
         }
         let color = if m.done { DONE } else { TODO };
         // The picked marker is the one the options bar edits and the one a drag would move.
-        let picked = tool_state.selected == Some(i);
+        let picked = tool_state.selected.contains(&i);
         let width = if picked { 3.0 } else { 2.0 };
         // Dashed box reads as "annotation" rather than selection; solid enough to survive
         // screenshotting the manual.
