@@ -64,9 +64,9 @@ pub(crate) struct Ctx<'a> {
     pub txt2: Option<photocraft_text::engine_data::Value>,
     /// Smart-filter caches from the global `FEid`/`FXid` blocks (filter masks, by placed id).
     pub filter_effects: Vec<photocraft_psd::filter_effects::FilterEffectsItem>,
-    /// Filter masks already decoded, by placed id: every layer of a source reads the same item, and
-    /// a surface clones by sharing its tiles.
-    pub filter_masks: std::collections::HashMap<String, Option<LayerMask>>,
+    /// Filter-mask pixels decoded once per placed id. Each layer applies its own switches to a
+    /// surface clone, sharing tile storage even when its enabled/linked state differs.
+    pub filter_masks: std::collections::HashMap<String, Option<Surface>>,
     /// The same for the unfiltered pixels the mask mixes back in.
     pub unfiltered: std::collections::HashMap<String, Option<Surface>>,
     /// Pixel bytes retained in [`Self::unfiltered`], held under [`MAX_UNFILTERED_BYTES`].
@@ -403,21 +403,23 @@ impl Ctx<'_> {
 
     /// The filter mask of the smart object whose `placed` id is `placed`, from the `FEid` cache:
     /// document coordinates, white beyond its bounds (`filterMaskExtendWithWhite`). An all-white
-    /// mask is no mask.
+    /// mask with default enabled/unlinked switches is no mask.
     fn filter_mask(&mut self, placed: &str, stack: &crate::smart_map::FilterStack, name: &str) -> Option<LayerMask> {
-        if let Some(done) = self.filter_masks.get(placed) {
-            return done.clone();
-        }
-        let item = self.filter_effects.iter().find(|i| i.id == placed)?;
-        let mask = match crate::smart_map::mask_from_item(item, self.mask_fmt.sample, stack) {
-            Ok(m) => m,
-            Err(e) => {
-                self.warn(format!("layer \"{name}\": {e}; the filter mask was ignored"));
-                None
-            }
+        let surface = if let Some(done) = self.filter_masks.get(placed) {
+            done.clone()
+        } else {
+            let item = self.filter_effects.iter().find(|i| i.id == placed)?;
+            let surface = match crate::smart_map::mask_surface_from_item(item, self.mask_fmt.sample) {
+                Ok(surface) => surface,
+                Err(e) => {
+                    self.warn(format!("layer \"{name}\": {e}; the filter mask was ignored"));
+                    None
+                }
+            };
+            self.filter_masks.insert(placed.to_string(), surface.clone());
+            surface
         };
-        self.filter_masks.insert(placed.to_string(), mask.clone());
-        mask
+        surface.and_then(|surface| crate::smart_map::mask_from_surface(surface, stack))
     }
 
     fn apply_common(&mut self, l: &mut Layer, rec: &LayerRecord, blend_override: Option<photocraft_psd::BlendMode>) {
