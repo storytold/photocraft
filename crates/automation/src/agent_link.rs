@@ -895,11 +895,12 @@ mod tests {
         let exists = home.join("exists");
         let keep = home.join("keep");
         // `add` fails while an entry exists (as claude's does) or while `fail` is there; `remove`
-        // removes the entry, or fails while `keep` is there.
+        // removes the entry, or fails while `keep` is there. `PATH` holds only claude's folder and
+        // an empty one, so anything that isn't a shell builtin needs its full path.
         let script = format!(
             "#!/bin/sh\nprintf 'PATH=%s\\n' \"$PATH\" >> '{log}'\nprintf '%s ' \"$@\" >> '{log}'\nprintf '\\n' >> '{log}'\n\
              if [ \"$2\" = remove ] && [ -e '{keep}' ]; then echo 'locked' >&2; exit 1; fi\n\
-             if [ \"$2\" = remove ]; then rm -f '{exists}'; exit 0; fi\n\
+             if [ \"$2\" = remove ]; then /bin/rm -f '{exists}'; exit 0; fi\n\
              if [ \"$2\" = get ]; then [ -e '{exists}' ]; exit $?; fi\n\
              if [ \"$2\" = add ] && [ -e '{exists}' ]; then echo 'already exists' >&2; exit 1; fi\n\
              if [ \"$2\" = add ] && [ -e '{fail}' ]; then echo 'boom' >&2; exit 1; fi\n\
