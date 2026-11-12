@@ -107,16 +107,12 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             crate::widgets::vline(ui, 22.0);
             let label = tl!("Radius:");
             lbl(ui, label);
-            let mut r = match target.as_ref().and_then(|s| s.live.as_ref()) {
-                Some(photocraft_doc::LiveShape::Rect { radii, .. }) => radii[0] as f32,
-                _ => o.corner_radius,
-            };
+            // The tool's own radius for the next rectangle (#13338); the active shape is not touched.
+            let mut r = o.corner_radius;
             let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
             radius_alert = out_of_range;
             if resp.changed() {
                 o.corner_radius = r;
-                let rf = r as f64;
-                edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
             }
         }
         Tool::Polygon => {
@@ -238,6 +234,10 @@ fn range_alert(app: &mut PhotocraftApp, owed: bool, alert: &str) {
 #[cfg(test)]
 #[path = "rectangle_radius_range_tests.rs"]
 mod rectangle_radius_range_tests;
+
+#[cfg(test)]
+#[path = "rectangle_radius_target_tests.rs"]
+mod rectangle_radius_target_tests;
 
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
