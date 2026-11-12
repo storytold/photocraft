@@ -454,7 +454,10 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         let id = LayerId(target);
         with_shape(s, id, "Add Shape", |sh, _| {
             for mut sp in path.subpaths {
-                sp.op = op;
+                // A joined subpath (a hole) belongs to the component before it, which takes `op`.
+                if sp.op != PathOp::Join {
+                    sp.op = op;
+                }
                 sh.path.subpaths.push(sp);
             }
             sh.live = None;
