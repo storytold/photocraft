@@ -260,7 +260,19 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
 }
 
 /// [`warp_triangles`], reporting progress per destination tile to `ctl`. A cancelled `ctl` skips
-/// the remaining tiles; the caller discards the result.
+/// the remaining tiles: `None` once it is cancelled.
+pub fn warp_triangles_with(
+    src: &Surface,
+    src_rect: Rect,
+    verts: &[([f64; 2], [f64; 2])],
+    tris: &[[usize; 3]],
+    interp: Interp,
+    ctl: &Interrupt,
+) -> Option<Surface> {
+    let out = triangles(src, src_rect, verts, tris, interp, ctl, None);
+    (!ctl.cancelled()).then_some(out)
+}
+
 /// Destination tiles one triangle render may keep bookkeeping for (a 1M-tile render is 69 Gpx).
 const MAX_DST_TILES: u64 = 1 << 20;
 /// How close (source px) two triangles' source points under one pixel are when they are the

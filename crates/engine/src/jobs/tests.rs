@@ -1780,3 +1780,19 @@ fn a_cancelled_liquify_leaves_the_document_unchanged() {
     assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
     assert_eq!(st.history.past_len(), steps);
 }
+
+#[test]
+fn a_cancelled_puppet_warp_leaves_the_document_unchanged() {
+    let mut s = session(600, 400);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let pins = json!({"pins": [{"src": [100, 200], "dst": [100, 200]}, {"src": [500, 200], "dst": [500, 120]}]});
+    let id = job(s.start("edit.puppetWarp", pins).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    assert!(s.poll_jobs().is_empty(), "nothing arrives later");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
+}

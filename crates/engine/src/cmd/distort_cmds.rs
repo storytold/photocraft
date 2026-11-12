@@ -12,9 +12,9 @@
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, auto_cell};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, apply_liquify_with, auto_cell};
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
-use photocraft_algo::puppet::{PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetWarp, puppet_warp, puppet_warp_with_mask, warp_with_mesh};
+use photocraft_algo::puppet::{PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetWarp, puppet_warp, puppet_warp_with_mask_with, warp_with_mesh};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::warp::{Fold, warp_mesh_gray, warp_mesh_surface, warp_mesh_surface_with};
 use photocraft_color::PixelFormat;
@@ -403,10 +403,7 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
             if field.is_identity() {
                 return Ok(None);
             }
-            if ctl.cancelled() {
-                return Err(EngineError::Cancelled);
-            }
-            let out = apply_liquify(surf, &field);
+            let out = apply_liquify_with(surf, &field, ctl).ok_or(EngineError::Cancelled)?;
             Ok(Some(match sel {
                 Some(sel) => mix_by_selection(surf, &out, sel)?,
                 None => out,
@@ -456,14 +453,14 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let linked = s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.mask.as_ref()).filter(|m| m.linked).map(|m| m.surface.clone());
     let moved_mask: Arc<Mutex<Option<Surface>>> = Arc::default();
     let left = moved_mask.clone();
-    let layer_fn: LayerFn = Box::new(move |surf, sel, _, _| {
+    let layer_fn: LayerFn = Box::new(move |surf, sel, _, ctl| {
         deform_selected(surf, sel, &|x| {
             let b = x.content_bounds();
             if b.is_empty() {
                 return Ok(x.clone());
             }
             let too_far = || bad(&name, "the pins stretch the content too far: the result would cover more than 2^30 pixels");
-            let (out, mask) = puppet_warp_with_mask(x, b, &w, it, linked.as_ref()).ok_or_else(too_far)?;
+            let (out, mask) = puppet_warp_with_mask_with(x, b, &w, it, linked.as_ref(), ctl).map_err(|_| EngineError::Cancelled)?.ok_or_else(too_far)?;
             *left.lock().unwrap_or_else(PoisonError::into_inner) = mask;
             Ok(out)
         })

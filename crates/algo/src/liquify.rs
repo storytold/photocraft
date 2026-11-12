@@ -16,12 +16,13 @@
 //!
 //! [`apply_liquify`] upsamples the field with Catmull-Rom (bicubic) per pixel and samples the
 //! source (premultiplied, bicubic), tile by tile in parallel; tiles where the field is zero are
-//! copied untouched. [`ProxyImage::render`] is the cheap preview path: bilinear field and
-//! bilinear source on a downsampled RGBA copy, re-rendered only where a dab changed things.
+//! copied untouched. [`apply_liquify_with`] can be cancelled between tiles.
+//! [`ProxyImage::render`] is the cheap preview path: bilinear field and bilinear source on a
+//! downsampled RGBA copy, re-rendered only where a dab changed things.
 
 use crate::par;
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
 /// The Liquify tools (Photoshop's left tool strip, minus Hand/Zoom/Face).
@@ -842,13 +843,19 @@ fn cubic_taps(g: f64, len: usize) -> [(usize, f64); 4] {
 /// `p + d(p)` (bicubic field, bicubic premultiplied source, edge pixels repeat past the field
 /// bounds); everything outside the bounds is kept. Same format as `src`.
 pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
+    apply_liquify_with(src, field, &Interrupt::NONE).unwrap_or_else(|| src.clone())
+}
+
+/// [`apply_liquify`], checking `ctl` per tile and reporting progress per batch of tiles; `None`
+/// once it is cancelled (#210).
+pub fn apply_liquify_with(src: &Surface, field: &LiquifyField, ctl: &Interrupt) -> Option<Surface> {
     let fmt = src.format();
     let n = fmt.channels();
     let alpha = fmt.alpha;
     let b = field.bounds;
     let mut out = src.clone();
     if field.is_identity() || b.is_empty() {
-        return out;
+        return Some(out);
     }
     // A 1D Catmull-Rom stencil's absolute weights sum to at most 5/4, so the 2D
     // interpolated displacement can reach 25/16 of the largest nodal displacement.
@@ -856,6 +863,9 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
     let has_freeze = field.freeze.iter().any(|&f| f > 0.0);
     let tiles: Vec<Rect> = b.tiles().map(|t| t.rect().intersect(&b)).filter(|r| !r.is_empty() && field.touches(*r)).collect();
     let work = |t: &Rect| -> Option<(Rect, Vec<f32>)> {
+        if ctl.cancelled() {
+            return None;
+        }
         let w = t.width() as usize;
         let h = t.height() as usize;
         // Field per pixel (bicubic), with axis taps shared across rows and columns.
@@ -957,15 +967,22 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
         }
         Some((*t, outp))
     };
-    for batch in tiles.chunks(RENDER_BATCH_TILES) {
-        for (r, v) in par::map(batch.len(), true, |i| batch.get(i).and_then(work)).into_iter().flatten() {
+    let total = tiles.len().max(1);
+    for (k, batch) in tiles.chunks(RENDER_BATCH_TILES).enumerate() {
+        let rendered = par::map(batch.len(), true, |i| batch.get(i).and_then(work));
+        // A cancelled batch is missing tiles: the result is incomplete.
+        if ctl.cancelled() {
+            return None;
+        }
+        for (r, v) in rendered.into_iter().flatten() {
             out.write_region(r, &v);
         }
+        ctl.progress(((k + 1) * RENDER_BATCH_TILES).min(total) as f32 / total as f32);
     }
     if alpha {
         out.prune();
     }
-    out
+    Some(out)
 }
 
 /// A downsampled, premultiplied RGBA copy of a layer for the interactive preview.
