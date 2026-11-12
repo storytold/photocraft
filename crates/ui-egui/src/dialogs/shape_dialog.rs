@@ -15,6 +15,10 @@ use crate::state::{DialogKind, Tool};
 const MARK: &str = "__createShape";
 /// Largest side the dialog accepts, in pixels (Photoshop's document limit).
 const MAX_PX: f64 = 300_000.0;
+/// The reference's alert for a Width or Height typed past `1..=MAX_PX` px (#13358).
+const SIZE_RANGE_ALERT: &str = "A value between 1.00 Pixels and 300000.00 Pixels is required. Closest value inserted.";
+/// Set in the dialog's fields by [`body`] when a typed size was out of range; [`open_owed_alert`] takes it.
+const ALERT_OWED: &str = "__sizeRangeAlert";
 /// Remembered values (document pixels; sides and radii come from the options bar).
 const KEYS: [&str; 4] = ["width", "height", "fromCenter", "starRatio"];
 
@@ -183,6 +187,14 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     result
 }
 
+/// Opens the range alert when [`body`] noted an out-of-range Width or Height, once even if one is
+/// already showing.
+pub fn open_owed_alert(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
+    if f.remove(ALERT_OWED).is_some() {
+        crate::panels::options_bar::range_alert(&mut app.ui, SIZE_RANGE_ALERT);
+    }
+}
+
 /// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.
 const LABEL_MIN_W: f32 = 96.0;
 const LABEL_MAX_W: f32 = 200.0;
@@ -214,7 +226,18 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let to_unit = |px: f64| unit.from_px(px, dpi, extent, ppi) as f32;
             let mut v = to_unit(px);
             let places = unit.decimals() as u32;
-            let resp = crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places).accessible_name(text);
+            let range = to_unit(1.0)..=to_unit(MAX_PX);
+            // Create Triangle's pixel fields say when a typed size was out of range (#13358); the other
+            // units and the other shapes' dialogs keep clamping silently.
+            let (resp, out_of_range) = if unit == Unit::Pixels && kind == "triangle" {
+                crate::widgets::value_field_alerting_prec(ui, text, &mut v, range, unit.suffix(), 110.0, places)
+            } else {
+                (crate::widgets::value_field_prec(ui, &mut v, range, unit.suffix(), 110.0, places), false)
+            };
+            let resp = resp.accessible_name(text);
+            if out_of_range {
+                f.insert(ALERT_OWED.into(), Value::Bool(true));
+            }
             if resp.changed() {
                 let px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, MAX_PX);
                 f.insert(key.into(), json!((px * 1000.0).round() / 1000.0));
@@ -298,3 +321,6 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod create_triangle_range_alert_tests;

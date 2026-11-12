@@ -318,7 +318,10 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::snapshot_dialog::owns(fields) => crate::snapshot_dialog::body(ui, fields),
         _ if crate::channel_options_ui::owns(fields) => crate::channel_options_ui::body(ui, fields),
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
-        _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
+        _ if crate::shape_dialog::owns(fields) => {
+            crate::shape_dialog::body(app, ui, fields);
+            crate::shape_dialog::open_owed_alert(app, fields);
+        }
         _ if delete_prompt(fields) => delete_prompt_body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
