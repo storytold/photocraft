@@ -458,24 +458,38 @@ pub const HAND_MENU: &[Row] = &[
 /// the view itself.
 pub const FILL_SCREEN: &str = "view.fillScreen";
 
+/// A selection menu: the rows every selection menu shares, with `$fills` (the rows between
+/// Transform Selection and Last Filter) in its own order.
+macro_rules! selection_menu {
+    ($($fills:expr),* $(,)?) => {
+        &[
+            Some(("Deselect", "select.deselect")),
+            Some(("Select Inverse", "select.inverse")),
+            Some(("Feather…", "select.modify.feather")),
+            Some(("Select and Mask…", "select.selectAndMask")),
+            None,
+            Some(("Save Selection…", "select.saveSelection")),
+            Some(("Make Work Path…", "select.toWorkPath")),
+            None,
+            Some(("Layer Via Copy", "layer.new.layerViaCopy")),
+            Some(("Layer Via Cut", "layer.new.layerViaCut")),
+            Some(("New Layer…", "layer.new.layer")),
+            None,
+            Some(("Free Transform", "edit.freeTransform")),
+            Some(("Transform Selection", "select.transformSelection")),
+            $($fills,)*
+            None,
+            Some(("Last Filter", "filter.lastFilter")),
+            None,
+            Some(("Fade…", "edit.fade")),
+        ]
+    };
+}
+
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
 /// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
 /// their menu-bar twins.
-pub const SELECTION_MENU: &[Row] = &[
-    Some(("Deselect", "select.deselect")),
-    Some(("Select Inverse", "select.inverse")),
-    Some(("Feather…", "select.modify.feather")),
-    Some(("Select and Mask…", "select.selectAndMask")),
-    None,
-    Some(("Save Selection…", "select.saveSelection")),
-    Some(("Make Work Path…", "select.toWorkPath")),
-    None,
-    Some(("Layer Via Copy", "layer.new.layerViaCopy")),
-    Some(("Layer Via Cut", "layer.new.layerViaCut")),
-    Some(("New Layer…", "layer.new.layer")),
-    None,
-    Some(("Free Transform", "edit.freeTransform")),
-    Some(("Transform Selection", "select.transformSelection")),
+pub const SELECTION_MENU: &[Row] = selection_menu![
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
     None,
@@ -483,10 +497,6 @@ pub const SELECTION_MENU: &[Row] = &[
     Some(("Fill…", "edit.fill")),
     Some(("Stroke…", "edit.stroke")),
     Some(("Content-Aware Fill…", "edit.contentAwareFill")),
-    None,
-    Some(("Last Filter", "filter.lastFilter")),
-    None,
-    Some(("Fade…", "edit.fade")),
 ];
 
 /// The selection tools' context menu with nothing selected: making a selection.
@@ -498,8 +508,41 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     Some(("Load Selection…", "select.loadSelection")),
 ];
 
+/// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
+/// tool's canvas menu on a marker or off one (#11772), and the Red Eye tool's without a selection. Each row is enabled as the Layers panel
+/// menu enables it for the active layer (`menus::is_enabled`) and runs like the menu item.
+pub const COUNT_MENU: &[Row] = &[
+    Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
+    None,
+    Some(("Duplicate Layer…", "layer.duplicate")),
+    Some(("Delete Layer", "layer.delete")),
+    Some(("Group from Layers…", "layer.new.groupFromLayers")),
+    None,
+    Some(("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")),
+    Some(("Convert to Layers", "layer.smartObjects.convertToLayers")),
+    None,
+    Some(("Rasterize Layer", "layer.rasterize.layer")),
+    Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")),
+    None,
+    Some(("Free Transform", "edit.freeTransform")),
+    None,
+    Some(("Color Range…", "select.colorRange")),
+    Some(("Load Selection…", "select.loadSelection")),
+    Some(("Reselect", "select.reselect")),
+];
+
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
+
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577):
+/// no Distort or Perspective, and Delete and Fill Selection after the fills.
+pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
+    None,
+    Some(("Fill…", "edit.fill")),
+    Some(("Stroke…", "edit.stroke")),
+    Some(("Content-Aware Fill…", "edit.contentAwareFill")),
+    Some(("Delete and Fill Selection", "edit.deleteAndFillSelection")),
+];
 
 /// The Eyedropper's copy rows (#11747).
 pub const EYEDROPPER_COPY_HTML: &str = "canvasMenu.eyedropper.copyHtml";
@@ -651,8 +694,31 @@ fn cam_allowed(app: &PhotocraftApp) -> bool {
     app.session.active().is_some_and(|s| !matches!(s.doc.mode, ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel))
 }
 
+/// Is document point `d` on the image and inside the active selection?
+fn selected_at(app: &PhotocraftApp, d: [f64; 2]) -> bool {
+    d.iter().all(|v| v.is_finite())
+        && d[0] >= 0.0
+        && d[1] >= 0.0
+        && app.session.active().is_some_and(|s| {
+            d[0] < f64::from(s.doc.size.width)
+                && d[1] < f64::from(s.doc.size.height)
+                && s.doc.selection.as_ref().is_some_and(|sel| sel.sample_channel(d[0].floor() as i32, d[1].floor() as i32, 0) >= 0.5)
+        })
+}
+
+/// Does a Red Eye right-click at `doc` open a menu (#12577)? Only where the reference application
+/// was measured: an RGB document whose one layer is a pixel layer, with no selection or the pointer
+/// inside it. Elsewhere it keeps opening nothing.
+fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
+    app.session.active().is_some_and(|s| {
+        s.doc.mode == ColorMode::Rgb
+            && matches!(s.doc.layers.as_slice(), [l] if matches!(l.content, LayerContent::Raster(_)) && l.frame.is_none())
+            && (s.doc.selection.is_none() || doc.is_some_and(|d| selected_at(app, d)))
+    })
+}
+
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
-/// Content-Aware Move menu, the path menu and the Color Sampler's.
+/// Content-Aware Move menu, the path menu, the Color Sampler's and the Red Eye tool's.
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -669,9 +735,13 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
             | Tool::ColorSampler
+            // The layer menu (#11772).
+            | Tool::Count
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
+            // The layer or selection menu, where measured (#12577).
+            | Tool::RedEye
     ) || path_menu(tool)
 }
 
@@ -723,6 +793,10 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         PEN_MENU
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if menu.tool == Tool::Count {
+        COUNT_MENU
+    } else if menu.tool == Tool::RedEye {
+        if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
     } else if inside_selection(menu) {
@@ -1166,23 +1240,16 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         crate::color_hud::release(&mut app.ui);
         return false;
     }
+    if tool == Tool::RedEye && !red_eye_measured(app, doc) {
+        return false;
+    }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
-    let inside_selection = tool == Tool::ContentAwareMove
-        && doc.is_some_and(|d| {
-            d.iter().all(|v| v.is_finite())
-                && d[0] >= 0.0
-                && d[1] >= 0.0
-                && app.session.active().is_some_and(|s| {
-                    d[0] < f64::from(s.doc.size.width)
-                        && d[1] < f64::from(s.doc.size.height)
-                        && s.doc.selection.as_ref().is_some_and(|sel| sel.sample_channel(d[0].floor() as i32, d[1].floor() as i32, 0) >= 0.5)
-                })
-        });
+    let inside_selection = tool == Tool::ContentAwareMove && doc.is_some_and(|d| selected_at(app, d));
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
     // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
@@ -1676,7 +1743,10 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
 #[cfg(test)]
 mod cam_menu_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+
+#[cfg(test)]
+pub(crate) mod count_tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
