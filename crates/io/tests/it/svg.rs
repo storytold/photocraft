@@ -380,8 +380,7 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
             let r = open(&embed(svg::MAX_XML_DEPTH - 1, svg::MAX_XML_DEPTH - 1));
             assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
             // Within the shared budget the embedded drawing renders (its rect is black).
-            let within = (svg::MAX_XML_DEPTH - 4) / 2;
-            let r = open(&embed(within, within));
+            let r = open(&embed(250, 250));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
         })
         .unwrap()
@@ -389,21 +388,78 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
         .unwrap();
 }
 
-/// The old 512-level allowance reached usvg's recursive conversion and aborted on a 1 MiB
-/// stack. Reject that formerly accepted input before conversion in both import paths, while
-/// still drawing a document at the current nesting boundary on the same small stack.
+/// Accepted maximum-depth markup and deep embedded drawings must render correctly on the caller's unchanged small stack.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn formerly_accepted_svg_depth_is_refused_before_recursive_conversion() {
+fn accepted_deep_svg_and_embedded_children_do_not_exhaust_a_small_caller_stack() {
     std::thread::Builder::new()
         .stack_size(1 << 20)
         .spawn(|| {
-            let deep = nested(510);
-            assert!(matches!(import("deep.svg", deep.as_bytes()), Err(IoError::Svg(_))));
-            assert!(matches!(svg::rasterize_bounded(deep.as_bytes(), 1.0, 64), Err(IoError::Svg(_))));
-            let legal = nested(svg::MAX_XML_DEPTH - 2);
-            assert!(close(px(&open(&legal).document, 4, 4), [0.0, 0.0, 0.0, 1.0]));
-            let rendered = svg::rasterize_bounded(legal.as_bytes(), 1.0, 64).unwrap();
-            assert!(rendered.px[4 * 8 + 4][3] > 0.99);
+            let top = nested(svg::MAX_XML_DEPTH - 1);
+            let imported = open(&top);
+            assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "near-limit top-level shape must remain visible");
+            let (_, _, pixels) = svg::rasterize_rgba8(top.as_bytes()).unwrap();
+            assert_eq!(&pixels[(4 * 8 + 4) * 4..(4 * 8 + 4) * 4 + 4], &[0, 0, 0, 255]);
+            let (preview, _) = svg::import_svg_preview_with_work("drawing.svg", top.as_bytes(), u64::MAX).unwrap();
+            assert!(close(px(&preview.document, 4, 4), [0., 0., 0., 1.]), "near-limit preview shape must remain visible");
+            // The outer drawing alone is shallow. Its decoded child must receive the same
+            // isolation as a deep top-level drawing, without increasing the shared depth cap.
+            for inner in [126, 500] {
+                let url = base64_data_url("image/svg+xml", nested(inner).as_bytes());
+                let embedded = format!("<svg {NS} width=\"8\" height=\"8\"><g><image width=\"8\" height=\"8\" href=\"{url}\"/></g></svg>");
+                let imported = open(&embedded);
+                assert!(close(px(&imported.document, 4, 4), [0., 0., 0., 1.]), "shallow outer/deep child {inner} must remain visible");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Multiple children and opacity retain the groups: parsing alone on a worker is insufficient.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn retained_deep_svg_groups_lower_render_and_drop_on_a_bounded_worker() {
+    // Native document compositing has its own recursive stack requirements. Keep only this
+    // independent pixel oracle off the small caller; SVG APIs and native document destruction
+    // below must still complete there, with all retained groups intact.
+    let pixel = |doc: &photocraft_doc::Document| {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("svg-native-pixel-oracle".into())
+                .stack_size(8 << 20)
+                .spawn_scoped(scope, || px(doc, 0, 0))
+                .unwrap()
+                .join()
+                .unwrap()
+        })
+    };
+    std::thread::Builder::new()
+        .stack_size(512 << 10)
+        .spawn(move || {
+            let source = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(500),
+                "</g>".repeat(500)
+            );
+            let imported = svg::import_svg("retained.svg", source.as_bytes()).unwrap();
+            assert_eq!(imported.document.max_group_depth(), 100);
+            assert!(pixel(&imported.document)[3] > 0.5);
+            let (preview, _) = svg::import_svg_preview_with_work("retained.svg", source.as_bytes(), u64::MAX).unwrap();
+            assert_eq!(preview.document.max_group_depth(), 100);
+            assert!(pixel(&preview.document)[3] > 0.5);
+            // Whole-drawing rasterisation refuses more than 200 nested layers (#10953) with an
+            // error, not a crash; a drawing within that limit still renders on this small stack.
+            let refused = svg::rasterize_rgba8(source.as_bytes()).unwrap_err().to_string();
+            assert!(refused.contains("layers are nested too deeply"), "{refused}");
+            let within = format!(
+                "<svg {NS} width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+                "<g opacity=\"0.99\"><rect width=\"1\" height=\"1\"/>".repeat(150),
+                "</g>".repeat(150)
+            );
+            let (w, h, pixels) = svg::rasterize_rgba8(within.as_bytes()).unwrap();
+            assert_eq!((w, h), (8, 8));
+            assert!(pixels[3] > 127);
         })
         .unwrap()
         .join()
@@ -637,14 +693,11 @@ fn a_costly_filter_past_the_pattern_recursion_cutoff_is_refused() {
     let e = import("x.svg", deep.as_bytes()).err().unwrap_or_else(|| panic!("opened a costly filter 210 patterns deep"));
     assert!(matches!(&e, IoError::Svg(m) if m.contains("too costly")), "{e}");
     assert!(svg::rasterize(deep.as_bytes(), 1.0).is_err());
-    // A short chain with an ordinary filter and groups within the XML nesting budget still open.
+    // A short chain with an ordinary filter still opens, and so do groups nested past the cutoff.
     assert!(!open(&chain(4, "<feGaussianBlur stdDeviation=\"2\"/>")).document.layers.is_empty());
-    let groups = |depth: usize| {
-        format!("<svg {NS} width=\"10\" height=\"10\">{}<rect width=\"10\" height=\"10\"/>{}</svg>", "<g opacity=\"0.99\">".repeat(depth), "</g>".repeat(depth))
-    };
-    assert!(!open(&groups(svg::MAX_XML_DEPTH - 2)).document.layers.is_empty());
-    // The smaller stack-safe allowance rejects the formerly accepted 250-level drawing.
-    assert!(matches!(import("groups.svg", groups(250).as_bytes()), Err(IoError::Svg(m)) if m.contains("nested")));
+    let groups =
+        format!("<svg {NS} width=\"10\" height=\"10\">{}<rect width=\"10\" height=\"10\"/>{}</svg>", "<g opacity=\"0.99\">".repeat(250), "</g>".repeat(250));
+    assert!(!open(&groups).document.layers.is_empty());
 }
 
 #[test]
@@ -716,13 +769,14 @@ fn image_hrefs_to_local_files_are_never_read() {
 /// A depth-limited embedded image can be omitted, but ordinary and bounded imports report it.
 #[test]
 fn omitted_embedded_svg_depth_is_reported_without_losing_valid_siblings() {
-    let inner = base64_data_url("image/svg+xml", nested(70).as_bytes());
+    let depth = svg::MAX_XML_DEPTH / 2;
+    let inner = base64_data_url("image/svg+xml", nested(depth).as_bytes());
     let images = format!("<image width=\"8\" height=\"8\" href=\"{inner}\"/>").repeat(2);
     let xml = format!(
         "<svg {NS} width=\"16\" height=\"8\">{}{}{}<rect x=\"8\" width=\"8\" height=\"8\" fill=\"blue\"/></svg>",
-        "<g>".repeat(60),
+        "<g>".repeat(depth),
         images,
-        "</g>".repeat(60)
+        "</g>".repeat(depth)
     );
     for result in [import("depth.svg", xml.as_bytes()).unwrap(), svg::import_svg_bounded("depth", xml.as_bytes(), 128).unwrap()] {
         assert!(px(&result.document, 4, 4)[3] < 0.01);
