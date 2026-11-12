@@ -11,7 +11,7 @@ use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use crate::commands::{blend_from_str, color_param, layer_param};
+use crate::commands::{blend_from_str, cmyk_param, color_param, layer_param};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -108,7 +108,14 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         "foreground" => color_source(s, s.tools.foreground),
         // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
         "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background)),
-        "color" => color_source(s, color_param(CMD, p, "color", s.tools.foreground)?),
+        "color" => {
+            let rgba = color_param(CMD, p, "color", s.tools.foreground)?;
+            match cmyk_param(CMD, p, "colorCmyk")? {
+                Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
+                Some(_) => return Err(bad("`colorCmyk` requires an opaque color")),
+                None => color_source(s, rgba),
+            }
+        }
         "black" => Source::Color([0.0, 0.0, 0.0, 1.0]),
         "gray" => Source::Color([128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]),
         "white" => Source::Color([1.0; 4]),

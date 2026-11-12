@@ -68,7 +68,7 @@ pub mod zoom_window_fit;
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{
     alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
-    precise_other_cursor, sampler_hover_cursor,
+    precise_other_cursor, sampled_cmyk_color, sampler_hover_cursor,
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;

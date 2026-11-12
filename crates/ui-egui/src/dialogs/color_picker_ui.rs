@@ -306,7 +306,23 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         .or_else(|| d.fields.get("__pickColorDefault").and_then(Value::as_str).and_then(parse_hex))
         .unwrap_or([0.0; 3]);
     d.fields.remove("__pickColorDefault");
-    open_for_field(app, &title, rgb, id, &field);
+
+    let cmyk = if field == "color" && crate::fill_ui::owns(&d.fields) {
+        d.fields
+            .get("colorCmyk")
+            .and_then(|v| serde_json::from_value::<[f32; 4]>(v.clone()).ok())
+            .filter(|inks| hex(photocraft_color::convert::cmyk_to_rgb(*inks)) == hex(rgb))
+    } else {
+        None
+    };
+
+    let picker_id = open_for_field(app, &title, rgb, id, &field);
+
+    if let Some(inks) = cmyk {
+        if let Some(picker) = app.ui.dialog_mut(picker_id) {
+            seed_cmyk(&mut picker.fields, inks);
+        }
+    }
 }
 
 pub fn owns(f: &Map<String, Value>) -> bool {
@@ -330,9 +346,14 @@ pub fn top(app: &PhotocraftApp) -> Option<u64> {
 /// point (x, y). Off the image or over transparency nothing changes.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) {
     let Some(id) = top(app) else { return };
-    let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };
+    let (rgb, keep) = if let Some((rgb, inks)) = crate::canvas::sampled_cmyk_color(app, x, y, "all") {
+        (rgb, Keep::Cmyk(inks))
+    } else {
+        let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };
+        (rgb, Keep::Nothing)
+    };
     if let Some(d) = app.ui.dialog_mut(id) {
-        set_rgb(&mut d.fields, rgb, Keep::Nothing);
+        set_rgb(&mut d.fields, rgb, keep);
     }
 }
 
@@ -767,7 +788,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = (cmyk[i] * 100.0).round();
                 if widgets::value_field(ui, &mut x, 0.0..=100.0, "", VALUE_W).accessible_name(tl!(&label)).changed() {
-                    let mut k = cmyk;
+                    let mut k = cmyk.map(|v| (v * 100.0).round() / 100.0);
                     k[i] = x / 100.0;
                     edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
                 }
@@ -998,8 +1019,23 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         let (Some(dialog), Some(field)) = (f.get("__dialog").and_then(Value::as_u64), f.get("__field").and_then(Value::as_str)) else {
             return Err("the Color Picker has no field to set".into());
         };
+
+        let cmyk = parse_hex(color).and_then(|rgb| kept::<4>(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb));
+
         let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
         set_field(&mut d.fields, field, json!(color))?;
+
+        if crate::fill_ui::owns(&d.fields) && field == "color" {
+            match cmyk {
+                Some(inks) => {
+                    d.fields.insert("colorCmyk".into(), json!(inks));
+                }
+                None => {
+                    d.fields.remove("colorCmyk");
+                }
+            }
+        }
+
         return Ok(json!({ "color": color }));
     }
     if target == "widget" {

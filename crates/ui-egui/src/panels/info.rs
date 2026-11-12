@@ -74,10 +74,26 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         row(&mut cols[0], "R:", rgba.map_or_else(dash, |c| q(c[0]).to_string()));
         row(&mut cols[0], "G:", rgba.map_or_else(dash, |c| q(c[1]).to_string()));
         row(&mut cols[0], "B:", rgba.map_or_else(dash, |c| q(c[2]).to_string()));
-        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as
-        // the Color Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk =
-            rgba.map(|c| photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2])));
+        // Display native CMYK ink percentages when supported, matching the Eyedropper
+        // and Color Sampler. Fall back to colour-managed RGB-to-CMYK conversion
+        // for RGB documents and unsupported CMYK compositions.
+        let cmyk = rgba.map(|c| {
+            let native = pos.and_then(|(x, y)| {
+                photocraft_engine::sample_cmds::sample_cmyk_at(
+                    &app.session.active()?.doc,
+                    app.session.active()?.active_layer,
+                    f64::from(x) + 0.5,
+                    f64::from(y) + 0.5,
+                    app.ui.tool_options.eyedropper_size,
+                    Some(f64::from(app.current_zoom())),
+                    photocraft_engine::sample_cmds::SampleLayers::All,
+                )
+            });
+
+            native.map(|inks| inks.map(|v| (v.clamp(0.0, 1.0) * 100.0).round() as i32)).unwrap_or_else(|| {
+                photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2]))
+            })
+        });
         for (i, k) in ["C:", "M:", "Y:", "K:"].iter().enumerate() {
             row(&mut cols[1], k, cmyk.map_or_else(dash, |c| format!("{}%", c[i])));
         }

@@ -218,6 +218,49 @@ fn averaging_model(doc: &Document) -> ColorMode {
     }
 }
 
+/// The sampled document's native CMYK inks, before display conversion (#11640).
+/// Uses the same layers and zoom-dependent box as the Eyedropper. Coverage weights the
+/// mean, and integer documents round it to their channel precision.
+///
+/// Unsupported stacks keep the existing RGB pick. In particular, do not enter the ink
+/// compositor's whole-document split route on every pointer move (see #11681).
+pub fn sample_cmyk_at(doc: &Document, active: Option<LayerId>, x: f64, y: f64, size: u32, zoom: Option<f64>, which: SampleLayers) -> Option<[f32; 4]> {
+    if doc.mode != ColorMode::Cmyk {
+        return None;
+    }
+    let rect = sample_rect_at(x, y, size, zoom, doc.bounds())?;
+    let src = sampled_document(doc, active, which)?;
+    if !photocraft_compose::cmyk::supports(&src) {
+        return None;
+    }
+    let mut sum = [0.0f64; 4];
+    let mut coverage = 0.0f64;
+    // A zoomed-out sample can span thousands of rows. Retain only a bounded band.
+    photocraft_compose::cmyk::render_cmyk_bands(&src, rect, 32, |band| {
+        for [c, m, y, k, a] in band.px {
+            if !a.is_finite() || a <= 0.0 {
+                continue;
+            }
+            let inks = [c, m, y, k];
+            if inks.iter().any(|v| !v.is_finite()) {
+                return Err(());
+            }
+            let weight = f64::from(a.clamp(0.0, 1.0));
+            for (s, ink) in sum.iter_mut().zip(inks) {
+                *s += f64::from(ink.clamp(0.0, 1.0)) * weight;
+            }
+            coverage += weight;
+        }
+        Ok(())
+    })?
+    .ok()?;
+    (coverage > 0.0).then(|| sum.map(|s| quantize((s / coverage) as f32, doc.depth)))
+}
+
+#[cfg(test)]
+#[path = "sample_cmds/cmyk_pick_tests.rs"]
+mod cmyk_pick_tests;
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }

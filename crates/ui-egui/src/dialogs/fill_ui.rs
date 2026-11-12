@@ -28,7 +28,7 @@ pub const CONTENTS: [(&str, &str); 9] = [
 ];
 
 /// Params the dialog edits and remembers.
-const KEYS: [&str; 7] = ["contents", "color", "pattern", "colorAdaptation", "mode", "opacity", "preserveTransparency"];
+const KEYS: [&str; 8] = ["contents", "color", "colorCmyk", "pattern", "colorAdaptation", "mode", "opacity", "preserveTransparency"];
 
 /// Is this dialog the Fill dialog?
 pub fn owns(fields: &Map<String, Value>) -> bool {
@@ -46,6 +46,7 @@ fn valid(app: &PhotocraftApp, key: &str, v: &Value) -> bool {
         "contents" => v.as_str().is_some_and(|c| CONTENTS.iter().any(|(k, _)| *k == c)),
         "mode" | "opacity" | "preserveTransparency" => crate::dialog_blend_ui::valid(key, v),
         "color" => v.as_str().is_some_and(|h| h.len() == 7 && h.starts_with('#') && h.get(1..).is_some_and(|d| d.chars().all(|c| c.is_ascii_hexdigit()))),
+        "colorCmyk" => v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|x| x.as_f64().is_some_and(|n| n.is_finite() && (0.0..=1.0).contains(&n)))),
         "pattern" => v.as_str().is_some_and(|p| app.session.patterns.items.iter().any(|q| q.id == p)),
         "colorAdaptation" => v.is_boolean(),
         _ => false,
@@ -131,6 +132,11 @@ pub fn params(f: &Map<String, Value>) -> Value {
         && let Some(v) = f.get(k)
     {
         p[k] = v.clone();
+    }
+    if contents == "color" {
+        if let Some(cmyk) = f.get("colorCmyk") {
+            p["colorCmyk"] = cmyk.clone();
+        }
     }
     if let Some(target) = f.get("__target") {
         p["target"] = target.clone();

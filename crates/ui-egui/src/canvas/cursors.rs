@@ -327,6 +327,17 @@ mod brush_shift_alt_sampler_tests;
 /// Sample the image or targeted raster mask at (x, y) using the configured Sample Size.
 /// Write a valid sample to the foreground swatch, or to the background swatch with Alt.
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    // Pixel picks carry the inks alongside their display RGB, as typed CMYK colours do.
+    // Masks and other scalar targets must keep their grayscale sampling path.
+    if eyedropper_mask_source(app).is_none() && super::paint_target(app) == json!("pixels") {
+        let layers = app.ui.tool_options.eyedropper_sample.clone();
+        if let Some((rgb, inks)) = sampled_cmyk_color(app, x, y, &layers) {
+            let key = if mods.alt { "background" } else { "foreground" };
+            let ink_key = format!("{key}Cmyk");
+            let _ = app.run("tools.setColors", json!({key: [rgb[0], rgb[1], rgb[2], 1.0], ink_key: inks}));
+            return;
+        }
+    }
     let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
         sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
     } else {
@@ -401,6 +412,30 @@ pub(crate) fn eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Optio
 pub(crate) fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
     sample_color(app, x, y, "all")
 }
+
+/// A CMYK image pick with its native inks and the RGB stand-in the tool colour stores.
+/// Derive that stand-in from the retained inks so reopening the picker and painting
+/// use the same colour, including averaged samples and the document's ICC profile.
+pub(crate) fn sampled_cmyk_color(app: &PhotocraftApp, x: f64, y: f64, sample_layer: &str) -> Option<([f32; 3], [f32; 4])> {
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_cmyk_at};
+    let st = app.session.active()?;
+    let inks = sample_cmyk_at(
+        &st.doc,
+        st.active_layer,
+        x,
+        y,
+        app.ui.tool_options.eyedropper_size,
+        Some(f64::from(app.current_zoom())),
+        SampleLayers::parse(sample_layer)?,
+    )?;
+    let space = photocraft_compose::cmyk_space(&st.doc);
+    let rgb = photocraft_color::convert::with_cmyk_space(space.as_ref(), || photocraft_color::convert::cmyk_to_rgb(inks));
+    Some((rgb.map(|v| v.clamp(0.0, 1.0)), inks))
+}
+
+#[cfg(test)]
+#[path = "../eyedropper_cmyk_tests.rs"]
+mod eyedropper_cmyk_tests;
 
 pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
     mods.alt && !mods.ctrl && tool == Tool::MixerBrush
