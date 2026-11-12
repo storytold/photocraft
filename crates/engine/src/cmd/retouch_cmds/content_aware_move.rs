@@ -703,9 +703,9 @@ impl ContentAwarePreview {
 }
 
 /// Prepare the preview of `paint.contentAwareMove` with params `p` on the active document. Errors
-/// as the command does (bad params, nothing to move, a selection larger than the command takes), except
-/// that the landing check (a selected pixel on the canvas, which can scan the whole selection) runs in
-/// the job ([`ContentAwarePreview::run`]), off the UI thread.
+/// as the command does (bad params, nothing to move, a selection larger than the command takes); the
+/// landing check (a selected pixel on the canvas, which can scan the whole selection) runs in the job, as
+/// the command's does ([`ContentAwarePreview::run`]), off the UI thread.
 pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
     let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
     let p = &captured;
