@@ -382,9 +382,9 @@ mod add_anchor_lock_tests;
 #[cfg(test)]
 mod add_anchor_targeted_path_tests;
 #[cfg(test)]
-mod delete_anchor_drag_tests;
-#[cfg(test)]
 mod delete_anchor_drag_segment_tests;
+#[cfg(test)]
+mod delete_anchor_drag_tests;
 #[cfg(test)]
 mod delete_anchor_live_shape_tests;
 #[cfg(test)]
