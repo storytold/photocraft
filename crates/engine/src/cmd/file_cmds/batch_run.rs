@@ -342,7 +342,7 @@ pub(super) fn process_document_copies(
             Ok(())
         };
         let notices = std::cell::RefCell::new(Vec::new());
-        let input = InputPolicy { prepare: &prepare, notices: &notices };
+        let input = InputPolicy { prepare: &prepare, notices: &notices, save_and_close: false };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
         let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input) };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
