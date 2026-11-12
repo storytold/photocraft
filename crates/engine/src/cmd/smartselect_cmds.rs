@@ -290,22 +290,22 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
     };
     let (w, h) = (bbox.width() as usize, bbox.height() as usize);
     let (a, b) = (SOFT_EDGE_SELF, 1.0 - SOFT_EDGE_SELF);
-    // Horizontal pass over the box's rows and the one above it, which the vertical pass reads.
-    let mut tmp = vec![0.0f64; w * (h + 1)];
-    for (y, row) in (bbox.y0.saturating_sub(1)..).zip(tmp.chunks_exact_mut(w)) {
-        for (x, t) in (bbox.x0..).zip(row.iter_mut()) {
-            *t = a * at(x, y) + b * at(x.saturating_sub(1), y);
-        }
-    }
     let (lo, hi) = SOFT_EDGE_RAMP;
-    let mask = tmp
-        .windows(2 * w)
-        .step_by(w)
-        .flat_map(|pair| {
-            let (above, row) = pair.split_at(w);
-            row.iter().zip(above).map(move |(m, u)| (((a * m + b * u - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8)
-        })
-        .collect();
+    // The vertical pass reads only the row above, so the horizontal pass keeps two rows, not the
+    // whole box: a large found object costs its 8-bit mask, not eight bytes a pixel more.
+    let horizontal = |y: i32, row: &mut Vec<f64>| {
+        row.clear();
+        row.extend((bbox.x0..).take(w).map(|x| a * at(x, y) + b * at(x.saturating_sub(1), y)));
+    };
+    let (mut above, mut row) = (Vec::with_capacity(w), Vec::with_capacity(w));
+    let mut rows = bbox.y0.saturating_sub(1)..;
+    horizontal(rows.next().unwrap_or(bbox.y0), &mut above);
+    let mut mask = Vec::with_capacity(w * h);
+    for y in rows.take(h) {
+        horizontal(y, &mut row);
+        mask.extend(row.iter().zip(&above).map(|(m, u)| (((a * m + b * u - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8));
+        std::mem::swap(&mut above, &mut row);
+    }
     trimmed(Region { bbox, mask }, w)
 }
 
