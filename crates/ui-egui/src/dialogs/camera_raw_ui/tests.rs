@@ -91,6 +91,105 @@ fn closing_the_camera_raw_window_cancels() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
+/// Over a full-screen main window (or a maximized one on Wayland) the dialog is drawn in that
+/// window, not in a window of its own: a separate window would cover the main one, which then
+/// draws no frames, and the dialog drawn inside those frames would freeze.
+#[test]
+fn camera_raw_stays_in_a_full_screen_or_wayland_maximized_window() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    ctx.set_embed_viewports(false);
+    // Stands in for the desktop backend: records each window the dialog asks for and draws it,
+    // as eframe does, in a frame of its own.
+    let windows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = std::rc::Rc::clone(&windows);
+    egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+        seen.borrow_mut().push(viewport.ids.this);
+        let mut input = egui::RawInput { viewport_id: viewport.ids.this, ..Default::default() };
+        input.viewports.insert(viewport.ids.this, egui::ViewportInfo::default());
+        ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui)).textures_delta.clear();
+    });
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+
+    // (Wayland, full screen, maximized, a window of its own)
+    for (wayland, fullscreen, maximized, own_window) in [
+        (false, false, false, true),
+        (true, false, false, true),
+        (false, true, false, false),
+        (true, true, false, false),
+        (false, false, true, true),
+        (true, false, true, false),
+    ] {
+        app.services.is_wayland = wayland;
+        windows.borrow_mut().clear();
+        app.camera_raw.as_mut().unwrap().viewport = None;
+        let mut input = egui::RawInput::default();
+        let root = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        (root.fullscreen, root.maximized) = (Some(fullscreen), Some(maximized));
+        ctx.run_ui(input, |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+        let case = format!("wayland {wayland}, full screen {fullscreen}, maximized {maximized}");
+        if own_window {
+            assert_eq!(*windows.borrow(), [window], "a window of its own ({case})");
+        } else {
+            assert!(windows.borrow().is_empty(), "no window of its own ({case})");
+        }
+        assert!(app.camera_raw.as_ref().unwrap().viewport.is_some(), "the dialog is drawn ({case})");
+    }
+}
+
+/// Coming back to PhotoCraft (⌘Tab, the Dock) can put the main window over Camera Raw's, or
+/// leave Camera Raw minimized: the main window gaining focus, or a click on its dimmed surface,
+/// restores Camera Raw's window and focuses it, once per activation.
+#[test]
+fn the_main_window_gaining_focus_or_a_click_raises_the_camera_raw_window() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    ctx.set_embed_viewports(false);
+    // A multi-window backend for this thread: Camera Raw gets a window of its own, as on a desktop,
+    // and the commands its window receives are recorded.
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = sent.clone();
+    egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
+        let id = immediate.ids.this;
+        let mut callback = immediate.viewport_ui_cb;
+        let input = egui::RawInput { viewport_id: id, viewports: std::iter::once((id, egui::ViewportInfo::default())).collect(), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| callback(ui));
+        out.textures_delta.clear();
+        if let Some(v) = out.viewport_output.get(&id) {
+            record.lock().unwrap().extend(v.commands.iter().cloned());
+        }
+    });
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+    let raised = [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus];
+    let frame = |app: &mut PhotocraftApp, focused: bool, events: Vec<egui::Event>| {
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(focused);
+        let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
+        let mut commands: Vec<_> = std::mem::take(&mut *sent.lock().unwrap());
+        commands.extend(out.viewport_output.get(&window).map(|v| v.commands.clone()).unwrap_or_default());
+        // Only the raising commands: the window also gets its own setup (title, size) from egui.
+        commands.retain(|c| matches!(c, egui::ViewportCommand::Minimized(_) | egui::ViewportCommand::Focus));
+        commands
+    };
+    assert!(frame(&mut app, false, Vec::new()).is_empty(), "Camera Raw's window is in front");
+    assert_eq!(frame(&mut app, true, Vec::new()), raised, "the main window came forward");
+    assert!(frame(&mut app, true, Vec::new()).is_empty(), "once per activation, so Camera Raw's own focus isn't fought");
+    let at = egui::pos2(400.0, 300.0);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    frame(&mut app, true, vec![egui::Event::PointerMoved(at), button(true)]);
+    let after_click = frame(&mut app, true, vec![button(false)]);
+    assert_eq!(after_click, raised, "a click on the dimmed main window");
+}
+
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
 fn worker_app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
