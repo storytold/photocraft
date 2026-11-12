@@ -36,6 +36,7 @@ mod menu_item;
 
 mod steps_artboard;
 mod steps_artboard_section;
+mod steps_automate;
 mod steps_batch;
 mod steps_calculations;
 mod steps_channels;
@@ -188,6 +189,9 @@ mod layer_props_tests;
 
 #[cfg(test)]
 mod layer_list_tests;
+
+#[cfg(test)]
+mod automate_tests;
 
 #[cfg(test)]
 mod stylize_tests;
