@@ -323,13 +323,16 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
     // On the proxy every mask is reduced the way its pixels are, so band and mask agree: the
     // combined and pixel masks with the proxy's own nearest-neighbour sampling, and the vector
     // mask (which the proxy leaves as it is) read at exactly the document pixels the proxy sampled.
-    // A pixel mask that reveals everything is skipped.
+    // A pixel mask that reveals everything is skipped, unless an enabled vector mask multiplies it.
     let combined = below
         .filter(|l| photocraft_compose::masks::has_feather(l))
         .and_then(|l| photocraft_compose::masks::combined_mask(l, doc.bounds()))
         .map(|s| if k > 1 { photocraft_compose::proxy::downsample(&s, k) } else { s });
     let pixel = match (source, &combined) {
-        (HistSource::BelowLayer(id), None) => d.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.enabled && !reveals_all(m)),
+        (HistSource::BelowLayer(id), None) => d
+            .layer(id)
+            .and_then(|l| l.mask.as_ref())
+            .filter(|m| m.enabled && (!reveals_all(m) || below.and_then(|l| l.vector_mask.as_ref()).is_some_and(|v| v.enabled))),
         _ => None,
     };
     let vector = match &combined {
@@ -1153,6 +1156,33 @@ mod tests {
         (s, id)
     }
 
+    /// #12325 review: a pixel mask that reveals on its own (0.6) is still multiplied by an enabled
+    /// vector mask (0.6 here), so 0.36 is hidden and nothing is counted; without the vector mask
+    /// the same pixel mask counts everything.
+    #[test]
+    fn a_pixel_mask_that_reveals_alone_still_counts_with_an_enabled_vector_mask() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("faint-pixel-mask", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let m = l.mask.as_mut().unwrap();
+            m.surface = photocraft_doc::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[0.6]);
+            Ok(())
+        })
+        .unwrap();
+        let source = HistSource::BelowLayer(id);
+        let alone = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(alone.pixel_count, 64 * 64, "the pixel mask alone reveals everything");
+        s.edit("faint-vector-mask", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let mut v = photocraft_doc::vector::VectorMask::new(photocraft_vector::shapes::rect(1000.0, 1000.0, 1.0, 1.0));
+            v.density = 0.4; // outside its path a vector mask reads 1 - density = 0.6
+            l.vector_mask = Some(v);
+            Ok(())
+        })
+        .unwrap();
+        let both = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(both.pixel_count, 0, "0.6 x 0.6 = 0.36 is hidden");
+    }
     #[test]
     fn vector_mask_limits_the_counted_area() {
         let (s, id) = vector_masked_adjustment(64, 64, 32);
