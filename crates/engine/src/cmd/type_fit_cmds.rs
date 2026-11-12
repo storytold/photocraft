@@ -178,6 +178,11 @@ fn release(s: &mut Session, p: &Value) -> Result<Value> {
             t.fit = None;
         } else {
             let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+            // Lines never solved (or solved for other text) would bake to nothing: the release
+            // would drop the fitted look and report success. Solve them first.
+            if !photocraft_text::fit::is_fitted_lines(t) {
+                photocraft_text::fit::refit(&mut eng, t, dpi);
+            }
             let baked = photocraft_text::fit::bake(&mut eng, t, dpi).map_err(|e| match e {
                 photocraft_text::fit::BakeError::Condensed => bad(RELEASE, CONDENSED),
                 e => bad(RELEASE, &format!("the fitted look cannot be kept as ordinary type: {e}")),

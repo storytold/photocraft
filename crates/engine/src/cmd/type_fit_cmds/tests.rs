@@ -233,6 +233,29 @@ fn release_keeps_sizes() {
     assert_eq!(run_sizes(&text(&s, id)), sizes);
 }
 
+/// A fitted layer whose lines were never solved (a file saved without them) still releases with
+/// its fitted look: the lines are solved first, instead of the release dropping the look.
+#[test]
+fn release_solves_missing_lines_before_baking() {
+    let (mut s, id) = session_with_box_text("Hello dynamic world of text", 12.0, [0.0, 0.0, 300.0, 150.0]);
+    s.execute("type.convertToDynamicText", json!({"layer": id.0})).unwrap();
+    let (hi, lo) = effective(&s, id);
+    s.edit("no lines", |doc, _| {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content)
+            && let Some(f) = t.fit.as_mut()
+        {
+            f.lines.clear();
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.releaseDynamicText", json!({"layer": id.0})).unwrap();
+    let t = text(&s, id);
+    assert!(t.fit.is_none());
+    let sizes = run_sizes(&t);
+    assert!(sizes.len() >= 2 && sizes.iter().all(|&v| v >= lo - 0.05 && v <= hi + 0.05), "{sizes:?} vs {lo}..{hi}");
+}
+
 #[test]
 fn release_without_keep_look_restores_the_text() {
     let (mut s, id) = session_with_box_text("Hello dynamic world of text", 12.0, [0.0, 0.0, 300.0, 150.0]);
