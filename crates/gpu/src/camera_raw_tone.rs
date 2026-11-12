@@ -660,6 +660,14 @@ struct DetailKey {
     mask: Option<Vec<u32>>,
 }
 
+impl DetailKey {
+    /// Whether the plan reads `fs_colour`'s luminance: luminance noise reduction filters it and
+    /// sharpening blurs it (or what the reduction made of it). Colour noise reduction alone doesn't.
+    fn reads_luma(&self) -> bool {
+        self.luminance.is_some() || self.sharpen.is_some()
+    }
+}
+
 impl PlanKey {
     fn new(s: &PerPixel) -> Self {
         let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
@@ -1237,11 +1245,13 @@ impl ToneFrame {
         // of itself), the chroma's (a Gaussian), then sharpening's blur and its mask's of the
         // reduced luminance. `camera_raw.wgsl` combines them.
         if let (Some(k), Some(d)) = (&key.detail, &self.detail) {
-            if let Some(luma) = &d.luma {
+            // The texture outlives the plan that made it: only a plan that reads it fills it.
+            let luma = d.luma.as_ref().filter(|_| k.reads_luma());
+            if let Some(luma) = luma {
                 b.filter(Pipe::DetailIn, full, full, [0, 0, 0, 0], &d.colored, None, luma);
             }
-            let mut reduced = d.luma.as_ref();
-            if let (Some([r, eps, keep]), Some(luma), Some(noise)) = (k.luminance, &d.luma, &d.noise) {
+            let mut reduced = luma;
+            if let (Some([r, eps, keep]), Some(luma), Some(noise)) = (k.luminance, luma, &d.noise) {
                 b.guided(full, r, f32::from_bits(eps), [luma, &noise[0], &noise[1]], Guided::Kept(f32::from_bits(keep)));
                 reduced = Some(&noise[1]);
             }
@@ -1305,5 +1315,26 @@ fn record(encoder: &mut wgpu::CommandEncoder, ops: &[Op], pipes: &TonePipelines,
                 wgpu::Extent3d { width: 1, height: 2, depth_or_array_layers: 1 },
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_algo::camera_raw::{CameraRaw, per_pixel};
+
+    fn reads_luma(p: &CameraRaw) -> bool {
+        let stages = per_pixel(p, 64, 48, false, None).expect("a per-pixel develop");
+        PlanKey::new(&stages).detail.expect("Detail's stages").reads_luma()
+    }
+
+    /// Colour noise reduction alone doesn't fill the luminance texture a sharpening or luminance
+    /// noise reduction frame left allocated (a full-frame pass nothing reads).
+    #[test]
+    fn only_luminance_noise_and_sharpening_read_the_luminance() {
+        assert!(!reads_luma(&CameraRaw { noise_color: 50.0, ..Default::default() }));
+        assert!(reads_luma(&CameraRaw { noise_luminance: 50.0, ..Default::default() }));
+        assert!(reads_luma(&CameraRaw { sharpen_amount: 80.0, ..Default::default() }));
+        assert!(reads_luma(&CameraRaw { noise_color: 50.0, sharpen_amount: 80.0, sharpen_masking: 40.0, ..Default::default() }));
     }
 }
