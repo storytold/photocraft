@@ -3,6 +3,7 @@
 //! wait their turn, and the commit takes the stroke's pixels once it is done.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -15,7 +16,12 @@ const M: egui::Modifiers = egui::Modifiers::NONE;
 /// A document with an empty layer and the Brush set up to paint a short stroke on it, with
 /// background work on, as on the desktop.
 fn app() -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app_with(Default::default())
+}
+
+/// [`app`] with `services`.
+fn app_with(services: crate::Services) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 160, "height": 60, "background": "#00ff00"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
@@ -159,30 +165,63 @@ fn a_commit_rendered_from_its_command_paints_with_the_release_colour_and_brush()
     assert!(app.session.tools.foreground[2] > 0.9, "blue stays picked for the next stroke");
 }
 
-/// Dropped values never wait in a queue longer than the bin's depth, and the call never waits:
-/// past that, each is freed on a thread of its own. Every one is freed in the end.
-#[test]
-fn a_full_drop_bin_frees_on_threads_of_its_own_without_waiting() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    struct Slow(Arc<AtomicBool>, Arc<AtomicUsize>);
-    impl Drop for Slow {
-        fn drop(&mut self) {
-            while !self.0.load(Ordering::Acquire) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            self.1.fetch_add(1, Ordering::AcqRel);
+/// A slow value to free: its drop waits for `go`, then counts itself.
+struct SlowDrop(Arc<AtomicBool>, Arc<AtomicUsize>);
+
+impl Drop for SlowDrop {
+    fn drop(&mut self) {
+        while !self.0.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(1));
         }
+        self.1.fetch_add(1, Ordering::AcqRel);
     }
+}
+
+/// A few values while the bin is busy: queued, then each on a thread of its own, and handing them
+/// over never waits. Every one is freed in the end.
+#[test]
+fn a_busy_drop_bin_frees_on_threads_of_its_own_without_waiting() {
+    let bin = super::paint_thread::DropBin::new(2, 2);
     let (go, freed) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
     let start = Instant::now();
-    for _ in 0..6 {
-        super::paint_thread::drop_elsewhere(Slow(go.clone(), freed.clone()));
+    // At most 2 waiting + the one the bin frees + 2 extra threads: never one freed here.
+    for _ in 0..4 {
+        bin.drop_elsewhere(SlowDrop(go.clone(), freed.clone()));
     }
     assert!(start.elapsed() < Duration::from_secs(2), "handing them over never waits for a drop");
     go.store(true, Ordering::Release);
-    while freed.load(Ordering::Acquire) < 6 {
-        assert!(start.elapsed() < Duration::from_secs(10), "all six are freed");
+    while freed.load(Ordering::Acquire) < 4 || bin.outstanding() > 0 {
+        assert!(start.elapsed() < Duration::from_secs(10), "all four are freed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Under sustained load the outstanding values stay bounded (2 waiting, the one the bin frees, 2
+/// extra threads): past that, a value is freed where it is handed over, so the caller waits for it
+/// instead of documents and threads piling up. Freeing where no thread can start takes the same
+/// path.
+#[test]
+fn a_drop_bin_under_sustained_load_stays_bounded() {
+    let bin = super::paint_thread::DropBin::new(2, 2);
+    let (go, freed) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+    let releaser = {
+        let go = go.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            go.store(true, Ordering::Release);
+        })
+    };
+    let start = Instant::now();
+    let mut peak = 0;
+    for _ in 0..12 {
+        bin.drop_elsewhere(SlowDrop(go.clone(), freed.clone()));
+        peak = peak.max(bin.outstanding());
+    }
+    assert!(peak <= 5, "at most 5 outstanding, saw {peak}");
+    assert!(start.elapsed() >= Duration::from_millis(250), "past the bound the caller waited for a drop");
+    releaser.join().unwrap();
+    while freed.load(Ordering::Acquire) < 12 || bin.outstanding() > 0 {
+        assert!(start.elapsed() < Duration::from_secs(10), "all twelve are freed");
         std::thread::sleep(Duration::from_millis(2));
     }
 }
@@ -251,4 +290,83 @@ fn nothing_else_lands_in_the_frame_a_stroke_commits() {
     assert!(app.drag.is_some(), "a press now paints");
     tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, M);
     finish(&mut app);
+}
+
+/// Commands queued behind a finishing stroke run in order once it lands; one that fails doesn't
+/// stop the rest, and its error is what the status bar shows afterwards, not hidden by a later
+/// success.
+#[test]
+fn a_queued_command_that_fails_is_reported_after_the_queue_runs() {
+    let mut app = app();
+    let steps = app.session.active().unwrap().history.past_len();
+    let release = release_while_the_thread_is_busy(&mut app);
+    for id in ["no.suchCommand", "layer.new.layer"] {
+        assert_eq!(app.run(id, json!({})).unwrap()["queued"], json!(true), "{id}: queued");
+    }
+    release();
+    finish(&mut app);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 2, "the stroke, then the new layer");
+    assert!(app.ui.status_error, "the failed command is reported: {}", app.ui.status);
+    assert!(!app.ui.status.is_empty());
+}
+
+/// The reply to `engine.execute` of `actions.play` "Save a copy" over the control channel.
+fn play_over_control(app: &mut PhotocraftApp, ctx: &egui::Context) -> serde_json::Value {
+    let (req, _rx) = crate::control::ControlRequest::new("engine.execute", json!({"command": "actions.play", "params": {"action": "Save a copy"}}));
+    match crate::control::handle(app, ctx, &req) {
+        crate::control::Outcome::Done(v) => v,
+        _ => panic!("engine.execute: expected an immediate reply"),
+    }
+}
+
+/// An `actions.play` sent over the control channel while a stroke finishes is refused with an
+/// error to retry, never queued (queued, it would run after the request, outside its gate). Its
+/// retry once the stroke has landed runs under the request's automation gate: a `file.saveACopy`
+/// step is refused, and nothing is written at any point. The gate here refuses `file.*` the way
+/// the desktop's does (`authorize_desktop_engine_step`, in `photocraft-automation`, which this
+/// crate doesn't depend on).
+#[test]
+fn an_actions_play_over_control_never_writes_during_or_after_a_stroke() {
+    fn deny_files(id: &str, _: &serde_json::Value) -> photocraft_engine::Result<()> {
+        if id.starts_with("file.") && id != "file.new" {
+            Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
+        } else {
+            Ok(())
+        }
+    }
+    let written: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
+    let w = written.clone();
+    let services = crate::Services {
+        automation_authorize: Some(deny_files),
+        automation_command: Some(Box::new(|id, params| deny_files(id, params).map_err(|e| e.to_string()))),
+        export: Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new())))),
+        write: Some(Box::new(move |path: &str, _: &[u8]| {
+            w.borrow_mut().push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = app_with(services);
+    let outside = std::env::temp_dir().join("outside").join("x.png").to_string_lossy().into_owned();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        name: "Save a copy".into(),
+        steps: vec![("file.saveACopy".into(), json!({"path": outside}))],
+        ..Default::default()
+    });
+    let release = release_while_the_thread_is_busy(&mut app);
+    let ctx = egui::Context::default();
+    let refused = play_over_control(&mut app, &ctx);
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["error"], still_finishing(), "an error to retry: {refused}");
+    assert!(app.queued_commands.is_empty(), "not queued");
+    assert!(app.session.authorize.is_none(), "the gate is only installed for the request");
+
+    release();
+    finish(&mut app);
+    let retried = play_over_control(&mut app, &ctx);
+    assert_eq!(retried["result"]["ran"], 0, "{retried}");
+    assert_eq!(retried["result"]["failed"]["id"], "file.saveACopy", "{retried}");
+    assert!(retried["result"]["failed"]["error"].as_str().unwrap_or("").contains("disabled"), "{retried}");
+    assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+    assert!(app.session.authorize.is_none());
 }
