@@ -617,7 +617,7 @@ fn imported_explicit_wire_scope_wins_over_the_empty_set_display_alias() {
             ("actions.conditional".into(), json!({"then":"Child","else":"Child","set":""})),
         ],
     );
-    let bytes = native_archive(&[("", std::slice::from_ref(&child)), ("Ungrouped Actions", &[child, caller])]);
+    let bytes = native_archive(&[("", std::slice::from_ref(&child)), ("Ungrouped Actions", &[child.clone(), caller])]);
     let mut imported = atn_cmds::import(&bytes).unwrap();
     atn_cmds::normalize_import(&mut imported, [], false).unwrap();
     let steps = &imported.actions[2].steps;
