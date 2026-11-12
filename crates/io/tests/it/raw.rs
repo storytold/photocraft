@@ -183,6 +183,12 @@ fn a_developed_raw_keeps_its_camera_when_the_exif_directory_empties() {
 /// A NEF-like file with Nikon's (undocumented) compression and a full-size
 /// baseline JPEG preview in IFD0.
 fn nef_with_preview() -> Vec<u8> {
+    nef_with_preview_exif(false)
+}
+
+/// The same; `adobe_rgb`: the EXIF says the camera was set to Adobe RGB (ColorSpace
+/// Uncalibrated, InteropIndex "R03"), as on a Sony body, and the JPEG carries no profile.
+fn nef_with_preview_exif(adobe_rgb: bool) -> Vec<u8> {
     let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
     let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
     let mut t = TiffBuilder::default();
@@ -199,14 +205,30 @@ fn nef_with_preview() -> Vec<u8> {
         (33421, Val::Short(vec![2, 2])),
         (33422, Val::Byte(vec![0, 1, 1, 2])),
     ]);
-    let ifd0 = t.ifd(vec![
+    let mut tags = vec![
         (271, Val::Ascii("NIKON CORPORATION".into())),
         (330, Val::Ifds(vec![raw])),
         (513, Val::Blobs(vec![preview])),
         (514, Val::Long(vec![jpeg.len() as u32])),
-    ]);
+    ];
+    if adobe_rgb {
+        let interop = t.ifd(vec![(0x0001, Val::Ascii("R03".into()))]);
+        let exif = t.ifd(vec![(0xA001, Val::Short(vec![0xFFFF])), (0xA005, Val::Ifds(vec![interop]))]);
+        tags.push((34665, Val::Ifds(vec![exif])));
+    }
+    let ifd0 = t.ifd(tags);
     t.chain = vec![ifd0];
     t.build()
+}
+
+#[test]
+fn a_preview_fallback_keeps_the_colour_space_the_raw_states() {
+    let tagged = import("DSC_0001.NEF", &nef_with_preview_exif(true)).unwrap();
+    let icc = tagged.document.icc_profile.as_deref().expect("an Adobe RGB preview opens tagged");
+    let profile = photocraft_cms::Profile::parse(icc).unwrap();
+    assert!(profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    // Unstated: untagged sRGB, as before.
+    assert!(import("DSC_0001.NEF", &nef_with_preview()).unwrap().document.icc_profile.is_none());
 }
 
 #[test]
@@ -311,6 +333,38 @@ fn cr3_opens_its_upright_camera_jpeg_with_explicit_preview_warning() {
     assert_eq!(r.document.depth, SampleType::U8);
     assert!(r.warnings[0].contains("8-bit, not the raw sensor data"));
     assert!(r.warnings[0].contains("CR3"));
+}
+
+#[test]
+fn damaged_raw_opens_its_camera_jpeg_with_a_warning() {
+    use photocraft_raw::testgen::{RafPacking, RafSpec, XTRANS};
+    let img = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![120; 32 * 20 * 3]).unwrap();
+    let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    // A lossless compressed RAF (all-zero samples) with a real camera JPEG.
+    let mut spec = RafSpec::new(780, 18, vec![0; 780 * 18], XTRANS.to_vec());
+    spec.packing = RafPacking::Compressed { lossy: false };
+    spec.black = vec![0];
+    spec.preview_jpeg = Some(jpeg);
+    let mut b = spec.build();
+    assert_eq!(import("DSCF0001.RAF", &b).unwrap().document.depth, SampleType::U16, "intact: developed");
+
+    // Zero bits inside the first stripe overrun the residual escape: malformed sensor data.
+    let at = b.windows(5).position(|w| w == b"IS\x01\x10\x0e").unwrap();
+    b[at + 96..at + 160].fill(0);
+    let r = import("DSCF0001.RAF", &b).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height, r.document.depth), (32, 20, SampleType::U8));
+    assert!(r.warnings[0].contains("damaged") && r.warnings[0].contains("8-bit, not the raw sensor data"), "{:?}", r.warnings);
+
+    // Without a usable preview it stays an error.
+    spec.preview_jpeg = None;
+    let mut b = spec.build();
+    let at = b.windows(5).position(|w| w == b"IS\x01\x10\x0e").unwrap();
+    b[at + 96..at + 160].fill(0);
+    match import("DSCF0001.RAF", &b) {
+        Err(e @ IoError::Raw(_)) => assert!(e.to_string().contains("malformed"), "{e}"),
+        Err(e) => panic!("expected a raw error, got {e}"),
+        Ok(_) => panic!("damaged sensor data without a preview must not open"),
+    }
 }
 
 #[test]
