@@ -308,7 +308,7 @@ pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf
         // Straight alpha, as the canvas's own textures take it.
         let image = super::display::display_image(display.as_deref(), picture);
         if s.textures.len() >= SNAPSHOT_DISPLAYS {
-            s.textures.remove(0);
+            drop(s.textures.remove(0));
         }
         s.textures.push((key, painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR)));
     }
