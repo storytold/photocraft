@@ -188,19 +188,25 @@ fn remap_view(s: &mut Session, (target, eyes): (ChannelTarget, Vec<bool>), map: 
 
 /// Image › Mode › RGB / CMYK / Lab / Grayscale from a Multichannel document (called by
 /// `color_cmds::convert_mode`). Multichannel has no profile; when the inks are printed (the
-/// appearance branch) they mix in the light of the RGB space the image goes to: `profile` when it
-/// is an RGB one, else the working RGB.
+/// appearance branch) they mix in the light of the RGB space the image goes to: `profile` (which
+/// must be an RGB one) for RGB, else the working RGB. A printed RGB result is tagged with that
+/// profile, so its values are read in the space they were mixed in.
 pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     if !matches!(mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Grayscale) {
         return Err(EngineError::Other(format!("a Multichannel document can't be converted to {mode:?}")));
     }
-    let rgb = p
-        .get("profile")
-        .and_then(Value::as_str)
-        .filter(|_| mode == ColorMode::Rgb)
-        .and_then(|spec| s.color.resolve(spec, s.active().map(|st| &*st.doc), Some(mode)).ok())
-        .filter(|pr| pr.color_space == photocraft_cms::ColorSpace::Rgb)
-        .unwrap_or_else(|| s.color.working(ColorMode::Rgb));
+    // Checked before anything changes: a bad profile leaves the document as it was.
+    let asked = match p.get("profile").and_then(Value::as_str).filter(|_| mode == ColorMode::Rgb) {
+        Some(spec) => {
+            let pr = s.color.resolve(spec, s.active().map(|st| &*st.doc), Some(mode))?;
+            if pr.color_space != photocraft_cms::ColorSpace::Rgb {
+                return Err(EngineError::Other(format!("profile `{}` is {:?}, not RGB", pr.description, pr.color_space)));
+            }
+            Some(pr)
+        }
+        None => None,
+    };
+    let rgb = asked.unwrap_or_else(|| s.color.working(ColorMode::Rgb));
     let light = InkLight::of_profile(&rgb).unwrap_or_else(InkLight::srgb);
     // The inks leave; the other channels close up.
     let Some((spots, view)) = s
@@ -259,6 +265,9 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Resul
         *active = Some(bg.id);
         doc.layers = vec![bg];
         doc.channels = others;
+        if !reinterpret && mode == ColorMode::Rgb {
+            doc.icc_profile = Some(rgb.to_bytes());
+        }
         Ok(if reinterpret { "channels" } else { "appearance" })
     })?;
     remap_view(s, view, &map);

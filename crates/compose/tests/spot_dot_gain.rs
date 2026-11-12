@@ -133,8 +133,8 @@ fn chart() -> Document {
 }
 
 /// The inks mixed in Adobe RGB's light with a 38 % spot dot gain reproduce the reference's
-/// merge: every channel of every patch within one level. (The engine's curve, `1 − (1 − v)^γ`,
-/// is within about 1 % of the reference's Textile 38 % dot gain table.)
+/// merge: mean 0.35 levels, max 1.3 over every channel of every patch. (The engine's curve,
+/// `1 − (1 − v)^γ`, is within about 1 % of the reference's Textile 38 % dot gain table.)
 fn reference_spot_chart() {
     set_spot_dot_gain(38.0);
     let doc = chart();

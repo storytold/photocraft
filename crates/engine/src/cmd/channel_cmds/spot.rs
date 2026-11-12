@@ -26,6 +26,12 @@ pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
         let mut comp = photocraft_compose::render(doc, area);
         let ch = doc.channels.get(i).ok_or_else(|| bad(cmd, "not a spot channel"))?;
         let k = read_plane(&ch.surface, area);
+        // The image is flattened onto white paper first, as the preview shows it: the inks print
+        // over opaque pixels.
+        for p in &mut comp.px {
+            let a = if p[3].is_nan() { 0.0 } else { p[3].clamp(0.0, 1.0) };
+            *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
+        }
         // Ink over the image: opaque at 100% solidity, multiplied (transparent ink) at 0%.
         let space = photocraft_compose::multichannel::InkSpace::of(doc);
         space.press(&mut comp.px, photocraft_compose::multichannel::spot_dot_gain()).print(&space.ink(ch), k.iter().map(|v| v.clamp(0.0, 1.0)));

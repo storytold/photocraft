@@ -422,9 +422,11 @@ what an agent can't finish alone.
 - **Progress (2026-11-11, #13375):** spot inks print as Photoshop's Merge Spot Channels, measured on
   a 77-patch chart (one ink at five solidities × eleven coverages, two inks overlapping both ways
   round): the Spot dot gain added, mixed in linear light, later channels on top; over white the
-  solidity makes no difference. Every patch within one level at a 38 % gain in Adobe RGB. The canvas
+  solidity makes no difference. Mean 0.35 levels, max 1.3 at a 38 % gain in Adobe RGB. The canvas
   preview, the PSD thumbnail, Merge Spot Channel and Image › Mode out of Multichannel share the one
   model, so the merge is what the preview showed (before: 5–7 levels off on real separations).
+  Image › Mode › RGB out of Multichannel tags its printed result with the RGB profile the inks
+  mixed in (`profile`, else the working RGB); before, the result was untagged.
 - **Progress (2026-10-30, #10249):** visible spot channels of RGB and CMYK documents print over
   the canvas composite as inks (the Multichannel overprint formula, in Channels panel order), open
   visible, and print in the PSD thumbnail; flatten, export and the merged image stay free of them.

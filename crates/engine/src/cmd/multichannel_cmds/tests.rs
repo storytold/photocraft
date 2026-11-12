@@ -234,3 +234,38 @@ fn flat_export_prints_the_inks() {
     // Solid process black ink, not paper.
     assert!(px[0] < 0.3 && px[3] > 0.99, "{px:?}");
 }
+
+/// The printed RGB result is tagged with the profile its inks mixed in (`profile`, else the working
+/// RGB); a profile that can't be used is refused before the document changes; the
+/// channel-for-channel conversion keeps its tag as it was.
+#[test]
+fn printed_rgb_result_is_tagged_and_a_bad_profile_changes_nothing() {
+    let tag = |s: &Session| doc(s).icc_profile.as_ref().and_then(|b| photocraft_cms::Profile::parse(b).ok());
+    let mut s = session("rgb", 8);
+    s.execute("image.mode.multichannel", json!({})).unwrap();
+    s.edit("drop", |doc, _| {
+        doc.channels.truncate(2);
+        Ok(())
+    })
+    .unwrap();
+    for bad in [json!({"profile": "no-such-profile"}), json!({"profile": "coated-cmyk"})] {
+        assert!(s.execute("image.mode.rgb", bad.clone()).is_err(), "{bad}");
+        assert_eq!(doc(&s).mode, ColorMode::Multichannel, "{bad}");
+        assert_eq!(doc(&s).channels.len(), 2, "{bad}");
+    }
+    let r = s.execute("image.mode.rgb", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    assert_eq!(r["converted"], "appearance");
+    assert!(tag(&s).unwrap().same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("image.mode.rgb", json!({})).unwrap();
+    assert!(tag(&s).unwrap().same_colors(&s.color.working(ColorMode::Rgb)));
+    // A non-RGB target ignores `profile` as before.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.execute("image.mode.grayscale", json!({"profile": "coated-cmyk"})).is_ok());
+
+    let mut s = session("rgb", 8);
+    s.execute("image.mode.multichannel", json!({})).unwrap();
+    let before = doc(&s).icc_profile.clone();
+    assert_eq!(s.execute("image.mode.rgb", json!({"profile": "adobe-rgb-compat"})).unwrap()["converted"], "channels");
+    assert_eq!(doc(&s).icc_profile, before);
+}

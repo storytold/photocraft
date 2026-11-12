@@ -9,8 +9,8 @@
 //! composite's tone curve decoded, [`InkLight`]): transparent inks (solidity 0) multiply like
 //! overprinted process inks, opaque ones cover what is below. Inks print in Channels panel order.
 //! This is the reference editor's Merge Spot Channels, measured on a chart of one ink at five
-//! solidities × eleven coverages and two overlapping inks both ways round (every patch within one
-//! level at a 38 % gain in Adobe RGB); its spot preview shows the same. Over white the result does
+//! solidities × eleven coverages and two overlapping inks both ways round (mean 0.35 levels, max
+//! 1.3 at a 38 % gain in Adobe RGB); its spot preview shows the same. Over white the result does
 //! not depend on solidity. An alpha-type channel of a Multichannel document (selected / masked
 //! areas) still prints, as a transparent black ink, like the reference editor shows it. Its value
 //! is stored as-is (1 = selected, white in the Channels panel), so its ink is `1 − value`.
