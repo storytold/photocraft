@@ -146,7 +146,8 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
     let label = if target == "background" { "Color Picker (Background Color)" } else { "Color Picker (Foreground Color)" };
     let mut fields = fields_with_web(app, target, label, rgb);
     // A colour that was picked as CMYK shows the inks it was picked as, not what its sRGB stand-in converts to (#4196).
-    if let Some(cmyk) = app.session.tools.picked_cmyk(rgb) {
+    let role = if target == "background" { 1 } else { 0 };
+    if let Some(cmyk) = app.session.tools.picked_role_cmyk(role) {
         seed_cmyk(&mut fields, cmyk);
     }
     if let Some(st) = app.session.active() {

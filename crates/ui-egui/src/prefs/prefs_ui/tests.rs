@@ -2360,8 +2360,8 @@ fn tool_colors_restore_cmyk_inks_for_picker_and_fill_after_swapping_and_exiting_
     app.session.tools.target_mask(true);
     crate::tool_memory::save_on_exit(&mut app).unwrap();
     let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(restored.session.tools.picked_cmyk(fg), Some(cyan));
-    assert_eq!(restored.session.tools.picked_cmyk(bg), Some(magenta));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(cyan));
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(magenta));
     for (target, expected) in [("foreground", magenta), ("background", cyan)] {
         crate::color_picker_ui::open(&mut restored, target);
         assert_eq!(restored.ui.dialogs.last().unwrap().fields["__cmyk"], json!(expected));
@@ -2392,9 +2392,55 @@ fn tool_colors_save_changed_cmyk_inks_even_when_rgba_is_unchanged() {
     assert!(app.session.prefs.rev() > rev);
     tick(&mut app, &ctx);
     let (restored, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(restored.session.tools.picked_cmyk(rgb), Some(inks));
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(inks));
 }
 
+#[test]
+fn tool_colors_preserve_distinct_cmyk_inks_with_identical_rgb_after_restart() {
+    let (mut app, store) = app_with_store();
+
+    let rgb = [0.0, 0.0, 0.0];
+    let foreground = [0.0, 0.0, 0.0, 1.0];
+    let background = [0.5, 0.5, 0.5, 1.0];
+
+    app.run(
+        "tools.setColors",
+        json!({
+            "foreground": rgb,
+            "background": rgb,
+            "foregroundCmyk": foreground,
+            "backgroundCmyk": background
+        }),
+    )
+    .unwrap();
+
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+
+    let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
+
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(foreground));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(background));
+
+    // Both pickers must show their own original separation.
+    for (target, expected) in [("foreground", foreground), ("background", background)] {
+        crate::color_picker_ui::open(&mut restored, target);
+        assert_eq!(restored.ui.dialogs.last().unwrap().fields["__cmyk"], json!(expected));
+    }
+
+    // Swap also swaps the native ink associations.
+    restored.run("tools.swapColors", json!({})).unwrap();
+
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(background));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(foreground));
+
+    // Mask colours must not overwrite the pixel colour pair.
+    restored.session.tools.target_mask(true);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), None);
+
+    restored.session.tools.target_mask(false);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(background));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(foreground));
+}
 #[test]
 fn tool_colors_restore_only_bounded_valid_cmyk_picks() {
     let limit = photocraft_engine::ToolState::CMYK_PICKS;

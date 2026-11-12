@@ -105,15 +105,19 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({ "contents": contents });
     let restore = contents == "history";
     let source = match contents {
-        "foreground" => color_source(s, s.tools.foreground),
+        "foreground" => color_source(s, s.tools.foreground, 0),
         // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
-        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background)),
+        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background), 1),
         "color" => {
             let rgba = color_param(CMD, p, "color", s.tools.foreground)?;
             match cmyk_param(CMD, p, "colorCmyk")? {
                 Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
                 Some(_) => return Err(bad("`colorCmyk` requires an opaque color")),
-                None => color_source(s, rgba),
+                None if p.get("color").is_none() => color_source(s, rgba, 0),
+                None => match s.tools.matching_cmyk([rgba[0], rgba[1], rgba[2]]) {
+                    Some(cmyk) if rgba[3] >= 1.0 => Source::Cmyk { rgba, cmyk },
+                    _ => Source::Color(rgba),
+                },
             }
         }
         "black" => Source::Color([0.0, 0.0, 0.0, 1.0]),
@@ -171,8 +175,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A fill colour: the inks it was picked as when it was picked as CMYK (#4196), else plain sRGB.
-fn color_source(s: &Session, c: [f32; 4]) -> Source {
-    match s.tools.picked_cmyk([c[0], c[1], c[2]]) {
+fn color_source(s: &Session, c: [f32; 4], role: usize) -> Source {
+    match s.tools.picked_role_cmyk(role) {
         Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
         _ => Source::Color(c),
     }
