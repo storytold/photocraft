@@ -54,10 +54,9 @@ fn hover(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
     h.run_steps(2);
 }
 
-/// The pipette is drawn in its own tooltip-layer area.
+/// The Eyedropper's pipette: the OS bitmap where one uploads, else drawn (#12523).
 fn pipette_shown(h: &Harness<'static, PhotocraftApp>) -> bool {
-    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-icon-cursor"));
-    h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
+    crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
 }
 
 /// The OS cursor bitmap's size, hotspot and alpha channel.
