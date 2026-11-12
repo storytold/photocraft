@@ -163,9 +163,7 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
     h.run_steps(3);
     let default = drawn(&h).0;
-    // Essentials drops the heights and collapse and lays out its icon column beside the dock.
-    assert!(h.state().ui.dock.heights.is_empty() && h.state().ui.dock.collapsed.is_empty(), "{:?}", h.state().ui.dock);
-    assert!(h.state().ui.docking.as_ref().is_some_and(|w| w.layout.contains(&"navigator".to_owned())), "the icon column");
+    assert_eq!(h.state().ui.dock, DockLayout::default());
     h.state_mut().ui.dock.heights.insert(Group::Color, 300.0);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
     h.run_steps(3);
@@ -839,6 +837,35 @@ fn an_unreadable_docking_layout_is_dropped_and_the_rest_applies() {
     apply(&mut app, &saved);
     assert!(app.ui.docking.is_none(), "the unreadable docking value is dropped");
     assert!(app.ui.timeline.open, "the rest of the layout still applies");
+}
+
+/// `toolbar_side` belongs to the workspace when the layout saved one; a layout saved before the
+/// toolbar could move, or with an unreadable side, keeps the current side instead of `Start`.
+#[test]
+fn applying_a_workspace_keeps_the_toolbar_side_unless_it_saved_one() {
+    use crate::state::ToolbarSide;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let saved = snapshot(&app);
+    let cases = [
+        (None, ToolbarSide::Right),
+        (Some(json!("sideways")), ToolbarSide::Right),
+        (Some(json!("left")), ToolbarSide::Left),
+        (Some(json!("start")), ToolbarSide::Start),
+    ];
+    for (side, expected) in cases {
+        app.ui.panels.toolbar_side = ToolbarSide::Right;
+        app.ui.panels.brush_settings = false;
+        let mut saved = saved.clone();
+        let panels = saved["panels"].as_object_mut().unwrap();
+        panels.insert("brush_settings".into(), json!(true));
+        match &side {
+            Some(side) => panels.insert("toolbar_side".into(), side.clone()),
+            None => panels.remove("toolbar_side"),
+        };
+        apply(&mut app, &saved);
+        assert_eq!(app.ui.panels.toolbar_side, expected, "{side:?}");
+        assert!(app.ui.panels.brush_settings, "the rest of the saved panels still apply: {side:?}");
+    }
 }
 
 /// Layers panel options live in the preferences on their own (like Photoshop's Panel Options),
