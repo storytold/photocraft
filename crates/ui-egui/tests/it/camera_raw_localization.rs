@@ -6,13 +6,26 @@ use serde_json::json;
 
 #[test]
 fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_or_filter() {
+    render_camera_raw_languages(i18n::Lang::all());
+}
+
+#[test]
+fn mongolian_camera_raw_labels_fit_and_switch_without_resetting() {
+    let Some(mn) = i18n::Lang::from_code("mn") else {
+        eprintln!("skipped: Mongolian catalog not embedded");
+        return;
+    };
+    render_camera_raw_languages([mn]);
+}
+
+fn render_camera_raw_languages(languages: impl IntoIterator<Item = i18n::Lang>) {
     // On Linux some scripts arrive through the background Fontconfig lookup. Kittest's strict
     // missing-glyph policy must not race that scan: wait for it exactly as the i18n live tests do.
     #[cfg(target_os = "linux")]
     assert!(photocraft_ui_egui::cjk_fonts::wait_for_fontconfig_cjk_scan(), "Fontconfig CJK lookup did not finish within 10 seconds");
     assert_required_camera_raw_fonts();
     let _gpu = photocraft_testkit::gpu_lock();
-    for lang in i18n::Lang::all() {
+    for lang in languages {
         let gpu = std::env::var_os("PHOTOCRAFT_LOCALE_SNAPSHOTS").is_some();
         let builder = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1440.0, 1000.0));
         // A script the central manifest does not ship yet may have no face on a CI runner: the
