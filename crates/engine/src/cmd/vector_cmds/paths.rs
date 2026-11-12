@@ -84,13 +84,19 @@ pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Re
 }
 
 /// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
-/// The optional Freeform Pen history label overrides the normal Work Path or Save Path label.
+/// The optional Freeform Pen history label overrides the normal Work Path or Save Path label, and
+/// New Work Path the Work Path one.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
-    let label = pen_history_name(p, CMD, if is_work(name.as_deref()) { "Work Path" } else { "Save Path" })?;
+    let work = is_work(name.as_deref());
+    // The Pen names a path that starts a Work Path "New Work Path", as Photoshop does (#13012).
+    let label = match p.get("historyName") {
+        Some(Value::String(n)) if work && n == "New Work Path" => "New Work Path",
+        _ => pen_history_name(p, CMD, if work { "Work Path" } else { "Save Path" })?,
+    };
     s.edit(label, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {

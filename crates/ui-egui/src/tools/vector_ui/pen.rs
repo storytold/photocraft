@@ -493,7 +493,10 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         // subpath, even with nothing selected in the Paths panel.
         let target = draft_target(app, pen);
         let name = target.clone().unwrap_or_else(|| "work".into());
-        let mut params = json!({"name": name, "path": path, "historyName": freeform.then_some("Freeform Pen")});
+        // Photoshop names the step of a Pen path that starts a Work Path "New Work Path" (#13012);
+        // the Curvature Pen was not measured and keeps "Work Path".
+        let history = if freeform { Some("Freeform Pen") } else { (target.is_none() && !pen.curvature).then_some("New Work Path") };
+        let mut params = json!({"name": name, "path": path, "historyName": history});
         if target.is_some() {
             params["op"] = json!(op.unwrap_or("combine"));
         }
@@ -989,6 +992,10 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
 #[cfg(test)]
 #[path = "freeform_history_name_tests.rs"]
 mod freeform_history_name_tests;
+
+#[cfg(test)]
+#[path = "new_work_path_history_tests.rs"]
+mod new_work_path_history_tests;
 
 #[cfg(test)]
 #[path = "pen_alt_drag_segment_tests.rs"]
