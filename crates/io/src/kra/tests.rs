@@ -211,11 +211,11 @@ fn deeply_nested_maindoc_is_an_error_not_a_stack_overflow() {
     let entity = format!("<!DOCTYPE DOC [<!ENTITY e \"{open}{close}\">]><DOC><IMAGE width=\"4\" height=\"4\">&e;</IMAGE></DOC>");
     // A quoted `?>` in the XML declaration must not hide the DOCTYPE behind it.
     let declared = format!("<?xml version=\"?>\"?>{entity}");
-    // The nesting is refused by its depth; an internal subset is refused outright (craft-kra).
-    for (xml, why) in [(direct, Some("nest")), (entity, None), (declared, None)] {
+    // The nesting is refused by its depth; entity-based forms must also fail safely.
+    for (xml, expected) in [(direct, Some("nest")), (entity, None), (declared, None)] {
         let bytes = archive(&xml, &[]);
         let e = std::thread::Builder::new().stack_size(512 * 1024).spawn(move || crate::import("deep.kra", &bytes).err()).unwrap().join().unwrap();
-        assert!(matches!(&e, Some(IoError::Kra(m)) if why.is_none_or(|w| m.contains(w))), "{why:?}: {e:?}");
+        assert!(matches!(&e, Some(IoError::Kra(m)) if expected.is_none_or(|why| m.contains(why))), "{expected:?}: {e:?}");
     }
 }
 

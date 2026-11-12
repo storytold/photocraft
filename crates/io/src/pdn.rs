@@ -62,17 +62,12 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let count = doc.surface_count();
     let mut surfaces = HashMap::new();
-    let mut failed = None;
-    doc.read_surfaces(&keep_going, &mut |i, s| {
-        if failed.is_some() {
-            return;
-        }
+    doc.try_read_surfaces(&keep_going, &mut |i, s| -> Result<()> {
         let mut surface = Surface::new(PixelFormat::RGBA8);
         let mut row = Vec::with_capacity(width * 4);
         for (y, src) in s.rows().enumerate() {
             if ctl.check().is_err() {
-                failed = Some(IoError::Cancelled);
-                return;
+                return Err(IoError::Cancelled);
             }
             row.clear();
             row.extend_from_slice(src);
@@ -83,11 +78,12 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         }
         surfaces.insert(i, surface);
         ctl.progress(0.05 + 0.95 * (i + 1) as f32 / count as f32);
+        Ok(())
     })
-    .map_err(pdn_err)?;
-    if let Some(e) = failed {
-        return Err(e);
-    }
+    .map_err(|error| match error {
+        craft_pdn::ReadSurfacesError::Decode(error) => pdn_err(error),
+        craft_pdn::ReadSurfacesError::Callback(error) => error,
+    })?;
     let mut document = Document::new(name, Size::new(w, h), ColorMode::Rgb, SampleType::U8);
     for l in &doc.layers {
         let mut layer = Layer::raster(l.name.clone(), PixelFormat::RGBA8);

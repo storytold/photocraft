@@ -153,7 +153,8 @@ fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut
 
 /// Imports an XCF file (already inflated when it was gzipped).
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
-    let xcf = Xcf::parse(bytes).map_err(xcf_err)?;
+    let keep_going = || ctl.check().is_ok();
+    let xcf = Xcf::parse_with(bytes, &keep_going).map_err(xcf_err)?;
     let info = xcf.image();
     let version = info.version;
     let mut warnings = Warnings::default();
@@ -208,7 +209,6 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     // Channels: the selection and the extras.
     let mut channels = Vec::new();
     let mut selection = None;
-    let keep_going = || ctl.check().is_ok();
     for i in 0..info.channel_count {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let (channel, px) = xcf.channel(i, &mut reader.budget, &keep_going).map_err(xcf_err)?;
