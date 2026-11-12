@@ -4,7 +4,7 @@ use photocraft_engine::{
     actions_cmds::Action,
     preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend},
 };
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnFile},
     descriptor::UnicodeString,
 };

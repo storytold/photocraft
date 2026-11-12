@@ -27,13 +27,14 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             set.metadata = sidecar::empty_source(raw, index);
         }
     }
+    let original_set = imp.set.clone();
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
             if imp.sets.len() != 1 {
                 return Err(bad(cmd, "set override requires exactly one real set"));
             }
-            imp.set = n.trim().to_string();
+            imp.set = super::convert::clip_name(n.trim()).trim_end().to_string();
             if let Some(set) = imp.sets.first_mut() {
                 set.name = imp.set.clone();
             }
@@ -42,6 +43,18 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
+    }
+    // Native Batch and droplet calls keep main's set-override and collision-renaming rules.
+    // Only references to the imported source set follow its override; foreign scopes stay intact.
+    for action in &mut imp.actions {
+        action.automation = s.authorize.is_some();
+        for (id, params) in &mut action.steps {
+            if matches!(id.as_str(), "file.automate.batch" | "file.automate.createDroplet")
+                && params.get("set").and_then(Value::as_str) == Some(original_set.as_str())
+            {
+                params["set"] = json!(imp.set);
+            }
+        }
     }
     let replace = match p.get("replace") {
         None | Some(Value::Null) => true,
@@ -64,9 +77,10 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let old_groups = sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?;
     let retained_groups: Vec<_> = old_groups.iter().filter(|(name, _)| !replace || !targets.contains(*name)).collect();
     let sidecar_needed = imp.sets.iter().any(|set| set.metadata.is_some())
+        || imp.actions.iter().any(sidecar::action_needs_metadata)
         || retained_groups.iter().any(|(_, selection)| {
             selection.source.is_some()
-                || selection.actions.iter().any(|action| action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty())
+                || selection.actions.iter().any(|action| sidecar::action_needs_metadata(action))
         });
     let overhead = usize::from(sidecar_needed);
     if retained_groups.len().checked_add(imp.sets.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_SETS) {

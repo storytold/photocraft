@@ -565,7 +565,7 @@ fn new_group(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Queue an immutable draft snapshot with the backend owner that suspends capture for its entire preview.
 fn start_preview(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Value, String> {
     let (action, owner) = actions_cmds::playback::preview(&mut app.session, draft, from).map_err(|error| error.to_string())?;
-    let frame = Frame { action, from, source: Source::Draft(draft), take: app.session.actions.take };
+    let frame = Frame { action, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
     queue(app, frame, owner, Vec::new())
 }
 
@@ -577,7 +577,7 @@ fn start_library(app: &mut PhotocraftApp, indices: &[usize]) -> Result<Value, St
         .map(|&index| app.session.actions.list.get(index).cloned().ok_or("The selected action no longer exists".to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let (action, from, owner) = actions_cmds::playback::Owner::library(&mut app.session, &json!({"action":index})).map_err(|error| error.to_string())?;
-    let frame = Frame { action, from, source: Source::Library, take: app.session.actions.take };
+    let frame = Frame { action, from, source: Source::Library, take: app.session.actions.take, admitted: false, pending_call: false };
     queue(app, frame, owner, then)
 }
 
@@ -613,7 +613,7 @@ pub(super) fn resume_tick(app: &mut PhotocraftApp, paused: PausedPlayback) -> Re
         owner: paused.record,
         gate: paused.gate,
         used: paused.used,
-        ran: paused.ran.saturating_add(1),
+        ran: paused.ran.saturating_add(u64::from(!paused.timed)),
         then: paused.then,
         history: paused.history,
     });
@@ -636,7 +636,9 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         .paused
         .iter()
         .filter_map(|(token, paused)| {
-            let open = if paused.dialog == 0 {
+            let open = if paused.timed {
+                app.paused_playbacks.timer.is_some_and(|timer| timer.token == *token)
+            } else if paused.dialog == 0 {
                 app.ui.type_panels.spell.as_ref().is_some_and(|dialog| dialog.resume == Some(*token))
             } else {
                 app.ui.dialogs.iter().any(|dialog| dialog.id == paused.dialog)
@@ -683,6 +685,12 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         task.ran = task.ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
         if let Some(failed) = value.get("failed") {
             return Err(failed.get("error").and_then(Value::as_str).unwrap_or("Action playback failed").to_string());
+        }
+        if value.get("stopped").is_some() {
+            task.parents.clear();
+            task.then.clear();
+            super::report_play(app, &value);
+            return Ok(true);
         }
         if let Some(dialog) = value.get("paused").and_then(waiting_dialog) {
             let token = paused_token(app, dialog);
@@ -754,6 +762,9 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
 
 /// Release incremental task and dialog owners, closing only their own Spelling panel or step dialogs.
 pub(super) fn cancel(app: &mut PhotocraftApp) {
+    if app.paused_playbacks.timer.is_some_and(|timer| app.paused_playbacks.paused.get(&timer.token).is_some_and(|paused| paused.incremental)) {
+        app.paused_playbacks.timer = None;
+    }
     if let Some(mut task) = app.actions_runtime.task.take()
         && let Some(owner) = task.owner.take()
     {

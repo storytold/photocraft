@@ -1,7 +1,7 @@
 //! The measured Actions sidecar. Opaque bytes travel with their action, never with its display name.
 use std::{ops::Range, sync::Arc};
 
-use photocraft_psd::{
+use craft_psd::{
     atn,
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
@@ -219,6 +219,7 @@ pub struct ActionMetadata {
     description: String,
     icon: String,
     thumbnail: i32,
+    automation: bool,
     reset_icon: bool,
 }
 
@@ -644,6 +645,14 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
                 } else {
                     String::new()
                 };
+                let automation = match parsed.get("photocraftAutomation") {
+                    None => false,
+                    Some(D::Boolean(value)) => {
+                        unique(&parsed, "photocraftAutomation")?;
+                        *value
+                    }
+                    Some(_) => return Err("invalid Actions automation origin".into()),
+                };
                 // Unknown values of the other measured properties remain opaque and unchanged.
                 let metadata = ActionMetadata {
                     raw,
@@ -652,6 +661,7 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
                     description: description.to_string_lossy(),
                     icon,
                     thumbnail: *thumbnail,
+                    automation,
                     reset_icon: false,
                 };
                 if let Some(slot) = result.actions.get_mut(index).and_then(|actions| actions.get_mut(at)) {
@@ -669,6 +679,7 @@ fn decode_inner(files: &[AtnFile], library: bool, raw_outer: Option<&[u8]>) -> R
 pub(crate) fn apply(action: &mut Action, metadata: ActionMetadata) {
     action.description = metadata.description.clone();
     action.icon = metadata.icon.clone();
+    action.automation = metadata.automation;
     action.atn_metadata = Some(metadata);
 }
 
@@ -681,6 +692,9 @@ fn entry(action: &Action) -> Result<Vec<u8>> {
     }
     if let Some(metadata) = &action.atn_metadata {
         let mut changes = Vec::new();
+        if action.automation != metadata.automation {
+            changes.push(("photocraftAutomation", if action.automation { Some(value_bytes(D::Boolean(true))?) } else { None }));
+        }
         if action.description != metadata.description {
             changes.push(("actionDescriptionKey", Some(value_bytes(D::Text(UnicodeString::new(&action.description)))?)));
         }
@@ -693,6 +707,9 @@ fn entry(action: &Action) -> Result<Vec<u8>> {
     let mut descriptor = Descriptor::new("null")
         .with("actionDescriptionKey", D::Text(UnicodeString::new(&action.description)))
         .with("actionThumbnailTypeKey", D::Integer(if action.icon.is_empty() { 0 } else { 3 }));
+    if action.automation {
+        descriptor = descriptor.with("photocraftAutomation", D::Boolean(true));
+    }
     if !action.icon.is_empty() {
         descriptor = descriptor.with("actionIconKey", D::Text(UnicodeString::new(&action.icon)));
     }
@@ -741,7 +758,7 @@ pub(crate) fn append_library(
 }
 
 pub(crate) fn action_needs_metadata(action: &Action) -> bool {
-    action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty()
+    action.automation || action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty()
 }
 
 /// Patch selected positional metadata while preserving unknown source fields.

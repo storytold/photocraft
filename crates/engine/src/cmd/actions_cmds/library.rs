@@ -1,7 +1,7 @@
 //! The sole durable Actions library. Runtime origins refer to physical ATN records, never names.
 use std::{ops::Range, sync::Arc};
 
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnFile, SpannedAtnArchive},
     descriptor::{Descriptor, UnicodeString, Value as D},
 };

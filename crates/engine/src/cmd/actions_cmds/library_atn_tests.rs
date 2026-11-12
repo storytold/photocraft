@@ -4,7 +4,7 @@ use crate::{
     atn_cmds,
     preset_store::{self, ACTIONS_FILE, LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES, MIGRATED_ACTIONS_FILE, MemBackend, PresetBackend},
 };
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };

@@ -28,8 +28,8 @@ const UNKNOWN_ICON: &str = " future/editor-icon-图标 ";
 /// Independent PSD descriptor oracle: inspect the emitted sidecar without the Engine's
 /// importer or sidecar decoder agreeing with its own writer.
 fn assert_exported_metadata(bytes: &[u8], icon: &str) {
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
-    let files = photocraft_psd::atn::parse_sets(bytes).unwrap();
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+    let files = craft_psd::atn::parse_sets(bytes).unwrap();
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].name.to_string_lossy(), "Metadata set");
     assert_eq!(files[0].actions.len(), 1);
@@ -200,7 +200,7 @@ fn editor_metadata_stays_draft_until_save_and_discard_keeps_saved_values() {
         let (kept, skipped) = photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], false).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(photocraft_engine::atn_cmds::import(&kept).unwrap().actions[0].steps, unsupported.steps);
-        assert_eq!(photocraft_psd::atn::parse_sets(&kept).unwrap()[0].actions[0].items[0].event.id(), "photocraftCommand");
+        assert_eq!(craft_psd::atn::parse_sets(&kept).unwrap()[0].actions[0].items[0].event.id(), "photocraftCommand");
         let (bytes, skipped) = photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], true).unwrap();
         assert_eq!(skipped.len(), 1, "skipUnsupported affects steps, never metadata");
         assert_exported_metadata(&bytes, icon);

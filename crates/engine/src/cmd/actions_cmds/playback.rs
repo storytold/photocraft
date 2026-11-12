@@ -15,6 +15,7 @@ enum Destination {
 pub struct Owner {
     serial: u64,
     take: u64,
+    automation: bool,
     destination: Option<Destination>,
     preview: Option<(u64, Arc<Action>)>,
     call: Option<(String, usize)>,
@@ -74,7 +75,7 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(S
     };
     s.actions.playback_nonce = serial;
     s.actions.held_playback = Some(serial);
-    Ok(Some(Owner { serial, take: s.actions.take, destination, preview, call }))
+    Ok(Some(Owner { serial, take: s.actions.take, automation: s.authorize.is_some(), destination, preview, call }))
 }
 
 /// Resolve an ordinary named library call and suspend either recording destination once.
@@ -89,7 +90,9 @@ pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, O
 /// `from` is an original step index; disabled/dialog indices stay attached to that snapshot.
 pub fn preview(s: &mut Session, draft: u64, from: usize) -> Result<(Arc<Action>, Owner)> {
     super::not_playing(s, "actions.editor.preview")?;
-    let action = Arc::new(super::editor::preview_value(s, draft)?);
+    let value = super::editor::preview_value(s, draft)?;
+    super::check_playback_budget(s, value.steps.len())?;
+    let action = Arc::new(value);
     if from > action.steps.len() {
         return Err(bad("actions.editor.preview", "preview step is outside the draft"));
     }
@@ -173,6 +176,7 @@ impl Owner {
             && let Some((action, from)) = self.call
         {
             super::journal_call(s, &action, from);
+            super::note_step_origin(s, self.automation, "actions.play", &serde_json::json!({"action": action}));
         }
     }
 }

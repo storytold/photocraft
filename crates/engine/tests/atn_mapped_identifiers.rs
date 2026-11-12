@@ -3,11 +3,11 @@
 #[path = "support/atn_export.rs"]
 mod atn_export;
 
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
+use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
 use serde_json::json;
 
 /// A small marked document makes canvas translation and image resampling distinguishable.

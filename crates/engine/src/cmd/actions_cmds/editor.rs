@@ -1,7 +1,7 @@
 //! One unpublished action value, a capture-only recorder, and one logical definition Save.
 use std::collections::BTreeMap;
 
-use super::{Action, CommandSpec, Result, Session, Value, bad, json, not_playing, replayable};
+use super::{Action, CommandSpec, Result, Session, Value, bad, json, not_playing};
 
 const OPEN: &str = "actions.editor.open";
 const GET: &str = "actions.editor.get";
@@ -66,7 +66,7 @@ fn owned<'a>(s: &'a Session, p: &Value, cmd: &str) -> Result<&'a Draft> {
 
 /// Raw replayable capture is counted before projection to retain the editor's allocation bound.
 fn pending<'a>(s: &'a Session, draft: &Draft) -> impl Iterator<Item = &'a (String, Value)> {
-    s.journal.iter().skip(draft.recording.unwrap_or(s.journal.len())).filter(|(id, _)| replayable(id))
+    s.journal.iter().skip(draft.recording.unwrap_or(s.journal.len())).filter(|(id, params)| super::recorded(id, params) && (s.actions.record_tools || !super::tool_stroke(id)))
 }
 
 /// Build the visible value without flushing into either destination or changing its cursor.
@@ -354,6 +354,7 @@ fn step(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut next = draft.clone();
     next.value = value;
+    next.value.automation |= s.authorize.is_some();
     if next.recording.is_some() {
         next.recording = Some(s.journal.len());
     }
@@ -372,10 +373,18 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let take = s.actions.take.checked_add(1).ok_or_else(|| bad(RECORD, "recording identities exhausted"))?;
     next.recording = Some(s.journal.len());
+    next.value.automation |= s.authorize.is_some();
     let response = view(&next, &next.value);
     s.actions.take = take;
     s.actions.editor = Some(next);
     Ok(response)
+}
+
+/// Retain the dispatch origin of steps captured into an unpublished draft.
+pub(super) fn note_automation_recording(s: &mut Session) {
+    if let Some(draft) = s.actions.editor.as_mut().filter(|draft| draft.recording.is_some()) {
+        draft.value.automation = true;
+    }
 }
 
 /// Flush completed logical commands into the draft only, without publishing it.
@@ -418,29 +427,26 @@ fn unchanged(s: &Session, draft: &Draft) -> Result<()> {
     Ok(())
 }
 
-/// Rewrite only the existing named call fields, sharing Classic Rename's reference rules.
-fn rename_calls(params: &mut Value, id: &str, old: &str, new: &str) {
-    for key in super::call_keys(id) {
-        if params.get(*key).and_then(Value::as_str) == Some(old) {
-            params[*key] = json!(new);
-        }
-    }
-}
-
-/// Prepare only changed named-call parameters; the caller validates the proposed definitions.
+/// Prepare renamed callers using the same row/set resolution as Classic Rename.
 fn references(s: &Session, draft: &Draft, value: &mut Action) -> Vec<(usize, usize, Value)> {
     let mut changes = Vec::new();
-    if !draft.source.is_some_and(|index| super::owns_name(&s.actions.list, index)) || draft.opening.name == value.name {
-        return changes;
-    }
+    let Some(source) = draft.source.filter(|_| draft.opening.name != value.name) else { return changes };
     for (id, params) in &mut value.steps {
-        rename_calls(params, id, &draft.opening.name, &value.name);
+        for key in super::rename_call_keys(&s.actions.list, source, id, params) {
+            if params.get(*key).and_then(Value::as_str) == Some(draft.opening.name.as_str()) {
+                params[*key] = json!(value.name);
+            }
+        }
     }
-    for (action, item) in s.actions.list.iter().enumerate().filter(|(i, _)| Some(*i) != draft.source) {
+    for (action, item) in s.actions.list.iter().enumerate().filter(|(i, _)| *i != source) {
         for (step, (id, params)) in item.steps.iter().enumerate() {
-            if super::call_keys(id).iter().any(|key| params.get(*key).and_then(Value::as_str) == Some(draft.opening.name.as_str())) {
-                let mut next = params.clone();
-                rename_calls(&mut next, id, &draft.opening.name, &value.name);
+            let mut next = params.clone();
+            for key in super::rename_call_keys(&s.actions.list, source, id, params) {
+                if params.get(*key).and_then(Value::as_str) == Some(draft.opening.name.as_str()) {
+                    next[*key] = json!(value.name);
+                }
+            }
+            if next != *params {
                 changes.push((action, step, next));
             }
         }

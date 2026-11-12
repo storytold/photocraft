@@ -1,9 +1,9 @@
 //! Recorded direct Gradient Map and Replace Color forms from #10603 / #10607.
-use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
+use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
 
 fn enumeration(kind: &str, value: &str) -> D {

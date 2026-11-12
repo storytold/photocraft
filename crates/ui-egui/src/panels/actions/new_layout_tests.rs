@@ -427,7 +427,7 @@ fn export_suggests_the_selected_action_only_with_a_portable_uppercase_extension(
     app.poll_file_dialog(&egui::Context::default(), None);
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert!(matches!(asked.borrow().as_slice(),[FileDialogRequest::Save{suggested}] if suggested=="Web_Print_Mail.ATN"));
-    let parsed = photocraft_psd::atn::parse(&written.borrow()).unwrap();
+    let parsed = craft_psd::atn::parse(&written.borrow()).unwrap();
     assert_eq!(parsed.actions.len(), 1);
     assert_eq!(parsed.actions[0].name.to_string_lossy(), "Web/Print:Mail");
 }

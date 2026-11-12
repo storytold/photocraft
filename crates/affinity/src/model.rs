@@ -294,6 +294,9 @@ const MAX_NAME_BYTES: usize = 64 << 20;
 const MAX_PAGES: usize = 1 << 18;
 /// Bytes of font names the text runs may retain across the document.
 const MAX_FONT_NAME_BYTES: usize = 16 << 20;
+/// Text work units (block and run slots traversed, bytes of story text retained) across all
+/// text nodes of a document; real documents use a tiny fraction.
+const MAX_TEXT_WORK: usize = 64 << 20;
 
 /// Read a document: archive, `doc.dat` and the model.
 pub fn read(bytes: &[u8], limits: Limits) -> Result<Document, Error> {
@@ -316,6 +319,7 @@ pub(crate) struct Reader<'s, 'a, 'b> {
     name_bytes: usize,
     pages: usize,
     font_name_bytes: usize,
+    text_work: usize,
     active: HashSet<ObjId>,
     pub(crate) geometry_budget: crate::geometry::Budget,
     /// Decoded pixels still available ([`Limits::max_pixel_bytes`] less what the layers read so
@@ -335,6 +339,7 @@ impl<'s, 'a, 'b> Reader<'s, 'a, 'b> {
             name_bytes: 0,
             pages: 0,
             font_name_bytes: 0,
+            text_work: 0,
             active: HashSet::new(),
             geometry_budget: crate::geometry::Budget::default(),
             pixels_left: limits.max_pixel_bytes,
@@ -650,6 +655,12 @@ impl Reader<'_, '_, '_> {
     pub(crate) fn charge_font_name(&mut self, n: usize) -> bool {
         self.font_name_bytes = self.font_name_bytes.saturating_add(n);
         self.font_name_bytes <= MAX_FONT_NAME_BYTES
+    }
+
+    /// Counts text traversal work and retained text bytes against [`MAX_TEXT_WORK`]; false once it is spent.
+    pub(crate) fn charge_text(&mut self, n: usize) -> bool {
+        self.text_work = self.text_work.saturating_add(n);
+        self.text_work <= MAX_TEXT_WORK
     }
 
     /// Counts retained page rectangles against [`MAX_PAGES`].
