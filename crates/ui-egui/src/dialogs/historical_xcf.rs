@@ -97,7 +97,13 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
     let (id, params) = canonical_params(app, fields, accept)?;
     authorize(app, &params)?;
     if !accept {
-        let value = app.run("file.open", params)?;
+        let value = if app.session.holds_historical_xcf_open(id) {
+            app.run("file.open", params)?
+        } else {
+            // Another authorized caller already released this capability. After
+            // authorization, dismiss only its stale local question; no source remains to cancel.
+            json!({"cancelled":false,"alreadyReleased":true,"heldHistoricalXcfOpen":id})
+        };
         app.ui.dialogs.retain(|dialog| dialog.fields.get(FIELD).and_then(Value::as_u64) != Some(id));
         app.historical_opens.retain(|held| held.id != id);
         app.prompt_order.pop_front();
