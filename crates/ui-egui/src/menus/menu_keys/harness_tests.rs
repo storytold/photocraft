@@ -242,6 +242,27 @@ fn a_letter_in_an_open_menu_runs_the_row_with_that_mnemonic_or_opens_its_submenu
 }
 
 #[test]
+fn alt_e_then_a_opens_edit_transform() {
+    // #13181: the Edit menu has more rows than letters, and every letter of Transform was taken
+    // before its row, so its submenu had no key. It takes A; Find and Replace Text moves to X.
+    let mut h = bar();
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    alt_key(&mut h, egui::Key::E);
+    h.run_steps(2);
+    let level = rows(&h, 0);
+    let letter = |id: &str| level.iter().find(|r| r.command.as_deref() == Some(id)).and_then(|r| r.mnemonic);
+    assert_eq!(letter("edit.findAndReplaceText"), Some('X'));
+    // The rows around them keep their letters.
+    assert_eq!(letter("edit.fill"), Some('I'));
+    assert_eq!(letter("edit.contentAwareScale"), Some('W'));
+    let keyed: Vec<char> = level.iter().filter_map(|r| r.mnemonic).collect();
+    assert!(keyed.iter().all(|c| keyed.iter().filter(|d| *d == c).count() == 1), "mnemonics are unique within a level: {keyed:?}");
+    key(&mut h, egui::Key::A);
+    h.run_steps(3);
+    assert!(rows(&h, 1).iter().any(|r| r.command.as_deref() == Some("edit.transform.scale")), "A opened Edit › Transform");
+}
+
+#[test]
 fn mnemonics_are_underlined_only_with_alt_or_a_keyboard_opened_menu() {
     let mut h = bar();
     h.get_by_label("File").click();

@@ -32,6 +32,22 @@ pub const TOP_PREFERRED: [(&str, char); 10] = [
     ("Help", 'H'),
 ];
 
+/// Mnemonics for menu rows, by the menu's path and the row's English label, used where the shown
+/// label has the letter. The Edit menu has more rows than there are letters: assigned in order,
+/// every letter of Transform was taken before its row, so its submenu had no key (#13181).
+/// Transform takes A (Alt+E, A, as reported for Photoshop); Find and Replace Text, which took the
+/// A, takes X, so no other row's letter changes.
+pub const ITEM_PREFERRED: [(&[&str], &str, char); 2] = [(&["Edit"], "Transform", 'A'), (&["Edit"], "Find and Replace Text…", 'X')];
+
+/// The [`ITEM_PREFERRED`] letters for the rows `english` of the menu at `path`.
+pub fn item_preferred(path: &[&str], english: &[&str]) -> Vec<Option<char>> {
+    // Most menus have none: no allocation or scan per row on each frame they are open.
+    if !ITEM_PREFERRED.iter().any(|(p, _, _)| *p == path) {
+        return Vec::new();
+    }
+    english.iter().map(|label| ITEM_PREFERRED.iter().find(|(p, l, _)| *p == path && l == label).map(|(_, _, c)| *c)).collect()
+}
+
 /// Keyboard state of the menu bar between frames.
 #[derive(Clone, Debug, Default)]
 pub struct Keys {
@@ -206,21 +222,37 @@ pub(crate) fn label_key(c: char) -> Option<char> {
 /// else the first unused ASCII letter or digit, trying the first character of each word before
 /// the others. Compared case-insensitively; the returned letter is upper case.
 pub fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> {
-    let mut used: Vec<char> = Vec::new();
-    let mut out = Vec::with_capacity(labels.len());
-    for (i, label) in labels.iter().enumerate() {
+    assign_with(labels, preferred, false)
+}
+
+/// [`assign`]; with `reserve`, every row takes its preferred letter before any row falls back, so
+/// an earlier row can't take a later row's preferred letter (#13181).
+fn assign_with(labels: &[&str], preferred: &[Option<char>], reserve: bool) -> Vec<Option<char>> {
+    let preferred_key = |i: usize, label: &str, used: &[char]| {
         let upper: Vec<char> = label.chars().filter_map(label_key).collect();
-        let has = |c: char| upper.contains(&c.to_ascii_uppercase());
-        let mut pick = preferred.get(i).copied().flatten().map(|c| c.to_ascii_uppercase()).filter(|&c| has(c) && !used.contains(&c));
-        if pick.is_none() {
-            let starts = label.split(|c: char| !c.is_alphanumeric()).filter_map(|w| w.chars().next());
-            let rest = label.chars();
-            pick = starts.chain(rest).filter_map(label_key).find(|c| !used.contains(c));
+        preferred.get(i).copied().flatten().map(|c| c.to_ascii_uppercase()).filter(|c| upper.contains(c) && !used.contains(c))
+    };
+    let mut used: Vec<char> = Vec::new();
+    let mut out: Vec<Option<char>> = vec![None; labels.len()];
+    if reserve {
+        for ((i, label), slot) in labels.iter().enumerate().zip(out.iter_mut()) {
+            *slot = preferred_key(i, label, &used);
+            if let Some(c) = *slot {
+                used.push(c);
+            }
         }
-        if let Some(c) = pick {
+    }
+    for ((i, label), slot) in labels.iter().enumerate().zip(out.iter_mut()) {
+        if slot.is_some() {
+            continue;
+        }
+        *slot = preferred_key(i, label, &used).or_else(|| {
+            let starts = label.split(|c: char| !c.is_alphanumeric()).filter_map(|w| w.chars().next());
+            starts.chain(label.chars()).filter_map(label_key).find(|c| !used.contains(c))
+        });
+        if let Some(c) = *slot {
             used.push(c);
         }
-        out.push(pick);
     }
     out
 }
@@ -232,13 +264,24 @@ pub fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> 
 /// do in those languages ("文件(F)", #5863). Mnemonics stay unique within the group, and a shown
 /// "(F)" is always the row's key.
 pub fn localized(labels: &[String], english: &[&str], preferred: &[Option<char>]) -> (Vec<String>, Vec<Option<char>>) {
+    localized_with(labels, english, preferred, false)
+}
+
+/// [`localized`] for the rows of a menu: their [`ITEM_PREFERRED`] letters are taken before any
+/// row falls back (#13181). The top menus keep [`localized`]'s order, so no translated menu bar
+/// changes its letters.
+pub fn localized_rows(labels: &[String], english: &[&str], preferred: &[Option<char>]) -> (Vec<String>, Vec<Option<char>>) {
+    localized_with(labels, english, preferred, true)
+}
+
+fn localized_with(labels: &[String], english: &[&str], preferred: &[Option<char>], reserve: bool) -> (Vec<String>, Vec<Option<char>>) {
     let typed = |l: &str| l.chars().any(|c| label_key(c).is_some());
     // The key goes before a trailing ellipsis, as Windows writes it: "新建(N)…".
     let with_key = |l: &str, k: char| match l.strip_suffix('…').map(|b| (b, "…")).or_else(|| l.strip_suffix("...").map(|b| (b, "..."))) {
         Some((base, tail)) => format!("{base}({k}){tail}"),
         None => format!("{l}({k})"),
     };
-    let english_keys = crate::i18n::with_language(crate::i18n::Lang::EN, || assign(english, preferred));
+    let english_keys = crate::i18n::with_language(crate::i18n::Lang::EN, || assign_with(english, preferred, reserve));
     let mut shown = Vec::with_capacity(labels.len());
     let mut pref = Vec::with_capacity(labels.len());
     for (i, label) in labels.iter().enumerate() {
@@ -260,7 +303,7 @@ pub fn localized(labels: &[String], english: &[&str], preferred: &[Option<char>]
     let ordered: Vec<&str> = order.iter().map(|&i| shown.get(i).map_or("", String::as_str)).collect();
     let ordered_pref: Vec<Option<char>> = order.iter().map(|&i| pref.get(i).copied().flatten()).collect();
     let mut keys = vec![None; shown.len()];
-    for (&i, key) in order.iter().zip(assign(&ordered, &ordered_pref)) {
+    for (&i, key) in order.iter().zip(assign_with(&ordered, &ordered_pref, reserve)) {
         if let Some(slot) = keys.get_mut(i) {
             *slot = key;
         }
@@ -572,6 +615,32 @@ mod tests {
         assert_eq!(assign(&["Aa", "Ab", "Ba"], &[Some('A'), Some('A'), Some('A')]), [Some('A'), Some('B'), None]);
         // Only ASCII letters and digits are keys: no mnemonic without one.
         assert_eq!(assign(&["ファイル", "Zoom 100%", "✔ Rulers"], &[]), [None, Some('Z'), Some('R')]);
+    }
+
+    #[test]
+    fn menu_rows_take_their_preferred_letters_first_and_the_top_menus_keep_their_order() {
+        // #13181: assigned in order, the first row takes A and the second, preferring A, none.
+        assert_eq!(assign(&["A1", "A"], &[None, Some('A')]), [Some('A'), None]);
+        assert_eq!(assign_with(&["A1", "A"], &[None, Some('A')], true), [Some('1'), Some('A')]);
+        assert_eq!(assign_with(&["Ab", "Ta"], &[None, Some('A')], true), [Some('B'), Some('A')]);
+        // The menu bar is unchanged in a translation whose labels lack some preferred letters.
+        let german = ["Datei", "Bearbeiten", "Bild", "Ebene", "Schrift", "Auswahl", "Filter", "Ansicht", "Fenster", "Hilfe"].map(String::from);
+        let preferred: Vec<Option<char>> = TOP_PREFERRED.iter().map(|(_, c)| Some(*c)).collect();
+        let english: Vec<&str> = TOP_PREFERRED.iter().map(|(l, _)| *l).collect();
+        let (_, keys) = localized(&german, &english, &preferred);
+        assert_eq!(keys, "DEIBSATNFH".chars().map(Some).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn every_preferred_row_letter_names_a_catalog_row_that_has_it() {
+        // A renamed row would silently lose its letter (and Transform its key, #13181).
+        for (path, label, c) in ITEM_PREFERRED {
+            let in_catalog = crate::menu_catalog::CATALOG
+                .iter()
+                .any(|(p, l, _, _)| (*p == path && *l == label) || (p.len() > path.len() && p.starts_with(path) && p.get(path.len()) == Some(&label)));
+            assert!(in_catalog, "{path:?} › {label} is not in the menu catalog");
+            assert!(label.to_ascii_uppercase().contains(c), "{label} has no {c}");
+        }
     }
 
     #[test]

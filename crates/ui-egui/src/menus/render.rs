@@ -43,7 +43,9 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
             })
             .unzip()
     };
-    let (shown_labels, mnemonics) = crate::menu_keys::localized(&translated, &english, &[]);
+    let menu_path: Vec<&str> = items.first().map(|it| it.path.iter().take(depth).map(String::as_str).collect()).unwrap_or_default();
+    let preferred = crate::menu_keys::item_preferred(&menu_path, &english);
+    let (shown_labels, mnemonics) = crate::menu_keys::localized_rows(&translated, &english, &preferred);
     let mut next_row = 0usize;
     let mut shown_subs: Vec<&str> = Vec::new();
     let mut last_was_sep = true;
