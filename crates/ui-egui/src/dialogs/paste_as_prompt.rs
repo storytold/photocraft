@@ -21,9 +21,11 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 /// Opens the dialog in place of an implicit Paste, only when the clipboard's vector source
 /// survived paste preparation (an SVG or PDF app's clipboard, not an ordinary bitmap copy):
 /// `None` otherwise, so the caller falls through to the ordinary route. Automation already
-/// states its mode through `edit.paste`'s own `as` param and never sees this dialog.
+/// states its mode through `edit.paste`'s own `as` param and never sees this dialog, and neither
+/// does a programmatic `engine.execute` (an implicit `edit.paste` there has nowhere to show a
+/// dialog, and would otherwise return `confirmationPending` without ever pasting).
 pub fn offer(app: &mut PhotocraftApp) -> Option<Result<Value, String>> {
-    let clip = app.session.clipboard.as_ref().filter(|_| !app.automation_input)?;
+    let clip = app.session.clipboard.as_ref().filter(|_| !app.automation_input && !app.programmatic_playback)?;
     let pdf_only = clip.svg.is_none() && clip.pdf.is_some();
     if clip.svg.is_none() && clip.pdf.is_none() {
         return None;

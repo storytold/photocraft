@@ -157,6 +157,7 @@ impl PhotocraftApp {
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
             self.os_clip_svg = None;
+            self.os_clip_pdf = None;
             self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
             self.clip_unmirrored = false;
         }
