@@ -471,17 +471,17 @@ mod web_playback_tests {
     fn four_up_double_click_selects_once() {
         let mut h = four_up_harness();
         let at = pane_center(&h, 2);
-        // Two quick presses at one spot, without the pointer leaving in between: a double-click.
+        // Three quick presses at one spot, without the pointer leaving in between: a double, then a triple click.
         h.hover_at(at);
         h.run_steps(1);
-        for _ in 0..2 {
+        for _ in 0..3 {
             for pressed in [true, false] {
                 h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
                 h.run_steps(1);
             }
         }
         h.run_steps(3);
-        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the second click of a double-click does not select again");
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the later clicks of a double or triple click do not select again");
     }
 
     /// A click that picks a slice in the pane is a slice selection, not a 4-Up choice.
@@ -521,6 +521,39 @@ mod web_playback_tests {
         click_pane(&mut h, 2);
         assert_eq!(h.state().1["colorTableEdits"], json!({"0": "#ffff00"}));
         assert!(h.state().1.contains_key("colorTable"), "the palette stays");
+    }
+
+    /// A pane whose settings equal the current ones shows the edited palette Save will write.
+    #[test]
+    fn variants_with_the_current_settings_keep_the_palette_edits() {
+        let p = json!({"format": "gif", "colors": 2, "colorTable": ["#000", "#fff"], "colorTableEdits": {"0": "#ff0"}});
+        let v = variants(&p);
+        assert_eq!(v[1]["colorTableEdits"], p["colorTableEdits"], "colors stay 2, so the pane is the current settings");
+        let p = json!({"format": "gif", "colors": 128, "colorTable": ["#000"], "colorTableEdits": {"0": "#ff0"}});
+        let v = variants(&p);
+        assert!(v[1].get("colorTable").is_none() && v[1].get("colorTableEdits").is_none(), "a different palette size drops them");
+        let mut f = json!({"format": "jpeg", "quality": 2.0, "__preset": "x"}).as_object().unwrap().clone();
+        select_variant(&mut f, &json!({"format": "jpeg", "quality": 2}));
+        assert_eq!(f["__preset"], "x", "2 and 2.0 are the same quality");
+    }
+
+    /// Clicking a slice that is already selected is still a slice click.
+    #[test]
+    fn four_up_click_on_a_selected_slice_leaves_the_settings() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 64, 48], "name": "all"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("jpeg"));
+        fields.insert("quality".into(), json!(60));
+        fields.insert("__selectedSlices".into(), json!([1]));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        click_pane(&mut h, 2);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]));
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0));
     }
 
     #[test]

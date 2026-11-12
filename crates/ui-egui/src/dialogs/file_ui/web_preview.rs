@@ -298,7 +298,8 @@ pub fn selected_slices(f: &Map<String, Value>) -> Vec<u64> {
 /// layer slices outlined in the slice colour, auto slices dashed, each with its number, and the
 /// selected ones highlighted (#10548). A click selects the slice under the pointer and
 /// Shift-click adds or removes one, like the dialog's Slice Select tool; the selection is the
-/// `__selectedSlices` field, which Selected Slices exports.
+/// `__selectedSlices` field, which Selected Slices exports. Returns true when a click landed on a
+/// slice, so the caller does not also treat it as a pane click.
 pub fn slices(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -307,10 +308,10 @@ pub fn slices(
     doc: &photocraft_doc::Document,
     color: egui::Color32,
     f: &mut Map<String, Value>,
-) {
+) -> bool {
     use photocraft_doc::SliceOrigin;
     if doc.slices.is_empty() {
-        return;
+        return false;
     }
     let (dw, dh) = (doc.size.width.max(1) as f32, doc.size.height.max(1) as f32);
     let to_screen = |r: photocraft_geom::Rect| {
@@ -318,10 +319,12 @@ pub fn slices(
         egui::Rect::from_two_pos(at(r.x0, r.y0), at(r.x1, r.y1))
     };
     let all = photocraft_doc::slices::resolve(doc);
+    let mut handled = false;
     if response.clicked()
         && let Some(pos) = response.interact_pointer_pos()
     {
         let hit = all.iter().find(|r| to_screen(r.rect).contains(pos)).map(|r| r.number as u64);
+        handled = hit.is_some();
         let mut selected = selected_slices(f);
         match hit {
             Some(n) if ui.input(|i| i.modifiers.shift) => {
@@ -376,6 +379,7 @@ pub fn slices(
             }
         }
     }
+    handled
 }
 
 #[cfg(test)]
