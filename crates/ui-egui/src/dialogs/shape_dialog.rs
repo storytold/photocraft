@@ -124,7 +124,7 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
             if radii.iter().any(|r| *r > 0.0) { json!({"kind": "roundedRect", "rect": rect, "radii": radii}) } else { json!({"kind": "rect", "rect": rect}) }
         }
         "ellipse" => json!({"kind": "ellipse", "rect": rect}),
-        "triangle" => json!({"kind": "polygon", "rect": rect, "sides": 3}),
+        "triangle" => json!({"kind": "triangle", "rect": rect}),
         "polygon" => {
             let sides = num(f, "sides").map_or(5.0, |s| s.round().clamp(3.0, 100.0));
             let ratio = num(f, "starRatio").map_or(100.0, |r| r.clamp(1.0, 100.0));
