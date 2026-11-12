@@ -92,7 +92,7 @@ fn fresh_metrics_text_writes_no_txt2_block() {
         photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
         doc.layers.push(Layer::new("t", LayerContent::Text(r)));
         let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
-        photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().global_blocks.iter().any(|b| &b.key == b"Txt2")
+        craft_psd::PsdFile::from_bytes(&bytes).unwrap().global_blocks.iter().any(|b| &b.key == b"Txt2")
     };
     assert!(!saves_txt2(Kerning::Metrics), "a plain Metrics layer must not write the empty Txt2 stub");
     assert!(saves_txt2(Kerning::Optical), "Optical lives only in Txt2");
@@ -140,7 +140,7 @@ fn fresh_stylistic_sets_round_trip_through_psd() {
     photocraft_text::TextEngine::new().render_layer(&mut r, doc.resolution_dpi, doc.pixel_format());
     doc.layers.push(Layer::new("t", LayerContent::Text(r)));
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
     let txt2 =
         file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).expect("Txt2 written for stylistic sets");
     let style = txt2
@@ -188,7 +188,7 @@ fn duplicate_preserved_text_indices_get_distinct_txt2_objects() {
         doc.layers.push(Layer::new(name, LayerContent::Text(t)));
     }
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
     assert_eq!(txt2.path(&["1", "1"]).and_then(E::as_array).unwrap().len(), 2);
     let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
@@ -304,7 +304,7 @@ fn hostile_text_index_never_sizes_the_save() {
     r.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&photocraft_text::psd::build_tysh(&r, 72.0, None), i32::MAX).unwrap()));
     doc.layers.push(Layer::new("hostile", LayerContent::Text(r)));
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
     let slots = txt2.path(&["1", "1"]).and_then(E::as_array).unwrap();
     assert!(slots.len() <= 8, "a file-controlled TextIndex sized the save: {} slots", slots.len());
@@ -338,7 +338,7 @@ fn txt2_extras_survive_an_unedited_resave() {
     doc.layers.push(Layer::new("kept", LayerContent::Text(r)));
     doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", std::sync::Arc::new(txt2.clone())));
     let saved = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap();
-    let file = photocraft_psd::PsdFile::from_bytes(&saved.bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&saved.bytes).unwrap();
     let back = &file.global_blocks.iter().find(|b| &b.key == b"Txt2").expect("an unedited resave keeps the file's Txt2").data;
     assert_eq!(back[..], txt2[..], "written back as it was");
     let object = photocraft_text::psd::parse_txt2(back).unwrap().path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
@@ -349,7 +349,7 @@ fn txt2_extras_survive_an_unedited_resave() {
 /// `tysh` with the superscript, subscript and small-caps sizes taken out of its EngineData (as an
 /// older PhotoCraft wrote a type layer it made), and then `also` applied to the EngineData.
 fn without_document_sizes(tysh: &[u8], also: impl FnOnce(&mut E)) -> Vec<u8> {
-    use photocraft_psd::descriptor::Value as D;
+    use craft_psd::descriptor::Value as D;
     let mut t = photocraft_text::psd::parse_tysh(tysh).unwrap();
     let mut e = photocraft_text::psd::engine_data(&t.text).unwrap();
     for key in ["ResourceDict", "DocumentResources"] {
@@ -388,7 +388,7 @@ fn edited_type_drops_the_files_txt2() {
         }
         doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(prev.clone()))];
         let saved = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap();
-        let file = photocraft_psd::PsdFile::from_bytes(&saved.bytes).unwrap();
+        let file = craft_psd::PsdFile::from_bytes(&saved.bytes).unwrap();
         let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").map(|b| b.data.clone());
         // Dropping the file's Txt2 is said, untouched layers included; keeping it says nothing.
         let warned = saved.warnings.iter().any(|w| w.contains("Txt2") && w.contains("unedited ones included"));
@@ -462,6 +462,7 @@ fn native_txt2_carries_what_photoshop_needs() {
     on_path.shape = photocraft_doc::text::TextShape::Path {
         path: photocraft_doc::vector::Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0)]),
         start: 0.0,
+        end: None,
         flip: false,
     };
     assert!(photocraft_text::psd::needs_txt2(&[(0, &on_path)]), "type on a path is kept in Txt2");
@@ -529,7 +530,7 @@ fn photoshop_kerning_oracles() {
     ];
     for (name, want, same_fields, worst_max, mean_max) in cases {
         let bytes = std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+        let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
         let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)).unwrap();
         let doc = photocraft_io::import(name, &bytes).unwrap().document;
         let t = doc
@@ -559,7 +560,7 @@ fn photoshop_kerning_oracles() {
             continue;
         }
         let index = match &tysh.text.get("TextIndex") {
-            Some(photocraft_psd::descriptor::Value::Integer(i)) => *i as usize,
+            Some(craft_psd::descriptor::Value::Integer(i)) => *i as usize,
             _ => panic!("{name}: no TextIndex"),
         };
         let ps = photoshop_positions(&txt2, index).unwrap();
@@ -574,4 +575,27 @@ fn photoshop_kerning_oracles() {
         eprintln!("{name}: advance error vs Photoshop: mean {mean:.3} px, worst {worst:.3} px");
         assert!(worst <= worst_max && mean <= mean_max, "{name}: mean {mean}, worst {worst}");
     }
+}
+
+/// A type layer's range on its path (a moved start and an end limit) survives a PSD save and
+/// open, without an export warning.
+#[test]
+fn psd_keeps_a_text_path_range() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_doc::vector::Subpath;
+
+    let mut doc = Document::new("range", photocraft_geom::Size::new(64, 32), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut text = layer("hello", &[]);
+    text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (60.0, 0.0)]), start: 5.0, end: Some(20.0), flip: false };
+    doc.layers.push(Layer::new("limited", LayerContent::Text(text)));
+    let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
+    assert!(!result.warnings.iter().any(|w| w.contains("limited")), "{:?}", result.warnings);
+    let back = photocraft_io::import("range.psd", &result.bytes).unwrap().document;
+    let shape = back.layers.iter().find_map(|l| match &l.content {
+        LayerContent::Text(t) => Some(t.shape.clone()),
+        _ => None,
+    });
+    let Some(TextShape::Path { path, start, end: Some(end), flip: false }) = shape else { panic!("{shape:?}") };
+    assert!(!path.closed && path.knots.len() == 2, "the whole path is saved: {path:?}");
+    assert!((start - 5.0).abs() < 0.01 && (end - 20.0).abs() < 0.01, "{start} {end}");
 }
