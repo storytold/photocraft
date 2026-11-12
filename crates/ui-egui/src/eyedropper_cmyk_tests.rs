@@ -40,13 +40,13 @@ fn eyedropper_cmyk_foreground_and_background_reopen_with_exact_inks() {
 
 #[test]
 fn eyedropper_cmyk_pick_fills_with_the_original_inks() {
-    for ink_index in 0..4 {
+    for (ink_index, ink) in INKS.iter().enumerate() {
         let mut app = chart(8);
         sample_eyedropper(&mut app, (ink_index * 8 + 3) as f64, 3.0, egui::Modifiers::NONE);
         app.run("edit.fillForeground", json!({})).unwrap();
         let st = app.session.active().unwrap();
         let pixel = st.doc.layers[0].surface().unwrap().pixel(1, 1);
-        assert_eq!(pixel.get(..4), Some(INKS[ink_index].as_slice()));
+        assert_eq!(pixel.get(..4), Some(ink.as_slice()));
     }
 }
 
@@ -75,22 +75,22 @@ fn eyedropper_cmyk_mask_keeps_grayscale_sampling() {
 
 #[test]
 fn eyedropper_cmyk_dialog_sampling_confirms_original_inks_and_reset_restores_opening_color() {
-    for ink_index in 0..4 {
+    for (ink_index, ink) in INKS.iter().enumerate() {
         let mut app = chart(16);
         let original = app.session.tools.foreground;
         let id = color_picker_ui::open(&mut app, "foreground");
         color_picker_ui::sample_at(&mut app, (ink_index * 8 + 3) as f64, 3.0);
         let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-        assert_eq!(color_picker_ui::current(&fields).cmyk, INKS[ink_index]);
+        assert_eq!(color_picker_ui::current(&fields).cmyk, *ink);
         assert_eq!(app.session.tools.foreground, original, "sampling inside a dialog does not commit the colour");
         color_picker_ui::reset(&mut app.ui.dialog_mut(id).unwrap().fields);
         assert_eq!(app.ui.dialog_mut(id).unwrap().fields["color"], color_picker_ui::hex([original[0], original[1], original[2]]));
         color_picker_ui::confirm(&mut app, &fields).unwrap();
         let c = app.session.tools.foreground;
-        assert_eq!(app.session.tools.picked_cmyk([c[0], c[1], c[2]]), Some(INKS[ink_index]));
+        assert_eq!(app.session.tools.picked_cmyk([c[0], c[1], c[2]]), Some(*ink));
         app.ui.close_dialog(id);
         let id = color_picker_ui::open(&mut app, "foreground");
-        assert_eq!(color_picker_ui::current(&app.ui.dialog_mut(id).unwrap().fields).cmyk, INKS[ink_index]);
+        assert_eq!(color_picker_ui::current(&app.ui.dialog_mut(id).unwrap().fields).cmyk, *ink);
     }
 }
 
