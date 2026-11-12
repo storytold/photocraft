@@ -627,8 +627,17 @@ pub const PEN_MENU: &[Row] = &[
 /// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
 /// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
 /// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
-/// menus, keep the table's label.
+/// menus, keep the table's label. The layer rows that act on every selected layer (Duplicate,
+/// Delete, Rasterize) read in the plural with several layers selected, as in the Layers panel
+/// menu (#12358).
 pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    // Only these rows count the selected layers (the menu asks for every row each frame).
+    if crate::layer_menu_ui::layer_count_label(command, false).is_some() {
+        let multi = app.session.active().is_some_and(|st| st.selected_layers().len() > 1);
+        if let Some(label) = crate::layer_menu_ui::layer_count_label(command, multi) {
+            return label;
+        }
+    }
     if command != "path.transform" || menu.tool != Tool::Pen {
         return label;
     }
@@ -1780,6 +1789,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                     let text = match row_label(app, &menu, label, command) {
                         // Spelled out so `cargo xtask i18n-coverage` lists the new label.
                         "Free Transform Points" => tl!("Free Transform Points"),
+                        // `layer_menu_ui::layer_count_label`'s labels, likewise (#12358).
+                        "Duplicate Layer…" => tl!("Duplicate Layer…"),
+                        "Delete Layer" => tl!("Delete Layer"),
+                        "Duplicate Layers…" => tl!("Duplicate Layers…"),
+                        "Delete Layers" => tl!("Delete Layers"),
+                        "Rasterize Layers" => tl!("Rasterize Layers"),
                         key => tl!(key),
                     };
                     let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
@@ -1838,3 +1853,6 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+
+#[cfg(test)]
+mod layer_plural_tests;
