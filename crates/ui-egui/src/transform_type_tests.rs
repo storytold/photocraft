@@ -128,16 +128,18 @@ fn distort_and_perspective_corner_drags_scale_editable_type() {
 }
 
 /// Beyond Photoshop, opt-in (Preferences › Type › Free Transforms on Type, #3321): Distort and
-/// Perspective stay available on editable type. The default is the greyed rule above.
+/// Perspective stay available on editable type. The default is the greyed rule above. The split
+/// warps stay greyed until a Warp box is open (#12494), opted in or not.
 #[test]
 fn opted_in_type_layers_offer_distort_and_perspective() {
     let mut app = app();
     assert!(!app.session.prefs().type_.free_transforms_on_type, "off by default");
     assert!(!crate::menus::is_enabled(&app, "edit.transform.distort"));
     app.run("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
-    for id in ["edit.transform.distort", "edit.transform.perspective", "edit.transform.splitWarpCrosswise"] {
+    for id in ["edit.transform.distort", "edit.transform.perspective"] {
         assert!(crate::menus::is_enabled(&app, id), "{id}");
     }
+    assert!(!crate::menus::is_enabled(&app, "edit.transform.splitWarpCrosswise"), "no Warp box is open");
 }
 
 /// Opted in, ⌘-drag (distort) and ⌘⌥⇧-drag (perspective) of a corner on editable type distort the
