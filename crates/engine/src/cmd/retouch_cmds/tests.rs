@@ -1529,7 +1529,7 @@ fn content_aware_move_coarse_preview_handles_transform_extend_and_limits() {
     let (extended, _) = content_aware_move_preview(&s, &json!({"offset": [250, 60], "mode": "extend"})).unwrap().run(&JobCtx::new()).unwrap();
     assert!(is_object(px(&extended, 460, 220)) && is_object(px(&extended, 210, 160)));
     // Off the canvas, or past the command's own limit, is still an error.
-    assert!(content_aware_move_preview(&s, &json!({"offset": [400, 0]})).is_err());
+    assert!(content_aware_move_preview(&s, &json!({"offset": [700, 0]})).is_err());
     let mut big = session(5000, 4000, 8, "rgb");
     big.execute("select.rect", json!({"x": 0, "y": 0, "width": 4500, "height": 3900})).unwrap();
     assert!(content_aware_move_preview(&big, &json!({"offset": [10, 10]})).is_err());
@@ -1694,7 +1694,7 @@ fn content_aware_move_fails_gracefully() {
         json!({"offset": [10, 0], "color": -1}),
         json!({"offset": [10, 0], "color": 11}),
         json!({"offset": [10, 0], "color": [1]}),
-        json!({"offset": [50, 0]}),
+        json!({"offset": [60, 0]}),
         json!({"offset": [0, -30]}),
         json!({"offset": [10, 0], "target": "mask"}),
         json!({"offset": [10, 0], "target": {"channel": 7}}),
@@ -2978,6 +2978,176 @@ fn live_history_and_pattern_strokes_stop_at_the_canvas_edge() {
         };
         assert_eq!(bounds(true), bounds(false), "{cmd}: the live stroke stays where it was drawn");
     }
+}
+
+/// #12453: the Content-Aware Move may be dragged past the canvas edge; what lands outside is
+/// dropped and the part on the canvas moves.
+#[test]
+fn content_aware_move_past_the_edge_drops_the_outside_part() {
+    for (mode, keeps) in [("move", false), ("extend", true)] {
+        let mut s = session(128, 64, 8, "rgb");
+        paint_layer(&mut s, with_object(100, 26));
+        s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20})).unwrap();
+        // The selection (x 96..116) lands on x 116..136: 12 columns on the canvas, 8 past the edge.
+        let r = s.execute("paint.contentAwareMove", json!({"offset": [20, 0], "mode": mode})).unwrap();
+        assert_eq!(r["offset"], json!([20, 0]));
+        // The object (x 100..112) now spans 120..132; the part up to the edge is there.
+        for (x, y) in [(124, 30), (126, 32), (127, 34)] {
+            assert!(is_object(rgba(&s, x, y)), "{mode}: object at {x},{y}: {:?}", rgba(&s, x, y));
+        }
+        // Its old place is filled again (move) or kept (extend).
+        for (x, y) in [(103, 30), (106, 32), (109, 35)] {
+            assert_eq!(is_object(rgba(&s, x, y)), keeps, "{mode}: old place {x},{y}: {:?}", rgba(&s, x, y));
+        }
+        // The selection followed the content and is cut off at the edge.
+        assert!(selected(&s, 120, 32) && selected(&s, 127, 32), "{mode}: selection on the canvas");
+        assert!(!selected(&s, 100, 32) && !selected(&s, 130, 32), "{mode}: old place and the part past the edge");
+        let b = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+        assert_eq!((b.x0, b.x1), (116, 128), "{mode}: the selection is cut at the edge");
+        // One undo step restores it.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(is_object(rgba(&s, 105, 31)) && !is_object(rgba(&s, 125, 31)), "{mode}: undo");
+        assert!(selected(&s, 100, 32), "{mode}: undo restores the selection");
+    }
+}
+
+#[test]
+fn content_aware_move_wholly_off_the_canvas_is_refused() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20})).unwrap();
+    let before = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(105, 31);
+    for p in [
+        json!({"offset": [32, 0]}),
+        json!({"offset": [-200, 0]}),
+        json!({"offset": [0, 60]}),
+        json!({"offset": [0, -70], "mode": "extend"}),
+        json!({"offset": [i32::MAX, 0]}),
+        json!({"offset": [-1e12, 5]}),
+        json!({"offset": [1e12, -1e12]}),
+    ] {
+        assert!(s.execute("paint.contentAwareMove", p.clone()).is_err(), "{p}");
+    }
+    assert_eq!(rgba(&s, 105, 31), before, "the document is unchanged");
+    assert!(selected(&s, 100, 32) && !selected(&s, 125, 32), "so is the selection");
+    // One pixel on the canvas is enough.
+    assert!(s.execute("paint.contentAwareMove", json!({"offset": [31, 0]})).is_ok());
+}
+
+#[test]
+fn content_aware_move_with_no_selected_pixel_on_the_canvas_is_refused() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    let probe = [(105, 31), (96, 41), (127, 0), (100, 26), (60, 10)];
+    let before: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let bounds = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    // The bounding box's bottom-left corner lands on the canvas's top-right pixel, where the
+    // ellipse has no selected pixel.
+    for mode in ["move", "extend"] {
+        let r = s.execute("paint.contentAwareMove", json!({"offset": [31, -41], "mode": mode}));
+        assert!(r.is_err(), "{mode}: {r:?}");
+    }
+    let after: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    assert_eq!(before, after, "the document is unchanged");
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), bounds, "so is the selection");
+    // The same selection, moved so that its middle row reaches the canvas, is fine.
+    assert!(s.execute("paint.contentAwareMove", json!({"offset": [31, -22]})).is_ok());
+}
+
+#[test]
+fn content_aware_move_transformed_selection_is_cut_at_the_edge_too() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20})).unwrap();
+    // Stretched to three times the width about its centre, then moved 20 px right: x 96..156.
+    let r = s.execute("paint.contentAwareMove", json!({"offset": [20, 0], "scaleX": 300})).unwrap();
+    assert_eq!(r["transformed"], json!(true));
+    let b = s.active().unwrap().doc.selection.as_ref().expect("part of the selection is still on the canvas").content_bounds();
+    assert!(b.x0 >= 0 && b.y0 >= 0 && b.x1 <= 128 && b.y1 <= 64, "the selection lies on the canvas: {b:?}");
+    assert!(b.x1 > 120, "and reaches the edge: {b:?}");
+}
+
+#[test]
+fn content_aware_move_transformed_with_no_selected_pixel_on_the_canvas_is_refused() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    let probe = [(105, 31), (96, 41), (127, 0), (100, 26), (60, 10)];
+    let before: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let bounds = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    // Stretched to twice the width (x 86..126), its bounding box's bottom-left corner lands on the
+    // canvas's top-right pixel, where the ellipse has no selected pixel.
+    for mode in ["move", "extend"] {
+        let r = s.execute("paint.contentAwareMove", json!({"offset": [41, -41], "scaleX": 200, "mode": mode}));
+        assert!(r.is_err(), "{mode}: {r:?}");
+    }
+    let after: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    assert_eq!(before, after, "the document is unchanged");
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), bounds, "so is the selection");
+}
+
+#[test]
+fn content_aware_move_transformed_ellipse_partly_on_the_canvas_moves() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    // Stretched to x 86..126 and moved 30 px right: x 116..156, its left part on the canvas.
+    let r = s.execute("paint.contentAwareMove", json!({"offset": [30, 0], "scaleX": 200}));
+    assert!(r.is_ok(), "{r:?}");
+    assert!(selected(&s, 124, 32), "the selection followed onto the canvas");
+}
+
+#[test]
+fn content_aware_move_keeps_an_inverted_selection() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    // Everything but a hole near the right edge, kept as the outside being selected (default pixel set).
+    s.execute("select.rect", json!({"x": 118, "y": 22, "width": 8, "height": 20})).unwrap();
+    let st = s.active_mut().unwrap();
+    let mut inv = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
+    inv.write_interleaved(photocraft_geom::Rect::new(118, 22, 126, 42), &[0u8; 8 * 20]);
+    std::sync::Arc::make_mut(&mut st.doc).selection = Some(inv);
+    assert!(selected(&s, 10, 10) && !selected(&s, 120, 30), "everything but the hole is selected");
+    // The hole goes past the right edge; the rest of the selection is still the canvas.
+    let r = s.execute("paint.contentAwareMove", json!({"offset": [20, 0]}));
+    assert!(r.is_ok(), "{r:?}");
+    assert!(s.active().unwrap().doc.selection.is_some(), "the inverted selection survives the move");
+    assert!(selected(&s, 10, 10), "a pixel far from the hole is still selected");
+    assert!(selected(&s, 120, 30), "so is the old position of the hole");
+}
+
+#[test]
+fn content_aware_move_heavily_scaled_down_landing_on_no_pixel_is_refused() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    let probe = [(105, 31), (96, 41), (127, 0), (100, 26), (60, 10)];
+    let before: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let bounds = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    // Scaled to 1% about its centre the selection is a fraction of a pixel wide: its whole mapped
+    // bounds are on the canvas but no pixel centre falls inside it.
+    for mode in ["move", "extend"] {
+        let r = s.execute("paint.contentAwareMove", json!({"offset": [-40, 0], "scaleX": 1, "scaleY": 1, "mode": mode}));
+        assert!(r.is_err(), "{mode}: {r:?}");
+    }
+    let after: Vec<_> = probe.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    assert_eq!(before, after, "the document is unchanged");
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), bounds, "so is the selection");
+}
+
+#[test]
+fn content_aware_move_preview_defers_the_landing_check_to_its_job() {
+    let mut s = session(128, 64, 8, "rgb");
+    paint_layer(&mut s, with_object(100, 26));
+    s.execute("select.rect", json!({"x": 96, "y": 22, "width": 20, "height": 20, "ellipse": true})).unwrap();
+    // The same drop the command refuses (its selection lands on no pixel centre): preparing the
+    // preview on the UI thread is cheap and succeeds, the job reports the error.
+    let p = json!({"offset": [-40, 0], "scaleX": 1, "scaleY": 1});
+    assert!(s.execute("paint.contentAwareMove", p.clone()).is_err());
+    let job = crate::retouch_cmds::content_aware_move_preview(&s, &p).expect("the preview is prepared without the landing scan");
+    let err = job.run(&crate::jobs::JobCtx::new()).unwrap_err();
+    assert!(err.to_string().contains("no selected pixel of the moved selection lands on the canvas"), "{err}");
 }
 
 /// `smoothing` (the options bar's %) overrides the session brush's amount and keeps its other

@@ -1212,3 +1212,91 @@ fn history_brush_options_bar_shows_source_name() {
     h.run_steps(4);
     h.get_by_label("The History Brush source was deleted: set a new source in the History panel");
 }
+
+/// #12453: the Content-Aware Move Tool may drag the selection past the canvas edge (one pixel of it
+/// stays on the canvas); the Patch Tool keeps the whole outline on the canvas.
+#[test]
+fn content_aware_move_offset_may_reach_past_the_edge_but_patch_stays_inside() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 40, "y": 20, "width": 20, "height": 20})).unwrap();
+    app.ui.tool = Tool::ContentAwareMove;
+    // Selection x 40..60 on a 100 px canvas: left until its last column (x 59) sits at x 0.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-59, 0]);
+    // Right until its first column (x 40) sits at x 99.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [600.0, 30.0]), [59, 0]);
+    // Selection y 20..40 on a 60 px canvas.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [50.0, -500.0]), [0, -39]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [50.0, 500.0]), [0, 39]);
+    // A drag that stays within these limits is untouched.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [20.0, 35.0]), [-30, 5]);
+    // The Patch Tool keeps the strict clamp.
+    app.ui.tool = Tool::Patch;
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-40, 0]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [600.0, 30.0]), [40, 0]);
+}
+
+#[test]
+fn patch_offset_with_no_room_or_an_empty_selection_does_not_panic() {
+    let mut app = app();
+    app.ui.tool = Tool::ContentAwareMove;
+    // No selection at all.
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [5.0, 5.0]), [5, 5]);
+    // A selection covering the whole canvas: at least one pixel stays on it, so any drag up to
+    // the canvas size is allowed, and a huge one is held there.
+    app.run("select.all", json!({})).unwrap();
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [1e9, -1e9]), [99, -59]);
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [f64::NAN, f64::INFINITY]), [0, 0]);
+    app.ui.tool = Tool::Patch;
+    assert_eq!(patch_offset(&mut app, [0.0, 0.0], [1e9, -1e9]), [0, 0]);
+}
+
+/// The clamp follows the tool the drag started with, not the toolbar's current one.
+#[test]
+fn patch_offset_follows_the_drags_own_tool() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 40, "y": 20, "width": 20, "height": 20})).unwrap();
+    app.ui.tool = Tool::ContentAwareMove;
+    app.drag = Some(crate::canvas::Drag::new(Tool::Patch, [50.0, 30.0], vec![[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    // Strict: the whole outline stays on the canvas.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-40, 0]);
+    // And the other way round: a Content-Aware Move drag keeps the loose clamp.
+    app.ui.tool = Tool::Patch;
+    app.drag = Some(crate::canvas::Drag::new(Tool::ContentAwareMove, [50.0, 30.0], vec![[50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-500.0, 30.0]), [-59, 0]);
+    app.drag = None;
+}
+
+/// #12453: an inverted selection (Select All minus a hole near the edge) is planned by the engine over
+/// the canvas, so the drag clamp uses the canvas too, not the bounds of the unselected hole.
+#[test]
+fn content_aware_move_drag_clamp_uses_the_canvas_for_an_inverted_selection() {
+    let mut app = app();
+    app.ui.tool = Tool::ContentAwareMove;
+    let mut sel = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
+    sel.write_interleaved(photocraft_geom::Rect::new(90, 20, 98, 40), &[0u8; 8 * 20]);
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).selection = Some(sel);
+    // Clamped to the hole's bounds this would stop at 9 (100 - 90 - 1); on the canvas a one pixel
+    // overlap allows up to 99.
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [70.0, 30.0]), [20, 0]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [1000.0, 30.0]), [99, 0]);
+    assert_eq!(patch_offset(&mut app, [50.0, 30.0], [-1000.0, 30.0]), [-99, 0]);
+}
+
+/// Transform On Drop boxes the area the engine plans over: the canvas for an inverted selection, not the
+/// bounds of its unselected hole (which would also be skipped for a Select All without tiles).
+#[test]
+fn transform_on_drop_box_uses_the_canvas_for_an_inverted_selection() {
+    let mut app = app();
+    app.ui.tool = Tool::ContentAwareMove;
+    let mut sel = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
+    sel.write_interleaved(photocraft_geom::Rect::new(90, 20, 98, 40), &[0u8; 8 * 20]);
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).selection = Some(sel);
+    assert!(crate::cam_transform::begin(&mut app, [5, 0]));
+    assert_eq!(app.ui.cam_transform.as_ref().unwrap().frame.rect, [5.0, 0.0, 105.0, 60.0]);
+    // A plain Select All has no tiles at all; the box still comes up.
+    app.ui.cam_transform = None;
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).selection =
+        Some(photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+    assert!(crate::cam_transform::begin(&mut app, [5, 0]));
+    assert_eq!(app.ui.cam_transform.as_ref().unwrap().frame.rect, [5.0, 0.0, 105.0, 60.0]);
+}

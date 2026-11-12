@@ -29,8 +29,9 @@
 //! scale and rotate the content before the blend is computed. `scaleX` / `scaleY` (%) and
 //! `rotate` (degrees, clockwise) scale and turn the content about the centre of the selection's
 //! bounds before `offset` moves it, as `select.transformSelection` does; the selection is
-//! transformed with it. A transformed patch may reach past the canvas edge (Photoshop lets the
-//! box go there): what lands outside is dropped.
+//! transformed with it. A patch, transformed or plain, may reach past the canvas edge (Photoshop
+//! lets the box go there): what lands outside is dropped, and the selection that follows the
+//! content is cut off at the edge too. Only a move that leaves nothing on the canvas is refused.
 
 use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fill_with, level_transform};
 use photocraft_algo::transform::{Homography, Interp};
@@ -205,7 +206,10 @@ fn landed_mask(cov: &[f32], area: Rect, inv: &Homography, rect: Rect) -> Vec<boo
         .collect()
 }
 
-fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
+/// Everything a move is checked for except that a selected pixel lands on the canvas ([`check_lands`]),
+/// which can read a whole large selection: cheap, so a caller can plan on the UI thread and run the
+/// scan in its job.
+fn plan_unchecked(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     let mode = match string(p, "mode", "move") {
         "move" => Mode::Move,
         "extend" => Mode::Extend,
@@ -235,16 +239,95 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     Ok(Plan { target: Target { id, all_layers }, canvas, area, offset: (dx, dy), map, dest, mode, structure, color, margin })
 }
 
+/// The error of a move whose selection lands on no canvas pixel (see [`selected_pixel_lands`]).
+fn check_lands(sel: &Surface, plan: &Plan) -> Result<()> {
+    if selected_pixel_lands(sel, plan.area, plan.map.as_ref(), plan.offset, plan.dest) {
+        Ok(())
+    } else {
+        Err(bad(CMD, "no selected pixel of the moved selection lands on the canvas"))
+    }
+}
+
+/// Whether any selected pixel of the moved (or transformed) selection falls inside `dest`, the
+/// part of its bounds that is on the canvas. A round selection dragged towards a corner can keep
+/// only a corner of its bounding box there; moving that would erase the old place and paste nothing.
+/// Always scanned, never assumed from the bounds: a heavily scaled-down selection can land on no
+/// pixel centre although its whole bounds are on the canvas. The plain path reads in 64-row bands,
+/// the transformed path reads the coverage of the inverse-mapped sub-rect once; both stop at the
+/// first selected pixel.
+fn selected_pixel_lands(sel: &Surface, area: Rect, map: Option<&Homography>, (dx, dy): (i32, i32), dest: Rect) -> bool {
+    match map {
+        None => any_selected(sel, dest.translate(-dx, -dy)),
+        Some(h) => {
+            // `run_move` reports the collapsed transform.
+            let Some(inv) = h.inverse() else { return true };
+            let corners = [(dest.x0, dest.y0), (dest.x1, dest.y0), (dest.x0, dest.y1), (dest.x1, dest.y1)].map(|(x, y)| inv.apply(f64::from(x), f64::from(y)));
+            if corners.iter().any(|(x, y)| !(x.is_finite() && y.is_finite())) {
+                return true;
+            }
+            let lo = |f: fn(f64, f64) -> f64, pick: fn(&(f64, f64)) -> f64| corners.iter().map(pick).fold(pick(&corners[0]), f);
+            let clamp = |v: f64| v.clamp(-1e8, 1e8) as i32;
+            let sub = Rect::new(
+                clamp(lo(f64::min, |c| c.0).floor() - 1.0),
+                clamp(lo(f64::min, |c| c.1).floor() - 1.0),
+                clamp(lo(f64::max, |c| c.0).ceil() + 1.0),
+                clamp(lo(f64::max, |c| c.1).ceil() + 1.0),
+            )
+            .intersect(&area);
+            if sub.is_empty() {
+                return false;
+            }
+            let cov = coverage(sel, sub);
+            let w = sub.width() as usize;
+            (dest.y0..dest.y1).any(|qy| {
+                (dest.x0..dest.x1).any(|qx| {
+                    let (sx, sy) = inv.apply(f64::from(qx) + 0.5, f64::from(qy) + 0.5);
+                    let (x, y) = (sx.floor(), sy.floor());
+                    if !(f64::from(sub.x0)..f64::from(sub.x1)).contains(&x) || !(f64::from(sub.y0)..f64::from(sub.y1)).contains(&y) {
+                        return false;
+                    }
+                    let j = (y as i32 - sub.y0) as usize * w + (x as i32 - sub.x0) as usize;
+                    cov.get(j).is_some_and(|c| *c > 0.0)
+                })
+            })
+        }
+    }
+}
+
+/// Whether any pixel of `sel` over `rect` is above zero: read in bands of 64 rows (one buffer),
+/// stopping at the first hit.
+fn any_selected(sel: &Surface, rect: Rect) -> bool {
+    let n = sel.channels().max(1);
+    let mut buf = Vec::new();
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let band = Rect::new(rect.x0, y, rect.x1, y.saturating_add(64).min(rect.y1));
+        sel.read_region_into(band, &mut buf);
+        if buf.chunks_exact(n).any(|px| px.first().is_some_and(|c| *c > 0.0)) {
+            return true;
+        }
+        y = band.y1;
+    }
+    false
+}
+
+/// Whether `s` selects anything: its default pixel (outside every tile) is set, as for an
+/// inverted selection, or some pixel differs from it.
+fn selects_something(s: &Surface) -> bool {
+    s.default_pixel().first().copied().unwrap_or(0.0) > 0.0 || !s.content_bounds().is_empty()
+}
+
 /// Where the content of `area` lands on `canvas`: moved by `offset`, or (Transform On Drop) the
-/// bounds of the area mapped by `map`, clipped to the canvas.
+/// bounds of the area mapped by `map`; either way clipped to the canvas (what lands outside is
+/// dropped).
 fn landing(map: Option<&Homography>, area: Rect, (dx, dy): (i32, i32), canvas: Rect) -> Result<Rect> {
     match map {
         None => {
-            // Content dropped beyond the edge would be lost: keep it on the canvas, as the Patch
-            // Tool does.
-            let dest = area.translate(dx, dy);
-            if !canvas.contains_rect(&dest) {
-                return Err(bad(CMD, "the moved selection must stay inside the canvas"));
+            // A plain move may reach past the edge, as a transformed one does: what lands outside
+            // the canvas is dropped. Only a move that leaves nothing on the canvas is refused.
+            let dest = area.translate(dx, dy).intersect(&canvas);
+            if dest.is_empty() {
+                return Err(bad(CMD, "the moved selection must land on the canvas"));
             }
             Ok(dest)
         }
@@ -594,7 +677,7 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
 }
 
 pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
-    let plan = plan(s, p, MAX_MARGIN)?;
+    let plan = plan_unchecked(s, p, MAX_MARGIN)?;
     let label = if plan.mode == Mode::Move { "Content-Aware Move" } else { "Content-Aware Extend" };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
@@ -607,8 +690,10 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
             let p = p.clone();
             move |ctx| {
                 ctx.progress(0.0, label);
-                let mut work = (*doc).clone();
                 let sel = doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
+                // The landing scan runs here, off the UI thread (`plan_unchecked` leaves it out).
+                check_lands(sel, &plan)?;
+                let mut work = (*doc).clone();
                 run_move(&mut work, sel, &plan, &p, ctx, label)
             }
         },
@@ -617,11 +702,20 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit(label, |doc, _| {
                 *crate::channel_cmds::target_surface(doc, plan.target.id, &p)?.0 = surf;
                 // The selection follows the content, ready for another drag.
-                if let Some(moved) = moved_sel {
-                    doc.selection = Some(moved).filter(|s| !s.content_bounds().is_empty());
-                } else if let Some(sel) = doc.selection.as_ref() {
-                    doc.selection = Some(crate::layer_multi_cmds::shift_surface(sel, dx, dy));
-                }
+                let followed = if let Some(moved) = moved_sel {
+                    Some(moved).filter(selects_something)
+                } else {
+                    doc.selection.as_ref().map(|sel| crate::layer_multi_cmds::shift_surface(sel, dx, dy))
+                };
+                // What was dragged past the canvas edge is dropped from the selection too, plain or
+                // transformed; nothing left means no selection.
+                doc.selection = followed.and_then(|f| {
+                    if plan.canvas.contains_rect(&f.content_bounds()) {
+                        Some(f)
+                    } else {
+                        Some(photocraft_algo::resample::crop_surface(&f, plan.canvas)).filter(selects_something)
+                    }
+                });
                 Ok(())
             })?;
             s.hint_damage(damage);
@@ -654,14 +748,23 @@ pub struct ContentAwarePreview {
     params: Value,
     /// Below 1: the scale the move is solved at before it is enlarged back.
     scale: f64,
+    /// The landing scan has already passed for this document and plan (a refinement of a checked preview).
+    checked: bool,
 }
 
 impl ContentAwarePreview {
     /// The active document with the move applied (nothing is recorded, the session is not
-    /// touched) and the rectangle it changed. Stops with `Cancelled` once `ctx` is cancelled.
+    /// touched) and the rectangle it changed. Fails as the command does when no selected pixel of the
+    /// moved selection lands on the canvas: that check runs here, on the worker, not in [`preview`].
+    /// Stops with `Cancelled` once `ctx` is cancelled.
     pub fn run(&self, ctx: &crate::jobs::JobCtx) -> Result<(Document, Rect)> {
-        let mut work = (*self.doc).clone();
         let sel = self.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to move first"))?;
+        // The scan for a selected pixel on the canvas runs here, off the UI thread (`preview` leaves it out);
+        // the full-resolution refinement of a coarse preview that passed it skips the repeat.
+        if !self.checked {
+            check_lands(sel, &self.plan)?;
+        }
+        let mut work = (*self.doc).clone();
         let damage = if self.is_coarse() {
             run_scaled(&mut work, sel, &self.plan, &self.params, self.scale, ctx)?
         } else {
@@ -689,21 +792,24 @@ impl ContentAwarePreview {
             plan: Plan { margin: MAX_MARGIN, ..self.plan },
             params: self.params.clone(),
             scale: 1.0,
+            checked: true,
         })
     }
 }
 
 /// Prepare the preview of `paint.contentAwareMove` with params `p` on the active document. Errors
-/// as the command does (bad params, nothing to move, a selection larger than the command takes).
+/// as the command does (bad params, nothing to move, a selection larger than the command takes); the
+/// landing check (a selected pixel on the canvas, which can scan the whole selection) runs in the job, as
+/// the command's does ([`ContentAwarePreview::run`]), off the UI thread.
 pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
     let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
     let p = &captured;
-    let plan = plan(s, p, PREVIEW_MARGIN)?;
+    let plan = plan_unchecked(s, p, PREVIEW_MARGIN)?;
     let px = |r: Rect| u64::from(r.width()) * u64::from(r.height());
     let pixels = px(plan.area).max(px(plan.dest));
     let scale = if pixels > PREVIEW_MAX_PIXELS { (PREVIEW_MAX_PIXELS as f64 / pixels as f64).sqrt() } else { 1.0 };
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(ContentAwarePreview { colors: crate::color_channels::target(s, p)?, doc: d.doc.clone(), plan, params: p.clone(), scale })
+    Ok(ContentAwarePreview { colors: crate::color_channels::target(s, p)?, doc: d.doc.clone(), plan, params: p.clone(), scale, checked: false })
 }
 
 /// The surface's tiles over `r` (shared, not copied) on a surface of their own: what a resize of
@@ -770,10 +876,10 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
     }
     let mut offset = ((f64::from(dx) * f).round() as i32, (f64::from(dy) * f).round() as i32);
     if plan.map.is_none() {
-        // Rounding may push the scaled patch a pixel past the edge: keep it on the canvas.
+        // Rounding may push a patch that barely reaches the canvas off it: keep one pixel on it.
         let moved = area.translate(offset.0, offset.1);
-        offset.0 += (canvas.x0 - moved.x0).max(0) - (moved.x1 - canvas.x1).max(0);
-        offset.1 += (canvas.y0 - moved.y0).max(0) - (moved.y1 - canvas.y1).max(0);
+        offset.0 += (canvas.x0 + 1 - moved.x1).max(0) - (moved.x0 - (canvas.x1 - 1)).max(0);
+        offset.1 += (canvas.y0 + 1 - moved.y1).max(0) - (moved.y0 - (canvas.y1 - 1)).max(0);
     }
     let map = match plan.map {
         Some(_) => placement(p, area, offset)?,
@@ -850,7 +956,8 @@ mod tests {
             let (got, damage) = job.run(&JobCtx::new()).unwrap();
             // What the preview has always computed: the move at full resolution, with the
             // preview's margin.
-            let plan = plan(&s, &p, PREVIEW_MARGIN).unwrap();
+            let plan = plan_unchecked(&s, &p, PREVIEW_MARGIN).unwrap();
+            check_lands(s.active().unwrap().doc.selection.as_ref().unwrap(), &plan).unwrap();
             let d = s.active().unwrap();
             let mut want = (*d.doc).clone();
             let (_, want_damage, _) = run_move(&mut want, d.doc.selection.as_ref().unwrap(), &plan, &p, &JobCtx::new(), "test").unwrap();
