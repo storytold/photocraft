@@ -210,7 +210,7 @@ fn own_params(f: &Map<String, Value>) -> Map<String, Value> {
         p.insert(k.into(), v.clone());
     }
     if let Some(target) = f.get("__target") {
-        p["target"] = target.clone();
+        p.insert("target".into(), target.clone());
     }
     p
 }
