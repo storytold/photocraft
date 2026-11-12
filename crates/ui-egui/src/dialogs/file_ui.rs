@@ -387,7 +387,7 @@ mod web_playback_tests {
     /// Save for Web's 4-Up: a variant copies only the keys it carries and drops the palette.
     #[test]
     fn select_variant_copies_format_quality_and_colors() {
-        let mut f = json!({"format": "jpeg", "quality": 60, "matte": "#fff", "__view": "4up", "colorTable": ["#000"], "colorTableEdits": {"0": "#111"}})
+        let mut f = json!({"format": "jpeg", "quality": 60, "matte": "#fff", "__view": "4up", "__preset": "JPEG High", "__tableSignature": "x", "__selectedColor": 1, "colorTable": ["#000"], "colorTableEdits": {"0": "#111"}})
             .as_object()
             .unwrap()
             .clone();
@@ -396,6 +396,11 @@ mod web_playback_tests {
         assert_eq!(f["quality"], 30.0);
         assert_eq!(f["format"], "jpeg");
         assert!(!f.contains_key("colorTable") && !f.contains_key("colorTableEdits"));
+        assert!(!f.contains_key("__tableSignature") && !f.contains_key("__selectedColor"), "the palette is rebuilt, not reused");
+        assert_eq!(f["__preset"], "", "settings no longer match the named preset");
+        let before = f.clone();
+        select_variant(&mut f, &v[1]);
+        assert_eq!(f, before, "choosing the current settings is a no-op");
         assert_eq!((f["matte"].as_str(), f["__view"].as_str()), (Some("#fff"), Some("4up")));
         assert!(!f.contains_key("colors"), "keys the variant lacks are not invented");
 
@@ -458,6 +463,64 @@ mod web_playback_tests {
         click_pane(&mut h, 3);
         h.run_steps(3);
         assert_eq!(h.state().1["quality"].as_f64(), Some(8.0));
+    }
+
+    /// A double-click (select, then a second press) must not select a second time: after the
+    /// layout regenerates around the first choice, the same pane would otherwise halve again.
+    #[test]
+    fn four_up_double_click_selects_once() {
+        let mut h = four_up_harness();
+        let at = pane_center(&h, 2);
+        // Two quick presses at one spot, without the pointer leaving in between: a double-click.
+        h.hover_at(at);
+        h.run_steps(1);
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0), "the second click of a double-click does not select again");
+    }
+
+    /// A click that picks a slice in the pane is a slice selection, not a 4-Up choice.
+    #[test]
+    fn four_up_slice_click_selects_the_slice_not_the_variant() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 64, 48], "name": "all"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("jpeg"));
+        fields.insert("quality".into(), json!(60));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        click_pane(&mut h, 3);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]), "the click selected the slice");
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "and left the settings alone");
+    }
+
+    /// Choosing a variant that keeps the format, colours and quality changes nothing, so the
+    /// palette edits survive.
+    #[test]
+    fn four_up_same_settings_variant_keeps_palette_edits() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("gif"));
+        fields.insert("colors".into(), json!(2));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        h.state_mut().1.insert("colorTableEdits".into(), json!({"0": "#ffff00"}));
+        h.run_steps(2);
+        assert!(h.state().1.contains_key("colorTable"));
+        click_pane(&mut h, 2);
+        assert_eq!(h.state().1["colorTableEdits"], json!({"0": "#ffff00"}));
+        assert!(h.state().1.contains_key("colorTable"), "the palette stays");
     }
 
     #[test]

@@ -82,35 +82,45 @@ pub(super) fn variants(p: &Value) -> Vec<Value> {
 
 /// Makes a 4-Up variant the current settings, so Save writes what that pane showed.
 pub(super) fn select_variant(f: &mut Map<String, Value>, v: &Value) {
-    for k in ["format", "quality", "colors"] {
+    const KEYS: [&str; 3] = ["format", "quality", "colors"];
+    // The current settings chosen again change nothing, and keep their palette edits.
+    if KEYS.iter().all(|k| v.get(k).is_none_or(|x| f.get(*k) == Some(x))) {
+        return;
+    }
+    for k in KEYS {
         if let Some(x) = v.get(k) {
             f.insert(k.into(), x.clone());
         }
     }
-    f.remove("colorTable");
-    f.remove("colorTableEdits");
+    // The palette belongs to the old settings; dropping its signature makes `prepare_table`
+    // rebuild it (a same-palette signature would otherwise leave no table at all).
+    for k in ["colorTable", "colorTableEdits", "__tableSignature", "__selectedColor"] {
+        f.remove(k);
+    }
+    // Hand-edited settings are no longer the named preset.
+    f.insert("__preset".into(), json!(""));
 }
 
 /// What a click on a preview pane does in Save for Web's 4-Up.
 #[derive(Clone, Copy)]
-pub(super) enum Choice<'a> {
+pub(super) enum Choice {
     /// Nothing: the original, or a view without alternatives.
     Plain,
     /// The pane Save writes: it gets the accent border.
     Current,
     /// An alternative: a click makes these settings current.
-    Variant(&'a Value),
+    Variant,
 }
 
 /// A preview pane's index and what clicking it does.
 #[derive(Clone, Copy)]
-pub(super) struct Slot<'a> {
+pub(super) struct Slot {
     pane: usize,
-    choice: Choice<'a>,
+    choice: Choice,
 }
 
-impl<'a> Slot<'a> {
-    const fn new(pane: usize, choice: Choice<'a>) -> Self {
+impl Slot {
+    const fn new(pane: usize, choice: Choice) -> Self {
         Self { pane, choice }
     }
 }
@@ -196,7 +206,9 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         // Photoshop's panes are grey around the image; only the image shows transparency (#2362).
         ui.painter().rect_filled(r, 0.0, t.canvas);
         let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
+        let slices_before = web_preview::selected_slices(f);
         web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), f);
+        let slice_clicked = web_preview::selected_slices(f) != slices_before;
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
         match slot.choice {
             Choice::Plain => {}
@@ -205,8 +217,13 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
                 ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
             }
             // A click (not a drag, which pans) makes the alternative's settings current.
-            Choice::Variant(v) => {
-                if response.clicked() {
+            // Not the second click of a double-click, and not a click that picked a slice.
+            Choice::Variant => {
+                if let Some(v) = p
+                    && response.clicked_by(egui::PointerButton::Primary)
+                    && !response.double_clicked()
+                    && !slice_clicked
+                {
                     select_variant(f, v);
                 }
             }
@@ -344,8 +361,8 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                         web_pane(app, ui, cell, Some(&v[0]), f, Slot::new(1, Choice::Current), frame);
                     });
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, Some(&v[1]), f, Slot::new(2, Choice::Variant(&v[1])), frame);
-                        web_pane(app, ui, cell, Some(&v[2]), f, Slot::new(3, Choice::Variant(&v[2])), frame);
+                        web_pane(app, ui, cell, Some(&v[1]), f, Slot::new(2, Choice::Variant), frame);
+                        web_pane(app, ui, cell, Some(&v[2]), f, Slot::new(3, Choice::Variant), frame);
                     });
                 }
             }
