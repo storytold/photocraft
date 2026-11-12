@@ -211,6 +211,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             feather: m.feather,
         }),
         vector_mask: l.vector_mask.clone(),
+        frame: l.frame.as_deref().cloned(),
         effects: EffectsM {
             enabled: l.effects.enabled,
             items: l.effects.items.clone(),
@@ -237,8 +238,11 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
-    DocM {
+/// Build native document manifest data, sending durable conversion provenance through the same bounded content sink as
+/// other stored data.
+pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+    let import_conversion = d.metadata.import_conversion.as_deref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
+    Ok(DocM {
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -252,6 +256,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
+            import_conversion,
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
@@ -281,7 +286,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
-    }
+    })
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -463,6 +468,9 @@ impl Loader<'_> {
     /// One layer, given its already converted group children.
     #[inline(never)]
     fn layer_with(&mut self, m: &LayerM, children: Vec<Layer>) -> Result<Layer> {
+        // Unusable frame metadata is dropped rather than making the whole document unreadable;
+        // the group and its vector mask still load.
+        let frame = m.frame.clone().filter(|f| f.valid() && matches!(m.content, ContentM::Group { .. }));
         let content = match &m.content {
             ContentM::Raster { surface } => LayerContent::Raster(self.surface(surface)?),
             ContentM::Group { expanded, artboard, frame_stroke, .. } => {
@@ -569,6 +577,7 @@ impl Loader<'_> {
             clipped: m.clipped,
             mask,
             vector_mask: m.vector_mask.clone(),
+            frame: frame.map(Box::new),
             effects: Effects {
                 enabled: m.effects.enabled,
                 items: m.effects.items.clone(),
@@ -589,6 +598,8 @@ impl Loader<'_> {
         })
     }
 
+    /// Reconstruct checked native data while reserving/remapping IDs, validating resources and preserving references
+    /// plus opaque conversion provenance.
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
@@ -618,6 +629,7 @@ impl Loader<'_> {
         }
         let quick_mask = m.quick_mask.as_ref().map(|c| self.channel(c)).transpose()?;
         let mut md = Metadata {
+            import_conversion: m.metadata.import_conversion.as_ref().map(|report| crate::import_conversion::from_manifest(report, self.fetch)).transpose()?,
             xmp: m.metadata.xmp.as_deref().map(std::sync::Arc::from),
             exif: self.opt_blob(&m.metadata.exif)?,
             text: m.metadata.text.clone(),

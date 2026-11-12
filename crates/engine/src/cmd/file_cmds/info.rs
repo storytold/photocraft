@@ -314,12 +314,12 @@ fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
                 while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
                     i += 1;
                 }
-                if let Some(&q) = bytes.get(i) {
-                    if q == b'"' || q == b'\'' {
-                        let v0 = i + 1;
-                        if let Some(v1) = tag[v0..].find(q as char).map(|j| j + v0) {
-                            return Some((lt + ws, lt + v1 + 1, &tag[v0..v1]));
-                        }
+                if let Some(&q) = bytes.get(i)
+                    && (q == b'"' || q == b'\'')
+                {
+                    let v0 = i + 1;
+                    if let Some(v1) = tag[v0..].find(q as char).map(|j| j + v0) {
+                        return Some((lt + ws, lt + v1 + 1, &tag[v0..v1]));
                     }
                 }
             }
