@@ -24,7 +24,7 @@ pub const SECTIONS: [(&str, &str); 18] = [
     ("plugIns", "Plugins"),
     ("type", "Type"),
     ("enhancedControls", "Enhanced Controls"),
-    ("rawDefaults", "Camera Raw Defaults"),
+    ("rawDefaults", "RAW Defaults"),
     ("integrations", "Integrations"),
 ];
 
@@ -40,8 +40,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
     "performance.legacyCompositing",
-    "unitsAndRulers.columnWidth",
-    "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
     "type.textEngine",
