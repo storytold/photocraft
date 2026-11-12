@@ -369,6 +369,31 @@ mod lookup_tests {
         }
     }
 
+    /// Photoshop 22.4.3, measured (#13448): amounts other than ±50 %, an ink combined with Black,
+    /// and relative changes beyond 100 %. Absolute changes are clamped to the ink's room, Black
+    /// compounds with the ink (a + k + a·k), and relative changes are clamped per range.
+    #[test]
+    fn selective_color_matches_photoshop_away_from_half() {
+        // (relative, range index, [cyan, magenta, yellow, black] %, input, Photoshop's output)
+        let measured = [
+            (false, 7, [100.0f32, 0.0, 0.0, 0.0], [128u8, 143, 16], [64u8, 143, 16]),
+            (false, 7, [-100.0, 0.0, 0.0, 0.0], [128, 0, 0], [191, 0, 0]),
+            (false, 7, [25.0, 0.0, 0.0, 0.0], [64, 128, 64], [16, 128, 64]),
+            (false, 7, [50.0, 0.0, 0.0, 50.0], [128, 143, 16], [64, 79, 8]),
+            (false, 0, [100.0, 0.0, 0.0, 0.0], [128, 0, 0], [64, 0, 0]),
+            (true, 7, [100.0, 0.0, 0.0, 0.0], [80, 112, 0], [45, 112, 0]),
+            (true, 0, [0.0, -100.0, 0.0, -100.0], [128, 0, 0], [192, 128, 128]),
+        ];
+        for (relative, range, inks, input, want) in measured {
+            let mut adj = [[0.0f32; 4]; 9];
+            adj[range] = inks;
+            let got = selective_color(input.map(|v| v as f32 / 255.0), relative, &adj).map(|v| v * 255.0);
+            for i in 0..3 {
+                assert!((got[i] - want[i] as f32).abs() <= 1.5, "relative {relative} range {range} {inks:?} on {input:?}: {got:?} vs {want:?}");
+            }
+        }
+    }
+
     #[test]
     fn selective_color_zero_is_identity_and_ranges_are_local() {
         let zero = [[0.0f32; 4]; 9];
