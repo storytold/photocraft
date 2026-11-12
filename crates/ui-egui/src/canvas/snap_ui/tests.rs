@@ -984,3 +984,77 @@ fn a_path_box_snaps_to_a_stationary_selection_edge() {
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 143.0, y: 110.0 }, m);
     assert_eq!(app.ui.transform.as_ref().unwrap().quad[0][0], 123.0);
 }
+
+/// A group of two layers (40..90 x 40..80 and 100..140 x 100..130) selected, as one layer.
+fn app_with_group() -> PhotocraftApp {
+    let mut app = app_with_box();
+    app.run("layer.new.layer", json!({"name": "second"})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 40, "height": 30})).unwrap();
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.select", json!({"name": "mover"})).unwrap();
+    app.run("layer.select", json!({"name": "second", "mode": "add"})).unwrap();
+    app.run("layer.groupLayers", json!({"name": "G"})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    app
+}
+
+fn child_bounds(app: &PhotocraftApp, name: &str) -> photocraft_geom::Rect {
+    let st = app.session.active().unwrap();
+    let (_, _, l) = st.doc.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap();
+    l.surface().unwrap().content_bounds()
+}
+
+fn drag(app: &mut PhotocraftApp, from: [f32; 2], to: [f32; 2]) {
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, m);
+}
+
+/// #13418: a selected group had no Move gesture at all (`layer_rect` skips groups), so no blue box
+/// and no Smart Guides; the box is the union of the layers it carries.
+#[test]
+fn dragging_a_group_frames_the_layers_inside_it() {
+    for bbox in [false, true] {
+        let mut app = app_with_group();
+        app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = bbox);
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
+        assert_eq!(gesture, Some(Gesture::Move { rect: [40.0, 40.0, 140.0, 130.0] }), "bounding box pref {bbox}");
+    }
+}
+
+/// #13418: a group moves its layers whole with a selection too, so the box isn't cut to the
+/// selection as a pixel layer's is.
+#[test]
+fn a_group_box_is_not_cut_to_the_selection() {
+    let mut app = app_with_group();
+    app.run("select.rect", json!({"x": 50, "y": 50, "width": 20, "height": 20})).unwrap();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
+    assert_eq!(gesture, Some(Gesture::Move { rect: [40.0, 40.0, 140.0, 130.0] }));
+}
+
+/// #13418: the group's edge snaps to another layer's edge as a single layer's does.
+#[test]
+fn a_dragged_group_snaps_to_other_layers() {
+    let mut app = app_with_group();
+    // 72 px down puts the group's bottom edge (130 -> 202) 2 px past the target's top (200); no
+    // other edge or centre is within reach.
+    drag(&mut app, [60.0, 60.0], [80.0, 132.0]);
+    let (m, s) = (child_bounds(&app, "mover"), child_bounds(&app, "second"));
+    assert_eq!((m.x0, m.y0, s.y0), (60, 110, 170), "snapped 2 px up, the layers kept their spacing");
+}
+
+/// #13418: a moving group's layers are not snap targets, or it would snap to where it started.
+#[test]
+fn a_dragged_group_does_not_snap_to_its_own_layers() {
+    let mut app = app_with_group();
+    // +46, +3: the group's left edge (86) is 4 px from where the mover's right edge was (90) and
+    // its top (43) 3 px from where the mover's top was (40); nothing else is in reach.
+    drag(&mut app, [60.0, 60.0], [106.0, 63.0]);
+    let b = child_bounds(&app, "mover");
+    assert_eq!((b.x0, b.y0), (86, 43), "moved by the raw offset");
+}
