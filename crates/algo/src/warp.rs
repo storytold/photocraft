@@ -809,6 +809,13 @@ fn on_grid(t: f64) -> f64 {
     (t * 65536.0).round() / 65536.0
 }
 
+/// Marks pixel `o` of `twice` (empty when nothing is drawn twice) as drawn twice when `again`.
+fn mark_twice(twice: &mut [bool], o: usize, again: bool) {
+    if let Some(t) = twice.get_mut(o) {
+        *t |= again;
+    }
+}
+
 /// The last of a premultiplied pixel `px` (alpha last) of a single bilinear sample: drawn again
 /// over itself where two triangles of one layer reach it (`twice`), then, for an 8-bit source
 /// (`steps`, whose blends are in 8-bit steps), rounded once, after its edge coverage and any fold
@@ -1665,10 +1672,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                             // the end.
                             stack_layer(&mut under, head, (uv[o], owner[o]), &near);
                         }
-                        // (`twice` is empty without `one_tap`.)
-                        if let Some(t) = twice.get_mut(o) {
-                            *t |= !uv[o][0].is_nan() && near(uv[o]) && owner[o] != k as u32;
-                        }
+                        mark_twice(&mut twice, o, !uv[o][0].is_nan() && near(uv[o]) && owner[o] != k as u32);
                         uv[o] = q;
                         owner[o] = k as u32;
                     }
