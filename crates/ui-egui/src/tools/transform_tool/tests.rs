@@ -601,8 +601,8 @@ fn saving_a_reopened_smart_object_keeps_the_pending_rotation() {
         let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let capture = written.clone();
         let services = crate::Services {
-            export: Some(Box::new(|doc, _, settings| {
-                photocraft_io::export(doc, "psd", settings).map(|out| (out.bytes, out.warnings)).map_err(|e| e.to_string())
+            export: Some(Box::new(|doc, path, settings| {
+                photocraft_io::export(doc, path, &settings.io_options()).map(|out| (out.bytes, out.warnings)).map_err(|e| e.to_string())
             })),
             write: Some(Box::new(move |_, bytes| {
                 capture.borrow_mut().push(bytes.to_vec());
