@@ -100,7 +100,6 @@ pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Re
 /// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
 /// The optional Freeform Pen or Line Tool history label overrides the normal Work Path or Save
 /// Path label.
-
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
