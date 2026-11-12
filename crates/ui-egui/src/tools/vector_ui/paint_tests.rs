@@ -617,6 +617,54 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     assert_eq!(shape(h.state()).fill, original.fill);
 }
 
+/// #8741: a shape paint swatch draws a rounded fill over its transparency checker, so the checker
+/// has to be rounded too. The square one painted light cells past the rounded corners, which read
+/// as specks on dark themes; the other colour swatches went to `checker_rounded` for the same
+/// reason in #3363. Both callers of the shared `swatch` are pinned: the Properties panel's
+/// Appearance row and the shape tools' options bar.
+fn assert_swatch_checkers_are_rounded(h: &Harness<'_, PhotocraftApp>, labels: [&str; 2]) {
+    let panel = h.ctx.global_style().visuals.panel_fill;
+    // the fill's own corners: a checker rounded less would still show past them
+    let radius = egui::CornerRadius::from(crate::theme::Tokens::get(&h.ctx).radius_sm);
+    for label in labels {
+        let swatch = h.get_by_label(label).rect();
+        let (mut square, mut rounded) = (Vec::new(), 0);
+        for c in &h.output().shapes {
+            // the harness's own panel background behind the widget is not the swatch's checker
+            if let egui::Shape::Rect(r) = &c.shape {
+                if !swatch.contains_rect(r.rect) {
+                    continue;
+                }
+                if r.corner_radius == egui::CornerRadius::ZERO && r.fill != panel {
+                    square.push(r.rect);
+                } else if r.corner_radius == radius && r.brush.is_some() {
+                    // `checker_rounded`: a textured rect rounded like the fill
+                    rounded += 1;
+                }
+            }
+        }
+        assert!(square.is_empty(), "{label}: square shapes inside the rounded swatch {swatch:?}: {square:?}");
+        assert_eq!(rounded, 1, "{label}: exactly one checker rounded like the fill inside the swatch {swatch:?}");
+    }
+}
+
+#[test]
+fn shape_paint_swatch_checker_keeps_to_the_rounded_corners() {
+    let shape = |a: &mut PhotocraftApp| {
+        a.run("shape.create", json!({"rect": [20,20,80,60], "fill": "#80808080", "stroke": {"width": 4, "color": "#ee335580"}})).unwrap();
+    };
+    // Properties panel (Appearance row)
+    let mut a = app("rgb", 8);
+    shape(&mut a);
+    let h = harness(a, true);
+    assert_swatch_checkers_are_rounded(&h, ["Set shape fill type", "Set shape stroke type"]);
+    // Options bar
+    let mut a = app("rgb", 8);
+    shape(&mut a);
+    let h = harness(a, false);
+    assert_swatch_checkers_are_rounded(&h, ["Fill color", "Stroke color"]);
+}
+
 fn test_gradient() -> photocraft_doc::Fill {
     photocraft_doc::Fill::Gradient {
         stops: vec![(0.0, photocraft_doc::Color::rgba(0.123456, 0.5, 0.75, 1.0)), (1.0, photocraft_doc::Color::rgba(0.9, 0.2, 0.1, 0.6))],
@@ -991,5 +1039,63 @@ fn a_refused_popover_swatch_is_not_a_recently_used_colour() {
         assert_eq!(shape(h.state()).fill, Some(solid_paint([0.0, 1.0, 0.0, 1.0])), "properties={properties}");
         let recent: Vec<String> = crate::paint_picker::recent_colors(&h.state().session).into_iter().map(crate::color_picker_ui::hex).collect();
         assert_eq!(recent, ["#00ff00"], "properties={properties}");
+    }
+}
+
+/// CodeRabbit on #9456: Path mode hides Fill and Stroke (a path has no paint), but each tool's
+/// geometry stays in the options bar, as in Photoshop's Path tool mode.
+#[test]
+fn path_mode_keeps_the_geometry_options_and_hides_paint() {
+    for (tool, geometry) in [(Tool::Rectangle, "Radius:"), (Tool::Polygon, "Sides:"), (Tool::Line, "Weight:"), (Tool::CustomShape, "Shape:")] {
+        let mut app = app("rgb", 8);
+        app.ui.tool = tool;
+        app.ui.tool_options.shape_mode = "path".into();
+        let h = harness(app, false);
+        assert!(h.query_by_label(geometry).is_some(), "{tool:?}: {geometry} stays in Path mode");
+        for paint in ["Fill:", "Stroke:", "Fill color", "Stroke color", "Stroke Options"] {
+            assert!(h.query_by_label(paint).is_none(), "{tool:?}: {paint} is hidden in Path mode");
+        }
+    }
+}
+
+/// CodeRabbit on #9456: in Path mode the Radius field sets the next outline's radius only; it
+/// must not edit a shape layer that happens to be active.
+#[test]
+fn path_mode_radius_leaves_the_active_shape_layer_alone() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"kind": "rect", "rect": [20, 20, 60, 40], "radii": 10})).unwrap();
+    let radii = |app: &PhotocraftApp| match &shape(app).live {
+        Some(photocraft_doc::LiveShape::Rect { radii, .. }) => *radii,
+        other => panic!("expected a live rectangle, got {other:?}"),
+    };
+    assert_eq!(radii(&app), [10.0; 4]);
+    app.ui.tool_options.corner_radius = 3.0;
+    app.ui.tool_options.shape_mode = "path".into();
+    let history = app.session.active().unwrap().history.past_len();
+    let mut h = harness(app, false);
+    h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("the radius").click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("20".into()));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.tool_options.corner_radius, 20.0, "the next outline's radius");
+    assert_eq!(radii(h.state()), [10.0; 4], "the shape layer keeps its radius");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "no edit");
+}
+
+/// CodeRabbit on #9456: the Shape tools' Path mode is theirs alone. With a shape selected, Path
+/// Selection and Direct Selection keep their Fill and Stroke controls whatever that mode is.
+#[test]
+fn selection_tools_ignore_the_shape_tools_path_mode() {
+    for tool in [Tool::PathSelection, Tool::DirectSelection] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect": [20, 20, 60, 40]})).unwrap();
+        app.ui.tool = tool;
+        app.ui.tool_options.shape_mode = "path".into();
+        let h = harness(app, false);
+        for label in ["Fill color", "Stroke color"] {
+            assert!(h.query_by_label(label).is_some(), "{tool:?}: {label} stays");
+        }
     }
 }

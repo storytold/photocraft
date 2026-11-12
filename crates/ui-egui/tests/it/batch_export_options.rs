@@ -204,6 +204,8 @@ fn batch_custom_quality_is_bounded_dialog_local_and_reversible() {
     assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "reopening returns to the existing default");
 }
 
+/// Actual folder-mode controls must pass both WebP quality endpoints to the encoder while
+/// preserving the active document, history, preferences and recorded actions.
 #[test]
 fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
     let _gpu = photocraft_testkit::gpu_lock();
@@ -233,6 +235,10 @@ fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
                 assert_eq!(fields["width"], json!(0));
                 assert_eq!(fields["height"], json!(0));
                 assert_eq!(fields["convertToSrgb"], json!(true));
+                h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Source").click();
+                h.run_steps(3);
+                h.get_by_label("Folder").click();
+                h.run_steps(3);
             }
             choose_webp(&mut h);
             edit_path(&mut h, "Input", &input);
@@ -290,7 +296,7 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     edit_path(&mut h, "Output", &output);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File Naming").click();
     h.run_steps(2);
-    replace_text(&mut h, "{serial}_{name}");
+    replace_text(&mut h, "{serial}_{name}.{ext}");
     h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Starting serial").click();
     h.run_steps(2);
     h.event(egui::Event::Text("7".into()));
