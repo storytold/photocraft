@@ -311,3 +311,38 @@ mod missing_font_warning_tests {
         let _ = std::fs::remove_dir_all(&folder);
     }
 }
+
+#[cfg(test)]
+mod historical_order_tests {
+    use crate::test_support::invoke;
+
+    #[test]
+    fn historical_order_flag_reaches_info_run_and_convert_without_guessing() {
+        let folder = std::env::temp_dir().join(format!("photocraft-cli-historical-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let input = folder.join("source.xcf");
+        let mut bytes = b"gimp xcf v007\0".to_vec();
+        for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        std::fs::write(&input, bytes).unwrap();
+        let input = input.to_str().unwrap();
+        assert_ne!(invoke(&["info", input]).code, 0);
+        for order in ["little-endian", "big-endian"] {
+            let output = folder.join(format!("{order}.pcraft"));
+            let output = output.to_str().unwrap();
+            for args in [
+                vec!["info", input, "--historical-xcf-sample-order", order],
+                vec!["run", input, "--historical-xcf-sample-order", order, "--out", output],
+                vec!["convert", input, output, "--historical-xcf-sample-order", order],
+            ] {
+                let result = invoke(&args);
+                assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
+            }
+        }
+        let invalid = invoke(&["info", input, "--historical-xcf-sample-order", "native"]);
+        assert_eq!(invalid.code, 2);
+        assert!(invalid.stderr.contains("expected little-endian or big-endian"), "{}", invalid.stderr);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+}

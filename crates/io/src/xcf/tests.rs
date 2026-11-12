@@ -1406,3 +1406,30 @@ fn integer_tile_rows_preserve_rgb_gray_alpha_masks_channels_and_native_depth() {
         }
     }
 }
+
+#[test]
+fn a_narrow_drawable_is_charged_the_tiles_it_stores() {
+    // One pixel wide and 300000 tall: 1.2 MB of samples a layer, but 1172 whole tiles (307 MB
+    // in RGBA8); four such layers pass the sample budget and exceed the 1 GiB of tiles.
+    let h = MAX_SIDE;
+    let mut img = TestImage::rgb8(1, h);
+    for name in ["a", "b", "c", "d"] {
+        img.layers.push(TestLayer::rgba(name, 1, h, rgba(1, h, |_, _| [1, 2, 3, 255])));
+    }
+    let e = open(&img.write()).unwrap_err().to_string();
+    assert!(e.contains("pixel limit"), "{e}");
+    img.layers.truncate(3);
+    assert!(open(&img.write()).is_ok(), "three fit");
+}
+
+/// Blank content keeps no tiles after `prune()`, so it is not charged against the pixel budget.
+#[test]
+fn blank_layers_are_not_charged_for_pruned_tiles() {
+    let mut budget = MAX_PIXEL_BYTES;
+    for _ in 0..4 {
+        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        let px = Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000], underflow: false };
+        write_pixels(&mut surface, &px, 0, 0, &mut budget).unwrap();
+    }
+    assert_eq!(budget, MAX_PIXEL_BYTES);
+}

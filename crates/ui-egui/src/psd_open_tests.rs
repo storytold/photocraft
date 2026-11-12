@@ -159,9 +159,9 @@ fn cancelling_one_damaged_open_does_not_open_the_next_damaged_file_without_conse
 fn damage_confirmation_precedes_the_profile_question() {
     let mut app = app();
     app.run("edit.colorSettings", json!({"askOnMismatch": true, "policyRgb": "preserve"})).unwrap();
-    let (mut file, _) = photocraft_psd::PsdFile::from_bytes_and_merged(&recovery_psd::make_psd(true), |_| false).unwrap();
-    file.resources.push(photocraft_psd::ImageResource::new(
-        photocraft_psd::resources::ids::ICC_PROFILE,
+    let (mut file, _) = craft_psd::PsdFile::from_bytes_and_merged(&recovery_psd::make_psd(true), |_| false).unwrap();
+    file.resources.push(craft_psd::ImageResource::new(
+        craft_psd::resources::ids::ICC_PROFILE,
         photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes().to_vec(),
     ));
     app.open_bytes("profile.psd", &file.to_bytes().unwrap()).unwrap();
@@ -843,7 +843,7 @@ fn inline_set_keeps_the_memory_prompted_file_in_batch_order() {
             assert_eq!(app.held_memory_prompts.front().unwrap().order.map(|o| o.seq), Some(0), "the set order travels with the prompt");
             // The flat file waits behind the prompt, keeping its own place in the set.
             assert_eq!(app.held_opens.len(), 1);
-            assert_eq!(app.held_opens.front().unwrap().order().map(|o| o.seq), Some(1));
+            assert_eq!(app.held_opens.front().unwrap().order.map(|o| o.seq), Some(1));
             let dlg = app.ui.dialogs[0].id;
             assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": dlg}))["ok"], true);
             let names: Vec<_> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();

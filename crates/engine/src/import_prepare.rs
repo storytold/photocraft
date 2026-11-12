@@ -11,43 +11,6 @@ use crate::{EngineError, Result, Session, smart_cmds};
 mod memo;
 
 impl Session {
-    /// Apply a validated import's native view state once, without an edit or history step.
-    /// Callers validate before publishing the pending document; native reopen supplies no hint.
-    pub fn apply_import_initial_view(&mut self, view: Option<photocraft_io::NativeInitialView>) -> Result<()> {
-        let Some(view) = view else { return Ok(()) };
-        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
-        view.validate(&st.doc).map_err(|e| EngineError::Other(e.to_string()))?;
-        if !view.selected_layers.is_empty() {
-            st.active_layer = view.active_layer;
-            st.selected_layers = view.selected_layers;
-            st.layer_anchor = st.active_layer;
-            let target = crate::LayerTarget { active: st.active_layer, selected: st.selected_layers.clone() };
-            st.history.set_current_layers(target.clone());
-            // The opened snapshot predates this one-time view handoff. Update its target only
-            // while it still holds this exact admitted document, never an older edited state.
-            if let Some(snapshot) = st.snapshots.iter_mut().find(|snapshot| snapshot.id == 0 && Arc::ptr_eq(&snapshot.doc, &st.doc)) {
-                snapshot.layers = target;
-            }
-        }
-        st.channel_view.target = match view.target {
-            photocraft_io::NativeImportTarget::Composite => crate::channel_cmds::ChannelTarget::Composite,
-            photocraft_io::NativeImportTarget::LayerMask => crate::channel_cmds::ChannelTarget::LayerMask,
-            photocraft_io::NativeImportTarget::AlphaChannel(index) => crate::channel_cmds::ChannelTarget::Alpha(index),
-        };
-        st.color_samplers = view.samplers;
-        for index in view.visible_alpha_channels {
-            st.channel_view.set_alpha_visible(index, true);
-        }
-        st.channel_view.layer_mask = if view.show_layer_mask {
-            st.active_layer.map(|layer| crate::mask_view_cmds::LayerMaskView { layer, mode: crate::mask_view_cmds::MaskViewMode::Gray, filter: false })
-        } else {
-            None
-        };
-        st.initial_path_selection = view.selected_path;
-        self.sync_tools_mask_target();
-        Ok(())
-    }
-
     /// Prepare pending data under this session's normal stored-command authority.
     pub fn prepare_imported_document(&self, doc: &mut Document, ctx: &JobCtx) -> Result<()> {
         let _authority = crate::jobs::render_authorization_scope(self.authorize);
@@ -533,7 +496,7 @@ mod initial_view_tests {
         let doc = Document::new("held", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
         let mut session = Session::new();
         let view = NativeInitialView { samplers: vec![[1.0, 2.0]], ..Default::default() };
-        let id = session.hold_open(doc, true, Some(view.clone()));
+        let id = session.hold_open_with_view(doc, true, Some(view.clone()));
         let (_, read_only, pending) = session.take_held_open_with_view(id).unwrap();
         assert!(read_only);
         assert_eq!(pending, Some(view));

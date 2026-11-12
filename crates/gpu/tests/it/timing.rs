@@ -96,8 +96,7 @@ fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, do
     (submit_ms, wall_ms, timing)
 }
 
-/// Measure submission and waited wall time for one complete refresh, then poll its GPU timing readback alongside actual
-/// render statistics.
+/// Measure submission and waited wall time for one refresh, returning GPU execution timing and render statistics.
 fn measure_with_stats(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>, Stats) {
     let t0 = Instant::now();
     let stats = comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
@@ -200,16 +199,99 @@ fn a_refresh_that_submits_several_times_is_one_measurement() {
     let _ = measure(&device, &queue, &mut comp, &doc, full);
     let (submit_ms, wall_ms, timing, stats) = measure_with_stats(&device, &queue, &mut comp, &doc, full);
     let t = timing.expect("a batched refresh is measured like any other");
-    eprintln!("batched: {} command buffers, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms", t.spans, t.ms);
+    eprintln!(
+        "batched: {} flushes, {} command buffers timed, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms",
+        stats.flushes, t.spans, t.ms
+    );
     assert_eq!(t.px, area(full));
-    assert!(stats.flushes >= 1, "the constrained workload must submit intermediate command buffers");
-    assert_eq!(u64::from(t.spans), stats.flushes as u64 + 1, "every intermediate submit and the final submit must contribute a span");
+    assert!(stats.flushes >= 1, "a refresh over a 24 MiB budget submits in batches");
+    // Each flush closes the span of the command buffer it submits and opens one in the next, so the
+    // one measurement holds a span for every command buffer the refresh submitted.
+    assert_eq!(t.spans as usize, stats.flushes + 1, "the measurement spans every command buffer of the refresh");
     assert!(t.ms.is_finite() && t.ms > 0.0, "a batched hardware refresh must report finite positive execution time");
     assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
-    // Queue-level uploads precede our timestamped command buffers, and the final waited tail
-    // also includes driver scheduling and writeback. It is not a lower bound on their summed
-    // execution time. Exact aggregation of nonuniform spans, excluding inter-submit gaps, is
+    // Queue uploads and driver scheduling also contribute to waited wall time, so it is
+    // not a lower bound on timestamped execution. Nonuniform span aggregation is
     // pinned separately by timing::tests::mapped_nonuniform_spans_sum_through_collect_and_take.
+}
+
+/// Submit `buffers` command buffers as one measurement, each copying `src` into `dst` `copies`
+/// times, through `start`, `split` and `finish` as a refresh that flushes does.
+fn time_copies(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    timer: &mut timing::GpuTimer,
+    src: &wgpu::Buffer,
+    dst: &wgpu::Buffer,
+    buffers: usize,
+    copies: u32,
+) -> GpuTiming {
+    let mut encoder = device.create_command_encoder(&Default::default());
+    timer.start(&mut encoder, buffers as u64);
+    for i in 0..buffers {
+        for _ in 0..copies {
+            encoder.copy_buffer_to_buffer(src, 0, dst, 0, src.size());
+        }
+        if i + 1 < buffers {
+            let mut next = device.create_command_encoder(&Default::default());
+            timer.split(&mut encoder, &mut next);
+            queue.submit([std::mem::replace(&mut encoder, next).finish()]);
+        }
+    }
+    timer.finish(&mut encoder);
+    queue.submit([encoder.finish()]);
+    timer.submitted();
+    let mut timing = None;
+    for _ in 0..8 {
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        timing = timer.take();
+        if timing.is_some() {
+            break;
+        }
+    }
+    let t = timing.expect("the copies are measured");
+    assert_eq!(t.spans as usize, buffers, "one span per command buffer");
+    t
+}
+
+/// The measurement of several command buffers is the sum of their spans. This compares GPU time
+/// with GPU time only: the same copies timed as one command buffer, and four times over in four.
+#[test]
+fn several_command_buffers_sum_their_gpu_time() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((device, queue, _)) = gpu() else { return };
+    let mut timer = timing::GpuTimer::new(&device, &queue).expect("the device has timestamp queries");
+    let buffer = |label| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: 64 << 20,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    let (src, dst) = (buffer("timing_src"), buffer("timing_dst"));
+
+    // Double the copies until one command buffer takes at least 2 ms.
+    let mut copies = 1;
+    loop {
+        let t = time_copies(&device, &queue, &mut timer, &src, &dst, 1, copies);
+        if t.ms >= 2.0 {
+            break;
+        }
+        if copies >= 1024 {
+            eprintln!("SKIP the sum: {copies} copies of 64 MiB take {:.2} ms in one command buffer", t.ms);
+            return;
+        }
+        copies *= 2;
+    }
+
+    let before = time_copies(&device, &queue, &mut timer, &src, &dst, 1, copies);
+    let four = time_copies(&device, &queue, &mut timer, &src, &dst, 4, copies);
+    let after = time_copies(&device, &queue, &mut timer, &src, &dst, 1, copies);
+    let one = before.ms.max(after.ms);
+    eprintln!("{copies} copies: one command buffer {:.2} / {:.2} ms, four {:.2} ms ({:.2}x)", before.ms, after.ms, four.ms, four.ms / one);
+    // A sum of the four spans reads about 4x; timing only the last command buffer reads about 1x.
+    assert!(four.ms >= 2.5 * one, "four command buffers measured {:.2} ms against {one:.2} ms for one: is only one span counted?", four.ms);
 }
 
 #[test]

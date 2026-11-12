@@ -87,15 +87,8 @@ impl PhotocraftApp {
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
-        if self.background_jobs {
+        if self.background_jobs || photocraft_io::historical_xcf_sample_order_request(name, bytes).map_err(|error| error.to_string())?.is_some() {
             jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
-            return Ok(Vec::new());
-        }
-        // A plain header is cheap to inspect. Wrapped inputs stay on the normal
-        // single-decode path; only a refused import needs the choice preflight.
-        if bytes.starts_with(b"gimp xcf ") && photocraft_io::historical_xcf_sample_order_request(name, bytes).map_err(|error| error.to_string())?.is_some() {
-            let value = self.session.open_for_user_inline(name, jobs_ui::bytes(bytes), path.map(str::to_string)).map_err(|error| error.to_string())?;
-            jobs_ui::finish_open(self, name, path, &value, slot, order)?;
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
@@ -119,20 +112,12 @@ impl PhotocraftApp {
             };
             (r, damaged)
         } else {
-            match import(name, bytes, &opts) {
-                Ok(imported) => (imported, false),
-                Err(error) => {
-                    if photocraft_io::historical_xcf_sample_order_request(name, bytes).ok().flatten().is_some() {
-                        let value =
-                            self.session.open_for_user_inline(name, jobs_ui::bytes(bytes), path.map(str::to_string)).map_err(|error| error.to_string())?;
-                        jobs_ui::finish_open(self, name, path, &value, slot, order)?;
-                        return Ok(Vec::new());
-                    }
-                    return Err(error);
-                }
-            }
+            (import(name, bytes, &opts)?, false)
         };
         let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = r;
+        if let Some(view) = &initial_view {
+            view.validate(&doc).map_err(|error| error.to_string())?;
+        }
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -147,8 +132,9 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
+                // Keep preview sources protected even when a host importer omits the flag.
+                read_only: source_read_only || photocraft_io::affinity::is_affinity(bytes),
                 initial_view,
-                read_only: source_read_only,
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -174,35 +160,6 @@ impl PhotocraftApp {
         self.open_automation_bytes_with_sample_order(name, bytes, None)
     }
 
-    /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
-    /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(
-        &mut self,
-        name: &str,
-        bytes: &[u8],
-        approved: bool,
-        sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
-    ) -> Result<Vec<String>, String> {
-        let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        opts.historical_xcf_sample_order = sample_order;
-        opts.psd_high_memory_approved = approved;
-        opts.psd_approved_estimate = None;
-        let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = import(name, bytes, &opts)?;
-        photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        if let Some(view) = &initial_view {
-            view.validate(&doc).map_err(|e| e.to_string())?;
-        }
-        self.session.prepare_imported_document(&mut doc, &photocraft_engine::jobs::JobCtx::new()).map_err(|e| e.to_string())?;
-        self.admit_automation_document(doc, initial_view, source_read_only)?;
-        self.sync_views();
-        file_open::apply_initial_path(self);
-        self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
-        self.ui.status_error = false;
-        notices::import_warnings(self, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &warnings);
-        Ok(warnings)
-    }
-
     /// Install automation bytes through native import policy with an optional explicit historical sample order and no
     /// interactive guessing.
     pub fn open_automation_bytes_with_sample_order(
@@ -216,24 +173,20 @@ impl PhotocraftApp {
 
     /// Automation approval applies only to these bytes and does not supply a historical sample choice.
     pub fn open_automation_bytes_with_approval(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
-        self.open_automation_bytes_with_policy(name, bytes, approved, None)
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        opts.psd_high_memory_approved = approved;
+        self.open_automation_bytes_with_options(name, bytes, &opts)
     }
 
-    /// Combine independent per-open memory approval and historical interpretation without script events.
-    pub(crate) fn open_automation_bytes_with_policy(
-        &mut self,
-        name: &str,
-        bytes: &[u8],
-        approved: bool,
-        sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
-    ) -> Result<Vec<String>, String> {
+    /// Open authenticated bytes with explicit per-import options, without changing global preferences.
+    pub fn open_automation_bytes_with_options(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes, approved, sample_order),
+            None => self.import_automation_document(name, bytes, options),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -241,22 +194,53 @@ impl PhotocraftApp {
         result
     }
 
-    /// Admit prepared automation data with source protection, rolling back only the new tab if view application fails.
+    /// Decode authenticated bytes with explicit options and prepare native contents before admission.
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
+        let import = self.services.import.as_ref().ok_or("no importer configured")?;
+        let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = import(name, bytes, options)?;
+        photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
+        if let Some(view) = &initial_view {
+            view.validate(&doc).map_err(|error| error.to_string())?;
+        }
+        self.session.prepare_imported_document(&mut doc, &photocraft_engine::jobs::JobCtx::new()).map_err(|error| error.to_string())?;
+        self.admit_automation_document(doc, initial_view, source_read_only || photocraft_io::affinity::is_affinity(bytes))?;
+        self.sync_views();
+        file_open::apply_initial_path(self);
+        self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
+        self.ui.status_error = false;
+        notices::import_warnings(self, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &warnings);
+        Ok(warnings)
+    }
+
+    /// Combine independent explicit import choices without changing global preferences.
+    pub(crate) fn open_automation_bytes_with_policy(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        approved: bool,
+        order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+    ) -> Result<Vec<String>, String> {
+        let mut options = photocraft_engine::jobs::import_options(self.session.prefs());
+        options.psd_high_memory_approved = approved;
+        options.historical_xcf_sample_order = order;
+        self.open_automation_bytes_with_options(name, bytes, &options)
+    }
+
+    /// Admit prepared import data and roll back only its new tab if view installation fails.
     pub(crate) fn admit_automation_document(
         &mut self,
         doc: Document,
         initial_view: Option<photocraft_io::NativeInitialView>,
         source_read_only: bool,
     ) -> Result<(), String> {
-        let previous_active = self.session.active_index();
-        // The caller records the path it read from after this transaction succeeds.
+        let previous = self.session.active().map(|state| state.doc.id);
         let index = self.session.add_document(doc, None);
         if let Some(state) = self.session.active_mut() {
             state.source_read_only = source_read_only;
         }
         if let Err(error) = self.session.apply_import_initial_view(initial_view) {
-            let _ = self.session.close(index);
-            if let Some(previous) = previous_active {
+            self.session.close(index);
+            if let Some(previous) = previous.and_then(|id| self.session.documents().iter().position(|state| state.doc.id == id)) {
                 self.session.set_active(previous);
             }
             return Err(error.to_string());
@@ -324,6 +308,10 @@ impl PhotocraftApp {
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
+        // A JPEG whose lone layer has transparency it can't keep is offered as a PNG, as
+        // Photoshop's Save does once pixels are deleted (#2223).
+        let transparent_jpeg = ext.as_deref().and_then(photocraft_codecs::from_extension) == Some(photocraft_codecs::Format::Jpeg)
+            && plain_raster(&st.doc).is_some_and(|l| !crate::opaque_layer(&st.doc, l));
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (e == "ora" && holds_ora)
@@ -333,6 +321,7 @@ impl PhotocraftApp {
         // This is generic document data, independent of the source name or format label.
         let lossless_import = st.doc.metadata.import_conversion.is_some() && (st.source_read_only || st.path.is_none());
         let suggested = match &st.path {
+            Some(p) if transparent_jpeg && !lossless_import => std::path::Path::new(p).with_extension("png").to_string_lossy().into_owned(),
             Some(p) if writable && !lossless_import => p.clone(),
             p => {
                 let source = p.as_deref().unwrap_or(&st.doc.name);
@@ -415,8 +404,41 @@ impl PhotocraftApp {
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
         FormatChoices { jpeg: None, ..choices }.record(&mut step);
+        photocraft_engine::actions_cmds::note_automation_step(&mut self.session, "file.save", &step);
         self.session.journal.push(("file.save".into(), step));
         Ok(r)
+    }
+
+    /// File › Save over the flat file the document came from, which still holds it
+    /// ([`crate::saves_flat_in_place`]): a JPEG asks JPEG Options first, as Photoshop does
+    /// (#2223), a TIFF its TIFF Options, and an RGB Targa or a DDS texture its Targa or DDS
+    /// Options, unless `choices` answer them; the answer writes the file and is recorded as a
+    /// plain `file.save` (#3531). Anything else is written straight back.
+    pub(crate) fn save_flat_in_place(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        if self.save_options_open() {
+            return Err(SAVE_OPTIONS_OPEN.into());
+        }
+        if choices.tga_bits.is_none() && targa_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            targa_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
+            let copy = self.saves_copy(&path, None)?;
+            dds_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if choices.jpeg.is_none() && jpeg_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            jpeg_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        // A TIFF asks TIFF Options over its own file too, as Save As does.
+        if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
+            tiff_options_ui::park(self, path.clone(), false, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        self.save_in_place(path, choices)
     }
 
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
@@ -428,6 +450,7 @@ impl PhotocraftApp {
             step["tiffLayers"] = layers.into();
         }
         choices.record(&mut step);
+        photocraft_engine::actions_cmds::note_automation_step(&mut self.session, "file.saveAs", &step);
         self.session.journal.push(("file.saveAs".into(), step));
         Ok(r)
     }
@@ -547,17 +570,19 @@ impl PhotocraftApp {
         if id == "file.save" {
             // The file the action is played on: one that holds the whole document, or a flat
             // file a recorded Save confirmed in the dialog while the document is still a plain
-            // raster, so it is never flattened over (#3531, #3806). A flat file's recorded Targa,
-            // DDS or JPEG answer writes the same way, without asking.
+            // raster, so it is never flattened over (#3531, #3806), and only while that file held
+            // just this one image (#5733). A flat file's recorded Targa, DDS or JPEG answer writes
+            // the same way, without asking (#2223).
             let choices = FormatChoices::from_step(params, id)?;
             let st = self.session.active().ok_or("no document")?;
             let flat_own = |p: &str| {
                 !photocraft_engine::file_cmds::saves_in_place(p)
                     && plain_raster(&st.doc).is_some()
+                    && st.doc.file_encoding.source_images.is_none()
                     && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
             };
             let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
-                "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
+                "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer and the file held only that image",
             )?;
             return self.save_in_place(path, choices);
         }
@@ -833,6 +858,7 @@ impl PhotocraftApp {
             app.write_document(path, settings, copy)
         });
         if written.is_ok() {
+            photocraft_engine::actions_cmds::note_automation_step(&mut self.session, record, &step);
             self.session.journal.push((record.into(), step));
         }
         match written {

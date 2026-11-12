@@ -77,7 +77,7 @@ use paths::{
     path_transform, paths_list, resolve_path, select_to_work_path,
 };
 pub(crate) use paths::{is_work, path_mut};
-pub(crate) use shape::{bake_path, map_path, map_shape, shift_shape, with_shape};
+pub(crate) use shape::{bake_path, map_path, map_shape, shift_shape, translate_vectors_wrapped, with_shape};
 use shape::{
     can_paste_shape_fill, can_paste_shape_stroke, combine_shapes, copy_shape_fill, copy_shape_stroke, has_shape_fill, has_shape_stroke, merge_components,
     paste_shape_fill, paste_shape_stroke, path_to_shape, selection_to_shape, shape_create, shape_edit, shape_info, shape_rasterize,
@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Shape Layer",
             ["Layer", "New"],
             leak(format!(
-                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"cornerRadius":px=0 (polygon/star: rounds every vertex; the Triangle tool is a 3-sided polygon),"from":[x,y],"to":[x,y],"weight":px=1 (line),"arrowStart":bool=false,"arrowEnd":bool=false,"arrowWidth":px=52,"arrowLength":px=50,"arrowConcavity":0..100=0 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
+                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"cornerRadius":px=0 (polygon: rounds every vertex, star: its outer points; the Triangle tool is a 3-sided polygon),"from":[x,y],"to":[x,y],"weight":px=1 (line),"arrowStart":bool=false,"arrowEnd":bool=false,"arrowWidth":px=52,"arrowLength":px=50,"arrowConcavity":0..100=0 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
             )),
             has_doc,
             shape_create
@@ -372,3 +372,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod line_tool_history_name_tests;

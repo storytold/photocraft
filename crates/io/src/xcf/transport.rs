@@ -8,6 +8,11 @@ use super::{IoError, MAGIC, MAX_INFLATED, Result, invalid};
 const CHUNK: usize = 32 * 1024;
 const XZ_MEMORY_KIB: u32 = 64 * 1024;
 
+mod bzip;
+
+#[cfg(test)]
+mod review_tests;
+
 /// Checks cancellation during headers, empty members and compressed input consumption,
 /// as well as between output chunks. A long header must not bypass cooperative cancellation.
 struct Input<'a, 'b> {
@@ -73,7 +78,7 @@ fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pre
     let mut input = Input { remaining: bytes, ctl: *ctl };
     let mut decoder: Box<dyn Read + '_> = match compression {
         "gzip" => Box::new(flate2::bufread::MultiGzDecoder::new(&mut input)),
-        "bzip2" => Box::new(crabz2::reader(&mut input)),
+        "bzip2" => Box::new(bzip::Reader::new(&mut input)),
         _ => Box::new(lzma_rust2::XzReader::new_mem_limit(&mut input, true, XZ_MEMORY_KIB)),
     };
     let mut prefix = [0; MAGIC.len()];

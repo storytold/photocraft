@@ -218,7 +218,7 @@ issue = 209
 bench = "perf_scenarios"
 row = "paste 12 MP layer (repeat) + refresh"
 budget_ms = 20
-enforce = false  # Windows/RTX 4080 runs pass; qualify the macOS nightly and refresh its baseline before enforcing
+enforce = false  # over budget in the 2026-10-05 baseline
 
 [[scenario]]
 id = "P12"
@@ -303,7 +303,7 @@ bench = "perf_scenarios"
 row = "open 20 MP layered PSD (decode + first composite)"
 budget_ms = 3000
 
-# P20/P63: generated fixtures (`photocraft_psd::fixtures`, #5107); the row checks a pixel, so a
+# P20/P63: generated fixtures (`craft_psd::fixtures`, #5107); the row checks a pixel, so a
 # blank document fails it. No time budget yet: the target is the behaviour (progress, editable).
 [[scenario]]
 id = "P20"

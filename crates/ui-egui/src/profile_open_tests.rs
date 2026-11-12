@@ -145,6 +145,10 @@ fn the_prompt_is_translated_and_still_names_its_file() {
     let png = adobe_png();
     let template = "The document “{name}” has an embedded color profile that does not match the current {mode} working space.";
     for code in ["en", "de", "fr", "ja"] {
+        // English runs in every build; the others need the craft-i18n catalogs.
+        if code != "en" && !crate::i18n::needs_catalogs() {
+            continue;
+        }
         let services = Services {
             import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
             ..Default::default()
@@ -179,7 +183,7 @@ fn a_held_file_still_reports_its_missing_fonts() {
     let mut doc = (*s.active().unwrap().doc).clone();
     doc.icc_profile = Some(photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
     let services = Services {
-        import: Some(Box::new(move |_: &str, _: &[u8], _: &photocraft_io::ImportOptions| Ok(crate::test_import_result(doc.clone(), Vec::new())))),
+        import: Some(Box::new(move |_: &str, _: &[u8], _: &photocraft_io::ImportOptions| Ok(crate::services::imported((doc.clone(), Vec::new()))))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(Session::new(), services);

@@ -73,9 +73,9 @@ channels. Structural records and modern XCF sample order remain unchanged. The c
 as import provenance; native editing and `.pcraft` reopening require no XCF byte-order setting.
 
 CLI `convert`, `info`, `run` and `batch` accept
-`--historical-xcf-sample-order little-endian` (or `big-endian`). Automation `doc.open`, MCP
-`doc_open`, desktop `app.open`, and engine `file.openAs` accept
-`historicalXcfSampleOrder: "little-endian"` (or `"big-endian"`). Without a choice, noninteractive
+`--historical-xcf-sample-order little-endian` (or `big-endian`). Automation `doc.open`, desktop `app.open`, and engine `file.openAs` accept
+`historicalXcfSampleOrder: "little-endian"` (or `"big-endian"`); MCP `doc_open` uses
+`historical_xcf_sample_order` with the same values. Without a choice, noninteractive
 imports refuse ambiguous high-depth files rather than publish potentially wrong pixels. The
 public IO API exposes the same choice through `ImportOptions::historical_xcf_sample_order`.
 

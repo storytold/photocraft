@@ -178,9 +178,15 @@ impl Headless {
         self.open_with_options(path, &opts)
     }
 
-    /// Open using a caller-selected byte order for historical XCF7–11 samples.
+    /// Open with explicit historical sample order while preserving the standard import options path.
     pub fn open_with_sample_order(&mut self, path: &Path, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Value, AutomationError> {
         self.open_with_options(path, &photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() })
+    }
+
+    /// Open with strictly validated per-import controls; missing sample order stays unset.
+    pub fn open_with_parameters(&mut self, path: &Path, params: &Value) -> Result<Value, AutomationError> {
+        let opts = files::import_options_from_params(params)?;
+        self.open_with_options(path, &opts)
     }
 
     /// Open a file with custom import options and make it the active document.
@@ -246,6 +252,7 @@ impl Headless {
             if let Some(previous) = previous.and_then(|id| self.session.documents().iter().position(|state| state.doc.id == id)) {
                 self.session.set_active(previous);
             }
+            self.session.sync_tools_mask_target();
             return Err(error.into());
         }
         Ok((index, color))
@@ -738,6 +745,153 @@ mod waited_error_tests {
             headless.job_poll(id),
             JobPoll::Ended(Err(AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required: 9000, limit: 4000, .. })))
         ));
+    }
+}
+
+#[cfg(test)]
+mod import_initial_view_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+    use std::sync::Arc;
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let folder = std::env::temp_dir().join(format!("photocraft-initial-view-{}-{serial}", std::process::id()));
+            std::fs::create_dir(&folder).unwrap();
+            Self(folder)
+        }
+
+        fn source(&self) -> PathBuf {
+            self.0.join("saved-view.xcf")
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Independent v3 XCF with a saved sampler at (1, 2): image property 27,
+    /// followed by empty layer/channel tables, with no later native-preparation features.
+    fn xcf_with_saved_view() -> Vec<u8> {
+        let mut bytes = b"gimp xcf v003\0".to_vec();
+        for word in [4u32, 4, 0, 27, 8, 1, 2, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&word.to_be_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn loaders_and_headless_apply_saved_xcf_view_once() {
+        let fixture = Fixture::new();
+        let source = xcf_with_saved_view();
+        std::fs::write(fixture.source(), &source).unwrap();
+        let bytes = files::open_bytes("saved-view.xcf", &source).unwrap();
+        let disk = files::open(&fixture.source()).unwrap();
+        for opened in [&bytes, &disk] {
+            assert!(opened.source_read_only);
+            assert_eq!(opened.initial_view.as_ref().unwrap().samplers, [[1., 2.]]);
+            opened.initial_view.as_ref().unwrap().validate(&opened.document).unwrap();
+        }
+        for scoped in [false, true] {
+            let mut headless = if scoped {
+                Headless::with_workspace(AuthorizedWorkspace::with_read_roots([fixture.0.as_path()], None::<&Path>).unwrap())
+            } else {
+                Headless::trusted_local()
+            };
+            let result = headless.open(&fixture.source()).unwrap();
+            assert_eq!(result["index"], 0);
+            let state = headless.session.active().unwrap();
+            assert_eq!(state.color_samplers, [[1., 2.]]);
+            assert!(state.source_read_only);
+            assert!(state.path.is_none());
+            assert_eq!(state.protected_import_source.as_deref(), fixture.source().to_str());
+            assert!(!state.is_dirty());
+            assert_eq!(state.history.past_len(), 0);
+            assert_eq!(std::fs::read(fixture.source()).unwrap(), source);
+        }
+        // View hints are handed off once, not replayed from the XCF conversion report.
+        let native = photocraft_format::save_to_bytes(&bytes.document, &Default::default()).unwrap();
+        assert!(files::open_bytes("native.pcraft", &native).unwrap().initial_view.is_none());
+        let native_path = fixture.0.join("native.pcraft");
+        std::fs::write(&native_path, native).unwrap();
+        assert!(files::open(&native_path).unwrap().initial_view.is_none());
+        let directory = fixture.0.join("native-directory");
+        photocraft_format::PcraftWriter::new().save_dir(&bytes.document, &directory, &Default::default()).unwrap();
+        assert!(files::open(&directory).unwrap().initial_view.is_none());
+        let mut reopened = Headless::trusted_local();
+        reopened.open(&native_path).unwrap();
+        assert!(reopened.session.active().unwrap().color_samplers.is_empty());
+    }
+
+    #[test]
+    fn invalid_view_application_rolls_back_admission_and_restores_active_identity() {
+        for existing in [0, 3] {
+            let mut headless = Headless::trusted_local();
+            for n in 0..existing {
+                let doc = Document::new(format!("existing {n}"), Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+                headless.session.add_document(doc, Some(format!("existing-{n}.pcraft")));
+            }
+            if existing != 0 {
+                headless.session.set_active(0);
+                headless.session.active_mut().unwrap().color_samplers = vec![[0., 1.]];
+            }
+            let active = headless.session.active().map(|state| state.doc.id);
+            let before: Vec<_> = headless
+                .session
+                .documents()
+                .iter()
+                .map(|state| {
+                    (
+                        Arc::clone(&state.doc),
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone(),
+                        state.history.past_len(),
+                    )
+                })
+                .collect();
+            let mut doc = Document::new("invalid import", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+            if let Some(id) = active {
+                doc.id = id; // Admission remaps the collision; rollback must resolve the original identity.
+            }
+            let view = NativeInitialView { target: NativeImportTarget::AlphaChannel(usize::MAX), ..Default::default() };
+            assert!(view.validate(&doc).is_err());
+            let error = headless.install_imported_document(doc, Some("source.xcf".into()), true, Some(view)).unwrap_err();
+            assert!(error.to_string().contains("target alpha channel is absent"));
+            assert_eq!(headless.session.documents().len(), existing);
+            assert_eq!(headless.session.active().map(|state| state.doc.id), active);
+            assert_eq!(headless.session.active_index(), if existing == 0 { None } else { Some(0) });
+            for (state, before) in headless.session.documents().iter().zip(before) {
+                assert!(Arc::ptr_eq(&state.doc, &before.0));
+                assert_eq!(
+                    (
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone(),
+                        state.history.past_len()
+                    ),
+                    (before.1, before.2, before.3, before.4, before.5, before.6, before.7, before.8)
+                );
+            }
+            assert!(headless.writers.is_empty());
+        }
     }
 }
 

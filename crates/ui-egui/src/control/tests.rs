@@ -653,6 +653,80 @@ fn agent_right_click_with_the_zoom_tool_opens_and_runs_the_view_menu() {
     assert!(app.ui.canvas_tool_menu.is_none());
 }
 
+/// #11271: an agent's right-click with Space held is the held Hand's: the view menu, whatever the
+/// tool; with ⌘ as well (the held Zoom) it is not.
+#[test]
+fn agent_space_right_click_opens_the_hand_view_menu() {
+    for tool in [crate::state::Tool::Move, crate::state::Tool::Brush, crate::state::Tool::RectMarquee, crate::state::Tool::Pen] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        app.ui.tool = tool;
+        let click = |space, command| json!({"space": space, "command": command, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", click(true, false))["ok"], true);
+        let menu = app.ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: no menu"));
+        assert!(crate::canvas_tool_menu::rows(&menu) == crate::canvas_tool_menu::HAND_MENU, "{tool:?}");
+        assert_eq!(menu.under, Some(tool), "{tool:?}");
+        assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"view.twoHundredPercent"}))["ok"], true, "{tool:?}");
+        assert_eq!(app.ui.views[0].zoom, 2.0, "{tool:?}");
+        assert_eq!(app.ui.tool, tool);
+        app.ui.canvas_tool_menu = None;
+        app.ui.layer_menu = None;
+        app.ui.brush_picker = None;
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", click(true, true))["ok"], true, "{tool:?}");
+        assert!(app.ui.canvas_tool_menu.is_none(), "{tool:?}: ⌘Space holds the Zoom, which has no menu");
+        // ⌘ still makes it a ⌘/Ctrl+right-click, which lists the layers under the pointer (#307).
+        assert!(app.ui.layer_menu.is_some(), "{tool:?}: ⌘+right-click lists the layers");
+        app.ui.canvas_tool_menu = None;
+        app.ui.layer_menu = None;
+        app.ui.brush_picker = None;
+        // ⌥Space holds the Zoom too: no view menu, and not the Move tool's layer list.
+        let alt = json!({"space": true, "alt": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", alt)["ok"], true, "{tool:?}");
+        assert!(app.ui.canvas_tool_menu.is_none(), "{tool:?}: ⌥Space opens no menu");
+        assert!(app.ui.layer_menu.is_none(), "{tool:?}: ⌥Space doesn't open the layer list");
+    }
+}
+
+/// #11271: while type is edited Space types, so an agent's Space right-click stays the type
+/// edit menu, not the Hand's view menu.
+#[test]
+fn agent_space_right_click_while_typing_keeps_the_type_menu() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Type;
+    app.run("type.create", json!({"text": "Hello", "size": 12, "x": 4, "y": 20})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "type.editText", json!({})).unwrap();
+    assert!(app.ui.text_edit.is_some());
+    let click = json!({"space": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":16},{"kind":"up","x":8,"y":16}]});
+    assert_eq!(call(&mut app, &ctx, "ui.pointer", click)["ok"], true);
+    let menu = app.ui.canvas_tool_menu.clone().expect("the type edit menu");
+    assert!(menu.anchor.is_none() && menu.text, "the type edit menu, not the view menu");
+}
+
+/// #11271: with a text field focused Space types, so an agent's Space right-click with the Move
+/// tool is the Move tool's (its layer list), not the Hand's view menu, as `hold_keys` decides in
+/// the app.
+#[test]
+fn agent_space_right_click_with_a_text_field_focused_keeps_the_tool() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    app.sync_views();
+    app.ui.tool = crate::state::Tool::Move;
+    let field = egui::Id::unique("a focused text field");
+    egui::text_edit::TextEditState::default().store(&ctx, field);
+    ctx.memory_mut(|m| m.request_focus(field));
+    assert!(ctx.text_edit_focused(), "the field has focus");
+    let click = json!({"space": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
+    assert_eq!(call(&mut app, &ctx, "ui.pointer", click)["ok"], true);
+    assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "no view menu while a field has focus");
+    assert!(app.ui.layer_menu.is_some(), "the Move tool's layer list");
+}
+
 /// #6561: an agent's right-click on a pending crop opens the crop menu, as on the canvas.
 #[test]
 fn agent_right_click_on_a_pending_crop_opens_and_runs_the_crop_menu() {
@@ -713,6 +787,10 @@ fn agent_right_click_during_its_crop_drag_opens_no_menu() {
     let right_click = json!([{"kind":"down","x":16,"y":12},{"kind":"up","x":16,"y":12}]);
     pointer(&mut app, "secondary", right_click.clone());
     assert!(app.ui.canvas_tool_menu.is_none(), "no menu over the drag");
+    // Space repositions the frame being dragged rather than holding the Hand: no view menu (#11271).
+    let spaced = json!({"tool": "Crop", "space": true, "button": "secondary", "events": right_click.clone()});
+    assert_eq!(call(&mut app, &ctx, "ui.pointer", spaced)["ok"], true);
+    assert!(app.ui.canvas_tool_menu.is_none(), "no view menu with Space over the drag");
     pointer(&mut app, "left", json!([{"kind":"up","x":18,"y":14}]));
     pointer(&mut app, "secondary", right_click.clone());
     assert!(app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "after the release it opens");
@@ -1567,7 +1645,10 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     let w = written.clone();
     let services = crate::Services {
         import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok(crate::test_import_result(Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
+            Ok(crate::services::imported((
+                Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                vec!["Adjustment layer flattened".to_string()],
+            )))
         })),
         export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
         automation_read: Some(Box::new(|path: &str| {
@@ -1691,6 +1772,111 @@ fn automation_confirming_a_file_writing_dialog_is_judged_as_its_file_command() {
     assert!(r.is_err_and(|e| e.contains("file.save")));
 }
 
+/// The desktop policy's verdict on file commands (crates/automation/src/workspace.rs): automation
+/// may close documents, but every file command that reads or writes a file, File › Save
+/// included, is refused.
+fn desktop_file_policy(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+    if id.starts_with("file.") && !matches!(id, "file.new" | "file.close" | "file.closeAll" | "file.closeOthers") {
+        Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
+    } else {
+        Ok(())
+    }
+}
+
+/// An app under the desktop file policy whose dirty document (its own file outside any
+/// automation root) a control request asked to close: the unsaved-changes prompt is up.
+/// Returns the app, its context, the paths written so far and the document's own file.
+fn dirty_close_prompted() -> (PhotocraftApp, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, String) {
+    let (mut app, ctx, written, _) = gated_app_recording_writes();
+    app.services.automation_authorize = Some(desktop_file_policy);
+    app.services.automation_command = Some(Box::new(|id, params| desktop_file_policy(id, params).map_err(|e| e.to_string())));
+    let own_file = std::env::temp_dir().join("outside").join("x.psd").to_string_lossy().into_owned();
+    app.session.active_mut().unwrap().path = Some(own_file.clone());
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    let r = call(&mut app, &ctx, "ui.menu.invoke", json!({"command": "file.close"}));
+    assert!(app.discard.is_some(), "closing a dirty document asks first: {r}");
+    (app, ctx, written, own_file)
+}
+
+/// Answers the open unsaved-changes prompt with Save, as synthetic input (the drawn prompt's
+/// answer with `automation_input` set) or as a control client's `ui.dialog.confirm`. Returns
+/// the refusal, if any.
+fn answer_save(app: &mut PhotocraftApp, ctx: &egui::Context, synthetic: bool) -> Result<(), String> {
+    if synthetic {
+        app.automation_input = true;
+        let r = crate::discard_ui::answer_choice(app, ctx, "save", false);
+        app.automation_input = false;
+        return r.map(|_| ());
+    }
+    let r = call(app, ctx, "ui.dialog.confirm", json!({"dialog": crate::discard_ui::CONTROL_ID, "choice": "save"}));
+    match r["error"].as_str() {
+        Some(e) => Err(e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Answering the unsaved-changes prompt with Save writes the document back like File › Save,
+/// so automation is judged for `file.save` there too, through a control request or synthetic
+/// input alike: a client allowed to close a document can't write it over its own file. A
+/// policy that allows the Save lets it write and close, and a user's Save still writes and
+/// closes.
+#[test]
+fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
+    for synthetic in [false, true] {
+        let (mut app, ctx, written, _) = dirty_close_prompted();
+        let error = answer_save(&mut app, &ctx, synthetic).err().unwrap_or_default();
+        assert!(written.borrow().is_empty(), "synthetic={synthetic}: nothing is written: {:?}", written.borrow());
+        assert!(error.contains("file.save"), "synthetic={synthetic}: {error:?}");
+        assert!(app.discard.is_some(), "synthetic={synthetic}: the prompt stays up");
+        assert_eq!(app.session.documents().len(), 1, "synthetic={synthetic}: the document stays open");
+    }
+    // A policy that allows `file.save` lets the automation Save write the document and close it.
+    /// A policy that allows every command.
+    fn allow(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Ok(())
+    }
+    for synthetic in [false, true] {
+        let (mut app, ctx, written, own_file) = dirty_close_prompted();
+        app.services.automation_authorize = Some(allow);
+        app.services.automation_command = Some(Box::new(|id, params| allow(id, params).map_err(|e| e.to_string())));
+        let r = answer_save(&mut app, &ctx, synthetic);
+        assert!(r.is_ok(), "synthetic={synthetic}: {r:?}");
+        assert_eq!(*written.borrow(), vec![own_file], "synthetic={synthetic}: the document is written back");
+        assert!(app.discard.is_none() && app.session.documents().is_empty(), "synthetic={synthetic}: the prompt and the document close");
+    }
+    // The user answering Save writes the document back and closes it.
+    let (mut app, ctx, written, own_file) = dirty_close_prompted();
+    crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
+    assert_eq!(*written.borrow(), vec![own_file]);
+    assert!(app.discard.is_none());
+    assert!(app.session.documents().is_empty());
+}
+
+/// A control client's Save on the unsaved-changes prompt is judged as `file.save` whatever part
+/// of the automation policy its services carry: only the gate, or only the command callback
+/// (which installs no session gate for the request). With no policy at all, synthetic input and
+/// a control answer alike fail closed. Nothing is written, and the prompt and document stay.
+#[test]
+fn automation_saving_from_the_unsaved_changes_prompt_needs_a_policy_to_judge_it() {
+    for (gate, callback) in [(true, false), (false, true), (false, false)] {
+        for synthetic in [false, true] {
+            let (mut app, ctx, written, _) = dirty_close_prompted();
+            if !gate {
+                app.services.automation_authorize = None;
+            }
+            if !callback {
+                app.services.automation_command = None;
+            }
+            let error = answer_save(&mut app, &ctx, synthetic).err().unwrap_or_default();
+            let case = format!("gate={gate} callback={callback} synthetic={synthetic}");
+            assert!(error.contains("file.save"), "{case}: {error:?}");
+            assert!(written.borrow().is_empty(), "{case}: nothing is written: {:?}", written.borrow());
+            assert!(app.discard.is_some(), "{case}: the prompt stays up");
+            assert_eq!(app.session.documents().len(), 1, "{case}: the document stays open");
+        }
+    }
+}
+
 #[test]
 fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     use photocraft_doc::Document;
@@ -1708,10 +1894,10 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
             }
         })),
         import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok(crate::test_import_result(
+            Ok(crate::services::imported((
                 Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
                 Vec::new(),
-            ))
+            )))
         })),
         automation_read: Some(Box::new(|path: &str| {
             if path == "zipped.pcraft" {
@@ -2370,184 +2556,6 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
 }
 
-/// Original historical header with no drawable data; decoding must wait for an explicit component order.
-fn historical_control_source() -> Vec<u8> {
-    let mut bytes = b"gimp xcf v007\0".to_vec();
-    for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
-        bytes.extend(value.to_be_bytes());
-    }
-    bytes
-}
-
-/// Match the desktop capability distinction for this production-handler test; the actual desktop gate is tested in automation and the app.
-fn held_control_gate(id: &str, params: &Value) -> photocraft_engine::Result<()> {
-    if id == "file.open" {
-        let valid = params.as_object().is_some_and(|fields| {
-            fields.get("heldHistoricalXcfOpen").and_then(Value::as_u64).is_some_and(|id| id > 0)
-                && (fields.get("cancel") == Some(&json!(true)) && fields.len() == 2
-                    || fields.keys().all(|key| matches!(key.as_str(), "heldHistoricalXcfOpen" | "historicalXcfSampleOrder" | "interactive"))
-                        && matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian")))
-        });
-        if valid {
-            return Ok(());
-        }
-    }
-    deny_ambient_file(id, params)
-}
-
-/// A profile-held first source with three ordered waiting opens and their original document identity.
-struct HistoricalControlProfileFixture {
-    app: PhotocraftApp,
-    ctx: egui::Context,
-    original: std::sync::Arc<photocraft_doc::Document>,
-    trailing: u64,
-    last: u64,
-    profile: u64,
-}
-
-/// Prepare the same four-source queue inline or on a worker, waiting at most 30 seconds for the profile handoff.
-fn historical_control_profile_fixture(background: bool) -> HistoricalControlProfileFixture {
-    use photocraft_color::{Color, ColorMode, SampleType};
-    use photocraft_doc::Document;
-    use photocraft_geom::Size;
-    let services = crate::Services {
-        automation_authorize: Some(held_control_gate),
-        import: Some(Box::new(|name, bytes, options| photocraft_io::import_with_options(name, bytes, options).map_err(|error| error.to_string()))),
-        ..Default::default()
-    };
-    let mut session = photocraft_engine::Session::new();
-    session.execute("file.new", json!({"width":2,"height":2})).unwrap();
-    let mut app = PhotocraftApp::new(session, services);
-    let original = app.session.active().unwrap().doc.clone();
-    app.background_jobs = false;
-    app.session.color.settings.working_rgb = photocraft_cms::Builtin::DisplayP3.id().into();
-    app.session.color.settings.ask_on_mismatch = true;
-    app.session.color.settings.ask_on_missing = true;
-    app.open_bytes("A.xcf", &historical_control_source()).unwrap();
-    let dialog = app.ui.dialogs.iter().find(|dialog| crate::open_prompt::owns_historical(&dialog.fields)).unwrap().id;
-    let mut matching = Document::with_background("B.pcraft", Size::new(1, 1), ColorMode::Rgb, SampleType::U8, Color::rgba(1., 0., 0., 1.));
-    matching.icc_profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes());
-    let bytes = photocraft_format::save_to_bytes(&matching, &Default::default()).unwrap();
-    app.open_bytes("B.pcraft", &bytes).unwrap();
-    app.open_bytes("C.xcf", &historical_control_source()).unwrap();
-    let trailing = match app.held_opens.back().unwrap() {
-        crate::open_prompt::Pending::Historical(held) => held.id,
-        _ => panic!("C must remain a historical capability"),
-    };
-    app.open_bytes("D.xcf", &historical_control_source()).unwrap();
-    let last = match app.held_opens.back().unwrap() {
-        crate::open_prompt::Pending::Historical(held) => held.id,
-        _ => panic!("D must remain a historical capability"),
-    };
-    let ctx = egui::Context::default();
-    assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog":dialog,"field":"historicalXcfSampleOrder","value":"little-endian"}))["ok"], true);
-    app.background_jobs = background;
-    assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":dialog,"wait":false}))["ok"], true);
-    let start = std::time::Instant::now();
-    while !app.jobs.opens.is_empty() && start.elapsed() < std::time::Duration::from_secs(30) {
-        crate::jobs_ui::tick(&mut app, &ctx);
-        std::thread::yield_now();
-    }
-    assert!(app.jobs.opens.is_empty());
-    assert_eq!(app.held_opens.iter().map(|pending| pending.name()).collect::<Vec<_>>(), ["A.xcf", "B.pcraft", "C.xcf", "D.xcf"]);
-    assert!(app.held_opens.front().and_then(crate::open_prompt::Pending::decoded).unwrap().question.is_some());
-    assert_eq!(app.session.documents().len(), 1, "B cannot open or fire its opened behavior ahead of A's profile answer");
-    let profile = app.ui.dialogs.iter().find(|dialog| crate::open_prompt::owns(&dialog.fields)).unwrap().id;
-    HistoricalControlProfileFixture { app, ctx, original, trailing, last, profile }
-}
-
-/// Exercise external consumption and atomic profile cancellation against one prepared queue without admitting waiting files.
-fn historical_control_profile_cancel_scenario(background: bool, consume_c: Option<bool>, keep_d: bool) {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    };
-    let HistoricalControlProfileFixture { mut app, ctx, original, trailing, last, profile } = historical_control_profile_fixture(background);
-    if let Some(cancel) = consume_c {
-        // Another accepted engine caller may consume C while A still owns the profile dialog.
-        let settings = app.session.color.settings.clone();
-        app.session.color.settings.ask_on_missing = false;
-        app.session.color.settings.ask_on_mismatch = false;
-        let params = if cancel {
-            json!({"heldHistoricalXcfOpen":trailing,"cancel":true})
-        } else {
-            json!({"heldHistoricalXcfOpen":trailing,"historicalXcfSampleOrder":"little-endian"})
-        };
-        app.session.execute("file.open", params).unwrap();
-        app.session.color.settings = settings;
-        assert!(!app.session.holds_historical_xcf_open(trailing));
-    }
-    if !keep_d {
-        app.session.execute("file.open", json!({"heldHistoricalXcfOpen":last,"cancel":true})).unwrap();
-    }
-    let live: Vec<_> = [trailing, last].into_iter().filter(|id| app.session.holds_historical_xcf_open(*id)).collect();
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let recorded = calls.clone();
-    let denied = Arc::new(AtomicBool::new(true));
-    let refuse = denied.clone();
-    let deny_id = live.last().copied();
-    app.services.automation_command = Some(Box::new(move |command, params| {
-        held_control_gate(command, params).map_err(|error| error.to_string())?;
-        if command == "file.open" {
-            let id = params["heldHistoricalXcfOpen"].as_u64().unwrap();
-            assert_eq!(params["cancel"], true);
-            recorded.lock().unwrap().push(id);
-            if refuse.load(Ordering::SeqCst) && Some(id) == deny_id {
-                return Err("profile queue cancellation denied".into());
-            }
-        }
-        Ok(())
-    }));
-    let before: Vec<_> = app.session.documents().iter().map(|state| state.doc.clone()).collect();
-    let active = app.session.active_index();
-    let dialogs = app.ui.dialogs.clone();
-    let queue: Vec<_> = app.held_opens.iter().map(|pending| pending.name().to_string()).collect();
-    if !live.is_empty() {
-        let response = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":profile}));
-        assert_eq!(response["ok"], false);
-        assert!(response["error"].as_str().unwrap().contains("profile queue cancellation denied"));
-        assert_eq!(app.held_opens.iter().map(|pending| pending.name().to_string()).collect::<Vec<_>>(), queue);
-        assert_eq!(app.ui.dialogs, dialogs, "denial must preserve the original profile dialog");
-        assert!(live.iter().all(|id| app.session.holds_historical_xcf_open(*id)), "authorization is atomic across all live capabilities");
-        assert_eq!(*calls.lock().unwrap(), live, "consumed capabilities must not be reauthorized");
-        calls.lock().unwrap().clear();
-    }
-    denied.store(false, Ordering::SeqCst);
-    let response = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog":profile}));
-    assert_eq!(response["ok"], true, "background={background}, consumed={consume_c:?}, keep_d={keep_d}: {response}");
-    assert_eq!(*calls.lock().unwrap(), live);
-    assert!(app.held_opens.is_empty());
-    assert!(!app.ui.dialogs.iter().any(|dialog| dialog.id == profile));
-    assert_eq!(app.session.documents().len(), if consume_c == Some(false) { 2 } else { 1 });
-    assert_eq!(app.session.active_index(), active);
-    for (state, prior) in app.session.documents().iter().zip(&before) {
-        assert!(Arc::ptr_eq(prior, &state.doc), "cancellation must neither open waiting documents nor modify admitted data");
-    }
-    assert!(Arc::ptr_eq(&original, &app.session.documents()[0].doc));
-    if consume_c == Some(false) {
-        assert_eq!(app.session.active().unwrap().doc.name, "C.xcf");
-        assert!(app.session.active().unwrap().source_read_only);
-    }
-    assert!(
-        app.session.execute("file.open", json!({"heldHistoricalXcfOpen":trailing,"cancel":true})).is_err(),
-        "whole-queue cancellation must release C's actual held bytes"
-    );
-    assert!(!app.session.holds_historical_xcf_open(last));
-    assert!(app.session.authorize.is_none());
-}
-
-#[test]
-/// Profile Cancel reconciles externally consumed trailing sources before authorization, retains the entire queue on denial, and never admits waiting files.
-fn historical_control_continuation_preserves_queue_order_and_atomic_profile_cancel() {
-    for background in [false, true] {
-        for consume_c in [None, Some(true), Some(false)] {
-            for keep_d in [false, true] {
-                historical_control_profile_cancel_scenario(background, consume_c, keep_d);
-            }
-        }
-    }
-}
-
 #[test]
 fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     use photocraft_color::{ColorMode, SampleType};
@@ -2560,13 +2568,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let writes = written.clone();
     let services = crate::Services {
         import: Some(Box::new(|name: &str, _: &[u8], _: &photocraft_io::ImportOptions| {
-            Ok(photocraft_io::ImportResult {
-                document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
-                warnings: Vec::new(),
-                source_read_only: false,
-                preview_only: false,
-                initial_view: None,
-            })
+            Ok(crate::services::imported((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))
         })),
         export: Some(Box::new(|_: &Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new())))),
         automation_read: Some(Box::new(|path: &str| {

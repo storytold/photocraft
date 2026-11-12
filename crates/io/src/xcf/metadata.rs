@@ -12,6 +12,17 @@ fn word(props: &[Prop<'_>], kind: u32) -> Option<u32> {
     props.iter().rev().find(|p| p.kind == kind).and_then(|p| be_u32(p.data))
 }
 
+/// Validate both source axes together; a malformed optional pair cannot change native DPI.
+fn resolution_pair(data: &[u8]) -> Option<(f32, f32)> {
+    be_f32(data).zip(data.get(4..).and_then(be_f32)).filter(|(x, y)| [*x, *y].iter().all(|axis| axis.is_finite() && *axis > 0.0 && *axis < 1.0e6))
+}
+
+/// Source properties apply in order: the last valid pair wins, while invalid pairs leave the earlier DPI intact.
+/// Text decoding and document metadata must share this final resolution and validation policy.
+pub(super) fn image_resolution(props: &[Prop<'_>], fallback: f32) -> f32 {
+    props.iter().filter(|property| property.kind == 19).filter_map(|property| resolution_pair(property.data).map(|(x, _)| x)).next_back().unwrap_or(fallback)
+}
+
 /// Channel colours are explicitly stored as nonlinear RGB, independently of image precision.
 /// This is the same RGB colour value used by native channel overlays, not document samples.
 pub(super) fn channel_overlay(channel: &mut AlphaChannel, props: &[Prop<'_>]) -> Vec<u32> {
@@ -69,6 +80,7 @@ pub(super) fn image<'a>(
     budget: &mut usize,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
+    doc.resolution_dpi = image_resolution(props, doc.resolution_dpi);
     let mut metadata_incomplete = false;
     for p in props {
         match p.kind {
@@ -109,15 +121,7 @@ pub(super) fn image<'a>(
                 }
             }
             19 => {
-                if let Some((x, y)) = be_f32(p.data).zip(p.data.get(4..).and_then(be_f32))
-                    && x.is_finite()
-                    && x > 0.0
-                    && x < 1.0e6
-                    && y.is_finite()
-                    && y > 0.0
-                    && y < 1.0e6
-                {
-                    doc.resolution_dpi = x;
+                if let Some((x, y)) = resolution_pair(p.data) {
                     if x != y {
                         outcomes.detail(
                             owner,
