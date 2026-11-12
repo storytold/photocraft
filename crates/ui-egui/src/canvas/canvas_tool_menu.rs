@@ -8,7 +8,9 @@ use photocraft_engine::prefs::{self, CanvasColor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::direct_select::PathRef;
 use crate::{PhotocraftApp, state::Tool};
+use photocraft_vector::edit::Hit;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CanvasToolMenu {
@@ -70,6 +72,12 @@ pub struct CanvasToolMenu {
     /// Opened with the Content-Aware Move tool inside the active selection (#12194).
     #[serde(default)]
     pub inside_selection: bool,
+    /// Opened with the Delete Anchor Point or Convert Point tool over an anchor or a segment of the
+    /// targeted path (#12771, #12744): the engine command that entry runs and its params. It heads
+    /// the path menu, above a separator. The third part is the document id and revision it was read
+    /// from: the knot index means something only there, so the entry expires once either moves on.
+    #[serde(default)]
+    pub point: Option<(String, Value, (u64, u64))>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -382,6 +390,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -759,7 +768,54 @@ pub fn magnetic_drawing(app: &PhotocraftApp) -> bool {
 /// Selection and Direct Selection tools, whose Photoshop menu offers the same whole-path actions
 /// for the selected path (#1056).
 pub fn path_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)
+    matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection) || point_menu(tool)
+}
+
+/// The anchor tools whose path menu also heads with the entry for the point under the right-click
+/// (#12771, #12744). Add Anchor Point (#12710) joins here.
+fn point_menu(tool: Tool) -> bool {
+    matches!(tool, Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+}
+
+/// The anchor or segment of the targeted path under document point `doc`, as the anchor tools hit
+/// it (`direct_select::hit_active`): Delete Anchor Point on an anchor, Add Anchor Point on a
+/// segment, at the clicked point. `None` on empty canvas, a handle, or the Pen draft, which the
+/// engine doesn't edit.
+fn point_at(app: &PhotocraftApp, doc: [f64; 2]) -> Option<(String, Value, (u64, u64))> {
+    let (target, _, hit) = crate::direct_select::hit_active(app, doc)?;
+    let (command, mut params) = match hit {
+        Hit::Anchor([subpath, knot]) => (POINT_DELETE, json!({"subpath": subpath, "knot": knot})),
+        Hit::Segment([subpath, knot], t) => (POINT_ADD, json!({"subpath": subpath, "knot": knot, "t": t})),
+        Hit::Handle(..) => return None,
+    };
+    if target == PathRef::Pen || crate::anchor_tools::ignores(app, &target) {
+        return None;
+    }
+    if let (Some(o), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
+        o.extend(t.clone());
+    }
+    let stamp = app.session.active().map(|st| (st.doc.id.0, st.revision))?;
+    Some((command.to_string(), params, stamp))
+}
+
+const POINT_DELETE: &str = "path.deleteAnchor";
+const POINT_ADD: &str = "path.addAnchor";
+
+/// The label of a menu's top point entry, spelled out so `cargo xtask i18n-coverage` lists it.
+fn point_label(command: &str) -> String {
+    if command == POINT_DELETE { tl!("Delete Anchor Point").to_string() } else { tl!("Add Anchor Point").to_string() }
+}
+
+/// Is `command` the open menu's top point entry?
+fn is_point(menu: &CanvasToolMenu, command: &str) -> bool {
+    menu.point.as_ref().is_some_and(|(c, ..)| c == command)
+}
+
+/// Is the open menu's point entry still about the path as it is? The document and its revision are
+/// the ones the entry was read from; an edit meanwhile (say a control-channel `path.addAnchor`)
+/// shifts the knot indexes, so a stale entry runs nothing.
+fn point_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    menu.point.as_ref().is_some_and(|(.., stamp)| app.session.active().map(|st| (st.doc.id.0, st.revision)) == Some(*stamp))
 }
 
 /// Tools whose plain canvas right-click offers the view menu.
@@ -808,7 +864,9 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
 
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    (rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command)) && entry_enabled(app, menu, command)
+    (is_point(menu, command) && point_current(app, menu))
+        || ((rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command))
+            && entry_enabled(app, menu, command))
 }
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
@@ -977,6 +1035,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1064,6 +1123,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1101,6 +1161,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         sampler_at: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1249,6 +1310,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
+    let point = if point_menu(tool) && has_path { doc.filter(|d| d.iter().all(|v| v.is_finite())).and_then(|d| point_at(app, d)) } else { None };
     let inside_selection = tool == Tool::ContentAwareMove && doc.is_some_and(|d| selected_at(app, d));
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
@@ -1275,6 +1337,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         sampler_at,
         color,
         inside_selection,
+        point,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1309,6 +1372,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         sampler_at: None,
         color: None,
         inside_selection: false,
+        point: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1351,7 +1415,9 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     if !available(app, &menu, command) {
         return;
     }
-    let result = if menu.crop.is_some() {
+    let result = if is_point(&menu, command) {
+        menu.point.as_ref().map_or(Ok(()), |(id, params, _)| app.run(id, params.clone()).map(|_| ()))
+    } else if menu.crop.is_some() {
         choose_crop(app, &menu, command)
     } else if menu.guide {
         choose_guide(app, ctx, command)
@@ -1699,6 +1765,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         selected = Some(command);
                     }
                 }
+                if let Some((command, ..)) = &menu.point {
+                    let item = egui::Button::new(point_label(command)).min_size(egui::vec2(200.0, 20.0));
+                    if ui.add_enabled(available(app, &menu, command), item).clicked() {
+                        selected = Some(command.clone());
+                    }
+                    ui.separator();
+                }
                 for row in rows(&menu) {
                     let Some((label, command)) = *row else {
                         ui.separator();
@@ -1759,3 +1832,9 @@ mod make_selection_dialog_tests;
 
 #[cfg(test)]
 mod type_layer_menu_tests;
+
+#[cfg(test)]
+mod delete_anchor_menu_tests;
+
+#[cfg(test)]
+mod convert_point_menu_tests;
