@@ -493,3 +493,48 @@ fn wrapped_sample_order_probe_reads_only_the_fixed_header() {
         }
     }
 }
+
+/// Carry the validated source model through plain/wrapped requests without profile
+/// or drawable decoding, and agree with the native document after an explicit choice.
+#[test]
+fn historical_request_retains_rgb_and_gray_modes_across_wrappers_and_native_save() {
+    use std::io::Write;
+    for gray in [false, true] {
+        let mode = if gray { ColorMode::Grayscale } else { ColorMode::Rgb };
+        let bytes = image(9, Sample::Float, Order::LittleEndian, gray, 1);
+        let expected = photocraft_io::HistoricalXcfSampleOrderRequest { version: 9, bits_per_sample: 32, mode };
+        assert_eq!(photocraft_io::historical_xcf_sample_order_request("header.xcf", &bytes[..30]).unwrap(), Some(expected));
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(&bytes).unwrap();
+        for (name, wrapped) in [
+            ("source.xcf", bytes.clone()),
+            ("source.xcf.gz", gzip.finish().unwrap()),
+            ("source.xcf.bz2", crabz2::compress(&bytes, crabz2::Level::default())),
+            ("source.xcf.xz", xz(&bytes)),
+        ] {
+            assert_eq!(photocraft_io::historical_xcf_sample_order_request(name, &wrapped).unwrap(), Some(expected), "{name}/{gray}");
+            let Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(required)) = photocraft_io::import(name, &wrapped) else {
+                panic!("{name}/{gray}: expected the same typed decoder refusal")
+            };
+            assert_eq!(required, expected);
+            let imported = photocraft_io::import_with_options(name, &wrapped, &opts(Order::LittleEndian)).unwrap();
+            assert_eq!(imported.document.mode, mode);
+            assert_pixels(&imported.document, Sample::Float, gray);
+            let saved = photocraft_format::save_to_bytes(&imported.document, &Default::default()).unwrap();
+            assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap().mode, mode);
+            assert!(photocraft_io::historical_xcf_sample_order_request("native.pcraft", &saved).unwrap().is_none());
+        }
+    }
+}
+
+/// Invalid and high-depth indexed headers must fail validation rather than yield
+/// an apparently authorized RGB request.
+#[test]
+fn historical_request_rejects_invalid_and_high_depth_indexed_models() {
+    for (base_type, message) in [(2u32, "indexed pixels require"), (3, "unknown image type")] {
+        let mut bytes = image(9, Sample::Float, Order::LittleEndian, false, 0);
+        bytes[22..26].copy_from_slice(&base_type.to_be_bytes());
+        assert!(photocraft_io::historical_xcf_sample_order_request("invalid.xcf", &bytes).unwrap_err().to_string().contains(message));
+        assert!(photocraft_io::import("invalid.xcf", &bytes).unwrap_err().to_string().contains(message));
+    }
+}

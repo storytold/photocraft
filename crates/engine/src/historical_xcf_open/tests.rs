@@ -71,6 +71,82 @@ fn historical_choice_is_consumed_once_and_cancel_releases_exact_source() {
 }
 
 #[test]
+fn historical_profile_refusal_preserves_exact_source_and_options_for_retry() {
+    fn authorize(id: &str, params: &Value) -> Result<()> {
+        if id == "edit.profileInfo" && params.get("profile").and_then(Value::as_str).is_some_and(|profile| profile.starts_with("denied-")) {
+            return Err(EngineError::Other("test denies edit.profileInfo".into()));
+        }
+        Ok(())
+    }
+    for (base_type, mode) in [(0, photocraft_color::ColorMode::Rgb), (1, photocraft_color::ColorMode::Grayscale)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        let original = s.active().unwrap().doc.clone();
+        let mut bytes = b"gimp xcf v007\0".to_vec();
+        for value in [1u32, 1, base_type, 250, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        let bytes = Arc::new(bytes);
+        let question = photocraft_io::historical_xcf_sample_order_request("old.xcf", &bytes).unwrap().unwrap();
+        assert_eq!(question.mode, mode);
+        let options = photocraft_io::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(1234), ..Default::default() };
+        let held = hold_with_path(&mut s, "old.xcf".into(), bytes.clone(), question, options, Some("source.xcf".into())).unwrap();
+        let id = held["heldHistoricalXcfOpen"].as_u64().unwrap();
+        let defaults = s.color.settings.clone();
+        s.color.settings.ask_on_missing = false;
+        s.color.settings.ask_on_mismatch = false;
+        s.color.settings.working_rgb = "denied-rgb.icc".into();
+        s.color.settings.working_gray = "denied-gray.icc".into();
+        s.color.settings.working_cmyk = "denied-cmyk.icc".into();
+        s.authorize = Some(authorize);
+        let error = s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).unwrap_err();
+        assert!(error.to_string().contains("test denies edit.profileInfo"));
+        assert!(s.holds_historical_xcf_open(id));
+        assert_eq!(s.jobs.historical_xcf.len(), 1);
+        let retained = s.jobs.historical_xcf.first().unwrap();
+        assert_eq!(retained.id, id);
+        assert!(Arc::ptr_eq(&retained.bytes, &bytes));
+        assert_eq!(retained.options, options);
+        assert_eq!(retained.path.as_deref(), Some("source.xcf"));
+        assert_eq!(s.documents().len(), 1);
+        assert!(Arc::ptr_eq(&s.active().unwrap().doc, &original));
+        assert!(s.jobs().is_empty());
+        // Only this source's working space is permitted; unused profiles remain denied.
+        match mode {
+            photocraft_color::ColorMode::Rgb => s.color.settings.working_rgb = defaults.working_rgb,
+            photocraft_color::ColorMode::Grayscale => s.color.settings.working_gray = defaults.working_gray,
+            _ => panic!("fixture mode"),
+        }
+        let Started::Done(result) = s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).unwrap() else {
+            panic!("inline retry")
+        };
+        assert!(result.get("document").is_some(), "{result}");
+        assert!(!s.holds_historical_xcf_open(id));
+        assert_eq!(s.documents().len(), 2);
+        assert_eq!(s.active().unwrap().doc.mode, mode);
+        assert!(Arc::ptr_eq(&s.documents()[0].doc, &original));
+        assert!(s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).is_err());
+    }
+}
+
+#[test]
+fn permitted_historical_attempt_still_consumes_source_on_decode_failure() {
+    let mut bytes = b"gimp xcf v007\0".to_vec();
+    for value in [1u32, 1, 0, 250] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    let bytes = Arc::new(bytes); // Valid fixed header, truncated before the property stream.
+    let question = photocraft_io::historical_xcf_sample_order_request("truncated.xcf", &bytes).unwrap().unwrap();
+    let mut s = Session::new();
+    let held = hold(&mut s, "truncated.xcf".into(), bytes.clone(), question, Default::default()).unwrap();
+    let id = held["heldHistoricalXcfOpen"].as_u64().unwrap();
+    assert!(s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).is_err());
+    assert!(!s.holds_historical_xcf_open(id));
+    assert!(s.documents().is_empty());
+    assert_eq!(Arc::strong_count(&bytes), 1);
+}
+
+#[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn cancelling_before_poll_does_not_publish_a_historical_source_capability() {
     let mut s = Session::new();
@@ -104,7 +180,7 @@ fn pending_source_count_is_bounded_without_discarding_earlier_choices() {
 #[test]
 fn pending_sources_charge_retained_and_incoming_capacity_after_truncation() {
     let mut s = Session::new();
-    let question = photocraft_io::HistoricalXcfSampleOrderRequest { version: 7, bits_per_sample: 16 };
+    let question = photocraft_io::HistoricalXcfSampleOrderRequest { version: 7, bits_per_sample: 16, mode: photocraft_color::ColorMode::Rgb };
     let mut buffer = Vec::with_capacity(128);
     buffer.extend([1u8, 2, 3, 4]);
     buffer.truncate(1);
