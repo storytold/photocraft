@@ -127,9 +127,37 @@ pub(crate) fn committing(app: &PhotocraftApp) -> Option<JobId> {
     app.transform_preview.as_ref().and_then(|pv| pv.committing)
 }
 
+fn saves_document(id: &str) -> bool {
+    matches!(id, "file.save" | "file.saveAs" | "file.saveACopy")
+}
+
+/// A save must see the transform the user sees on the canvas. In the desktop app the commit
+/// may have its own worker, so defer the save until the transformed document is installed.
+pub(crate) fn before_save(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
+    let preview = app.transform_preview.as_ref()?;
+    if !saves_document(id) || app.ui.transform.is_none() || app.active_doc_id().ok() != Some(preview.doc.id) {
+        return None;
+    }
+    if let Err(error) = crate::FormatChoices::from_params(params, id) {
+        return Some(Err(error));
+    }
+    if app.automation_input || app.session.authorize.is_some() {
+        return Some(Err(tl!("Commit or cancel the transform first").into()));
+    }
+    commit(app);
+    if committing(app).is_some() {
+        if app.after_transform_commit.is_some() {
+            return Some(Err(tl!("Free Transform is still being applied; try again when it has finished.").into()));
+        }
+        app.after_transform_commit = Some((id.to_string(), params.clone()));
+        return Some(Ok(serde_json::Value::Null));
+    }
+    app.ui.transform.as_ref().map(|_| Err(app.ui.status.clone()))
+}
+
 /// A job ended (see [`crate::jobs_ui`]): when it was the commit, the session ends with it. Its
 /// status and errors are reported like any job's.
-pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
+pub fn on_job_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: &JobEvent) {
     if super::begin::on_prepared(app, e) {
         return;
     }
@@ -151,10 +179,15 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
     let document = pv.doc.id;
     let landed = matches!(e.outcome, JobOutcome::Done(_));
     finish(app, Some(document), LayerId(t.layer), t.made, landed);
-    // Not in another tab, which the click wasn't meant for.
-    if let Some((id, params)) = after.filter(|_| landed && app.session.active().is_some_and(|st| st.doc.id == document))
-        && let Err(e) = app.run(&id, params)
-    {
+    let Some((id, params)) = after.filter(|_| landed) else { return };
+    let result = if saves_document(&id) {
+        app.with_document(document, |app| crate::menus::invoke(app, ctx, &id, params))
+    } else if app.active_doc_id().ok() == Some(document) {
+        app.run(&id, params)
+    } else {
+        return;
+    };
+    if let Err(e) = result {
         // A notice, as the commit's own status replaces the status bar's text next (jobs_ui).
         crate::notices::error(app, e);
     }

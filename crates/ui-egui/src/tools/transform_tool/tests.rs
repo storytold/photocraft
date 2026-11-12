@@ -585,6 +585,74 @@ fn land_jobs(app: &mut PhotocraftApp) {
     panic!("the background jobs never landed");
 }
 
+#[test]
+fn saving_a_reopened_smart_object_keeps_the_pending_rotation() {
+    for (background, already_committing, switch_tab) in [(false, false, false), (true, false, false), (true, true, false), (true, true, true)] {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 96, "height": 64})).unwrap();
+        let shape = app.session.execute("shape.create", json!({"kind": "rect", "rect": [8, 6, 45, 30], "fill": "#ae6325"})).unwrap()["layer"].as_u64().unwrap();
+        app.session.execute("type.create", json!({"text": "Hi", "size": 16, "x": 12, "y": 25})).unwrap();
+        app.session.execute("layer.select", json!({"layer": shape, "mode": "add"})).unwrap();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.session.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 12, 8]})).unwrap();
+        let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "psd", &Default::default()).unwrap().bytes;
+
+        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let capture = written.clone();
+        let services = crate::Services {
+            export: Some(Box::new(|doc, _, settings| {
+                photocraft_io::export(doc, "psd", settings).map(|out| (out.bytes, out.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(move |_, bytes| {
+                capture.borrow_mut().push(bytes.to_vec());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.open_bytes_from("smart.psd", &bytes, Some("smart.psd")).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layers.iter().find(|l| matches!(l.content, LayerContent::Smart(_))).unwrap().id;
+        app.run("layer.select", json!({"layer": layer.0})).unwrap();
+        begin(&mut app, &ctx).unwrap();
+        super::options_bar::rotate_about_pivot(&mut app, 25_f64.to_radians());
+        app.background_jobs = background;
+        let document = app.active_doc_id().unwrap();
+        if already_committing {
+            commit(&mut app);
+            assert!(committing(&app).is_some());
+        }
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        if background {
+            assert!(written.borrow().is_empty(), "save waits for the transform job");
+        }
+        let other = switch_tab.then(|| {
+            app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.active_doc_id().unwrap()
+        });
+        land_jobs(&mut app);
+        let writes = written.borrow();
+        assert_eq!(writes.len(), 1);
+        let saved = photocraft_io::import("smart.psd", &writes[0]).unwrap().document;
+        let placement = |doc: &photocraft_doc::Document| {
+            doc.layers
+                .iter()
+                .find_map(|l| match &l.content {
+                    LayerContent::Smart(sm) => Some(sm.transform),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let after = placement(&saved);
+        assert!((after.m[1] - 25_f64.to_radians().sin()).abs() < 1e-9, "background {background}, already committing {already_committing}: {after:?}");
+        assert!(app.ui.transform.is_none());
+        assert_eq!(app.active_doc_id().unwrap(), other.unwrap_or(document));
+        let state = app.session.documents().iter().find(|state| state.doc.id == document).unwrap();
+        assert!(!state.is_dirty());
+    }
+}
+
 /// A smart object placed the way a dropped file is (the last step made it), in Free Transform
 /// and moved 8 px right, with commits running in the background as in the desktop app:
 /// (app, the placed layer, its frame before the move, history steps before the place).
