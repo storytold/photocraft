@@ -1,12 +1,12 @@
 //! Preferences › File Handling › Image Previews: PSD/PSB saves embed Photoshop's thumbnail
 //! resource (1036: 28-byte header + JFIF, ≤ 160 px) unless the previews are turned off.
 
+use craft_psd::PsdFile;
+use craft_psd::resources::ids;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer};
 use photocraft_geom::Size;
 use photocraft_io::{ExportOptions, export, import};
-use photocraft_psd::PsdFile;
-use photocraft_psd::resources::ids;
 
 /// A `w`×`h` document of `mode`/`depth` holding one layer of `rgba` (given as straight sRGB-ish
 /// RGBA and converted to the document's model), covering the left `cover` fraction.
