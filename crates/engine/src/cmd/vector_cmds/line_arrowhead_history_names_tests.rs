@@ -98,3 +98,21 @@ fn a_refused_arrowhead_edit_adds_no_step() {
     assert!(s.execute("shape.edit", json!({"arrowEnd": 1})).is_err());
     assert_eq!(steps(&s), n);
 }
+
+#[test]
+fn a_plain_line_turning_an_arrowhead_on_is_change_arrowhead_end() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
+    s.execute("shape.create", json!({"kind": "line", "from": [100, 300], "to": [600, 300], "weight": 4})).unwrap();
+    edit(&mut s, json!({"arrowEnd": true}));
+    assert_eq!(last_step(&s), Some("Change Arrowhead End"));
+}
+
+#[test]
+fn arrowhead_keys_on_a_shape_that_is_not_a_line_stay_edit_shape() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
+    s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 100, 80]})).unwrap();
+    edit(&mut s, json!({"arrowWidth": 15}));
+    assert_eq!(last_step(&s), Some("Edit Shape"));
+}
