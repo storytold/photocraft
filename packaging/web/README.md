@@ -26,7 +26,7 @@ From the repository root (Docker is the only build prerequisite):
 ```sh
 docker build --load -t photocraft-web:local .
 docker run -d --name photocraft-web --restart unless-stopped \
-  -p 8080:8080 photocraft-web:local
+  -p 127.0.0.1:8080:8080 photocraft-web:local
 ```
 
 Open **http://localhost:8080/**. The multi-stage `Dockerfile` builds the existing Rust/Wasm
@@ -35,6 +35,34 @@ runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint an
 health check. It serves precompressed gzip assets, the Wasm MIME type, immutable hashed
 assets, and an HTML page that revalidates after deployments. No Rust installation, Node.js,
 database, GPU passthrough, or document volume is needed on the host.
+### Docker Compose
+
+If you prefer Compose, run these commands from the repository root. Docker Compose builds the
+image from the local source tree and binds port `8080` to `127.0.0.1` on the host. It does not
+set a restart policy, which keeps this local-development service from restarting automatically:
+
+```sh
+docker compose up --build -d
+```
+
+Open **http://localhost:8080/** to use PhotoCraft. To check the service status and health check:
+
+```sh
+docker compose ps
+docker compose logs -f photocraft-web
+```
+
+Stop and remove the container with:
+
+```sh
+docker compose down
+```
+
+The included `compose.yaml` uses the local image name `photocraft-web:local` and maps
+`127.0.0.1:8080` on the host to port `8080` in the container. If port 8080 is already in use,
+change the host port in `compose.yaml`, for example to `"127.0.0.1:8081:8080"`, and then open
+**http://localhost:8081/**.
+
 
 The first build downloads Rust dependencies and Trunk's Wasm tools and can take several
 minutes. Subsequent builds reuse Cargo caches. The builder supports Linux amd64 and arm64;
