@@ -955,6 +955,31 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    // Path Selection (#13287): with components of the saved path targeted in the Paths panel
+    // selected, Esc deselects the components and keeps the path targeted and drawn, while a plain
+    // Enter deselects the components and also untargets the path (its Paths panel row and outline
+    // go). Neither adds a History step. Free Transform Path and ⌘↩ (Make Selection) took their
+    // keys earlier; with no component selected both keys keep today's behaviour. Not while the
+    // path's name is typed in the panel.
+    if !esc_taken
+        && app.ui.tool == Tool::PathSelection
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+        && let Some((crate::direct_select::PathRef::Saved(i), ..)) = crate::path_components::selected(app)
+        && i == index
+    {
+        if pressed(Key::Escape) {
+            crate::path_components::deselect_components(app);
+            return;
+        }
+        if pressed(Key::Enter) {
+            crate::path_components::deselect_components(app);
+            if let Some(name) = app.ui.selected_path.clone() {
+                crate::vector_ui::deselect_loaded_path(app, &name);
+            }
+            return;
+        }
+    }
     // + / − pick a Path Operation with the Pen tools and Path Selection (`path_components`)…
     crate::path_components::handle_keys(app, ctx);
     // … and otherwise ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the
