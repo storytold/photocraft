@@ -3,7 +3,7 @@
 PhotoCraft loads and saves action sets in the reference application's `.atn` format: Load Actions and
 Save Actions in the Actions panel menu, `actions.load` / `actions.save` for agents, and
 `photocraft batch --actions set.atn` on the command line. Reading and writing the file lives in
-`photocraft-psd` (`crates/psd/src/atn.rs`, version 16 sets, exact round trip); the mapping between the
+`craft-psd` (`crates/psd/src/atn.rs`, version 16 sets, exact round trip); the mapping between the
 application's events and PhotoCraft commands lives in `photocraft-engine`
 (`crates/engine/src/cmd/atn_cmds/`, table `EVENTS` in `events.rs`).
 
