@@ -84,19 +84,26 @@ impl AbandonedInit {
     /// the work finished. The join also waits for the thread's thread-local destructors, which
     /// `limit` does not cover.
     pub fn wait(&self, limit: Duration) -> bool {
-        let start = Instant::now();
+        self.wait_from(Instant::now(), limit)
+    }
+
+    /// [`AbandonedInit::wait`] with its limit counted from `start`.
+    fn wait_from(&self, start: Instant, limit: Duration) -> bool {
         let (finished, changed) = &*self.state;
         let mut done = finished.lock().unwrap_or_else(PoisonError::into_inner);
-        if !*done
-            && !limit.is_zero()
-            && let Some(waiting) = &self.waiting
-        {
-            let _ = waiting.send(());
-        }
+        let mut told = false;
         while !*done {
             let Some(left) = limit.checked_sub(start.elapsed()).filter(|left| !left.is_zero()) else {
                 return false;
             };
+            // Tell the test hook only once some time is left, so a wait that has already run out
+            // does not release the thread.
+            if !told {
+                told = true;
+                if let Some(waiting) = &self.waiting {
+                    let _ = waiting.send(());
+                }
+            }
             done = changed.wait_timeout(done, left).unwrap_or_else(PoisonError::into_inner).0;
         }
         drop(done);
@@ -398,6 +405,20 @@ mod tests {
         // Dropping the last handle disconnects the thread's receiver.
         drop(init);
         assert_eq!(told.recv().ok(), Some(false), "a wait with no time left does not tell the thread it started waiting");
+    }
+
+    #[test]
+    fn a_wait_whose_limit_ran_out_before_it_started_does_not_release_the_thread() {
+        let (told_tx, told) = std::sync::mpsc::channel();
+        let init = AbandonedInit::spawn(move |waiting| {
+            let _ = told_tx.send(waiting.recv().is_ok());
+        })
+        .unwrap();
+        // A nonzero limit that ran out before the wait took the lock, as when taking it was slow.
+        let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        assert!(!init.wait_from(start, Duration::from_millis(500)));
+        drop(init);
+        assert_eq!(told.recv().ok(), Some(false), "a wait whose limit ran out does not tell the thread it started waiting");
     }
 
     #[test]
