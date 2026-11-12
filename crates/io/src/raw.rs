@@ -267,7 +267,7 @@ fn default_look(bytes: &[u8], sensor: &Sensor) -> Option<CameraLook> {
 
 /// "Canon" + "Canon EOS 80D" and "NIKON CORPORATION" + "NIKON D3200" read as the model alone:
 /// the model already starts with the make's first word.
-fn camera_name(make: Option<&str>, model: Option<&str>) -> String {
+pub(crate) fn camera_name(make: Option<&str>, model: Option<&str>) -> String {
     match (make, model) {
         (Some(make), Some(model))
             if make.split_whitespace().next().is_some_and(|brand| model.to_ascii_lowercase().starts_with(&brand.to_ascii_lowercase())) =>

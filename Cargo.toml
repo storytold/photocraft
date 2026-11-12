@@ -62,6 +62,8 @@ arc-swap = "1"
 # Raw develop: LightCraft's settings model and geometry, shared through craft-libs (Camera Raw).
 craft-geom = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 craft-develop-model = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
+craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d" }
 bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 encoding_rs = { version = "0.8", default-features = false, features = ["alloc"] }
@@ -100,6 +102,8 @@ todo = "warn"
 [patch."https://github.com/storytold/craft-libs"]
 craft-geom = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/geom" }
 craft-develop-model = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/develop-model" }
+craft-raw = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/raw" }
+craft-develop = { path = "/Users/texjernigan/Code/artcraft/craft-libs-develop/crates/develop" }
 
 # Dependencies carry no debug info: their frames in a backtrace lose file:line, and the target dir
 # and link times shrink. The test profile inherits both settings.

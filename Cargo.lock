@@ -1429,6 +1429,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crw"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-develop"
+version = "0.1.0"
+dependencies = [
+ "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
+ "craft-tiff",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
+]
+
+[[package]]
 name = "craft-develop-model"
 version = "0.1.0"
 dependencies = [
@@ -1541,6 +1564,23 @@ dependencies = [
  "tempfile",
  "winprint",
  "winsafe",
+]
+
+[[package]]
+name = "craft-raw"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "craft-crw",
+ "craft-metadata",
+ "craft-tiff",
+ "jxl-oxide",
+ "miniz_oxide 0.9.1",
+ "rayon",
+ "serde",
+ "thiserror 2.0.21",
+ "zune-core 0.5.3",
+ "zune-jpeg 0.5.15",
 ]
 
 [[package]]
@@ -5689,10 +5729,12 @@ name = "photocraft-io"
 version = "0.20.1"
 dependencies = [
  "blake3",
+ "craft-develop",
  "craft-develop-model",
  "craft-docpath",
  "craft-geom",
  "craft-pdf",
+ "craft-raw",
  "crc32fast",
  "flate2",
  "imagesize",
