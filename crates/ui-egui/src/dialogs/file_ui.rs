@@ -26,7 +26,7 @@ pub use web::open_web;
 #[cfg(test)]
 use web::web_params;
 #[cfg(test)]
-use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, variants, web_frame_document};
+use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, select_variant, variants, web_frame_document};
 use web::{web_body, web_confirm};
 
 fn no_params(p: &Value) -> bool {
@@ -382,6 +382,82 @@ mod web_playback_tests {
             assert_eq!(source.timeline.as_ref().unwrap().current, 0);
             assert_eq!(photocraft_compose::flatten(&source).px[0], [1.0, 0.0, 0.0, 1.0]);
         }
+    }
+
+    /// Save for Web's 4-Up: a variant copies only the keys it carries and drops the palette.
+    #[test]
+    fn select_variant_copies_format_quality_and_colors() {
+        let mut f = json!({"format": "jpeg", "quality": 60, "matte": "#fff", "__view": "4up", "colorTable": ["#000"], "colorTableEdits": {"0": "#111"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let v = variants(&Value::Object(f.clone()));
+        select_variant(&mut f, &v[1]);
+        assert_eq!(f["quality"], 30.0);
+        assert_eq!(f["format"], "jpeg");
+        assert!(!f.contains_key("colorTable") && !f.contains_key("colorTableEdits"));
+        assert_eq!((f["matte"].as_str(), f["__view"].as_str()), (Some("#fff"), Some("4up")));
+        assert!(!f.contains_key("colors"), "keys the variant lacks are not invented");
+
+        let mut f = json!({"format": "png24", "colors": 256, "__view": "4up"}).as_object().unwrap().clone();
+        let v = variants(&Value::Object(f.clone()));
+        select_variant(&mut f, &v[2]);
+        assert_eq!((f["format"].as_str(), f["colors"].as_u64()), (Some("gif"), Some(64)));
+        select_variant(&mut f, &json!("not an object"));
+        assert_eq!(f["format"], "gif");
+    }
+
+    fn four_up_harness() -> Harness<'static, (PhotocraftApp, Map<String, Value>)> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("jpeg"));
+        fields.insert("quality".into(), json!(60));
+        let mut h = harness(app, fields);
+        h.get_by_label("4-Up").click();
+        h.run_steps(3);
+        h
+    }
+
+    fn pane_center(h: &Harness<'static, (PhotocraftApp, Map<String, Value>)>, pane: usize) -> egui::Pos2 {
+        let r = &h.state().1["__previewRects"][pane];
+        let c = |i: usize| r[i].as_f64().unwrap() as f32;
+        egui::pos2((c(0) + c(2)) / 2.0, (c(1) + c(3)) / 2.0)
+    }
+
+    fn click_pane(h: &mut Harness<'static, (PhotocraftApp, Map<String, Value>)>, pane: usize) {
+        let at = pane_center(h, pane);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    }
+
+    /// #13405: a click on a 4-Up alternative makes it current; a drag only pans.
+    #[test]
+    fn four_up_click_selects_the_pane_and_a_drag_does_not() {
+        let mut h = four_up_harness();
+        let a = pane_center(&h, 2);
+        h.drag_at(a);
+        h.run_steps(1);
+        h.hover_at(a + egui::vec2(25.0, 10.0));
+        h.run_steps(1);
+        h.drop_at(a + egui::vec2(25.0, 10.0));
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "a drag must not select");
+        for pane in [0, 1] {
+            click_pane(&mut h, pane);
+            h.run_steps(3);
+            assert_eq!(h.state().1["quality"].as_f64(), Some(60.0), "pane {pane} changes nothing");
+        }
+        click_pane(&mut h, 2);
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(30.0));
+        // The grid regenerated around the new current settings: pane 3 is now a quarter of 30.
+        click_pane(&mut h, 3);
+        h.run_steps(3);
+        assert_eq!(h.state().1["quality"].as_f64(), Some(8.0));
     }
 
     #[test]

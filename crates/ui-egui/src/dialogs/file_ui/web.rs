@@ -80,13 +80,49 @@ pub(super) fn variants(p: &Value) -> Vec<Value> {
     out
 }
 
+/// Makes a 4-Up variant the current settings, so Save writes what that pane showed.
+pub(super) fn select_variant(f: &mut Map<String, Value>, v: &Value) {
+    for k in ["format", "quality", "colors"] {
+        if let Some(x) = v.get(k) {
+            f.insert(k.into(), x.clone());
+        }
+    }
+    f.remove("colorTable");
+    f.remove("colorTableEdits");
+}
+
+/// What a click on a preview pane does in Save for Web's 4-Up.
+#[derive(Clone, Copy)]
+pub(super) enum Choice<'a> {
+    /// Nothing: the original, or a view without alternatives.
+    Plain,
+    /// The pane Save writes: it gets the accent border.
+    Current,
+    /// An alternative: a click makes these settings current.
+    Variant(&'a Value),
+}
+
+/// A preview pane's index and what clicking it does.
+#[derive(Clone, Copy)]
+pub(super) struct Slot<'a> {
+    pane: usize,
+    choice: Choice<'a>,
+}
+
+impl<'a> Slot<'a> {
+    const fn new(pane: usize, choice: Choice<'a>) -> Self {
+        Self { pane, choice }
+    }
+}
+
 /// The flattened preview image: pixels, width, height, full-size / proxy pixel ratio.
 pub(super) type WebProxy = (Arc<Vec<[f32; 4]>>, u32, u32, f64, egui::Vec2);
 
 pub(super) type WebCache = (String, Arc<egui::TextureHandle>, Option<(usize, Option<usize>, &'static str)>);
 
 /// Renders one preview pane: the original (`None`) or an optimised variant.
-fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, pane: usize, frame: Option<usize>) {
+fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, slot: Slot, frame: Option<usize>) {
+    let pane = slot.pane;
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else { return };
     let doc = st.doc.clone();
@@ -162,6 +198,19 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
         web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), f);
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
+        match slot.choice {
+            Choice::Plain => {}
+            // The pane Save writes is marked so the choice is clear.
+            Choice::Current => {
+                ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+            }
+            // A click (not a drag, which pans) makes the alternative's settings current.
+            Choice::Variant(v) => {
+                if response.clicked() {
+                    select_variant(f, v);
+                }
+            }
+        }
         let (l1, l2) = match (p, info) {
             (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
             (Some(_), Some((bytes, colors, ext))) => {
@@ -279,24 +328,24 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
         ui.vertical(|ui| {
             ui.set_width(area.x);
             match s(f, "__view", "2up").as_str() {
-                "original" => web_pane(app, ui, area, None, f, 0, frame),
-                "optimized" => web_pane(app, ui, area, Some(&p), f, 1, frame),
+                "original" => web_pane(app, ui, area, None, f, Slot::new(0, Choice::Plain), frame),
+                "optimized" => web_pane(app, ui, area, Some(&p), f, Slot::new(1, Choice::Plain), frame),
                 "2up" => {
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, egui::vec2(half_w, area.y), None, f, 0, frame);
-                        web_pane(app, ui, egui::vec2(half_w, area.y), Some(&p), f, 1, frame);
+                        web_pane(app, ui, egui::vec2(half_w, area.y), None, f, Slot::new(0, Choice::Plain), frame);
+                        web_pane(app, ui, egui::vec2(half_w, area.y), Some(&p), f, Slot::new(1, Choice::Plain), frame);
                     });
                 }
                 _ => {
                     let v = variants(&p);
                     let cell = egui::vec2(half_w, half_h);
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, None, f, 0, frame);
-                        web_pane(app, ui, cell, Some(&v[0]), f, 1, frame);
+                        web_pane(app, ui, cell, None, f, Slot::new(0, Choice::Plain), frame);
+                        web_pane(app, ui, cell, Some(&v[0]), f, Slot::new(1, Choice::Current), frame);
                     });
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, Some(&v[1]), f, 2, frame);
-                        web_pane(app, ui, cell, Some(&v[2]), f, 3, frame);
+                        web_pane(app, ui, cell, Some(&v[1]), f, Slot::new(2, Choice::Variant(&v[1])), frame);
+                        web_pane(app, ui, cell, Some(&v[2]), f, Slot::new(3, Choice::Variant(&v[2])), frame);
                     });
                 }
             }
