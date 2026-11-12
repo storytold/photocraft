@@ -1,0 +1,26 @@
+# Strings this fork adds on top of the pinned craft-i18n catalog (zh-hans).
+# Merged after locales/zh-hans/photocraft.tsv of craft-i18n; a key keeps its first row, so
+# these only fill the gaps. Remove a row once upstream carries the translation.
+	Add from Selection	从选区添加
+	Bind Layer	绑定图层
+	Center H	水平居中
+	Center V	垂直居中
+	Check All	全部检查
+	Click a marker to move it; Alt-drag copies it; Shift-click picks several to align. Its size appears here once one is picked.	单击标记即可移动；按住 Alt 拖动可复制；按住 Shift 单击可多选以便对齐。选中一个标记后，它的尺寸会显示在这里。
+	Drag Toolbar out of its dock	按住可把工具栏拖出停靠位置
+	Mark as Green	标记为绿色
+	Mark as Red	标记为红色
+	Marker	标记
+	Markers	标记
+	No layer under this marker. Select the layer in the Layers panel and press Bind Layer again.	此标记下方没有图层。请在“图层”面板中选中图层，再按一次“绑定图层”。
+	Remove this marker	删除此标记
+	Reset All to Red	全部重置为红色
+	Select the content to change with the Rectangular Marquee, then press Add from Selection.	用矩形选框选中要修改的内容，然后点“从选区添加”。
+	Set this marker back to red without re-taking its snapshot	把此标记改回红色，但不重新拍摄快照
+	Set this marker green without comparing pixels	把此标记标为绿色，不比较像素
+	Unbind	解除绑定
+	Revision	修订
+	Revision Markers	修订标记
+	Delete	删除
+	Distribute Horizontally	水平均匀分布
+	Distribute Vertically	垂直均匀分布

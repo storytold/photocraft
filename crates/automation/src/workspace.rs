@@ -683,6 +683,9 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
     let keys: &[&str] = match id {
         "image.adjustments.colorLookup" | "layer.newAdjustmentLayer.colorLookup" | "layer.setAdjustment" => &["file"],
         "filter.distort.displace" => &["mapPath"],
+        // Placing a shot from the web preview passes the image itself (`png`); the path branch
+        // reads a file at any path the request names, which an untrusted session must not do.
+        "edit.placeImage" => &["path"],
         "layer.quickExportAsPng"
         | "layer.exportAs"
         | "image.applyDataSet"

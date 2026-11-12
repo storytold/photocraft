@@ -56,6 +56,7 @@ pub fn handles(id: &str) -> bool {
             | "window.panel.history"
             | "window.panel.navigator"
             | "window.panel.properties"
+            | "window.panel.revision"
             | "window.panel.color"
             | "window.panel.actions"
             | "window.panel.channels"

@@ -39,13 +39,19 @@ fn main() {
 const APP_CATALOG: &str = "photocraft.tsv";
 
 /// `CRAFT_I18N` from `CRAFT_I18N_DIR`: the `Embedded` list the craft-i18n crate reads.
+/// Strings this fork adds that craft-i18n does not carry yet, per locale, in the same TAB file
+/// format: `crates/ui-egui/locales/<locale>/photocraft.tsv`. The pinned catalog is embedded first
+/// and the overlay rows after it, and a key keeps its first row, so upstream's wording wins where
+/// it exists and only the gaps are filled. The directory can go once these strings reach craft-i18n.
+const OVERLAY_LOCALES: &str = "locales";
+
 fn craft_i18n() -> String {
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_I18N_REQUIRED");
     let required = std::env::var("CRAFT_I18N_REQUIRED").is_ok_and(|v| v.trim() == "1");
     let entries = match std::env::var_os("CRAFT_I18N_DIR").filter(|d| !d.is_empty()) {
         // Not canonicalized: on Windows that gives `\\?\C:\…`, which `include_str!` can't read.
-        Some(dir) => match locales(&std::path::PathBuf::from(dir).join("locales")) {
+        Some(dir) => match locales(&std::path::PathBuf::from(dir).join("locales")).map(with_overlays) {
             Ok(entries) => entries,
             Err(e) => {
                 let level = if required { "error" } else { "warning" };
@@ -73,6 +79,35 @@ fn craft_i18n() -> String {
 
 /// One embedded locale: its code, its `common.tsv` if it has one, and its PhotoCraft catalog.
 type Locale = (String, Option<std::path::PathBuf>, std::path::PathBuf);
+
+/// Replace each locale's catalog with the catalog plus this fork's overlay rows, written to
+/// `OUT_DIR` (a locale without an overlay keeps the catalog it came with).
+fn with_overlays(entries: Vec<Locale>) -> Vec<Locale> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(OVERLAY_LOCALES);
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("i18n");
+    entries
+        .into_iter()
+        .map(|(code, shared, app)| {
+            let overlay = root.join(&code).join(APP_CATALOG);
+            if !overlay.is_file() {
+                return (code, shared, app);
+            }
+            println!("cargo::rerun-if-changed={}", overlay.display());
+            let Ok(mut text) = std::fs::read_to_string(&app) else { return (code, shared, app) };
+            match std::fs::read_to_string(&overlay) {
+                Ok(rows) => text.push_str(&rows),
+                Err(e) => println!("cargo::warning={}: {e}", overlay.display()),
+            }
+            let dir = out.join(&code);
+            if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join(APP_CATALOG), &text)) {
+                println!("cargo::warning=writing the {code} overlay: {e}");
+                return (code, shared, app);
+            }
+            let merged = dir.join(APP_CATALOG);
+            (code, shared, merged)
+        })
+        .collect()
+}
 
 /// Every locale under `dir` with PhotoCraft's catalog, by code. An error when `dir` isn't a
 /// craft-i18n `locales/` directory.

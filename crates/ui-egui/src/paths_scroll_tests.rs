@@ -58,13 +58,15 @@ fn scrolling_the_paths_list_does_not_move_the_footer() {
     }
 }
 
-/// Channels, Paths and Layers are siblings with the same own-scroll layout, so none is wrapped in
-/// the dock's scroll area.
+/// Channels, Paths, Layers and Revision are siblings with the same own-scroll layout, so none is
+/// wrapped in the dock's scroll area; the QR tab below them has no scroll area of its own and
+/// still needs the dock's.
 #[test]
 fn the_layers_group_tabs_all_scroll_themselves() {
     use crate::dock::Group;
-    for tab in 0..=2 {
+    for tab in 0..=3 {
         assert!(Group::Layers.scrolls_itself(tab), "Layers group tab {tab}");
     }
-    assert!(!Group::Layers.scrolls_itself(3), "a tab that does not exist is not special");
+    assert!(!Group::Layers.scrolls_itself(4), "the QR tab is wrapped in the dock's scroll area");
+    assert!(!Group::Layers.scrolls_itself(5), "a tab that does not exist is not special");
 }

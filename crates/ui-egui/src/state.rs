@@ -89,6 +89,10 @@ pub struct Panels {
     /// or malformed value reads as `Start`, so it never discards the other panel flags.
     #[serde(default, deserialize_with = "toolbar_side_or_default")]
     pub toolbar_side: ToolbarSide,
+    /// Where a floating tool palette was left, when the user dragged its grip out of the dock.
+    /// `None` keeps it docked; a saved layout reopens it where it was dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolbar_float: Option<[f32; 2]>,
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).
     #[serde(default = "yes")]
     pub dock: bool,
@@ -149,6 +153,7 @@ impl Default for Panels {
             character: false,
             toolbar_double: false,
             toolbar_side: ToolbarSide::Start,
+            toolbar_float: None,
             dock: true,
             hidden_by_tab: None,
             full_screen_chrome: false,
@@ -525,6 +530,13 @@ pub struct UiState {
     /// version, which shows the default layout: saved again unchanged until the layout changes.
     #[serde(skip)]
     pub docking_kept: Option<serde_json::Map<String, serde_json::Value>>,
+    /// An edit command just ran with revision markers present: re-run `revision.detect` soon, so a
+    /// marker turns green right after its content changed (throttled in `revision_auto_detect`).
+    #[serde(skip)]
+    pub revision_detect_pending: bool,
+    /// Wall-clock seconds of the last automatic revision detect (throttle anchor).
+    #[serde(skip)]
+    pub revision_detect_at: f64,
     /// Panels belonging to explicitly collapsed custom tab groups.
     #[serde(default)]
     pub docking_collapsed: Vec<String>,
@@ -613,6 +625,9 @@ pub struct UiState {
     pub camera_raw_scope: CameraRawScopeState,
     #[serde(default)]
     pub camera_raw_preview: CameraRawPreviewState,
+    /// QR code recognition results (`tools::qr_ui`): the floating result window's state.
+    #[serde(default)]
+    pub qr: crate::tools::qr_ui::QrState,
 }
 
 impl Default for UiState {
@@ -703,6 +718,8 @@ impl Default for UiState {
             docking: None,
             docking_returns: Default::default(),
             docking_kept: None,
+            revision_detect_pending: false,
+            revision_detect_at: 0.0,
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
@@ -732,6 +749,7 @@ impl Default for UiState {
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
             camera_raw_preview: Default::default(),
+            qr: Default::default(),
         }
     }
 }
@@ -865,7 +883,10 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 69);
+        assert_eq!(Tool::from_name("revisionMarker"), Some(Tool::RevisionMarker));
+        assert_eq!(Tool::from_name("Revision Marker Tool"), Some(Tool::RevisionMarker));
+        assert_eq!(Tool::RevisionMarker.key(), '\0', "no key reaches it");
+        assert_eq!(Tool::ALL.len(), 70);
     }
 
     fn vector_tool_names_parse() {

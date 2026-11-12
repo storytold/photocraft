@@ -48,6 +48,8 @@ pub struct Show {
     pub count: bool,
     pub canvas_guides: bool,
     pub artboard_guides: bool,
+    /// Revision markers (red/green boxes over content that must be changed).
+    pub revision_markers: bool,
 }
 
 impl Default for Show {
@@ -66,6 +68,7 @@ impl Default for Show {
             count: true,
             canvas_guides: true,
             artboard_guides: true,
+            revision_markers: true,
         }
     }
 }

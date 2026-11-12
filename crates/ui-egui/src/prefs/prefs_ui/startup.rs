@@ -61,12 +61,14 @@ pub fn load(app: &mut PhotocraftApp) {
     }
 }
 
-/// The save base after loading `stored`: what was loaded, with the keys the shift tool switch
-/// migration may change (#5647) put back as the file had them, the way [`repair_invalid`] puts
-/// back unreadable values. The migrated value and the new version then differ from the base, so
-/// the next save writes them rather than keeping the old value under a newer version. Every other
-/// key keeps its loaded value, so the three-way merge leaves another instance's changes alone,
-/// also for keys the file doesn't have yet. A file from a newer version keeps its version.
+/// The save base after loading `stored`: what was loaded, with the keys the migrations may change
+/// (the shift tool switch, #5647; Show Font Names in English, version 3) put back as the file had
+/// them, the way [`repair_invalid`] puts back unreadable values. The migrated value and the new
+/// version then differ from the base, so the next save writes them rather than keeping the old
+/// value under a newer version — which would make version 3 skip the migration on the next launch
+/// and bring the migrated-away value back. Every other key keeps its loaded value, so the
+/// three-way merge leaves another instance's changes alone, also for keys the file doesn't have yet.
+/// A file from a newer version keeps its version.
 fn stored_base(loaded: &Value, stored: &Value) -> Value {
     let mut base = loaded.clone();
     let Some(obj) = base.as_object_mut() else {
@@ -83,6 +85,9 @@ fn stored_base(loaded: &Value, stored: &Value) -> Value {
     }
     if let (Some(v), Some(tools)) = (stored.pointer("/tools/useShiftKeyForToolSwitch"), obj.get_mut("tools").and_then(Value::as_object_mut)) {
         tools.insert("useShiftKeyForToolSwitch".into(), v.clone());
+    }
+    if let (Some(v), Some(ty)) = (stored.pointer("/type/showFontNamesInEnglish"), obj.get_mut("type").and_then(Value::as_object_mut)) {
+        ty.insert("showFontNamesInEnglish".into(), v.clone());
     }
     base
 }

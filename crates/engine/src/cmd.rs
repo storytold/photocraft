@@ -130,12 +130,15 @@ pub mod pattern_fill_cmds;
 pub mod perspective_crop_cmds;
 pub mod photo_cmds;
 pub mod pick_cmds;
+pub mod place_cmds;
 pub mod plugin_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
+pub mod qr_cmds;
 pub mod rasterize_style_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
+pub mod revision_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
 #[cfg(test)]
@@ -1447,6 +1450,9 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::jobs::specs());
     v.extend(crate::wia_cmds::specs());
     v.extend(crate::rasterize_style_cmds::specs());
+    v.extend(crate::revision_cmds::specs());
+    v.extend(crate::qr_cmds::specs());
+    v.extend(crate::cmd::place_cmds::specs());
     v.extend(crate::variables_cmds::specs());
     v.extend(crate::plugin_cmds::specs());
     v.extend(crate::group_view_cmds::specs());

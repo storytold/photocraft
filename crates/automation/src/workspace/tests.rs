@@ -695,6 +695,10 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
     }
     assert!(authorize_engine_command("filter.distort.displace", &serde_json::json!({"mapPath": "outside.png"})).is_err());
     assert!(authorize_engine_command("layer.setAdjustment", &serde_json::json!({"file": "outside.cube"})).is_err());
+    // A placed shot is in-memory bytes (`png`); reading it from a named path is ambient.
+    assert!(authorize_engine_command("edit.placeImage", &serde_json::json!({"png": "iVBORw0KGgo="})).is_ok());
+    assert!(authorize_engine_command("edit.placeImage", &serde_json::json!({"path": "/outside/shot.png"})).is_err());
+    assert!(authorize_engine_command("edit.placeImage", &serde_json::json!({"path": ""})).is_ok(), "an empty path reads nothing");
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "colorSettings.workingRgb", "value": "outside.icc"})).is_err());
     assert!(authorize_engine_step("file.open", &serde_json::json!({})).is_err());
     assert!(authorize_engine_step("actions.play", &serde_json::json!({})).is_ok());

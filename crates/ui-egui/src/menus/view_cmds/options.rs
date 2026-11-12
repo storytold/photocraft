@@ -74,6 +74,7 @@ pub(super) fn show_slot<'a>(s: &'a mut Show, key: &str) -> Option<&'a mut bool> 
         "count" => &mut s.count,
         "canvasGuides" => &mut s.canvas_guides,
         "artboardGuides" => &mut s.artboard_guides,
+        "revisionMarkers" => &mut s.revision_markers,
         _ => return None,
     })
 }
@@ -209,6 +210,7 @@ pub(super) fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, 
         "window.panel.channels" => ("layers", 1),
         "window.panel.paths" => ("layers", 2),
         "window.panel.layers" => ("layers", 0),
+        "window.panel.revision" => ("layers", 3),
         "window.panel.adjustments" => ("properties", 1),
         "window.panel.properties" => ("properties", 0),
         // Their own Character | Paragraph group, so Properties stays open (#150).

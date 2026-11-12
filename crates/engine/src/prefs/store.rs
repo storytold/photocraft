@@ -26,7 +26,10 @@ impl PrefsStore {
 
 /// The preferences file format written by [`Session::prefs_value`]. 2: Use Shift Key for Tool
 /// Switch stored as chosen (before, a stored `false` was the old default; see `load_prefs_json`).
-pub const PREFS_VERSION: u64 = 2;
+/// 3: Show Font Names in English defaults off (font menus show a family's localized name, e.g.
+/// "微软雅黑" for Microsoft YaHei, as Photoshop does); files written before version 3 kept the
+/// old `true` default, so that saved value is dropped on load.
+pub const PREFS_VERSION: u64 = 3;
 
 /// A saved preference [`Session::load_prefs_json`] couldn't read (a wrong type, an unknown
 /// choice) and left at its default.

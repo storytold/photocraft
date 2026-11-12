@@ -3,7 +3,7 @@ use super::{
     ControlRequest, DocId, Document, HashMap, PhotocraftApp, Receiver, Session, SyntheticTarget, Tool, UiState, Value, actions, analysis_ui, brush_panel,
     brush_picker, camera_raw_ui, canvas, dds_options_ui, delete_layer_prompt, dialogs, discard_ui, distort_ui, dock, field_wheel, file_open, gpu_canvas,
     gpu_status, gradient_ui, histogram_panel, i18n, jobs_ui, jpeg_options_ui, json, kys_import, last_brush, layers_panel_ui, mask_thumbs_ui, mask_trash_prompt,
-    monitor_status, native_menu, notices, open_prompt, paint_mouse, palette, panel_docking, panels, prefs_ui, preset_files_ui, preset_panels, rasterize_prompt,
+    monitor_status, native_menu, notices, open_prompt, paint_mouse, palette, panel_docking, panels, prefs_ui, preset_files_ui, preset_panels, qr_ui, rasterize_prompt,
     screen_picker, shape_stroke_ui, shortcuts, single_line_drag, smart_svg_ui, state, stroke_trace, stylus, targa_options_ui, text_field_menu, theme,
     tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, type_transform, updates_ui, vector_ui,
     view_cmds, wheel_nav, wide_angle_ui, widgets, work_area, workspace_ui,
@@ -33,7 +33,26 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
-    /// Creates a new application state managing the engine session and UI services; the session
+    /// Run a pending automatic `revision.detect` once it is due (debounced: re-check ~0.25 s after
+    /// the latest edit, whose time stamp is refreshed on every edit, so continuous strokes batch
+    /// into one re-check and a finished edit turns green promptly). `revision.detect` itself never
+    /// schedules another one.
+    pub(crate) fn revision_auto_detect(&mut self) {
+        if !self.ui.revision_detect_pending {
+            return;
+        }
+        let now = gpu_canvas::now_ms() as f64 / 1000.0;
+        if now - self.ui.revision_detect_at < 0.25 {
+            return;
+        }
+        self.ui.revision_detect_at = now;
+        self.ui.revision_detect_pending = false;
+        if self.session.active().is_some_and(|st| !st.doc.revision_markers.is_empty()) {
+            let _ = self.run("revision.detect", json!({}));
+        }
+    }
+
+/// Creates a new application state managing the engine session and UI services; the session
     /// keeps the services' automation policy as the gate actions automation wrote play under.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
@@ -68,6 +87,7 @@ impl PhotocraftApp {
             menu_cache: None,
             move_preview: None,
             move_hover: None,
+            revision_tool: Default::default(),
             move_distance: None,
             object_finder: None,
             blend_preview: None,
@@ -75,6 +95,7 @@ impl PhotocraftApp {
             reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
+            web_preview: None,
             magnetic: Default::default(),
             secondary_erase: false,
             held_erase: false,
@@ -259,6 +280,7 @@ impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.logic_frame(ctx, frame);
         self.finish_type_reset_logic(ctx);
+        self.revision_auto_detect();
     }
 
     /// Drain the platform's optional WinTab queue before the frame's input is processed.

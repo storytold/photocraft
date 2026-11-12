@@ -134,19 +134,29 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     save(&text)
 }
 
-/// The save base without the shift tool switch migration (#5647) once storage already holds a
-/// version 2 file: another instance wrote it, so its Use Shift Key for Tool Switch is a choice,
-/// not the old default this instance migrated. The base then holds the migrated value (on) instead
-/// of the old file's off, so only a change made here since loading is written over that choice.
+/// The save base without a migration whose version storage has already reached: another instance
+/// wrote the newer file, so the key it holds is a choice, not the old default this instance
+/// migrated away from. The base then holds the migrated value instead of the old file's value, so
+/// only a change made here since loading is written over that choice.
+///
+/// Version 2 migrated Use Shift Key for Tool Switch from off to on (#5647); version 3 migrated
+/// Show Font Names in English from on to off, because font menus list localized family names now.
 fn without_stale_migration(base: &Value, theirs: &Value) -> Value {
+    /// (the version that introduced the migration, the key's `section/key` path, the value an
+    /// older file stored, the value this instance migrated it to).
+    const MIGRATED: &[(u64, &str, bool, bool)] =
+        &[(2, "tools/useShiftKeyForToolSwitch", false, true), (3, "type/showFontNamesInEnglish", true, false)];
+    let version = |v: &Value| v.get("version").and_then(Value::as_u64).unwrap_or(0);
     let mut base = base.clone();
-    let new_file = |v: &Value| v.get("version").and_then(Value::as_u64).is_some_and(|v| v >= 2);
-    if new_file(theirs) && !new_file(&base) {
-        let key = "useShiftKeyForToolSwitch";
-        if let Some(tools) = base.get_mut("tools").and_then(Value::as_object_mut)
-            && tools.get(key) == Some(&Value::Bool(false))
+    for &(introduced, path, stored_value, migrated) in MIGRATED {
+        if version(theirs) < introduced || version(&base) >= introduced {
+            continue;
+        }
+        let Some((section, key)) = path.split_once('/') else { continue };
+        if let Some(obj) = base.get_mut(section).and_then(Value::as_object_mut)
+            && obj.get(key) == Some(&Value::Bool(stored_value))
         {
-            tools.insert(key.into(), Value::Bool(true));
+            obj.insert(key.into(), Value::Bool(migrated));
         }
     }
     base

@@ -574,6 +574,85 @@ fn history_steps(app: &PhotocraftApp) -> usize {
 
 /// As in the reference app, files dropped on the canvas are placed one at a time, each in Free
 /// Transform; the next is placed once the previous transform is committed or cancelled.
+/// #8531: a file dropped on the canvas lands where it was dropped, as in Photoshop, instead of
+/// at the centre of the document's bounds (in a document with several artboards that is the empty
+/// space between boards, which meant dragging the new layer back every time).
+#[test]
+fn a_dropped_file_lands_where_it_was_dropped() {
+    let ctx = egui::Context::default();
+    let (mut app, _) = app_with(Vec::new());
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    app.drop_canvas_rect = Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)));
+    let doc = app.session.active().unwrap().doc.id;
+    let layers = layer_count(&app);
+    // Far from the document's centre (400, 300).
+    let target = [110.0, 470.0];
+    app.drop_places.push_back((
+        doc,
+        crate::file_open::DropPlace::At {
+            source: Box::new(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(20, 10))),
+            frame: None,
+            centre: Some(target),
+        },
+    ));
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), layers + 1, "the file is placed");
+    crate::transform_tool::commit(&mut app);
+    let st = app.session.active().unwrap();
+    let placed = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+    let b = photocraft_compose::layer_bounds(&placed, st.doc.bounds());
+    let (cx, cy) = ((f64::from(b.x0) + f64::from(b.x1)) / 2.0, (f64::from(b.y0) + f64::from(b.y1)) / 2.0);
+    assert!((cx - target[0]).abs() <= 1.0 && (cy - target[1]).abs() <= 1.0, "centred on the drop point, not the document: {cx} {cy}");
+}
+
+/// #8531: File › Place (and a file the shell hands over) has no drop point, so it lands in the
+/// middle of the view the user is looking at, not the middle of the whole canvas.
+#[test]
+fn a_placed_file_lands_at_the_view_centre() {
+    let (mut app, _) = app_with(Vec::new());
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].center = [120.0, 460.0];
+    app.ui.views[0].fit_pending = false;
+    let layers = layer_count(&app);
+    app.place_bytes("photo.png", png_bytes(20, 10), None).unwrap();
+    assert_eq!(layer_count(&app), layers + 1, "the file is placed");
+    crate::transform_tool::commit(&mut app);
+    let st = app.session.active().unwrap();
+    let placed = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+    let b = photocraft_compose::layer_bounds(&placed, st.doc.bounds());
+    let (cx, cy) = ((f64::from(b.x0) + f64::from(b.x1)) / 2.0, (f64::from(b.y0) + f64::from(b.y1)) / 2.0);
+    assert!((cx - 120.0).abs() <= 1.0 && (cy - 460.0).abs() <= 1.0, "centred on the view: {cx} {cy}");
+    // The new layer is the top one, above the layer that was active when it was placed.
+    assert_eq!(st.doc.layers.len(), 2, "a placed layer joins the stack, it does not replace a layer");
+}
+
+/// A place whose params name no `frame` fills the active layer's frame, and the engine reads a
+/// `center` as a position inside that frame: the view centre must not be added there.
+#[test]
+fn a_place_into_a_selected_frame_is_not_given_a_view_centre() {
+    let (mut app, _) = app_with(Vec::new());
+    app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+    app.sync_views();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].center = [120.0, 460.0];
+    app.ui.views[0].fit_pending = false;
+    app.run("layer.new.frame", json!({"x": 100, "y": 80, "width": 200, "height": 120})).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().frame.is_some(), "a frame is active");
+    let params = app.place_params(&json!({}));
+    assert!(params.get("center").is_none(), "the frame decides where its image lands: {params}");
+    // An explicit `"frame": false` places on the canvas, where the view centre does apply.
+    let on_canvas = app.place_params(&json!({"frame": false}));
+    let center = on_canvas.get("center").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    assert_eq!(center.len(), 2, "the view centre is used without a frame: {on_canvas}");
+    // An explicit `center` is the caller's own drop point and is kept as it is.
+    let dropped = app.place_params(&json!({"center": [11.0, 22.0]}));
+    assert_eq!(dropped["center"], json!([11.0, 22.0]));
+}
+
 #[test]
 fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     let dir = std::env::temp_dir().join(format!("photocraft-drop-place-{}", std::process::id()));

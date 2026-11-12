@@ -1,0 +1,17 @@
+[package]
+name = "photocraft-webwin"
+description = "The preview window's WebView2 child, and the OS handle of the window it lives in."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+# The page itself: a WebView2 child window inside the preview's own OS window.
+wry = { version = "0.57.1", default-features = false }
+# Finding that window by its title (`ui-egui` builds it as an egui viewport, which only exposes
+# its handle through the OS).
+windows-sys = { version = "0.61", default-features = false, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+# `wry` asks for `HasWindowHandle`; the handle is ours, so it is borrowed from the raw pointer.
+raw-window-handle = "0.6"
