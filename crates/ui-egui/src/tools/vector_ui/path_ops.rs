@@ -216,14 +216,14 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
         && matches!(target_path(app), Some((PathTarget::Work, _)))
 }
 
-/// The anchor ⌫ / Delete removes, with its two segments: with the Add Anchor Point tool, the one
+/// The anchor ⌫ / Delete removes, with its two segments: with the Add or Delete Anchor Point tool, the one
 /// anchor selected on it (⌘/Ctrl+click) while that selection still holds and its path is shown,
 /// as in Photoshop (#12703). The key reached Edit › Clear and deleted the active layer. Several
 /// selected anchors weren't measured and keep the key's other routes.
 pub(crate) fn delete_key_deletes_anchor(app: &PhotocraftApp) -> Option<(crate::direct_select::PathRef, [usize; 2])> {
     let ds = &app.ui.direct_selection;
     let ([[s, k]], Some(target)) = (ds.anchors.as_slice(), ds.target) else { return None };
-    let usable = app.ui.tool == Tool::AddAnchorPoint
+    let usable = matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint)
         && app.ui.pen.is_none()
         && ds.drag.is_none()
         && app.ui.view.shows(app.ui.view.show.target_path)
