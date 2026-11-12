@@ -77,7 +77,7 @@ fn new_layer_makes_a_new_shape_layer() {
 #[test]
 fn an_operation_with_a_pixel_layer_active_still_makes_a_shape_layer() {
     let mut app = app();
-    app.run("layer.new", json!({})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
     app.ui.tool_options.shape_path_op = "combine".into();
     let layers = layer_count(&app);
     drag(&mut app, [50.0, 50.0], [200.0, 200.0]);
