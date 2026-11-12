@@ -924,3 +924,23 @@ row = "cancel Perspective Warp job on 24 MP"
 metric = "p95"
 budget_ms = 200
 enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P120"
+title = "Cancel a Liquify job on 24 MP (until the worker exits)"
+issue = 210
+bench = "perf_scenarios"
+row = "cancel Liquify job on 24 MP"
+metric = "p95"
+budget_ms = 200
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P121"
+title = "Cancel a Puppet Warp job on 24 MP (until the worker exits)"
+issue = 210
+bench = "perf_scenarios"
+row = "cancel Puppet Warp job on 24 MP"
+metric = "p95"
+budget_ms = 200
+enforce = false  # new; no baseline yet
