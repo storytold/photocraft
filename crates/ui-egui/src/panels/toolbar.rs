@@ -181,12 +181,29 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let size_id = egui::Id::unique("photocraft-toolbar-window-size");
         let main_rect = ui.ctx().input(|i| i.viewport().outer_rect).unwrap_or_else(|| ui.ctx().content_rect());
         let height = ui.ctx().data(|d| d.get_temp::<f32>(size_id)).unwrap_or(520.0);
-        let builder = egui::ViewportBuilder::default()
-            .with_title(tl!("Toolbar"))
-            .with_position(main_rect.min + vec2(x, y))
-            .with_inner_size(vec2(w + 14.0, height))
-            .with_min_inner_size(vec2(w + 14.0, 160.0))
-            .with_resizable(false);
+        // The window's own geometry wins once it exists: egui moves or resizes a viewport whenever
+        // the builder asks for something else, so handing it the remembered spot and height every
+        // frame fought the user's drag and made the palette flicker. Geometry is passed once, when
+        // the window opens; afterwards only a change of the palette's width reaches it again.
+        let placed_id = egui::Id::unique("photocraft-toolbar-window-placed");
+        let width_id = egui::Id::unique("photocraft-toolbar-window-width");
+        let placed = ui.ctx().data(|d| d.get_temp::<bool>(placed_id).unwrap_or(false));
+        let last_w = ui.ctx().data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
+        let want_w = w + 14.0;
+        let width_changed = (last_w - want_w).abs() > 0.5;
+        // Decorations off: the palette draws Photoshop's own slim header instead of the desktop's
+        // title bar, so the floating window matches the rest of the app.
+        let mut builder = egui::ViewportBuilder::default().with_title(tl!("Toolbar")).with_decorations(false);
+        if !placed || width_changed {
+            builder = builder
+                .with_inner_size(vec2(want_w, height))
+                .with_min_inner_size(vec2(want_w, 160.0))
+                .with_resizable(false);
+            if !placed {
+                builder = builder.with_position(main_rect.min + vec2(x, y));
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(width_id, want_w));
+        }
         // Reports from the child window are collected here: the callback runs inside this frame,
         // so locals are the only channel that reaches the app state afterwards.
         let mut moved: Option<[f32; 2]> = None;
@@ -201,6 +218,37 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 return;
             }
             let t = Tokens::get(ui.ctx());
+            // Undecorated windows have no background of their own: paint the chrome first, then the
+            // header the palette is dragged by, then the tools.
+            let bg = ui.max_rect();
+            ui.painter().rect_filled(bg, 0.0, t.chrome);
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            let (bar, bar_resp) = ui.allocate_exact_size(vec2(w + 14.0, 18.0), egui::Sense::click_and_drag());
+            let close = Rect::from_min_max(pos2(bar.right() - 18.0, bar.top() + 2.0), pos2(bar.right() - 4.0, bar.bottom() - 2.0));
+            let over_close = ui.ctx().input(|i| i.pointer.hover_pos()).is_some_and(|p| close.contains(p));
+            ui.painter().text(
+                pos2(bar.left() + 7.0, bar.center().y),
+                egui::Align2::LEFT_CENTER,
+                tl!("Toolbar"),
+                egui::FontId::proportional(11.0),
+                t.text_dim,
+            );
+            if over_close {
+                ui.painter().rect_filled(close, 3.0, Color32::from_white_alpha(28));
+            }
+            // Two strokes rather than a glyph: the interface font has no guaranteed "×".
+            let ink = if over_close { t.text } else { t.text_faint };
+            let x = close.shrink(5.0);
+            ui.painter().line_segment([x.left_top(), x.right_bottom()], egui::Stroke::new(1.0, ink));
+            ui.painter().line_segment([x.right_top(), x.left_bottom()], egui::Stroke::new(1.0, ink));
+            // A click on the cross docks the palette again; a drag of the strip moves the window,
+            // which is what StartDrag hands to the window manager until the button comes up.
+            if bar_resp.clicked() && over_close {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if bar_resp.drag_started() && !over_close {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
             egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(7, 7)).show(ui, |ui| {
                 ui.set_width(w);
                 toolbar_body(app, ui, true);
@@ -211,9 +259,13 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 moved = Some([outer.min.x - main_rect.min.x, outer.min.y - main_rect.min.y]);
             }
         });
+        // The window exists now: from here on only its remembered spot follows it, so the next
+        // launch reopens where the user left it and this frame's drag is never undone.
+        ui.ctx().data_mut(|d| d.insert_temp(placed_id, true));
         if closed {
             // Closing the window is the same as docking it again: the palette returns to its side.
             app.ui.panels.toolbar_float = None;
+            ui.ctx().data_mut(|d| d.remove::<bool>(placed_id));
             crate::dock::persist_panels(app, ui.ctx());
             return;
         }
@@ -266,6 +318,8 @@ fn toolbar_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, floating: bool) {
             let y = (at.y - 8.0).clamp(screen.top() + 24.0, (screen.bottom() - 120.0).max(screen.top() + 24.0));
             app.ui.panels.toolbar_float = Some([x, y]);
             ui.data_mut(|d| d.remove::<Pos2>(press));
+            // A palette dragged out of the dock is a new window: it opens under the pointer.
+            ui.data_mut(|d| d.remove::<bool>(egui::Id::unique("photocraft-toolbar-window-placed")));
             crate::dock::persist_panels(app, ui.ctx());
         }
         ui.add_space(2.0);
@@ -296,6 +350,8 @@ fn toolbar_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, floating: bool) {
             // A floating palette goes back into the dock on this button: the window hosting it
             // disappears with it, so the side the user asked for is the side it docks to.
             app.ui.panels.toolbar_float = None;
+            // The next float opens a fresh window at the spot it is dropped on, not at the old one.
+            ui.ctx().data_mut(|d| d.remove::<bool>(egui::Id::unique("photocraft-toolbar-window-placed")));
             // Persist the side as a discrete change; the dock may not be drawn this frame.
             crate::dock::persist_panels(app, ui.ctx());
         }
