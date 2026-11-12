@@ -135,7 +135,7 @@ struct Image<'a> {
     native_color_error: Option<String>,
 }
 
-/// Bounded source mask facts retained for reporting after native coverage conversion.
+/// Bounded source mask facts retained for reporting; this cache contains no pixels.
 struct CoverageMaskRecord<'a> {
     name: String,
     properties: Vec<Prop<'a>>,
@@ -411,8 +411,8 @@ impl<'a> Image<'a> {
         Ok(())
     }
 
-    /// Resolves bounded auxiliary coverage references while detecting cycles and retaining unavailable
-    /// optional masks.
+    /// Resolves bounded auxiliary coverage references while detecting cycles and caching only their
+    /// configuration for reporting. The caller owns the returned pixels until installation or discard.
     fn coverage_auxiliary(
         &mut self,
         offset: usize,
@@ -612,10 +612,10 @@ impl<'a> Image<'a> {
                                 feature_code: "xcf.coverage_effect_mask".into(),
                                 source: conversion::source("coverage_effect_mask", ordinal as usize, start, "", &current_owner.source.item_path, None),
                                 targets: current_owner.targets.clone(),
-                                disposition: ConversionDisposition::RetainedUnapplied,
+                                disposition: ConversionDisposition::SkippedNonessential,
                                 reason: ConversionReason::InvalidOptionalData,
                                 source_description: format!("Optional effect-mask coverage could not be decoded: {error}"),
-                                native_description: "Native owner coverage is preserved; the unapplied source stage and its unreadable mask remain inactive"
+                                native_description: "Native owner coverage is preserved; unreadable auxiliary mask pixels are not retained and the source stage remains inactive"
                                     .into(),
                                 attachments: Vec::new(),
                             })?;
@@ -624,13 +624,15 @@ impl<'a> Image<'a> {
                     };
                     &fallback
                 };
+                // Cached facts and inert properties cannot recover discarded coverage pixels.
+                // Only a mask installed with its translated owner can avoid a loss disclosure.
                 let mask_applied = translated && decoded_masks.contains_key(&start);
                 let mask_outcome = self.outcomes.push(ConversionEntry {
                     feature_code: "xcf.coverage_effect_mask".into(),
                     source: conversion::source("coverage_effect_mask", ordinal as usize, start, &record.name, &owner_entry.source.item_path, None),
-                    targets: current_owner.targets.clone(), disposition: if mask_applied { ConversionDisposition::NativeApproximation } else { ConversionDisposition::RetainedUnapplied }, reason: if mask_applied { ConversionReason::NativePolicy } else { ConversionReason::MissingMapping },
+                    targets: current_owner.targets.clone(), disposition: if mask_applied { ConversionDisposition::NativeApproximation } else { ConversionDisposition::SkippedNonessential }, reason: if mask_applied { ConversionReason::NativePolicy } else { ConversionReason::NativeLimitation },
                     source_description: format!("Source effect-mask coverage {}x{}; {} nested effects", record.width, record.height, record.children.len()),
-                    native_description: if mask_applied { "Source image-global auxiliary pixels and supported nested operations became ordinary native layer-mask coverage; source operation parameters remain historical" } else if !owner_committed { "Temporary native auxiliary coverage was discarded because the owning source operation was not committed; original configuration remains inert" } else { "Mask identity and configuration retained inert with its unapplied coverage stage; native coverage conversion remains unfinished" }.into(), attachments: Vec::new(),
+                    native_description: if mask_applied { "Source image-global auxiliary pixels and supported nested operations became ordinary native layer-mask coverage; source operation parameters remain historical" } else if !owner_committed { "Source auxiliary mask pixels are not retained because the owning source operation was not committed; only mask identity and configuration remain inert" } else { "Source auxiliary mask pixels are not retained; only mask identity and configuration remain inert with the unapplied coverage stage" }.into(), attachments: Vec::new(),
                 })?;
                 for property in &record.properties {
                     self.outcomes.property(mask_outcome, property.kind, property.offset, property.data)?;

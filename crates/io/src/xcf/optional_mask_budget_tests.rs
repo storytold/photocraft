@@ -1,5 +1,6 @@
 use super::tests::{W, hierarchy};
 use super::*;
+use photocraft_doc::import_conversion::ImportConversion;
 
 fn image(bytes: &[u8], budget: usize) -> Image<'_> {
     Image {
@@ -156,7 +157,7 @@ fn failed_optional_mask_translation_and_report_leave_budget_for_later_layer() {
     let photocraft_doc::import_conversion::ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("conversion report") };
     assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.coverage_effect_mask"
         && entry.reason == ConversionReason::InvalidOptionalData
-        && entry.disposition == ConversionDisposition::RetainedUnapplied));
+        && entry.disposition == ConversionDisposition::SkippedNonessential));
 }
 
 #[test]
@@ -184,6 +185,55 @@ fn report_only_mask_decode_releases_pixels_but_keeps_configuration_charges() {
     admit_later_layer(&mut image, layer);
     let photocraft_doc::import_conversion::ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("conversion report") };
     assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.coverage_effect_mask" && entry.source.name == "Optional mask"));
+}
+
+#[test]
+fn discarded_auxiliary_mask_pixels_are_reported_as_lost_after_native_reopen() {
+    let metadata = b"inert mask configuration";
+    let (bytes, channel, _, effect) = fixture_with_mask(true, 1, &[(777, metadata.to_vec())]);
+    for cached in [true, false] {
+        for committed in [true, false] {
+            let mut image = image(&bytes, later_layer_allowance());
+            let owner = coverage_owner(&mut image);
+            let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+            let state = if cached {
+                image.convert_coverage_effects(&[effect], &mut surface, Rect::new(0, 0, 1, 1), None, &Interrupt::NONE).unwrap()
+            } else {
+                CoverageTranslation::default()
+            };
+            assert_eq!(state.masks.contains_key(&channel), cached);
+            image.report_converted_coverage(owner, &[effect], &state, committed, &Interrupt::NONE).unwrap();
+            assert_eq!(surface.tile_count(), 0, "the auxiliary pixels were never installed");
+            assert_eq!(image.budget, later_layer_allowance(), "discarded pixels leave no permanent charge");
+            let conversion = image.outcomes.finish().unwrap();
+            let ImportConversion::Report(report) = &conversion else { panic!("conversion report") };
+            let mask = report.entries.iter().find(|entry| entry.feature_code == "xcf.coverage_effect_mask").unwrap();
+            assert_eq!(mask.disposition, ConversionDisposition::SkippedNonessential, "cached={cached}, committed={committed}");
+            assert_eq!(mask.reason, ConversionReason::NativeLimitation);
+            assert!(mask.native_description.contains("pixels are not retained"));
+            assert_eq!(mask.source.name, "Optional mask");
+            assert_eq!(mask.source.record_offset, Some(channel as u64));
+            assert!(report.attachments.iter().any(|attachment| attachment.bytes.as_slice() == metadata), "inert properties still survive");
+            let mut document = Document::new("Coverage report", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+            document.metadata.import_conversion = Some(Arc::new(conversion));
+            let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+            assert_eq!(reopened.metadata.import_conversion, document.metadata.import_conversion, "native save must retain the loss disclosure and metadata");
+        }
+    }
+}
+
+#[test]
+fn unreadable_auxiliary_mask_pixels_are_reported_as_lost() {
+    let (bytes, _, _, effect) = fixture(false);
+    let mut image = image(&bytes, later_layer_allowance());
+    let owner = coverage_owner(&mut image);
+    image.report_converted_coverage(owner, &[effect], &CoverageTranslation::default(), true, &Interrupt::NONE).unwrap();
+    let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("conversion report") };
+    let mask = report.entries.iter().find(|entry| entry.feature_code == "xcf.coverage_effect_mask").unwrap();
+    assert_eq!(mask.disposition, ConversionDisposition::SkippedNonessential);
+    assert_eq!(mask.reason, ConversionReason::InvalidOptionalData);
+    assert!(mask.native_description.contains("pixels are not retained"));
 }
 
 #[test]
