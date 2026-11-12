@@ -1228,6 +1228,140 @@ fn background_job_scenarios(b: &mut Bench, sz: &Sizes) {
     if b.wanted(full) {
         full_refresh_frame_scenario(b, full, w, h);
     }
+    lens_job_scenarios(b, sz);
+}
+
+/// Four small patches of layer `id` (the corners and the middle), to tell whether a command
+/// changed it without reading the whole layer.
+fn patches(s: &Session, id: u64) -> Res<Vec<f32>> {
+    let d = s.active().ok_or("no document")?;
+    let surf = d.doc.layer(photocraft_doc::LayerId(id)).and_then(photocraft_doc::Layer::surface).ok_or("no pixel layer")?;
+    let b = d.doc.bounds();
+    let (w, h) = (b.width() as i32, b.height() as i32);
+    Ok([(0, 0), (w - 16, 0), (w / 2 - 8, h / 2 - 8), (0, h - 16)]
+        .into_iter()
+        .flat_map(|(x, y)| surf.read_region(Rect::new(b.x0 + x, b.y0 + y, b.x0 + x + 16, b.y0 + y + 16)))
+        .collect())
+}
+
+/// The UI thread's part of running `id` as the app does (`Session::start`): the start itself
+/// and, when it became a background job, each frame's `poll_jobs` until the job ends (the last
+/// one applies the result), polled every 4 ms as the brush import row does. Returns the longest
+/// of those steps, the time until the result was applied, and whether it ran as a job. Inline,
+/// the start is the whole command, so both times are its time. The command must change the
+/// active layer as one undo step, which is undone afterwards.
+fn ui_thread_step(s: &mut Session, id: &str, p: Value) -> Res<(f64, f64, bool)> {
+    use photocraft_engine::jobs::{JobOutcome, Started};
+    let steps = s.active().map(|d| d.history.past_len()).ok_or("no document")?;
+    let layer = active_layer(s)?;
+    let before = patches(s, layer)?;
+    let t0 = Instant::now();
+    let started = s.start(id, p).map_err(|e| format!("{id}: {e}"))?;
+    let mut worst = ms(t0);
+    let (result, job) = match started {
+        Started::Done(v) => (v, false),
+        Started::Job(job) => loop {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            let t = Instant::now();
+            let ended = s.poll_jobs().into_iter().find(|e| e.id == job);
+            worst = worst.max(ms(t));
+            match ended.map(|e| e.outcome) {
+                Some(JobOutcome::Done(v)) => break (v, true),
+                Some(other) => return Err(format!("{id}: the job ended with {other:?}")),
+                None if t0.elapsed().as_secs() > 120 => return Err(format!("{id}: the job did not finish in 120 s")),
+                None => {}
+            }
+        },
+    };
+    let total = ms(t0);
+    // Vanishing Point reports the dabs its clone strokes stamped: none would leave them untimed.
+    let stamped = result.get("dabs").and_then(Value::as_u64) != Some(0);
+    if result.get("changed").and_then(Value::as_bool) == Some(false) || !stamped || patches(s, layer)? == before {
+        return Err(format!("{id} did not change the layer: {result}"));
+    }
+    if s.active().map(|d| d.history.past_len()) != Some(steps + 1) {
+        return Err(format!("{id} did not add one undo step"));
+    }
+    exec(s, "edit.undo", json!({}))?;
+    Ok((worst, total, job))
+}
+
+/// Adds a red layer above the active one, which stays active; returns the red layer.
+fn red_layer_above(s: &mut Session) -> Res<u64> {
+    let active = active_layer(s)?;
+    exec(s, "layer.new.layer", json!({}))?;
+    exec(s, "edit.fill", json!({"color": "#ff0000"}))?;
+    let red = active_layer(s)?;
+    exec(s, "layer.select", json!({"layer": active}))?;
+    Ok(red)
+}
+
+/// #210: Lens Correction, Adaptive Wide Angle, RAW Develop Filter and Vanishing Point on 24 MP,
+/// as the UI runs them (through `Session::start`): the UI thread's longest step, with the time
+/// until the result was applied (`total_samples_ms`) and whether the command ran as a background
+/// job (`ran_as_job`).
+fn lens_job_scenarios(b: &mut Bench, sz: &Sizes) {
+    let (w, h) = sz.big_photo;
+    let (fw, fh) = (f64::from(w), f64::from(h));
+    let line = json!([{"a": [fw * 0.1, fh * 0.15], "b": [fw * 0.9, fh * 0.15], "orientation": "horizontal"}]);
+    let floor = json!([{"corners": [[fw * 0.3, fh * 0.3], [fw * 0.7, fh * 0.3], [fw * 0.9, fh * 0.9], [fw * 0.1, fh * 0.9]]}]);
+    let rows: [(&str, &str, Value); 4] = [
+        ("Lens Correction 24 MP: longest UI-thread step", "filter.lensCorrection", json!({"distortion": -40, "vignetteAmount": -50})),
+        (
+            "Adaptive Wide Angle 24 MP: longest UI-thread step",
+            "filter.adaptiveWideAngle",
+            json!({"model": "fisheye", "focalLength": 10, "constraints": line}),
+        ),
+        ("RAW Develop Filter 24 MP: longest UI-thread step", "filter.cameraRaw", json!({"exposure": 1.0, "vibrance": 30, "clarity": 20})),
+        // A full-canvas red layer pasted onto a floor plane receding to the top, as the Vanishing
+        // Point dialog pastes the clipboard: it covers the canvas's middle (the paste spans
+        // 0.45-0.58 of the height there), which `patches` reads. Then one clone stroke from the
+        // floor's near part to its far part. The paste's `layer` is filled in below.
+        (
+            "Vanishing Point 24 MP: longest UI-thread step",
+            "filter.vanishingPoint",
+            json!({
+                "planes": floor,
+                "paste": [{"plane": 0, "at": [0.25, 0.4], "width": 0.5}],
+                "clone": [{"source": [fw * 0.5, fh * 0.8], "points": [[fw * 0.45, fh * 0.38], [fw * 0.55, fh * 0.38]], "size": fw * 0.03, "hardness": 80}],
+            }),
+        ),
+    ];
+    if !rows.iter().any(|(name, ..)| b.wanted(name)) {
+        return;
+    }
+    let mut s = match open_photo(w, h) {
+        Ok(s) => s,
+        Err(e) => return b.errors.push((rows[0].0.into(), e)),
+    };
+    // The Vanishing Point paste's source.
+    let layer = match red_layer_above(&mut s) {
+        Ok(l) => l,
+        Err(e) => return b.errors.push((rows[0].0.into(), e)),
+    };
+    let reps = b.reps.min(8);
+    for (name, cmd, mut params) in rows {
+        if let Some(paste) = params.get_mut("paste").and_then(|v| v.get_mut(0)) {
+            paste["layer"] = json!(layer);
+        }
+        let mut totals = Vec::new();
+        let mut as_job = Vec::new();
+        b.time(name, &mut s, reps, true, |_, s, i| {
+            let (worst, total, job) = ui_thread_step(s, cmd, params.clone())?;
+            if i > 0 {
+                totals.push(total);
+                as_job.push(job);
+            }
+            Ok(worst)
+        });
+        if let Some(r) = b.rows.iter_mut().rev().find(|r| r["name"] == name)
+            && let Some(o) = r.as_object_mut()
+        {
+            println!("{name:<52} until applied p50 {:.2} ms, ran as a job: {}", median(&totals), as_job.iter().all(|j| *j));
+            o.insert("total_samples_ms".into(), json!(totals));
+            o.insert("ran_as_job".into(), json!(as_job.iter().all(|j| *j)));
+        }
+    }
 }
 
 /// #9328: the whole app (kittest harness, CPU canvas) with a 24 MP document; each sample toggles
