@@ -163,7 +163,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if st.impressionist {
             // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
             let effect = st.impressionist_effect(surf.format());
-            Ok(apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect))
+            apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect).map_err(|e| bad(CMD, e.to_string()))
         } else {
             paint_aligned(surf, &st, sel, lock, CMD)
         }

@@ -449,7 +449,7 @@ fn windows_unc_root_writes_and_exports_when_supported() {
 #[cfg(windows)]
 #[test]
 fn windows_handle_relative_helpers_match_the_capability_operations() {
-    let (inside, outside, workspace) = roots("unc-helpers");
+    let (inside, _outside, workspace) = roots("unc-helpers");
     let root = workspace.write.as_ref().unwrap();
     assert!(!is_unc_root(root));
 
@@ -464,7 +464,15 @@ fn windows_handle_relative_helpers_match_the_capability_operations() {
     std::fs::create_dir(inside.join("dir")).unwrap();
     assert!(delete_on_close(&root.dir, Path::new("dir")).is_err());
     assert!(inside.join("dir").is_dir());
+}
 
+/// The ambient rename that stands in for the capability's below a UNC root (#10317).
+#[cfg(windows)]
+#[test]
+fn windows_rename_unc_matches_the_capability_rename() {
+    let (inside, outside, workspace) = roots("unc-rename");
+    let root = workspace.write.as_ref().unwrap();
+    std::fs::create_dir(inside.join("dir")).unwrap();
     // The ambient rename on the canonical root path behaves like the capability's: it creates,
     // replaces a file, replaces a link instead of writing through it, and refuses a directory.
     std::fs::write(inside.join("plain.tmp"), b"the longer first version").unwrap();
@@ -487,7 +495,15 @@ fn windows_handle_relative_helpers_match_the_capability_operations() {
         assert_eq!(std::fs::read(outside.join("target.png")).unwrap(), b"outside");
     }
     let _ = std::fs::remove_file(inside.join("plain.tmp"));
+}
 
+/// The directory walk that stands in for the capability's `create_dir_all` below a UNC root
+/// (#10317) creates, refuses files on the way and never follows a junction outside.
+#[cfg(windows)]
+#[test]
+fn windows_create_dir_all_unc_matches_the_capability_operation() {
+    let (inside, outside, workspace) = roots("unc-dirs");
+    let root = workspace.write.as_ref().unwrap();
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
     assert!(inside.join("a/b/c").is_dir());
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
@@ -1492,7 +1508,7 @@ fn csh_import_requires_inline_data_in_automation() {
 
 /// A one-shape CSH set (version 2) named `name`, with a single open one-knot subpath.
 fn one_shape_csh(name: &str) -> Vec<u8> {
-    use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath};
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath};
     let mut bytes = b"cush".to_vec();
     bytes.extend_from_slice(&2u32.to_be_bytes());
     bytes.extend_from_slice(&1u32.to_be_bytes());
