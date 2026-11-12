@@ -1160,7 +1160,7 @@ fn native_channel_drag_snaps_to_stationary_linked_layers() {
         assert_eq!(doc.layer(linked), before.layer(linked), "{colors:?}: the linked layer stays put");
         let old = before.layer(mover).unwrap().surface().unwrap().read_region(doc.bounds());
         let new = after.read_region(doc.bounds());
-        for (old, new) in old.chunks_exact(4).zip(new.chunks_exact(4)) {
+        for (old, new) in old.as_chunks::<4>().0.iter().zip(new.as_chunks::<4>().0) {
             for component in 0..4 {
                 if !colors.contains(&component) {
                     assert_eq!(old[component].to_bits(), new[component].to_bits(), "{colors:?}: untargeted component {component}");
