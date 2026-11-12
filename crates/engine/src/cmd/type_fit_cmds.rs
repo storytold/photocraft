@@ -2,7 +2,7 @@
 //! Convert to Dynamic Text. The fit itself runs in `type_cmds::refresh`, so every edit of a
 //! fitted layer refits it in the same history step.
 
-use photocraft_doc::text::{Orientation, TextDirection, TextFit, TextShape};
+use photocraft_doc::text::{Orientation, TextFit, TextShape};
 use photocraft_doc::{LayerContent, TextLayer};
 use serde_json::{Value, json};
 
@@ -27,17 +27,9 @@ pub fn fit_refusal(t: &TextLayer) -> Option<&'static str> {
     if t.orientation == Orientation::Vertical {
         return Some("Dynamic Text does not support vertical type");
     }
-    let mut at = 0usize;
-    let rtl = t.paragraph_runs().iter().any(|p| {
-        let range = at..at.saturating_add(p.len);
-        at = range.end;
-        match p.style.direction {
-            TextDirection::Rtl => true,
-            TextDirection::Ltr => false,
-            TextDirection::Auto => t.text.get(range).and_then(photocraft_text::layout::first_strong_rtl) == Some(true),
-        }
-    });
-    if rtl {
+    // Per text paragraph, with the paragraph style at its start, as layout reads it (and as PSD
+    // export asks): a paragraph run can span several paragraphs, or end inside one.
+    if photocraft_text::layout::has_rtl_paragraph(t) {
         return Some("Dynamic Text does not support right-to-left text");
     }
     if matches!(t.shape, TextShape::Path { .. }) {
@@ -178,6 +170,11 @@ fn release(s: &mut Session, p: &Value) -> Result<Value> {
             t.fit = None;
         } else {
             let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+            // Lines never solved (or solved for other text) would bake to nothing: the release
+            // would drop the fitted look and report success. Solve them first.
+            if !photocraft_text::fit::is_fitted_lines(t) {
+                photocraft_text::fit::refit(&mut eng, t, dpi);
+            }
             let baked = photocraft_text::fit::bake(&mut eng, t, dpi).map_err(|e| match e {
                 photocraft_text::fit::BakeError::Condensed => bad(RELEASE, CONDENSED),
                 e => bad(RELEASE, &format!("the fitted look cannot be kept as ordinary type: {e}")),

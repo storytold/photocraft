@@ -1587,6 +1587,33 @@ fn split_paragraphs_keep_their_own_txt2_paragraph_style() {
     assert_eq!(leadings("AB\nXY\nEF"), vec![1.0, 2.0, 2.0]);
 }
 
+/// An empty paragraph the edit didn't add keeps its own `Txt2` paragraph style: matched by
+/// position only, it took the next character's paragraph (the last one's here), so adding a
+/// space, or baking, restyled it. An empty paragraph the edit adds still takes the next one's.
+#[test]
+fn existing_empty_paragraphs_keep_their_txt2_paragraph_style() {
+    use crate::engine_data::Value as E;
+    let para = |leading: f64, len: usize| format!("<< /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /7 {leading:.1} >> >> >> /1 {len} >> ");
+    let style = "<< /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 >> >> >> /1 5 >> ";
+    // "A\r\rB\r": three paragraphs, the middle one empty, leading 1.0, 2.0 and 3.0.
+    let prev = format!(
+        "\n\n/98 << /0 7 >> /0 << /8 << /0 [ << /0 << >> >> ] >> >> /1 << /0 << /0 1 >> /1 [ << /0 << /0 (\u{fe}\u{ff}\0A\0\r\0\r\0B\0\r) /5 << /0 [ {}{}{}] >> /6 << /0 [ {style}] >> >> /1 << /0 [ << /0 0 >> ] >> >> ] >> >>",
+        para(1.0, 2),
+        para(2.0, 1),
+        para(3.0, 2)
+    );
+    let prev: Vec<u8> = prev.chars().map(|c| c as u32 as u8).collect();
+    let leadings = |text: &str| -> Vec<f64> {
+        let t = runs_of(text, &[(text.len(), CharStyle::default())]);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+        object.path(&["0", "5", "0"]).and_then(E::as_array).unwrap().iter().map(|r| r.path(&["0", "0", "5", "7"]).and_then(E::as_f64).unwrap()).collect()
+    };
+    assert_eq!(leadings("A \n\nB"), vec![1.0, 2.0, 3.0], "a space added before the empty paragraph");
+    assert_eq!(leadings("A\n\n\nB"), vec![1.0, 2.0, 3.0, 3.0], "an added empty paragraph takes the next one's");
+    assert_eq!(leadings("\nA\n\nB"), vec![1.0, 1.0, 2.0, 3.0], "an empty paragraph added in front");
+}
+
 /// #8415: a style-only edit (`type.setStyle` with no text change) reaches the file's `Txt2`.
 /// Photoshop reads the character style from the object's style runs, and an object whose text
 /// still matched kept the file's runs, so Photoshop reopened the layer in its old font with faux
@@ -4409,4 +4436,31 @@ fn vertical_path_decoration_clipping_and_warp() {
     let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
     assert!(!rect.is_empty(), "clipped vertical decoration must draw");
     assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
+}
+
+/// Dynamic Text's right-to-left check reads each paragraph as layout does: the paragraph style at
+/// its start, and for Auto the first strong character of that paragraph alone. Checking the
+/// whole text's first character, or each paragraph run's, disagreed with layout both ways.
+#[test]
+fn rtl_paragraphs_are_read_per_text_paragraph() {
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle, TextDirection};
+    let layer = |text: &str, paras: &[(usize, TextDirection)]| TextLayer {
+        text: text.into(),
+        paragraphs: paras.iter().map(|&(len, direction)| ParagraphRun { len, style: ParagraphStyle { direction, ..Default::default() } }).collect(),
+        ..Default::default()
+    };
+    let hebrew = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}";
+    // A Hebrew second paragraph under one Auto run: it lays out right to left.
+    let t = layer(&format!("Hi\n{hebrew}"), &[]);
+    assert!(crate::layout::has_rtl_paragraph(&t));
+    // A Hebrew first paragraph set Left to Right, then a Latin Auto one: none is right to left.
+    let first = hebrew.len() + 1;
+    let t = layer(&format!("{hebrew}\nHi"), &[(first, TextDirection::Ltr), (2, TextDirection::Auto)]);
+    assert!(!crate::layout::has_rtl_paragraph(&t));
+    // A run edge inside a Latin-first paragraph doesn't make its Hebrew part a paragraph of its own.
+    let t = layer(&format!("Hi {hebrew}"), &[(3, TextDirection::Auto), (hebrew.len(), TextDirection::Auto)]);
+    assert!(!crate::layout::has_rtl_paragraph(&t));
+    // An explicit Right to Left paragraph is right to left whatever its characters.
+    let t = layer("Hi", &[(2, TextDirection::Rtl)]);
+    assert!(crate::layout::has_rtl_paragraph(&t));
 }

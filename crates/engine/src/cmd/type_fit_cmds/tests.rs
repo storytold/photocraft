@@ -233,6 +233,29 @@ fn release_keeps_sizes() {
     assert_eq!(run_sizes(&text(&s, id)), sizes);
 }
 
+/// A fitted layer whose lines were never solved (a file saved without them) still releases with
+/// its fitted look: the lines are solved first, instead of the release dropping the look.
+#[test]
+fn release_solves_missing_lines_before_baking() {
+    let (mut s, id) = session_with_box_text("Hello dynamic world of text", 12.0, [0.0, 0.0, 300.0, 150.0]);
+    s.execute("type.convertToDynamicText", json!({"layer": id.0})).unwrap();
+    let (hi, lo) = effective(&s, id);
+    s.edit("no lines", |doc, _| {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content)
+            && let Some(f) = t.fit.as_mut()
+        {
+            f.lines.clear();
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.releaseDynamicText", json!({"layer": id.0})).unwrap();
+    let t = text(&s, id);
+    assert!(t.fit.is_none());
+    let sizes = run_sizes(&t);
+    assert!(sizes.len() >= 2 && sizes.iter().all(|&v| v >= lo - 0.05 && v <= hi + 0.05), "{sizes:?} vs {lo}..{hi}");
+}
+
 #[test]
 fn release_without_keep_look_restores_the_text() {
     let (mut s, id) = session_with_box_text("Hello dynamic world of text", 12.0, [0.0, 0.0, 300.0, 150.0]);
@@ -422,6 +445,30 @@ fn refused_targets() {
         assert!(s.execute("type.releaseDynamicText", p.clone()).is_err());
         assert!(s.execute("type.setDynamicText", p).is_err());
     }
+}
+
+/// Right-to-left is decided per text paragraph, as layout decides it: a Hebrew second paragraph
+/// under one Auto paragraph run is refused, and a run edge inside a Latin-first paragraph is not.
+#[test]
+fn right_to_left_is_checked_per_text_paragraph() {
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle};
+    let hebrew = "\u{5e9}\u{5dc}\u{5d5}\u{5dd}";
+    let (mut s, id) = session_with_box_text(&format!("Hi\n{hebrew}"), 12.0, [0.0, 0.0, 300.0, 100.0]);
+    assert_eq!(text(&s, id).paragraph_runs().len(), 1, "one Auto run over both paragraphs");
+    let e = s.execute("type.convertToDynamicText", json!({"layer": id.0})).unwrap_err().to_string();
+    assert!(e.contains("right-to-left"), "{e}");
+
+    let (mut s, id) = session_with_box_text(&format!("Hi {hebrew}"), 12.0, [0.0, 0.0, 300.0, 100.0]);
+    s.edit("run edge", |doc, _| {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            let style = ParagraphStyle::default();
+            t.paragraphs = vec![ParagraphRun { len: 3, style: style.clone() }, ParagraphRun { len: hebrew.len(), style }];
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.convertToDynamicText", json!({"layer": id.0})).unwrap();
+    assert!(text(&s, id).fit.is_some());
 }
 
 #[test]
