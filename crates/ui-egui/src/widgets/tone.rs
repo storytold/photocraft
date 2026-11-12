@@ -2,8 +2,8 @@
 //!
 //! The adjustment editors themselves live in `adjust_editors` and the panel in `histogram_panel`;
 //! this module computes and caches the histograms they draw, in the channels of the adjustment's
-//! space (RGB, CMYK ink brightness, Lab), and draws them. Photoshop keeps the two audiences apart
-//! (see [`HistScope`]): the panel follows the selection, the editors' dialogs do not.
+//! space (RGB, CMYK ink brightness, Lab), and draws them. Both the panel and the tone editors
+//! follow the active selection (`HistScope::Selection`).
 
 use std::sync::Arc;
 
@@ -66,16 +66,13 @@ pub enum HistSource {
     UpTo(LayerId),
 }
 
-/// Whether a histogram counts the whole input or only the selected pixels. Photoshop's Histogram
-/// panel follows the selection ("to display histogram data for a portion of the image, first
-/// select that portion" — Adobe), while its Levels/Curves/Threshold dialogs show the
-/// adjustment's whole input: with a selection active the histogram behind the curve is of the
-/// entire image, not just the selected pixels.
+/// Whether a histogram counts the whole input or only the selected pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistScope {
-    /// The whole input, unmasked by any selection (the tone editors' histograms).
+    /// The whole input, unmasked by any selection.
     WholeInput,
-    /// Only the selected pixels, partial coverage counting from ½ up (the Histogram panel).
+    /// Only the selected pixels, partial coverage counting from ½ up (used by the Histogram panel
+    /// and the tone editors when a selection is active).
     Selection,
 }
 
@@ -165,9 +162,8 @@ fn hide_above(layers: &mut [Layer], id: LayerId) -> bool {
 
 /// Histograms of `doc` as seen by `source`, in the channels of `space`, at whatever cache level
 /// the document's size calls for (up to [`MAX_CACHE_LEVEL`]). [`HistScope::Selection`] counts
-/// only the selected pixels (the Histogram panel; partial coverage counts from ½ up);
-/// [`HistScope::WholeInput`] ignores the selection, like Photoshop's Levels/Curves/Threshold
-/// dialogs, which show the adjustment's whole input.
+/// only the selected pixels (partial coverage counts from ½ up); [`HistScope::WholeInput`]
+/// ignores the selection and counts the whole input.
 pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace, scope: HistScope) -> Histograms {
     compute_histograms_at(doc, source, space, scope, MAX_CACHE_LEVEL)
 }
@@ -270,11 +266,11 @@ fn proxy_factor(doc: &Document, level: u32) -> u32 {
 /// Bins of the composited image below (`BelowLayer`), up to (`UpTo`) or of one layer alone
 /// (`Layer`), in `space`, then luminosity in the last of `h`, counting the whole input or only
 /// the selected pixels per `scope`; `pixels` counts every pixel the count kept, transparent ones
-/// included. Returns the cache level counted (see [`cache_level`]): 1 when every document pixel
-/// was counted, higher when a downsampled proxy stood in (like Photoshop's histogram cache
-/// levels). The proxy only stands in while there is no selection mask to sample (the editors
-/// always, the panel while nothing is selected): a masked count samples the mask in document
-/// space and stays exact (level 1).
+/// included. Returns the cache level counted (see [`cache_level`]): 1 when every
+/// document pixel was counted, higher when a downsampled proxy stood in (like Photoshop's histogram
+/// cache levels). The proxy only stands in while there is no selection mask to sample (either
+/// [`HistScope::WholeInput`] or [`HistScope::Selection`] while nothing is selected): a masked
+/// count samples the mask in document space and stays exact (level 1).
 ///
 /// The pixels are counted as they are, never blended: an area-averaged thumbnail invented greys
 /// that aren't in the image wherever an edge fell inside one of its cells (#6538). Documents up to
@@ -302,9 +298,9 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         HistScope::WholeInput => None,
         HistScope::Selection => d.selection.clone(),
     };
-    // The proxy stands in only while there is no selection mask to sample: the editors never
-    // have one, and the panel has none while nothing is selected — either way the count is the
-    // whole input. A masked count samples the mask in document space and stays exact (level 1).
+    // The proxy stands in only while there is no selection mask to sample (either `WholeInput` or
+    // `Selection` while nothing is selected — either way the count is the whole input). A masked
+    // count samples the mask in document space and stays exact (level 1).
     let level = if sel.is_some() { 1 } else { cache_level(&d, max_level) };
     let d = if level > 1 { photocraft_compose::proxy::proxy_document(&d, proxy_factor(&d, level)) } else { d };
     // A selection whose default reads as unselected (marquee/lasso masks) can only pass the
@@ -481,13 +477,14 @@ fn gray_bins(surf: &photocraft_raster::Surface, area: photocraft_geom::Rect) -> 
 }
 
 /// Cached histograms for a tone editor; recomputed only when something other than the editor's
-/// own commits changed the document (see [`keep_after_commit`]). The editors' histograms show the
-/// whole input ([`HistScope::WholeInput`]), so a selection change — view-only, no pixels moved —
-/// keeps the cache (#125); only the panel's masked histogram tracks the selection.
+/// own commits changed the document (see [`keep_after_commit`]) or when the active selection
+/// changes. Uses [`HistScope::Selection`] so Levels, Curves and Threshold show the selected area's
+/// histogram when a selection is active (#13496).
 pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace) -> Arc<Histograms> {
     let Some(st) = app.session.active() else { return Arc::new(Histograms::default()) };
     let (doc_id, rev) = (st.doc.id, st.revision);
-    let want = tag(source, space, HistScope::WholeInput, 0);
+    let scope = HistScope::Selection;
+    let want = tag(source, space, scope, selection_key(&st.doc));
     let layer = match source {
         HistSource::BelowLayer(l) | HistSource::Layer(l) | HistSource::UpTo(l) => l,
         HistSource::Channel { layer, .. } | HistSource::Colors { layer, .. } => layer,
@@ -502,7 +499,7 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
         return h.clone();
     }
     let t0 = crate::gpu_canvas::now_ms();
-    let h = Arc::new(compute_histograms(&st.doc, source, space, HistScope::WholeInput));
+    let h = Arc::new(compute_histograms(&st.doc, source, space, scope));
     app.perf.span("histogram", crate::gpu_canvas::now_ms() - t0);
     app.tone_hist = Some((doc_id, layer, rev, h.clone()));
     h
@@ -885,8 +882,8 @@ mod tests {
 
     /// Above the exact-count size a nearest-neighbour proxy stands in (cache level > 1): it is
     /// smaller, yet still only holds black and white. It stands in whenever no selection mask is
-    /// sampled — the editors always, the panel while nothing is selected — and a
-    /// selection-masked count stays exact (level 1).
+    /// sampled (`WholeInput`, or `Selection` while nothing is selected), and a selection-masked
+    /// count stays exact (level 1).
     #[test]
     fn large_split_image_counts_a_nearest_proxy_without_inventing_greys() {
         let s = split_doc(6000, 3000, 2001, None);
