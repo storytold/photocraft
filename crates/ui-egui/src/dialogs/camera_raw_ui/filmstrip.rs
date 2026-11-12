@@ -1,6 +1,7 @@
 //! The open-time dialog's filmstrip: raws opened together wait side by side in one Camera Raw
-//! dialog, as in Photoshop's. Each keeps its own settings and demosaic choice when another is
-//! shown, Open develops every one and Cancel closes every one.
+//! dialog, as in Photoshop's. None is a document yet. Each keeps its own settings and demosaic
+//! choice when another is shown, Open develops every one into a document and Cancel drops every
+//! one.
 
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
@@ -13,8 +14,8 @@ pub(super) const FILM_W: f32 = 150.0;
 /// Long side of a filmstrip thumbnail, in pixels.
 const THUMB_SIDE: usize = 240;
 
-/// A raw waiting in the open-time dialog: opened (developed with the defaults) and reviewed
-/// before Open keeps it.
+/// A raw waiting in the open-time dialog: developed with the defaults and reviewed before Open
+/// makes it a document (until then it is not one: no tab, nothing on the canvas).
 pub struct HeldRaw {
     pub raw: RawOpen,
     /// Its settings and the settings it started from (its sidecar's, or the defaults) once it
@@ -27,14 +28,13 @@ pub struct HeldRaw {
 
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
-        let thumb = super::open::document_index(app, raw.document).and_then(|i| thumbnail(app, i));
+        let thumb = super::open::raw_document(app, &raw).and_then(|doc| thumbnail(app, &doc));
         HeldRaw { raw, kept: None, thumb, tex: None }
     }
 }
 
-/// A filmstrip thumbnail of document `index` (a just-developed raw: its first pixel layer).
-fn thumbnail(app: &PhotocraftApp, index: usize) -> Option<egui::ColorImage> {
-    let doc = &app.session.documents().get(index)?.doc;
+/// A filmstrip thumbnail of `doc` (a just-developed raw: its first pixel layer).
+fn thumbnail(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<egui::ColorImage> {
     let surf = doc.layers.iter().find_map(|l| l.surface())?;
     let area = doc.bounds();
     let (w, h) = (area.width() as usize, area.height() as usize);
@@ -114,7 +114,7 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     held.kept = Some((d.params.clone(), d.original.clone()));
     held.raw.demosaic = raw.demosaic;
     // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
-    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
+    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().ok().map(|f| f.px)).flatten();
     let developed = frame.as_deref().unwrap_or(&d.processed);
     if !developed.is_empty() {
         let (px, w, h) = shrink(developed, d.pw, d.ph);
@@ -130,54 +130,62 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
         return (loaded.clone(), Some(loaded));
     }
     let mut p = CameraRaw::default();
-    // From the proxy the dialog would use, so showing a raw doesn't change what Auto gives it.
+    // From the pixels the dialog's Auto reads, so showing a raw doesn't change what Auto gives it.
     if app.session.prefs().raw_defaults.apply_auto_tone
-        && let Some(st) = super::open::document_index(app, raw.document).and_then(|i| app.session.documents().get(i))
-        && let Some(surf) = st.doc.layers.iter().find_map(|l| l.surface())
-        && let Ok((area, w, h)) = super::convert::preview_area(st.doc.bounds(), surf)
+        && let Some(proxy) = super::open::raw_document(app, raw).and_then(|doc| default_proxy(&doc))
     {
-        let (proxy, ..) = super::convert::box_proxy(surf, area, w, h);
         photocraft_algo::camera_raw::auto_tone(&proxy, &mut p);
     }
     (p, None)
 }
 
-/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
-/// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
+/// The default develop of a raw box-averaged to the preview's size: what Camera Raw Defaults ›
+/// Apply auto tone reads, for a shown raw and one Open develops without showing it alike.
+pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 4]>> {
+    let surf = doc.layers.iter().find_map(|l| l.surface())?;
+    let (area, w, h) = super::convert::preview_area(doc.bounds(), surf).ok()?;
+    Some(super::convert::box_proxy(surf, area, w, h).0)
+}
+
+/// Open with raws in the filmstrip, in its order: the shown one as the dialog has it, every other
+/// with its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
 /// filmstrip once it has opened or its background develop has started: one that fails stays or
-/// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
+/// comes back there with its settings, so the dialog returns for it (or Cancel lets it go).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
-    let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
-    let first = commit_open_raw(app, params, raw, Some(original));
-    if let Ok(v) = &first {
-        return_on_failure(app, v, original);
-        app.raw_shelf.retain(|h| h.raw.document != raw.document);
-    }
-    if others.is_empty() {
-        return first;
+    // In filmstrip order, the shown raw in its place, so the tabs follow the filmstrip.
+    let mut order: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    if !order.contains(&raw.document) {
+        order.insert(0, raw.document);
     }
     let mut opened = Vec::new();
     let mut failed = Vec::new();
-    match first {
-        Ok(v) => opened.push(v),
-        Err(e) => failed.push(format!("{}: {e}", raw.name)),
-    }
-    for id in others {
-        let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == id) else { continue };
-        let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
-        let (p, loaded) = match kept {
-            Some((p, original)) => (p, Some(original)),
-            None => first_settings(app, &held_raw),
+    let mut last = None;
+    for id in &order {
+        let (this, p, loaded) = if *id == raw.document {
+            (raw.clone(), params.clone(), Some(original.clone()))
+        } else {
+            let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == *id) else { continue };
+            let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
+            let (p, loaded) = match kept {
+                Some((p, original)) => (p, Some(original)),
+                None => first_settings(app, &held_raw),
+            };
+            (held_raw, p, loaded)
         };
-        match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
+        let r = commit_open_raw(app, &p, &this, loaded.as_ref());
+        match &r {
             Ok(v) => {
-                return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
-                opened.push(v);
-                app.raw_shelf.retain(|h| h.raw.document != id);
+                return_on_failure(app, v, &p, loaded.as_ref().unwrap_or(&CameraRaw::default()));
+                opened.push(v.clone());
+                app.raw_shelf.retain(|h| h.raw.document != *id);
             }
-            Err(e) => failed.push(format!("{}: {e}", held_raw.name)),
+            Err(e) => failed.push(format!("{}: {e}", this.name)),
         }
+        last = Some(r);
+    }
+    if order.len() == 1 {
+        return last.unwrap_or_else(|| Err("no raw file to open".into()));
     }
     if !failed.is_empty() {
         let e = failed.join("; ");
@@ -190,7 +198,7 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
 }
 
 /// Done: saves each raw's settings to its sidecar, as Camera Raw's Done does, and opens none of
-/// them (they close again).
+/// them.
 pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     use super::sidecar::Stored;
     keep_settings(app);
@@ -223,7 +231,8 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     let saved = json!(saved);
     app.camera_raw = None;
     app.raw_shelf.clear();
-    for (raw, _) in &raws {
+    // Held raws were never documents; one shown from the session closes, as before it was kept.
+    for (raw, _) in raws.iter().filter(|(r, _)| r.held.is_none()) {
         if let Some(index) = super::open::document_index(app, raw.document) {
             app.session.close(index);
         }

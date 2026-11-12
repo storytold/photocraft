@@ -629,8 +629,14 @@ Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture or Dehaze cha
 white-balance gains, develop exposure, and the other five in linear light before the camera's
 tone curve, as Camera Raw does for raw files; without an as-shot white balance, or without the file's bytes, they stay RGB
 adjustments), applies the remaining settings as one `filter.cameraRaw` step and leaves the
-document unmodified; its result is `{document, redeveloped, filter?}`. The preview keeps the
-method the file was opened with. Cancel closes the document. `app.open` and other automation
+document unmodified; its result is `{document, redeveloped, filter?}`. The preview develops
+those raw-stage settings from the sensor data as Open does: the fitted view from the frame binned
+to the preview's size (no demosaic, so it keeps the method the file was opened with), 1:1 and
+closer zooms from the whole frame, so highlights the default develop clipped come back at a lower
+exposure in the preview as they do on Open. Until Open a raw in the dialog (or in its filmstrip)
+is not a document: no tab, nothing on the canvas, no History; the open documents and the
+active one stay as they were. Open makes a document of each raw it opens (its result's
+`document` is that tab); Cancel and Done make none. `app.open` and other automation
 opens never show the dialog. The preference `rawDefaults.openInCameraRaw` (default `true`) turns
 it off; `rawDefaults.demosaic` (`ahd` by default, `mhc`, `bilinear`; Preferences › Camera Raw)
 is the method the app's raw opens develop with (interactive opens, `app.open` and Place).

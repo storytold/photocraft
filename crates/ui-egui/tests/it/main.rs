@@ -10,6 +10,7 @@ mod batch_export_options;
 mod brush_reset_defaults;
 mod camera_raw_histogram;
 mod camera_raw_localization;
+mod camera_raw_open;
 mod camera_raw_scope;
 mod camera_raw_zoom;
 mod canvas_16f;
