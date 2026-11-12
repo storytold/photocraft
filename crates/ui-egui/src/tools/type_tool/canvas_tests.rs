@@ -3581,7 +3581,7 @@ mod dynamic_text_ui {
         app.run("layer.select", json!({"layer": plain.0, "mode": "replace"})).unwrap();
         app.run("layer.select", json!({"layer": fit.0, "mode": "add"})).unwrap();
         app.session.active_mut().unwrap().active_layer = Some(plain);
-        let mut h = bar(app, false);
+        let h = bar(app, false);
         assert!(!fitted(&h, plain) && fitted(&h, fit));
         assert!(h.get_all_by_role(Role::SpinButton).next().expect("size field").accesskit_node().is_disabled());
     }
