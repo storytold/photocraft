@@ -553,6 +553,24 @@ fn break_units(text: &str, lines: &[FitLine]) -> Vec<Unit> {
     out
 }
 
+/// Whether a paragraph of `t` lays out right to left: its paragraph style (the one at its start,
+/// as layout reads it) sets Right to Left, or Auto with a right-to-left first strong character
+/// in that paragraph. Dynamic Text refuses such text; the engine's Convert and PSD export both
+/// ask this, so they agree on which layers the solver may fit.
+pub fn has_rtl_paragraph(t: &TextLayer) -> bool {
+    use photocraft_doc::text::TextDirection;
+    let paras = t.paragraph_runs();
+    let starts = running_starts(paras.iter().map(|r| r.len));
+    split_paragraphs(&t.text).into_iter().any(|r| {
+        let Some(p) = paras.get(run_index_at(&starts, r.start)) else { return false };
+        match p.style.direction {
+            TextDirection::Rtl => true,
+            TextDirection::Ltr => false,
+            TextDirection::Auto => t.text.get(r.start..strip_break(&t.text, &r)).and_then(first_strong_rtl) == Some(true),
+        }
+    })
+}
+
 /// Whether the first strong character of `s` is right-to-left (UAX #9 P2, without isolates), or
 /// `None` when it has none. Dynamic Text uses it to refuse Auto-direction paragraphs that lay out
 /// right to left.

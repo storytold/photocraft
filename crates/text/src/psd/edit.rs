@@ -189,23 +189,48 @@ pub(super) fn td_edited_object(object: &E, text: &str) -> Option<E> {
 /// `new` is `old` with only its spacing and paragraph breaks changed (the same characters
 /// otherwise, in order): baking Dynamic Text splits a paragraph into one per line, and every
 /// piece keeps its own paragraph's style, not the style of whichever paragraph had its index.
-/// `None` otherwise, and the paragraphs keep the file's by index.
+/// An empty paragraph of `new` is the empty paragraph `old` has at the same place, while one is
+/// left there, and keeps its style; a new empty one takes the next character's paragraph.
+/// `None` otherwise (and for unchanged text), and the paragraphs keep the file's by index.
 fn paragraph_sources(old: &str, new: &str) -> Option<Vec<usize>> {
     let blank = |c: char| matches!(c, ' ' | '\r' | '\n');
-    if !old.chars().filter(|&c| !blank(c)).eq(new.chars().filter(|&c| !blank(c))) {
+    if old == new || !old.chars().filter(|&c| !blank(c)).eq(new.chars().filter(|&c| !blank(c))) {
         return None;
     }
-    // The old paragraph each non-blank character sits in, in order.
-    let mut owner = Vec::new();
-    for (i, p) in old.split_inclusive('\r').enumerate() {
-        owner.extend(p.chars().filter(|&c| !blank(c)).map(|_| i));
+    // Per old paragraph (not per character): how many non-blank characters come before it, and
+    // how many it holds.
+    let count = |p: &str| p.chars().filter(|&c| !blank(c)).count();
+    let mut old_paras: Vec<(usize, usize)> = Vec::new();
+    let mut before = 0usize;
+    for p in old.split_inclusive('\r') {
+        let n = count(p);
+        old_paras.push((before, n));
+        before = before.saturating_add(n);
     }
-    let mut seen = 0usize;
+    // Past the last character: the last old paragraph that holds one.
+    let last_full = old_paras.iter().rposition(|&(_, n)| n > 0).unwrap_or(0);
+    // `owner`: the old paragraph holding the character at `seen`; `empty`: the next old paragraph
+    // an empty new one may be. Both only move forward, as `seen` does.
+    let (mut owner, mut empty, mut seen) = (0usize, 0usize, 0usize);
     let mut out = Vec::new();
     for p in new.split_inclusive('\r') {
-        // A paragraph with no characters of its own (an empty one) takes the next character's.
-        out.push(owner.get(seen).or(owner.last()).copied().unwrap_or(0));
-        seen += p.chars().filter(|&c| !blank(c)).count();
+        let n = count(p);
+        while old_paras.get(owner).is_some_and(|&(at, len)| len == 0 || at.saturating_add(len) <= seen) {
+            owner += 1;
+        }
+        while old_paras.get(empty).is_some_and(|&(at, len)| if len == 0 { at < seen } else { at.saturating_add(len) <= seen }) {
+            empty += 1;
+        }
+        let src = if n == 0 && old_paras.get(empty).is_some_and(|&(at, len)| len == 0 && at == seen) {
+            empty += 1;
+            empty - 1
+        } else if owner < old_paras.len() {
+            owner
+        } else {
+            last_full
+        };
+        out.push(src);
+        seen = seen.saturating_add(n);
     }
     Some(out)
 }
