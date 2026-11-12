@@ -75,7 +75,7 @@ fn to_rc(format: Format, image: &Image, plan: Plan) -> Result<rc::Image, CodecEr
 }
 
 pub(crate) mod dds {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, Plan, SampleType, err, from_rc, limits, rc, to_rc};
     use crate::options::EncodeOptions;
     const F: Format = Format::Dds;
 
@@ -92,7 +92,7 @@ pub(crate) mod dds {
 }
 
 pub(crate) mod dicom {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, err, from_rc, limits, rc};
     const F: Format = Format::Dicom;
 
     pub(crate) fn is_dicom(b: &[u8]) -> bool {
@@ -104,7 +104,7 @@ pub(crate) mod dicom {
 }
 
 pub(crate) mod fits {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, Plan, err, from_rc, limits, rc, to_rc};
     use crate::options::EncodeOptions;
     const F: Format = Format::Fits;
 
@@ -120,7 +120,7 @@ pub(crate) mod fits {
 }
 
 pub(crate) mod iff {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, Plan, err, from_rc, limits, rc, to_rc};
     const F: Format = Format::Iff;
 
     pub(crate) fn looks_like_iff(b: &[u8]) -> bool {
@@ -135,7 +135,7 @@ pub(crate) mod iff {
 }
 
 pub(crate) mod pcx {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, err, from_rc, limits, rc};
     const F: Format = Format::Pcx;
 
     pub(crate) fn looks_like_pcx(b: &[u8]) -> bool {
@@ -147,7 +147,7 @@ pub(crate) mod pcx {
 }
 
 pub(crate) mod pnm {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, Plan, err, from_rc, limits, rc, to_rc};
     use crate::options::EncodeOptions;
     const F: Format = Format::Pnm;
 
@@ -160,7 +160,7 @@ pub(crate) mod pnm {
 }
 
 pub(crate) mod xpm {
-    use super::*;
+    use super::{CodecError, Format, Image, Limits, err, from_rc, limits, rc};
     const F: Format = Format::Xpm;
 
     pub(crate) fn decode(b: &[u8], l: &Limits) -> Result<Image, CodecError> {
