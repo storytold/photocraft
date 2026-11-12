@@ -225,6 +225,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     if !prefs.menus.hidden.is_empty() {
         items.retain(|i| !prefs.menus.is_hidden(&i.id));
     }
+    // Edit › Generative Fill exists only where generative AI can (the desktop app, #41).
+    if !crate::genai_ui::menu_visible(app) {
+        items.retain(|i| i.id != photocraft_engine::genai_cmds::FILL);
+    }
     if prefs.interface.show_menu_colors {
         for it in &mut items {
             it.color = prefs.menus.colors.get(&it.id).cloned();

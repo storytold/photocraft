@@ -1267,3 +1267,19 @@ fn a_new_step_or_purge_forgets_the_cleared_states() {
     assert!(!h.can_undo() && !h.is_cleared());
     assert!(!h.clear_states(), "a single state can't be cleared");
 }
+
+#[test]
+fn held_docs_are_every_state_undo_redo_or_undoing_clear_history_brings_back() {
+    let mut h = History::new(2);
+    let mut cur = Arc::new(base());
+    let names = |h: &History| h.held_docs().map(|d| d.name.clone()).collect::<Vec<_>>();
+    edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+    edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+    assert_eq!(names(&h), ["h", "a"]);
+    edit(&mut h, &mut cur, "C", |d| d.name = "c".into());
+    assert_eq!(names(&h), ["a", "b", "h"], "the state the last step dropped stays held until the next change");
+    assert!(h.undo(cur).is_some());
+    assert_eq!(names(&h), ["a", "c"], "the redo side");
+    assert!(h.clear_states());
+    assert_eq!(names(&h), ["a", "c"], "Clear History can be undone");
+}
