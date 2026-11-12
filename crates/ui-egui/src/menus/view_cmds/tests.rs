@@ -212,6 +212,20 @@ fn print_size_and_fit_layers_use_the_whole_zoom_range() {
     assert_eq!(app.ui.views[0].zoom, crate::zoom_levels::MAX);
 }
 
+/// Window › Revision Markers is how a Revision tab closed from its strip comes back: the menu
+/// selects the tab and un-hides it, as it does for the other panels of the Layers card.
+#[test]
+fn window_menu_reopens_the_revision_tab() {
+    use crate::dock::Group;
+    let (mut app, ctx) = app_with(1);
+    let pro = app.ui.theme.is_pro();
+    app.ui.dock.hide_tab(Group::Layers, 3, pro);
+    app.ui.dock_tabs.layers = 0;
+    menu(&mut app, &ctx, "window.panel.revision", json!({})).unwrap();
+    assert_eq!(app.ui.dock_tabs.layers, 3, "the menu selects the Revision tab");
+    assert!(app.ui.dock.visible_tabs(Group::Layers, pro).iter().any(|(tab, _)| *tab == 3), "and un-hides it");
+}
+
 /// Print Size divides the document's ppi into the Screen Resolution preference
 /// (Units & Rulers), not into a constant 72 ppi.
 #[test]

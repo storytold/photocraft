@@ -210,6 +210,7 @@ pub(super) fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, 
         "window.panel.channels" => ("layers", 1),
         "window.panel.paths" => ("layers", 2),
         "window.panel.layers" => ("layers", 0),
+        "window.panel.revision" => ("layers", 3),
         "window.panel.adjustments" => ("properties", 1),
         "window.panel.properties" => ("properties", 0),
         // Their own Character | Paragraph group, so Properties stays open (#150).
