@@ -704,11 +704,10 @@ impl Ex<'_> {
             }
             if !stack.filters.is_empty() {
                 self.smart.keep_fx.insert(t.placed.clone());
-                if masked(sm) {
-                    let fmt = self.fmt;
-                    if let Some(u) = self.smart.old_fx.iter().find(|i| i.id == t.placed).and_then(|i| crate::smart_map::unfiltered_from_item(i, fmt)) {
-                        self.smart.unfiltered.insert(l.id, u);
-                    }
+                if masked(sm)
+                    && let Some(u) = self.preserved_unfiltered(&t.placed, &l.name)
+                {
+                    self.smart.unfiltered.insert(l.id, u);
                 }
             }
             return;
@@ -804,20 +803,64 @@ impl Ex<'_> {
 
     /// Whether an imported placed layer still says what the smart object is: transform, warp,
     /// filter stack and filter mask as stored.
-    fn placed_unchanged(&self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> bool {
+    fn placed_unchanged(&mut self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> bool {
         if t.transform != sm.transform || blocks::parse_placed_warp(b"SoLd", data) != sm.warp || t.stack.clone().unwrap_or_default() != *stack {
             return false;
         }
         if stack.filters.is_empty() {
             return true;
         }
-        let old = self.smart.old_fx.iter().find(|i| i.id == t.placed);
-        let mask = old.map(|i| crate::smart_map::mask_from_item(i, self.mask_fmt.sample, stack));
-        match mask {
-            Some(Ok(m)) => m == sm.filter_mask,
-            Some(Err(_)) => false,
-            None => sm.filter_mask.is_none(),
+        if !self.smart.old_fx.iter().any(|i| i.id == t.placed) {
+            return sm.filter_mask.is_none();
         }
+        match self.preserved_mask(&t.placed, stack) {
+            Ok(m) => m == sm.filter_mask,
+            Err(_) => false,
+        }
+    }
+
+    /// The filter mask in the preserved `FEid` item of `placed`, with `stack`'s mask settings:
+    /// decoded once per export (every layer of a source compares it) and charged to the export's
+    /// smart-filter cache budget.
+    fn preserved_mask(
+        &mut self,
+        placed: &str,
+        stack: &crate::smart_map::FilterStack,
+    ) -> Result<Option<photocraft_doc::LayerMask>, crate::smart_map::FilterCacheError> {
+        let sample = self.mask_fmt.sample;
+        let smart = &mut self.smart;
+        let decoded = match smart.old_masks.get(placed) {
+            Some(done) => done.clone(),
+            None => {
+                let item = smart.old_fx.iter().find(|i| i.id == placed);
+                let made = item.map_or(Ok(None), |i| crate::smart_map::mask_from_item(i, sample, stack, &mut smart.fx_budget));
+                smart.old_masks.insert(placed.to_string(), made.clone());
+                made
+            }
+        };
+        decoded.map(|m| m.map(|m| photocraft_doc::LayerMask { enabled: stack.mask_enabled, linked: stack.mask_linked, ..m }))
+    }
+
+    /// The unfiltered pixels in the preserved `FEid` item of `placed`: decoded once per export
+    /// (layers of one source share their tiles) and charged to its smart-filter cache budget.
+    /// Without them the layer is written with its filter mask applied, as it shows.
+    fn preserved_unfiltered(&mut self, placed: &str, layer: &str) -> Option<Surface> {
+        if let Some(done) = self.smart.old_unfiltered.get(placed) {
+            return done.clone();
+        }
+        let fmt = self.fmt;
+        let smart = &mut self.smart;
+        let item = smart.old_fx.iter().find(|i| i.id == placed);
+        let made = match item.map(|i| crate::smart_map::unfiltered_from_item(i, fmt, &mut smart.fx_budget)) {
+            Some(Ok(made)) => made,
+            Some(Err(e)) => {
+                self.warnings.push(format!("layer \"{layer}\": {e}; it was written with its filter mask applied"));
+                None
+            }
+            None => None,
+        };
+        self.smart.old_unfiltered.insert(placed.to_string(), made.clone());
+        made
     }
 
     /// The `lnk2` file a smart object's source is written as: a preserved embedded file, or a new

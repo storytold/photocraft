@@ -2,8 +2,9 @@
 //! for shapes with clipped layers: Photoshop draws the stroke above the clipped layers. Cached
 //! per shape state, so tiles (and the GPU's textures) reuse one rasterisation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use photocraft_color::{PixelFormat, SampleType};
@@ -22,8 +23,63 @@ fn cache() -> &'static Mutex<Cache> {
     C.get_or_init(|| Mutex::new((HashMap::new(), 0)))
 }
 
+/// Keys of splits refused for their size ([`MAX_SPLIT_DRAW_BYTES`]): a refused shape isn't
+/// measured again on every request.
+fn refused() -> &'static Mutex<HashSet<u64>> {
+    static R: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Most refusals remembered; past it the set starts over.
+const MAX_REFUSED: usize = 4096;
+
 pub(crate) fn purge() {
     cache().lock().unwrap_or_else(|e| e.into_inner()).0.clear();
+    refused().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+/// The most pixel bytes a split may draw: its two parts' tiles over their bounds and a
+/// feathered fill's blur, measured before anything is drawn. A memory-safety limit, not the
+/// cache's budget: a split between the two is drawn for each request and not kept, as before.
+/// Natively it holds a 36 MP 32-bit shape's two parts and a feather's blur (1.5 GB at most).
+/// A shape from a file can declare a fill or stroke far larger than the pixels it stores (an
+/// inverted fill on a huge canvas): past this the shape is not split, and its pixels composite
+/// as they are, with the stroke under its clipped layers.
+pub const MAX_SPLIT_DRAW_BYTES: u64 = if cfg!(target_arch = "wasm32") { 1 << 30 } else { 2 << 30 };
+
+static CACHE_BUDGET: AtomicUsize = AtomicUsize::new(BUDGET);
+static DRAW_LIMIT: AtomicU64 = AtomicU64::new(MAX_SPLIT_DRAW_BYTES);
+
+/// The split cache's byte budget and the most a split may draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Limits {
+    cache: usize,
+    draw: u64,
+}
+
+fn limits() -> Limits {
+    Limits { cache: CACHE_BUDGET.load(Ordering::Relaxed), draw: DRAW_LIMIT.load(Ordering::Relaxed) }
+}
+
+/// Sets, process-wide, the split cache's byte budget (splits larger are drawn for each request,
+/// not kept) and the most pixel bytes a split may draw ([`MAX_SPLIT_DRAW_BYTES`]); returns the
+/// previous `(cache, draw)` limits. For memory preferences and tests.
+pub fn set_split_limits(cache_bytes: usize, draw_bytes: u64) -> (usize, u64) {
+    let before = (CACHE_BUDGET.swap(cache_bytes, Ordering::Relaxed), DRAW_LIMIT.swap(draw_bytes, Ordering::Relaxed));
+    // Refusals were measured against the old limit.
+    refused().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    before
+}
+
+/// What drawing `parts` over `canvas` in `fmt` takes at most ([`MAX_SPLIT_DRAW_BYTES`]).
+fn split_bytes(parts: [&ShapeLayer; 2], canvas: Rect, fmt: &PixelFormat) -> u64 {
+    parts
+        .into_iter()
+        .map(|part| {
+            let area = photocraft_vector::render_bounds(part, photocraft_vector::DEFAULT_TOLERANCE, canvas).map_or(Rect::EMPTY, |b| b.intersect(&canvas));
+            photocraft_raster::tile_storage_bytes(area, fmt).saturating_add(photocraft_vector::feather_workspace_bytes(part, area))
+        })
+        .fold(0, u64::saturating_add)
 }
 
 /// Pixel-byte budget for split parts and their pinned source surfaces (#4530).
@@ -49,10 +105,16 @@ fn get(c: &Mutex<Cache>, key: u64) -> Option<(Surface, Surface)> {
 }
 
 /// Cache a split only when its retained pixel bytes fit the budget and are nonzero.
+#[cfg(test)]
 fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>) {
+    insert_within(c, key, parts, source, BUDGET);
+}
+
+/// [`insert`] with a cache budget of `budget` bytes.
+fn insert_within(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>, budget: usize) {
     let new_bytes = entry_bytes(parts, source);
     // Don't cache entries that hold no pixels or exceed the byte budget.
-    if new_bytes == 0 || new_bytes > BUDGET {
+    if new_bytes == 0 || new_bytes > budget {
         return;
     }
     let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
@@ -62,7 +124,7 @@ fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option
     let mut held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
     // Least recently used first, until the new entry fits the byte budget.
     loop {
-        if held.saturating_add(new_bytes) <= BUDGET {
+        if held.saturating_add(new_bytes) <= budget {
             break;
         }
         let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
@@ -80,16 +142,63 @@ pub fn purge_cache() -> usize {
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     let bytes = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
     c.0.clear();
+    refused().lock().unwrap_or_else(|e| e.into_inner()).clear();
     bytes
 }
 
 /// (fill only, stroke only) of a stroked shape, rendered over `canvas` in RGBA at `depth`.
-/// `None` without a stroke. Where the shape's pixels
-/// (Photoshop's rendering, `sh.cache`) reach past our fill, the part the fill doesn't explain is
-/// stroke: the stroke follows Photoshop's coverage (psd-tools double-stroke-effects).
+/// `None` without a stroke, and when the parts would take more than [`MAX_SPLIT_DRAW_BYTES`]
+/// or can't be allocated (callers then composite the shape's own pixels). Where the shape's
+/// pixels (Photoshop's rendering, `sh.cache`) reach past our fill, the part the fill doesn't
+/// explain is stroke: the stroke follows Photoshop's coverage (psd-tools double-stroke-effects).
 pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surface, Surface)> {
+    split_in(sh, canvas, depth, cache(), refused(), limits())
+}
+
+/// [`split`] with its cache, its refusals and its limits given.
+fn split_in(
+    sh: &ShapeLayer,
+    canvas: Rect,
+    depth: SampleType,
+    cache: &Mutex<Cache>,
+    refused: &Mutex<HashSet<u64>>,
+    limits: Limits,
+) -> Option<(Surface, Surface)> {
     let generation = photocraft_raster::spill::read_error_generation();
     sh.stroke.as_ref()?;
+    let key = split_key(sh, canvas, depth);
+    if let Some(parts) = get(cache, key) {
+        return Some(parts);
+    }
+    if refused.lock().unwrap_or_else(|e| e.into_inner()).contains(&key) {
+        return None;
+    }
+    let fmt = PixelFormat::RGBA8.with_sample(depth);
+    let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
+    let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
+    if split_bytes([&fill_only, &stroke_only], canvas, &fmt) > limits.draw {
+        let mut refused = refused.lock().unwrap_or_else(|e| e.into_inner());
+        if refused.len() >= MAX_REFUSED {
+            refused.clear();
+        }
+        refused.insert(key);
+        return None;
+    }
+    let fill = photocraft_vector::try_render_shape(&fill_only, fmt, canvas).ok()?;
+    let stroke = photocraft_vector::try_render_shape(&stroke_only, fmt, canvas).ok()?;
+    let mut parts = (fill, stroke);
+    if let Some(cache) = &sh.cache {
+        fit_stroke(&parts.0, &mut parts.1, cache, canvas);
+    }
+    if photocraft_raster::spill::check_since(generation).is_err() || sh.cache.as_ref().is_some_and(|c| c.scratch_health().is_err()) {
+        return Some(parts);
+    }
+    insert_within(cache, key, &parts, sh.cache.as_ref(), limits.cache);
+    Some(parts)
+}
+
+/// The cache key of a split: the shape's state, its pixels' tiles, the canvas and the depth.
+fn split_key(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (canvas.x0, canvas.y0, canvas.x1, canvas.y1).hash(&mut h);
     depth.hash(&mut h);
@@ -101,22 +210,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
             (k.tx, k.ty, std::sync::Arc::as_ptr(t) as usize).hash(&mut h);
         }
     }
-    let key = h.finish();
-    if let Some(parts) = get(cache(), key) {
-        return Some(parts);
-    }
-    let fmt = PixelFormat::RGBA8.with_sample(depth);
-    let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
-    let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
-    let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
-    if let Some(cache) = &sh.cache {
-        fit_stroke(&parts.0, &mut parts.1, cache, canvas);
-    }
-    if photocraft_raster::spill::check_since(generation).is_err() || sh.cache.as_ref().is_some_and(|c| c.scratch_health().is_err()) {
-        return Some(parts);
-    }
-    insert(cache(), key, &parts, sh.cache.as_ref());
-    Some(parts)
+    h.finish()
 }
 
 /// The stroke-only shape a Frame's stroke draws: the Frame tool's own border (`Layer::frame`),
@@ -350,6 +444,34 @@ mod tests {
         assert_eq!(c.0.len(), slots as usize);
         assert!(!c.0.contains_key(&0), "evict the earlier completion");
         assert!(c.0.contains_key(&1), "keep the later completion");
+    }
+
+    /// A split is measured before it is drawn, against the draw limit rather than the cache's
+    /// budget: one past the cache's budget is still drawn (each time, not kept), one past the
+    /// draw limit is neither drawn nor measured again. Own stores and limits: the process-wide
+    /// ones are shared with other tests.
+    #[test]
+    fn splits_past_the_cache_budget_are_drawn_and_past_the_draw_limit_refused() {
+        let (store, refusals) = (Mutex::new(Cache::default()), Mutex::new(HashSet::new()));
+        let limits = Limits { cache: 1 << 20, draw: 64 << 20 };
+        let mut sh = shape(10.0);
+        sh.path.inverted = true;
+        // 16 RGBA8 tiles of fill (4 MiB): past the cache's budget, within the draw limit.
+        let middling = Rect::new(0, 0, 1024, 1024);
+        let (fill, stroke) = split_in(&sh, middling, SampleType::U8, &store, &refusals, limits).expect("drawn");
+        assert_eq!(fill.content_bounds(), middling);
+        assert!(stroke.tile_count() > 0);
+        assert!(store.lock().unwrap().0.is_empty(), "not kept");
+        assert!(split_in(&sh, middling, SampleType::U8, &store, &refusals, limits).is_some(), "drawn again");
+        // 360 GB of fill: refused before anything is drawn, and remembered.
+        let huge = Rect::new(0, 0, 300_000, 300_000);
+        assert!(split_in(&sh, huge, SampleType::U8, &store, &refusals, limits).is_none());
+        assert!(refusals.lock().unwrap().contains(&split_key(&sh, huge, SampleType::U8)), "remembered, not measured again");
+        assert!(split_in(&sh, huge, SampleType::U8, &store, &refusals, limits).is_none());
+        // A split that fits the cache is kept.
+        assert!(split_in(&sh, Rect::new(0, 0, 64, 64), SampleType::U8, &store, &refusals, limits).is_some());
+        assert_eq!(store.lock().unwrap().0.len(), 1);
+        assert_eq!(refusals.lock().unwrap().len(), 1);
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and

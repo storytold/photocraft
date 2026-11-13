@@ -7,6 +7,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Test seams for dependants' tests (`filter_mask::tiles_visited`); never on in a release build.
+testgen = []
+
 [dependencies]
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }

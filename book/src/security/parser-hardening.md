@@ -8,6 +8,8 @@ Parser safety is broader than “does not crash.” A parser must also bound mem
 
 `craft-psd` enforces maximum document dimensions and channel counts, bounds decoded channel data, limits ActionDescriptor nesting and pattern edges, and uses checked arithmetic for key decoded-size calculations. Tests cover malformed headers, truncation, property-generated inputs, and dedicated fuzz targets.
 
+PhotoCraft's import preflight (`photocraft-io` `psd_budget`) charges every layer, mask, merged and pattern surface before any pixel is decoded, and also the shapes the import renders from their paths (shapes without stored pixels, and soft shapes), which can cover the whole declared canvas from a record of a few bytes. Those renders work in bounded pieces and allocate fallibly, and the compositor sizes a stored shape's fill/stroke split before drawing it (past a fixed draw limit, 2 GiB natively, the stored pixels composite as they are). Smart-filter caches (`FEid` sources, filter masks and the layers mixed through them) are charged against a separate import- and export-wide cap before they are decoded; past it they are left out with a warning. Mixing visits only the tiles the surfaces hold, never the empty grid between far-apart ones.
+
 ### Raster codecs
 
 `photocraft-codecs` has configurable `Limits` for width, height, pixel count, and decoded allocation. The default policy is applied across enabled decoders and tested with oversized PNG, PNM, JPEG, and TIFF headers plus random/mutated inputs.

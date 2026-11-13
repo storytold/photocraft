@@ -64,6 +64,11 @@ pub(super) struct SmartOut {
     pub(super) composites: std::collections::HashMap<String, Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)>>,
     /// Preserved `FEid` items (by placed id).
     pub(super) old_fx: Vec<craft_psd::filter_effects::FilterEffectsItem>,
+    /// Their filter masks and unfiltered pixels, decoded once each (by placed id) and charged to
+    /// [`Self::fx_budget`].
+    pub(super) old_masks: std::collections::HashMap<String, Result<Option<photocraft_doc::LayerMask>, crate::smart_map::FilterCacheError>>,
+    pub(super) old_unfiltered: std::collections::HashMap<String, Option<Surface>>,
+    pub(super) fx_budget: crate::smart_map::FilterCacheBudget,
     /// Placed ids whose preserved `FEid` item stays.
     pub(super) keep_fx: std::collections::HashSet<String>,
     /// Regenerated `FEid` items.

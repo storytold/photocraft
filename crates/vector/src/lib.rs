@@ -32,7 +32,7 @@ pub mod trace;
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Fill, FillRule, GradientStyle, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, VectorMask};
 use photocraft_geom::{Rect, TILE_SIZE};
-use photocraft_raster::{Interrupt, Surface};
+use photocraft_raster::{AllocationError, Interrupt, Surface};
 
 pub use flatten::{Polyline, flatten_path, flatten_subpath};
 pub use raster::Rasterizer;
@@ -163,31 +163,94 @@ pub fn vector_mask_values(m: &VectorMask, rect: Rect) -> Vec<f32> {
     CompiledVectorMask::new(m).render(rect)
 }
 
-/// Tile-aligned bands (rows of tiles) covering `r`.
+/// Pixels of a band piece rendered at once: a piece is whole rows of one tile row, as many as
+/// this allows (at least one). A render's buffers are sized by it rather than by the area, so a
+/// very wide canvas does not make every band hold gigabytes. Whole rows render exactly as whole
+/// bands do: a row's coverage sums run from the area's left edge whichever rows share its piece
+/// (pieces split into columns started those sums at each piece, a 16-bit level off at seams).
+const PIECE_PIXELS: usize = 1 << 18;
+
+/// Rows of `r` one piece holds ([`PIECE_PIXELS`]).
+fn piece_rows(r: Rect) -> i64 {
+    (PIECE_PIXELS / (r.width() as usize).max(1)).clamp(1, TILE_SIZE as usize) as i64
+}
+
+/// Pieces covering `r`: whole rows of it, within one row of tiles each ([`piece_rows`]).
 fn tile_bands(r: Rect) -> Vec<Rect> {
     let mut out = Vec::new();
     if r.is_empty() {
         return out;
     }
     let step = i64::from(TILE_SIZE);
+    let rows = piece_rows(r);
     let (y0, y1) = (i64::from(r.y0), i64::from(r.y1));
     let mut y = y0.div_euclid(step) * step;
     while y < y1 {
-        let next = (y + step).min(y1);
-        let band = Rect::new(r.x0, y.max(y0) as i32, r.x1, next as i32);
-        out.push(band);
-        y = next;
+        let tile_end = (y + step).min(y1);
+        let mut top = y.max(y0);
+        while top < tile_end {
+            let bottom = (top + rows).min(tile_end);
+            out.push(Rect::new(r.x0, top as i32, r.x1, bottom as i32));
+            top = bottom;
+        }
+        y = tile_end;
     }
     out
 }
 
+/// How a render allocates its band buffers and writes them: [`Unchecked`] aborts when memory
+/// runs out (as `vec!` does), [`Checked`] returns [`AllocationError`].
+trait Buffers {
+    type Error: Send;
+    /// An empty vector with room for `n` values.
+    fn with_capacity<T>(n: usize) -> Result<Vec<T>, Self::Error>;
+    fn write(surface: &mut Surface, r: Rect, values: &[f32]) -> Result<(), Self::Error>;
+}
+
+struct Unchecked;
+
+impl Buffers for Unchecked {
+    type Error = std::convert::Infallible;
+    fn with_capacity<T>(n: usize) -> Result<Vec<T>, Self::Error> {
+        Ok(Vec::with_capacity(n))
+    }
+    fn write(surface: &mut Surface, r: Rect, values: &[f32]) -> Result<(), Self::Error> {
+        surface.write_region(r, values);
+        Ok(())
+    }
+}
+
+struct Checked;
+
+impl Buffers for Checked {
+    type Error = AllocationError;
+    fn with_capacity<T>(n: usize) -> Result<Vec<T>, Self::Error> {
+        let mut v = Vec::new();
+        v.try_reserve_exact(n).map_err(|_| AllocationError::NotEnoughMemory { bytes: n.saturating_mul(std::mem::size_of::<T>()) })?;
+        Ok(v)
+    }
+    fn write(surface: &mut Surface, r: Rect, values: &[f32]) -> Result<(), Self::Error> {
+        surface.try_write_region(r, values)
+    }
+}
+
+/// `n` copies of `value`, allocated as `B` allocates.
+fn filled<B: Buffers, T: Clone>(n: usize, value: T) -> Result<Vec<T>, B::Error> {
+    let mut v = B::with_capacity(n)?;
+    v.resize(n, value);
+    Ok(v)
+}
+
+/// A piece's tiles: tile-aligned rects and their values.
+type Tiles = Vec<(Rect, Vec<f32>)>;
+
 /// Splits a band buffer (`channels` floats per pixel) into tile-aligned pieces, skipping
 /// pieces where `keep` is false for every pixel.
-fn band_tiles(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -> bool) -> Vec<(Rect, Vec<f32>)> {
+fn band_tiles<B: Buffers>(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -> bool) -> Result<Tiles, B::Error> {
     let w = band.width() as usize;
     let mut out = Vec::new();
     if band.is_empty() {
-        return out;
+        return Ok(out);
     }
     let step = i64::from(TILE_SIZE);
     let (x0, x1) = (i64::from(band.x0), i64::from(band.x1));
@@ -196,7 +259,7 @@ fn band_tiles(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -
         let next = (x + step).min(x1);
         let tr = Rect::new(x.max(x0) as i32, band.y0, next as i32, band.y1);
         let tw = tr.width() as usize;
-        let mut buf = Vec::with_capacity(tw * tr.height() as usize * channels);
+        let mut buf = B::with_capacity(tw * tr.height() as usize * channels)?;
         let mut any = false;
         for row in 0..tr.height() as usize {
             let o = (row * w + (tr.x0 - band.x0) as usize) * channels;
@@ -211,30 +274,76 @@ fn band_tiles(band: Rect, data: &[f32], channels: usize, keep: impl Fn(&[f32]) -
         }
         x = next;
     }
-    out
+    Ok(out)
 }
 
-/// Runs `f` over the bands of `r` (in parallel groups on native targets) and writes the
-/// resulting pieces into `surface`.
-fn render_bands(surface: &mut Surface, r: Rect, f: &(dyn Fn(Rect) -> Vec<(Rect, Vec<f32>)> + Sync)) {
+/// How many pieces of `r` render at once (each holds its buffers until its group is written):
+/// twice the threads, fewer when a single row is wider than [`PIECE_PIXELS`], so that their
+/// pixels stay within that many pieces' worth.
+fn pieces_in_flight(r: Rect) -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    let group = rayon::current_num_threads().max(1) * 2;
+    #[cfg(target_arch = "wasm32")]
+    let group = 1usize;
+    let piece = (r.width() as usize).saturating_mul(piece_rows(r) as usize).max(1);
+    (group.saturating_mul(PIECE_PIXELS) / piece).clamp(1, group)
+}
+
+/// Runs `f` over the pieces of `r` ([`tile_bands`]; [`pieces_in_flight`] at a time, in parallel on
+/// native targets) and writes the resulting tiles into `surface`.
+fn render_bands<B: Buffers>(surface: &mut Surface, r: Rect, f: &(dyn Fn(Rect) -> Result<Tiles, B::Error> + Sync)) -> Result<(), B::Error> {
     let bands = tile_bands(r);
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        let group = rayon::current_num_threads().max(1) * 2;
-        for chunk in bands.chunks(group) {
-            let parts: Vec<Vec<(Rect, Vec<f32>)>> = chunk.par_iter().map(|b| f(*b)).collect();
-            for (tr, v) in parts.into_iter().flatten() {
-                surface.write_region(tr, &v);
+        for chunk in bands.chunks(pieces_in_flight(r)) {
+            let parts: Vec<Result<Tiles, B::Error>> = chunk.par_iter().map(|b| f(*b)).collect();
+            for part in parts {
+                for (tr, v) in part? {
+                    B::write(surface, tr, &v)?;
+                }
             }
         }
     }
     #[cfg(target_arch = "wasm32")]
     for b in bands {
-        for (tr, v) in f(b) {
-            surface.write_region(tr, &v);
+        for (tr, v) in f(b)? {
+            B::write(surface, tr, &v)?;
         }
     }
+    Ok(())
+}
+
+/// Bytes a render piece holds per pixel at most: straight RGBA, fill, stroke and alignment
+/// coverage, then the converted values and their tile copies (`channels` floats each).
+fn piece_bytes_per_pixel(channels: usize) -> u64 {
+    16 + 3 * 4 + 2 * 4 * channels as u64
+}
+
+/// The most bytes rendering `shape` over `area` (its bounds met with the clip, as
+/// [`CompiledShape::render`] renders) holds at once besides the surface it fills, in a format of
+/// `channels` channels: the band pieces in flight and, for a feathered fill, the blurred plane,
+/// the blur's transposed copy and its line buffers. For budgeting a render before making it;
+/// beyond a few pieces it does not grow with `area`, unless one row of it is wider than all the
+/// pieces in flight together.
+pub fn render_workspace_bytes(shape: &ShapeLayer, area: Rect, channels: usize) -> u64 {
+    let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
+    let piece = u64::from(area.width()).saturating_mul(piece_rows(area).unsigned_abs());
+    let in_flight = px.min(piece.saturating_mul(pieces_in_flight(area) as u64));
+    in_flight.saturating_mul(piece_bytes_per_pixel(channels)).saturating_add(feather_workspace_bytes(shape, area))
+}
+
+/// The part of [`render_workspace_bytes`] that grows with `area`: a feathered fill's blurred
+/// plane, the blur's transposed copy and its line buffers (0 without a feathered fill).
+pub fn feather_workspace_bytes(shape: &ShapeLayer, area: Rect) -> u64 {
+    if shape.fill.is_none() || feather::feather_sigma(shape.feather) <= 0.0 || area.is_empty() {
+        return 0;
+    }
+    // The plane lies within `area` (the bounds of a feathered fill are its plane, or the whole
+    // clip). Up to 16 workers keep two padded lines for each axis, halos of up to 3 (r + 1).
+    let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
+    let line = u64::from(area.width().max(area.height())).saturating_add(6 * 1001);
+    px.saturating_mul(8).saturating_add(line.saturating_mul(16 * 2 * 2 * 4))
 }
 
 /// Renders a rasterizer's coverage into a single-channel surface of `format` (grayscale
@@ -244,9 +353,9 @@ pub fn coverage_surface(r: &Rasterizer, format: PixelFormat, clip: Rect) -> Surf
     let fmt = PixelFormat::new(ColorMode::Grayscale, format.sample, false);
     let mut s = Surface::new(fmt);
     let area = if r.is_inverted() { clip } else { r.pixel_bounds().map_or(Rect::EMPTY, |b| b.intersect(&clip)) };
-    render_bands(&mut s, area, &|band| {
+    let Ok(()) = render_bands::<Unchecked>(&mut s, area, &|band| {
         let cov = r.render(band);
-        band_tiles(band, &cov, 1, |p| p[0] > 0.0)
+        band_tiles::<Unchecked>(band, &cov, 1, |p| p[0] > 0.0)
     });
     s
 }
@@ -493,8 +602,9 @@ enum FillCoverage {
 
 impl FillCoverage {
     /// Builds the fill's coverage for `shape` over the frame `canvas` (a feather is blurred
-    /// within it, as the compositor blurs a vector mask within the canvas).
-    fn new(shape: &ShapeLayer, area: &Rasterizer, canvas: Rect) -> Self {
+    /// within it, as the compositor blurs a vector mask within the canvas). Without `blur` a
+    /// feather's plane is left empty: only its bounds are right ([`render_bounds`]).
+    fn new(shape: &ShapeLayer, area: &Rasterizer, canvas: Rect, blur: bool) -> Self {
         if !shape.has_soft_mask() {
             return FillCoverage::Path(area.clone());
         }
@@ -518,6 +628,9 @@ impl FillCoverage {
         let region = feather::path_area(&shape.path, sigma).intersect(&canvas);
         let (w, h) = (region.width() as usize, region.height() as usize);
         let mut values = Vec::new();
+        if !blur {
+            return FillCoverage::Plane { area: region, values, outside };
+        }
         if values.try_reserve_exact(w.saturating_mul(h)).is_err() {
             // Too large to blur: keep the edge hard rather than fail the render.
             return FillCoverage::Dense(area.clone(), density);
@@ -588,13 +701,18 @@ impl CompiledShape {
     /// [`CompiledShape::new`] with the feather computed over `coverage` while gradients still lay
     /// out in `gradient_frame`: measuring a shape beyond the canvas it is drawn in.
     pub fn with_frames(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect) -> Self {
+        Self::compile(shape, tol, coverage, gradient_frame, true)
+    }
+
+    /// [`CompiledShape::with_frames`], blurring a feather only with `blur`.
+    fn compile(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect, blur: bool) -> Self {
         let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
         let g = gradient_frame;
         let cb = (f64::from(g.x0), f64::from(g.y0), f64::from(g.x1), f64::from(g.y1));
         let area = fill_rasterizer(&shape.path, tol);
         let mut bounds = None;
         let fill = shape.fill.as_ref().map(|f| {
-            let coverage = FillCoverage::new(shape, &area, coverage);
+            let coverage = FillCoverage::new(shape, &area, coverage, blur);
             bounds = coverage.bounds();
             (coverage, Paint::from_fill(f, pb, cb))
         });
@@ -628,8 +746,14 @@ impl CompiledShape {
 
     /// Straight RGBA for every pixel of `rect`.
     pub fn render_rgba(&self, rect: Rect) -> Vec<[f32; 4]> {
+        let Ok(out) = self.rgba::<Unchecked>(rect);
+        out
+    }
+
+    /// [`Self::render_rgba`], its buffer allocated as `B` allocates.
+    fn rgba<B: Buffers>(&self, rect: Rect) -> Result<Vec<[f32; 4]>, B::Error> {
         let n = rect.width() as usize * rect.height() as usize;
-        let mut out = vec![[0.0f32; 4]; n];
+        let mut out = filled::<B, _>(n, [0.0f32; 4])?;
         let w = rect.width() as usize;
         if let Some((r, paint)) = &self.fill {
             let cov = r.render(rect);
@@ -667,28 +791,41 @@ impl CompiledShape {
                 o[3] = a;
             }
         }
-        out
+        Ok(out)
     }
 
     /// Renders into a new surface of `format` over `clip` (typically the canvas: it bounds the
     /// render and anchors gradients whose fill is not aligned with the layer).
     pub fn render(&self, format: PixelFormat, clip: Rect) -> Surface {
+        let Ok(s) = self.render_with::<Unchecked>(format, clip);
+        s
+    }
+
+    /// [`Self::render`] with fallible allocations: `Err` when a band buffer or a tile of the
+    /// surface can't be allocated, rather than an abort. Callers rendering at a size a file
+    /// chose (an importer) use this.
+    pub fn try_render(&self, format: PixelFormat, clip: Rect) -> Result<Surface, AllocationError> {
+        self.render_with::<Checked>(format, clip)
+    }
+
+    fn render_with<B: Buffers>(&self, format: PixelFormat, clip: Rect) -> Result<Surface, B::Error> {
         let mut s = Surface::new(format);
-        let Some(b) = self.bounds else { return s };
+        let Some(b) = self.bounds else { return Ok(s) };
         let area = b.intersect(&clip);
         let ch = format.channels();
-        render_bands(&mut s, area, &|band| {
-            let rgba = self.render_rgba(band);
-            let mut vals = vec![0.0f32; rgba.len() * ch];
+        render_bands::<B>(&mut s, area, &|band| {
+            let rgba = self.rgba::<B>(band)?;
+            let mut vals = filled::<B, _>(rgba.len() * ch, 0.0f32)?;
             for (p, o) in rgba.iter().zip(vals.chunks_exact_mut(ch)) {
                 if p[3] > 0.0 {
                     photocraft_raster::from_rgba_into(&format, *p, o);
                 }
             }
+            drop(rgba);
             let alpha = format.alpha;
-            band_tiles(band, &vals, ch, |px| if alpha { px[ch - 1] > 0.0 } else { px.iter().any(|v| *v != 0.0) })
-        });
-        s
+            band_tiles::<B>(band, &vals, ch, |px| if alpha { px[ch - 1] > 0.0 } else { px.iter().any(|v| *v != 0.0) })
+        })?;
+        Ok(s)
     }
 }
 
@@ -696,6 +833,19 @@ impl CompiledShape {
 /// `clip` — the canvas, which also lays out gradients whose fill is not aligned with the layer.
 pub fn render_shape(shape: &ShapeLayer, format: PixelFormat, clip: Rect) -> Surface {
     CompiledShape::new(shape, DEFAULT_TOLERANCE, clip).render(format, clip)
+}
+
+/// [`render_shape`] with fallible allocations ([`CompiledShape::try_render`]).
+pub fn try_render_shape(shape: &ShapeLayer, format: PixelFormat, clip: Rect) -> Result<Surface, AllocationError> {
+    CompiledShape::new(shape, DEFAULT_TOLERANCE, clip).try_render(format, clip)
+}
+
+/// The bounds [`CompiledShape::new`] gives `shape` over `canvas` (or a little more), without
+/// blurring a feather: everything rendering it can cover, `None` for nothing. It compiles the
+/// path and stroke outlines (work their point budgets bound) but no pixel plane, so a render can
+/// be sized ([`render_workspace_bytes`]) before it is made.
+pub fn render_bounds(shape: &ShapeLayer, tol: f64, canvas: Rect) -> Option<Rect> {
+    CompiledShape::compile(shape, tol, canvas, canvas, false).bounds
 }
 
 #[cfg(test)]

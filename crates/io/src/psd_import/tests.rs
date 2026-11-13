@@ -583,7 +583,7 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
         filter_effects: Vec::new(),
         filter_masks: Default::default(),
         unfiltered: Default::default(),
-        unfiltered_bytes: 0,
+        smart_filter_budget: Default::default(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
@@ -626,4 +626,187 @@ fn legacy_conversion_refuses_before_waiting_for_the_decode_gate() {
 
     drop(_guard);
     handle.join().expect("worker thread");
+}
+
+fn test_ctx(file: &PsdFile) -> Ctx<'_> {
+    Ctx {
+        file,
+        global: Vec::new(),
+        fmt: PixelFormat::new(ColorMode::Rgb, SampleType::U8, true),
+        mask_fmt: PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false),
+        cc: 3,
+        cmyk: false,
+        warnings: Vec::new(),
+        damaged: false,
+        fatal_error: None,
+        dpi: 72.0,
+        txt2: None,
+        filter_effects: Vec::new(),
+        filter_masks: Default::default(),
+        unfiltered: Default::default(),
+        smart_filter_budget: Default::default(),
+        smart_contents: Default::default(),
+        plld_sizes: Default::default(),
+        vector_previews: Default::default(),
+        ctl: photocraft_raster::Interrupt::NONE,
+        done: 0,
+        uniform: Default::default(),
+        total: 0,
+    }
+}
+
+/// An inverted, solid-filled shape record without pixels (`vsms` with only the initial fill).
+fn bare_shape_record(extra: Vec<TaggedBlock>) -> LayerRecord {
+    use craft_psd::path::{PathData, VectorMaskBlock};
+    let vsms = VectorMaskBlock { version: 3, flags: 0, path: PathData::from_subpaths(&[], true) }.to_bytes();
+    let (key, data) = blocks::write_fill(&photocraft_doc::Fill::Solid(photocraft_color::Color::BLACK));
+    let mut all = vec![TaggedBlock::new(*b"vsms", vsms), TaggedBlock::new(key, data)];
+    all.extend(extra);
+    LayerRecord { name: b"shape".to_vec(), blocks: all, ..Default::default() }
+}
+
+/// The budget charges exactly the shapes the importer renders: a shape record that is really
+/// another kind of layer (adjustment, type, placed), or keeps its stored pixels, is not charged.
+#[test]
+fn shape_render_area_follows_the_importer() {
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    file.header.width = 1000;
+    file.header.height = 600;
+    let canvas = Rect::new(0, 0, 1000, 600);
+    let shape = bare_shape_record(Vec::new());
+    assert_eq!(shape_render_area(&file, &shape, 72.0).map(|(area, _)| area), Some(canvas));
+    let other = |key: &[u8; 4]| bare_shape_record(vec![TaggedBlock::new(*key, vec![0; 4])]);
+    for key in [b"levl", b"TySh", b"SoLd", b"SoLE", b"PlLd"] {
+        assert_eq!(shape_render_area(&file, &other(key), 72.0).map(|(area, _)| area), None, "{}", String::from_utf8_lossy(key));
+    }
+    // Stored pixels stay the rendering of a hard shape.
+    let mut stored = shape.clone();
+    stored.rect = craft_psd::Rect::from_xywh(0, 0, 4, 3);
+    assert_eq!(shape_render_area(&file, &stored, 72.0).map(|(area, _)| area), None);
+    // The importer makes each of these the content the area says.
+    for (rec, rendered) in [(&shape, true), (&other(b"TySh"), false), (&stored, false)] {
+        let layer = test_ctx(&file).layer_from_record(rec);
+        let shape_cache = match &layer.content {
+            LayerContent::Shape(sh) => sh.cache.as_ref().map(Surface::content_bounds),
+            _ => None,
+        };
+        assert_eq!(shape_cache == Some(canvas), rendered, "{:?}", layer.content);
+    }
+}
+
+/// The estimate reads the resolution the import gives the document (stroke widths in points
+/// depend on it).
+#[test]
+fn the_estimate_reads_the_document_resolution() {
+    let mut file = testgen::small(Version::Psd, Compression::Raw);
+    assert_eq!(resolution_dpi(&file), psd_to_document(&file).0.resolution_dpi);
+    let info = craft_psd::ResolutionInfo::from_dpi(300.0);
+    file.resources.push(ImageResource::new(ids::RESOLUTION_INFO, info.to_bytes()));
+    let (doc, _) = psd_to_document(&file);
+    assert_eq!(doc.resolution_dpi, 300.0);
+    assert_eq!(resolution_dpi(&file), doc.resolution_dpi);
+}
+
+/// A smart object over testgen's first layer (4x3 stored pixels at the origin) with a Gaussian
+/// Blur, and its `FEid` item: green unfiltered pixels over `source`, with a filter mask that
+/// hides the filter over `hidden` (where the mix shows the green).
+fn filtered_smart_object(file: &PsdFile, source: Rect, hidden: Rect) -> (LayerRecord, craft_psd::filter_effects::FilterEffectsItem) {
+    use crate::smart_map::{FilterStack, PlacedSpec, feid_item, filter_fx, sold_bytes};
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mask_fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let mut unfiltered = Surface::new(fmt);
+    unfiltered.fill_rect(source, &[0.0, 1.0, 0.0, 1.0]);
+    let mut hide = Surface::with_default(mask_fmt, &[1.0]);
+    hide.fill_rect(hidden, &[0.0]);
+    let mask = LayerMask { surface: hide, enabled: true, linked: false, density: 1.0, feather: 0.0 };
+    let item = feid_item("placed-1", &unfiltered, Some(&mask), source, fmt).expect("item");
+    let blur = photocraft_doc::SmartFilter {
+        command: "filter.blur.gaussianBlur".into(),
+        params: serde_json::json!({ "radius": 1.0 }),
+        blend: BlendMode::Normal,
+        opacity: 1.0,
+        visible: true,
+    };
+    let stack = FilterStack { enabled: true, filters: vec![blur], mask_enabled: true, mask_linked: false };
+    let spec = PlacedSpec {
+        idnt: "source",
+        placed: "placed-1",
+        transform: photocraft_geom::Affine::IDENTITY,
+        perspective: None,
+        size: (4.0, 3.0),
+        dpi: 72.0,
+        warp: None,
+        filter_fx: Some(filter_fx(&stack, "s", &mut Vec::new())),
+    };
+    let mut rec = file.layers()[0].clone();
+    rec.blocks.push(TaggedBlock::new(*b"SoLd", sold_bytes(None, &spec, &mut Vec::new())));
+    (rec, item)
+}
+
+/// Smart objects sharing one `FEid` source each mix their own copy of it through the filter
+/// mask: the copies are charged to the import's smart-filter cache budget, and past it a layer
+/// keeps its stored pixels with a warning, however many layers name the source.
+#[test]
+fn filter_mask_mixes_are_charged_per_layer() {
+    use crate::smart_map::FilterCacheBudget;
+    let file = testgen::small(Version::Psd, Compression::Raw);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mask_fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    // The filter shows on the right half only: the left is the unfiltered green once mixed.
+    let (rec, item) = filtered_smart_object(&file, Rect::new(0, 0, 4, 3), Rect::new(0, 0, 2, 3));
+    let tile = photocraft_raster::stored_tiles_bytes(1, &fmt);
+    let mask_tile = photocraft_raster::stored_tiles_bytes(1, &mask_fmt);
+
+    let mixed_layers = |cap: u64, layers: usize| {
+        let mut cx = test_ctx(&file);
+        cx.filter_effects = vec![item.clone()];
+        cx.smart_filter_budget = FilterCacheBudget::new(cap);
+        let mixed = (0..layers)
+            .filter(|_| match cx.layer_from_record(&rec).content {
+                LayerContent::Smart(sm) => sm.cache.is_some_and(|c| c.pixel(0, 0) == vec![0.0, 1.0, 0.0, 1.0]),
+                other => panic!("{other:?}"),
+            })
+            .count();
+        assert!(cx.smart_filter_budget.used() <= cap);
+        assert!(cx.fatal_error.is_none());
+        (mixed, cx.warnings)
+    };
+    // The mask, the source and every layer's copy fit: all are mixed, without a word.
+    let (mixed, warnings) = mixed_layers(mask_tile + tile + 8 * tile, 8);
+    assert_eq!(mixed, 8, "{warnings:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // Room for three copies: three layers are mixed, the others keep their stored pixels.
+    let (mixed, warnings) = mixed_layers(mask_tile + tile + 3 * tile, 8);
+    assert_eq!(mixed, 3);
+    assert_eq!(warnings.iter().filter(|w| w.contains("filter mask was not applied")).count(), 5, "{warnings:?}");
+    // No room for the mask: it is ignored before it is decoded, so nothing is mixed.
+    let (mixed, warnings) = mixed_layers(mask_tile - 1, 2);
+    assert_eq!(mixed, 0);
+    assert!(warnings.iter().any(|w| w.contains("too large") && w.contains("filter mask was ignored")), "{warnings:?}");
+}
+
+/// Mixing a smart object's stored pixels with its unfiltered source visits only the tiles the
+/// two hold, not every tile of the rectangle between them: a source a million pixels away from
+/// the stored layer (a few bytes in the file) costs two tiles, not fifteen million.
+#[test]
+fn a_far_filter_source_mixes_without_walking_the_tiles_between() {
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    let far = Rect::new(1_000_000, 1_000_000, 1_000_004, 1_000_003);
+    let (rec, item) = filtered_smart_object(&file, far, far);
+    file.layers_mut().clear();
+    file.layers_mut().push(rec);
+    let mut fx = craft_psd::filter_effects::FilterEffects { version: 3, items: vec![item] }.to_bytes();
+    fx.resize(fx.len().next_multiple_of(4), 0);
+    file.global_blocks.push(TaggedBlock::new(*b"FEid", fx));
+    let bytes = file.to_bytes().unwrap();
+
+    let before = photocraft_compose::filter_mask::tiles_visited();
+    let imported = crate::import("far.psb", &bytes).expect("import");
+    let visited = photocraft_compose::filter_mask::tiles_visited() - before;
+    assert!(visited <= 4, "{visited} tiles visited");
+    let LayerContent::Smart(sm) = &imported.document.layers[0].content else { panic!("{:?}", imported.document.layers[0].content) };
+    let cache = sm.cache.as_ref().expect("pixels");
+    assert_eq!(cache.pixel(1_000_000, 1_000_000), vec![0.0, 1.0, 0.0, 1.0], "the mask shows the unfiltered source there");
+    let stored = test_ctx(&file).record_surface(&file.layers()[0], "a");
+    assert_eq!(cache.pixel(1, 1), stored.pixel(1, 1), "and the filtered pixels elsewhere");
 }
