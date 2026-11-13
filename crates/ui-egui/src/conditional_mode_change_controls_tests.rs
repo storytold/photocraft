@@ -67,8 +67,14 @@ fn steps(h: &H) -> usize {
 
 /// OK as the default button files it; the family runs the command in the passes after it.
 fn ok(h: &mut H, id: DialogId) {
-    crate::dialogs::testing::confirm(h.state_mut(), id).expect("OK is accepted");
+    try_ok(h, id).expect("OK is accepted");
+}
+
+/// OK as [`ok`] does, with the refusal of a held OK as the error.
+pub(super) fn try_ok(h: &mut H, id: DialogId) -> Result<(), String> {
+    let answer = crate::dialogs::testing::confirm(h.state_mut(), id);
     h.run_steps(3);
+    answer
 }
 
 fn set(h: &mut H, id: DialogId, key: &str, value: Value) {
@@ -116,12 +122,6 @@ fn none_clears_and_all_ticks_every_source() {
     click(&mut h, Role::Button, "All");
     assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l)), "All ticks all eight");
     assert_eq!(field(&h, id, "from"), json!(ALL_IDS));
-    // Until #13681 adds its alert, OK with nothing ticked converts nothing and closes.
-    let before = steps(&h);
-    click(&mut h, Role::Button, "None");
-    ok(&mut h, id);
-    assert!(!is_open(&h, id));
-    assert_eq!((mode(&h), steps(&h)), (ColorMode::Rgb, before));
 }
 
 #[test]
@@ -156,8 +156,8 @@ fn ok_leaves_a_document_whose_mode_is_not_ticked() {
     let before = steps(&h);
     click(&mut h, Role::CheckBox, "RGB Color");
     set(&mut h, id, "to", json!("grayscale"));
-    ok(&mut h, id);
-    assert!(!is_open(&h, id));
+    assert!(try_ok(&mut h, id).is_err(), "OK is refused");
+    assert!(is_open(&h, id), "the dialog stays under its alert (#13681)");
     assert_eq!((mode(&h), steps(&h)), (ColorMode::Rgb, before), "RGB Color unticked: nothing converts");
 }
 
@@ -181,14 +181,15 @@ fn values_set_over_the_control_channel_show_and_reach_the_command() {
             assert_eq!(checked(&h, l), ticked.contains(l), "{from}: {l}");
         }
         assert_eq!(field(&h, id, "from"), from, "drawing keeps the value");
-        ok(&mut h, id);
+        let _ = try_ok(&mut h, id);
         if converted == ColorMode::Indexed {
             // #13678: the Indexed Color dialog asks for its options first.
             let (key, target) = open_dialog(&h).expect("a dialog is open");
             assert_eq!(key, "image.mode.indexedColor");
             ok(&mut h, target);
         }
-        assert!(!is_open(&h, id));
+        // Nothing to convert keeps the dialog under its alert (#13681).
+        assert_eq!(is_open(&h, id), converted == ColorMode::Rgb, "{from} to {to}");
         assert_eq!(mode(&h), converted, "{from} to {to}");
     }
 }

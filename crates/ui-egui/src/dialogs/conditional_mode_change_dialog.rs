@@ -70,6 +70,24 @@ fn ticked(from: &Value, id: &str) -> bool {
     }
 }
 
+/// The `ParamFamily::check` of the dialog: OK with nothing to convert shows Photoshop's alert and keeps the dialog with
+/// its values (#13681). Checked before the dialog closes, with the command's own reasons: running the command first
+/// would end a paused action's step and journal a no-op.
+pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let Some(mode) = app.session.active().map(|st| st.doc.mode) else { return Ok(()) };
+    let from = from_value(&result.fields);
+    let to = result.fields.text("to").unwrap_or_default();
+    let message = match photocraft_engine::file_cmds::nothing_to_convert(mode, Some(&from).filter(|v| !v.is_null()), to) {
+        Some("noSource") => tl!("At least one Source Mode must be selected."),
+        Some("noMatch") => tl!("Mode of the document does not match any selected Source Modes."),
+        Some(_) => tl!("Mode of the document is the same as the Target Mode.  No conversion performed."),
+        None => return Ok(()),
+    };
+    // One alert per message: a second OK (automation can confirm again) does not stack another.
+    crate::dialogs::alerts::alert(app, message);
+    Err(Label::from(message))
+}
+
 /// The two columns of checkboxes, each as wide as its widest label.
 const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
 
