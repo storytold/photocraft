@@ -309,6 +309,15 @@ const KINDS: [(&str, DrawTool); 10] = [
     ("Luminance Range", DrawTool::None),
 ];
 
+/// Why People cannot be chosen in this build (no face detector: the browser build).
+const NO_FACES: &str = "People needs the face detector, which the desktop app has and the browser version does not.";
+
+/// Whether this build can make a component of `kind` (`faces`: a face detector is available,
+/// [`photocraft_algo::faces::AVAILABLE`]). Without a detector People would select nothing.
+fn kind_available(kind: &str, faces: bool) -> bool {
+    faces || kind != "People"
+}
+
 /// A component of `kind` that needs no drawing, or `None` for the drawn kinds (made by the drag).
 fn ready_shape(kind: &str) -> Option<Shape> {
     Some(match kind {
@@ -324,6 +333,14 @@ fn ready_shape(kind: &str) -> Option<Shape> {
 
 /// Creates a mask (or, with `op`, adds a component to the selected one) of `kind`.
 pub(crate) fn create(p: &mut CameraRaw, s: &mut MaskUi, kind: &str, op: Option<Op>) {
+    create_with(p, s, kind, op, photocraft_algo::faces::AVAILABLE);
+}
+
+/// [`create`], with `faces` saying whether this build has a face detector (People needs one).
+fn create_with(p: &mut CameraRaw, s: &mut MaskUi, kind: &str, op: Option<Op>, faces: bool) {
+    if !kind_available(kind, faces) {
+        return;
+    }
     let tool = KINDS.iter().find(|(k, _)| *k == kind).map_or(DrawTool::None, |(_, t)| *t);
     let target = match (op, s.selected) {
         (Some(_), Some(i)) if i < p.masks.len() => i,
@@ -388,7 +405,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         for (kind, _) in KINDS {
-            if widgets::pill_tab(ui, trc(kind), false).clicked() {
+            let available = kind_available(kind, photocraft_algo::faces::AVAILABLE);
+            let clicked = ui.add_enabled_ui(available, |ui| widgets::pill_tab(ui, trc(kind), false).on_disabled_hover_text(trc(NO_FACES)).clicked()).inner;
+            if clicked {
                 create(p, &mut s, kind, None);
             }
         }
@@ -459,7 +478,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
             for (label, op) in [("Add", Op::Add), ("Subtract", Op::Subtract), ("Intersect", Op::Intersect)] {
                 ui.menu_button(trc(label), |ui| {
                     for (kind, _) in KINDS {
-                        if ui.button(trc(kind)).clicked() {
+                        let available = kind_available(kind, photocraft_algo::faces::AVAILABLE);
+                        if ui.add_enabled(available, egui::Button::new(trc(kind))).on_disabled_hover_text(trc(NO_FACES)).clicked() {
                             create(p, &mut s, kind, Some(op));
                             ui.close();
                         }
@@ -1315,6 +1335,23 @@ mod tests {
         let d = describe(&ctx);
         assert_eq!((d["open"].clone(), d["selected"].clone(), d["tool"].clone()), (json!(false), Value::Null, json!("none")));
         assert!((load(&ctx).brush.size - 0.1).abs() < 1e-6, "the brush carries over");
+    }
+
+    /// Without a face detector (the browser build) People is not offered: it would make a mask
+    /// that selects nothing.
+    #[test]
+    fn people_needs_a_face_detector() {
+        let mut p = CameraRaw::default();
+        let mut s = MaskUi::default();
+        create_with(&mut p, &mut s, "People", None, false);
+        assert!(p.masks.is_empty(), "no detector: no People mask");
+        create_with(&mut p, &mut s, "Sky", None, false);
+        create_with(&mut p, &mut s, "People", Some(Op::Add), false);
+        assert_eq!(p.masks[0].components.len(), 1, "nor a People component");
+        create_with(&mut p, &mut s, "People", Some(Op::Add), true);
+        assert_eq!(p.masks[0].components.len(), 2);
+        assert!(KINDS.iter().all(|(k, _)| kind_available(k, true)));
+        assert_eq!(KINDS.iter().filter(|(k, _)| !kind_available(k, false)).count(), 1);
     }
 
     /// Shift+W toggles Masking, but not while a text field (a mask's name) takes the typing.
