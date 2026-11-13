@@ -34,11 +34,13 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
     (h - 0.5) * std::f32::consts::SQRT_2 > h
 }
 
-/// Whether a brush-tip circle draws its centre mark.
-/// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
-/// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
-/// Photoshop; the Background Eraser always shows its sampling hotspot, and the Remove tool its
-/// centre + (#12550).
+/// Whether a brush-tip circle draws its centre mark, for Normal and Full Size Brush Tip cursors
+/// alike (both draw through this). Quick Selection never draws one. Clone Stamp and Healing Brush
+/// stay an empty circle until Option is held, the source-point cursor (the Healing Brush's ⌥ with
+/// Normal Brush Tip shows the sample target instead, #12113). Other brushes follow
+/// Preferences › Cursors › Show Crosshair in Brush Tip, as in Photoshop; the Background Eraser
+/// and the Color Replacement tool (#11934) always show their sampling hotspot, and the Remove
+/// tool its centre + (#12550).
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
     if tool == Tool::QuickSelection {
         return false;
@@ -46,7 +48,7 @@ pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
     if matches!(tool, Tool::CloneStamp | Tool::Healing) {
         return option || show_crosshair;
     }
-    show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::Remove)
+    show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::ColorReplacement | Tool::Remove)
 }
 
 /// The display colour of an RGB triple (0..1 per channel) as an egui colour.
@@ -176,11 +178,9 @@ pub(crate) fn color_sampler_cursor(ctx: &egui::Context, p: Pos2) -> egui::Cursor
 }
 
 /// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
-/// OS cursor to set (hidden).
+/// OS cursor to set. Native windows use a cached bitmap that moves independently of rendering.
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
-    crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-    egui::CursorIcon::None
+    crate::tool_cursor::pipette(ctx, p)
 }
 
 /// The filter dialogs' preview locator: a small square centred on `p`, the point a click centres
@@ -196,6 +196,58 @@ pub(crate) fn preview_locator_cursor(ctx: &egui::Context, p: Pos2) -> egui::Curs
     painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
     egui::CursorIcon::None
 }
+
+/// The cursor while ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): the pipette,
+/// or the comparison ring while it samples with the button `held` (#213), or the precise crosshair
+/// with Preferences › Cursors › Other Cursors = Precise. The Mixer Brush's ⌥ loads paint instead:
+/// its sample target, with no ring (#11957).
+pub(super) fn alt_pick_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, p: Pos2, held: bool, tool: Tool) -> egui::CursorIcon {
+    let precise = app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise;
+    if tool == Tool::MixerBrush && !app.alt_sampling {
+        return if precise { egui::CursorIcon::Crosshair } else { sample_target_cursor(painter, p) };
+    }
+    if let Some(icon) = eyedropper_ring(app, painter, xf, p, held) {
+        icon
+    } else if precise {
+        egui::CursorIcon::Crosshair
+    } else {
+        pipette_cursor(painter.ctx(), p)
+    }
+}
+
+/// The Mixer Brush's and the Healing Brush's ⌥ cursor, the reference's sample target (#11957,
+/// #12113): a small circle with a crosshair through it, centred on the hotspot. Draws it at `p`
+/// and returns the OS cursor to set.
+pub(crate) fn sample_target_cursor(painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
+    let across = vec![vec2(-8.0, 0.0), vec2(8.0, 0.0)];
+    let down = vec![vec2(0.0, -8.0), vec2(0.0, 8.0)];
+    super::tool_cursor::outline(painter, p, vec![ring(5.0), across, down], false)
+}
+
+/// A no-entry sign, a circle with a diagonal bar centred on the hotspot: the Mixer Brush over a
+/// layer it can't paint (Lock All, #11957). Draws it at `p` and returns the OS cursor to set.
+pub(crate) fn no_entry_cursor(painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
+    let bar = vec![vec2(-4.5, -4.5), vec2(4.5, 4.5)];
+    super::tool_cursor::outline(painter, p, vec![ring(6.5), bar], false)
+}
+
+/// A closed circle of `radius` points around the hotspot.
+fn ring(radius: f32) -> Vec<egui::Vec2> {
+    (0..32).map(|i| i as f32 / 32.0 * std::f32::consts::TAU).map(|a| vec2(a.cos(), a.sin()) * radius).collect()
+}
+
+/// Whether the Mixer Brush's target layer has Lock All on, so it shows [`no_entry_cursor`].
+pub(crate) fn mixer_target_locked(app: &PhotocraftApp) -> bool {
+    app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).is_some_and(|layer| layer.locks.all)
+}
+
+#[cfg(test)]
+#[path = "../mixer_cursor_tests.rs"]
+mod mixer_cursor_tests;
+
+#[cfg(test)]
+#[path = "../healing_alt_cursor_tests.rs"]
+mod healing_alt_cursor_tests;
 
 /// The Paint Bucket artwork and target share one cached cursor image. Report rasterization
 /// failures once per distinct message, with the same concise error in the dialog and status bar.
@@ -369,6 +421,10 @@ pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
 mod eyedropper_mask_sample_tests;
 
 #[cfg(test)]
+#[path = "../color_replacement_cursor_tests.rs"]
+mod color_replacement_cursor_tests;
+
+#[cfg(test)]
 #[path = "../color_replacement_alt_click_tests.rs"]
 mod color_replacement_alt_click_tests;
 
@@ -379,3 +435,7 @@ mod background_eraser_alt_click_tests;
 #[cfg(test)]
 #[path = "remove_cursor_tests.rs"]
 mod remove_cursor_tests;
+
+#[cfg(test)]
+#[path = "paint_bucket_cursor_tests.rs"]
+mod paint_bucket_cursor_tests;

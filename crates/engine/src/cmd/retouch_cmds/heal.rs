@@ -1,4 +1,4 @@
-use super::clone::{blend_param, clamp_samples, clone_mapping, clone_result, clone_sample};
+use super::clone::{apply_clone_coverage, blend_param, clamp_samples, clone_mapping, clone_result, clone_sample};
 use super::periodic;
 use super::sampling::{SampleLayers, composite_region, sample_all_layers, sample_layers};
 use super::{
@@ -44,11 +44,19 @@ pub(super) fn heal_region(fmt: &PixelFormat, src: &Region, dst: &Region, mask: &
     out
 }
 
+/// The reference's alert for the Healing Brush in an Indexed Color document (#12112). Bitmap,
+/// Duotone and Multichannel weren't measured and heal as before.
+const INDEXED_REFUSAL: &str = "Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+
 pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.healingBrush";
+    if s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed) {
+        return Err(EngineError::Other(INDEXED_REFUSAL.into()));
+    }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     let which = sample_layers(p, CMD)?;
+    let source = super::clone_sampling::resolve(s, p, CMD)?;
     let mode = blend_param(p, CMD)?;
     let aligned = flag(p, "aligned", true);
     let map = clone_mapping(s, p, &stroke, CMD)?;
@@ -59,8 +67,8 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let wrap = flag(p, "wrap", false);
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let (g, cov) = pad_coverage(bounds, &cov, 2);
-        let fmt = surf.format();
-        let src = clone_sample(pre, id, surf, which, g, &map, wrap, CMD)?;
+        let fmt = source.sample_format(surf);
+        let src = clone_sample(pre, id, surf, which, &source, g, &map, wrap, CMD)?;
         // The destination the texture is fitted to: the layer itself, or what the user sees when
         // sampling several layers (so healing onto an empty layer matches the composite).
         let dst = if wrap {
@@ -68,18 +76,29 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         } else if which == SampleLayers::Current {
             Region::read(surf, g)
         } else {
-            composite_region(pre, id, which, g, fmt)
+            composite_region(pre, id, which, g, surf.format())
         };
-        let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
-        let healed = heal_region(&fmt, &src, &dst, &mask);
+        let dst = if fmt.alpha && !surf.format().alpha { super::clone_sampling::opaque_alpha(dst, surf.format()) } else { dst };
+        // The solver can reconstruct positive alpha from the destination boundary even where
+        // no source pixel exists. Keep source availability separate from the solved channels.
+        let alpha = super::alpha_index(&fmt);
+        let has_source = |pixel: &[f32]| alpha.is_none_or(|a| pixel.get(a).is_some_and(|value| *value > 0.0));
+        let mask: Vec<bool> = cov.iter().zip(src.data.chunks_exact(fmt.channels())).map(|(c, pixel)| *c > 0.0 && has_source(pixel)).collect();
+        let mut healed = heal_region(&fmt, &src, &dst, &mask);
+        for (pixel, sample) in healed.data.chunks_exact_mut(fmt.channels()).zip(src.data.chunks_exact(fmt.channels())) {
+            if !has_source(sample) {
+                pixel.fill(0.0);
+            }
+        }
         if wrap {
-            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, |_, r| {
+            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, fmt, |_, r| {
                 let part = healed.crop(r);
                 if part.rect == r { Ok(part) } else { Err(bad(CMD, "the healed patch does not cover the stroke")) }
             });
         }
-        Ok(apply_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode))
+        Ok(apply_clone_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode))
     })?;
+    crate::presets::clone_source::remember_mapping(s, p, &map);
     Ok(clone_result(dmg, off, aligned, p, &stroke))
 }
 
@@ -291,3 +310,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
     let dmg = run_stroke(s, "Spot Healing Brush", id, p, |pre, surf, sel, lock| spot_heal_surface(surf, pre, &stroke, kind, all, sel, lock))?;
     Ok(json!({ "damage": damage_json(dmg) }))
 }
+
+#[cfg(test)]
+#[path = "heal_indexed_tests.rs"]
+mod heal_indexed_tests;
