@@ -159,23 +159,51 @@ pub fn exif_resolution(exif: &[u8]) -> Option<(f32, f32)> {
     ppi_pair(x * scale, y * scale)
 }
 
-/// `exif` with its IFD0 resolution set to `ppi` (pixels per inch), borrowed when there is
-/// nothing to change: no resolution entries, already that resolution, or not parseable.
+/// `exif` with its IFD0 resolution set to `ppi` (pixels per inch), borrowed when it has no
+/// resolution entries, already records that resolution, or cannot be parsed.
 ///
-/// Every well-formed XResolution / YResolution (one RATIONAL) gets the new value in place and
-/// every well-formed ResolutionUnit (one SHORT) becomes 2 (inch); all other bytes are kept.
-/// A resolution entry that can't be rewritten safely (another type or count, or a value outside
-/// the block) is removed from IFD0 instead, so no stale value survives: the later entries move
-/// up, the entry count and next-IFD pointer follow, and the freed bytes at the table's end are
-/// zeroed. Nothing else moves, so every offset in the block stays valid.
+/// Existing well-formed XResolution / YResolution (one RATIONAL) entries are rewritten in place,
+/// and every well-formed ResolutionUnit (one SHORT) becomes 2 (inch). Malformed entries are
+/// removed from IFD0 instead, so no stale value survives; all other bytes are kept.
 pub fn exif_with_resolution(exif: &[u8], ppi: (f32, f32)) -> Cow<'_, [u8]> {
+    exif_with_resolution_inner(exif, ppi, false)
+}
+
+/// Like [`exif_with_resolution`], but adds X/Y resolution tags when a valid IFD0 has none.
+/// Existing TIFF data stays in place, so its offsets remain valid. Used by CMYK JPEG, which
+/// cannot carry a JFIF density marker.
+pub(crate) fn exif_with_resolution_adding_missing(exif: &[u8], ppi: (f32, f32)) -> Cow<'_, [u8]> {
+    exif_with_resolution_inner(exif, ppi, true)
+}
+
+/// Rewrite valid IFD0 resolution tags and optionally append tags that are missing or malformed.
+fn exif_with_resolution_inner(exif: &[u8], ppi: (f32, f32), add_missing: bool) -> Cow<'_, [u8]> {
     if ppi_pair(f64::from(ppi.0), f64::from(ppi.1)).is_none() {
         return Cow::Borrowed(exif);
+    }
+    if exif.is_empty() {
+        if !add_missing {
+            return Cow::Borrowed(exif);
+        }
+        // An image with DPI but no source EXIF still needs a valid EXIF block when the output
+        // format cannot carry resolution in its own header (CMYK JPEG has no valid JFIF marker).
+        return Cow::Owned(exif_with_resolution_inner(b"II*\0\x08\0\0\0\0\0\0\0\0\0\0", ppi, true).into_owned());
     }
     let body = tiff_body(exif);
     let prefix = exif.len() - body.len();
     let Some(ifd) = Ifd0::parse(body) else { return Cow::Borrowed(exif) };
-    if ifd.fields.is_empty() || exif_resolution(body).is_some_and(|r| same(r, ppi)) {
+    if exif_resolution(body).is_some_and(|r| same(r, ppi)) {
+        return Cow::Borrowed(exif);
+    }
+    let missing_xy = ifd.first_of(TAG_X_RESOLUTION).and_then(|f| f.rational(ifd.order, body)).is_none()
+        || ifd.first_of(TAG_Y_RESOLUTION).and_then(|f| f.rational(ifd.order, body)).is_none();
+    if add_missing && missing_xy {
+        let Some(body) = append_resolution_ifd(body, &ifd, ppi) else { return Cow::Borrowed(exif) };
+        let mut full = exif.get(..prefix).unwrap_or_default().to_vec();
+        full.extend_from_slice(&body);
+        return Cow::Owned(full);
+    }
+    if ifd.fields.is_empty() {
         return Cow::Borrowed(exif);
     }
     let order = ifd.order;
@@ -207,6 +235,98 @@ pub fn exif_with_resolution(exif: &[u8], ppi: (f32, f32)) -> Cow<'_, [u8]> {
     if full == exif { Cow::Borrowed(exif) } else { Cow::Owned(full) }
 }
 
+/// Append a replacement IFD0 with fresh resolution tags. Every other entry keeps its original
+/// bytes and offsets, since the TIFF block's existing data remains where it was.
+fn append_resolution_ifd(body: &[u8], ifd: &Ifd0, ppi: (f32, f32)) -> Option<Vec<u8>> {
+    let (count_bytes, next_bytes, alignment) = if ifd.big { (8usize, 8usize, 8usize) } else { (2usize, 4usize, 2usize) };
+    let mut entries = Vec::with_capacity(ifd.count.saturating_add(3));
+    for index in 0..ifd.count {
+        let entry = ifd.first.checked_add(index.checked_mul(ifd.entry_bytes)?)?;
+        let tag = ifd.order.u16(body, entry)?;
+        if matches!(tag, TAG_X_RESOLUTION | TAG_Y_RESOLUTION | TAG_RESOLUTION_UNIT) {
+            continue;
+        }
+        entries.push((tag, body.get(entry..entry.checked_add(ifd.entry_bytes)?)?.to_vec()));
+    }
+    let count = entries.len().checked_add(3)?;
+    if !ifd.big && count > usize::from(u16::MAX) {
+        return None;
+    }
+
+    let new_ifd = align_up(body.len(), alignment)?;
+    let table_end = new_ifd.checked_add(count_bytes)?.checked_add(count.checked_mul(ifd.entry_bytes)?)?;
+    let next_at = ifd.first.checked_add(ifd.count.checked_mul(ifd.entry_bytes)?)?;
+    let next_ifd = body.get(next_at..next_at.checked_add(next_bytes)?)?;
+    let rational_at = align_up(table_end.checked_add(next_bytes)?, if ifd.big { 8 } else { 4 })?;
+    let y_rational_at = rational_at.checked_add(8)?;
+    if !ifd.big && (new_ifd > u32::MAX as usize || y_rational_at.checked_add(8)? > u32::MAX as usize) {
+        return None;
+    }
+
+    entries.push((TAG_X_RESOLUTION, resolution_entry(ifd.order, ifd.big, TAG_X_RESOLUTION, u64::try_from(rational_at).ok()?)?));
+    entries.push((TAG_Y_RESOLUTION, resolution_entry(ifd.order, ifd.big, TAG_Y_RESOLUTION, u64::try_from(y_rational_at).ok()?)?));
+    entries.push((TAG_RESOLUTION_UNIT, resolution_entry(ifd.order, ifd.big, TAG_RESOLUTION_UNIT, 2)?));
+    entries.sort_by_key(|(tag, _)| *tag);
+
+    let mut out = body.to_vec();
+    out.resize(new_ifd, 0);
+    if ifd.big {
+        out.extend_from_slice(&put_u64(ifd.order, count as u64));
+    } else {
+        out.extend_from_slice(&put_u16(ifd.order, count as u16));
+    }
+    for (_, entry) in entries {
+        out.extend_from_slice(&entry);
+    }
+    out.extend_from_slice(next_ifd);
+    out.resize(rational_at, 0);
+    let (xn, xd) = rational(ppi.0);
+    let (yn, yd) = rational(ppi.1);
+    out.extend_from_slice(&put_u32(ifd.order, xn));
+    out.extend_from_slice(&put_u32(ifd.order, xd));
+    out.extend_from_slice(&put_u32(ifd.order, yn));
+    out.extend_from_slice(&put_u32(ifd.order, yd));
+
+    let offset_at: usize = if ifd.big { 8 } else { 4 };
+    if ifd.big {
+        out.get_mut(offset_at..offset_at.checked_add(8)?)?.copy_from_slice(&put_u64(ifd.order, new_ifd as u64));
+    } else {
+        out.get_mut(offset_at..offset_at.checked_add(4)?)?.copy_from_slice(&put_u32(ifd.order, u32::try_from(new_ifd).ok()?));
+    }
+    Some(out)
+}
+
+/// One IFD entry. Rational fields store an offset; the SHORT unit is inline.
+fn resolution_entry(order: Order, big: bool, tag: u16, value: u64) -> Option<Vec<u8>> {
+    let entry_bytes = if big { 20 } else { 12 };
+    let count_at = 4;
+    let value_at = if big { 12 } else { 8 };
+    let mut entry = vec![0; entry_bytes];
+    entry.get_mut(..2)?.copy_from_slice(&put_u16(order, tag));
+    entry.get_mut(2..4)?.copy_from_slice(&put_u16(order, if tag == TAG_RESOLUTION_UNIT { TYPE_SHORT } else { TYPE_RATIONAL }));
+    if big {
+        entry.get_mut(count_at..count_at + 8)?.copy_from_slice(&put_u64(order, 1));
+        if tag == TAG_RESOLUTION_UNIT {
+            entry.get_mut(value_at..value_at + 2)?.copy_from_slice(&put_u16(order, value as u16));
+        } else {
+            entry.get_mut(value_at..value_at + 8)?.copy_from_slice(&put_u64(order, value));
+        }
+    } else {
+        entry.get_mut(count_at..count_at + 4)?.copy_from_slice(&put_u32(order, 1));
+        if tag == TAG_RESOLUTION_UNIT {
+            entry.get_mut(value_at..value_at + 2)?.copy_from_slice(&put_u16(order, value as u16));
+        } else {
+            entry.get_mut(value_at..value_at + 4)?.copy_from_slice(&put_u32(order, u32::try_from(value).ok()?));
+        }
+    }
+    Some(entry)
+}
+
+/// Round `value` up to the next `alignment` boundary, returning `None` on overflow.
+fn align_up(value: usize, alignment: usize) -> Option<usize> {
+    value.checked_add((alignment - value % alignment) % alignment)
+}
+
 fn put_u16(order: Order, v: u16) -> [u8; 2] {
     match order {
         Order::Little => v.to_le_bytes(),
@@ -229,7 +349,13 @@ fn put_u64(order: Order, v: u64) -> [u8; 8] {
 }
 
 /// Removes the IFD0 entries at offsets `removed` (see [`exif_with_resolution`]).
-fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
+///
+/// `removed` is strictly increasing: `Ifd0::parse` visits entries in physical order and the
+/// caller records each malformed field at most once. Walk those offsets once alongside the
+/// table, keeping compaction linear even when many duplicate resolution entries are malformed.
+/// The private offset type lets tests observe real equality checks in this same loop; production
+/// instantiates it with `usize`, without a counter or a change to the exported codec API.
+fn remove_entries<Offset: Copy + PartialEq + From<usize>>(b: &mut [u8], ifd: &Ifd0, removed: &[Offset]) {
     let eb = ifd.entry_bytes;
     let next_bytes = if ifd.big { 8 } else { 4 };
     let count_bytes = if ifd.big { 8 } else { 2 };
@@ -237,8 +363,11 @@ fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
     let Some(old) = b.get(ifd.first..table_end.saturating_add(next_bytes)).map(<[u8]>::to_vec) else { return };
     let mut table = Vec::with_capacity(old.len());
     let mut kept = 0usize;
+    let mut removed = removed.iter().copied().peekable();
     for (i, entry) in old.chunks_exact(eb).take(ifd.count).enumerate() {
-        if !removed.contains(&(ifd.first + i * eb)) {
+        if removed.peek() == Some(&Offset::from(ifd.first + i * eb)) {
+            removed.next();
+        } else {
             table.extend_from_slice(entry);
             kept += 1;
         }
@@ -309,8 +438,14 @@ fn xmp_values(xmp: &str, key: &str) -> Vec<(usize, usize)> {
             continue;
         };
         let start = xmp.len() - value.len();
-        let Some(len) = value.find(close) else { continue };
+        // Advance past this value before searching for the next key. Without this, `from`
+        // only moved past the key text, so property-like text repeated inside an unrelated
+        // attribute re-ran this full-suffix `find(close)` for every occurrence, which is
+        // quadratic in the packet size. A missing close means the value is unterminated, so
+        // no later value can parse either; stop scanning in that case.
+        let Some(len) = value.find(close) else { break };
         out.push((start, start + len));
+        from = start + len + close.len_utf8();
     }
     out
 }
@@ -391,29 +526,141 @@ pub fn xmp_with_resolution(xmp: &str, ppi: (f32, f32)) -> Cow<'_, str> {
 fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     let body = tiff_body(exif);
     let prefix = exif.len() - body.len();
-    let (_, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
+    let (order, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
     let next = prefix.checked_add(first)?.checked_add(count.checked_mul(entry_bytes)?)?;
     let width = if big_tiff { 8 } else { 4 };
     // In bounds: `ifd0_entries` checked that the whole pointer is present.
     if exif.get(next..next.checked_add(width)?)?.iter().all(|b| *b == 0) {
         return None;
     }
+    // Classic TIFF: also blank the thumbnail JPEG itself (IFD1's JPEGInterchangeFormat/Length),
+    // which stays recoverable in the block once nothing points at it.
+    // Only a range clear of the TIFF header, IFD0's table and values, and its Exif/GPS sub-IFDs: one
+    // that covers them is not a thumbnail.
+    let thumb = (!big_tiff)
+        .then(|| thumbnail_range(order, body, next - prefix))
+        .flatten()
+        .filter(|&(off, len)| off >= 8 && !overlaps_ifd0(order, body, first - 2, count, off, len));
     let mut out = exif.to_vec();
     out.get_mut(next..next + width)?.fill(0);
+    if let Some((off, len)) = thumb
+        && let Some(jpeg) = prefix.checked_add(off).and_then(|a| out.get_mut(a..a.checked_add(len)?))
+    {
+        jpeg.fill(0);
+    }
     Some(out)
+}
+
+/// Most IFD entries `overlaps_ifd0` examines in total: a hostile block with thousands of Exif/GPS
+/// pointers to large sub-IFDs would otherwise cost billions of checks.
+const MAX_OVERLAP_ENTRIES: usize = 1 << 20;
+
+/// Whether `off..off + len` of `body` covers part of classic IFD0 (`ifd0` is its entry count's
+/// offset) or of its Exif / GPS sub-IFDs. Past [`MAX_OVERLAP_ENTRIES`] checks it answers `true`
+/// (the range is not trusted as a thumbnail, so its bytes stay).
+fn overlaps_ifd0(order: Order, body: &[u8], ifd0: usize, count: usize, off: usize, len: usize) -> bool {
+    let mut budget = MAX_OVERLAP_ENTRIES;
+    overlaps_ifd(order, body, ifd0, count, off, len, &mut budget)
+        || (0..count).any(|i| {
+            let e = ifd0 + 2 + i * 12;
+            // A LONG pointer (tag 0x8769 ExifIFD, 0x8825 GPSIFD) to a sub-IFD, whose own count says its size.
+            matches!(order.u16(body, e), Some(0x8769 | 0x8825))
+                && order.u32(body, e + 8).and_then(|v| usize::try_from(v).ok()).is_some_and(|sub| overlaps_sub_ifd(order, body, sub, off, len, &mut budget))
+        })
+}
+
+/// [`overlaps_ifd`] for the Exif / GPS sub-IFD at `sub`, and for the Interoperability IFD (tag
+/// 0xA005) it points to, which `jpeg.fill(0)` would otherwise erase from under its pointer.
+fn overlaps_sub_ifd(order: Order, body: &[u8], sub: usize, off: usize, len: usize, budget: &mut usize) -> bool {
+    let Some(n) = order.u16(body, sub).map(usize::from) else { return false };
+    if overlaps_ifd(order, body, sub, n, off, len, budget) {
+        return true;
+    }
+    (0..n).any(|i| {
+        let Some(left) = budget.checked_sub(1) else { return true };
+        *budget = left;
+        let e = sub + 2 + i * 12;
+        matches!(order.u16(body, e), Some(0xA005))
+            && order
+                .u32(body, e + 8)
+                .and_then(|v| usize::try_from(v).ok())
+                .is_some_and(|interop| order.u16(body, interop).is_some_and(|m| overlaps_ifd(order, body, interop, usize::from(m), off, len, budget)))
+    })
+}
+
+/// Whether `off..off + len` of `body` covers the table of the classic IFD at `ifd` (its entry
+/// count's offset) with the next-IFD pointer, or an out-of-line value of one of its entries. Each
+/// entry examined is charged to `budget`; when it runs out the answer is `true`.
+fn overlaps_ifd(order: Order, body: &[u8], ifd: usize, count: usize, off: usize, len: usize, budget: &mut usize) -> bool {
+    let end = off.saturating_add(len);
+    let hits = |a: usize, size: usize| a < end && off < a.saturating_add(size);
+    if hits(ifd, 2 + count * 12 + 4) {
+        return true;
+    }
+    (0..count).any(|i| {
+        let Some(left) = budget.checked_sub(1) else { return true };
+        *budget = left;
+        let e = ifd + 2 + i * 12;
+        let unit = match order.u16(body, e + 2) {
+            Some(1 | 2 | 6 | 7) => 1,
+            Some(3 | 8) => 2,
+            Some(4 | 9 | 11) => 4,
+            Some(5 | 10 | 12) => 8,
+            _ => return false,
+        };
+        let size = usize::try_from(order.u32(body, e + 4).unwrap_or(0)).unwrap_or(usize::MAX).saturating_mul(unit);
+        size > 4 && order.u32(body, e + 8).and_then(|v| usize::try_from(v).ok()).is_some_and(|v| hits(v, size))
+    })
+}
+
+/// IFD1's thumbnail JPEG as (offset, length) in `body`, from the next-IFD pointer at `ptr`.
+fn thumbnail_range(order: Order, body: &[u8], ptr: usize) -> Option<(usize, usize)> {
+    let ifd1 = usize::try_from(order.u32(body, ptr)?).ok()?;
+    let (mut off, mut len) = (None, None);
+    for i in 0..usize::from(order.u16(body, ifd1)?) {
+        let e = ifd1.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let tag = order.u16(body, e)?;
+        if !matches!(tag, 0x0201 | 0x0202) {
+            continue;
+        }
+        // One SHORT or LONG value; anything else holds an unrelated number.
+        let ty = order.u16(body, e + 2)?;
+        if order.u32(body, e + 4)? != 1 || !matches!(ty, 3 | 4) {
+            return None;
+        }
+        let value = if ty == 3 { usize::from(order.u16(body, e + 8)?) } else { usize::try_from(order.u32(body, e + 8)?).ok()? };
+        if tag == 0x0201 {
+            off = Some(value);
+        } else {
+            len = Some(value);
+        }
+    }
+    Some((off?, len?))
 }
 
 /// The EXIF to write next to upright pixels at resolution `ppi`: Orientation 1 (see
 /// [`upright_exif`]), no thumbnail of the source image (see [`exif_without_thumbnail`]) and,
 /// when `ppi` is known, the resolution (see [`exif_with_resolution`]).
 pub fn export_exif(exif: &[u8], ppi: Option<(f32, f32)>) -> Cow<'_, [u8]> {
+    export_exif_inner(exif, ppi, false)
+}
+
+/// Export EXIF for a format without its own resolution field, adding missing X/Y resolution
+/// entries to valid metadata when necessary.
+pub(crate) fn export_exif_adding_missing_resolution(exif: &[u8], ppi: Option<(f32, f32)>) -> Cow<'_, [u8]> {
+    export_exif_inner(exif, ppi, true)
+}
+
+/// Normalize EXIF orientation and thumbnails, optionally adding missing output resolution tags.
+fn export_exif_inner(exif: &[u8], ppi: Option<(f32, f32)>, add_missing: bool) -> Cow<'_, [u8]> {
     let up = upright_exif(exif);
     let up = match exif_without_thumbnail(&up) {
         Some(v) => Cow::Owned(v),
         None => up,
     };
     let Some(ppi) = ppi else { return up };
-    if let Cow::Owned(v) = exif_with_resolution(&up, ppi) {
+    let result = if add_missing { exif_with_resolution_adding_missing(&up, ppi) } else { exif_with_resolution(&up, ppi) };
+    if let Cow::Owned(v) = result {
         return Cow::Owned(v);
     }
     up
@@ -435,3 +682,6 @@ pub fn export_xmp(xmp: &str, ppi: Option<(f32, f32)>) -> Cow<'_, str> {
 pub(crate) fn from_metadata(exif: Option<&[u8]>, xmp: Option<&str>) -> Option<(f32, f32)> {
     xmp.and_then(xmp_resolution).or_else(|| exif.and_then(exif_resolution))
 }
+
+#[cfg(test)]
+mod complexity_tests;

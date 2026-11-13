@@ -17,6 +17,24 @@ pub fn is_identity_curve(points: &[CurvePoint]) -> bool {
     }
 }
 
+/// A 3D LUT file format (Photoshop's `LUTFormat`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LutFormat {
+    #[serde(rename = "cube")]
+    Cube,
+    #[serde(rename = "3dl")]
+    ThreeDl,
+    #[serde(rename = "look")]
+    Look,
+}
+
+/// A Color Lookup's LUT file as loaded: its format and bytes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LutSource {
+    pub format: LutFormat,
+    pub bytes: Arc<Vec<u8>>,
+}
+
 /// Entries in a pencil-drawn Curves map (one per 8-bit level, as in PSD `curv` maps).
 pub const CURVE_MAP_LEN: usize = 256;
 
@@ -176,6 +194,22 @@ fn default_hue_ranges() -> [HueRange; 6] {
     HueRange::defaults()
 }
 
+/// A gradient as Photoshop's Gradient Editor holds it (#8351): a few colour stops, a midpoint
+/// on each segment, Smoothness and the interpolation method, which renderers bake into dense
+/// linear stops.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientSource {
+    /// Colour stops (location 0..1, sRGB), in location order.
+    pub stops: Vec<(f32, [f32; 3])>,
+    /// Where each segment's halfway colour sits, as a fraction of it (0.5 = the middle): one per
+    /// segment, `stops.len() - 1`.
+    pub midpoints: Vec<f32>,
+    /// Photoshop's Smoothness, 0..1.
+    pub smoothness: f32,
+    /// `classic`, `perceptual`, `linear` or `smooth`.
+    pub method: String,
+}
+
 /// Photoshop adjustment layers (Layer → New Adjustment Layer).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Adjustment {
@@ -260,6 +294,11 @@ pub enum Adjustment {
         /// Ordered dither of ±½ an 8-bit step to hide banding (Photoshop's "Dither").
         #[serde(default)]
         dither: bool,
+        /// The LUT file `lut` was read from, embedded unchanged on PSD save as Photoshop does.
+        /// None for a table made in PhotoCraft (a built-in look); a save also ignores it when
+        /// it no longer parses to `lut`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<LutSource>,
     },
     Invert,
     Posterize {
@@ -269,11 +308,17 @@ pub enum Adjustment {
         level: f32,
     },
     GradientMap {
+        /// The gradient as rendered: linear sRGB stops.
         stops: Vec<(f32, [f32; 3])>,
         reverse: bool,
         /// Ordered dither of ±½ an 8-bit step to hide banding.
         #[serde(default)]
         dither: bool,
+        /// The gradient as Photoshop's Gradient Editor holds it, when the map has one (#8351):
+        /// `stops` is it baked for rendering. The editor shows these stops, and a PSD save writes
+        /// them, not the dense baked ones.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<GradientSource>,
     },
     /// Per range (reds, yellows, greens, cyans, blues, magentas, whites, neutrals, blacks) the
     /// cyan, magenta, yellow and black change in percent (-100..=100), as in Photoshop.
@@ -281,10 +326,11 @@ pub enum Adjustment {
         relative: bool,
         adjustments: [[f32; 4]; 9],
     },
-    /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip.
+    /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
+    /// document snapshots (#4535).
     Unsupported {
         psd_key: String,
-        raw: Vec<u8>,
+        raw: std::sync::Arc<[u8]>,
     },
 }
 

@@ -1,0 +1,1722 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::time::{Duration, Instant};
+
+use serde_json::json;
+
+use super::*;
+use crate::Session;
+
+/// A document `w`×`h` with a textured pixel layer (so blurs change every pixel).
+fn session(w: u32, h: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("pattern", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = ((x * 7 + y * 13) % 31) as f32 / 30.0;
+                px.extend_from_slice(&[v, 1.0 - v, ((x / 5 + y / 3) % 2) as f32, 1.0]);
+            }
+        }
+        surf.write_region(r, &px);
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+fn pixels(s: &Session) -> Vec<f32> {
+    let d = s.active().unwrap();
+    let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    l.surface().unwrap().read_region(d.doc.bounds())
+}
+
+/// Poll until job `id` ends (or 60 s pass); returns its event.
+fn wait_event(s: &mut Session, id: JobId) -> JobEvent {
+    let t = Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            return e;
+        }
+        assert!(t.elapsed() < Duration::from_secs(60), "job {id:?} did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn job(r: Started) -> JobId {
+    match r {
+        Started::Job(id) => id,
+        Started::Done(v) => panic!("expected a background job, ran inline: {v}"),
+    }
+}
+
+#[test]
+fn a_job_applies_as_one_undo_step_and_matches_the_inline_result() {
+    let mut inline = session(300, 200);
+    inline.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+
+    let mut s = session(300, 200);
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let journal = s.journal.len();
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap());
+    // The canvas shows the pre-job state until the job is applied.
+    assert_eq!(pixels(&s), before);
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert!(v["filter"].is_object(), "{v}");
+    assert_eq!(e.command, "filter.blur.gaussianBlur");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(s.journal.len(), journal + 1, "journaled like execute");
+    assert_eq!(s.journal.last().unwrap().0, "filter.blur.gaussianBlur");
+    assert_eq!(pixels(&s), pixels(&inline), "same pixels as the synchronous command");
+    assert!(s.undo());
+    assert_eq!(pixels(&s), before);
+    assert!(s.jobs().is_empty());
+}
+
+#[test]
+fn free_transform_runs_as_a_job_with_the_inline_result() {
+    let quad = json!({"quad": [[20, 10], [280, 30], [260, 190], [40, 170]]});
+    let mut inline = session(300, 200);
+    inline.execute("edit.transform", quad.clone()).unwrap();
+
+    let mut s = session(300, 200);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("edit.transform", quad).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(e.label, "Free Transform");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "same pixels as the synchronous command");
+}
+
+#[test]
+fn warp_runs_as_a_job_with_the_inline_result() {
+    let arc = json!({"style": "arc", "bend": 30});
+    let mut inline = session(300, 200);
+    inline.execute("edit.transform.warp", arc.clone()).unwrap();
+
+    let mut s = session(300, 200);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("edit.transform.warp", arc).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(e.label, "Warp");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "same pixels as the synchronous command");
+}
+
+#[test]
+fn a_cancelled_warp_leaves_the_document_unchanged() {
+    let mut s = session(1600, 1200);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("edit.transform.warp", json!({"style": "flag", "bend": 40})).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
+}
+
+#[test]
+fn cancel_leaves_the_document_byte_identical() {
+    let mut s = session(1600, 1200);
+    let doc_before = s.active().unwrap().doc.clone();
+    let before = pixels(&s);
+    let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 60})).unwrap());
+    assert!(s.cancel_job(id));
+    let e = wait_event(&mut s, id);
+    assert_eq!(e.outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    // Nothing arrives later either.
+    assert!(s.poll_jobs().is_empty());
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!((st.revision, st.history.past_len()), (rev, steps));
+    assert_eq!(pixels(&s), before);
+    assert!(matches!(s.wait_job(id), Err(EngineError::Cancelled)));
+}
+
+#[test]
+fn a_panic_in_the_worker_becomes_an_error_and_the_document_is_unchanged() {
+    let mut s = session(64, 64);
+    let doc_before = s.active().unwrap().doc.clone();
+    let id = job(s
+        .start_job(
+            "test.panics",
+            json!({}),
+            "Panicking job",
+            true,
+            |_ctx| -> Result<()> {
+                let v: Vec<u8> = Vec::new();
+                // An out-of-bounds index: a panic inside the worker.
+                #[allow(clippy::indexing_slicing)]
+                let _ = v[usize::MAX / 2];
+                Ok(())
+            },
+            |_s, ()| Ok(json!(null)),
+        )
+        .unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Failed(msg) = &e.outcome else { panic!("{e:?}") };
+    assert!(msg.contains("internal error"), "{msg}");
+    assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc_before));
+    // The session still works.
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
+fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
+    // REL-3: the last-resort guard in `jobs::dispatch` catches a panic that escapes `run`,
+    // reports it as an error and leaves the document (and its history) untouched.
+    let mut s = session(64, 64);
+    let doc_before = s.active().unwrap().doc.clone();
+    let (rev, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    let msg = s.execute("test.panic", json!({})).unwrap_err().to_string();
+    assert!(msg.contains("internal error"), "{msg}");
+    assert!(msg.contains("test.panic"), "{msg}");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!((st.revision, st.history.past_len()), (rev, steps));
+    // The session still works.
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+}
+
+#[test]
+fn progress_is_monotonic_and_reaches_one() {
+    let ctx = JobCtx::new();
+    ctx.progress(0.5, "half");
+    ctx.progress(0.3, "");
+    assert_eq!(ctx.fraction(), 0.5, "progress never goes backwards");
+    assert_eq!(ctx.message(), "half");
+    ctx.progress(f32::NAN, "");
+    ctx.progress(7.0, "");
+    assert_eq!(ctx.fraction(), 1.0);
+
+    let mut s = session(2000, 1500);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 30})).unwrap());
+    let mut seen = Vec::new();
+    let e = loop {
+        if let Some(j) = s.jobs().into_iter().find(|j| j.id == id) {
+            seen.push(j.progress);
+            assert_eq!(j.label, "Gaussian Blur");
+            assert_eq!(j.state, "running");
+        }
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            break e;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert!(seen.windows(2).all(|w| w[0] <= w[1]), "monotonic: {seen:?}");
+    let info = s.jobs_with_recent().into_iter().find(|j| j.id == id).unwrap();
+    assert_eq!((info.state, info.progress), ("done", 1.0));
+}
+
+#[test]
+fn a_preset_filter_job_is_named_after_the_preset() {
+    // #528: the job (progress UI) and its history step say "Blur More", not "Gaussian Blur".
+    let mut s = session(300, 200);
+    let id = job(s.start("filter.blur.blurMore", json!({})).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(e.label, "Blur More");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Blur More"));
+}
+
+/// A fake document job that runs until `gate` opens (or it is cancelled), then inverts nothing
+/// but records one undo step named "Gated Job".
+pub(super) fn gated_job(s: &mut Session, gate: &Arc<std::sync::atomic::AtomicBool>) -> JobId {
+    let gate = gate.clone();
+    job(s
+        .start_job(
+            "test.gated",
+            json!({}),
+            "Gated Job",
+            true,
+            move |ctx| {
+                while !gate.load(std::sync::atomic::Ordering::Relaxed) {
+                    ctx.check()?;
+                    ctx.progress(0.5, "waiting");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(())
+            },
+            |s, ()| {
+                s.edit("Gated Job", |_, _| Ok(()))?;
+                Ok(json!({"gated": true}))
+            },
+        )
+        .unwrap())
+}
+
+#[test]
+fn a_running_job_locks_its_document_but_not_others() {
+    let mut s = session(64, 64);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let id = gated_job(&mut s, &gate);
+    // Edits of the busy document are disabled with a message naming the job.
+    let err = s.execute("layer.new.layer", json!({})).unwrap_err();
+    assert!(matches!(&err, EngineError::Disabled(_, why) if why.contains("Gated Job")), "{err}");
+    assert!(!s.is_enabled("layer.new.layer"));
+    assert!(s.disabled_reason("filter.blur.gaussianBlur").unwrap().contains("still running"));
+    assert!(!s.undo(), "undo waits for the job");
+    // Queries and document-independent commands still run.
+    s.execute("jobs.list", json!({})).unwrap();
+    // A new document is free to edit while the first one is busy.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let r = s.execute("jobs.list", json!({})).unwrap();
+    assert_eq!(r["jobs"][0]["id"], json!(id.0));
+    // The result applies to its own document, and the active document stays the new one.
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(s.active_index(), Some(1));
+    assert_eq!(s.documents()[0].history.past_len(), 3);
+}
+
+#[test]
+fn jobs_list_puts_running_jobs_before_ended_ones() {
+    let mut s = session(64, 64);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let done = gated_job(&mut s, &gate);
+    assert!(matches!(wait_event(&mut s, done).outcome, JobOutcome::Done(_)));
+    // A second document, so the next job doesn't wait on the first one's.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let running = gated_job(&mut s, &gate);
+    let r = s.execute("jobs.list", json!({})).unwrap();
+    let listed: Vec<_> = r["jobs"].as_array().unwrap().iter().map(|j| (j["id"].clone(), j["state"].clone())).collect();
+    assert_eq!(listed, [(json!(running.0), json!("running")), (json!(done.0), json!("done"))], "{r}");
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    wait_event(&mut s, running);
+}
+
+#[test]
+fn background_job_finishes_bookkeeping_on_edited_document_after_tab_switch() {
+    let mut s = session(64, 64);
+    let edited_doc = s.active().unwrap().doc.id;
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_gate = Arc::clone(&gate);
+    // Hold a fadeable filter job until another document is the active tab.
+    // A deterministic gate avoids relying on the filter being sufficiently slow.
+    let id = job(s
+        .start_job(
+            "filter.blur.gaussianBlur",
+            json!({"radius": 2}),
+            "Deferred Blur",
+            true,
+            move |ctx| {
+                while !worker_gate.load(std::sync::atomic::Ordering::Relaxed) {
+                    ctx.check()?;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(())
+            },
+            |s, ()| {
+                s.edit("Deferred Blur", |doc, active| {
+                    let layer = active.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+                    let surface = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?.surface_mut().ok_or(EngineError::NoLayer(layer))?;
+                    surface.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0.4, 0.3, 0.2, 1.0]);
+                    Ok(())
+                })?;
+                Ok(json!({"filter": {"radius": 2}}))
+            },
+        )
+        .unwrap());
+
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let viewed_doc = s.active().unwrap().doc.id;
+    let viewed_revision = s.active().unwrap().revision;
+    assert_eq!(s.active_index(), Some(1));
+
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    let event = wait_event(&mut s, id);
+    assert!(matches!(event.outcome, JobOutcome::Done(_)), "{event:?}");
+    assert_eq!(s.active_index(), Some(1), "the user stays on the selected document");
+    assert_eq!(s.documents()[1].revision, viewed_revision, "the viewed document is unchanged");
+    assert_eq!(s.documents()[1].doc.id, viewed_doc);
+    assert_eq!(s.edit_state.fade.as_ref().map(|fade| fade.doc), Some(edited_doc), "Fade belongs to the edited document");
+    assert!(!s.is_enabled("edit.fade"), "Fade must not target the viewed document");
+
+    assert!(s.set_active(0));
+    assert!(s.is_enabled("edit.fade"), "Fade must be available on the document that was edited");
+}
+
+/// #7382: a background filter on a targeted alpha channel or the Quick Mask, finished while another
+/// document is shown, leaves Fade on that channel of the edited document: at 0 % it restores the
+/// channel exactly and leaves the layer alone.
+#[test]
+fn background_filter_on_a_channel_fades_that_channel_after_a_tab_switch() {
+    use crate::edit_menu_cmds::FadeTarget;
+    for quick_mask in [false, true] {
+        let mut s = session(32, 24);
+        let edited_doc = s.active().unwrap().doc.id;
+        if quick_mask {
+            s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        } else {
+            s.execute("channel.new", json!({"fill": "black"})).unwrap();
+            s.execute("channel.target", json!({"channel": 0})).unwrap();
+        }
+        // A pattern for the blur to change.
+        s.edit("pattern", |doc, _| {
+            let c = if quick_mask { doc.quick_mask.as_mut() } else { doc.channels.first_mut() };
+            let c = c.ok_or_else(|| EngineError::Other("no channel".into()))?;
+            c.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 32, 24), &[0.0]);
+            c.surface.fill_rect(photocraft_geom::Rect::new(8, 6, 20, 16), &[1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let channel = |s: &Session, d: usize| {
+            let doc = &s.documents()[d].doc;
+            let c = if quick_mask { doc.quick_mask.as_ref() } else { doc.channels.first() };
+            let c = c.unwrap();
+            (0..24).flat_map(|y| (0..32).map(move |x| (x, y))).map(|(x, y)| c.surface.pixel(x, y)[0]).collect::<Vec<f32>>()
+        };
+        let layer = |s: &Session| {
+            let st = &s.documents()[0];
+            st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(5, 5)
+        };
+        let (pattern, pixels) = (channel(&s, 0), layer(&s));
+        let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap());
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let event = wait_event(&mut s, id);
+        assert!(matches!(event.outcome, JobOutcome::Done(_)), "{event:?}");
+        assert_ne!(channel(&s, 0), pattern, "quick mask {quick_mask}: the blur changed the channel");
+        let fade = s.edit_state.fade.clone().unwrap();
+        assert_eq!(fade.doc, edited_doc);
+        assert_eq!(fade.target, if quick_mask { FadeTarget::QuickMask } else { FadeTarget::Channel(0) });
+        assert!(s.set_active(0));
+        s.execute("edit.fade", json!({"opacity": 0})).unwrap();
+        assert_eq!(channel(&s, 0), pattern, "quick mask {quick_mask}: Fade at 0 % restores the channel");
+        assert_eq!(layer(&s), pixels, "quick mask {quick_mask}: the layer is left alone");
+    }
+}
+
+#[test]
+fn closing_the_document_cancels_its_job() {
+    let mut s = session(1600, 1200);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 80})).unwrap());
+    s.close(0);
+    let e = wait_event(&mut s, id);
+    assert_eq!(e.outcome, JobOutcome::Cancelled);
+}
+
+#[test]
+fn jobs_cancel_command_and_bad_params() {
+    let mut s = session(1600, 1200);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 80})).unwrap());
+    assert!(s.execute("jobs.cancel", json!({"job": "x"})).is_err());
+    assert!(s.execute("jobs.cancel", json!({"job": 999})).is_err());
+    s.execute("jobs.cancel", json!({"job": id.0})).unwrap();
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert_eq!(s.execute("jobs.cancel", json!({})).unwrap()["cancelled"], 0);
+}
+
+/// A fake save of the active document to `target`, gated by the test: it waits for `go`, calls
+/// [`JobCtx::commit`] and reports whether it got through, then waits for `finish` and replaces
+/// the file. `done` disconnects once the worker has returned.
+struct GatedSave {
+    id: JobId,
+    go: std::sync::mpsc::Sender<()>,
+    committed: std::sync::mpsc::Receiver<bool>,
+    finish: std::sync::mpsc::Sender<()>,
+    done: std::sync::mpsc::Receiver<()>,
+}
+
+impl GatedSave {
+    fn start(s: &mut Session, target: &std::path::Path) -> Self {
+        let (go, go_rx) = std::sync::mpsc::channel();
+        let (committed_tx, committed) = std::sync::mpsc::channel();
+        let (finish, finish_rx) = std::sync::mpsc::channel::<()>();
+        let (done_tx, done) = std::sync::mpsc::channel::<()>();
+        let target = target.to_path_buf();
+        let id = job(s
+            .start_job(
+                "file.save",
+                json!({"path": target}),
+                "Saving w.psd",
+                true,
+                move |ctx| {
+                    let _done = done_tx;
+                    go_rx.recv().ok();
+                    let r = ctx.commit();
+                    committed_tx.send(r.is_ok()).ok();
+                    r?;
+                    finish_rx.recv().ok();
+                    std::fs::write(&target, b"new").map_err(|e| EngineError::Other(e.to_string()))?;
+                    Ok(target.display().to_string())
+                },
+                |_, path: String| Ok(json!({"path": path})),
+            )
+            .unwrap());
+        Self { id, go, committed, finish, done }
+    }
+
+    /// Let the worker reach its commit; true if it committed.
+    fn commit(&self) -> bool {
+        self.go.send(()).unwrap();
+        self.committed.recv_timeout(Duration::from_secs(60)).unwrap()
+    }
+
+    /// Let a committed worker write the file.
+    fn finish(&self) {
+        self.finish.send(()).unwrap();
+    }
+
+    /// Block until the worker has returned.
+    fn join(&self) {
+        assert!(matches!(self.done.recv_timeout(Duration::from_secs(60)), Err(std::sync::mpsc::RecvTimeoutError::Disconnected)));
+    }
+}
+
+/// A fresh directory for a [`GatedSave`] test (on every platform, unlike the Unix-only
+/// fixtures' `tmp_dir`).
+fn save_dir(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("photocraft-engine-gated-save-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// A job on the active document that runs until it is cancelled.
+fn open_job(s: &mut Session) -> JobId {
+    job(s
+        .start_job(
+            "test.spin",
+            json!({}),
+            "Spinning",
+            true,
+            |ctx| loop {
+                ctx.check()?;
+                std::thread::sleep(Duration::from_millis(1));
+            },
+            |_, ()| Ok(json!(null)),
+        )
+        .unwrap())
+}
+
+fn index_of(s: &Session, doc: photocraft_doc::DocId) -> usize {
+    s.documents().iter().position(|st| st.doc.id == doc).unwrap()
+}
+
+#[test]
+fn cancelling_a_save_before_it_commits_stops_it_without_touching_the_target() {
+    let dir = save_dir("cancel-before-commit");
+    let target = dir.join("w.psd");
+    std::fs::write(&target, b"old").unwrap();
+    let mut s = session(64, 64);
+    let save = GatedSave::start(&mut s, &target);
+    assert_eq!(s.execute("jobs.cancel", json!({"job": save.id.0})).unwrap(), json!({"cancelled": 1}));
+    assert_eq!(wait_event(&mut s, save.id).outcome, JobOutcome::Cancelled);
+    // The worker learns it lost at its commit point and writes nothing.
+    assert!(!save.commit(), "commit after a cancel must fail");
+    save.join();
+    assert_eq!(std::fs::read(&target).unwrap(), b"old", "target untouched");
+    assert!(s.job(save.id).is_none());
+}
+
+#[test]
+fn cancelling_a_committed_save_is_refused_and_it_reports_its_real_outcome() {
+    let dir = save_dir("cancel-after-commit");
+    let target = dir.join("w.psd");
+    std::fs::write(&target, b"old").unwrap();
+    let mut s = session(64, 64);
+    let save = GatedSave::start(&mut s, &target);
+    assert!(save.commit());
+    // Every single-job entry point says it was not cancelled.
+    assert!(!s.cancel_job(save.id));
+    assert_eq!(s.try_cancel_job(save.id), Err(CancelRefused::Committing));
+    assert_eq!(
+        s.execute("jobs.cancel", json!({"job": save.id.0})).unwrap(),
+        json!({"cancelled": 0, "notCancelled": [{"job": save.id.0, "reason": "committing"}]})
+    );
+    assert!(s.job(save.id).is_some(), "still running, document still locked");
+    assert!(s.poll_jobs().is_empty(), "no Cancelled event");
+    save.finish();
+    let e = wait_event(&mut s, save.id);
+    assert_eq!(e.outcome, JobOutcome::Done(json!({"path": target.display().to_string()})));
+    save.join();
+    assert_eq!(std::fs::read(&target).unwrap(), b"new");
+}
+
+#[test]
+fn cancel_all_cancels_open_jobs_and_reports_a_committed_save_it_left_running() {
+    let dir = save_dir("cancel-all-mixed");
+    let (committed_target, open_target) = (dir.join("a.psd"), dir.join("c.psd"));
+    std::fs::write(&committed_target, b"old").unwrap();
+    std::fs::write(&open_target, b"old").unwrap();
+    let mut s = session(64, 64);
+    let committed = GatedSave::start(&mut s, &committed_target);
+    assert!(committed.commit());
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let spinning = open_job(&mut s);
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let open = GatedSave::start(&mut s, &open_target);
+
+    let report = s.cancel_all_jobs();
+    assert_eq!(report.cancelled, vec![spinning, open.id]);
+    assert_eq!(report.refused, vec![(committed.id, CancelRefused::Committing)]);
+    assert_eq!(report.to_json(), json!({"cancelled": 2, "notCancelled": [{"job": committed.id.0, "reason": "committing"}]}));
+    // `jobs.cancel {}` again: only the committed save is left, and it is still not cancelled.
+    assert_eq!(s.execute("jobs.cancel", json!({})).unwrap(), json!({"cancelled": 0, "notCancelled": [{"job": committed.id.0, "reason": "committing"}]}));
+
+    // One poll reports both cancellations.
+    let ended: Vec<_> = s.poll_jobs().into_iter().map(|e| (e.id, e.outcome)).collect();
+    assert_eq!(ended, vec![(spinning, JobOutcome::Cancelled), (open.id, JobOutcome::Cancelled)]);
+    assert!(!open.commit());
+    open.join();
+    assert_eq!(std::fs::read(&open_target).unwrap(), b"old");
+    committed.finish();
+    assert!(matches!(wait_event(&mut s, committed.id).outcome, JobOutcome::Done(_)));
+    committed.join();
+    assert_eq!(std::fs::read(&committed_target).unwrap(), b"new");
+    assert!(s.jobs().is_empty());
+}
+
+#[test]
+fn closing_documents_cancels_open_saves_but_a_committed_save_finishes() {
+    let dir = save_dir("cancel-on-close-mixed");
+    let (committed_target, open_target) = (dir.join("a.psd"), dir.join("c.psd"));
+    std::fs::write(&committed_target, b"old").unwrap();
+    std::fs::write(&open_target, b"old").unwrap();
+    let mut s = session(64, 64);
+    let a = s.active().unwrap().doc.id;
+    let committed = GatedSave::start(&mut s, &committed_target);
+    assert!(committed.commit());
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let b = s.active().unwrap().doc.id;
+    let spinning = open_job(&mut s);
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let c = s.active().unwrap().doc.id;
+    let open = GatedSave::start(&mut s, &open_target);
+
+    assert_eq!(s.cancel_jobs_on(a).refused, vec![(committed.id, CancelRefused::Committing)]);
+    s.close(index_of(&s, a));
+    s.close(index_of(&s, c));
+    assert_eq!(wait_event(&mut s, open.id).outcome, JobOutcome::Cancelled);
+    assert!(!open.commit());
+    open.join();
+    assert_eq!(std::fs::read(&open_target).unwrap(), b"old", "the open save's target is untouched");
+    // The other document's job is not affected.
+    assert!(s.job(spinning).is_some());
+    // The committed save outlives its document and reports what it did, not "document closed".
+    committed.finish();
+    assert_eq!(wait_event(&mut s, committed.id).outcome, JobOutcome::Done(json!({"path": committed_target.display().to_string()})));
+    committed.join();
+    assert_eq!(std::fs::read(&committed_target).unwrap(), b"new");
+    assert!(s.cancel_job(spinning));
+    assert_eq!(s.documents().iter().map(|st| st.doc.id).collect::<Vec<_>>(), vec![b]);
+}
+
+#[test]
+fn commit_and_cancel_race_with_exactly_one_winner() {
+    for _ in 0..200 {
+        let ctx = JobCtx::default();
+        let other = ctx.clone();
+        let t = std::thread::spawn(move || other.commit().is_ok());
+        let cancelled = ctx.try_cancel();
+        let committed = t.join().unwrap();
+        assert_ne!(cancelled, committed, "exactly one of commit and cancel wins");
+        assert_eq!(ctx.cancelled(), cancelled);
+        assert_eq!(ctx.committed(), committed);
+    }
+}
+
+#[test]
+fn non_job_commands_still_finish_inline_with_start() {
+    let mut s = session(16, 16);
+    let r = s.start("layer.new.layer", json!({})).unwrap();
+    assert!(matches!(r, Started::Done(_)), "{r:?}");
+    // Errors are reported as before.
+    assert!(matches!(s.start("no.such.command", json!({})), Err(EngineError::UnknownCommand(_))));
+}
+
+#[test]
+fn content_aware_fill_and_scale_run_as_jobs() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    for t in [&mut inline, &mut s] {
+        t.execute("select.rect", json!({"x": 60, "y": 40, "width": 30, "height": 30})).unwrap();
+    }
+    inline.execute("edit.contentAwareFill", json!({})).unwrap();
+    let id = job(s.start("edit.contentAwareFill", json!({})).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(pixels(&s), pixels(&inline), "same fill as the synchronous command");
+
+    s.execute("select.deselect", json!({})).unwrap();
+    let id = job(s.start("edit.contentAwareScale", json!({"width": 120})).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert_eq!(v["to"][0], 120);
+}
+
+#[test]
+fn smart_filter_edits_run_as_jobs() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    for t in [&mut inline, &mut s] {
+        t.execute("filter.convertForSmartFilters", json!({})).unwrap();
+        t.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+        t.execute("filter.blur.motionBlur", json!({"angle": 45, "distance": 8})).unwrap();
+    }
+    inline.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("layer.smartFilter.setVisible", json!({"index": 0})).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "same pixels as the synchronous command");
+    assert!(s.undo());
+    assert_eq!(pixels(&s), before);
+}
+
+#[test]
+fn content_aware_move_runs_as_a_job() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    for t in [&mut inline, &mut s] {
+        t.execute("select.rect", json!({"x": 20, "y": 40, "width": 30, "height": 30})).unwrap();
+    }
+    let p = json!({"offset": [90, 10], "structure": 3, "color": 4});
+    inline.execute("paint.contentAwareMove", p.clone()).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let id = job(s.start("paint.contentAwareMove", p.clone()).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert_eq!(v["offset"], json!([90, 10]));
+    assert_eq!(pixels(&s), pixels(&inline), "same result as the synchronous command");
+    let sel = |s: &Session| s.active().unwrap().doc.selection.as_ref().unwrap().read_region(s.active().unwrap().doc.bounds());
+    assert_eq!(sel(&s), sel(&inline), "the selection moved the same way");
+    // Cancelled at once: the document stays as it was.
+    s.undo();
+    let id = job(s.start("paint.contentAwareMove", p).unwrap());
+    assert!(s.cancel_job(id));
+    s.join_cancelled_jobs();
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert_eq!(pixels(&s), before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().read_region(before.bounds()));
+}
+
+#[test]
+fn remove_runs_as_a_job() {
+    let mut inline = session(160, 120);
+    let mut s = session(160, 120);
+    let p = json!({"points": [[60, 50], [100, 70]], "size": 24});
+    inline.execute("paint.remove", p.clone()).unwrap();
+    let before = pixels(&s);
+    let id = job(s.start("paint.remove", p.clone()).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert!(v["damage"].is_array(), "{v}");
+    assert_eq!(pixels(&s), pixels(&inline), "same result as the synchronous command");
+    // Cancelled at once: the document stays as it was.
+    s.undo();
+    let id = job(s.start("paint.remove", p).unwrap());
+    assert!(s.cancel_job(id));
+    s.join_cancelled_jobs();
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert_eq!(pixels(&s), before);
+}
+
+#[test]
+fn open_runs_as_a_job_and_cancel_adds_nothing() {
+    let mut src = session(40, 30);
+    let doc = (*src.active().unwrap().doc).clone();
+    let bytes = photocraft_io::export(&doc, "x.psd", &Default::default()).unwrap().bytes;
+    src.close(0);
+    let mut s = Session::new();
+    let id = job(s.start_open("x.psd", OpenSource::Bytes(Arc::new(bytes.clone()))).unwrap());
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert_eq!(e.command, OPEN_JOB);
+    assert_eq!(v["document"], 0);
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.documents()[0].doc.size.width, 40);
+
+    let id = job(s.start_open("y.psd", OpenSource::Bytes(Arc::new(bytes))).unwrap());
+    s.cancel_job(id);
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert_eq!(s.documents().len(), 1, "a cancelled open adds no document");
+
+    let id = job(s.start_open("missing.psd", OpenSource::Path("/no/such/file.psd".into())).unwrap());
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Failed(_)));
+}
+
+#[test]
+fn cancelled_batch_job_returns_its_partial_result() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| {
+                while !ctx.cancelled() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(json!({"files": ["done.png"], "skipped": ["later.png"], "cancelled": true}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    assert!(s.cancel_job(id));
+    let event = wait_event(&mut s, id);
+    let JobOutcome::Done(result) = &event.outcome else { panic!("batch result was discarded: {:?}", event.outcome) };
+    assert_eq!(result["files"], json!(["done.png"]));
+    assert_eq!(result["skipped"], json!(["later.png"]));
+    assert_eq!(result["cancelled"], true);
+    let info = s.jobs_with_recent().into_iter().find(|info| info.id == id).unwrap();
+    assert_eq!(info.state, "cancelled");
+    assert_eq!(info.result.unwrap()["files"], json!(["done.png"]));
+    assert!(matches!(s.wait_job(id), Err(EngineError::Cancelled)));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn programmatic_cancel_wakes_a_batch_waiting_for_the_desktop_decision() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| {
+                while !ctx.batch_take_interrupt() {
+                    ctx.check()?;
+                    std::thread::yield_now();
+                }
+                let continued = ctx.batch_wait_for_decision();
+                Ok(json!({"continued": continued, "files": [], "cancelled": ctx.cancelled()}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    assert!(s.request_batch_interrupt_job(id));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.batch_interrupt_waiting(id) && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(s.batch_interrupt_waiting(id));
+    assert!(s.cancel_job(id), "jobs.cancel remains direct and wakes the worker");
+    let JobOutcome::Done(result) = wait_event(&mut s, id).outcome else { panic!("batch partial result was lost") };
+    assert_eq!(result["continued"], false);
+    assert_eq!(result["cancelled"], true);
+}
+
+#[test]
+fn accepted_batch_cancellation_after_result_snapshot_is_reported() {
+    let mut s = Session::new();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            move |ctx| {
+                let cancelled = ctx.cancelled();
+                ready_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+                Ok(json!({"files": ["done.png"], "cancelled": cancelled}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(s.cancel_job(id));
+    resume_tx.send(()).unwrap();
+    let event = wait_event(&mut s, id);
+    let JobOutcome::Done(result) = event.outcome else { panic!("batch result was discarded") };
+    assert_eq!(result["cancelled"], true);
+    assert_eq!(result["files"], json!(["done.png"]));
+    let info = s.jobs_with_recent().into_iter().find(|info| info.id == id).unwrap();
+    assert_eq!(info.state, "cancelled");
+}
+
+#[test]
+fn cancel_all_counts_an_accepted_batch_cancellation() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| {
+                while !ctx.cancelled() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(json!({"files": [], "cancelled": true}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    assert_eq!(s.execute("jobs.cancel", json!({})).unwrap()["cancelled"], 1);
+    assert_eq!(s.execute("jobs.cancel", json!({})).unwrap()["cancelled"], 0, "a repeated request is not a new cancellation");
+    assert_eq!(s.execute("jobs.cancel", json!({"job": id.0})).unwrap()["cancelled"], 0, "a repeated batch request is not a print error");
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_finished_batch_worker_rejects_late_cancellation() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job("file.automate.batch", json!({}), "Batch", false, |_| Ok(json!({"files": ["done.png"], "cancelled": false})), |_, result| Ok(result))
+        .unwrap());
+    let started = Instant::now();
+    while !s.jobs.running.iter().any(|running| running.id == id && running.handle.as_ref().is_some_and(|handle| handle.is_finished())) {
+        assert!(started.elapsed() < Duration::from_secs(10), "batch worker did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!s.cancel_job(id), "a result already sent cannot be cancelled");
+    let JobOutcome::Done(result) = wait_event(&mut s, id).outcome else { panic!("completed batch result was lost") };
+    assert_eq!(result["files"], json!(["done.png"]));
+    assert_eq!(result["cancelled"], false);
+}
+
+/// A flat scanline EXR opened from a path goes through the band decoder in the open job and
+/// arrives as the same 32-bit document the whole-file decoder makes; cancelling adds nothing.
+#[cfg(any(unix, windows))]
+#[test]
+fn an_exr_path_open_decodes_in_bands_and_cancels_cleanly() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, ExrCompression, Format, Image, SampleType};
+    let values: Vec<f32> = (0..64 * 48 * 3).map(|i| [0.25, 3.0, -0.5][i % 3]).collect();
+    let image = Image::from_f32(64, 48, ChannelLayout::Rgb, &values).unwrap().convert(ChannelLayout::Rgb, SampleType::F16);
+    let bytes = photocraft_codecs::encode(&image, Format::OpenExr, &EncodeOptions { exr_compression: ExrCompression::Zip16, ..Default::default() }).unwrap();
+    let path = std::env::temp_dir().join(format!("photocraft-open-job-{}.exr", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let reference = photocraft_io::import("band.exr", &bytes).unwrap().document;
+    let mut s = Session::new();
+    let id = job(s.start_open("band.exr", OpenSource::Path(path.to_string_lossy().into_owned())).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    let doc = &s.documents()[0].doc;
+    assert_eq!((doc.size, doc.mode, doc.depth), (reference.size, reference.mode, reference.depth));
+    use photocraft_doc::LayerContent;
+    let (LayerContent::Raster(a), LayerContent::Raster(r)) = (&doc.layers[0].content, &reference.layers[0].content) else { panic!("raster background") };
+    assert_eq!(a.to_interleaved(reference.bounds()), r.to_interleaved(reference.bounds()));
+
+    let id = job(s.start_open("again.exr", OpenSource::Path(path.to_string_lossy().into_owned())).unwrap());
+    s.cancel_job(id);
+    let outcome = wait_event(&mut s, id).outcome;
+    assert!(matches!(outcome, JobOutcome::Cancelled | JobOutcome::Done(_)), "{outcome:?}");
+    if outcome == JobOutcome::Cancelled {
+        assert_eq!(s.documents().len(), 1, "a cancelled open adds no document");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+/// Ask When Opening: a file whose profile doesn't match is decoded but not added; the shell takes
+/// it once the prompt is answered. Without Ask it opens as usual.
+#[test]
+fn an_open_that_asks_about_its_profile_holds_the_document_back() {
+    let mut src = session(8, 8);
+    let mut doc = (*src.active().unwrap().doc).clone();
+    doc.icc_profile = Some(photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
+    let bytes = Arc::new(photocraft_io::export(&doc, "x.png", &Default::default()).unwrap().bytes);
+    src.close(0);
+    let mut s = Session::new();
+    s.execute("edit.colorSettings", json!({"askOnMismatch": true, "policyRgb": "preserve"})).unwrap();
+    let id = job(s.start_open("x.png", OpenSource::Bytes(Arc::clone(&bytes))).unwrap());
+    let JobOutcome::Done(v) = wait_event(&mut s, id).outcome else { panic!() };
+    assert!(s.documents().is_empty(), "held back, not opened");
+    assert_eq!((v["color"]["mismatch"].as_bool(), v["color"]["ask"].as_bool(), v["color"]["action"].as_str()), (Some(true), Some(true), Some("preserve")));
+    let held = v["held"].as_u64().unwrap();
+    let (taken, _) = s.take_held_open(held).expect("the held document");
+    assert!(taken.icc_profile.is_some());
+    assert!(s.take_held_open(held).is_none(), "taken once");
+
+    s.execute("edit.colorSettings", json!({"askOnMismatch": false})).unwrap();
+    let id = job(s.start_open("x.png", OpenSource::Bytes(bytes)).unwrap());
+    let JobOutcome::Done(v) = wait_event(&mut s, id).outcome else { panic!() };
+    assert!(v.get("held").is_none());
+    assert_eq!(s.documents().len(), 1);
+}
+
+#[test]
+fn warm_layer_bounds_visits_every_layer_and_can_be_cancelled() {
+    let mut s = session(40, 30);
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    fn count(layers: &[photocraft_doc::Layer]) -> usize {
+        layers.iter().map(|l| 1 + l.children().map_or(0, count)).sum()
+    }
+    assert!(doc.layers.iter().any(|l| l.children().is_some_and(|c| !c.is_empty())), "a group with a layer in it");
+    let mut checks = 0;
+    warm_layer_bounds(&doc, || {
+        checks += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(checks, count(&doc.layers), "one check per layer, nested ones included");
+    let mut checks = 0;
+    let r = warm_layer_bounds(&doc, || {
+        checks += 1;
+        if checks > 1 { Err(EngineError::Cancelled) } else { Ok(()) }
+    });
+    assert!(matches!(r, Err(EngineError::Cancelled)));
+    assert_eq!(checks, 2, "stops at the first failed check");
+}
+
+#[test]
+fn wait_job_blocks_until_applied() {
+    let mut s = session(400, 300);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap());
+    let v = s.wait_job(id).unwrap();
+    assert!(v["filter"].is_object());
+    assert_eq!(s.active().unwrap().history.past_len(), 3);
+    // Waiting again reports the recorded result.
+    assert_eq!(s.wait_job(id).unwrap(), v);
+    assert!(s.wait_job(JobId(12345)).is_err());
+}
+
+#[test]
+fn params_that_are_not_an_object_are_rejected_before_running() {
+    let mut s = session(40, 30);
+    let before = s.active().unwrap().history.past_len();
+    for id in ["image.adjustments.invert", "filter.blur.gaussianBlur", "layer.new.layer"] {
+        for p in [json!([3]), json!("x"), json!(5), json!(true)] {
+            let e = s.execute(id, p.clone()).unwrap_err().to_string();
+            assert!(e.contains(id) && e.contains("must be a JSON object"), "{id} {p}: {e}");
+            assert!(s.start(id, p).is_err(), "{id}: background start must reject too");
+        }
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), before, "nothing ran");
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    s.execute("image.adjustments.invert", Value::Null).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), before + 2);
+}
+
+/// Cancel latency on a 24 MP document (6000×4000): from `cancel_job` until the worker thread
+/// has exited. Release only: debug builds are ~20× slower per tile.
+#[test]
+// Wall-clock timing depends on machine load (the release corpus job runs every test), so it is
+// opt-in; perf_scenarios tracks the same numbers as P25/P49.
+#[ignore = "timing: cargo test --release -p photocraft-engine --lib cancel_takes -- --ignored"]
+fn cancel_takes_effect_within_200_ms_on_24_mp() {
+    for (cmd, params, select) in [("filter.blur.gaussianBlur", json!({"radius": 50}), false), ("edit.contentAwareFill", json!({}), true)] {
+        let mut s = session(6000, 4000);
+        if select {
+            s.execute("select.rect", json!({"x": 2000, "y": 1500, "width": 1200, "height": 900})).unwrap();
+        }
+        let doc_before = s.active().unwrap().doc.clone();
+        // Cancel at several points of the run (early, middle, late stages).
+        let mut worst: f64 = 0.0;
+        for after_ms in [20, 150, 400, 600, 800, 1000, 1300] {
+            let id = job(s.start(cmd, params.clone()).unwrap());
+            std::thread::sleep(Duration::from_millis(after_ms));
+            if s.jobs().iter().all(|j| j.id != id) || s.jobs().iter().any(|j| j.id == id && j.progress >= 1.0) {
+                let _ = wait_event(&mut s, id);
+                s.undo();
+                continue;
+            }
+            let at = s.jobs().iter().find(|j| j.id == id).map(|j| j.progress).unwrap_or(0.0);
+            let t = Instant::now();
+            assert!(s.cancel_job(id));
+            s.join_cancelled_jobs();
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("{cmd}: cancelled after {after_ms} ms (at {:.0} %), latency {ms:.1} ms", at * 100.0);
+            worst = worst.max(ms);
+            assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+            assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc_before));
+        }
+        eprintln!("{cmd}: worst cancel latency {worst:.1} ms");
+        assert!(worst < 200.0, "{cmd}: cancel took {worst:.1} ms");
+    }
+}
+
+#[test]
+fn an_inline_job_ctx_lets_another_thread_cancel_inline_work() {
+    // A live filter preview runs the filter inline in a private session; when the dialog's
+    // parameters change, the stale computation is cancelled through this context.
+    let mut s = session(96, 64);
+    let before = pixels(&s);
+    let revision = s.active().unwrap().revision;
+    let ctx = JobCtx::new();
+    ctx.cancel();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    for (id, p) in [("filter.blur.gaussianBlur", json!({"radius": 40})), ("filter.blur.motionBlur", json!({"distance": 40}))] {
+        assert!(matches!(s.execute(id, p), Err(EngineError::Cancelled)), "{id}");
+        assert_eq!(pixels(&s), before, "{id}: the document is unchanged");
+        assert_eq!(s.active().unwrap().revision, revision, "{id}: no edit recorded");
+    }
+    // Not cancelled: the same session runs as before.
+    s.set_inline_job_ctx(Some(JobCtx::new()));
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+    assert_ne!(pixels(&s), before);
+    s.set_inline_job_ctx(None);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+}
+
+/// The command ids an action holds.
+fn action_steps(s: &mut Session, name: &str) -> Vec<String> {
+    let a = s.execute("actions.get", json!({"action": name})).unwrap();
+    a["steps"].as_array().unwrap().iter().map(|step| step[0].as_str().unwrap().to_string()).collect()
+}
+
+/// A job's result is recorded only by the recording it was started in: one started later keeps
+/// its own steps around it but doesn't pick up the older edit (#7289).
+#[test]
+fn a_job_lands_in_the_recording_it_was_started_in_only() {
+    // Started while recording A, applied after A stopped and B started.
+    let mut s = session(40, 30);
+    s.execute("actions.record", json!({"name": "A"})).unwrap();
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("actions.record", json!({"name": "B"})).unwrap();
+    // B's own steps before and after the result lands stay in B (a new document, so the job's
+    // document is unchanged and its result applies).
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.wait_job(id).unwrap();
+    s.execute("image.adjustments.desaturate", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(action_steps(&mut s, "A").is_empty());
+    assert_eq!(action_steps(&mut s, "B"), ["file.new", "image.adjustments.desaturate"]);
+
+    // Started before any recording, applied while B records.
+    let mut s = session(40, 30);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.execute("actions.record", json!({"name": "B"})).unwrap();
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(action_steps(&mut s, "B").is_empty());
+
+    // Started and applied while A records: A has it, as before.
+    let mut s = session(40, 30);
+    s.execute("actions.record", json!({"name": "A"})).unwrap();
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(action_steps(&mut s, "A"), ["filter.blur.gaussianBlur"]);
+}
+
+/// The automation policy the next tests stand in for: Gaussian Blur is refused.
+fn deny_blur(id: &str, _: &Value) -> Result<()> {
+    if id == "filter.blur.gaussianBlur" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+}
+
+/// The gate a control client's request runs under: its policy admitted the step, so it runs.
+fn admit(_: &str, _: &Value) -> Result<()> {
+    Ok(())
+}
+
+/// Whether the action named `name` is marked as written by automation.
+fn marked(s: &Session, name: &str) -> bool {
+    s.actions.list.iter().find(|a| a.name == name).unwrap().automation
+}
+
+/// A background step a gated client starts during the user's recording marks the recorded action
+/// as automation's, though the job is applied after the client's gate is removed: played
+/// ungated later (the user's key, the panel), the step still meets automation's gate.
+#[test]
+fn a_job_a_gated_client_starts_into_a_recording_keeps_its_gate_when_applied_ungated() {
+    let mut s = session(40, 30);
+    s.automation_gate = Some(deny_blur);
+    s.execute("actions.record", json!({"name": "Shared"})).unwrap();
+    s.authorize = Some(admit);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.authorize = None;
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(action_steps(&mut s, "Shared"), ["filter.blur.gaussianBlur"]);
+    assert!(marked(&s, "Shared"), "the client's background step marks the recorded action");
+    let r = s.execute("actions.play", json!({"action": "Shared"})).unwrap();
+    assert_eq!(r["failed"]["id"], "filter.blur.gaussianBlur", "{r}");
+    assert!(r["failed"]["error"].as_str().unwrap().contains("disabled"), "{r}");
+    assert!(s.authorize.is_none(), "the kept gate is removed after playback");
+}
+
+/// The converse: the user's own job, applied while a gated client waits on it, stays the user's.
+/// A gated client's job applied during a recording started after it marks nothing, since that
+/// recording doesn't get its step.
+#[test]
+fn a_users_job_applied_while_a_gated_client_waits_stays_the_users() {
+    let mut s = session(40, 30);
+    s.automation_gate = Some(deny_blur);
+    s.execute("actions.record", json!({"name": "Mine"})).unwrap();
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.authorize = Some(admit);
+    s.wait_job(id).unwrap();
+    s.authorize = None;
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(action_steps(&mut s, "Mine"), ["filter.blur.gaussianBlur"]);
+    assert!(!marked(&s, "Mine"), "the user's job is not marked by the caller that applied it");
+    let r = s.execute("actions.play", json!({"action": "Mine"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+
+    // A gated client's job started before the user records lands outside that recording.
+    s.authorize = Some(admit);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.authorize = None;
+    s.execute("actions.record", json!({"name": "Later"})).unwrap();
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(action_steps(&mut s, "Later").is_empty());
+    assert!(!marked(&s, "Later"), "a recording that doesn't get the step is not marked");
+}
+
+/// Exercise six terminal job routes so prepared paint snapshots cannot outlive a completed or discarded job.
+#[test]
+fn every_job_terminal_path_drops_a_live_commit_stroke() {
+    use crate::brush_cmds::mixer_live::LiveMixer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for outcome in 0..6 {
+        let mut s = session(32, 32);
+        let live = LiveMixer::begin(&s, &json!({"points": [[16, 16]], "size": 4})).unwrap();
+        live.prepare_commit(&mut s).unwrap();
+        let gate = Arc::new(AtomicBool::new(false));
+        let worker_gate = gate.clone();
+        let id = job(s
+            .start_job(
+                "test.mixer_cleanup",
+                json!({}),
+                "Mixer cleanup",
+                true,
+                move |ctx| {
+                    while !worker_gate.load(Ordering::Relaxed) {
+                        ctx.check()?;
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    if outcome == 1 { Err(EngineError::Other("worker failed".into())) } else { Ok(()) }
+                },
+                move |_, ()| {
+                    if outcome == 4 { Err(EngineError::Other("apply failed".into())) } else { Ok(json!({})) }
+                },
+            )
+            .unwrap());
+        assert!(s.live_commit.is_some());
+        if outcome == 2 {
+            assert!(s.cancel_job(id));
+            s.join_cancelled_jobs();
+        } else {
+            if outcome == 3 {
+                // Simulate replacement outside command dispatch, which itself clears offers.
+                let doc = (*s.active().unwrap().doc).clone();
+                s.active_mut().unwrap().doc = Arc::new(doc);
+            } else if outcome == 5 {
+                s.docs.clear();
+                s.active = None;
+            }
+            gate.store(true, Ordering::Relaxed);
+        }
+        let event = wait_event(&mut s, id);
+        match outcome {
+            0 => assert!(matches!(event.outcome, JobOutcome::Done(_))),
+            2 => assert!(matches!(event.outcome, JobOutcome::Cancelled)),
+            _ => assert!(matches!(event.outcome, JobOutcome::Failed(_))),
+        }
+        assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
+    }
+}
+
+// ---------- cooperative jobs (no worker threads, as on the web) ----------
+
+/// A job that needs `needed` calls, and records what each one saw.
+struct Counting {
+    needed: usize,
+    done: usize,
+    /// How far ahead the deadline of each call was.
+    ahead: Arc<Mutex<Vec<Duration>>>,
+    calls: Arc<AtomicUsize>,
+    thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for Counting {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Relaxed);
+    }
+}
+
+impl StepWork<usize> for Counting {
+    fn step(&mut self, ctx: &JobCtx, deadline: web_time::Instant) -> Result<Option<usize>> {
+        self.ahead.lock().unwrap().push(deadline.saturating_duration_since(web_time::Instant::now()));
+        *self.thread.lock().unwrap() = Some(std::thread::current().id());
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.done += 1;
+        ctx.progress(self.done as f32 / self.needed as f32, "Counting");
+        Ok((self.done >= self.needed).then_some(self.done))
+    }
+}
+
+struct Probe {
+    ahead: Arc<Mutex<Vec<Duration>>>,
+    calls: Arc<AtomicUsize>,
+    thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+    dropped: Arc<AtomicBool>,
+}
+
+fn counting(needed: usize) -> (Counting, Probe) {
+    let probe = Probe { ahead: Arc::default(), calls: Arc::default(), thread: Arc::default(), dropped: Arc::default() };
+    let work =
+        Counting { needed, done: 0, ahead: probe.ahead.clone(), calls: probe.calls.clone(), thread: probe.thread.clone(), dropped: probe.dropped.clone() };
+    (work, probe)
+}
+
+fn start_counting(s: &mut Session, needed: usize, lock: bool) -> (JobId, Probe) {
+    let (work, probe) = counting(needed);
+    let id = job(s.start_job_stepped("test.stepped", json!({}), "Stepping", lock, work, |_, n| Ok(json!({"steps": n}))).unwrap());
+    (id, probe)
+}
+
+#[test]
+fn a_cooperative_job_gets_one_slice_per_poll_on_the_calling_thread() {
+    let mut s = session(40, 30);
+    s.set_cooperative_jobs(true);
+    let (id, probe) = start_counting(&mut s, 3, true);
+    assert!(s.has_jobs());
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 0, "starting does no work");
+    // The document is locked as for a worker.
+    let refused = s.execute("layer.new.layer", json!({})).unwrap_err().to_string();
+    assert!(refused.contains("Stepping"), "{refused}");
+    for polls in 1..=2 {
+        assert!(s.poll_jobs().is_empty(), "poll {polls}");
+        assert_eq!(probe.calls.load(Ordering::Relaxed), polls);
+        assert!(s.has_jobs());
+    }
+    let info = s.job(id).unwrap();
+    assert_eq!(info.message, "Counting");
+    assert!((info.progress - 2.0 / 3.0).abs() < 1e-6, "{}", info.progress);
+    let events = s.poll_jobs();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome, JobOutcome::Done(json!({"steps": 3})));
+    assert_eq!((events[0].command.as_str(), events[0].label.as_str()), ("test.stepped", "Stepping"));
+    assert!(!s.has_jobs());
+    assert_eq!(*probe.thread.lock().unwrap(), Some(std::thread::current().id()), "no worker thread");
+    // Each slice was given about a frame's budget: no more than 8 ms from the poll.
+    let ahead = probe.ahead.lock().unwrap().clone();
+    assert!(ahead.iter().all(|d| *d <= STEP_BUDGET), "{ahead:?}");
+    assert!(ahead.iter().any(|d| *d > Duration::ZERO), "{ahead:?}");
+    assert!(probe.dropped.load(Ordering::Relaxed), "the finished work is let go");
+    s.execute("layer.new.layer", json!({})).unwrap();
+}
+
+#[test]
+fn a_cooperative_job_reports_real_elapsed_time() {
+    let mut s = session(8, 8);
+    s.set_cooperative_jobs(true);
+    let (id, _) = start_counting(&mut s, 5, false);
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(s.job(id).unwrap().elapsed_ms >= 15.0, "{}", s.job(id).unwrap().elapsed_ms);
+    assert_eq!(s.wait_job(id).unwrap(), json!({"steps": 5}));
+}
+
+/// A budget too large to add to an `Instant` runs the slice to the end instead of overflowing.
+#[test]
+fn a_huge_step_budget_does_not_panic() {
+    let mut s = session(8, 8);
+    s.set_cooperative_jobs(true);
+    s.set_job_step_budget(Duration::MAX);
+    let (id, probe) = start_counting(&mut s, 2, false);
+    s.poll_jobs();
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 1, "one slice still runs");
+    assert_eq!(s.wait_job(id).unwrap(), json!({"steps": 2}));
+}
+
+#[test]
+fn only_one_cooperative_job_is_stepped_per_poll() {
+    let mut s = session(8, 8);
+    s.set_cooperative_jobs(true);
+    let (a, pa) = start_counting(&mut s, 5, false);
+    let (b, pb) = start_counting(&mut s, 5, false);
+    s.poll_jobs();
+    assert_eq!((pa.calls.load(Ordering::Relaxed), pb.calls.load(Ordering::Relaxed)), (1, 0));
+    s.poll_jobs();
+    assert_eq!((pa.calls.load(Ordering::Relaxed), pb.calls.load(Ordering::Relaxed)), (2, 0));
+    // Both finish all the same.
+    assert_eq!(s.wait_job(a).unwrap(), json!({"steps": 5}));
+    assert_eq!(s.wait_job(b).unwrap(), json!({"steps": 5}));
+}
+
+#[test]
+fn wait_job_runs_a_cooperative_job_to_the_end() {
+    let mut s = session(8, 8);
+    s.set_cooperative_jobs(true);
+    let (id, probe) = start_counting(&mut s, 50, true);
+    assert_eq!(s.wait_job(id).unwrap(), json!({"steps": 50}));
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 50);
+    assert!(!s.has_jobs());
+}
+
+#[test]
+fn cancelling_a_cooperative_job_between_polls_discards_it() {
+    let mut s = session(8, 8);
+    s.set_cooperative_jobs(true);
+    let (id, probe) = start_counting(&mut s, 10, true);
+    s.poll_jobs();
+    assert!(s.cancel_job(id));
+    assert!(probe.dropped.load(Ordering::Relaxed), "the work is let go at once");
+    assert!(!s.has_jobs());
+    let events = s.poll_jobs();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome, JobOutcome::Cancelled);
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 1, "no slice after the cancel");
+    assert!(matches!(s.wait_job(id), Err(EngineError::Cancelled)));
+    s.execute("layer.new.layer", json!({})).unwrap();
+}
+
+#[test]
+fn a_failing_or_panicking_slice_fails_the_job() {
+    struct Fails(bool);
+    impl StepWork<()> for Fails {
+        fn step(&mut self, _: &JobCtx, _: web_time::Instant) -> Result<Option<()>> {
+            if self.0 { Err(EngineError::Other("the slice failed".into())) } else { panic!("a bug in the slice") }
+        }
+    }
+    for panics in [false, true] {
+        let mut s = session(8, 8);
+        s.set_cooperative_jobs(true);
+        let id = job(s.start_job_stepped("test.stepped", json!({}), "Failing", true, Fails(!panics), |_, ()| Ok(json!({}))).unwrap());
+        let events = s.poll_jobs();
+        assert_eq!(events.len(), 1, "panics={panics}");
+        let JobOutcome::Failed(msg) = &events[0].outcome else { panic!("{:?}", events[0]) };
+        assert_eq!(events[0].id, id);
+        if panics {
+            assert!(msg.contains("internal error"), "{msg}");
+        } else {
+            assert_eq!(msg, "the slice failed");
+        }
+        assert!(!s.has_jobs());
+        s.execute("layer.new.layer", json!({})).unwrap();
+    }
+}
+
+#[test]
+fn a_cooperative_session_runs_other_commands_inline() {
+    let mut s = session(60, 40);
+    s.set_cooperative_jobs(true);
+    assert!(matches!(s.start("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap(), Started::Done(_)));
+    assert!(!s.has_jobs());
+    let opened = s.start_open("a.png", OpenSource::Bytes(Arc::new(Vec::new())));
+    assert!(opened.is_err() || matches!(opened, Ok(Started::Done(_))), "opening runs inline too");
+}
+
+#[test]
+fn stepped_work_without_cooperation_runs_on_a_worker_or_inline() {
+    // A worker thread, when started in the background.
+    let mut s = session(8, 8);
+    assert!(!s.cooperative_jobs() || cfg!(target_arch = "wasm32"));
+    let (id, probe) = start_counting(&mut s, 4, true);
+    let e = wait_event(&mut s, id);
+    assert_eq!(e.outcome, JobOutcome::Done(json!({"steps": 4})));
+    assert_ne!(*probe.thread.lock().unwrap(), Some(std::thread::current().id()), "ran on a worker");
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 4);
+
+    // Inline, when run as part of a command.
+    let (work, probe) = counting(6);
+    let v = run_stepped(&mut s, "Inline", true, work, |_, n| Ok(json!({"steps": n}))).unwrap();
+    assert_eq!(v, json!({"steps": 6}));
+    assert_eq!(*probe.thread.lock().unwrap(), Some(std::thread::current().id()));
+    assert!(!s.has_jobs());
+
+    // Cooperative, but not started in the background: inline as well.
+    s.set_cooperative_jobs(true);
+    let (work, _) = counting(3);
+    assert_eq!(run_stepped(&mut s, "Inline", true, work, |_, n| Ok(json!({"steps": n}))).unwrap(), json!({"steps": 3}));
+}
+
+#[test]
+fn an_inline_stepped_job_stops_when_cancelled() {
+    let mut s = session(8, 8);
+    let ctx = JobCtx::new();
+    s.set_inline_job_ctx(Some(ctx.clone()));
+    let (work, probe) = counting(1_000_000);
+    ctx.cancel();
+    let r = run_stepped(&mut s, "Inline", true, work, |_, n| Ok(json!({"steps": n})));
+    assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+    assert!(probe.calls.load(Ordering::Relaxed) <= 1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn background_admission_counts_cancelled_workers_until_they_finish() {
+    // Dropping the senders releases every worker even if an assertion unwinds.
+    let mut gates = Vec::new();
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for _ in 0..MAX_BACKGROUND_JOBS {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        gates.push(tx);
+        ids.push(job(s
+            .start_job(
+                "test.gated",
+                json!({}),
+                "gated",
+                false,
+                move |_| {
+                    let _ = rx.recv();
+                    Ok(())
+                },
+                |_, ()| Ok(Value::Null),
+            )
+            .unwrap()));
+    }
+    let rejected = s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("over-limit worker ran") }, |_, ()| Ok(Value::Null));
+    assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
+    for id in ids {
+        assert!(s.cancel_job(id));
+    }
+    assert!(s.jobs.running.is_empty());
+    assert_eq!(s.jobs.draining.len(), MAX_BACKGROUND_JOBS);
+    let rejected =
+        s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("draining workers bypassed the cap") }, |_, ()| Ok(Value::Null));
+    assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
+    drop(gates);
+    s.join_cancelled_jobs();
+    let id = job(s.start_job("test.resumed", json!({}), "resumed", false, |_| Ok(()), |_, ()| Ok(json!("resumed"))).unwrap());
+    assert_eq!(s.wait_job(id).unwrap(), json!("resumed"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn reaping_finished_workers_preserves_the_release_request() {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let mut draining = vec![
+        Draining { handle: std::thread::spawn(|| {}), doc: None, release: true },
+        Draining {
+            handle: std::thread::spawn(move || {
+                let _ = rx.recv();
+            }),
+            doc: None,
+            release: true,
+        },
+    ];
+    let start = Instant::now();
+    while !draining[0].handle.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+    assert!(reap_draining(&mut draining));
+    assert_eq!(draining.len(), 1);
+    assert!(!reap_draining(&mut draining), "a running worker must retain its release request");
+    drop(tx);
+    let start = Instant::now();
+    while !draining[0].handle.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+    assert!(reap_draining(&mut draining));
+    assert!(draining.is_empty());
+}
+
+#[cfg(unix)]
+fn tmp_dir(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("photocraft-engine-jobs-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// A tiny real PSD fixture, so an admission test never allocates anything near a threshold.
+fn tiny_psd() -> Vec<u8> {
+    super::psd_open_fixture::make_psd(false)
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn approved_open_forwards_the_flag_and_the_bound_estimate() {
+    let gb = 1u64 << 30;
+    let bytes = Arc::new(tiny_psd());
+    // Known 8 GiB: S = 4 GiB, H = 6 GiB. The test charge puts the estimate just over S.
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None };
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
+            let mut s = Session::new();
+            let started = s.start_open_for_user_with_background("tiny.psd", OpenSource::Bytes(Arc::clone(&bytes)), false).unwrap();
+            let v = match started {
+                Started::Done(v) => v,
+                Started::Job(id) => s.wait_job(id).unwrap(),
+            };
+            let id = v["pendingPreflight"].as_u64().unwrap_or_else(|| panic!("expected a memory preflight: {v}"));
+            assert!(v["estimated"].as_u64().unwrap() > 4 * gb, "the seam's charge is part of the estimate: {v}");
+            assert!(s.documents().is_empty());
+            // Approving forwards the one-shot flag and estimate through the real import path.
+            let r = s.execute("file.approveMemory", json!({"id": id, "approve": true, "background": false})).unwrap();
+            assert_eq!(r["approved"], json!(true), "{r}");
+            assert!(r["result"].get("document").is_some(), "the approved import opened the document: {r}");
+            assert_eq!(s.documents().len(), 1);
+            assert_eq!(s.pending_preflight_bytes().unwrap(), 0, "approval releases the held source bytes");
+        });
+    });
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn approval_is_bound_to_the_approved_estimate() {
+    let gb = 1u64 << 30;
+    let bytes = Arc::new(tiny_psd());
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None };
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
+            let mut s = Session::new();
+            let source = OpenSource::Bytes(Arc::clone(&bytes));
+            let fingerprint = SourceFingerprint::of(&source).unwrap();
+            // Consent given for a much smaller estimate does not cover this file.
+            let err = s
+                .start_open_approved_with_background("tiny.psd", source, false, Some(1 << 20), Some(fingerprint), false)
+                .expect_err("a larger estimate needs fresh consent");
+            assert!(matches!(&err, EngineError::PsdApprovalRequired { .. }), "got {err:?}");
+            assert!(s.documents().is_empty());
+        });
+    });
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn unknown_capacity_metadata_never_invents_available_ram() {
+    let gb = 1u64 << 30;
+    let bytes = Arc::new(tiny_psd());
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: None, swap_free: None, commit_headroom: None };
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        // Above both the 2 GiB unknown-capacity allowance and the 8 GiB warning threshold.
+        photocraft_io::psd_budget::with_test_estimate_charge(8 * gb + 1, || {
+            let mut s = Session::new();
+            let started = s.start_open_for_user_with_background("unknown.psd", OpenSource::Bytes(Arc::clone(&bytes)), false).unwrap();
+            let v = match started {
+                Started::Done(v) => v,
+                Started::Job(id) => s.wait_job(id).unwrap(),
+            };
+            assert!(v["availableRam"].is_null(), "no number is invented for an unmeasured capacity: {v}");
+            assert_eq!(v["capacityUnknown"], json!(true), "{v}");
+            assert_eq!(v["uncertainCapacityWarning"], json!(true), "{v}");
+            let id = v["pendingPreflight"].as_u64().unwrap();
+            assert!(s.take_pending_preflight(id).is_some());
+        });
+    });
+}
+
+#[test]
+fn an_open_reports_a_typed_hard_budget_refusal() {
+    let gb = 1u64 << 30;
+    let bytes = Arc::new(tiny_psd());
+    // A measured 4 GiB gives a finite hard limit; a charge over it is refused.
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: Some(4 * gb), swap_free: None, commit_headroom: None };
+    let hard = photocraft_io::memory::resolve_budget(snapshot, None).hard_limit;
+    assert!(hard < u64::MAX, "the test needs a finite hard limit");
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        photocraft_io::psd_budget::with_test_estimate_charge(hard + 1, || {
+            let mut s = Session::new();
+            let err = s.start_open_for_user_with_background("over.psd", OpenSource::Bytes(Arc::clone(&bytes)), false).unwrap_err();
+            match &err {
+                EngineError::PsdHardBudget { required, limit, .. } => assert!(*required > hard && *limit == hard),
+                other => panic!("the job must keep the hard-budget fields, got {other:?}"),
+            }
+            assert!(s.documents().is_empty());
+        });
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_failed_job_keeps_its_typed_error_for_wait_and_events() {
+    let mut s = Session::new();
+    let started = s
+        .start_job(
+            "test.hardBudget",
+            json!({}),
+            "Test hard budget",
+            false,
+            |_ctx| -> Result<()> { Err(EngineError::PsdHardBudget { name: "too-big.psd".into(), required: 9000, limit: 4000, free_memory: None }) },
+            |_, _| Ok(Value::Null),
+        )
+        .unwrap();
+    let id = job(started);
+    let err = s.wait_job(id).expect_err("the job fails");
+    assert!(
+        matches!(&err, EngineError::PsdHardBudget { name, required, limit, .. } if name == "too-big.psd" && *required == 9000 && *limit == 4000),
+        "wait_job must not flatten the typed refusal: {err:?}"
+    );
+    let event = s.poll_jobs().into_iter().find(|e| e.id == id).expect("the job event");
+    assert!(
+        matches!(&event.error, Some(EngineError::PsdHardBudget { required, limit, .. }) if *required == 9000 && *limit == 4000),
+        "the event carries the typed refusal: {event:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_path_is_refused_with_the_source_identity_reason() {
+    let dir = tmp_dir("replaced");
+    let path = dir.join("source.psd");
+    let bytes = tiny_psd();
+    std::fs::write(&path, &bytes).unwrap();
+    let source = OpenSource::Path(path.to_string_lossy().into_owned());
+    let fingerprint = SourceFingerprint::of(&source).unwrap();
+    // A different inode with identical content and length: only the identity differs.
+    let replacement = dir.join("replacement.psd");
+    std::fs::write(&replacement, &bytes).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    let mut s = Session::new();
+    let err = s
+        .start_open_approved_with_background("source.psd", source.clone(), false, Some(1024), Some(fingerprint.clone()), false)
+        .expect_err("the handle is not the approved file");
+    assert!(matches!(&err, EngineError::SourceChanged { .. }), "the inline refusal must name the identity, not a parser failure: {err:?}");
+    assert!(s.documents().is_empty());
+    // The same check on the worker path: the job fails with the identity reason, not a decode error.
+    let started = s.start_open_approved_with_background("source.psd", source, false, Some(1024), Some(fingerprint), true).unwrap();
+    let Started::Job(id) = started else { panic!("expected a background job") };
+    let err = s.wait_job(id).expect_err("the worker's handle is not the approved file");
+    assert!(matches!(&err, EngineError::SourceChanged { .. }), "the background refusal must name the identity: {err:?}");
+    assert!(s.documents().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_same_size_rewrite_with_a_restored_mtime_is_refused_with_the_identity_reason() {
+    let dir = tmp_dir("rewrite");
+    let path = dir.join("source.psd");
+    let bytes = tiny_psd();
+    std::fs::write(&path, &bytes).unwrap();
+    let source = OpenSource::Path(path.to_string_lossy().into_owned());
+    let fingerprint = SourceFingerprint::of(&source).unwrap();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::thread::sleep(Duration::from_millis(10));
+    // Same inode, same length, same bytes, restored modification time: only ctime differs.
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+    let mut s = Session::new();
+    let err = s
+        .start_open_approved_with_background("source.psd", source, false, Some(1024), Some(fingerprint), false)
+        .expect_err("the rewrite is not the file whose estimate was approved");
+    assert!(matches!(&err, EngineError::SourceChanged { .. }), "a restored mtime must not hide the rewrite: {err:?}");
+    assert!(s.documents().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
+    let dir = tmp_dir("ctime");
+    let path = dir.join("source.psd");
+    std::fs::write(&path, b"AAAAAAAAAA").unwrap();
+    let before = SourceFingerprint::of(&OpenSource::Path(path.to_string_lossy().into_owned())).unwrap();
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::thread::sleep(Duration::from_millis(10));
+    std::fs::write(&path, b"BBBBBBBBBB").unwrap();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+    let after = SourceFingerprint::of(&OpenSource::Path(path.to_string_lossy().into_owned())).unwrap();
+    let (b, a) = (before.file_identity().unwrap(), after.file_identity().unwrap());
+    assert_eq!((b.len, b.modified, b.ino), (a.len, a.modified, a.ino), "same length, modification time and inode");
+    assert_ne!((b.ctime_secs, b.ctime_nanos), (a.ctime_secs, a.ctime_nanos), "the Unix identity carries ctime, so a restored mtime cannot hide a rewrite");
+    assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
+    let _ = std::fs::remove_dir_all(&dir);
+}

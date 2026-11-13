@@ -86,7 +86,7 @@ channels, the colour map, parasites, limits and malformed input.
 Real files come from GIMP 3.2.6 itself: `gimp/` of [photocraft-corpus](https://github.com/storytold/photocraft-corpus)
 (generator `tools/gimp-xcf/xcf_fixtures.py`, run inside GIMP), fetched into `corpus/gimp/` by
 `cargo xtask corpus --gimp` (28 files, 251 KB): procedural layers the tests regenerate sample for
-sample, and for each file GIMP's own merged rendering as a PNG. `crates/io/tests/xcf.rs` (feature
+sample, and for each file GIMP's own merged rendering as a PNG. `crates/io/tests/it/xcf.rs` (feature
 `corpus`, run by `cargo xtask test-corpus -p io`) checks the layer data against the formulas and our
 composite against GIMP's:
 

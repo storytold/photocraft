@@ -71,7 +71,7 @@ are rejected. The I/O adapter decodes it with a 128 MiB allocation limit.
 
 Affinity has no published file-format specification, so this reader is built only from a public
 description of the format and from public files, never from Affinity itself. This is how
-PhotoCraft already treats formats that are only partly documented: `photocraft-psd` fills the gaps
+PhotoCraft already treats formats that are only partly documented: `craft-psd` fills the gaps
 in Adobe's specification from the MIT-licensed psd-tools and ag-psd, and `photocraft-raw` recovered
 Nikon's compression tables by black-box analysis of CC0 sample files (see their READMEs).
 
@@ -108,11 +108,11 @@ The same reader is shared, as an independent copy, with VectorCraft's `vectorcra
 
 * Unit tests on synthetic containers built by the `synth` feature (stored, zlib and zstd entries,
   checksums, budgets, cycles, hostile streams, every truncation) and property tests of random
-  mutations, here and in `photocraft-io`'s `tests/affinity.rs`.
+  mutations, here and in `photocraft-io`'s `tests/it/affinity.rs`.
 * `cargo xtask corpus --affinity` fetches 21 public CC0/MIT documents, including the four
   Affinity 3 `.af` files of [samuel-etver/vector-art](https://github.com/samuel-etver/vector-art)
-  (CC0), at pinned commits, each checked against `xtask/affinity-corpus.sha256`. `tests/real_files.rs`
-  parses them; `photocraft-io`'s `tests/affinity_corpus.rs` imports and flattens each one and
+  (CC0), at pinned commits, each checked against `xtask/affinity-corpus.sha256`. `tests/it/real_files.rs`
+  parses them; `photocraft-io`'s `tests/it/affinity_corpus.rs` imports and flattens each one and
   compares it with the thumbnail Affinity saved in it (mean difference 0–4.6 of 255, with a
   ceiling per file).
 * `fuzz/` has `cargo-fuzz` targets for the whole reader (`preview`), the object stream (`stream`)
