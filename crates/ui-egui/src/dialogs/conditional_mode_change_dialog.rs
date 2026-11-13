@@ -95,3 +95,7 @@ pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
 }
+
+#[cfg(test)]
+#[path = "../conditional_mode_change_controls_tests.rs"]
+mod tests;
