@@ -279,10 +279,7 @@ pub fn import_options_from_params(base: photocraft_io::ImportOptions, p: &Value,
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "expected boolean for \"approveHighMemory\"".into() }),
     };
     let order = historical_xcf_sample_order(p, cmd)?;
-    let mut options = fresh_import_options(base);
-    options.psd_high_memory_approved = approved;
-    options.historical_xcf_sample_order = order;
-    Ok(options)
+    Ok(photocraft_io::ImportOptions { psd_high_memory_approved: approved, psd_approved_estimate: None, historical_xcf_sample_order: order, ..base })
 }
 
 /// Parse an explicit per-import choice. Neither a missing value nor null infers an order.
@@ -435,16 +432,8 @@ impl PlaceInput {
             let [a, b, c, d, _, _] = f.transform.m;
             (a.hypot(b), c.hypot(d))
         });
-        let approve = match p.get("approveHighMemory") {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(b)) => *b,
-            Some(_) => {
-                return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
-            }
-        };
-        let mut opts = crate::jobs::import_options(prefs);
-        opts.psd_high_memory_approved = approve;
-        opts.psd_approved_estimate = None;
+        let cmd = if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" };
+        let opts = import_options_from_params(crate::jobs::import_options(prefs), p, cmd)?;
         Ok(Self {
             name: name.to_string(),
             canvas,

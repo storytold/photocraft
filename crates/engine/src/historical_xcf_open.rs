@@ -48,7 +48,7 @@ impl Session {
     /// Open using explicit per-import options. An unset historical order is never inferred.
     pub fn start_open_with_options(&mut self, name: &str, source: OpenSource, options: &photocraft_io::ImportOptions) -> Result<Started> {
         let options = crate::file_cmds::fresh_import_options(*options);
-        self.start_open_inner(name, source, false, options.psd_high_memory_approved, options.psd_approved_estimate, None, true, Some(options))
+        self.start_open_inner(name, source, false, None, true, Some(options))
     }
 
     /// Interactive counterpart: typed historical, memory and profile questions remain pending.
@@ -60,7 +60,7 @@ impl Session {
         background: bool,
     ) -> Result<Started> {
         let options = crate::file_cmds::fresh_import_options(*options);
-        self.start_open_inner(name, source, true, options.psd_high_memory_approved, options.psd_approved_estimate, None, background, Some(options))
+        self.start_open_inner(name, source, true, None, background, Some(options))
     }
 
     /// Resume the exact retained bytes once. A refused startup keeps the capability

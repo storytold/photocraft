@@ -12,7 +12,28 @@ use photocraft_color::ColorMode;
 use super::{Precision, Result, invalid};
 
 #[cfg(test)]
+mod fallback_review_tests;
+#[cfg(test)]
 mod review_tests;
+
+pub(super) struct ProfileSelection {
+    pub bytes: Arc<Vec<u8>>,
+    /// Assigned colorants were unusable; callers must disclose the implicit interpretation
+    /// and retain the original optional configuration within the report's existing bounds.
+    pub fallback_reason: Option<String>,
+}
+
+/// Optional assigned-profile failures must not discard independently usable pixels.
+/// The fallback labels the original samples with the encoding-correct implicit space;
+/// it does not transform pixels or claim to preserve the unavailable assigned colorants.
+pub(super) fn select_profile(mode: ColorMode, precision: Precision, assigned: Option<Vec<u8>>) -> Result<ProfileSelection> {
+    let has_assigned = assigned.is_some();
+    match profile(mode, precision, assigned) {
+        Ok(bytes) => Ok(ProfileSelection { bytes, fallback_reason: None }),
+        Err(error) if has_assigned => Ok(ProfileSelection { bytes: profile(mode, precision, None)?, fallback_reason: Some(error.to_string()) }),
+        Err(error) => Err(error),
+    }
+}
 
 /// Combines source sample encoding with assigned primaries into a usable native ICC profile, rejecting
 /// incompatible profiles or inseparable transfer-curve rewrites.

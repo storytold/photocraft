@@ -19,9 +19,10 @@ impl Session {
         let previous_len = self.docs.len();
         let (index, report) = admit(self);
         if index != previous_len || self.docs.len() != previous_len.saturating_add(1) || self.active != Some(index) {
-            // A bad host callback must never turn a rejected view into closing an existing tab.
-            if index >= previous_len {
-                self.close(index);
+            // The callback's returned index is untrusted on this path. Remove the actual
+            // appended suffix, including multiple admissions, without closing an older tab.
+            while self.docs.len() > previous_len {
+                self.close(self.docs.len() - 1);
             }
             self.active = previous.and_then(|id| self.docs.iter().position(|state| state.doc.id == id));
             self.note_active_change();
@@ -76,6 +77,9 @@ impl Session {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod rollback_review_tests;
 
 #[cfg(test)]
 mod initial_view_tests {

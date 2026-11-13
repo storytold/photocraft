@@ -85,7 +85,13 @@ impl PhotocraftApp {
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
-        if self.background_jobs || photocraft_io::historical_xcf_sample_order_request(name, bytes).map_err(|error| error.to_string())?.is_some() {
+        // Wrapper header parsing can itself decompress a block or scan a gzip header.
+        // Let the engine's worker probe it under the existing transport limits instead
+        // of performing that work once here before the background open even starts.
+        if self.background_jobs
+            || photocraft_engine::jobs::has_compressed_import_signature(bytes)
+            || photocraft_io::historical_xcf_sample_order_request(name, bytes).map_err(|error| error.to_string())?.is_some()
+        {
             jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
             return Ok(Vec::new());
         }
@@ -990,3 +996,6 @@ mod tests {
 
 #[cfg(all(test, not(target_arch = "wasm32"), target_pointer_width = "64"))]
 mod fresh_source_approval_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod compressed_open_tests;

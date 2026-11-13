@@ -303,7 +303,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open as Smart Object…",
             &["File"],
             None,
-            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
+            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does),"approveHighMemory":bool=false,"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
             native,
             open_as_smart_object
         ),
@@ -326,7 +326,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -335,7 +335,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, true)
         ),
@@ -446,6 +446,10 @@ mod place_job_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_smart_object_tests.rs"]
 mod open_as_smart_object_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/historical_place_tests.rs"]
+mod historical_place_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

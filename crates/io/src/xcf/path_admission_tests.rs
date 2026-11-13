@@ -124,6 +124,50 @@ fn path_storage_uses_remaining_document_metadata_without_charging_borrowed_paylo
 }
 
 #[test]
+fn overlapping_path_limits_emit_one_disclosure_at_the_actual_admission_stop() {
+    let mut encoded = W { out: standalone("first", 0), wide: true };
+    let second_offset = encoded.out.len();
+    encoded.string("second");
+    let geometry = payload(16);
+    encoded.u32(geometry.len() as u32);
+    encoded.out.extend(geometry);
+    let first = paths::standalone(&image(&encoded.out).c, 4).unwrap();
+    let second = paths::standalone(&image(&encoded.out).c, second_offset).unwrap();
+    let retained_bytes = |path: &paths::DecodedPath| {
+        let mut allowance = usize::MAX;
+        admit_path(&mut allowance, path).unwrap();
+        usize::MAX - allowance
+    };
+    let full_allowance = retained_bytes(&first) + retained_bytes(&second);
+    for (geometry_limit, omitted) in [(true, None), (false, Some((4, 7))), (true, Some((4, 7)))] {
+        let mut image = image(&encoded.out);
+        image.meta_budget = full_allowance - usize::from(geometry_limit);
+        let mut document = Document::new("Path limits", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        import_paths(&mut document, &mut image, &[], &[4, second_offset], omitted, &Interrupt::NONE).unwrap();
+        assert_eq!(document.paths.len(), if geometry_limit { 1 } else { 2 });
+        let warnings = image.warnings.finish();
+        assert_eq!(warnings.iter().filter(|warning| warning.contains("Optional saved paths exceeded an admission limit")).count(), 1);
+        document.metadata.import_conversion = Some(Arc::new(image.outcomes.finish().unwrap()));
+        let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("conversion report") };
+        let limited: Vec<_> =
+            report.entries.iter().filter(|entry| entry.feature_code == "xcf.path" && entry.reason == ConversionReason::RetentionLimit).collect();
+        assert_eq!(limited.len(), 1, "overlapping ceilings are one omission, not duplicate path events");
+        let entry = limited[0];
+        assert_eq!(entry.source.ordinal, if geometry_limit { 1 } else { 2 });
+        assert_eq!(entry.source.record_offset, Some(if geometry_limit { second_offset as u64 } else { 4 }));
+        assert_eq!(entry.source_description.contains("document metadata allowance"), geometry_limit);
+        assert_eq!(entry.source_description.contains("standalone pointer retention limit"), omitted.is_some());
+        if omitted.is_some() {
+            assert!(entry.source_description.contains("7 later records omitted"));
+        }
+        let native = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&native).unwrap();
+        assert_eq!(reopened.paths, document.paths);
+        assert_eq!(reopened.metadata.import_conversion, document.metadata.import_conversion);
+    }
+}
+
+#[test]
 fn path_limit_keeps_saved_pixels_and_earlier_paths_with_a_durable_disclosure() {
     let bytes = standalone("retained", 0);
     let mut image = image(&bytes);

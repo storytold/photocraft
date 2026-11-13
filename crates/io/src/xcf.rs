@@ -791,7 +791,13 @@ pub(crate) fn import_with_sample_order(
 
     let ImageMetadata { properties: image_props, compression, colormap, icc } = read_image_metadata(&mut c, version)?;
     let assigned_profile = icc.is_some();
-    let native_profile = color::profile(mode, precision, icc)?;
+    let color::ProfileSelection { bytes: native_profile, fallback_reason } = color::select_profile(mode, precision, icc)?;
+    if let Some(reason) = &fallback_reason {
+        warnings.note(&format!(
+            "The assigned ICC profile could not be used: {reason}. Original samples use the implicit {} profile for their encoding; assigned colorants could not be preserved",
+            if mode == ColorMode::Grayscale { "gray" } else { "RGB" }
+        ));
+    }
     let native_color_error = text::color_transform(&native_profile).err().map(|error| error.to_string());
 
     let mut layer_ptrs = Vec::new();
@@ -897,7 +903,8 @@ pub(crate) fn import_with_sample_order(
     }
     for property in &image_props {
         if property.kind == 21 {
-            image.outcomes.parasites(image_outcome, property.offset, property.data, &["icc-profile"])?;
+            let handled: &[&str] = if fallback_reason.is_some() { &[] } else { &["icc-profile"] };
+            image.outcomes.parasites(image_outcome, property.offset, property.data, handled)?;
         } else if !matches!(property.kind, 1 | 17) {
             let reason = match property.kind {
                 18 | 19 => ConversionReason::NativePolicy,
@@ -934,8 +941,8 @@ pub(crate) fn import_with_sample_order(
         feature_code: "xcf.color_encoding".into(),
         source: conversion::source("image", 0, 0, "", &[], None),
         targets: vec![NativeTargetRef { label: "Document color profile".into(), ..Default::default() }],
-        disposition: ConversionDisposition::NativeEquivalent,
-        reason: ConversionReason::NativePolicy,
+        disposition: if fallback_reason.is_some() { ConversionDisposition::NativeApproximation } else { ConversionDisposition::NativeEquivalent },
+        reason: if fallback_reason.is_some() { ConversionReason::NativeLimitation } else { ConversionReason::NativePolicy },
         source_description: format!(
             "{} profile; {} sample encoding",
             if assigned_profile { "Assigned" } else { "Implicit sRGB/sGray" },
@@ -947,7 +954,12 @@ pub(crate) fn import_with_sample_order(
                 "profile transfer curve"
             }
         ),
-        native_description: "Native ICC profile preserves the source colorants and sample transfer curve; samples retain native precision and range".into(),
+        native_description: match fallback_reason {
+            Some(reason) => format!(
+                "The assigned ICC profile could not be used: {reason}. An encoding-correct implicit profile interprets the unchanged samples; assigned colorants could not be preserved. Optional source profile bytes remain inert when retention limits permit"
+            ),
+            None => "Native ICC profile preserves the source colorants and sample transfer curve; samples retain native precision and range".into(),
+        },
         attachments: Vec::new(),
     })?;
     import_paths(&mut document, &mut image, &image_props, &path_ptrs, omitted_paths, ctl)?;
@@ -1194,11 +1206,16 @@ fn import_paths<'a>(
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let incomplete_identity = incomplete_identity || limit.is_some() || omitted_standalone.is_some();
-    if let Some((ordinal, offset, reason)) = limit {
-        limited_paths(image, ordinal, offset, reason)?;
-    }
-    if let Some((offset, count)) = omitted_standalone {
-        limited_paths(image, ordinal, offset, &format!("standalone pointer retention limit; {count} later records omitted"))?;
+    let disclosure = match (limit, omitted_standalone) {
+        (Some((ordinal, offset, reason)), Some((_, count))) => {
+            Some((ordinal, offset, format!("{reason}; standalone pointer retention limit; {count} later records omitted")))
+        }
+        (Some((ordinal, offset, reason)), None) => Some((ordinal, offset, reason.to_string())),
+        (None, Some((offset, count))) => Some((ordinal, offset, format!("standalone pointer retention limit; {count} later records omitted"))),
+        (None, None) => None,
+    };
+    if let Some((ordinal, offset, reason)) = disclosure {
+        limited_paths(image, ordinal, offset, &reason)?;
     }
     if incomplete_identity {
         // Undecoded records could select another path or duplicate an admitted tattoo.

@@ -968,6 +968,11 @@ pub enum OpenSource {
     Path(String),
 }
 
+/// Compressed envelopes require worker-side format probing; these signatures do not claim XCF.
+pub fn has_compressed_import_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x1f, 0x8b]) || bytes.starts_with(b"BZh") || bytes.starts_with(b"\xfd7zXZ\0")
+}
+
 /// The command id open jobs report (there is no engine command: opening is the shell's).
 pub const OPEN_JOB: &str = "file.open";
 
@@ -1210,7 +1215,8 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
+        let options = photocraft_io::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: approved_estimate, ..import_options(self.prefs()) };
+        self.start_open_inner(name, source, confirm_damage, expected_fingerprint, background, Some(options))
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1224,7 +1230,7 @@ impl Session {
     /// [`Session::take_held_open_with_view`] once answered. Use [`Session::admit_import_with_initial_view`]
     /// to admit the document and validate/apply its saved view together, rolling back a rejection.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true, None)
+        self.start_open_inner(name, source, false, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1237,7 +1243,7 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background, None)
+        self.start_open_inner(name, source, true, None, background, None)
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1260,15 +1266,11 @@ impl Session {
 
     /// Decodes a file in a job and optionally holds damaged PSD content for
     /// interactive confirmation while leaving headless opens non-interactive.
-    // Keep the worker and apply closures together with their execution options.
-    #[allow(clippy::too_many_arguments)]
     fn start_open_inner(
         &mut self,
         name: &str,
         source: OpenSource,
         confirm_damage: bool,
-        approve_high_memory: bool,
-        approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
         options: Option<photocraft_io::ImportOptions>,
@@ -1279,8 +1281,8 @@ impl Session {
         let mut opts = options.unwrap_or_else(|| import_options(self.prefs()));
         // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
         opts.keep_raw |= confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
-        opts.psd_high_memory_approved = approve_high_memory;
-        opts.psd_approved_estimate = approved_estimate;
+        // A nominally inline interactive open must not probe compressed envelopes on the UI thread.
+        let background = background || (confirm_damage && matches!(&source, OpenSource::Bytes(bytes) if has_compressed_import_signature(bytes)));
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),

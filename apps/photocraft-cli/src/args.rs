@@ -248,6 +248,9 @@ pub(crate) struct BatchArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 batch inputs; never guessed
+    #[arg(long, value_parser = ["little-endian", "big-endian"])]
+    pub(crate) historical_xcf_sample_order: Option<String>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
