@@ -63,9 +63,10 @@ const NO_SELECTION: [&str; 17] = [
     "Reselect",
 ];
 
-/// The reference also greys Group from Layers… and Load Selection…, but their menu-bar twins are
-/// live here (as in the Count tool's menu), and the rows follow the twins.
-const NO_SELECTION_GREY: [&str; 5] = ["Blending Options…", "Convert to Layers", "Rasterize Layer", "Rasterize Layer Style", "Free Transform"];
+/// The reference also greys Load Selection…, but its menu-bar twin is live here (as in the Count
+/// tool's menu), and the row follows the twin.
+const NO_SELECTION_GREY: [&str; 6] =
+    ["Blending Options…", "Group from Layers…", "Convert to Layers", "Rasterize Layer", "Rasterize Layer Style", "Free Transform"];
 
 const IN_SELECTION: [&str; 23] = [
     "Deselect",

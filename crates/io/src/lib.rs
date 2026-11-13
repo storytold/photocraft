@@ -695,6 +695,9 @@ pub struct ImportOptions {
     /// Required only for multibyte development XCF7–11 samples. No default is
     /// inferred from the current machine, file name, producer or pixel values.
     pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
+    /// Keep a developed raw's sensor data for its open-time Camera Raw dialog
+    /// ([`raw::take_kept_decode`]) instead of decoding the file again there.
+    pub keep_raw: bool,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace, and the
     /// equivalent allowance for a layered TIFF's composite and retained decoded image. May
     /// lower the default cap; 0 uses the adaptive budget. Does not cover metadata or
@@ -730,6 +733,7 @@ impl Default for ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
             historical_xcf_sample_order: None,
+            keep_raw: false,
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
             pdf_dpi: 300.0,
@@ -1155,12 +1159,18 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             Ok(ImportResult { initial_view: None, warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
-        Route::Affinity => affinity::import(name, bytes),
+        Route::Affinity => affinity::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
         Route::Xcf => xcf::import_with_sample_order(name, bytes, opts.historical_xcf_sample_order, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
-        Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
+        Route::Raw => {
+            if opts.keep_raw {
+                raw::import_raw_demosaic_keeping(name, bytes, opts.demosaic)
+            } else {
+                raw::import_raw_demosaic(name, bytes, opts.demosaic)
+            }
+        }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
