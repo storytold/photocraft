@@ -22,6 +22,14 @@ const RES_UNIT: &str = "__resUnit";
 /// Centimetres per inch.
 const CM: f64 = 2.54;
 
+/// The top of the size and font size fields.
+const FIELD_MAX: f64 = 300_000.0;
+/// Resolution in pixels/inch.
+const RES_MIN: f64 = 1.0;
+const RES_MAX: f64 = 10_000.0;
+/// The top of the Columns and Rows fields.
+const GRID_MAX: f64 = 100.0;
+
 const UNITS: [(&str, &str); 3] = [("inches", "inches"), ("cm", "cm"), ("pixels", "pixels")];
 const RES_UNITS: [(&str, &str); 2] = [("in", "pixels/inch"), ("cm", "pixels/cm")];
 const MODES: [(&str, &str); 4] = [("gray", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
@@ -54,6 +62,62 @@ pub(crate) fn preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> 
         app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
     }
     Err(message)
+}
+
+/// The fields the dialog opens with: `defaults` under the values of the last OK (#13695), kept in
+/// the preferences so they survive a restart. Each stored value the dialog cannot show gives its
+/// default (see [`settings`]).
+pub(crate) fn opening(app: &PhotocraftApp, mut defaults: Value) -> Value {
+    let saved = app.session.prefs().dialogs.get(COMMAND).and_then(Value::as_object).map(settings);
+    if let (Some(saved), Some(fields)) = (saved, defaults.as_object_mut()) {
+        fields.extend(saved);
+    }
+    defaults
+}
+
+/// OK ran the command: keep the dialog's values for the next open. The Files list (#13686) is not
+/// among them, and Cancel never reaches here, so the next open shows the last OK'd run.
+pub(crate) fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
+    let saved = settings(f);
+    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(saved)));
+}
+
+/// The values of `f` the dialog keeps: each one its control can show, whole numbers as integers.
+/// A value it cannot show (a hand-edited preferences file, a value set over the control channel)
+/// and a key without a control are left out, so the dialog shows its default there. Units, Width
+/// and Height are kept only all three together, since a width means nothing without its units.
+fn settings(f: &Map<String, Value>) -> Map<String, Value> {
+    let within = |v: &Value, lo: f64, hi: f64| v.as_f64().filter(|n| (lo..=hi).contains(n)).map(|n| json!(n));
+    let whole = |v: &Value, hi: f64| v.as_f64().filter(|n| n.fract() == 0.0 && (0.0..=hi).contains(n)).map(|n| json!(n as u64));
+    let one_of = |v: &Value, ids: &[&str]| v.as_str().filter(|s| ids.contains(s)).map(|s| json!(s));
+    let mut kept = Map::new();
+    for (key, v) in f {
+        let v = match key.as_str() {
+            "input" | "font" => v.is_string().then(|| v.clone()),
+            RES_UNIT => one_of(v, &RES_UNITS.map(|(id, _)| id)),
+            "mode" => one_of(v, &MODES.map(|(id, _)| id)),
+            "depth" => whole(v, f64::MAX).filter(|d| DEPTHS.iter().any(|(id, _)| d.as_u64() == Some(*id))),
+            "fontSize" => within(v, 0.0, FIELD_MAX),
+            "resolution" => within(v, RES_MIN, RES_MAX),
+            "columns" | "rows" => whole(v, GRID_MAX),
+            "includeSubfolders" | "groupByFolder" | "placeAcrossFirst" | "autoSpacing" | "rotateForBestFit" | "caption" | "flatten" => {
+                v.is_boolean().then(|| v.clone())
+            }
+            _ => None,
+        };
+        if let Some(v) = v {
+            kept.insert(key.clone(), v);
+        }
+    }
+    let size = (
+        f.get("units").and_then(|v| one_of(v, &UNITS.map(|(id, _)| id))),
+        f.get("width").and_then(|v| within(v, 0.0, FIELD_MAX)),
+        f.get("height").and_then(|v| within(v, 0.0, FIELD_MAX)),
+    );
+    if let (Some(units), Some(width), Some(height)) = size {
+        kept.extend([("units".into(), units), ("width".into(), width), ("height".into(), height)]);
+    }
+    kept
 }
 
 /// The dialog body: one block per group.
@@ -111,7 +175,7 @@ fn document(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
     for (key, label, name, d) in [("width", tl!("Width:"), tl!("Width"), 8.0), ("height", tl!("Height:"), tl!("Height"), 10.0)] {
         row(ui, w, label, |ui| {
             let mut v = number(f, key, d) as f32;
-            if crate::widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 90.0, decimals).accessible_name(name).changed() {
+            if crate::widgets::value_field_prec(ui, &mut v, 0.0..=FIELD_MAX as f32, "", 90.0, decimals).accessible_name(name).changed() {
                 f.insert(key.into(), json!(exact(v)));
             }
         });
@@ -120,8 +184,12 @@ fn document(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
         let mut unit = text(f, RES_UNIT, "in");
         let k = if unit == "cm" { CM } else { 1.0 };
         let mut v = (res / k) as f32;
-        if crate::widgets::value_field_prec(ui, &mut v, (1.0 / k as f32)..=(10_000.0 / k as f32), "", 90.0, 2).accessible_name(tl!("Resolution")).changed() {
-            f.insert("resolution".into(), json!(exact(v) * k));
+        if crate::widgets::value_field_prec(ui, &mut v, ((RES_MIN / k) as f32)..=((RES_MAX / k) as f32), "", 90.0, 2)
+            .accessible_name(tl!("Resolution"))
+            .changed()
+        {
+            // The f32 field's ends read back a hair outside the range in pixels/cm.
+            f.insert("resolution".into(), json!((exact(v) * k).clamp(RES_MIN, RES_MAX)));
         }
         if choice(ui, "cs2-res-unit", tl!("Resolution Unit"), &mut unit, &RES_UNITS) {
             f.insert(RES_UNIT.into(), json!(unit));
@@ -154,7 +222,7 @@ fn thumbnails(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
     for (key, label, name, d) in [("columns", tl!("Columns:"), tl!("Columns"), 5.0), ("rows", tl!("Rows:"), tl!("Rows"), 6.0)] {
         row(ui, w, label, |ui| {
             let mut v = number(f, key, d) as f32;
-            if crate::widgets::value_field_whole(ui, &mut v, 0.0..=100.0, "", 90.0).accessible_name(name).changed() {
+            if crate::widgets::value_field_whole(ui, &mut v, 0.0..=GRID_MAX as f32, "", 90.0).accessible_name(name).changed() {
                 f.insert(key.into(), json!(v.round() as i64));
             }
         });
@@ -180,7 +248,7 @@ fn caption(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
         });
         row(ui, w, tl!("Font size:"), |ui| {
             let mut v = number(f, "fontSize", 12.0) as f32;
-            if crate::widgets::value_field(ui, &mut v, 0.0..=300_000.0, "pt", 90.0).accessible_name(tl!("Font size")).changed() {
+            if crate::widgets::value_field(ui, &mut v, 0.0..=FIELD_MAX as f32, "pt", 90.0).accessible_name(tl!("Font size")).changed() {
                 f.insert("fontSize".into(), json!(exact(v)));
             }
         });

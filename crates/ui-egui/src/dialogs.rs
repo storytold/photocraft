@@ -1062,6 +1062,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }
+    if result.is_ok() && crate::file_ui::contact_sheet::owns(&d.fields) {
+        crate::file_ui::contact_sheet::remember(app, &d.fields);
+    }
     if result.is_ok() {
         if crate::adjust_dialog::owns(&d.fields) {
             crate::adjust_dialog::remember(app, &d.fields);
