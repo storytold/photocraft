@@ -242,6 +242,19 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
+/// Is `p` within the grab radius `tol` of one of `r`'s end points?
+fn near_end(r: Ruler, p: [f64; 2], tol: f64) -> bool {
+    dist(p, r.start) <= tol || dist(p, r.end) <= tol
+}
+
+/// Is the pointer at document point `p` over the ruler's end points? The very hit test a press
+/// makes its decision with ([`near_end`], `dist` with [`tolerance`]), so the Ruler tool's ⌥ pointer
+/// shows exactly where an ⌥-drag starts the protractor arm (#12037).
+pub(crate) fn ruler_end_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    let tol = tolerance(app);
+    app.session.active().is_some_and(|d| d.doc.measurement.ruler.is_some_and(|r| near_end(r, p, tol)))
+}
+
 /// Shift constrains to 45° steps around `from`, as the reference does (#11985): on a diagonal step
 /// both legs take the smaller of |dx| and |dy| (signs kept), on a 0° or 90° step the dominant
 /// component stays and the other becomes 0, so the ruler never gets longer than the pointer's legs.
@@ -309,7 +322,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             let near = |q: [f64; 2]| dist(p, q) <= tol;
             match cur {
                 // ⌥-drag from an end point starts the protractor arm at that vertex.
-                Some(mut r) if mods.alt && (near(r.start) || near(r.end)) => {
+                Some(mut r) if mods.alt && near_end(r, p, tol) => {
                     if near(r.end) && !near(r.start) {
                         std::mem::swap(&mut r.start, &mut r.end);
                     }
