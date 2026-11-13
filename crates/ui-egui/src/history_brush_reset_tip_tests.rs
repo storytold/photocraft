@@ -184,6 +184,7 @@ fn other_tools_keep_their_reset_tips_and_smoothing() {
         let expected = match tool {
             Tool::Brush | Tool::Smudge => (13.0, 0.0, 0.25),
             Tool::BackgroundEraser => (13.0, 1.0, 0.25),
+            Tool::Pencil => (1.0, 1.0, 0.25),
             Tool::Healing => (19.0, 1.0, 0.25),
             Tool::Burn | Tool::Dodge | Tool::Sponge => (65.0, 0.0, 0.25),
             Tool::CloneStamp => (21.0, 0.0, 0.25),
