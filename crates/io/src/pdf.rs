@@ -13,22 +13,24 @@ mod text;
 
 /// Neutral page records and PDF syntax are owned by craft-pdf; this module only maps the
 /// PhotoCraft document to those records and supplies its product-level cancellation policy.
-pub use craft_pdf::write_raster::{Image as PrintImage, Marks, Page as PrintPage, SelectionFont, SpotPlate};
+pub use craft_pdf::write_raster::{ContentOp, Image as PrintImage, Marks, Page as PrintPage, SelectionFont, SpotPlate, VectorContent};
 
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
-    craft_pdf::write_raster::write_pages(std::slice::from_ref(page), &[String::new()], &SelectionFont::default(), None)
+    craft_pdf::write_raster::write_pages_with_vector_content(std::slice::from_ref(page), &[VectorContent::default()], &SelectionFont::default(), None)
+        .unwrap_or_default()
 }
 
 fn print_pdf_pages(
     pages: &[PrintPage],
-    vectors: &[String],
+    vectors: &[VectorContent],
     selection_font: &SelectionFont,
     xmp: Option<&str>,
     ctl: &photocraft_raster::Interrupt,
 ) -> std::result::Result<Vec<u8>, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    Ok(craft_pdf::write_raster::write_pages(pages, vectors, selection_font, xmp))
+    craft_pdf::write_raster::write_pages_with_vector_content(pages, vectors, selection_font, xmp)
+        .ok_or_else(|| IoError::Unsupported("PDF vector content contains an invalid number".into()))
 }
 
 /// The namespace of the spot-plate description written by the shared PDF metadata encoder.
@@ -80,9 +82,9 @@ fn plates_of(doc: &Document, rect: photocraft_geom::Rect) -> Vec<SpotPlate> {
 /// indices of the layers they replace, and the selection font covering their text (plus, when a
 /// lower candidate is rejected during emission, that layer's unused characters).
 /// Hidden and blocked layers contribute no characters, so they cannot exhaust the font's codes.
-fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, SelectionFont) {
+fn collect_vectors(doc: &Document) -> (Vec<(usize, Vec<ContentOp>)>, SelectionFont) {
     enum Candidate<'a> {
-        Ops(String),
+        Ops(Vec<ContentOp>),
         Text(text::PreparedText<'a>),
     }
     let mut candidates = Vec::new();
@@ -107,8 +109,8 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, SelectionFont) {
                 break;
             }
             let candidate = match &layer.content {
-                photocraft_doc::LayerContent::Shape(shape) => match shapes::shape_path(shape, doc.mode) {
-                    Some(ops) => Candidate::Ops(ops),
+                photocraft_doc::LayerContent::Shape(shape) => match shapes::shape_content(shape, doc.mode) {
+                    Some(path) => Candidate::Ops(vec![ContentOp::Path(path)]),
                     None => break,
                 },
                 photocraft_doc::LayerContent::Text(text_layer) => {
@@ -274,7 +276,7 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
             return Err(IoError::Unsupported("PDF: the document's artboards have no area".into()));
         }
         warnings.push(format!("PDF exported {} artboards as {} pages; vector/text layers on artboards are rasterised", artboards.len(), pages.len()));
-        let vectors = vec![String::new(); pages.len()];
+        let vectors = vec![VectorContent::default(); pages.len()];
         (pages, vectors, SelectionFont::default())
     } else {
         let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
@@ -295,17 +297,18 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
         });
         // The vector layers, bottom to top, in the document's pixel space (y down), over the
         // image and under the plates.
-        let mut vectors = String::new();
+        let mut operations = Vec::new();
         if !vector_layers.is_empty() {
             let scale = 72.0 / dpi;
             let ph = f64::from(doc.size.height) * scale;
-            vectors.push_str(&format!("q {scale} 0 0 -{scale} 0 {ph} cm\n"));
+            operations.push(ContentOp::Save);
+            operations.push(ContentOp::Concat([scale, 0.0, 0.0, -scale, 0.0, ph]));
             for (_, ops) in vector_layers.iter().rev() {
-                vectors.push_str(ops);
+                operations.extend(ops.iter().cloned());
             }
-            vectors.push_str("Q\n");
+            operations.push(ContentOp::Restore);
         }
-        (vec![page_of(image, canvas, None)], vec![vectors], selection_font)
+        (vec![page_of(image, canvas, None)], vec![VectorContent { operations }], selection_font)
     };
     // The plates are the document's: every page has the same ones, over its own region.
     let plates = pages.first().map(|p| p.plates.as_slice()).unwrap_or_default();
