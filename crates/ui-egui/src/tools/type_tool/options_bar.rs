@@ -28,7 +28,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Font family and style menus (one placeholder in their place while the fonts load).
     // Keep the following controls' positional IDs stable when the font menus replace the
     // loading placeholder: both states occupy one slot in the parent UI.
-    ui.scope(|ui| {
+    ui.scope_builder(egui::UiBuilder::new().id_salt("type-options-fonts"), |ui| {
         if fonts_ready(ui, 170.0 + ui.spacing().item_spacing.x + 110.0) {
             if let Some(picked) = font_picker(app, ui, &mut fam, 170.0) {
                 app.ui.tool_options.type_font = fam.clone();
