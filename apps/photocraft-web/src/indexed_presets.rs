@@ -119,10 +119,10 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
             // A versionchange transaction excludes version1 tabs that could still write JSON.
             // Keep the existing store when upgrading; no second persistence schema is added.
             let result = upgrade_req.result().and_then(|v| v.dyn_into::<IdbDatabase>()).and_then(|db| {
-                if let Some(tx) = upgrade_req.transaction() {
-                    if let Ok(store) = tx.object_store(FILES) {
-                        return Ok(store);
-                    }
+                if let Some(tx) = upgrade_req.transaction()
+                    && let Ok(store) = tx.object_store(FILES)
+                {
+                    return Ok(store);
                 }
                 db.create_object_store(FILES)
             });
@@ -271,13 +271,12 @@ fn queue_batch(store: &web_sys::IdbObjectStore, batch: &Batch, committed: bool) 
 /// Acknowledge only transaction completion; migration comparisons and writes share one bounded transaction.
 /// A closed connection is replaced without rehydrating over newer unsaved bridge edits.
 pub async fn write(db: &std::rc::Rc<std::cell::RefCell<IdbDatabase>>, batch: &Batch) -> Result<(), WriteError> {
-    if let Some(migration) = &batch.migration {
-        if !matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None))
+    if let Some(migration) = &batch.migration
+        && (!matches!(batch.get(LEGACY_ACTIONS_FILE), Some(None))
             || batch.get(MIGRATED_ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.legacy.as_ref())
-            || batch.get(ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.atn.as_ref())
-        {
-            return Err("incomplete Actions migration transaction".into());
-        }
+            || batch.get(ACTIONS_FILE).and_then(Option::as_ref).is_none_or(|bytes| bytes.as_ref() != migration.atn.as_ref()))
+    {
+        return Err("incomplete Actions migration transaction".into());
     }
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
     // A versionchange handler closes the old connection. Retry replaces only that
