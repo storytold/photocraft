@@ -3,12 +3,13 @@ name = "photocraft-tablet"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit), Linux X11 (XInput2) and Windows (WinTab), and barrel button and eraser end on Windows (Windows Ink)"
+description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit), Linux X11 (XInput2), Wayland (tablet-v2) and Windows (WinTab), and barrel buttons and the eraser end on Windows (Windows Ink) and Wayland"
 
 # The one isolated `unsafe` helper crate (see AGENTS.md, Never crash): the AppKit event
-# monitor on macOS and the WH_GETMESSAGE and WH_CALLWNDPROC pointer hooks on Windows need
-# platform interop. Only `src/macos.rs` and `src/windows.rs` allow `unsafe`; everything else is
-# denied, and every other crate keeps the workspace's `unsafe_code = "forbid"`.
+# monitor on macOS, the WH_GETMESSAGE and WH_CALLWNDPROC pointer hooks on Windows and wrapping
+# winit's wl_display on Wayland need platform interop. Only `src/macos.rs`, `src/windows.rs` and
+# `src/wayland.rs` allow `unsafe`; everything else is denied, and every other crate keeps the
+# workspace's `unsafe_code = "forbid"`.
 [lints.rust]
 unsafe_code = "deny"
 
@@ -30,6 +31,15 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 # Pure-Rust X11 client (no unsafe in the RustConnection path we use).
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "=0.13.2", default-features = false, features = ["xinput"] }
+# Native Wayland tablet input on winit's own connection (`src/wayland.rs`). Already in Cargo.lock
+# through winit (system libwayland, loaded at run time like winit's); pinned exactly like the others.
+raw-window-handle = { version = "=0.6.2", default-features = false, features = ["std"] }
+wayland-backend = { version = "=0.3.17", default-features = false, features = ["client_system", "dlopen"] }
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", default-features = false, features = ["client", "staging", "unstable"] }
+# memfd for the pen cursor bitmap's shared memory and poll for the reader thread's stop (safe
+# wrappers). Already in Cargo.lock (wayland-backend); pinned exactly.
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "event", "process", "thread"] }
 
 # WinTab 1.4: a system context on PhotoCraft's real window supplies pressure, tilt, rotation and
 # the eraser end while Windows Ink is disabled. `wintab` safely wraps the vendor's wintab32.dll,

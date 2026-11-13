@@ -290,6 +290,28 @@ To use the bundled CLI, run `./photocraft-<version>-linux-x86_64.AppImage --cli 
 
 On a Wayland session, files dropped on the window don't open yet: winit 0.30, the windowing library under egui, has no Wayland drag and drop (#386). Use File › Open, or copy the image in your file manager and paste it with Ctrl+V. To drag and drop, start PhotoCraft under XWayland: `WAYLAND_DISPLAY= photocraft`, `WAYLAND_DISPLAY= ./photocraft-<version>-linux-x86_64.AppImage`, or `flatpak run --nosocket=wayland --socket=x11 ai.storyteller.photocraft`. On Wayland, PhotoCraft shows the command for your install in a notice until you dismiss it. Preferences › Performance › Linux display server = X11 does the same on every launch. With a fractional display scale (125%, 150%, 175%) an XWayland window is drawn at a lower resolution and enlarged by the compositor, so the interface is blurred there; native Wayland stays sharp (#1072).
 
+### Pen tablets on Wayland
+
+PhotoCraft reads Wacom and other pen tablets natively through Wayland's tablet protocol when the
+compositor offers it: pressure, tilt, rotation, the eraser end, tip and barrel buttons. If the
+compositor has no tablet protocol (or its probe cannot run because `WAYLAND_SOCKET` is set),
+PhotoCraft opens the window through Xwayland, where the X11 tablet reader takes over. The fallback
+needs a detected pen, `DISPLAY` and the X11 libraries; without them the window stays on native
+Wayland.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `PHOTOCRAFT_NATIVE_WAYLAND` | unset | Keep native Wayland even without tablet-v2; wins over `PHOTOCRAFT_XWAYLAND_PEN` when both are set |
+| `PHOTOCRAFT_XWAYLAND_PEN` | unset | Force the Xwayland path even when tablet-v2 is available |
+
+Both apply to a new process: quit PhotoCraft or pass `--new-instance`. Preferences › Performance ›
+Linux display server = X11 also forces Xwayland and wins over `PHOTOCRAFT_NATIVE_WAYLAND`; set it
+back to Auto. On some multi-GPU systems Xwayland presents through a GPU that drives no display,
+giving a blurred, very slow window; set `PHOTOCRAFT_NATIVE_WAYLAND=1` on a compositor with
+tablet-v2 (or use an X11 session). A pen press cannot start a native window move or resize; drag
+the custom title bar with the mouse. See [Pen tablets on Linux](docs/development.md#pen-tablets-on-linux)
+for diagnostics (`wayland-info` and the startup log line).
+
 On macOS, the command-line tool comes as `photocraft-cli-<version>-macos-universal.zip`. The binary is signed with the same Developer ID as the app and notarized by Apple. A bare binary can't carry a stapled notarization ticket the way the DMG does, so the first time you run it macOS checks the notarization online. You can confirm it yourself:
 
 ```sh
