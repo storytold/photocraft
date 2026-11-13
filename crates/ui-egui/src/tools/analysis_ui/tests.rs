@@ -384,6 +384,31 @@ fn color_sampler_limit_opens_alert_dialog_instead_of_status_note() {
 }
 
 #[test]
+fn color_sampler_limit_alert_also_for_alt_click_off_a_point() {
+    // Measured in the reference application: Alt+click off a point adds a point like a plain
+    // click, so at 10 points it opens the same alert; Alt+click on a point deletes it, no alert.
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    for i in 0..10 {
+        let x = 10.0 + (i as f64) * 10.0;
+        down(&mut app, x, 20.0, egui::Modifiers::NONE);
+        up(&mut app, x, 20.0);
+    }
+    down(&mut app, 150.0, 20.0, egui::Modifiers::ALT);
+    up(&mut app, 150.0, 20.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
+    let alerts: Vec<_> =
+        app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str()).collect();
+    assert_eq!(alerts, [MAX_SAMPLERS_ALERT]);
+
+    app.ui.dialogs.clear();
+    down(&mut app, 10.0, 20.0, egui::Modifiers::ALT);
+    up(&mut app, 10.0, 20.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 9);
+    assert!(app.ui.dialogs.is_empty());
+}
+
+#[test]
 fn color_sampler_drag_error_reports_to_status_bar_without_dialog() {
     let (mut app, _) = app();
     app.ui.tool = Tool::ColorSampler;
