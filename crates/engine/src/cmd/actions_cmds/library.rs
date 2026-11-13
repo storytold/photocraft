@@ -475,7 +475,7 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
     }
     let mut files = Vec::new();
     let mut records = Vec::new();
-    for ((name, selection), wire) in groups.iter().zip(&wire_names) {
+    for ((_, selection), wire) in groups.iter().zip(&wire_names) {
         let original = selection.raw.as_ref().map(RowOrigin::file).transpose()?;
         let mut file = original.cloned().unwrap_or_default();
         if original.is_none_or(|file| file.name.to_string_lossy() != *wire) {
