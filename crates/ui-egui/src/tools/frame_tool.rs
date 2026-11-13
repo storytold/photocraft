@@ -63,13 +63,16 @@ fn drawn(start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) -> [i64; 4
     let [x, y] = cur;
     let (mut dx, mut dy) = (x - sx, y - sy);
     if square {
-        let side = dx.abs().max(dy.abs());
+        // Shift squares from the drag's shorter side, as the reference application does (#13865).
+        let side = dx.abs().min(dy.abs());
         dx = side.copysign(dx);
         dy = side.copysign(dy);
     }
     let (a, b) = if centred { ([sx - dx, sy - dy], [sx + dx, sy + dy]) } else { (start, [sx + dx, sy + dy]) };
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|v| v.round() as i64)
 }
+#[cfg(test)]
+mod shift_square_tests;
 pub fn selected(app: &PhotocraftApp) -> Option<&Layer> {
     let st = app.session.active()?;
     let id = photocraft_engine::frame_cmds::frame_of(&st.doc, st.active_layer?)?;
