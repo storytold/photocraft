@@ -60,10 +60,24 @@ fn fade_step_missing_keys_take_fixed_defaults() {
     }
 }
 
-/// Out-of-range opacity wraps modulo 100 and fractions round; whole values in range are unchanged.
+/// Opacity less than 100 out of range wraps modulo 100 and fractions round; whole values in range
+/// are unchanged, and unmeasured values further out keep the clamp.
 #[test]
 fn fade_step_opacity_wraps_and_rounds() {
-    for (recorded, expected) in [(150.0, 50.0), (-5.0, 95.0), (50.5, 51.0), (0.0, 0.0), (37.0, 37.0), (100.0, 100.0), (-0.4, 0.0)] {
+    for (recorded, expected) in [
+        (150.0, 50.0),
+        (-5.0, 95.0),
+        (50.5, 51.0),
+        (0.0, 0.0),
+        (37.0, 37.0),
+        (100.0, 100.0),
+        (-0.4, 0.0),
+        (199.0, 99.0),
+        (200.0, 100.0),
+        (1e9, 100.0),
+        (-100.0, 0.0),
+        (-105.0, 0.0),
+    ] {
         let (id, opacity, _) = imported(desc("null").with("Opct", pct(recorded)).with("Md  ", enm("BlnM", "Nrml")));
         assert_eq!(id, "edit.fade");
         assert_eq!(opacity, expected, "{recorded}");

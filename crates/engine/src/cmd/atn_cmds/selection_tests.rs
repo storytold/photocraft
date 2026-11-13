@@ -262,12 +262,12 @@ fn noncanonical_group_f_enums_keep_their_bytes_and_flags() {
     }
 }
 
-/// Fade writes native defaults; a recorded opacity outside 0..=100 wraps modulo 100 on import.
+/// Fade writes native defaults; a recorded opacity just outside 0..=100 wraps modulo 100 on import.
 #[test]
 fn fade_defaults_and_opacity_limits_are_explicit() {
     let native = export_item("edit.fade", &json!({}), "S").unwrap().descriptor.unwrap();
     assert_eq!(native, desc("null").with("Opct", pct(100.0)).with("Md  ", enm("BlnM", "Nrml")));
-    for (opacity, expected) in [(-5.0, 95.0), (0.0, 0.0), (100.0, 100.0), (105.0, 5.0)] {
+    for (opacity, expected) in [(-5.0, 95.0), (0.0, 0.0), (100.0, 100.0), (105.0, 5.0), (250.0, 100.0)] {
         let bytes = file(AtnEvent::Code(*b"Fade"), desc("null").with("Opct", pct(opacity)).with("Md  ", enm("BlnM", "Nrml")));
         let loaded = import(&bytes).unwrap();
         assert!(loaded.unsupported.is_empty());

@@ -178,13 +178,20 @@ pub(super) fn fade_from(d: &Descriptor) -> Mapped {
     mapped().map_or(Mapped::Unsupported { harmless: false }, |p| step("edit.fade", p))
 }
 
-/// A recorded Fade opacity outside 0..=100 wraps modulo 100 (150 plays as 50, -5 as 95), as
-/// measured in the reference application, rather than clamping.
+/// A recorded Fade opacity less than 100 past either end wraps modulo 100 (150 plays as 50, -5 as
+/// 95), as measured in the reference application. Values further out (200, -100, -105) were not
+/// measured and keep the clamp to 0..=100.
 fn fade_opacity(recorded: f64) -> f64 {
     let rounded = recorded.round();
-    let wrapped = if (0.0..=100.0).contains(&rounded) { rounded } else { rounded.rem_euclid(100.0) };
-    // -0.4 rounds, and -200 wraps, to -0.0; adding zero stores it as 0.
-    wrapped + 0.0
+    let played = if rounded > 100.0 && rounded < 200.0 {
+        rounded - 100.0
+    } else if rounded < 0.0 && rounded > -100.0 {
+        rounded + 100.0
+    } else {
+        rounded.clamp(0.0, 100.0)
+    };
+    // -0.4 rounds to -0.0; adding zero stores it as 0.
+    played + 0.0
 }
 
 /// Native omitted Fade settings retain the command's 100% Normal behavior.
