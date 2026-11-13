@@ -1691,8 +1691,13 @@ fn recorded_print_steps_drop_the_drivers_printable_area() {
     let area = json!({"paper": "a4", "scale": 150, "printable": [36.0, 36.0, 523.0, 720.0]});
     s.execute("file.printSettings", area).unwrap();
     let dir = tmp("recorded-print-area");
-    let ran = s.execute("file.print", json!({"paper": "a4", "center": true, "scale": 100, "dryRun": true,
-        "output": format!("{dir}/job.pdf"), "printable": [36.0, 36.0, 523.0, 720.0]})).unwrap();
+    let ran = s
+        .execute(
+            "file.print",
+            json!({"paper": "a4", "center": true, "scale": 100, "dryRun": true,
+        "output": format!("{dir}/job.pdf"), "printable": [36.0, 36.0, 523.0, 720.0]}),
+        )
+        .unwrap();
     assert_eq!(ran["sent"], json!(false), "dryRun prints nothing");
     let stopped = s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(stopped["steps"], json!(2), "both print commands recorded: {stopped}");
@@ -1702,6 +1707,10 @@ fn recorded_print_steps_drop_the_drivers_printable_area() {
     assert_eq!(got["steps"][0][1]["paper"], json!("a4"), "everything else keeps its place");
     assert_eq!(got["steps"][1][0], json!("file.print"));
     assert!(got["steps"][1][1].get("printable").is_none(), "the print step drops it too: {}", got["steps"][1][1]);
-    // Live validation of an area given in this session stays exactly as it was.
-    assert!(matches!(s.execute("file.printSettings", json!({"paper": "a4", "printable": [0.0, 0.0, 1e9, 1.0]})), Err(EngineError::BadParams { .. })));
+    // Live validation of an area given in this session stays exactly as it was: an area that
+    // does not fit the paper is refused before anything is stored.
+    assert!(matches!(
+        s.execute("file.printSettings", json!({"paper": "a4", "scaleToFit": true, "printable": [0.0, 0.0, 1e9, 1.0]})),
+        Err(EngineError::BadParams { .. })
+    ));
 }
