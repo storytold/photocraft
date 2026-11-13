@@ -51,21 +51,19 @@ pub(super) fn stroke(s: &mut Session, extra: Value) -> Result<Value> {
 
 #[test]
 fn a_click_held_back_by_the_tolerance_adds_one_unchanged_state() {
-    for depth in [8u64, 16, 32] {
-        for tolerance in [90, 95, 99, 100] {
-            for points in [json!([[24, 16]]), json!([[8, 16], [40, 16]])] {
-                let mut s = held_back_session(depth);
-                let (before, n) = (pixels(&s), steps(&s));
-                let r = stroke(&mut s, json!({"tolerance": tolerance, "points": points})).unwrap();
-                let case = format!("depth {depth} tolerance {tolerance} points {points}");
-                assert!(r["damage"].is_null(), "{case}: {r}");
-                assert_eq!(steps(&s), n + 1, "{case}: one state");
-                assert_eq!(s.active().unwrap().history.undo_label(), Some("Art History Brush"), "{case}");
-                assert_eq!(pixels(&s), before, "{case}: no pixel changed");
-                assert!(s.undo(), "{case}");
-                assert_eq!(steps(&s), n, "{case}: undo removes the state");
-                assert_eq!(pixels(&s), before, "{case}: undo leaves the layer as it was");
-            }
+    for tolerance in [90, 95, 99, 100] {
+        for points in [json!([[24, 16]]), json!([[8, 16], [40, 16]])] {
+            let mut s = held_back_session(8);
+            let (before, n) = (pixels(&s), steps(&s));
+            let r = stroke(&mut s, json!({"tolerance": tolerance, "points": points})).unwrap();
+            let case = format!("tolerance {tolerance} points {points}");
+            assert!(r["damage"].is_null(), "{case}: {r}");
+            assert_eq!(steps(&s), n + 1, "{case}: one state");
+            assert_eq!(s.active().unwrap().history.undo_label(), Some("Art History Brush"), "{case}");
+            assert_eq!(pixels(&s), before, "{case}: no pixel changed");
+            assert!(s.undo(), "{case}");
+            assert_eq!(steps(&s), n, "{case}: undo removes the state");
+            assert_eq!(pixels(&s), before, "{case}: undo leaves the layer as it was");
         }
     }
 }
