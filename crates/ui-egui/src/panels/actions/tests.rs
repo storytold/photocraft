@@ -2233,6 +2233,7 @@ fn a_suspended_call_is_recorded_into_its_action_after_the_list_changes() {
     let id = pause_child(&mut app);
     // Something else puts an action where Owner was.
     app.session.actions.list.insert(1, Action::new("Bystander", vec![]));
+    app.session.actions.rev = app.session.actions.rev.saturating_add(1);
     crate::dialogs::confirm(&mut app, id).unwrap();
     app.run("actions.stop", json!({})).unwrap();
     assert!(app.session.actions.list[1].steps.is_empty(), "the action now at the old index gets nothing");
