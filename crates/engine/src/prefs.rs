@@ -1187,6 +1187,15 @@ pub fn migrate_integrations(section: &mut Value) {
     }
 }
 
+/// A saved `integrations` section read as the app's preference load reads it: migrated, and
+/// leniently (a value of the wrong type keeps its default, the rest still loads). The desktop
+/// app's launch read and `photocraft-cli mcp` use it, so a bad value can't reset, say, When
+/// PhotoCraft Is Closed for them alone.
+pub fn read_integrations_section(mut section: Value) -> Integrations {
+    migrate_integrations(&mut section);
+    read_section(section)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Integrations {

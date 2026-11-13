@@ -105,44 +105,12 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
 /// as the app's lenient load reads them (#6611): a wrong-typed value elsewhere in the file, or
 /// in the other field, must not turn Allow Agent Control back on while the dialog shows it off.
 fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::prefs::Integrations {
-    use serde_json::Value;
-    let mut out = photocraft_engine::prefs::Preferences::default().integrations;
-    let file: Option<Value> = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok());
-    let Some(mut section) = file.as_ref().and_then(|v| v.get("integrations")).cloned() else {
-        return out;
-    };
-    // As the engine's load does: a Control Port saved before the agents switch keeps it on.
-    photocraft_engine::prefs::migrate_integrations(&mut section);
-    match serde_json::from_value(section.clone()) {
-        Ok(whole) => whole,
-        Err(_) => {
-            integration_fields(&section, &mut out);
-            out
-        }
-    }
-}
-
-/// [`integrations`]' value-by-value read of a section that doesn't read as a whole.
-fn integration_fields(section: &serde_json::Value, out: &mut photocraft_engine::prefs::Integrations) {
-    use serde_json::Value;
-    if let Some(allow) = section.get("allowAgentControl").and_then(Value::as_bool) {
-        out.allow_agent_control = allow;
-    }
-    if let Some(on) = section.get("connectAgents").and_then(Value::as_bool) {
-        out.connect_agents = on;
-    }
-    if let Some(when) = section.get("whenAppClosed").cloned().and_then(|v| serde_json::from_value(v).ok()) {
-        out.when_app_closed = when;
-    }
-    if let Some(port) = section.get("controlPort").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()) {
-        out.control_port = port;
-    }
-    if let Some(root) = section.get("readRoot").and_then(Value::as_str) {
-        root.clone_into(&mut out.read_root);
-    }
-    if let Some(root) = section.get("writeRoot").and_then(Value::as_str) {
-        root.clone_into(&mut out.write_root);
-    }
+    let file: Option<serde_json::Value> = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok());
+    file.as_ref()
+        .and_then(|v| v.get("integrations"))
+        .cloned()
+        .map(photocraft_engine::prefs::read_integrations_section)
+        .unwrap_or_else(|| photocraft_engine::prefs::Preferences::default().integrations)
 }
 
 /// The automation roots: `--automation-read-root` / `--automation-write-root` (or their

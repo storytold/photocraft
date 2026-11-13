@@ -368,7 +368,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
+      "args": ["mcp", "--headless", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -381,7 +381,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
 ```sh
 cargo build --release -p photocraft-cli
 mkdir -p "$PWD/photocraft-work"
-claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
+claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp --headless \
   --automation-read-root "$PWD/photocraft-work" \
   --automation-write-root "$PWD/photocraft-work"
 ```

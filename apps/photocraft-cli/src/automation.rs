@@ -68,11 +68,12 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     }
 }
 
-/// `mcp`: the open window when agents may use it, otherwise headless (`mcp_live`); `--headless`
-/// always headless; `--bridge` (or PHOTOCRAFT_CONTROL_PORT) a `photocraft --control` app.
+/// `mcp`: with the suite's `AI-MCP` flag, the open window when agents may use it, otherwise
+/// headless (`mcp_live`); without the flag headless, as before it; `--headless` always headless;
+/// `--bridge` (or PHOTOCRAFT_CONTROL_PORT) a `photocraft --control` app.
 pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     let server = match &a.bridge {
-        None if !a.headless => PhotocraftMcp::live(live_config(a)?),
+        None if !a.headless && photocraft_automation::agent_link::mcp_flag() => PhotocraftMcp::live(live_config(a)?),
         Some(addr) => {
             if a.bridge_from_env {
                 // Name the mode switch, as `serve` does: the way back to headless is to unset it.

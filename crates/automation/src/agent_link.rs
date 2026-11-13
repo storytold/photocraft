@@ -176,11 +176,7 @@ pub fn read_integrations(dir: &Path) -> Integrations {
         .flatten()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|v| v.get("integrations").cloned())
-        .and_then(|mut v| {
-            // As the app reads it: a Control Port saved before the agents switch keeps it on.
-            photocraft_engine::prefs::migrate_integrations(&mut v);
-            serde_json::from_value(v).ok()
-        })
+        .map(photocraft_engine::prefs::read_integrations_section)
         .unwrap_or_default()
 }
 
@@ -303,6 +299,9 @@ mod tests {
         assert!(read_integrations(&dir).connect_agents);
         std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"controlPort": 7878, "connectAgents": false}}"#).unwrap();
         assert!(!read_integrations(&dir).connect_agents);
+        // One bad value resets only itself, as in the app: the saved closed-app choice stays.
+        std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"whenAppClosed": "error", "readRoot": 5}}"#).unwrap();
+        assert_eq!(read_integrations(&dir).when_app_closed, photocraft_engine::prefs::WhenAppClosed::Error);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -2112,6 +2112,12 @@ fn mcp_without_consent_works_headless() {
     env.push(("PHOTOCRAFT_CONTROL_PORT", std::ffi::OsStr::new("not-a-port")));
     let r = mcp_session(&["mcp", "--headless"], &env, &calls[..1]);
     assert_ne!(r[0]["isError"], true, "{}", r[0]);
+    // Without the `AI-MCP` flag a Control Port saved before the agents switch (which the app
+    // reads as "agents may connect") still leaves plain `mcp` headless: it neither looks for
+    // the app nor applies When PhotoCraft Is Closed ("error" would fail this call).
+    std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"controlPort": 7878}}"#).unwrap();
+    let r = mcp_session(&["mcp", "--when-closed", "error"], &env[..2], &calls[..1]);
+    assert_ne!(r[0]["isError"], true, "without the flag plain mcp stays headless: {}", r[0]);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&empty);
 }
