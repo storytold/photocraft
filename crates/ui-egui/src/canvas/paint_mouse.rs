@@ -40,7 +40,8 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
-        // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
+        // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
+        // opacity and flow (#12616): those fields are their own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
         // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
         // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
@@ -51,10 +52,15 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // the outgoing opacity.
         None if tool == Tool::Pencil => BrushSettings { opacity: current.opacity, ..fresh_brush(tool, &current) },
         None => {
-            let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
+            let fresh = BrushSettings::default();
+            let (opacity, flow) = match tool {
+                Tool::ArtHistoryBrush => (fresh.opacity, current.flow),
+                Tool::PatternStamp => (fresh.opacity, fresh.flow),
+                _ => (current.opacity, current.flow),
+            };
             // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
             let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
-            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, size, ..current }
+            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current }
         }
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
