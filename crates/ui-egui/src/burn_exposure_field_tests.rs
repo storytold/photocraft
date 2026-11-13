@@ -178,3 +178,19 @@ fn text_past_the_input_limit_over_an_out_of_range_entry_shows_no_alert() {
     assert!(alerts(&h).is_empty(), "no alert for a draft the field refuses: {:?}", alerts(&h));
     assert_eq!(exposure(&h), 100.0, "the 150 that was typed before still took the closest value");
 }
+
+/// Text and the key that leaves the field in one pass after an out-of-range entry: the editor
+/// parses the text only as it loses focus, so the alert owed for the 150 must drop there too.
+#[test]
+fn text_and_leaving_in_one_pass_over_an_out_of_range_entry_shows_no_alert() {
+    for key in [egui::Key::Enter, egui::Key::Tab] {
+        let mut h = bar(Tool::Burn);
+        type_within(&mut h, "150");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("abc".into()));
+        h.key_press(key);
+        h.run_steps(3);
+        assert!(alerts(&h).is_empty(), "{key:?}: no alert for a draft that is no longer a number: {:?}", alerts(&h));
+        assert_eq!(exposure(&h), 100.0, "{key:?}: the 150 typed before still took the closest value");
+    }
+}
