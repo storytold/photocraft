@@ -193,6 +193,11 @@ impl Session {
         self.next_held_open
     }
 
+    /// Whether a document held back for its prompt already has `name`.
+    pub(crate) fn held_open_named(&self, name: &str) -> bool {
+        self.held_opens.iter().any(|(_, d, _)| d.name == name)
+    }
+
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
@@ -210,6 +215,7 @@ impl Session {
             self.cancel_jobs_on(id);
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
+            self.presets.clone.forget_doc(id);
             self.link_missing.retain(|(d, _)| *d != id.0);
             self.link_scan = None;
         }

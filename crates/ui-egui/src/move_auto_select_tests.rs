@@ -218,6 +218,8 @@ fn every_theme_shows_the_gradient_options() {
     for theme in crate::theme::ThemeKind::ALL {
         let (mut app, _, _) = app();
         app.ui.tool = Tool::Gradient;
+        // The blend Mode and Opacity are the Classic gradient's (#12007).
+        app.ui.tool_options.gradient_classic = true;
         let mut h = Harness::builder().with_size(egui::vec2(1600.0, 60.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
