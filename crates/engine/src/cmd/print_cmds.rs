@@ -1445,7 +1445,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = std::path::absolute(dir).map_or_else(|_| dir.to_string(), |d| d.to_string_lossy().into_owned());
     let dir = crate::file_cmds::forward_slashes(dir);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = (*d.doc).clone();
+    let mut doc = (*d.doc).clone();
     let document = d.path.clone();
     let name = stem(&d.path.clone().unwrap_or_else(|| doc.name.clone()));
     // The native format keeps external links; our PSD writer has no `lnkE` (external linked
@@ -1460,6 +1460,8 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
+    // (layer, the link's old base name, the base name its copy got), for copies renamed by a clash.
+    let mut renames: Vec<(photocraft_doc::LayerId, String, String)> = Vec::new();
     let mut missing = Vec::new();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
@@ -1510,7 +1512,19 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         };
+        if file_name(path) != file_name(&target) {
+            renames.push((l.id, stem(path), stem(&target)));
+        }
         relinks.push((l.id, target));
+    }
+    // A layer named after its link's old file name takes the copy's new name (the packaged copy
+    // only; the open document keeps its names).
+    for (id, old, new) in &renames {
+        if let Some(layer) = doc.layer_mut(*id)
+            && let Some(rest) = layer.name.strip_prefix(old.as_str())
+        {
+            layer.name = format!("{new}{rest}");
+        }
     }
     let mut t = Session::new();
     t.add_document(doc, None);
@@ -1704,3 +1718,7 @@ mod tests;
 #[cfg(test)]
 #[path = "print_cmds/paths_export_path_blocks_tests.rs"]
 mod paths_export_path_blocks_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_layer_rename_tests.rs"]
+mod package_layer_rename_tests;
