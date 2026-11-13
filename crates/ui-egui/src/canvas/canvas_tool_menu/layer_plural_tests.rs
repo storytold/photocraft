@@ -99,10 +99,15 @@ fn with_two_layers_selected_the_layer_rows_read_in_the_plural() {
         "the measured list"
     );
     // Greyed in the reference with two pixel layers and no pixel selection; the plural rows act on
-    // the whole selection and stay available. Blending Options, Color Range… and Load Selection…
-    // (also greyed there) are left out: the rows keep following `menus::is_enabled`, which enables
-    // them here, and #12358 changes labels only.
-    let greyed = ["layer.smartObjects.convertToLayers", "layer.rasterize.layer", "layer.rasterize.layerStyle"];
+    // the whole selection and stay available.
+    let greyed = [
+        "layer.layerStyle.blendingOptions",
+        "layer.smartObjects.convertToLayers",
+        "layer.rasterize.layer",
+        "layer.rasterize.layerStyle",
+        "select.colorRange",
+        "select.loadSelection",
+    ];
     let enabled = ["layer.duplicate", "layer.delete", "layer.new.groupFromLayers", "layer.smartObjects.convertToSmartObject", "edit.freeTransform"];
     let wrong: Vec<(&str, Option<bool>)> = greyed
         .iter()
@@ -126,6 +131,11 @@ fn with_one_layer_selected_the_layer_rows_stay_singular() {
     for (id, singular, _) in COUNTED {
         let label = entries.iter().find(|e| e.0 == id).map(|e| e.1.as_str());
         assert_eq!(label, Some(singular), "{id}");
+    }
+    // With one layer the rows greyed only for several layers keep following `menus::is_enabled`.
+    for id in ["layer.layerStyle.blendingOptions", "select.colorRange", "select.loadSelection"] {
+        let enabled = entries.iter().find(|e| e.0 == id).map(|e| e.2);
+        assert_eq!(enabled, Some(crate::menus::is_enabled(&app, id)), "{id}");
     }
 }
 

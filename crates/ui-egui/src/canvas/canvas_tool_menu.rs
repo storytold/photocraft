@@ -626,6 +626,11 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
+/// Several layers are selected in the front document (#12358).
+fn several_layers_selected(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.selected_layers().len() > 1)
+}
+
 /// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
 /// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
 /// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
@@ -635,7 +640,7 @@ pub const PEN_MENU: &[Row] = &[
 pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
     // Only these rows count the selected layers (the menu asks for every row each frame).
     if crate::layer_menu_ui::layer_count_label(command, false).is_some() {
-        let multi = app.session.active().is_some_and(|st| st.selected_layers().len() > 1);
+        let multi = several_layers_selected(app);
         if let Some(label) = crate::layer_menu_ui::layer_count_label(command, multi) {
             return label;
         }
@@ -1242,6 +1247,15 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     // selection channel (non-spot alpha channel) has been saved.
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
+    }
+    // #12358, measured on the Count tool's layer menu: with several layers selected, Blending
+    // Options…, Color Range… and Load Selection… work on one layer, so they are greyed. The other
+    // tools' layer menus weren't measured with several layers and keep `menus::is_enabled`.
+    if menu.tool == Tool::Count
+        && matches!(command, "layer.layerStyle.blendingOptions" | "select.colorRange" | "select.loadSelection")
+        && several_layers_selected(app)
+    {
+        return false;
     }
     if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
