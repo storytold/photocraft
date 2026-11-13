@@ -395,15 +395,14 @@ fn render_with_source(
     let gain = photocraft_compose::multichannel::spot_dot_gain();
     // Visible spot channels of an RGB or CMYK document print over the picture as inks, in panel
     // order, before the alpha channel and Quick Mask tints.
-    let spots: Vec<(photocraft_compose::multichannel::Ink, Vec<f32>)> = if vis > 0 {
-        let spot_ids: Vec<usize> = overlays.iter().copied().filter(|&i| photocraft_compose::multichannel::is_overprint_spot(doc, i)).collect();
-        overlays.retain(|i| !spot_ids.contains(i));
-        // The ink colours are converted once per render, and only when there are inks to print.
-        let space = (!spot_ids.is_empty()).then(|| photocraft_compose::multichannel::InkSpace::of(doc));
-        space.iter().flat_map(|space| spot_ids.iter().filter_map(|&i| doc.channels.get(i)).map(|ch| (space.ink(ch), sample(&ch.surface, r, factor)))).collect()
-    } else {
-        Vec::new()
-    };
+    let spot_ids: Vec<usize> =
+        if vis > 0 { overlays.iter().copied().filter(|&i| photocraft_compose::multichannel::is_overprint_spot(doc, i)).collect() } else { Vec::new() };
+    overlays.retain(|i| !spot_ids.contains(i));
+    // The ink colours (and the light they mix in) are worked out once per render, and only when
+    // there are inks to print.
+    let space = (!spot_ids.is_empty()).then(|| photocraft_compose::multichannel::InkSpace::of(doc));
+    let spots: Vec<(photocraft_compose::multichannel::Ink, Vec<f32>)> =
+        space.iter().flat_map(|space| spot_ids.iter().filter_map(|&i| doc.channels.get(i)).map(|ch| (space.ink(ch), sample(&ch.surface, r, factor)))).collect();
     // Over the whole composite, spot inks print (#10249) only where they have ink.
     let inked: Vec<usize> = if vis == colors && !spots.is_empty() {
         (0..n).filter(|&k| spots.iter().any(|(_, vals)| vals.get(k).is_some_and(|v| *v > 0.0))).collect()
@@ -475,10 +474,12 @@ fn render_with_source(
         // normal canvas (display LUT, proofing, full resolution) shows. Only the inked area of the
         // composite is rendered.
         let mut printed = composite_at(doc, r, factor, &inked, source.cached, &mut computed);
-        if printed.len() == inked.len() {
+        if let Some(space) = space.as_ref().filter(|_| printed.len() == inked.len()) {
+            let mut press = space.press(&mut printed, gain);
             for (ink, vals) in &spots {
-                ink.apply_with_gain(&mut printed, inked.iter().map(|&k| vals.get(k).copied().unwrap_or(0.0)), gain);
+                press.print(ink, inked.iter().map(|&k| vals.get(k).copied().unwrap_or(0.0)));
             }
+            drop(press);
             source.screen.apply(&mut printed);
             for (&k, p) in inked.iter().zip(printed) {
                 if let Some(o) = out.get_mut(k) {
@@ -486,9 +487,10 @@ fn render_with_source(
                 }
             }
         }
-    } else if vis < colors {
+    } else if let Some(space) = space.as_ref().filter(|_| vis < colors) {
+        let mut press = space.press(&mut out, gain);
         for (ink, vals) in &spots {
-            ink.apply_with_gain(&mut out, vals.iter().copied(), gain);
+            press.print(ink, vals.iter().copied());
         }
     }
     *source.fresh = computed;

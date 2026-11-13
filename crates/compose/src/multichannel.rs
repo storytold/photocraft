@@ -2,18 +2,22 @@
 //! white paper, and the visible spot channels of an RGB or CMYK document over its composite
 //! (the canvas preview and the PSD thumbnail; never `flatten`, export or the merged image).
 //!
-//! Ink density `v` (the channel value, 1 = solid) of an ink with display colour `c` and solidity
-//! `s` turns the colour underneath `p` into `(1 − s·v)·p·(1 − v + v·c) + s·v·c`: transparent inks
-//! (solidity 0) multiply like overprinted process inks, opaque ones cover what is below, which is
-//! how the reference editor previews spot channels. Inks print in Channels panel order. An
-//! alpha-type channel of a Multichannel document (selected / masked areas) still prints, as a
-//! transparent black ink, like the reference editor shows it. Its value is stored as-is
-//! (1 = selected, white in the Channels panel), so its ink is `1 − value`.
+//! Ink density `v` (the channel value, 1 = solid) first gets the Spot working space's dot gain
+//! (Edit › Color Settings › Spot, [`set_spot_dot_gain`]): it prints with coverage `e` =
+//! [`dot_gain`]`(v)`, as on press. An ink with colour `c` and solidity `s` then turns the colour
+//! underneath `p` into `(1 − e)·p + e·(s·c + (1 − s)·p·c)`, per channel, in linear light (the
+//! composite's tone curve decoded, [`InkLight`]): transparent inks (solidity 0) multiply like
+//! overprinted process inks, opaque ones cover what is below. Inks print in Channels panel order.
+//! This is the reference editor's Merge Spot Channels, measured on a chart of one ink at five
+//! solidities × eleven coverages and two overlapping inks both ways round (mean 0.35 levels, max
+//! 1.3 at a 38 % gain in Adobe RGB); its spot preview shows the same. Over white the result does
+//! not depend on solidity. An alpha-type channel of a Multichannel document (selected / masked
+//! areas) still prints, as a transparent black ink, like the reference editor shows it. Its value
+//! is stored as-is (1 = selected, white in the Channels panel), so its ink is `1 − value`.
 //!
-//! Like Photoshop, the ink preview adds the Spot working space's dot gain (Edit › Color Settings ›
-//! Spot, [`set_spot_dot_gain`]): a 50 % dot shows as 50 % plus the gain, as it prints on press.
-//! The saved thumbnail ([`thumbnail_with_inks`]) adds it too, as Photoshop bakes the gain set at
-//! save time into a document's preview.
+//! The canvas preview, the saved thumbnail ([`thumbnail_with_inks`], as Photoshop bakes the gain
+//! set at save time into a document's preview), Image › Mode out of Multichannel and Merge Spot
+//! Channel all print through [`Press`], so they agree.
 
 //! This is a screen approximation, not a press proof: stored RGB alternate colours are taken as
 //! sRGB and, like Lab/gray alternates, converted into an RGB document's own profile; CMYK
@@ -23,7 +27,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{Builtin, ColorSpace, Profile, Transform, TransformOptions};
+use photocraft_cms::{Builtin, ColorSpace, Curve, Profile, Transform, TransformOptions};
 use photocraft_color::convert::CmykSpace;
 use photocraft_color::{Color, ColorMode};
 use photocraft_doc::{AlphaChannel, Document};
@@ -86,49 +90,153 @@ impl Ink {
         InkSpace::of(doc).ink(ch)
     }
 
-    /// Print this ink with channel values `values` (one per pixel) over the opaque `px`.
-    pub fn apply(&self, px: &mut [[f32; 4]], values: impl IntoIterator<Item = f32>) {
-        self.apply_with_gain(px, values, 0.0);
+    /// The ink amount channel value `v` stands for: `v` for a spot channel, `1 − v` for an alpha
+    /// channel; `None` where nothing prints.
+    fn amount(&self, v: f32) -> Option<f32> {
+        let v = if self.alpha { 1.0 - v } else { v };
+        (v > 0.0).then_some(v)
+    }
+}
+
+/// The tone curve of a composite's colour space, which turns its encoded values into linear light
+/// (the light inks mix in): the document's profile's curves, or sRGB's when it has none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InkLight {
+    /// One curve per RGB channel; `None` when every one is the identity (linear light already).
+    trc: Option<Arc<[Curve; 3]>>,
+}
+
+impl InkLight {
+    /// The sRGB tone curve.
+    pub fn srgb() -> InkLight {
+        let t = photocraft_cms::curve::srgb_trc();
+        InkLight { trc: Some(Arc::new([t.clone(), t.clone(), t])) }
     }
 
-    /// [`Ink::apply`] with a dot gain of `gain` percent at a 50 % dot (see [`dot_gain`]) added to
-    /// the ink.
-    pub fn apply_with_gain(&self, px: &mut [[f32; 4]], values: impl IntoIterator<Item = f32>, gain: f32) {
-        let (c, s) = (self.rgb, self.solidity);
-        for (p, v) in px.iter_mut().zip(values) {
-            let v = if self.alpha { 1.0 - v } else { v };
-            if v.is_nan() || v <= 0.0 {
-                continue;
+    /// The tone curves of `profile`: an RGB matrix/TRC profile's three curves, a gray profile's
+    /// curve on every channel; `None` for a profile without them (a LUT-based or CMYK one).
+    pub fn of_profile(profile: &Profile) -> Option<InkLight> {
+        if profile.a2b.iter().any(Option::is_some) {
+            return None;
+        }
+        let trc = match (profile.color_space, &profile.trc, &profile.gray_trc) {
+            (ColorSpace::Rgb, Some(t), _) if profile.matrix.is_some() => t.clone(),
+            (ColorSpace::Gray, _, Some(g)) => [g.clone(), g.clone(), g.clone()],
+            _ => return None,
+        };
+        Some(InkLight { trc: (!trc.iter().all(Curve::is_identity)).then(|| Arc::new(trc)) })
+    }
+
+    /// Encoded values → linear light.
+    fn decode(&self, p: [f32; 3]) -> [f32; 3] {
+        match &self.trc {
+            Some(t) => std::array::from_fn(|j| t[j].eval(p[j])),
+            None => p,
+        }
+    }
+
+    /// Linear light → encoded values.
+    fn encode(&self, p: [f32; 3]) -> [f32; 3] {
+        match &self.trc {
+            Some(t) => std::array::from_fn(|j| t[j].eval_inverse(p[j])),
+            None => p,
+        }
+    }
+}
+
+/// Inks printing, one after another, over the opaque pixels `px` (see the module docs). A pixel
+/// is turned into linear light the first time an ink reaches it and back when the press is
+/// dropped, so pixels no ink reaches stay exactly as they were.
+pub struct Press<'a> {
+    px: &'a mut [[f32; 4]],
+    light: &'a InkLight,
+    gain: f32,
+    /// The pixels in linear light now.
+    lit: Vec<bool>,
+}
+
+impl<'a> Press<'a> {
+    /// A press over `px` whose inks print in `light` with a dot gain of `gain` percent at a
+    /// 50 % dot ([`dot_gain`]).
+    pub fn new(px: &'a mut [[f32; 4]], light: &'a InkLight, gain: f32) -> Press<'a> {
+        let lit = vec![false; px.len()];
+        Press { px, light, gain, lit }
+    }
+
+    /// Print `ink` with channel values `values` (one per pixel, in order) over what is there.
+    pub fn print(&mut self, ink: &Ink, values: impl IntoIterator<Item = f32>) {
+        let c = self.light.decode(ink.rgb);
+        let s = ink.solidity;
+        for ((p, lit), v) in self.px.iter_mut().zip(self.lit.iter_mut()).zip(values) {
+            let Some(v) = ink.amount(v) else { continue };
+            if !*lit {
+                let l = self.light.decode([p[0], p[1], p[2]]);
+                p[..3].copy_from_slice(&l);
+                *lit = true;
             }
-            let v = dot_gain(v, gain);
-            let keep = 1.0 - s * v;
+            let e = dot_gain(v, self.gain);
             for j in 0..3 {
-                p[j] = keep * p[j] * (1.0 - v + v * c[j]) + s * v * c[j];
+                p[j] = (1.0 - e) * p[j] + e * (s * c[j] + (1.0 - s) * p[j] * c[j]);
             }
         }
     }
 }
 
-/// How spot colours of one document map into its composite space. Build it once per render:
-/// the document's profiles are parsed here, not per ink or per damage rect.
+impl Drop for Press<'_> {
+    fn drop(&mut self) {
+        for (p, lit) in self.px.iter_mut().zip(&self.lit) {
+            if *lit {
+                let e = self.light.encode([p[0], p[1], p[2]]);
+                p[..3].copy_from_slice(&e);
+            }
+        }
+    }
+}
+
+/// How spot colours of one document map into its composite space, and the light they mix in.
+/// Build it once per render: the document's profiles are parsed here, not per ink or per damage
+/// rect.
 pub struct InkSpace {
     cmyk: Option<Arc<CmykSpace>>,
     /// sRGB → an RGB document's own profile, when that differs from sRGB.
     to_own: Option<Arc<Transform>>,
+    light: InkLight,
 }
 
 impl InkSpace {
     pub fn of(doc: &Document) -> InkSpace {
+        let own = doc.icc_profile.as_ref().and_then(|b| Profile::parse(b).ok());
         let to_own = if doc.mode == ColorMode::Rgb {
-            doc.icc_profile
-                .as_ref()
-                .and_then(|b| Profile::parse(b).ok())
+            own.as_ref()
                 .filter(|p| p.color_space == ColorSpace::Rgb && !p.same_colors(Builtin::Srgb.profile()))
-                .and_then(|own| photocraft_cms::transform::cached(Builtin::Srgb.profile(), &own, TransformOptions::default()).ok())
+                .and_then(|own| photocraft_cms::transform::cached(Builtin::Srgb.profile(), own, TransformOptions::default()).ok())
         } else {
             None
         };
-        InkSpace { cmyk: crate::cmyk_space(doc), to_own }
+        // RGB and Grayscale composites are in the document's own profile; the others' (CMYK, Lab,
+        // Multichannel) are sRGB.
+        let light = own
+            .as_ref()
+            .filter(|p| matches!((doc.mode, p.color_space), (ColorMode::Rgb, ColorSpace::Rgb) | (ColorMode::Grayscale, ColorSpace::Gray)))
+            .and_then(InkLight::of_profile)
+            .unwrap_or_else(InkLight::srgb);
+        InkSpace { cmyk: crate::cmyk_space(doc), to_own, light }
+    }
+
+    /// The same inks, mixed in `light` instead: Image › Mode out of Multichannel prints them in the
+    /// light of the colour space the image goes to.
+    pub fn in_light(self, light: InkLight) -> InkSpace {
+        InkSpace { light, ..self }
+    }
+
+    /// The light the inks mix in.
+    pub fn light(&self) -> &InkLight {
+        &self.light
+    }
+
+    /// A [`Press`] over `px` in this space's light, with a dot gain of `gain` percent.
+    pub fn press<'a>(&'a self, px: &'a mut [[f32; 4]], gain: f32) -> Press<'a> {
+        Press::new(px, &self.light, gain)
     }
 
     /// The ink of channel `ch`: a spot channel's colour and solidity, an alpha channel's
@@ -160,8 +268,12 @@ impl InkSpace {
 /// opaque `buf`, reading them over `buf.rect`, with the Spot dot gain ([`spot_dot_gain`]).
 pub fn overprint(buf: &mut Buffer, doc: &Document, visible: impl Fn(usize) -> bool) {
     let rect = buf.rect;
-    let gain = spot_dot_gain();
-    let space = InkSpace::of(doc);
+    overprint_in(&mut buf.px, rect, doc, &InkSpace::of(doc), visible);
+}
+
+/// [`overprint`] of the pixels `px` of `rect` with the inks of `space`.
+fn overprint_in(px: &mut [[f32; 4]], rect: Rect, doc: &Document, space: &InkSpace, visible: impl Fn(usize) -> bool) {
+    let mut press = space.press(px, spot_dot_gain());
     let mut vals = Vec::new();
     for (i, ch) in doc.channels.iter().enumerate() {
         if !visible(i) {
@@ -174,7 +286,7 @@ pub fn overprint(buf: &mut Buffer, doc: &Document, visible: impl Fn(usize) -> bo
         }
         let n = ch.surface.channels().max(1);
         ch.surface.read_region_into(rect, &mut vals);
-        ink.apply_with_gain(&mut buf.px, vals.chunks_exact(n).map(|v| v[0]), gain);
+        press.print(&ink, vals.chunks_exact(n).map(|v| v[0]));
     }
 }
 
@@ -185,8 +297,33 @@ pub fn is_overprint_spot(doc: &Document, i: usize) -> bool {
 
 /// The printed inks of `doc` over `rect` (opaque).
 pub fn inks(doc: &Document, rect: Rect) -> Buffer {
+    inks_in(doc, rect, &InkSpace::of(doc))
+}
+
+/// [`inks`] with the inks of `space` (Image › Mode out of Multichannel mixes them in the light of
+/// the colour space the image goes to, [`InkSpace::in_light`]).
+/// Off wasm, bands of rows print in parallel, so a whole canvas (the mode conversion) uses every
+/// core.
+pub fn inks_in(doc: &Document, rect: Rect, space: &InkSpace) -> Buffer {
+    /// Rows per band.
+    const BAND: usize = 64;
     let mut buf = Buffer::filled(rect, [1.0, 1.0, 1.0, 1.0]);
-    overprint(&mut buf, doc, |_| true);
+    let w = rect.width() as usize;
+    if w == 0 || buf.px.len() != w * rect.height() as usize {
+        return buf;
+    }
+    let band = |(k, px): (usize, &mut [[f32; 4]])| {
+        let y0 = rect.y0.saturating_add(i32::try_from(k * BAND).unwrap_or(i32::MAX));
+        let rows = i32::try_from(px.len() / w).unwrap_or(0);
+        overprint_in(px, Rect::new(rect.x0, y0, rect.x1, y0.saturating_add(rows)), doc, space, |_| true);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        buf.px.par_chunks_mut(w * BAND).enumerate().for_each(band);
+    }
+    #[cfg(target_arch = "wasm32")]
+    buf.px.chunks_mut(w * BAND).enumerate().for_each(band);
     buf
 }
 
@@ -219,9 +356,11 @@ pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
             *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
         }
     }
-    let gain = spot_dot_gain();
-    for (ink, vals) in inks {
-        ink.apply_with_gain(&mut buf.px, vals, gain);
+    {
+        let mut press = space.press(&mut buf.px, spot_dot_gain());
+        for (ink, vals) in inks {
+            press.print(&ink, vals);
+        }
     }
     buf
 }
@@ -266,6 +405,7 @@ fn reduce(s: &photocraft_raster::Surface, area: Rect, w: u32, h: u32) -> Vec<f32
 
 #[cfg(test)]
 mod tests {
+    use photocraft_color::convert::{linear_to_srgb, srgb_to_linear};
     use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
     use photocraft_doc::{AlphaChannel, Document, Size};
     use photocraft_raster::Surface;
@@ -283,10 +423,11 @@ mod tests {
         doc.channels.push(AlphaChannel { spot: Some((Color::rgb(0.0, 1.0, 1.0), 0.0)), ..AlphaChannel::new("Cyan", a) });
         doc.channels.push(AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 1.0), 0.0)), ..AlphaChannel::new("Magenta", b) });
         let r = crate::flatten(&doc);
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 1e-5);
         assert_eq!(r.px[0], [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!(r.px[1], [0.0, 1.0, 1.0, 1.0]);
-        assert_eq!(r.px[2], [0.0, 0.0, 1.0, 1.0]);
-        assert_eq!(r.px[3], [1.0, 0.0, 1.0, 1.0]);
+        assert!(near(r.px[1], [0.0, 1.0, 1.0, 1.0]), "{:?}", r.px[1]);
+        assert!(near(r.px[2], [0.0, 0.0, 1.0, 1.0]), "{:?}", r.px[2]);
+        assert!(near(r.px[3], [1.0, 0.0, 1.0, 1.0]), "{:?}", r.px[3]);
         // An alpha-type channel (stored as-is: 1 = selected) prints as a black ink where it is
         // unselected, as the reference editor shows it.
         let mut k = Surface::new(fmt);
@@ -294,11 +435,12 @@ mod tests {
         doc.channels.push(AlphaChannel::new("Alpha", k));
         let r = crate::flatten(&doc);
         // 0.5 is stored as 128/255 in an 8-bit channel, so its ink is 127/255; the preview adds
-        // the Spot dot gain.
-        let paper = 1.0 - dot_gain(1.0 - 128.0 / 255.0, spot_dot_gain());
-        assert!((r.px[0][0] - paper).abs() <= 1e-4 && (r.px[0][1] - paper).abs() <= 1e-4, "{:?}", r.px[0]);
-        assert_eq!(r.px[1], [0.0, 1.0, 1.0, 1.0]);
-        assert_eq!(r.px[3], [0.0, 0.0, 0.0, 1.0]);
+        // the Spot dot gain, and the ink takes that much light away (an untagged document mixes in
+        // sRGB's light).
+        let paper = linear_to_srgb(1.0 - dot_gain(1.0 - 128.0 / 255.0, spot_dot_gain()));
+        assert!((r.px[0][0] - paper).abs() <= 1e-4 && (r.px[0][1] - paper).abs() <= 1e-4, "{:?} vs {paper}", r.px[0]);
+        assert!(near(r.px[1], [0.0, 1.0, 1.0, 1.0]), "{:?}", r.px[1]);
+        assert!(near(r.px[3], [0.0, 0.0, 0.0, 1.0]), "{:?}", r.px[3]);
         // Other modes have no inks.
         doc.mode = ColorMode::Rgb;
         assert_eq!(crate::flatten(&doc).px[1][3], 0.0);
@@ -330,11 +472,15 @@ mod tests {
         AlphaChannel { spot: Some((Color::rgb(rgb[0], rgb[1], rgb[2]), solidity)), ..AlphaChannel::new(name, s) }
     }
 
-    /// The ink formula written out for one ink over `p`.
-    /// The overprint adds the Spot dot gain (read, not changed: the setting is process-wide).
+    /// The ink formula written out for one ink over `p`, in sRGB's light (the documents here are
+    /// untagged). The overprint adds the Spot dot gain (read, not changed: the setting is
+    /// process-wide).
     fn print(p: [f32; 3], c: [f32; 3], s: f32, v: f32) -> [f32; 3] {
-        let v = dot_gain(v, spot_dot_gain());
-        std::array::from_fn(|j| (1.0 - s * v) * p[j] * (1.0 - v + v * c[j]) + s * v * c[j])
+        let e = dot_gain(v, spot_dot_gain());
+        std::array::from_fn(|j| {
+            let (p, c) = (srgb_to_linear(p[j]), srgb_to_linear(c[j]));
+            linear_to_srgb((1.0 - e) * p + e * (s * c + (1.0 - s) * p * c))
+        })
     }
 
     fn close(a: [f32; 4], b: [f32; 3], tol: f32) -> bool {
@@ -392,7 +538,7 @@ mod tests {
                         // Only the channels `visible` picks print.
                         let mut buf = Buffer::filled(doc.bounds(), [under[0], under[1], under[2], 1.0]);
                         overprint(&mut buf, &doc, |i| i == 0);
-                        assert!(close(buf.px[2], print(under, a, sa, 1.0), 1e-5));
+                        assert!(close(buf.px[2], print(under, a, sa, 1.0), 1e-4));
                     }
                 }
             }
@@ -407,11 +553,11 @@ mod tests {
         doc.channels.push(spot(SampleType::U8, "teal", teal, 0.0, &[1.0]));
         let mut buf = Buffer::filled(doc.bounds(), [1.0; 4]);
         overprint(&mut buf, &doc, |_| true);
-        assert!(close(buf.px[0], teal, 1e-6), "{:?}", buf.px[0]);
+        assert!(close(buf.px[0], teal, 1e-5), "{:?}", buf.px[0]);
         doc.channels[0].spot = Some((Color::rgb(teal[0], teal[1], teal[2]), 1.0));
         let mut buf = Buffer::filled(doc.bounds(), [0.2, 0.9, 0.1, 1.0]);
         overprint(&mut buf, &doc, |_| true);
-        assert!(close(buf.px[0], teal, 1e-6), "{:?}", buf.px[0]);
+        assert!(close(buf.px[0], teal, 1e-5), "{:?}", buf.px[0]);
     }
 
     #[test]
@@ -425,7 +571,7 @@ mod tests {
                 overprint(&mut preview, &doc, |_| false);
                 assert_eq!(preview.px, before.px);
                 overprint(&mut preview, &doc, |_| true);
-                assert!(close(preview.px[0], [0.0, 0.6, 0.65], 1e-6));
+                assert!(close(preview.px[0], [0.0, 0.6, 0.65], 1e-5));
                 assert_eq!(crate::flatten(&doc).px, before.px);
                 assert_eq!(doc.channels[0].spot, Some((Color::rgb(0.0, 0.6, 0.65), 1.0)));
             }
@@ -488,5 +634,79 @@ mod tests {
         // Small boxes stay exact.
         let r = reduce(&sf, Rect::new(0, 0, 64, 1), 16, 1);
         assert_eq!(r, (0..16).map(|x| if x < 8 { 1.0 } else { 0.0 }).collect::<Vec<f32>>());
+    }
+
+    fn adobe() -> InkLight {
+        InkLight::of_profile(Builtin::AdobeRgbCompat.profile()).unwrap()
+    }
+
+    /// 50 % of #3366cc over white in Adobe RGB with a 38 % spot dot gain is #6a84d3 in the
+    /// reference editor's Merge Spot Channels at every solidity (the ink prints at 88 %, mixed in
+    /// linear light). The old gamma-space mix without the gain gave #99b2e5 at solidity 0 and
+    /// #668cd9 at 100.
+    #[test]
+    fn half_tint_over_white_matches_the_reference_at_every_solidity() {
+        let blue = [0x33, 0x66, 0xcc].map(|v| v as f32 / 255.0);
+        let light = adobe();
+        for s in [0.0, 0.3, 0.5, 0.8, 1.0] {
+            let mut px = vec![[1.0; 4]];
+            Press::new(&mut px, &light, 38.0).print(&Ink { rgb: blue, solidity: s, alpha: false }, [0.5]);
+            let got = px[0].map(|v| v * 255.0);
+            for (g, want) in got.iter().zip([106.0, 132.0, 211.0]) {
+                assert!((g - want).abs() <= 1.0, "solidity {s}: {got:?}");
+            }
+            assert_eq!(px[0][3], 1.0);
+        }
+    }
+
+    /// Pixels no ink reaches keep their exact values (they never go through the tone curve).
+    #[test]
+    fn press_leaves_uninked_pixels_exact() {
+        let light = adobe();
+        let before = vec![[0.123_456_7, 0.5, 0.987_654_3, 1.0], [0.3, 0.2, 0.1, 1.0]];
+        let mut px = before.clone();
+        {
+            let mut press = Press::new(&mut px, &light, 20.0);
+            press.print(&Ink { rgb: [0.0, 0.6, 0.65], solidity: 0.5, alpha: false }, [0.0, 1.0]);
+            press.print(&Ink { rgb: [0.0; 3], solidity: 0.0, alpha: true }, [1.0, f32::NAN]);
+        }
+        assert_eq!(px[0], before[0]);
+        assert_ne!(px[1], before[1]);
+    }
+
+    /// The light comes from the document's profile: Adobe RGB's gamma, none for linear sRGB, and
+    /// sRGB's curve for untagged documents and modes whose composite is sRGB.
+    #[test]
+    fn ink_light_follows_the_document_profile() {
+        assert!(adobe().trc.is_some());
+        assert_eq!(InkLight::of_profile(Builtin::LinearSrgb.profile()), Some(InkLight { trc: None }));
+        assert_eq!(InkLight::of_profile(Builtin::CoatedCmyk.profile()), None);
+        let mut doc = Document::new("a", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        assert_eq!(InkSpace::of(&doc).light(), &InkLight::srgb());
+        doc.icc_profile = Some(Builtin::AdobeRgbCompat.profile().to_bytes());
+        assert_eq!(InkSpace::of(&doc).light(), &adobe());
+        doc.mode = ColorMode::Cmyk;
+        assert_eq!(InkSpace::of(&doc).light(), &InkLight::srgb(), "a CMYK composite is sRGB");
+        assert_eq!(InkSpace::of(&doc).in_light(adobe()).light(), &adobe());
+    }
+
+    /// The whole-canvas print in bands is the one-pass print.
+    #[test]
+    fn inks_in_bands_match_one_pass() {
+        let (w, h) = (3, 150);
+        let mut doc = Document::new("b", Size::new(w, h), ColorMode::Multichannel, SampleType::U16);
+        let ramp: Vec<f32> = (0..w * h).map(|i| (i % 97) as f32 / 96.0).collect();
+        let rev: Vec<f32> = ramp.iter().map(|v| 1.0 - v).collect();
+        for (name, rgb, s, vals) in [("a", [0.0, 0.6, 0.65], 0.3, &ramp), ("b", [0.9, 0.2, 0.5], 1.0, &rev)] {
+            let mut sf = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U16, false));
+            sf.write_region(Rect::new(0, 0, w as i32, h as i32), vals);
+            doc.channels.push(AlphaChannel { spot: Some((Color::rgb(rgb[0], rgb[1], rgb[2]), s)), ..AlphaChannel::new(name, sf) });
+        }
+        let space = InkSpace::of(&doc).in_light(adobe());
+        let banded = inks_in(&doc, doc.bounds(), &space);
+        let mut one = Buffer::filled(doc.bounds(), [1.0; 4]);
+        overprint_in(&mut one.px, doc.bounds(), &doc, &space, |_| true);
+        assert_eq!(banded.px, one.px);
+        assert_eq!(inks(&doc, doc.bounds()).px.len(), (w * h) as usize);
     }
 }

@@ -15,6 +15,7 @@
 //! above; otherwise the printed look is converted.
 
 use photocraft_color::{Color, ColorMode, PixelFormat};
+use photocraft_compose::multichannel::{InkLight, InkSpace};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -186,11 +187,27 @@ fn remap_view(s: &mut Session, (target, eyes): (ChannelTarget, Vec<bool>), map: 
 }
 
 /// Image › Mode › RGB / CMYK / Lab / Grayscale from a Multichannel document (called by
-/// `color_cmds::convert_mode`). Profiles are not involved: Multichannel has none.
-pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Result<Value> {
+/// `color_cmds::convert_mode`). Multichannel has no profile; when the inks are printed (the
+/// appearance branch) they mix in the light of the RGB space the image goes to: `profile` (which
+/// must be an RGB one) for RGB, else the working RGB. A printed RGB result is tagged with that
+/// profile, so its values are read in the space they were mixed in.
+pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     if !matches!(mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Grayscale) {
         return Err(EngineError::Other(format!("a Multichannel document can't be converted to {mode:?}")));
     }
+    // Checked before anything changes: a bad profile leaves the document as it was.
+    let asked = match p.get("profile").and_then(Value::as_str).filter(|_| mode == ColorMode::Rgb) {
+        Some(spec) => {
+            let pr = s.color.resolve(spec, s.active().map(|st| &*st.doc), Some(mode))?;
+            if pr.color_space != photocraft_cms::ColorSpace::Rgb {
+                return Err(EngineError::Other(format!("profile `{}` is {:?}, not RGB", pr.description, pr.color_space)));
+            }
+            Some(pr)
+        }
+        None => None,
+    };
+    let rgb = asked.unwrap_or_else(|| s.color.working(ColorMode::Rgb));
+    let light = InkLight::of_profile(&rgb).unwrap_or_else(InkLight::srgb);
     // The inks leave; the other channels close up.
     let Some((spots, view)) = s
         .active()
@@ -216,7 +233,7 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         let shown = (!reinterpret).then(|| {
             let mut d = doc.clone();
             d.channels = inks.clone();
-            photocraft_compose::flatten(&d)
+            photocraft_compose::multichannel::inks_in(&d, canvas, &InkSpace::of(&d).in_light(light.clone()))
         });
         doc.mode = mode;
         let fmt = doc.pixel_format();
@@ -248,6 +265,9 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         *active = Some(bg.id);
         doc.layers = vec![bg];
         doc.channels = others;
+        if !reinterpret && mode == ColorMode::Rgb {
+            doc.icc_profile = Some(rgb.to_bytes());
+        }
         Ok(if reinterpret { "channels" } else { "appearance" })
     })?;
     remap_view(s, view, &map);
