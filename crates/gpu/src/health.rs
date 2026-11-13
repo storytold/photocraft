@@ -213,6 +213,24 @@ impl DeviceHealth {
         }
     }
 
+    /// Run GPU work (queue writes, submissions) unless the device is already unusable. wgpu
+    /// panics inside `Queue::write_*` when the device was lost but its lost callback hasn't run
+    /// yet (a DirectX 12 device removed between polls, #13529): the panic is caught here and
+    /// recorded as a device loss, so the loss path runs instead of the app closing. `None` when
+    /// the work was skipped or panicked; the device must not be used again after that.
+    pub fn guard<R>(&self, work: impl FnOnce() -> R) -> Option<R> {
+        if !self.is_ok() {
+            return None;
+        }
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+            Ok(r) => Some(r),
+            Err(_) => {
+                self.lost_by_poll();
+                None
+            }
+        }
+    }
+
     /// `Device::poll` panicked: wgpu found the device lost.
     fn lost_by_poll(&self) {
         self.0.device_lost.store(true, Ordering::Release);

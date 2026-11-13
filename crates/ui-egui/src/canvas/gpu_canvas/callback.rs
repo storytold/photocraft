@@ -137,6 +137,7 @@ impl CallbackTrait for CanvasCallback {
             return Vec::new();
         }
         let data = self.uniforms(screen.size_in_pixels, screen.pixels_per_point, res.out_linear, &res.style);
+        let health = res.health.clone();
         let (bgl, sampler) = (&res.view_bgl, &res.sampler);
         let v = res.views.entry(self.params.view_key).or_insert_with(|| {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -156,8 +157,10 @@ impl CallbackTrait for CanvasCallback {
             ViewGpu { buffer, bind_group, frame_data: [f32::NAN; VIEW_FLOATS] }
         });
         if v.frame_data != data {
-            queue.write_buffer(&v.buffer, 0, &f32_bytes(&data));
-            v.frame_data = data;
+            // A device lost before its callback ran panics inside the write (#13529).
+            if health.guard(|| queue.write_buffer(&v.buffer, 0, &f32_bytes(&data))).is_some() {
+                v.frame_data = data;
+            }
         }
         Vec::new()
     }
