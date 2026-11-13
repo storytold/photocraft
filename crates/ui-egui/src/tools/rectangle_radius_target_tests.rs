@@ -14,7 +14,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A document with Rectangle 1 (radius 20) as the active layer, and `tool` current.
-fn bar_with(tool: Tool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn bar_with(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.run("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 80, 60], "radii": [20, 20, 20, 20], "fill": "#ff0000"})).unwrap();
@@ -27,7 +27,12 @@ fn bar_with(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    type_into(h, "Radius:", text);
+}
+
+/// Types `text` into the options-bar field named `label` and tabs out of it.
+pub(super) fn type_into(h: &mut Harness<'static, PhotocraftApp>, label: &str, text: &str) {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label)).expect("the field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
@@ -36,12 +41,12 @@ fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
     h.run_steps(3);
 }
 
-fn history_len(h: &Harness<'static, PhotocraftApp>) -> usize {
+pub(super) fn history_len(h: &Harness<'static, PhotocraftApp>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
 /// The first radius of every rectangle shape layer, bottom to top.
-fn radii(h: &Harness<'static, PhotocraftApp>) -> Vec<f64> {
+pub(super) fn radii(h: &Harness<'static, PhotocraftApp>) -> Vec<f64> {
     let st = h.state().session.active().unwrap();
     st.doc
         .walk()

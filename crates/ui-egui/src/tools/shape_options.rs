@@ -275,6 +275,10 @@ pub(crate) fn size_fields(ui: &mut egui::Ui, lbl: &dyn Fn(&mut egui::Ui, &str), 
     }
 }
 
+#[cfg(test)]
+#[path = "path_selection_size_fields_tests.rs"]
+mod path_selection_size_fields_tests;
+
 /// The Rectangle tool's corner radius in px, as the reference takes it (#13336).
 pub(crate) const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
 
