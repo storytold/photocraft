@@ -94,12 +94,6 @@ fn none_clears_and_all_ticks_every_source() {
     click(&mut h, Role::Button, "All");
     assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l)), "All ticks all eight");
     assert_eq!(field(&h, id, "from"), json!(ALL_IDS));
-    // Until #13681 adds its alert, OK with nothing ticked converts nothing and closes.
-    let before = steps(&h);
-    click(&mut h, Role::Button, "None");
-    click(&mut h, Role::Button, "OK");
-    assert!(h.state().ui.dialogs.is_empty());
-    assert_eq!((mode(&h), steps(&h)), (ColorMode::Rgb, before));
 }
 
 #[test]
@@ -146,12 +140,12 @@ fn enter_sends_the_ticked_sources_in_the_list_order_and_converts() {
 
 #[test]
 fn ok_leaves_a_document_whose_mode_is_not_ticked() {
-    let (mut h, _) = opened();
+    let (mut h, id) = opened();
     let before = steps(&h);
     click(&mut h, Role::CheckBox, "RGB Color");
     pick_target(&mut h, "Grayscale");
     click(&mut h, Role::Button, "OK");
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "the dialog stays under its alert (#13681)");
     assert_eq!((mode(&h), steps(&h)), (ColorMode::Rgb, before), "RGB Color unticked: nothing converts");
 }
 
@@ -182,7 +176,8 @@ fn values_set_over_the_control_channel_show_and_reach_the_command() {
         assert_eq!(h.get_by_role(Role::ComboBox).accesskit_node().value().as_deref(), Some(shown), "to {to}");
         assert_eq!((field(&h, id, "from"), field(&h, id, "to")), (from.clone(), json!(to)), "drawing keeps the values");
         click(&mut h, Role::Button, "OK");
-        assert!(h.state().ui.dialogs.is_empty());
+        // Nothing to convert keeps the dialog under its alert (#13681).
+        assert_eq!(h.state().ui.dialogs.iter().any(|d| d.id == id), converted == ColorMode::Rgb, "{from} to {to}");
         assert_eq!(mode(&h), converted, "{from} to {to}");
     }
 }

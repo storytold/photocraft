@@ -54,6 +54,34 @@ fn mode_name(m: ColorMode) -> &'static str {
     }
 }
 
+/// Why Conditional Mode Change has nothing to convert for a document in `mode`, in the order
+/// Photoshop's dialog checks it (#13681): `"noSource"`, `"noMatch"` or `"sameMode"`; `None` when
+/// it converts. `from` is the command's param ("any", one mode or a list; absent means "any"),
+/// and spellings the command does not know tick nothing. The dialog shows its alerts from this.
+pub fn nothing_to_convert(mode: ColorMode, from: Option<&Value>, to: &str) -> Option<&'static str> {
+    // One spelling per mode, for the array and the single-string forms alike (#7042).
+    let norm = |v: &str| {
+        let v = v.to_ascii_lowercase();
+        if v == "gray" { "grayscale".to_string() } else { v }
+    };
+    let known = |v: &String| ["any", "bitmap", "grayscale", "duotone", "indexed", "rgb", "cmyk", "lab", "multichannel"].contains(&v.as_str());
+    let from: Vec<String> = match from {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(norm).filter(known).collect(),
+        Some(Value::String(v)) => Some(norm(v)).filter(known).into_iter().collect(),
+        _ => vec!["any".into()],
+    };
+    let cur = mode_name(mode);
+    if from.is_empty() {
+        Some("noSource")
+    } else if !from.iter().any(|f| f == "any" || f == cur) {
+        Some("noMatch")
+    } else if norm(to) == cur {
+        Some("sameMode")
+    } else {
+        None
+    }
+}
+
 pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.conditionalModeChange";
     let to = str_param(p, "to", cmd)?.to_ascii_lowercase();
@@ -75,18 +103,9 @@ pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Valu
     };
     let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let (cur, depth, layers) = (mode_name(d.mode), d.depth, d.layers.len());
-    // One spelling per source mode, for the array and the single-string forms alike (#7042).
-    let norm = |v: &str| {
-        let v = v.to_ascii_lowercase();
-        if v == "gray" { "grayscale".to_string() } else { v }
-    };
-    let from: Vec<String> = match p.get("from") {
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(norm).collect(),
-        Some(Value::String(v)) => vec![norm(v)],
-        _ => vec!["any".into()],
-    };
-    if cur == to || !(from.iter().any(|f| f == "any" || f == cur)) {
-        return Ok(json!({"changed": false, "mode": cur}));
+    let reason = nothing_to_convert(d.mode, p.get("from"), to);
+    if let Some(reason) = reason {
+        return Ok(json!({"changed": false, "mode": cur, "reason": reason}));
     }
     // The steps Photoshop takes on the way, each its own history state (measured in #13678).
     // Routes to the new targets it was not measured on are refused rather than guessed.

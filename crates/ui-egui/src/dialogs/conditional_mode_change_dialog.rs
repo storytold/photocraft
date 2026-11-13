@@ -52,6 +52,28 @@ fn ticked(f: &Map<String, Value>, id: &str) -> bool {
     }
 }
 
+/// OK with nothing to convert shows Photoshop's alert and keeps the dialog with its values
+/// (#13681). Checked before the dialog closes, with the command's own reasons: running the
+/// command first would end a paused action's step and journal a no-op.
+pub(crate) fn preflight(app: &mut crate::PhotocraftApp, id: u64) -> Result<(), String> {
+    let Some(f) = app.ui.dialogs.iter().find(|d| d.id == id).map(|d| &d.fields).filter(|f| owns(f)) else { return Ok(()) };
+    let Some(mode) = app.session.active().map(|st| st.doc.mode) else { return Ok(()) };
+    let to = f.get("to").and_then(Value::as_str).unwrap_or_default();
+    let message = match photocraft_engine::file_cmds::nothing_to_convert(mode, f.get("from"), to) {
+        Some("noSource") => "At least one Source Mode must be selected.",
+        Some("noMatch") => "Mode of the document does not match any selected Source Modes.",
+        Some(_) => "Mode of the document is the same as the Target Mode.  No conversion performed.",
+        None => return Ok(()),
+    };
+    let message = tl!(message).to_string();
+    // A second OK (automation can confirm again) does not stack another alert.
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(&message));
+    if !shown {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
+    Err(message)
+}
+
 /// The dialog body.
 pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
