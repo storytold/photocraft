@@ -99,8 +99,8 @@ fn source_mode_has_eight_checkboxes_in_two_columns_with_all_and_none_under_them(
         h.query_all_by_label("Target Mode").map(|n| n.rect().top()).fold(f32::MAX, f32::min) > all.bottom(),
         "the Target Mode section is below the Source Mode one"
     );
-    // Today's default ("any") ticks every source, and none is greyed for an RGB document.
-    assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l)));
+    // The first open ticks RGB Color only (#13680), and none is greyed for an RGB document.
+    assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l) == (l == "RGB Color")));
     assert!(LEFT.into_iter().chain(RIGHT).all(|l| !h.get_by_role_and_label(Role::CheckBox, l).accesskit_node().is_disabled()));
     for raw in ["Any", "From", "To"] {
         assert!(h.query_all_by_label(raw).next().is_none(), "no raw {raw} control");
@@ -126,12 +126,13 @@ fn none_clears_and_all_ticks_every_source() {
 
 #[test]
 fn the_mode_list_names_the_targets_in_full() {
-    let rows = super::rows();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let rows = super::rows(&app);
     let to = rows.iter().find(|p| p.key == "to").expect("a Mode list");
     let craft::ui::patterns::form_dialogs::ParamKind::Choice { options, default, .. } = &to.kind else { panic!("Mode is a list") };
     let names: Vec<&str> = options.iter().map(|(_, label)| label.as_str()).collect();
     assert_eq!(names, ["Grayscale", "RGB Color", "CMYK Color", "Lab Color"]);
-    assert_eq!(default.as_deref(), Some("rgb"));
+    assert_eq!(default.as_deref(), Some("grayscale"));
     assert_eq!(to.label.as_str(), "Mode");
 }
 
