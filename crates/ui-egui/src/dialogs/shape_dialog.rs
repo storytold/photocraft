@@ -57,6 +57,21 @@ pub(crate) fn click_inside_active_rectangle(app: &PhotocraftApp, kind: ShapeKind
         .all(|((dx, dy), radius)| dx >= radius || dy >= radius || (radius - dx).hypot(radius - dy) <= radius)
 }
 
+/// Whether a click at `at` (document px) with the Ellipse tool in Shape mode lies inside the active live ellipse: the
+/// click leaves the shape alone (#13231); its bounding box corners outside the ellipse still open Create Ellipse.
+pub(crate) fn click_inside_active_ellipse(app: &PhotocraftApp, kind: ShapeKind, at: [f64; 2]) -> bool {
+    use photocraft_doc::{LayerContent, LiveShape};
+
+    if kind != ShapeKind::Ellipse || !matches!(app.ui.tool_options.shape_mode, craft::draw::ui::VectorMode::Shape) {
+        return false;
+    }
+    let Some(layer) = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))) else { return false };
+    let LayerContent::Shape(shape) = &layer.content else { return false };
+    let Some(LiveShape::Ellipse { rect: [x, y, w, h] }) = shape.live else { return false };
+    let (dx, dy) = ((at[0] - (x + w / 2.0)) / (w / 2.0), (at[1] - (y + h / 2.0)) / (h / 2.0));
+    dx.hypot(dy) <= 1.0
+}
+
 /// Opens the alert of a size typed past its range, once, then draws the shape of a Create Shape dialog that
 /// finished OK this pass.
 pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
