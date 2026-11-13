@@ -376,13 +376,15 @@ enum MatchRule {
 /// layer (#6183). The bucket rule is:
 /// - seed alpha 0: only pixels with alpha 0 match; Tolerance plays no role;
 /// - seed alpha 255: unchanged (colour and alpha each within Tolerance);
-/// - seed alpha in between: a pixel matches when its alpha is above 0 and its colour is
-///   within Tolerance of the seed's colour. There is no alpha band (alpha 40, 197 and 253 of
-///   one colour were measured to fill together) and alpha-0 pixels are never taken.
+/// - seed alpha in between: a pixel of the seed's own colour matches when its alpha is
+///   above 0 — there is no alpha band for that case (alpha 40, 197 and 253 of one colour
+///   were measured to fill together). A pixel of any other colour must also sit within
+///   Tolerance of the seed's alpha, as before: that case was not measured, and unmeasured
+///   cases keep today's behaviour. Alpha-0 pixels are never taken.
 ///
-/// Only that one semi-transparent case was measured; other cases follow this rule until
-/// measured. [`wand_region`] and [`wand_region_within`] are unchanged.
-pub fn wand_region_bucket(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
+/// Only that one semi-transparent case was measured; unmeasured cases keep the previous
+/// behaviour. [`wand_region`] and [`wand_region_within`] are unchanged.
+pub(crate) fn wand_region_bucket(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
     region_by_rule(img, area, seed, tolerance, contiguous, anti_alias, None, ColorDistance::LargestChannel, MatchRule::Bucket)
 }
 
@@ -419,7 +421,7 @@ fn region_by_rule(
         MatchRule::Bucket => match target[3] {
             0 => p[3] == 0,
             255 => distance.rgb(p, target) <= tol && (p[3] as i32 - 255).abs() <= tol,
-            _ => p[3] != 0 && distance.rgb(p, target) <= tol,
+            _ => p[3] != 0 && distance.rgb(p, target) <= tol && (p[..3] == target[..3] || (p[3] as i32 - target[3] as i32).abs() <= tol),
         },
     };
     let mut marks = vec![0u8; w * h];

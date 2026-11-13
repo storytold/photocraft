@@ -168,3 +168,18 @@ fn wand_region_still_uses_the_alpha_band() {
     assert_eq!(r32.at(10, EDGE_Y), 0.0, "alpha 40 is outside a Tolerance 32 alpha band");
     assert_eq!(r32.at(9, EDGE_Y), 1.0, "alpha 0 is inside it");
 }
+
+/// The measured semi-transparent case is one colour at several alphas; a pixel of another
+/// colour keeps the alpha band the shared rule always had (the issue leaves unmeasured
+/// cases at today's behaviour). Seed [0, 0, 0, 40] at x = 1: x = 0 is the same-colour
+/// control [0, 0, 0, 253]; x = 2 is [20, 20, 20, 197] — its RGB distance of 20 passes
+/// Tolerance 32, but its alpha sits 157 from the seed's, so it is not filled.
+#[test]
+fn semi_transparent_seed_keeps_the_alpha_band_for_other_colours() {
+    let img: Vec<[u8; 4]> = vec![[0, 0, 0, 253], [0, 0, 0, 40], [20, 20, 20, 197]];
+    let area = Rect::new(0, 0, 3, 1);
+    let after = fill(&img, area, (1, 0), 32.0, true);
+    let ch = changed(&img, &after);
+    assert!(ch.contains(&0), "same-colour pixel of alpha 253 fills");
+    assert!(!ch.contains(&2), "different-colour pixel of alpha 197 keeps the alpha band");
+}
