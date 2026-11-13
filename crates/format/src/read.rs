@@ -524,12 +524,51 @@ mod tests {
         let _ = std::fs::remove_dir(&link).or_else(|_| std::fs::remove_file(&link));
     }
 
+    #[cfg(windows)]
+    struct JunctionTestDir(PathBuf);
+
+    #[cfg(windows)]
+    impl JunctionTestDir {
+        fn new() -> io::Result<Self> {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let base = std::path::absolute(std::env::temp_dir())?;
+            loop {
+                let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let root = base.join(format!("photocraft-read-junctions-{}-{id}", std::process::id()));
+                match std::fs::create_dir(&root) {
+                    Ok(()) => return Ok(Self(root)),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for JunctionTestDir {
+        fn drop(&mut self) {
+            let mut unlinked = true;
+            for name in ["alias", "cloud"] {
+                if let Err(e) = std::fs::remove_dir(self.0.join(name))
+                    && e.kind() != io::ErrorKind::NotFound
+                {
+                    unlinked = false;
+                }
+            }
+            // Only delete our exclusively created tree after both junctions are gone.
+            if unlinked {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+    }
+
     /// Ordinary Windows paths fold parents before traversing junctions; verbatim paths do not.
     #[cfg(windows)]
     #[test]
     fn windows_fallback_normalizes_the_original_path_before_following_links() {
-        let real = temp("normalize-before-links", b"right document");
-        let root = real.parent().unwrap();
+        let dir = JunctionTestDir::new().unwrap();
+        let root = &dir.0;
+        std::fs::write(root.join("f.bin"), b"right document").unwrap();
         let other = root.join("other");
         std::fs::create_dir_all(other.join("sub")).unwrap();
         let wrong = other.join("cloud");
@@ -547,8 +586,30 @@ mod tests {
         assert_eq!(bytes, b"right document", "fallback must open the document named by the original Windows path");
         let verbatim = PathBuf::from(format!(r"\\?\{}", path.display()));
         assert_eq!(fallback_paths(&verbatim).next(), Some(wrong.join("f.bin")), "verbatim paths keep their existing link-first semantics");
-        std::fs::remove_dir(root.join("alias")).unwrap();
-        std::fs::remove_dir(root.join("cloud")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_test_directory_cleanup_survives_panics_without_removing_targets() {
+        let target = JunctionTestDir::new().unwrap();
+        let marker = target.0.join("keep.bin");
+        std::fs::write(&marker, b"keep target").unwrap();
+        for panic in [false, true] {
+            let dir = JunctionTestDir::new().unwrap();
+            let root = dir.0.clone();
+            let target_path = &target.0;
+            let result = std::panic::catch_unwind(move || {
+                let _guard = dir;
+                for name in ["alias", "cloud"] {
+                    let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(_guard.0.join(name)).arg(target_path).output().unwrap();
+                    assert!(made.status.success(), "junction creation failed: {made:?}");
+                }
+                assert!(!panic, "exercise cleanup during unwinding");
+            });
+            assert_eq!(result.is_err(), panic);
+            assert!(!root.exists(), "the owned directory is removed on success and panic");
+            assert_eq!(std::fs::read(&marker).unwrap(), b"keep target");
+        }
     }
 
     #[test]
