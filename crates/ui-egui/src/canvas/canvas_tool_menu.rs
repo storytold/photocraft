@@ -648,10 +648,12 @@ pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
     if any_path { label } else { "Free Transform" }
 }
 
-/// The Add Anchor Point menu's Fill, Stroke and transform rows, as measured (#12710): with anchors
-/// of the targeted path selected they act on those, **Fill Subpath…** / **Stroke Subpath…** for one
+/// The Add Anchor Point menu's Fill, Stroke and transform rows, labelled as measured (#12710): with
+/// anchors of the targeted path selected they read **Fill Subpath…** / **Stroke Subpath…** for one
 /// subpath, **Fill Subpaths…** / **Stroke Subpaths…** for several, and **Free Transform Points**.
-/// With no path targeted the transform row reads **Free Transform**.
+/// With no path targeted the transform row reads **Free Transform**. Only the labels follow the
+/// selection: `path.fill`, `path.stroke` and `path.transform` take no subpath or anchor selection
+/// yet, so the rows still act on the whole path.
 fn add_anchor_row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
     if !menu.has_path {
         return if command == "path.transform" { "Free Transform" } else { label };
