@@ -244,6 +244,25 @@ fn a_flat_file_that_keeps_the_document_saves_in_place() {
     assert_eq!(written.borrow().len(), 1);
 }
 
+/// #10898: Save writes a flat file back in place only while the document holds nothing the file
+/// drops: a saved path, a layer comp or a Quick Mask sends it through Save As.
+#[test]
+fn save_in_place_skips_a_document_with_a_saved_path() {
+    let (mut app, written) = app_with(vec![None, None]);
+    app.services.import = Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
+        photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+    }));
+    let ctx = egui::Context::default();
+    app.open_file("/pics/flat.png", &png_bytes(4, 3)).unwrap();
+    assert!(crate::saves_flat_in_place(&app.session.active().unwrap().doc, "/pics/flat.png"), "the plain PNG is written back");
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).paths.push(Default::default());
+    app.session.active_mut().unwrap().revision += 1;
+    assert!(!crate::saves_flat_in_place(&app.session.active().unwrap().doc, "/pics/flat.png"));
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    answer(&mut app);
+    assert!(written.borrow().is_empty(), "nothing written over the PNG");
+}
+
 /// #5733: Save doesn't write one image back over a file that held more (here a two-size icon;
 /// animations and multi-page TIFFs are recorded the same way), nor through an encoder that
 /// quantises (GIF), nor a Grayscale document into a format that stores only colour.

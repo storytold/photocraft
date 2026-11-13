@@ -209,6 +209,20 @@ impl ExportSettings {
     }
 }
 
+/// Whether a flat file at `path` keeps what a document holds beside its layers. Saved paths, layer
+/// comps and a quick mask are in no flat file. A TIFF keeps the alpha channels, and a Targa or DDS
+/// one, as its alpha; anything else keeps none. Guides don't count: they're not worth a Save As.
+pub(crate) fn flat_file_keeps_extras(doc: &Document, path: &str) -> bool {
+    if !doc.paths.is_empty() || !doc.layer_comps.is_empty() || doc.quick_mask.is_some() {
+        return false;
+    }
+    match photocraft_engine::file_cmds::extension(path).as_deref() {
+        Some("tif" | "tiff") => true,
+        Some("tga" | "dds") => doc.channels.len() <= 1 && doc.channels.iter().all(|c| c.spot.is_none()),
+        _ => doc.channels.is_empty(),
+    }
+}
+
 /// Whether File › Save writes straight back to `path`, the flat file (JPEG, PNG, TIFF…) the
 /// document came from, as Photoshop's Save does (#5733): only while that file keeps everything,
 /// i.e. the document is one plain raster layer ([`plain_raster`]) with no extra channels, in RGB
@@ -242,6 +256,8 @@ pub(crate) fn saves_flat_in_place(doc: &Document, path: &str) -> bool {
         })
         && (doc.icc_profile.is_none() || caps.icc)
         && doc.channels.is_empty()
+        // Saved paths, layer comps and a quick mask are in no flat file (#10898).
+        && flat_file_keeps_extras(doc, path)
         && matches!(doc.mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale)
         // Last: it may read every tile.
         && (keeps_alpha || doc.is_background(layer.id) || opaque_layer(doc, layer))

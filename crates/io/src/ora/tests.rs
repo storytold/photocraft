@@ -546,6 +546,8 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
         ("float", doc(SampleType::F32)),
         ("profile", with(&|d| d.icc_profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes()))),
         ("metadata", with(&|d| d.metadata.xmp = Some("<x/>".into()))),
+        ("saved path", with(&|d| d.paths.push(Default::default()))),
+        ("Quick Mask", with(&|d| d.quick_mask = Some(photocraft_doc::AlphaChannel::new("Quick Mask", Surface::new(PixelFormat::GRAY8))))),
     ]
 }
 

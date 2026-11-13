@@ -306,3 +306,74 @@ fn cancel_writes_nothing() {
     assert!(writes.borrow().is_empty());
     assert_eq!(h.state().session.active().unwrap().path, None);
 }
+
+/// A TIFF that can't hold the document is a copy also when TIFF Options asks first (#10898): a
+/// one-layer document with a saved path writes a flat TIFF, so it keeps no file and stays unsaved.
+#[test]
+fn a_flat_tiff_through_tiff_options_is_a_copy() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, writes) = tiff_app("white", "unused.tif");
+    h.state_mut().session.edit_prefs(|p| p.file_handling.ask_before_saving_flat_copy = false);
+    h.state_mut().run("path.set", json!({"name": "Path 1", "path": {"subpaths": [{"knots": [[1, 1], [6, 1], [6, 6]]}]}})).unwrap();
+    h.state_mut().save_as(Some("p.tif".into())).unwrap();
+    h.run_steps(4);
+    assert!(h.state().tiff_options.is_some(), "TIFF Options asks");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(writes.borrow().len(), 1, "the TIFF is written");
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.path, None, "a copy: the saved path isn't in the file");
+    let doc = st.doc.id;
+    assert!(h.state().only_saved_flat(doc), "and the close prompt knows");
+}
+
+/// A layered TIFF keeps saved paths and layer comps with its layers: it is the document's own
+/// file, and File › Save writes it again in place (#10898).
+#[test]
+fn a_layered_tiff_holds_saved_paths_and_comps() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, _) = tiff_app("white", "unused.tif");
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.state_mut().run("path.set", json!({"name": "Path 1", "path": {"subpaths": [{"knots": [[1, 1], [6, 1], [6, 6]]}]}})).unwrap();
+    h.state_mut().run("layerComp.new", json!({"name": "Comp"})).unwrap();
+    h.state_mut().save_as(Some("t.tif".into())).unwrap();
+    h.run_steps(4);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.path.as_deref(), Some("t.tif"), "the layered TIFF holds the document");
+    assert!(!h.state().only_saved_flat(st.doc.id));
+    // An edit, then File › Save: it offers the TIFF again, not a PSD.
+    let (dialog, asked) = crate::file_dialog::fake(vec![None]);
+    h.state_mut().services.file_dialog = Some(dialog);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    let _ = h.state_mut().save_dialog_flow(None, crate::FormatChoices::default(), true);
+    h.run_steps(4);
+    let suggested: Vec<String> = asked
+        .borrow()
+        .iter()
+        .filter_map(|r| match r {
+            crate::file_dialog::FileDialogRequest::Save { suggested } => Some(suggested.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(suggested, ["t.tif"], "File › Save writes the TIFF it lives in");
+}
+
+/// Discarding the layers in TIFF Options is a flat copy the close prompt mentions (#10898).
+#[test]
+fn discarding_the_layers_of_a_tiff_is_a_flat_copy() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, _) = tiff_app("white", "unused.tif");
+    h.state_mut().session.edit_prefs(|p| p.file_handling.ask_before_saving_flat_copy = false);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.state_mut().save_as(Some("u.tif".into())).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Discard Layers and Save a Copy").click();
+    h.run_steps(2);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.path, None, "a copy");
+    assert!(h.state().only_saved_flat(st.doc.id), "the layers are in no file");
+}
