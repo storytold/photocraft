@@ -14,8 +14,8 @@
 //! The options bar has a Refresh button and a gear menu (#12857): Object Finder on/off, Object
 //! Subtract (stored only) and Object Finder Mode. Auto Refresh re-analyses after every edit, as
 //! above. Manual Refresh keeps the analysed pixels (`Finder::basis`) across the pointer leaving,
-//! a tool switch and selection-only changes, and after a pixel edit highlights nothing until
-//! Refresh is clicked ([`refresh`]).
+//! a tool switch and selection-only changes; it analyses nothing until Refresh is clicked
+//! ([`refresh`]): not on the first hover, on another document, or after a pixel edit.
 
 use std::sync::Arc;
 
@@ -110,21 +110,10 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
                     return Update::default();
                 }
             }
-            _ => {
-                app.object_finder = Some(Finder {
-                    doc,
-                    revision,
-                    target,
-                    all_layers,
-                    at: px,
-                    since: now,
-                    job: None,
-                    misses: Vec::new(),
-                    shown: None,
-                    texture: None,
-                    basis: Arc::clone(&doc_arc),
-                });
-            }
+            // Manual Refresh analyses nothing until Refresh is clicked: no finder yet, or one kept
+            // for another document, waits for [`refresh`] (#12857).
+            _ if manual => return Update::default(),
+            _ => app.object_finder = start(app),
         }
     }
     // The click reports an empty sampled layer; the hover says so too instead of showing nothing.
@@ -209,9 +198,30 @@ pub(crate) fn clear(app: &mut PhotocraftApp) {
     idle(app);
 }
 
-/// The options bar's Refresh button: the next [`update`] analyses the current pixels.
+/// The options bar's Refresh button: the next [`update`] analyses the current pixels. Under
+/// Manual Refresh this is the only way a finder starts.
 pub(crate) fn refresh(app: &mut PhotocraftApp) {
-    app.object_finder = None;
+    app.object_finder = start(app);
+}
+
+/// A new finder for the active document's current pixels, sampled layer and Sample All Layers.
+/// Its pointer position is unset, so the first hover starts the debounce.
+fn start(app: &PhotocraftApp) -> Option<Finder> {
+    let st = app.session.active()?;
+    let all_layers = app.ui.tool_options.sample_all.object_selection;
+    Some(Finder {
+        doc: st.doc.id,
+        revision: st.revision,
+        target: sampled_target(&st.doc, st.active_layer, all_layers),
+        all_layers,
+        at: [i32::MIN, i32::MIN],
+        since: 0.0,
+        job: None,
+        misses: Vec::new(),
+        shown: None,
+        texture: None,
+        basis: Arc::clone(&st.doc),
+    })
 }
 
 /// The options bar's gear button and its menu (#12857).

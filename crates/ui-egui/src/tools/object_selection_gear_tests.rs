@@ -80,16 +80,45 @@ fn reset_tool_restores_them() {
     assert_eq!(o, ToolOptions::default());
 }
 
+/// Hovers long past the debounce and checks nothing was shown or started.
+fn assert_idle(app: &mut PhotocraftApp) {
+    let u = hover(app, DISC);
+    assert!(u.shown.is_none() && !u.busy);
+    let u = update(app, Some(DISC), false, 500.0);
+    assert!(u.shown.is_none() && !u.busy);
+}
+
+#[test]
+fn manual_refresh_analyses_nothing_before_refresh() {
+    let mut app = app(ObjectFinderMode::Manual);
+    assert_idle(&mut app);
+    refresh(&mut app);
+    assert!(hover(&mut app, DISC).shown.is_some());
+}
+
+#[test]
+fn manual_refresh_needs_refresh_on_another_document() {
+    let mut app = app(ObjectFinderMode::Manual);
+    refresh(&mut app);
+    assert!(hover(&mut app, DISC).shown.is_some());
+    app.run("file.new", json!({"width": 200, "height": 160})).unwrap();
+    app.sync_views();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 55, "y": 35, "width": 90, "height": 90, "ellipse": true})).unwrap();
+    app.run("edit.fill", json!({"contents": "color", "color": "#e63319"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    assert_idle(&mut app);
+    refresh(&mut app);
+    assert!(hover(&mut app, DISC).shown.is_some());
+}
+
 #[test]
 fn manual_refresh_waits_for_refresh_after_a_pixel_edit() {
     let mut app = app(ObjectFinderMode::Manual);
+    refresh(&mut app);
     assert!(hover(&mut app, DISC).shown.is_some());
     edit_pixels(&mut app);
-    let u = hover(&mut app, DISC);
-    assert!(u.shown.is_none() && !u.busy);
-    // Still nothing after the debounce: no lookup was started.
-    let u = update(&mut app, Some(DISC), false, 500.0);
-    assert!(u.shown.is_none() && !u.busy);
+    assert_idle(&mut app);
     refresh(&mut app);
     assert!(hover(&mut app, DISC).shown.is_some());
 }
@@ -97,6 +126,7 @@ fn manual_refresh_waits_for_refresh_after_a_pixel_edit() {
 #[test]
 fn manual_refresh_survives_selection_changes_and_leaving() {
     let mut app = app(ObjectFinderMode::Manual);
+    refresh(&mut app);
     assert!(hover(&mut app, DISC).shown.is_some());
     assert!(update(&mut app, None, false, 200.0).shown.is_none());
     app.run("select.all", json!({})).unwrap();
