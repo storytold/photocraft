@@ -209,7 +209,12 @@ fn unticked_still_writes_flattened_jpeg_and_bmp_files() {
         let unticked = run(&mut h, dialog, dir.path());
         for (ticked, unticked) in ticked.iter().zip(&unticked) {
             assert!(unticked.bytes == ticked.bytes, "{format}: unticked writes today's file");
-            assert_eq!(unticked.at(0, 0), WHITE, "{format}: flattened on the board's white");
+            // JPEG is lossy: the red layer's colour bleeds a little into the corner's 8 x 8 block.
+            let corner = unticked.at(0, 0);
+            assert!(corner[3] == 255 && corner.iter().all(|c| *c >= 240), "{format}: flattened on the board's white, not transparent: {corner:?}");
+            if format == "bmp" {
+                assert_eq!(corner, WHITE);
+            }
         }
         assert_eq!(unticked.each_ref().map(|f| f.size), [(200, 150), (200, 200), (100, 100)], "{format}");
         if format == "bmp" {
