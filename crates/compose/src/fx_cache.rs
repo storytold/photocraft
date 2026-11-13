@@ -1,6 +1,6 @@
 use super::composite::texture_ctx;
 use super::ctx::{Ctx, PREPARE_DEPTH};
-use super::extents::{effect_shape, effect_source_bounds};
+use super::extents::{effect_outline, effect_shape, effect_source_bounds};
 use super::{Layer, LayerContent, Rect, Surface, advanced, effects};
 
 // ---------------------------------------------------------------------------------------------
@@ -79,7 +79,14 @@ struct FxEntry {
     maps: std::sync::Arc<effects::FxMaps>,
     /// The tiles the key identifies (see [`layer_identity`]): their addresses, not their pixels.
     _pin: Vec<std::sync::Weak<photocraft_raster::Tile>>,
+    /// What the reserved tile addresses keep allocated. The maps' arrays may be shared with other
+    /// entries (a move rebases them), so they are counted per allocation in [`FxCache::arrays`].
     bytes: usize,
+    /// The texture anchor the maps were built with ([`texture_ctx`]), for move reuse.
+    anchor: (f64, f64),
+    /// The layer the maps belong to (tests count builds and bytes per layer).
+    #[cfg(test)]
+    layer: u64,
 }
 
 /// Global cache of effect maps (bounded by bytes), one slot per layer state. Slots are filled
@@ -88,8 +95,18 @@ type FxSlot = std::sync::Arc<std::sync::OnceLock<FxEntry>>;
 
 struct FxCache {
     map: std::collections::HashMap<u64, FxSlot>,
+    /// Position-free index ([`move_key`]) → the exact key of the latest entry with it. Lookups
+    /// go through `map`, so an evicted entry is simply a miss.
+    moves: std::collections::HashMap<u64, u64>,
     order: std::collections::VecDeque<u64>,
     bytes: usize,
+    /// Each cached arrays allocation ([`effects::FxMaps::arrays_id`]) → how many cached entries
+    /// share it and its bytes, counted in `bytes` once while any of them is cached. An entry keeps
+    /// its arrays alive, so no other allocation can take the address meanwhile.
+    arrays: std::collections::HashMap<usize, (usize, usize)>,
+    /// `bytes` by layer (tests read their own layer's share while other tests render).
+    #[cfg(test)]
+    layer_bytes: std::collections::HashMap<u64, usize>,
 }
 
 /// Default effect-cache budget (Preferences › Performance can change it).
@@ -115,11 +132,18 @@ pub fn effect_cache_bytes() -> usize {
 
 /// Drop every cached effect map (Edit › Purge › All). Returns the bytes released.
 pub fn purge_effect_cache() -> usize {
+    // Tests that read the cache across renders hold this so a parallel test can't purge between.
+    #[cfg(test)]
+    let _held = FX_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
     let freed = c.bytes;
     c.map.clear();
+    c.moves.clear();
     c.order.clear();
+    c.arrays.clear();
     c.bytes = 0;
+    #[cfg(test)]
+    c.layer_bytes.clear();
     freed
 }
 
@@ -140,7 +164,17 @@ pub fn discard_unreadable_pixel_caches() {
 
 fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
     static C: std::sync::OnceLock<std::sync::Mutex<FxCache>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::sync::Mutex::new(FxCache { map: Default::default(), order: Default::default(), bytes: 0 }))
+    C.get_or_init(|| {
+        std::sync::Mutex::new(FxCache {
+            map: Default::default(),
+            moves: Default::default(),
+            order: Default::default(),
+            bytes: 0,
+            arrays: Default::default(),
+            #[cfg(test)]
+            layer_bytes: Default::default(),
+        })
+    })
 }
 
 /// Where `layer`'s effect maps are built (see [`effect_maps`]) and whether that is clipped to the
@@ -229,37 +263,187 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
     if let Some((m, _)) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return m.clone();
     }
-    let maps = cached_effect_maps(layer, region, key, cx);
+    let maps = cached_effect_maps(layer, region, clipped, key, cx);
     cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert((maps, clipped)).0.clone()
 }
 
-fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &FxSlot) -> std::sync::Arc<effects::FxMaps> {
-    let generation = photocraft_raster::spill::read_error_generation();
-    let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
-    let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
+fn build_fx_slot_maps(
+    layer: &Layer,
+    region: Rect,
+    shape: Option<Vec<f32>>,
+    generation: u64,
+    key: u64,
+    cx: &Ctx,
+    slot: &FxSlot,
+) -> std::sync::Arc<effects::FxMaps> {
+    let shape: Vec<f32> = match shape {
+        Some(s) => s,
+        None if region.is_empty() => Vec::new(),
+        None => effect_shape(layer, region, cx),
+    };
+    let tex = texture_ctx(layer, region, cx);
+    let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &tex, cx.patterns);
+    #[cfg(test)]
+    count_build(layer.id.0);
+    fill_slot(layer, std::sync::Arc::new(maps), tex.anchor, generation, key, slot)
+}
+
+/// Fills `slot` with `maps` and returns the maps the slot holds: a concurrent fill that finished
+/// first wins, so every tile shares one map. `generation` is the scratch read-error generation
+/// from before the layer's pixels were read: maps whose shape came from a scratch placeholder
+/// are returned for this frame but never cached.
+fn fill_slot(
+    layer: &Layer,
+    maps: std::sync::Arc<effects::FxMaps>,
+    anchor: (f64, f64),
+    generation: u64,
+    key: u64,
+    slot: &FxSlot,
+) -> std::sync::Arc<effects::FxMaps> {
     let mut pin = Vec::new();
     let mut readable = true;
     layer_identity(layer, &mut std::collections::hash_map::DefaultHasher::new(), &mut |t| {
         readable &= t.scratch_health().is_ok();
         pin.push(std::sync::Arc::downgrade(t));
     });
-    // The maps, plus what each reserved tile address keeps allocated.
-    let bytes = maps.bytes().saturating_add(pin.len().saturating_mul(std::mem::size_of::<photocraft_raster::Tile>() + 2 * std::mem::size_of::<usize>()));
-    let maps = std::sync::Arc::new(maps);
     if !readable || photocraft_raster::spill::check_since(generation).is_err() {
         // Built from a scratch placeholder: use it for this frame, never cache it.
         return maps;
     }
-    if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
-        // Counted exactly once, by the build that filled the slot, and only while the
-        // slot is still cached (eviction may have dropped it meanwhile).
+    let bytes = pin.len().saturating_mul(std::mem::size_of::<photocraft_raster::Tile>() + 2 * std::mem::size_of::<usize>());
+    #[cfg(test)]
+    let entry = FxEntry { maps: maps.clone(), _pin: pin, bytes, anchor, layer: layer.id.0 };
+    #[cfg(not(test))]
+    let entry = FxEntry { maps: maps.clone(), _pin: pin, bytes, anchor };
+    // Filled and counted under the cache lock, so eviction uncounts exactly what was counted:
+    // only a fill that finds its slot still cached is counted (eviction may have dropped it).
+    let lost = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-        if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot)) {
-            c.bytes += bytes;
+        match slot.set(entry) {
+            Ok(()) => {
+                if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot))
+                    && let Some(e) = slot.get()
+                {
+                    count_entry(&mut c, e);
+                }
+                None
+            }
+            Err(e) => Some(e),
         }
-    }
-    // A concurrent build that finished first wins, so every tile shares one map.
+    };
+    // A losing build's maps are freed outside the lock.
+    drop(lost);
     slot.get().map_or(maps, |e| e.maps.clone())
+}
+
+/// Adds a cached entry to the byte count: its pins, and its arrays unless another cached entry
+/// already counts them.
+fn count_entry(c: &mut FxCache, e: &FxEntry) {
+    let shared = c.arrays.entry(e.maps.arrays_id()).or_insert((0, e.maps.bytes()));
+    shared.0 += 1;
+    let added = e.bytes.saturating_add(if shared.0 == 1 { shared.1 } else { 0 });
+    c.bytes = c.bytes.saturating_add(added);
+    #[cfg(test)]
+    {
+        *c.layer_bytes.entry(e.layer).or_default() += added;
+    }
+}
+
+/// The position-free key under which a whole-pixel move may reuse `layer`'s maps over `region`
+/// (built elsewhere, at the same size), or `None` where a rebase couldn't be proven exact. It is
+/// the GPU's move rule (`fx::shape_key` with an equal-size region): everything the maps are
+/// built from except the shape, which [`moved_maps`] compares bit for bit, and the region's
+/// origin. Unlike the GPU's key it holds the effects, since these maps are per effect.
+///
+/// Left out, rebuilt as before: maps that aren't [`effects::maps_are_local`] (their arithmetic
+/// depends on where the region starts), a region clipped to the render rectangle (it follows the
+/// render, not the layer), groups (their shape is their children's composite), fill layers (laid
+/// out over their absolute frame, as on the GPU) and a bevel texture not linked with the layer
+/// (it tiles from the canvas origin).
+fn move_key(layer: &Layer, region: Rect, clipped: bool, cx: &Ctx) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    if clipped || region.is_empty() || !effects::maps_are_local(layer) {
+        return None;
+    }
+    if matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_)) {
+        return None;
+    }
+    if bevel_textures(layer).any(|t| !t.link) {
+        return None;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write_u8(0x4d);
+    layer.id.0.hash(&mut h);
+    layer.fill_opacity.to_bits().hash(&mut h);
+    std::mem::discriminant(&layer.content).hash(&mut h);
+    effect_outline(layer).is_some().hash(&mut h);
+    // The effects without their reference point: where a linked texture anchors is checked
+    // against the move itself (`anchor_follows`).
+    format!("{:?}", layer.effects.items).hash(&mut h);
+    layer.effects.enabled.hash(&mut h);
+    layer.advanced.hash(&mut h);
+    layer.blend_if.hash(&mut h);
+    (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
+    (region.width(), region.height()).hash(&mut h);
+    Some(h.finish())
+}
+
+/// The enabled bevels' textures: the only map input that reads the texture anchor.
+fn bevel_textures(layer: &Layer) -> impl Iterator<Item = &photocraft_doc::BevelTexture> {
+    layer.effects.items.iter().filter(|e| e.enabled()).filter_map(|e| match e {
+        photocraft_doc::Effect::BevelEmboss(b) => b.texture.as_ref(),
+        _ => None,
+    })
+}
+
+/// Whether every linked bevel texture tiles from an origin that moved by exactly `d`, so each
+/// map pixel samples the texture at the same tile coordinates as before. The texture places
+/// pixel `x` at `x + 0.5 − (anchor + phase)` (`Placement::anchored`). Both `x` and the origin
+/// moved by `d` without rounding, so each difference rounds from the same real number to the
+/// same float: that holds only when `old + d` is exact and equals `new`, which the error term of
+/// a two-sum checks.
+fn anchor_follows(layer: &Layer, old: (f64, f64), new: (f64, f64), d: (i32, i32)) -> bool {
+    fn exact_sum(a: f64, b: f64) -> Option<f64> {
+        let s = a + b;
+        let bb = s - a;
+        let err = (a - (s - bb)) + (b - bb);
+        (s.is_finite() && err == 0.0).then_some(s)
+    }
+    bevel_textures(layer).all(|t| {
+        let axis = |old: f64, new: f64, phase: f32, d: i32| {
+            let (o_old, o_new) = (old + f64::from(phase), new + f64::from(phase));
+            exact_sum(o_old, f64::from(d)).is_some_and(|s| s.to_bits() == o_new.to_bits())
+        };
+        t.link && axis(old.0, new.0, t.phase.0, d.0) && axis(old.1, new.1, t.phase.1, d.1)
+    })
+}
+
+/// Maps for `layer` over `region` reused from the latest entry with the same [`move_key`]: when
+/// that entry covers an equal-size region and the layer's shape over `region` equals the one it
+/// was built from bit for bit, every map is the same array at a new origin. Returns the rebased
+/// maps with their anchor, or the shape computed for the check (a miss builds from it).
+#[allow(clippy::type_complexity)]
+fn moved_maps(layer: &Layer, region: Rect, mk: u64, cx: &Ctx) -> Result<(std::sync::Arc<effects::FxMaps>, (f64, f64)), Option<Vec<f32>>> {
+    let found = {
+        let c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+        c.moves.get(&mk).and_then(|k| c.map.get(k)).and_then(|s| s.get()).map(|e| (e.maps.clone(), e.anchor))
+    };
+    let Some((old, old_anchor)) = found else { return Err(None) };
+    let from = old.rect();
+    if from.width() != region.width() || from.height() != region.height() {
+        return Err(None);
+    }
+    let d = (region.x0.saturating_sub(from.x0), region.y0.saturating_sub(from.y0));
+    let anchor = texture_ctx(layer, region, cx).anchor;
+    if !anchor_follows(layer, old_anchor, anchor, d) {
+        return Err(None);
+    }
+    let shape = effect_shape(layer, region, cx);
+    let same = shape.len() == old.shape().len() && shape.iter().zip(old.shape()).all(|(a, b)| a.to_bits() == b.to_bits());
+    if !same {
+        return Err(Some(shape));
+    }
+    Ok((std::sync::Arc::new(old.rebased((region.x0, region.y0))), anchor))
 }
 
 fn evict_fx_cache_over_budget(key: u64) {
@@ -271,17 +455,38 @@ fn evict_fx_cache_over_budget(key: u64) {
             c.order.push_back(old);
             continue;
         }
-        if let Some(s) = c.map.remove(&old) {
-            c.bytes = c.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
-        }
+        remove_entry(&mut c, old);
     }
     // The current entry alone over the budget: its callers hold the maps, the cache must not.
-    if c.bytes > budget
-        && let Some(s) = c.map.remove(&key)
-    {
+    if c.bytes > budget && c.map.contains_key(&key) {
         c.order.retain(|k| *k != key);
-        c.bytes = c.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
+        remove_entry(&mut c, key);
     }
+}
+
+/// Drops the entry under `key` (already out of `order`) from the cache and its bytes from the
+/// count: its pins, and its arrays once no other cached entry shares them (a moved entry keeps
+/// them alive).
+fn remove_entry(c: &mut FxCache, key: u64) {
+    if let Some(s) = c.map.remove(&key)
+        && let Some(e) = s.get()
+    {
+        let id = e.maps.arrays_id();
+        let mut freed = e.bytes;
+        if let Some(shared) = c.arrays.get_mut(&id) {
+            shared.0 = shared.0.saturating_sub(1);
+            if shared.0 == 0 {
+                freed = freed.saturating_add(shared.1);
+                c.arrays.remove(&id);
+            }
+        }
+        c.bytes = c.bytes.saturating_sub(freed);
+        #[cfg(test)]
+        if let Some(b) = c.layer_bytes.get_mut(&e.layer) {
+            *b = b.saturating_sub(freed);
+        }
+    }
+    c.moves.retain(|_, k| *k != key);
 }
 
 /// The layer's effect maps from the global cache, built on a miss.
@@ -291,7 +496,7 @@ fn evict_fx_cache_over_budget(key: u64) {
 /// the same layer; had it blocked on a once-init held further up its own stack, it would deadlock.
 /// Instead a miss builds the maps here and the first finished build is kept. Renders build every
 /// layer's maps before their parallel tiles (`prepare_effects`), so tiles rarely miss.
-fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
+fn cached_effect_maps(layer: &Layer, region: Rect, clipped: bool, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     let slot = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = c.map.get(&key) {
@@ -305,9 +510,76 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
     };
     let maps = match slot.get() {
         Some(e) => e.maps.clone(),
-        None => build_fx_slot_maps(layer, region, key, cx, &slot),
+        None => {
+            let generation = photocraft_raster::spill::read_error_generation();
+            let mk = move_key(layer, region, clipped, cx);
+            let maps = match mk.map(|mk| moved_maps(layer, region, mk, cx)) {
+                // The arrays are shared with the entry moved from and counted once for both.
+                Some(Ok((maps, anchor))) => fill_slot(layer, maps, anchor, generation, key, &slot),
+                Some(Err(shape)) => build_fx_slot_maps(layer, region, shape, generation, key, cx, &slot),
+                None => build_fx_slot_maps(layer, region, None, generation, key, cx, &slot),
+            };
+            // Only a filled slot still in the cache can be moved from (one built from unreadable
+            // tiles stays empty, and one evicted meanwhile would leave a stale index entry).
+            if let Some(mk) = mk
+                && slot.get().is_some()
+            {
+                let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+                if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, &slot)) {
+                    c.moves.insert(mk, key);
+                }
+            }
+            maps
+        }
     };
     // Evict the oldest entries over budget (never the one just used).
     evict_fx_cache_over_budget(key);
     maps
+}
+
+/// Held by tests that read the effect cache across renders; [`purge_effect_cache`] takes it, so
+/// a test purging in parallel waits instead of emptying the cache between their renders.
+#[cfg(test)]
+pub(crate) static FX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn build_counts() -> &'static std::sync::Mutex<std::collections::HashMap<u64, usize>> {
+    static B: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, usize>>> = std::sync::OnceLock::new();
+    B.get_or_init(Default::default)
+}
+
+#[cfg(test)]
+fn count_build(layer: u64) {
+    *build_counts().lock().unwrap_or_else(|e| e.into_inner()).entry(layer).or_default() += 1;
+}
+
+/// How many times the maps of the layer with id `layer` were built (not reused).
+#[cfg(test)]
+pub(crate) fn fx_builds(layer: u64) -> usize {
+    build_counts().lock().unwrap_or_else(|e| e.into_inner()).get(&layer).copied().unwrap_or(0)
+}
+
+/// The cached entries of the layer with id `layer`: their maps and their own bytes (pins).
+#[cfg(test)]
+pub(crate) fn fx_entries(layer: u64) -> Vec<(std::sync::Arc<effects::FxMaps>, usize)> {
+    let c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+    c.map.values().filter_map(|s| s.get()).filter(|e| e.layer == layer).map(|e| (e.maps.clone(), e.bytes)).collect()
+}
+
+/// The part of [`effect_cache_bytes`] held by the layer with id `layer`.
+#[cfg(test)]
+pub(crate) fn fx_layer_bytes(layer: u64) -> usize {
+    fx_cache().lock().unwrap_or_else(|e| e.into_inner()).layer_bytes.get(&layer).copied().unwrap_or(0)
+}
+
+/// Evicts the cached entries of the layer with id `layer` whose maps match `which`, as the
+/// budget would.
+#[cfg(test)]
+pub(crate) fn fx_evict(layer: u64, which: impl Fn(&effects::FxMaps) -> bool) {
+    let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let keys: Vec<u64> = c.map.iter().filter(|(_, s)| s.get().is_some_and(|e| e.layer == layer && which(&e.maps))).map(|(k, _)| *k).collect();
+    for k in keys {
+        remove_entry(&mut c, k);
+        c.order.retain(|o| *o != k);
+    }
 }

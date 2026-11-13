@@ -179,8 +179,16 @@ impl Map {
 /// Effect maps derived from a layer's shape (its alpha), computed once over the layer's whole
 /// region and cropped per render tile. They depend only on the shape, the effect settings and the
 /// global light, never on the backdrop, so they can be cached across tiles and edits.
+///
+/// The arrays sit behind one `Arc` beside the rectangle they cover, so maps that a whole-pixel
+/// move leaves unchanged are placed at the new origin without copying them ([`FxMaps::rebased`]).
 pub struct FxMaps {
     rect: Rect,
+    arrays: std::sync::Arc<FxArrays>,
+}
+
+/// The arrays of [`FxMaps`], all over its `rect` (row-major).
+pub struct FxArrays {
     shape: Map,
     /// Per enabled effect (in `items` order): the maps it paints through.
     per: Vec<Vec<Map>>,
@@ -196,8 +204,72 @@ pub struct FxMaps {
     vdout_exact: Option<Vec<f32>>,
     /// `shape` joins the alpha with a filled shape's outline (`crate::effect_outline`).
     outline: bool,
-    /// Frames of gradient strokes by outside width (bits): see [`stroke_frame`].
+    /// Frames of gradient strokes by outside width (bits): see [`stroke_frame`]. Absolute, so
+    /// maps holding any are never rebased (gradient strokes aren't [`maps_are_local`]).
     frames: Vec<(u32, Rect)>,
+}
+
+impl std::ops::Deref for FxMaps {
+    type Target = FxArrays;
+    fn deref(&self) -> &FxArrays {
+        &self.arrays
+    }
+}
+
+impl FxMaps {
+    /// The rectangle the maps cover.
+    pub(crate) fn rect(&self) -> Rect {
+        self.rect
+    }
+
+    /// The layer's shape over [`FxMaps::rect`] (what the maps were built from).
+    pub(crate) fn shape(&self) -> &[f32] {
+        &self.arrays.shape.v
+    }
+
+    /// The same arrays placed with their top-left at `origin`, sharing them (no copy). Only
+    /// exact where nothing in them depends on where the region starts: the caller checks that
+    /// (`fx_cache`'s move reuse).
+    pub(crate) fn rebased(&self, origin: (i32, i32)) -> FxMaps {
+        let (w, h) = (self.rect.width(), self.rect.height());
+        let rect = Rect::new(origin.0, origin.1, origin.0.saturating_add(w as i32), origin.1.saturating_add(h as i32));
+        FxMaps { rect, arrays: self.arrays.clone() }
+    }
+
+    /// Identity of the arrays allocation, shared by rebased copies (the cache counts each once).
+    pub(crate) fn arrays_id(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.arrays) as usize
+    }
+
+    /// Whether `other` shares these maps' arrays (a rebased copy).
+    #[cfg(test)]
+    pub(crate) fn shares_arrays(&self, other: &FxMaps) -> bool {
+        std::sync::Arc::ptr_eq(&self.arrays, &other.arrays)
+    }
+
+    /// Whether every array equals `other`'s, bit for bit (tests compare rebased and fresh maps).
+    #[cfg(test)]
+    pub(crate) fn same_arrays(&self, other: &FxMaps) -> bool {
+        let bits = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+        let map = |a: &Map, b: &Map| a.w == b.w && a.h == b.h && bits(&a.v, &b.v);
+        let opt = |a: &Option<Vec<f32>>, b: &Option<Vec<f32>>| match (a, b) {
+            (Some(a), Some(b)) => bits(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        let (a, b) = (&*self.arrays, &*other.arrays);
+        map(&a.shape, &b.shape)
+            && a.per.len() == b.per.len()
+            && a.per.iter().zip(&b.per).all(|(x, y)| x.len() == y.len() && x.iter().zip(y).all(|(p, q)| map(p, q)))
+            && a.bevel_paint == b.bevel_paint
+            && opt(&a.din, &b.din)
+            && opt(&a.dout, &b.dout)
+            && opt(&a.dout_exact, &b.dout_exact)
+            && opt(&a.vdout, &b.vdout)
+            && opt(&a.vdout_exact, &b.vdout_exact)
+            && a.outline == b.outline
+            && a.frames == b.frames
+    }
 }
 
 impl FxMaps {
