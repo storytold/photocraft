@@ -4,7 +4,11 @@
 use super::*;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, ViewportId, pos2, vec2};
 use egui_kittest::Harness;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 /// Where the main window's content sits on the desktop.
 const ORIGIN: Pos2 = pos2(200.0, 100.0);
@@ -96,6 +100,11 @@ impl Desktop {
         let shared = host.clone();
         egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| Host::render(&shared, ctx, viewport));
         let mut ready = false;
+        // The dock draws only once the window system reports its windows (`steps`), as in the
+        // app, whose first frame has them: not in the frames the harness runs while it is built,
+        // where it would restore a saved layout's windows on no monitor at all.
+        let reporting = Rc::new(Cell::new(false));
+        let drawing = reporting.clone();
         let h = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
             move |ui, app: &mut PhotocraftApp| {
                 if !ready {
@@ -104,11 +113,15 @@ impl Desktop {
                     ready = true;
                     return;
                 }
+                if !drawing.get() {
+                    return;
+                }
                 crate::panels::dock_area(app, ui);
                 egui::CentralPanel::default().show(ui, |_| {});
             },
             app,
         );
+        reporting.set(true);
         let mut desktop = Self { h, host };
         desktop.steps(4);
         desktop
