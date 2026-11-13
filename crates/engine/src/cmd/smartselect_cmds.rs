@@ -118,7 +118,20 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
         let surface = matting::region_surface(&r);
         if enhance { matting::refine_surface(smp, &surface, canvas, &ENHANCE, None).map_err(|e| EngineError::Other(e.to_string())) } else { Ok(Some(surface)) }
     })??;
-    let Some(region) = region else { return apply(s, "Quick Selection", None, m) };
+    let Some(region) = region else {
+        // A click on the pasteboard alone deselects, as one step (#12931). Subtract (not measured)
+        // and finding nothing on the canvas keep `apply`'s "change nothing".
+        let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+        let off_canvas = pts.iter().all(|&(x, y)| !canvas.contains(x.floor() as i32, y.floor() as i32));
+        if off_canvas && m != SelectionMode::Subtract {
+            s.edit("Quick Selection", |doc, _| {
+                doc.selection = None;
+                Ok(())
+            })?;
+            return Ok(json!({ "selected": false, "changed": true }));
+        }
+        return apply(s, "Quick Selection", None, m);
+    };
     let bounds = region.content_bounds();
     let selected = s.edit("Quick Selection", |doc, _| {
         let empty = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
@@ -598,3 +611,5 @@ mod tests;
 
 #[cfg(test)]
 mod object_mode_refusal_tests;
+#[cfg(test)]
+mod quick_pasteboard_tests;
