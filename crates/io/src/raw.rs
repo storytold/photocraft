@@ -346,7 +346,10 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
             );
             preview_document(name, &img, note)
         }
-        // Damaged sensor data: the camera's JPEG is often still intact, so the photo opens.
+        // A damaged DNG can still carry a valid JPEG, but opening that thumbnail as if it were
+        // the photograph hides a corrupt raw source. Keep preview fallback for other camera
+        // formats whose independent preview is the established recovery path.
+        Err(RawError::Malformed(reason)) if format == "DNG" => Err(IoError::Raw(RawError::Malformed(reason))),
         Err(RawError::Malformed(reason)) => match photocraft_raw::embedded_jpeg_preview(bytes).map(|jpeg| preview_image(bytes, &jpeg, &opts.limits)) {
             Some(Ok(img)) => {
                 let (w, h) = img.dimensions();
