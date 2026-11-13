@@ -523,6 +523,39 @@ fn load_clips_an_overlong_set_override() {
     assert!(s.actions.list.iter().all(|a| a.set.as_deref() == Some(clipped.as_str())));
 }
 
+/// A one-set file of `actions` actions, each `steps` steps of an event PhotoCraft doesn't know,
+/// under a long action name.
+fn unknown_steps(actions: usize, steps: usize) -> Vec<u8> {
+    let item = AtnItem { event: AtnEvent::Code(*b"zzQz"), ..Default::default() };
+    let action =
+        |i: usize| AtnAction { name: UnicodeString::new(&format!("{i} {}", "n".repeat(1000))), items: vec![item.clone(); steps], ..Default::default() };
+    craft_psd::atn::write(&AtnFile { name: UnicodeString::new("Big"), actions: (0..actions).map(action).collect(), ..Default::default() }).unwrap()
+}
+
+/// A one-set file is held to the step budget the multi-set reader applies to a whole archive,
+/// and its unsupported steps are listed only up to a bound, with the full count beside them.
+#[test]
+fn load_holds_a_single_set_to_the_archive_step_budget() {
+    let budget = craft_psd::atn::MAX_TOTAL_ITEMS;
+    let mut s = Session::new();
+    let error = s.execute("actions.load", json!({"data": b64(&unknown_steps(2, budget / 2 + 1))})).unwrap_err().to_string();
+    assert!(error.contains("too many steps"), "{error}");
+    assert!(s.actions.list.is_empty());
+    let r = s.execute("actions.load", json!({"data": b64(&unknown_steps(2, budget / 2))})).unwrap();
+    assert_eq!(r["steps"], budget);
+    assert_eq!(r["unsupported"].as_array().unwrap().len(), super::convert::MAX_LISTED_UNSUPPORTED);
+    assert_eq!(r["unsupportedCount"], budget);
+    let more = budget - super::convert::MAX_LISTED_UNSUPPORTED;
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains(&format!("{more} more"))), "{}", r["warnings"]);
+}
+
+#[test]
+fn load_lists_every_unsupported_step_under_the_bound() {
+    let imp = super::convert::import(&unknown_steps(1, 3)).unwrap();
+    assert_eq!((imp.unsupported.len(), imp.unsupported_total), (3, 3));
+    assert!(imp.warnings.iter().all(|w| !w.contains("more")), "{:?}", imp.warnings);
+}
+
 #[test]
 fn load_many_duplicate_names_get_sequential_suffixes() {
     // Several actions share one base name. Deduplication must stay O(n) overall and produce

@@ -13,6 +13,10 @@ it back unchanged. Playback stops at an enabled kept step with its name, so an a
 work. Kept steps with no effect on the document (tool selections and the like) are imported switched off,
 so playback skips them.
 
+A file holds at most 100,000 steps in all, the limit `craft-psd` applies to a whole multi-set archive;
+`actions.load` refuses a larger one. Its reply lists the first 1,000 steps with no PhotoCraft
+equivalent in `unsupported` and counts them all in `unsupportedCount`.
+
 This page covers the events PhotoCraft maps today, the settings some of them still lose, how steps name
 layers and documents, newer and older events and files, and a measured reference for the events it does not
 map yet, with everything needed to implement them without

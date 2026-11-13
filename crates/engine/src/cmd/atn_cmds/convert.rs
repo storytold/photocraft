@@ -21,7 +21,11 @@ pub struct Imported {
     pub actions: Vec<Action>,
     /// Function keys the file assigns, as `(action name, key)`.
     pub function_keys: Vec<(String, String)>,
+    /// The steps with no PhotoCraft equivalent, the first 1,000 of them (each copies its action's
+    /// name); [`Self::unsupported_total`] counts them all.
     pub unsupported: Vec<Unsupported>,
+    /// How many steps have no PhotoCraft equivalent, listed or not.
+    pub unsupported_total: usize,
     pub warnings: Vec<String>,
     /// The encoding the file's 8-bit step names were read in (`"GBK"`, `"Shift_JIS"`,
     /// `"macintosh"`…); `None` when none needed one.
@@ -56,6 +60,9 @@ pub(super) fn normalise(v: &mut Value) {
     }
 }
 
+/// Most unsupported steps [`Imported::unsupported`] lists; the rest are only counted.
+pub(super) const MAX_LISTED_UNSUPPORTED: usize = 1_000;
+
 /// Longest action or set name kept (Photoshop's own limit is 255). A file's names are lengths it
 /// chooses, and each is copied into every action and every unsupported-step diagnostic.
 pub(super) const MAX_NAME_CHARS: usize = 1024;
@@ -64,7 +71,7 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
-fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
+fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>, unsupported_total: &mut usize) -> Action {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
@@ -85,7 +92,11 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             }
             Mapped::Unsupported { harmless } => {
                 let label = file.item_label(item);
-                unsupported.push(Unsupported { action: name.clone(), step: i, event: item.event.id(), name: label.clone() });
+                // Listed up to a bound: each entry copies the action's name.
+                if unsupported.len() < MAX_LISTED_UNSUPPORTED {
+                    unsupported.push(Unsupported { action: name.clone(), step: i, event: item.event.id(), name: label.clone() });
+                }
+                *unsupported_total = unsupported_total.saturating_add(1);
                 (vec![photoshop_step(item, label)], item.enabled && !harmless)
             }
         };
@@ -114,15 +125,23 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 /// `"gbk"`) instead of working it out. An unknown label fails.
 pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
     let file = atn::parse_with_encoding(bytes, encoding).map_err(|e| e.to_string())?;
+    // A one-set file is held to the step budget the multi-set reader gives a whole archive.
+    let steps = file.actions.iter().fold(0usize, |sum, a| sum.saturating_add(a.items.len()));
+    if steps > atn::MAX_TOTAL_ITEMS {
+        return Err(format!("too many steps in one actions file ({steps}; at most {})", atn::MAX_TOTAL_ITEMS));
+    }
     let set = file.name.to_string_lossy();
     let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
     let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
     for a in &file.actions {
-        let action = convert_action(&file, a, &set, &mut out.unsupported);
+        let action = convert_action(&file, a, &set, &mut out.unsupported, &mut out.unsupported_total);
         if a.function_key > 0 {
             out.function_keys.push((action.name.clone(), function_key_name(a.function_key, a.shift, a.command)));
         }
         out.actions.push(action);
+    }
+    if let Some(more) = out.unsupported_total.checked_sub(out.unsupported.len()).filter(|n| *n > 0) {
+        out.warnings.push(format!("{more} more steps with no PhotoCraft equivalent are not listed"));
     }
     Ok(out)
 }

@@ -48,6 +48,31 @@ impl PatternLibrary {
             None => self.items.push(pat),
         }
     }
+
+    /// [`upsert`](Self::upsert) each of `patterns` in order, finding ids through one index built
+    /// once rather than a scan per pattern (an imported file holds up to 10,000). Their ids.
+    pub fn upsert_all(&mut self, patterns: impl IntoIterator<Item = Pattern>) -> Vec<String> {
+        let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::with_capacity(self.items.len());
+        for (i, q) in self.items.iter().enumerate() {
+            at.entry(q.id.clone()).or_insert(i);
+        }
+        let mut ids = Vec::new();
+        for pat in patterns {
+            self.stored.remove(&pat.id);
+            ids.push(pat.id.clone());
+            match at.get(&pat.id).and_then(|&i| self.items.get_mut(i)) {
+                Some(q) => {
+                    *q = pat;
+                    self.pixels_rev += 1;
+                }
+                None => {
+                    at.insert(pat.id.clone(), self.items.len());
+                    self.items.push(pat);
+                }
+            }
+        }
+        ids
+    }
 }
 
 /// Whether `p` is a built-in pattern as shipped (same id, name, size and pixels): those are never
@@ -402,19 +427,10 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "pattern.import";
-    // A file on disk, or its bytes (a dropped file, the web build).
-    let bytes = match (p.get("path").and_then(Value::as_str), p.get("data").and_then(Value::as_str)) {
-        (Some(path), _) => std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?,
-        (None, Some(b64)) => photocraft_paint::tile::b64_decode(b64).ok_or_else(|| bad(cmd, "`data` is not base64"))?,
-        (None, None) => return Err(bad(cmd, "missing `path` (.pat file) or `data`")),
-    };
+    // A file on disk, or its bytes (a dropped file, the web build), within the preset-file limit.
+    let (bytes, _) = crate::preset_import_cmds::file_bytes(p, cmd, ".pat file")?;
     let pats = photocraft_io::pattern_map::read_pat(&bytes).map_err(EngineError::Other)?;
-    let mut ids = Vec::new();
-    for pat in pats {
-        ids.push(pat.id.clone());
-        s.patterns.stored.remove(&pat.id);
-        s.patterns.upsert(pat);
-    }
+    let ids = s.patterns.upsert_all(pats);
     Ok(json!({"imported": ids, "count": ids.len()}))
 }
 
@@ -693,6 +709,51 @@ mod tests {
         for bad in [json!({}), json!({"data": "not base64!"}), json!({"data": "aGVsbG8="})] {
             assert!(s.execute("pattern.import", bad.clone()).is_err(), "{bad}");
         }
+    }
+
+    /// A `.pat` file past the preset-file size limit is refused before it is read.
+    #[test]
+    fn importing_an_oversized_pat_file_is_refused_before_reading() {
+        let dir = std::env::temp_dir().join(format!("pc-pat-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big.pat");
+        std::fs::File::create(&big).unwrap().set_len(crate::preset_import_cmds::MAX_FILE_BYTES + 1).unwrap();
+        let mut s = Session::new();
+        let error = s.execute("pattern.import", json!({"path": big.to_str().unwrap()})).unwrap_err().to_string();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(error.contains("too large"), "{error}");
+    }
+
+    /// A bulk import replaces a pattern of the same id where it is (marking the pixels changed)
+    /// and appends new ones in file order; a file that repeats an id keeps its last copy.
+    #[test]
+    fn importing_patterns_replaces_ids_in_place_and_appends_new_ones() {
+        let mut s = Session::new();
+        let before = s.patterns.items.clone();
+        let rev = s.patterns.pixels_rev;
+        let solid = |name: &str, id: &str, v: f32| {
+            let mut surf = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, false));
+            surf.fill_rect(Rect::new(0, 0, 2, 2), &[v, v, v]);
+            let mut p = Pattern::new(name, surf, 2, 2);
+            p.id = id.into();
+            p
+        };
+        let replaced = before[2].id.clone();
+        let file = [solid("New A", "new-a", 0.1), solid("Replaced", &replaced, 0.2), solid("New B", "new-b", 0.3), solid("Again", "new-a", 0.4)];
+        let bytes = photocraft_io::pattern_map::write_pat(&file).unwrap();
+        let r = s.execute("pattern.import", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+        assert_eq!(r["count"], 4);
+        let ids: Vec<&str> = s.patterns.items.iter().map(|p| p.id.as_str()).collect();
+        let mut want: Vec<&str> = before.iter().map(|p| p.id.as_str()).collect();
+        want.extend(["new-a", "new-b"]);
+        assert_eq!(ids, want, "a replaced id keeps its place; new ids are appended once");
+        assert_eq!(s.patterns.items[2].name, "Replaced");
+        assert_eq!(s.patterns.items[before.len()].name, "Again", "the file's last copy of an id wins");
+        assert_eq!(s.patterns.pixels_rev, rev + 2, "the built-in and the repeated id were replaced");
+        // A later single upsert still finds what the bulk import added.
+        s.patterns.upsert(solid("New B again", "new-b", 0.5));
+        assert_eq!(s.patterns.items.len(), want.len());
+        assert_eq!(s.patterns.pixels_rev, rev + 3);
     }
 
     /// Review of the 8000 px cap: compositing a band of rows at a time gives the pixels and the

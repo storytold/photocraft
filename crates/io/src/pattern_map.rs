@@ -44,9 +44,10 @@ pub fn try_from_psd(p: &PsdPattern) -> Result<Option<Pattern>, String> {
 
 fn pattern_from_psd(p: &PsdPattern, oom: &mut Option<String>) -> Option<Pattern> {
     let (w, h) = (p.width as usize, p.height as usize);
-    if w == 0 || h == 0 || w > 30_000 || h > 30_000 || !matches!(p.depth, 1 | 8 | 16 | 32) {
+    if w == 0 || h == 0 || w > 30_000 || h > 30_000 {
         return None;
     }
+    let fmt = import_format(p)?;
     let n = w.checked_mul(h)?;
     let plane_len = w.checked_mul(usize::from(p.depth))?.div_ceil(8).checked_mul(h)?;
     if p.channels.iter().chain(p.alpha.iter()).any(|plane| plane.len() != plane_len) {
@@ -62,7 +63,7 @@ fn pattern_from_psd(p: &PsdPattern, oom: &mut Option<String>) -> Option<Pattern>
         out.try_reserve_exact(n).map_err(|e| *oom = Some(e.to_string())).ok()
     }
     // 1-bit patterns: expand to 8-bit grey.
-    let (channels, depth): (Vec<Vec<u8>>, u16) = if p.depth == 1 {
+    let channels: Vec<Vec<u8>> = if p.depth == 1 {
         let row = w.div_ceil(8);
         let expand = |plane: &Vec<u8>, oom: &mut Option<String>| -> Option<Vec<u8>> {
             let mut out = Vec::new();
@@ -70,32 +71,27 @@ fn pattern_from_psd(p: &PsdPattern, oom: &mut Option<String>) -> Option<Pattern>
             out.extend((0..n).map(|i| if plane.get((i / w) * row + (i % w) / 8).is_some_and(|b| b & (0x80 >> (i % w % 8)) != 0) { 0 } else { 255 }));
             Some(out)
         };
-        (p.channels.iter().map(|plane| expand(plane, oom)).collect::<Option<_>>()?, 8)
+        p.channels.iter().map(|plane| expand(plane, oom)).collect::<Option<_>>()?
     } else {
-        (p.channels.iter().map(|plane| copy_plane(plane, oom)).collect::<Option<_>>()?, p.depth)
+        p.channels.iter().map(|plane| copy_plane(plane, oom)).collect::<Option<_>>()?
     };
-    let (mode, channels) = match p.mode {
-        1 | 8 => (ColorMode::Grayscale, channels),
+    let channels: Vec<Vec<u8>> = match p.mode {
+        1 | 3 | 4 | 8 | 9 => channels,
         2 => {
             let pal = p.palette.as_deref()?;
             let idx = channels.first()?;
-            let ch: Vec<Vec<u8>> = (0..3)
+            (0..3)
                 .map(|c| {
                     let mut out = Vec::new();
                     reserve(&mut out, idx.len(), oom)?;
                     out.extend(idx.iter().map(|i| pal.get(usize::from(*i) * 3 + c).copied().unwrap_or(0)));
                     Some(out)
                 })
-                .collect::<Option<_>>()?;
-            (ColorMode::Rgb, ch)
+                .collect::<Option<_>>()?
         }
-        4 => (ColorMode::Cmyk, channels),
-        9 => (ColorMode::Lab, channels),
-        3 => (ColorMode::Rgb, channels),
-        _ => (ColorMode::Grayscale, channels.into_iter().take(1).collect()),
+        _ => channels.into_iter().take(1).collect(),
     };
-    let s = sample_for_depth(depth);
-    let fmt = PixelFormat::new(mode, s, p.alpha.is_some());
+    let (mode, s) = (fmt.mode, fmt.sample);
     let cc = mode_channels(psd_mode(mode));
     if channels.len() < cc {
         return None;
@@ -329,10 +325,124 @@ fn repair_legacy_blocks(raw: &[photocraft_doc::PsdGlobalBlock]) -> Vec<photocraf
         .collect()
 }
 
+/// Most patterns one `.pat` or `.asl` file may hold: as many as the pattern library keeps (the
+/// preset store loads at most 10,000).
+pub const MAX_FILE_PATTERNS: usize = 10_000;
+/// Memory one `.pat` or `.asl` file's patterns may take while they import: the allowance a PSD
+/// import has for its pixels, pattern surfaces included.
+pub const MAX_FILE_PATTERN_BYTES: u64 = crate::psd_budget::DEFAULT_PSD_IMPORT_PIXEL_BYTES;
+
+/// What one `.pat` or `.asl` file's patterns may cost to import.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PatternFileLimits {
+    /// Most patterns.
+    pub patterns: usize,
+    /// Most bytes of tiles, decoded planes and conversion workspace (see [`admit_patterns`]).
+    pub bytes: u64,
+}
+
+impl Default for PatternFileLimits {
+    fn default() -> Self {
+        PatternFileLimits { patterns: MAX_FILE_PATTERNS, bytes: MAX_FILE_PATTERN_BYTES }
+    }
+}
+
+/// The colour model [`from_psd`] gives a PSD pattern mode: indexed patterns become RGB, models
+/// without a surface of their own (bitmap, multichannel, duotone) grayscale.
+fn import_mode(mode: u32) -> ColorMode {
+    match mode {
+        2 | 3 => ColorMode::Rgb,
+        4 => ColorMode::Cmyk,
+        9 => ColorMode::Lab,
+        _ => ColorMode::Grayscale,
+    }
+}
+
+/// The surface format [`from_psd`] gives a pattern (1-bit patterns become 8-bit); `None` for a
+/// depth it doesn't read.
+fn format_for(mode: u32, depth: u16, alpha: bool) -> Option<PixelFormat> {
+    let depth = match depth {
+        1 => 8,
+        8 | 16 | 32 => depth,
+        _ => return None,
+    };
+    Some(PixelFormat::new(import_mode(mode), sample_for_depth(depth), alpha))
+}
+
+/// The surface format [`from_psd`] gives `p`.
+pub(crate) fn import_format(p: &PsdPattern) -> Option<PixelFormat> {
+    format_for(p.mode, p.depth, p.alpha.is_some())
+}
+
+/// One pattern as admission sees it: its size, its format once imported and its decoded planes.
+pub(crate) struct PatternCharge {
+    width: u32,
+    height: u32,
+    format: Option<PixelFormat>,
+    decoded: u64,
+}
+
+impl PatternCharge {
+    /// A decoded pattern.
+    pub(crate) fn of(p: &PsdPattern) -> Self {
+        let decoded = p.channels.iter().chain(p.alpha.iter()).fold(0u64, |sum, plane| sum.saturating_add(plane.len() as u64));
+        PatternCharge { width: p.width, height: p.height, format: import_format(p), decoded }
+    }
+
+    /// A pattern inspected before it decodes ([`craft_psd::patterns::pattern_block_memory`]).
+    pub(crate) fn inspected(m: &craft_psd::patterns::PatternMemory) -> Self {
+        let alpha = m.planes > mode_channels(m.mode);
+        PatternCharge { width: m.width, height: m.height, format: format_for(m.mode, m.depth, alpha), decoded: m.decoded_bytes }
+    }
+}
+
+/// Refuse a file's patterns when there are more than `limits` allows, or when importing them
+/// would take more memory: like a PSD import's pattern charge, every pattern's surface tiles
+/// (a tiny pattern still keeps whole tiles) and decoded planes (alive until the whole file has
+/// converted), plus the largest conversion workspace (a copy of the planes and the interleaved
+/// pixels). A pattern [`from_psd`] would skip costs nothing.
+pub(crate) fn admit_patterns(patterns: impl ExactSizeIterator<Item = PatternCharge>, limits: PatternFileLimits) -> Result<(), String> {
+    let count = patterns.len();
+    if count > limits.patterns {
+        return Err(format!("too many patterns in one file ({count}; at most {})", limits.patterns));
+    }
+    let (mut retained, mut workspace) = (0u64, 0u64);
+    for p in patterns {
+        let Some(format) = p.format else { continue };
+        let edge = |v: u32| i32::try_from(v).unwrap_or(i32::MAX);
+        let tiles = photocraft_raster::tile_storage_bytes(Rect::new(0, 0, edge(p.width), edge(p.height)), &format);
+        let interleaved = u64::from(p.width).saturating_mul(u64::from(p.height)).saturating_mul(format.bytes_per_pixel() as u64);
+        retained = retained.saturating_add(tiles).saturating_add(p.decoded);
+        workspace = workspace.max(interleaved.saturating_mul(2));
+    }
+    let required = retained.saturating_add(workspace);
+    if required > limits.bytes {
+        let mib = |b: u64| b.div_ceil(1 << 20);
+        return Err(format!("the file's patterns need {} MiB of memory to import; at most {} MiB is allowed", mib(required), mib(limits.bytes)));
+    }
+    Ok(())
+}
+
+/// Convert parsed patterns, skipping malformed ones and failing on one that can't be allocated
+/// (an import says the file could not be read in full rather than dropping it silently).
+pub(crate) fn convert_patterns(patterns: &[PsdPattern]) -> Result<Vec<Pattern>, String> {
+    let mut out = Vec::with_capacity(patterns.len());
+    for p in patterns {
+        out.extend(try_from_psd(p).map_err(|error| format!("pattern \"{}\" could not be imported: {error}", p.name))?);
+    }
+    Ok(out)
+}
+
 /// Reads a `.pat` pattern file.
 pub fn read_pat(bytes: &[u8]) -> Result<Vec<Pattern>, String> {
+    read_pat_with(bytes, PatternFileLimits::default())
+}
+
+/// [`read_pat`] with the file's patterns held to `limits` before any becomes a surface.
+pub fn read_pat_with(bytes: &[u8], limits: PatternFileLimits) -> Result<Vec<Pattern>, String> {
     let ps = craft_psd::patterns::parse_pat_file(bytes).map_err(|e| format!("not a readable .pat file: {e}"))?;
-    Ok(ps.iter().filter_map(from_psd).collect())
+    admit_patterns(ps.iter().map(PatternCharge::of), limits)?;
+    convert_patterns(&ps)
 }
 
 /// Writes patterns as a `.pat` file.
@@ -579,5 +689,69 @@ mod allocation_tests {
         p.width = 9;
         p.depth = 7;
         assert!(from_psd(&p).is_none());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    /// A 1 × 1 pattern: a few bytes in the file, a whole tile once imported.
+    fn dot(i: usize, depth: u16) -> PsdPattern {
+        let bytes = usize::from(depth / 8);
+        PsdPattern {
+            mode: 3,
+            width: 1,
+            height: 1,
+            name: format!("Dot {i}"),
+            id: format!("dot-{i}"),
+            palette: None,
+            depth,
+            channels: vec![vec![0x3f; bytes]; 3],
+            alpha: Some(vec![0x3f; bytes]),
+        }
+    }
+
+    fn pat(patterns: &[PsdPattern]) -> Vec<u8> {
+        craft_psd::patterns::write_pat_file(patterns).unwrap()
+    }
+
+    /// Each 1 × 1 float RGBA pattern keeps a 1 MiB tile, so four of them are refused under a
+    /// 3 MiB allowance and two are imported; the default allowance takes all four.
+    #[test]
+    fn pattern_files_are_refused_by_the_memory_their_tiles_take() {
+        let tile = photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+        assert_eq!(tile, 1 << 20);
+        let four: Vec<PsdPattern> = (0..4).map(|i| dot(i, 32)).collect();
+        let small = PatternFileLimits { patterns: MAX_FILE_PATTERNS, bytes: 3 << 20 };
+        let error = read_pat_with(&pat(&four), small).unwrap_err();
+        assert!(error.contains("memory"), "{error}");
+        assert_eq!(read_pat_with(&pat(&four[..2]), small).unwrap().len(), 2);
+        assert_eq!(read_pat(&pat(&four)).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn pattern_files_are_refused_past_the_pattern_count() {
+        let four: Vec<PsdPattern> = (0..4).map(|i| dot(i, 8)).collect();
+        let error = read_pat_with(&pat(&four), PatternFileLimits { patterns: 3, bytes: MAX_FILE_PATTERN_BYTES }).unwrap_err();
+        assert!(error.contains("too many patterns"), "{error}");
+        assert_eq!(read_pat_with(&pat(&four[..3]), PatternFileLimits { patterns: 3, bytes: MAX_FILE_PATTERN_BYTES }).unwrap().len(), 3);
+    }
+
+    /// The charge covers what conversion keeps: a 1-bit pattern becomes an 8-bit surface and an
+    /// indexed one RGB, so their tiles are charged at that format, not the file's.
+    #[test]
+    fn the_charge_uses_the_format_patterns_import_to() {
+        let mut bits = dot(0, 8);
+        (bits.mode, bits.depth, bits.channels, bits.alpha) = (1, 1, vec![vec![0x80]], None);
+        let converted = from_psd(&bits).unwrap();
+        assert_eq!(import_format(&bits), Some(converted.surface.format()));
+        let mut indexed = bits.clone();
+        (indexed.mode, indexed.depth, indexed.channels, indexed.palette) = (2, 8, vec![vec![1]], Some(vec![9; 768]));
+        assert_eq!(import_format(&indexed), Some(from_psd(&indexed).unwrap().surface.format()));
+        for depth in [8, 16, 32] {
+            let p = dot(0, depth);
+            assert_eq!(import_format(&p), Some(from_psd(&p).unwrap().surface.format()), "{depth}");
+        }
     }
 }
