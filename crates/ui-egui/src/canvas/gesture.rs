@@ -10,6 +10,10 @@ use super::{PhotocraftApp, Tool, json};
 #[path = "rectangle_click_in_shape_tests.rs"]
 mod rectangle_click_in_shape_tests;
 
+#[cfg(test)]
+#[path = "ellipse_click_in_shape_tests.rs"]
+mod ellipse_click_in_shape_tests;
+
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     finish(app, d, None);
 }
