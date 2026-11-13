@@ -184,8 +184,14 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if !["transform", "stroke", "name"].iter().any(|key| p.get(key).is_some()) {
         return Err(bad("supply transform, stroke or name"));
     }
+    // The Frame tool moves a frame as a "Move" step (#13880); every other change is "Frame Properties".
+    let step = match p.get("historyName") {
+        None | Some(Value::Null) => "Frame Properties",
+        Some(v) if v.as_str() == Some("Move") => "Move",
+        Some(_) => return Err(bad("`historyName` must be \"Move\" or null")),
+    };
     let id = frame_id(s, p)?;
-    s.edit("Frame Properties", |doc, _| {
+    s.edit(step, |doc, _| {
         check_lock(doc, id)?;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let f = l.frame.as_mut().ok_or_else(|| bad("not a frame"))?;
@@ -366,7 +372,13 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &["Layer", "New"],
             ..spec("layer.new.frameFromLayers", "Frame from Layers", r#"{"layer":id?,"name":str?}"#, has_layer, frame_from_layers)
         },
-        spec("layer.frame.set", "Frame Properties", r#"{"layer":id?,"transform":[a,b,c,d,x,y]?,"stroke":object|null?,"name":str?}"#, has_doc, set),
+        spec(
+            "layer.frame.set",
+            "Frame Properties",
+            r#"{"layer":id?,"transform":[a,b,c,d,x,y]?,"stroke":object|null?,"name":str?,"historyName":"Move"?}"#,
+            has_doc,
+            set,
+        ),
         CommandSpec { journal: false, ..spec("layer.frame.info", "Frame Info", r#"{"layer":id?}"#, has_doc, query) },
         spec("layer.frame.convert", "Convert to Frame", r#"{"layer":id?,"name":str?,"width":px?,"height":px?}"#, has_doc, convert),
         spec(
