@@ -26,7 +26,8 @@ fn classic_resume_rejects_missing_group_tail_instead_of_playing_a_prefix() {
         assert_eq!(names.iter().any(|name| name == "Second tail"), !missing);
         assert_eq!(names.iter().any(|name| name == "Third tail"), !missing);
         if missing {
-            assert!(app.ui.status.contains("group action changed"), "{}", app.ui.status);
+            assert_eq!(app.ui.status, tl!("Action playback stopped"));
+            assert!(!app.ui.status_error);
         }
         assert!(app.paused_playbacks.paused.is_empty());
         assert!(app.session.actions.held_playback.is_none());
