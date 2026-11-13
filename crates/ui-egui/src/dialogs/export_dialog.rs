@@ -151,6 +151,13 @@ fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
     }
 }
 
+/// Whether Enter answers the dialog with `f` as its fields the way its default button does. Export
+/// As starts only from a click on Export, as in Photoshop: Enter, with no text field taking it,
+/// leaves the dialog open (#13740). Every other dialog keeps Enter = OK.
+pub(crate) fn enter_confirms(f: &Map<String, Value>) -> bool {
+    !f.contains_key("__export")
+}
+
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
 pub fn open_layer(app: &mut PhotocraftApp, layer: photocraft_doc::LayerId) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -1174,6 +1181,9 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 mod srgb_default_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod enter_key_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
