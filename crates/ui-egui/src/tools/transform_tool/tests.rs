@@ -1382,6 +1382,11 @@ fn ending_a_copy_after_switching_documents_preserves_the_active_document() {
             if applies {
                 assert_eq!(origin.doc.layers.len(), original.layers.len() + 1, "the copy stays in the original");
                 assert_eq!(origin.history.past_len(), steps + 1, "the copy and its move are one step there");
+                let bounds = |l: &photocraft_doc::Layer| l.surface().map(|s| s.content_bounds());
+                let copy = origin.doc.layers.iter().find(|l| original.layer(l.id).is_none()).expect("the copy");
+                assert_eq!(bounds(copy), Some(photocraft_geom::Rect::new(12, 8, 28, 24)), "the copy has the box's move");
+                let square = Some(photocraft_geom::Rect::new(8, 8, 24, 24));
+                assert!(origin.doc.layers.iter().any(|l| l.id != copy.id && bounds(l) == square), "the layer copied from stays");
             } else {
                 assert!(Arc::ptr_eq(&origin.doc, &original), "only the originating copy is undone");
                 assert_eq!(origin.history.past_len(), steps);
