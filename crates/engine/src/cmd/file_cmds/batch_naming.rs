@@ -240,6 +240,13 @@ fn expand(parts: &[Part<'_>], name: &str, ext: &str, serial: u32, date: Date) ->
 /// An absent or empty template preserves the old filename path exactly. An explicit template
 /// determines the whole filename. Recorded components retain their separate format choice.
 pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -> Result<Option<Vec<String>>> {
+    plan_counting(inputs, output, format, params, &|_| true)
+}
+
+/// [`plan`] where only the inputs `counts` accepts use up a serial number and a serial letter: an
+/// input known to fail before its action starts still gets a name (reported with its error) but
+/// the next input reuses the number it would have taken.
+pub fn plan_counting(inputs: &[BatchInput], output: &str, format: &str, params: &Value, counts: &dyn Fn(&BatchInput) -> bool) -> Result<Option<Vec<String>>> {
     let structured = components(params)?;
     let compat = compatibility(params)?;
     let flat = match params.get("flatOutput") {
@@ -286,7 +293,9 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
         None
     };
     let mut outputs = Vec::with_capacity(inputs.len());
-    for (index, BatchInput { path, rel_dir }) in inputs.iter().enumerate() {
+    let mut index = 0usize;
+    for input in inputs {
+        let BatchInput { path, rel_dir } = input;
         let serial = if has_serial {
             u32::try_from(index).ok().and_then(|index| start.checked_add(index)).ok_or_else(|| bad("startingSerial plus the input count exceeds 4294967295"))?
         } else {
@@ -313,6 +322,9 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
         // Preserve the recorded structured routing; ordinary native templates use main's flat output.
         let subfolder = if structured.is_some() && !flat { rel_dir.as_str() } else { "" };
         outputs.push(join(&join(output, subfolder), &name));
+        if counts(input) {
+            index += 1;
+        }
     }
     // Renaming within the source folder could replace a later input before it is read. Resolve
     // existing paths so aliases such as `source/./001.png` cannot bypass the check. The default
