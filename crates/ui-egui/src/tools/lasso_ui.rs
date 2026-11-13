@@ -40,6 +40,12 @@ impl Lasso {
         &self.straight
     }
 
+    /// Whether a freehand stretch is in progress (the button held): the rubber-band preview
+    /// between Alt-clicks has `false`, so the smoothing indicator stays off there.
+    pub fn down(&self) -> bool {
+        self.down
+    }
+
     /// Start the smoothing filter at `p`: the press point, or a straight Alt-click vertex where
     /// the outline goes on freehand. The first point of a stretch is never pulled off its vertex,
     /// so straight segments stay exactly where they were clicked.
@@ -304,6 +310,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         ToolEvent::Move { .. } | ToolEvent::Up { .. } => {
             let up = matches!(ev, ToolEvent::Up { .. });
             let zoom = app.point_zoom();
+            let cfg = smoothing_config(app);
             let Some(d) = app.drag.as_mut().filter(|d| d.tool == tool) else { return true };
             d.track(mods);
             let Some(lasso) = &d.lasso else { return true };
@@ -319,6 +326,15 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 // Move relative to the rubber-band endpoint, not the last fixed vertex.
                 let last = d.points.last().map_or(d.start, |pt| [pt[0], pt[1]]);
                 d.shift_to([last[0] + p[0] - previous[0], last[1] + p[1] - previous[1]]);
+                // The outline moved as a whole: reseed the Lasso's smoothing filter at the moved
+                // endpoint so subsequent freehand samples continue from there instead of pulling
+                // back to where the filter was. Other tools and unsmoothed lassos are untouched.
+                if tool == Tool::Lasso && app.ui.tool_options.lasso_smoothing > 0.0 {
+                    let endpoint = d.points.last().map_or(d.start, |pt| [pt[0], pt[1]]);
+                    if let Some(lasso) = &mut d.lasso {
+                        lasso.restart_smoothing(&cfg, zoom, endpoint);
+                    }
+                }
             } else if down {
                 // While the button is down the outline follows the pointer (freehand), Alt or
                 // not; between Alt clicks only the rubber band moves. The Lasso draws it through
