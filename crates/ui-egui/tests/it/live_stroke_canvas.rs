@@ -175,8 +175,8 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
 /// arrives late, and only a later pointer event shows it; release would then paint the rest.
 /// `picture` holds the pointer still and takes a picture, with short real waits between them,
 /// until the stroke is idle and three pictures in a row match (matching pixels alone don't prove
-/// a slow step has finished): at most `TRIES` times, so a canvas that never settles can't hang
-/// the test (the release check then reports it).
+/// a slow step has finished): at most `TRIES` times, so a canvas that never settles fails
+/// instead of hanging or comparing an unsettled picture.
 fn settled(h: &mut Harness, picture: impl Fn(&mut Harness) -> Pixels) -> Pixels {
     const TRIES: usize = 80;
     let mut last = picture(h);
@@ -187,10 +187,10 @@ fn settled(h: &mut Harness, picture: impl Fn(&mut Harness) -> Pixels) -> Pixels 
         unchanged = if next == last { unchanged + 1 } else { 0 };
         last = next;
         if unchanged >= 2 && !h.state().live_stroke_busy() {
-            break;
+            return last;
         }
     }
-    last
+    panic!("the live stroke did not settle before release");
 }
 
 fn max_diff(a: &[[u8; 4]], b: &[[u8; 4]]) -> u8 {
