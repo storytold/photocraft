@@ -1002,3 +1002,166 @@ fn legacy_actions_with_trailing_bytes_cannot_mutate_the_live_library() {
     assert_eq!(session.actions, actions_before, "sync cannot acknowledge a rejected definition");
     assert!(session.preset_store.as_mut().unwrap().take_warnings().is_empty());
 }
+
+#[test]
+fn review_literal_wire_scopes_play_the_literal_set_and_preserve_source_bytes() {
+    let loose = Action::new("Child", vec![("file.new".into(), json!({"width":3,"height":1}))]);
+    let literal = Action::new("Child", vec![("file.new".into(), json!({"width":5,"height":1}))]);
+    let embedded = json!({"steps":[["actions.play",{"action":"Child","set":"Ungrouped Actions"}]],"calledActions":[{"name":"Child","steps":[]}]});
+    let caller = Action::new(
+        "Caller",
+        vec![
+            ("actions.play".into(), json!({"action":"Child","set":"Ungrouped Actions"})),
+            ("actions.conditional".into(), json!({"then":"Child","thenSet":"Ungrouped Actions","else":"Child","elseSet":""})),
+            ("file.automate.batch".into(), embedded.clone()),
+        ],
+    );
+    let bytes = native_archive(&[
+        ("", &[loose]),
+        ("Ungrouped Actions", &[literal]),
+        ("Ungrouped Actions 2", &[Action::new("Collision", vec![])]),
+        ("Third", &[caller]),
+    ]);
+    let state = library::decode(&bytes).unwrap();
+    let calls = &state.list[3].steps;
+    assert_eq!(calls[0].1["set"], "Ungrouped Actions 3");
+    assert_eq!(calls[1].1["thenSet"], "Ungrouped Actions 3");
+    assert_eq!(calls[1].1["elseSet"], "Ungrouped Actions");
+    assert_eq!(calls[2].1, embedded);
+    assert_eq!(super::playback_index(&state.list, &calls[0].1).unwrap(), 1);
+    assert_eq!(encode(&state), bytes, "projected aliases do not rewrite untouched physical events");
+    let mut session = crate::Session::new();
+    session.actions = state;
+    session.execute("actions.play", session.actions.list[3].steps[0].1.clone()).unwrap();
+    assert_eq!(session.active().unwrap().doc.size.width, 5);
+    // Removing the alias collision forces the literal row to retain its logical name on wire.
+    session.execute("actions.delete", json!({"set":"Ungrouped Actions 2"})).unwrap();
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(super::playback_index(&restored.list, &restored.list[2].steps[0].1).unwrap(), 1);
+}
+
+#[test]
+fn review_interleaved_scoped_calls_load_across_rows_but_duplicate_targets_refuse() {
+    let child = Action::new("Child", vec![("file.new".into(), json!({"width":7,"height":1}))]);
+    let caller = Action { set: Some("C".into()), ..Action::new("Caller", vec![("actions.play".into(), json!({"action":"Child","set":"A"}))]) };
+    let state = ActionState {
+        list: vec![
+            Action { set: Some("A".into()), ..Action::new("First", vec![]) },
+            Action { set: Some("B".into()), ..Action::new("Other", vec![]) },
+            Action { set: Some("A".into()), ..child.clone() },
+            caller.clone(),
+        ],
+        ..Default::default()
+    };
+    let bytes = encode(&state);
+    let mut session = crate::Session::new();
+    session.actions.list.push(Action::new("Child", vec![]));
+    session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).unwrap();
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    let calls = &restored.list[4].steps[0].1;
+    assert_eq!(calls, &json!({"action":"Child 2","set":"A"}));
+    assert_eq!(super::playback_index(&restored.list, calls).unwrap(), 3, "the second physical A row owns Child");
+    session.execute("actions.play", calls.clone()).unwrap();
+    assert_eq!(session.active().unwrap().doc.size.width, 7);
+    let ambiguous = native_archive(&[("A", std::slice::from_ref(&child)), ("B", &[]), ("A", &[child.clone()]), ("C", &[caller])]);
+    let mut imported = atn_cmds::import(&ambiguous).unwrap();
+    assert!(atn_cmds::normalize_import(&mut imported, [], false).unwrap_err().contains("ambiguous action call target"));
+    let before = encode(&session.actions);
+    let revision = session.actions.rev;
+    assert!(session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&ambiguous)})).is_err());
+    assert_eq!(encode(&session.actions), before, "ambiguous import publishes no partial library");
+    assert_eq!(session.actions.rev, revision);
+}
+
+#[test]
+fn review_kept_native_items_obey_portable_admission_and_whole_step_skip() {
+    for id in ["actions.load", "future.reviewCommand"] {
+        let params = json!({"nested":{"value":[1,true,null]},"data":"unexecuted"});
+        let bytes = native_archive(&[("S", &[Action::new("Native", vec![(id.into(), params.clone())])])]);
+        let descriptor = atn::parse_sets(&bytes).unwrap()[0].actions[0].items[0].descriptor.clone().unwrap();
+        let kept = Action {
+            disabled: [0].into(),
+            dialogs: [0].into(),
+            ..Action::new(
+                "Kept",
+                vec![(
+                    atn_cmds::PHOTOSHOP_STEP.into(),
+                    json!({
+                        "event":"photocraftCommand","eventKind":"name","name":"Kept native","descriptor":photocraft_paint::tile::b64_encode(&descriptor.to_bytes())
+                    }),
+                )],
+            )
+        };
+        let state = ActionState { list: vec![kept.clone()], ..Default::default() };
+        assert_eq!(
+            library::decode(&encode(&state)).unwrap().list[0].steps,
+            [(id.into(), params.clone())],
+            "durable native JSON remains unrestricted and exact"
+        );
+        if id == "actions.load" {
+            assert!(atn_cmds::import(&bytes).unwrap_err().contains("not permitted"));
+            assert!(atn_cmds::export("S", &[&kept], &[], false).unwrap_err().contains("not permitted"));
+        } else {
+            let (exported, skipped) = atn_cmds::export("S", &[&kept], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(atn::parse_sets(&exported).unwrap()[0].actions[0].items[0].descriptor.as_ref(), Some(&descriptor));
+            let imported = atn_cmds::import(&exported).unwrap();
+            assert_eq!(imported.actions[0].steps, [(id.into(), params)]);
+            assert_eq!(imported.actions[0].disabled, [0].into());
+            assert_eq!(imported.actions[0].dialogs, [0].into());
+        }
+        let (skipped_bytes, skipped) = atn_cmds::export("S", &[&kept], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].step, 0);
+        assert_eq!(skipped[0].id, atn_cmds::PHOTOSHOP_STEP);
+        assert!(atn::parse_sets(&skipped_bytes).unwrap()[0].actions[0].items.is_empty());
+    }
+}
+
+#[test]
+fn review_portable_grouping_rebases_numeric_calls_without_touching_embedded_scopes() {
+    let embedded = json!({"steps":[["actions.play",{"action":1}]],"calledActions":[{"name":"Embedded","steps":[]}]});
+    let caller = Action {
+        set: Some("A".into()),
+        ..Action::new(
+            "Caller",
+            vec![
+                ("actions.play".into(), json!({"action":1.0})),
+                ("file.automate.batch".into(), json!({"action":1})),
+                ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":1}]]})),
+                ("file.automate.batch".into(), embedded.clone()),
+                ("file.automate.createDroplet".into(), json!({"action":1})),
+                ("actions.play".into(), json!({"action":-1})),
+            ],
+        )
+    };
+    let mut session = crate::Session::new();
+    session.actions.list = vec![
+        Action { set: Some("A".into()), ..Action::new("First", vec![]) },
+        Action { set: Some("B".into()), ..Action::new("Child", vec![("file.new".into(), json!({"width":9,"height":1}))]) },
+        caller,
+    ];
+    let original = session.actions.list.clone();
+    let saved = session.execute("actions.save", json!({})).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let mut imported = atn_cmds::import(&bytes).unwrap();
+    atn_cmds::normalize_import(&mut imported, [], false).unwrap();
+    assert_eq!(imported.actions.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["First", "Caller", "Child"]);
+    let calls = &imported.actions[1].steps;
+    assert_eq!(calls[0].1["action"], 2);
+    assert_eq!(calls[1].1["action"], 2);
+    assert_eq!(calls[2].1["steps"][0][1]["action"], 2);
+    assert_eq!(calls[3].1, embedded);
+    assert_eq!(calls[4].1["action"], 2);
+    assert_eq!(calls[5].1["action"], -1, "invalid negative targets stay invalid");
+    let play = calls[0].1.clone();
+    session.actions.list = imported.actions;
+    session.execute("actions.play", play).unwrap();
+    assert_eq!(session.active().unwrap().doc.size.width, 9);
+    session.actions.list = original.clone();
+    let error = session.execute("actions.save", json!({"action":"Caller"})).unwrap_err();
+    assert!(error.to_string().contains("not included"), "a selected export must never silently bind an omitted numeric target to Caller");
+    let skipped = session.execute("actions.save", json!({"action":"Caller","skipUnsupported":true})).unwrap();
+    assert_eq!(skipped["skipped"].as_array().unwrap().len(), original[2].steps.len(), "explicit skipping still omits whole native source steps");
+    assert_eq!(session.actions.list, original, "export remaps only private copies");
+}

@@ -20,8 +20,8 @@ fn classic_resume_rejects_missing_group_tail_instead_of_playing_a_prefix() {
         if missing {
             app.session.actions.list.remove(2);
         }
-        let result = crate::dialogs::confirm(&mut app, dialog);
-        assert_eq!(result.is_err(), missing);
+        // The confirmed step succeeds; a missing group tail is reported as a controlled stop.
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
         let names = layer_names(&app);
         assert_eq!(names.iter().any(|name| name == "Second tail"), !missing);
         assert_eq!(names.iter().any(|name| name == "Third tail"), !missing);

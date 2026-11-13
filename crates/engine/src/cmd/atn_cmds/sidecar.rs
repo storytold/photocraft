@@ -346,6 +346,50 @@ pub(crate) fn selection<'a>(state: &ActionState, action: &'a Action) -> Selectio
     Selection { actions: vec![action], source, raw: state.library.row_source(&state.sets, action) }
 }
 
+/// Translate only caller-owned scope fields; embedded Batch libraries retain their namespace.
+pub(crate) fn remap_scopes(action: &mut Action, names: &std::collections::HashMap<String, String>) {
+    crate::actions_cmds::visit_calls(&mut action.steps, &mut |id, params, _| {
+        let keys: &[&str] = match id {
+            "actions.play" | "file.automate.batch" | "file.automate.createDroplet" => &["set", "actionSet"],
+            "actions.conditional" => &["set", "thenSet", "elseSet"],
+            _ => &[],
+        };
+        for key in keys {
+            if let Some(to) = params.get(*key).and_then(serde_json::Value::as_str).and_then(|name| names.get(name)) {
+                params[*key] = serde_json::json!(to);
+            }
+        }
+    });
+}
+
+/// Export copies resolve numeric identity before grouping changes the serialized order.
+pub(crate) fn portable_actions(state: &ActionState, groups: &[(String, Selection<'_>)], skip_unsupported: bool) -> Result<Vec<Vec<Action>>> {
+    let positions: std::collections::HashMap<_, _> =
+        groups.iter().flat_map(|(_, selection)| &selection.actions).enumerate().map(|(index, action)| (std::ptr::from_ref(*action), index)).collect();
+    let mut output: Vec<Vec<Action>> = groups.iter().map(|(_, selection)| selection.actions.iter().map(|action| (**action).clone()).collect()).collect();
+    let mut result = Ok(());
+    for action in output.iter_mut().flatten() {
+        crate::actions_cmds::visit_calls(&mut action.steps, &mut |id, params, _| {
+            if !matches!(id, "actions.play" | "file.automate.batch" | "file.automate.createDroplet")
+                || !params.get("action").is_some_and(serde_json::Value::is_number)
+            {
+                return;
+            }
+            if let Ok(index) = crate::actions_cmds::resolve(&state.list, params, "actions.save") {
+                match positions.get(&std::ptr::from_ref(&state.list[index])) {
+                    Some(&next) if next != index => params["action"] = serde_json::json!(next),
+                    Some(_) => {}
+                    None if !skip_unsupported => result = Err("numeric action call target is not included in the exported selection".into()),
+                    // Numeric call forms are native fallbacks: the explicit skip
+                    // option omits their complete source step in export_set.
+                    None => {}
+                }
+            }
+        });
+    }
+    result.map(|()| output)
+}
+
 /// Build the portable logical-set selection, preserving its opaque metadata and enforcing archive limits.
 pub(crate) fn groups<'a>(state: &'a ActionState, only: Option<&str>) -> Result<Vec<(&'a str, Selection<'a>)>> {
     groups_ordered(state, only, false)

@@ -1,5 +1,7 @@
 //! IndexedDB owns durable bytes; the engine sees only the bounded, Send memory bridge.
 //! Each batch commits tips, groups and index together, and success means transaction completion.
+use std::{cell::Cell, rc::Rc};
+
 use js_sys::{Array, Function, Promise, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
@@ -107,6 +109,9 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
     let req = factory.open_with_u32(DATABASE, 2).map_err(js)?;
     let mut upgrade = Listeners::new();
+    let blocked = Rc::new(Cell::new(false));
+    let noticed = blocked.clone();
+    upgrade.add(&req, "blocked", move |_| noticed.set(true)).map_err(js)?;
     let upgrade_req = req.clone();
     upgrade
         .add(&req, "upgradeneeded", move |_| {
@@ -144,6 +149,13 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
             Ok(db)
         }
         Err(e) => {
+            let e = if blocked.get() {
+                format!(
+                    "{e}; browser storage upgrade is blocked by another tab. Close other tabs for this site, then reload this tab to enable saving. Reloading discards session-only brushes."
+                )
+            } else {
+                e
+            };
             // An open request cannot be cancelled (another tab may block its upgrade). Keep
             // its handlers alive and close any late connection; never hydrate a live session.
             wasm_bindgen_futures::spawn_local(async move {

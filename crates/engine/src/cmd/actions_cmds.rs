@@ -15,7 +15,7 @@
 //! step, because the outer `actions.play` id would otherwise hide a recorded `file.*` command from
 //! the top-level check.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1436,6 +1436,35 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": names.first()}))
 }
 
+type NamedActionScopes = BTreeMap<String, BTreeSet<Option<String>>>;
+
+/// Match named selectors in their execution scope, retaining unscoped namesake fallback.
+fn deleted_named_target(removed: &NamedActionScopes, surviving: &NamedActionScopes, id: &str, params: &Value, key: &str) -> bool {
+    let branch;
+    let target = if id == "actions.conditional" {
+        branch = match conditional_target(params, key) {
+            Some(target) => target,
+            None => return false,
+        };
+        &branch
+    } else {
+        params
+    };
+    let Some(name) = target.get("action").and_then(Value::as_str) else { return false };
+    let matches = |sets: &BTreeSet<Option<String>>| match target.get("set").filter(|set| !set.is_null()) {
+        None => !sets.is_empty(),
+        Some(Value::String(scope)) => sets.iter().any(|set| {
+            if id == "file.automate.batch" {
+                set.as_deref() == Some(scope.as_str())
+            } else {
+                crate::atn_cmds::logical_set_name(set.as_deref()) == scope.as_str()
+            }
+        }),
+        Some(_) => false,
+    };
+    removed.get(name).is_some_and(matches) && !surviving.get(name).is_some_and(matches)
+}
+
 /// Delete validated, sorted library indices as one edit. References follow surviving
 /// identities; calls to deleted targets become invalid rather than playing a replacement.
 /// Embedded libraries in other commands' JSON own their own references and stay untouched.
@@ -1443,21 +1472,23 @@ fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
     let old_len = s.actions.list.len();
     let names: Vec<_> = removed.iter().filter_map(|&index| s.actions.list.get(index).map(|action| action.name.clone())).collect();
     let mut vanished: BTreeSet<&str> = names.iter().map(String::as_str).collect();
+    let mut removed_targets = NamedActionScopes::new();
+    let mut surviving_targets = NamedActionScopes::new();
     for (index, action) in s.actions.list.iter().enumerate() {
-        if removed.binary_search(&index).is_err() {
+        let targets = if removed.binary_search(&index).is_ok() {
+            &mut removed_targets
+        } else {
             vanished.remove(action.name.as_str());
-        }
+            &mut surviving_targets
+        };
+        targets.entry(action.name.clone()).or_default().insert(action.set.clone());
     }
     for action in &mut s.actions.list {
         visit_calls(&mut action.steps, &mut |id, params, _| {
-            let keys = if id == "file.automate.batch" && params.get("steps").is_none() && params.get("action").is_some_and(Value::is_number) {
-                &["action"][..]
-            } else {
-                call_keys(id)
-            };
+            let keys = if id == "file.automate.batch" && params.get("steps").is_none() { &["action"][..] } else { call_keys(id) };
             for &key in keys {
                 let Some(value) = params.get(key) else { continue };
-                if value.as_str().is_some_and(|name| vanished.contains(name)) {
+                if value.is_string() && deleted_named_target(&removed_targets, &surviving_targets, id, params, key) {
                     params[key] = Value::Null;
                 } else if let Some(index) = num(value).and_then(|index| usize::try_from(index).ok()).filter(|&index| index < old_len) {
                     match removed.binary_search(&index) {

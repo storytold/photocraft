@@ -141,7 +141,7 @@ pub fn normalize_import(
     Ok(names)
 }
 
-/// Resolve only an identified physical archive scope, preserving external/deferred references.
+/// Resolve wire names before logical aliases; repeated rows require one unique named target.
 fn scoped_call_target<'a>(
     sets: &'a [ImportedSet],
     renamed: &'a [std::collections::HashMap<String, String>],
@@ -151,20 +151,18 @@ fn scoped_call_target<'a>(
 ) -> std::result::Result<Option<(&'a String, &'a String)>, String> {
     // A literal wire name wins over an alias created for an empty-name set.
     let wire = sets.iter().any(|set| set.wire_name == scope);
-    let mut matching = sets.iter().enumerate().filter(|(_, set)| if wire { set.wire_name == scope } else { set.name == scope });
-    let (index, name) = match matching.next() {
-        Some((index, set)) => (index, &set.name),
-        None if allow_external_calls => return Ok(None),
-        None => return Err(format!("action call references missing set `{scope}`")),
-    };
-    if matching.next().is_some() {
-        return Err(format!("ambiguous action call set `{scope}`"));
+    let mut matching = sets.iter().enumerate().filter(|(_, set)| if wire { set.wire_name == scope } else { set.name == scope }).peekable();
+    if matching.peek().is_none() {
+        return if allow_external_calls { Ok(None) } else { Err(format!("action call references missing set `{scope}`")) };
     }
-    renamed
-        .get(index)
-        .and_then(|names| names.get(target))
-        .map(|target| Some((target, name)))
-        .ok_or_else(|| format!("action call target `{target}` is missing from set `{scope}`"))
+    // Interleaved durable rows can share one logical/wire name. Resolve the named
+    // target across those rows, while genuinely duplicate targets remain ambiguous.
+    let mut targets = matching.filter_map(|(index, set)| renamed.get(index)?.get(target).map(|target| (target, &set.name)));
+    let found = targets.next().ok_or_else(|| format!("action call target `{target}` is missing from set `{scope}`"))?;
+    if targets.next().is_some() {
+        return Err(format!("ambiguous action call target `{target}` in set `{scope}`"));
+    }
+    Ok(Some(found))
 }
 
 /// Retain an unsupported event's ID kind and descriptor for later export without executing it.
@@ -674,6 +672,15 @@ fn export_set(
                 }
                 None => vec![native_item(id, params)?],
             };
+            // A kept Photoshop step can itself wrap a native event. Validate the
+            // returned items too, before publishing any part of this source step.
+            if let Some(error) = items.iter().find_map(|item| read_native(item, NativeInput::Portable).err()) {
+                if skip_unsupported {
+                    skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
+                    continue;
+                }
+                return Err(error);
+            }
             if skip_unsupported && items.iter().any(|item| item.event == AtnEvent::name(NATIVE_EVENT)) {
                 skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
                 continue;

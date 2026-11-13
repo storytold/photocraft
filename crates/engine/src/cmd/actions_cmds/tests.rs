@@ -1998,3 +1998,100 @@ fn review_editor_rename_follows_inline_batch_calls_without_crossing_embedded_lib
     assert_eq!(calls[1].1["action"][0][1]["action"], "Renamed", "the legacy inline action-array spelling uses the same namespace");
     assert_eq!(calls[2].1, embedded, "embedded calledActions has its own unchanged namespace");
 }
+
+#[test]
+fn deleting_named_batch_targets_cannot_revive_caller_or_inline_calls() {
+    for group in [false, true] {
+        let mut s = Session::new();
+        let embedded = json!({"steps":[["actions.play",{"action":"A"}]],"calledActions":[{"name":"A","steps":[]}]});
+        let own_actions = json!([{"name":"Inner","steps":[["actions.play",{"action":0}]]}]);
+        s.actions.list = vec![
+            Action { set: Some("Removed".into()), ..Action::new("A", Vec::new()) },
+            Action::new(
+                "Caller",
+                vec![
+                    ("file.automate.batch".into(), json!({"action":"A"})),
+                    ("file.automate.batch".into(), json!({"action":"A","calledActions":own_actions.clone()})),
+                    ("file.automate.batch".into(), json!({"steps":[["file.automate.batch",{"action":"A"}],["actions.play",{"action":"A"}]]})),
+                    ("file.automate.batch".into(), json!({"action":[["file.automate.batch",{"action":"A"}]]})),
+                    ("file.automate.batch".into(), embedded.clone()),
+                    ("file.automate.batch".into(), json!({"steps":null,"action":"A"})),
+                ],
+            ),
+        ];
+        assert_eq!(crate::file_cmds::batch_action(&s.actions.list, &s.actions.list[1].steps[0].1).unwrap(), 0);
+        s.execute("actions.delete", if group { json!({"set":"Removed"}) } else { json!({"action":0}) }).unwrap();
+        let steps = &s.actions.list[0].steps;
+        assert!(steps[0].1["action"].is_null());
+        assert!(steps[1].1["action"].is_null());
+        assert_eq!(steps[1].1["calledActions"], own_actions, "the selected source is local; its supplied internal namespace is untouched");
+        assert!(steps[2].1["steps"][0][1]["action"].is_null());
+        assert!(steps[2].1["steps"][1][1]["action"].is_null());
+        assert!(steps[3].1["action"][0][1]["action"].is_null());
+        assert_eq!(steps[4].1, embedded, "inline embedded calls own their namespace");
+        assert_eq!(steps[5].1, json!({"steps":null,"action":"A"}), "present invalid steps still take precedence");
+        s.actions.list.push(Action::new("A", Vec::new()));
+        assert!(
+            crate::file_cmds::batch_action(&s.actions.list, &s.actions.list[0].steps[0].1).is_err(),
+            "reusing the deleted name cannot revive the old Batch"
+        );
+        assert_eq!(crate::file_cmds::batch_action(&s.actions.list, &json!({"action":"A"})).unwrap(), 1, "a new explicit call can select the replacement");
+    }
+}
+
+#[test]
+fn deleting_namesakes_respects_play_batch_and_conditional_effective_scopes() {
+    for group in [false, true] {
+        let mut s = Session::new();
+        s.actions.list = vec![
+            Action { set: Some("One".into()), ..Action::new("A", Vec::new()) },
+            Action { set: Some("Two".into()), ..Action::new("A", Vec::new()) },
+            Action::new(
+                "Caller",
+                vec![
+                    ("actions.play".into(), json!({"action":"A","set":"Two"})),
+                    ("actions.play".into(), json!({"action":"A","set":"One"})),
+                    ("actions.play".into(), json!({"action":"A"})),
+                    ("actions.conditional".into(), json!({"if":"always","then":"A","else":"A","set":"Two","elseSet":"One"})),
+                    ("actions.conditional".into(), json!({"if":"always","then":"A","else":"A","set":"Two","thenSet":"One","elseSet":null})),
+                    ("file.automate.batch".into(), json!({"action":"A","set":"Two"})),
+                    ("file.automate.batch".into(), json!({"action":"A","set":"One"})),
+                    ("file.automate.batch".into(), json!({"action":"A","set":null})),
+                    ("actions.play".into(), json!({"action":1})),
+                    ("actions.play".into(), json!({"action":2})),
+                ],
+            ),
+        ];
+        s.execute("actions.delete", if group { json!({"set":"Two"}) } else { json!({"action":1}) }).unwrap();
+        let steps = &s.actions.list[1].steps;
+        for index in [0, 5, 8] {
+            assert!(steps[index].1["action"].is_null());
+        }
+        for index in [1, 2, 6, 7] {
+            assert_eq!(steps[index].1["action"], "A");
+        }
+        assert!(steps[3].1["then"].is_null());
+        assert_eq!(steps[3].1["else"], "A");
+        assert_eq!(steps[4].1["then"], "A");
+        assert!(steps[4].1["else"].is_null(), "null branch scope inherits the common scope");
+        assert_eq!(steps[9].1["action"], 1, "surviving numeric identities still follow removal");
+        s.actions.list.push(Action { set: Some("Two".into()), ..Action::new("A", Vec::new()) });
+        assert!(playback_index(&s.actions.list, &s.actions.list[1].steps[0].1).is_err());
+        assert!(crate::file_cmds::batch_action(&s.actions.list, &s.actions.list[1].steps[5].1).is_err());
+        assert_eq!(playback_index(&s.actions.list, &s.actions.list[1].steps[1].1).unwrap(), 0);
+    }
+    let mut s = Session::new();
+    let ungrouped = crate::atn_cmds::UNGROUPED_SET;
+    s.actions.list = vec![
+        Action::new("A", Vec::new()),
+        Action { set: Some(ungrouped.into()), ..Action::new("A", Vec::new()) },
+        Action::new(
+            "Caller",
+            vec![("actions.play".into(), json!({"action":"A","set":ungrouped})), ("file.automate.batch".into(), json!({"action":"A","set":ungrouped}))],
+        ),
+    ];
+    s.execute("actions.delete", json!({"action":1})).unwrap();
+    assert_eq!(s.actions.list[1].steps[0].1["action"], "A", "Play shares the logical ungrouped identity with a legacy row");
+    assert!(s.actions.list[1].steps[1].1["action"].is_null(), "Batch's explicit-set selector requires the actual stored set");
+    assert_eq!(playback_index(&s.actions.list, &s.actions.list[1].steps[0].1).unwrap(), 0);
+}

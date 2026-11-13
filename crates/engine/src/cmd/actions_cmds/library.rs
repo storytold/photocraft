@@ -259,16 +259,26 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<ActionState> {
             state.list.push(action);
         }
     }
+    let scopes = archive
+        .parsed
+        .sets
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != archive.hidden)
+        .zip(&state.sets)
+        .map(|((_, file), logical)| (file.name.to_string_lossy(), logical.clone()))
+        .collect();
+    for action in &mut state.list {
+        sidecar::remap_scopes(action, &scopes);
+    }
     Ok(state)
 }
 
 /// External import may normalize names, while retaining the original event cohorts and bytes.
 pub(crate) fn bind_import(action: &mut Action, original: &Action) {
-    let Some(mut origin) = original.library_origin.clone() else { return };
-    let mut baseline = original.library_origin.as_ref().map(|origin| (*origin.baseline).clone()).unwrap_or_default();
-    baseline.steps = action.steps.clone();
-    origin.baseline = Arc::new(baseline);
-    action.library_origin = Some(origin);
+    // Keep the wire projection as the baseline. Normalized call names/scopes
+    // must be encoded when their target headers changed during import.
+    action.library_origin = original.library_origin.clone();
     action.library_steps = original.library_steps.clone();
     action.atn_metadata = original.atn_metadata.clone();
 }
@@ -443,7 +453,7 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
             .ok_or("Actions text exceeds library byte limit")?;
     }
     let groups = sidecar::library_groups(state)?;
-    let wire_names: Vec<String> = groups
+    let mut wire_names: Vec<String> = groups
         .iter()
         .map(|(name, selection)| match selection.raw.as_ref() {
             Some(row) if row.logical_name == *name => Ok(row.file()?.name.to_string_lossy()),
@@ -451,27 +461,32 @@ pub(crate) fn encode(state: &ActionState, keys: &[(String, String)]) -> Result<V
         })
         .collect::<Result<_>>()?;
     let mut available =
-        atn_cmds::UniqueNames::new(std::iter::once(atn_cmds::UNGROUPED_SET.to_string()).chain(wire_names.into_iter().filter(|name| !name.is_empty())));
+        atn_cmds::UniqueNames::new(std::iter::once(atn_cmds::UNGROUPED_SET.to_string()).chain(wire_names.iter().filter(|name| !name.is_empty()).cloned()));
     let literal_alias = available.claim(atn_cmds::UNGROUPED_SET);
+    for ((name, selection), wire) in groups.iter().zip(&mut wire_names) {
+        if selection.raw.as_ref().is_none_or(|row| row.logical_name != *name) || (*wire == atn_cmds::UNGROUPED_SET && literal_alias != *name) {
+            *wire = atn_cmds::wire_set_name(name).to_string();
+        }
+    }
+    let scopes = groups.iter().zip(&wire_names).map(|((name, _), wire)| (name.to_string(), wire.clone())).collect();
     let mut names = std::collections::HashMap::new();
     for action in &state.list {
         *names.entry(action.name.as_str()).or_insert(0usize) += 1;
     }
     let mut files = Vec::new();
     let mut records = Vec::new();
-    for (name, selection) in &groups {
+    for ((name, selection), wire) in groups.iter().zip(&wire_names) {
         let original = selection.raw.as_ref().map(RowOrigin::file).transpose()?;
         let mut file = original.cloned().unwrap_or_default();
-        let wire = atn_cmds::wire_set_name(name);
-        if selection.raw.as_ref().is_none_or(|row| row.logical_name != *name)
-            || original.is_some_and(|file| file.name.to_string_lossy() == atn_cmds::UNGROUPED_SET && literal_alias != *name)
-        {
+        if original.is_none_or(|file| file.name.to_string_lossy() != *wire) {
             file.name = UnicodeString::new_nul(wire);
         }
         file.actions.clear();
         let mut actions = Vec::new();
         for action in &selection.actions {
-            let (record, origin) = action_record(action, name, keys, names.get(action.name.as_str()) == Some(&1))?;
+            let mut wire_action = (**action).clone();
+            sidecar::remap_scopes(&mut wire_action, &scopes);
+            let (record, origin) = action_record(&wire_action, wire, keys, names.get(action.name.as_str()) == Some(&1))?;
             file.actions.push(record);
             actions.push(origin);
         }

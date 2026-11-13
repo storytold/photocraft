@@ -5,7 +5,7 @@ use super::{Action, Recording, Result, Session, Value, bad};
 
 #[derive(Debug)]
 enum Destination {
-    Classic(Box<Action>),
+    Classic { action: Box<Action>, target: super::PlaybackTarget },
     Draft(u64),
 }
 
@@ -21,11 +21,9 @@ pub struct Owner {
     call: Option<Value>,
 }
 
-/// Restore a Classic recorder only to one unchanged definition, allowing reorder but rejecting ambiguity.
-fn classic_index(s: &Session, action: &Action) -> Option<usize> {
-    let mut matches = s.actions.list.iter().enumerate().filter(|(_, candidate)| *candidate == action).map(|(index, _)| index);
-    let index = matches.next()?;
-    matches.next().is_none().then_some(index)
+/// Keep a resolved recorder row at the same revision; after edits require one unchanged definition.
+fn classic_index(s: &Session, action: &Action, target: &super::PlaybackTarget) -> Option<usize> {
+    super::refresh_playback_target(s, action, target).ok()?.position.map(|(_, row, _)| row)
 }
 
 /// Definition edits cannot invalidate a shell-owned capture, even through direct Session calls.
@@ -62,8 +60,8 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<Va
         Some(Recording::Classic(_, index)) => {
             // Valid Classic capture always names a current action. A missing destination must
             // fail before acquiring a lease rather than resume into an unrelated row.
-            match s.actions.list.get(index).cloned() {
-                Some(action) => Some(Destination::Classic(Box::new(action))),
+            match s.actions.list.get(index).cloned().zip(super::playback_target(s, index)) {
+                Some((action, target)) => Some(Destination::Classic { action: Box::new(action), target }),
                 None => {
                     s.actions.recording = Some((s.journal.len(), index));
                     return Err(bad("actions.play", "the recording destination no longer exists"));
@@ -144,7 +142,7 @@ impl Owner {
             return Err(bad("actions.play", "this playback no longer owns its capture"));
         }
         let destination_exists = match &self.destination {
-            Some(Destination::Classic(action)) => classic_index(s, action).is_some(),
+            Some(Destination::Classic { action, target }) => classic_index(s, action, target).is_some(),
             Some(Destination::Draft(id)) => s.actions.editor.as_ref().is_some_and(|draft| draft.id == *id),
             None => true,
         };
@@ -171,9 +169,9 @@ impl Owner {
             return;
         }
         match self.destination {
-            Some(Destination::Classic(action)) => {
+            Some(Destination::Classic { action, target }) => {
                 // A reordered identical owner is legitimate; a reused name/index is not.
-                if let Some(index) = classic_index(s, &action) {
+                if let Some(index) = classic_index(s, &action, &target) {
                     s.actions.recording = Some((s.journal.len(), index));
                 }
             }

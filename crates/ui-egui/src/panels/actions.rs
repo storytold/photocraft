@@ -2680,3 +2680,6 @@ mod drag_drop_tests;
 
 #[cfg(test)]
 mod command_route_tests;
+
+#[cfg(test)]
+mod continuation_policy_tests;

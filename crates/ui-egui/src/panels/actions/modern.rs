@@ -136,6 +136,13 @@ fn effective_gate(app: &PhotocraftApp) -> Option<Gate> {
     app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None })
 }
 
+/// Deferred effects must retain their captured policy and the current dispatch policies.
+fn deferred_gate(app: &PhotocraftApp, captured: Option<Gate>) -> Result<Option<Gate>, String> {
+    let service = if app.automation_input { app.services.automation_authorize } else { None };
+    let live = super::continuation_gate(app.session.authorize, service)?;
+    super::continuation_gate(captured, live)
+}
+
 /// Attach a visible page to an existing backend draft without allocating or replacing that draft.
 fn attach(app: &mut PhotocraftApp) -> Result<(), String> {
     if app.actions_runtime.page.is_none()
@@ -196,9 +203,10 @@ pub(super) fn leave_for(app: &mut PhotocraftApp, id: &str, params: Value) -> Res
     if active.playback_busy || active.finishing_step {
         return Err(tl!("Finish or cancel action playback and the pending step first").into());
     }
+    let gate = deferred_gate(app, None)?;
     let Some(mut page) = app.actions_runtime.page.take() else { return Err(tl!("Close the open Actions editor first").into()) };
     let previous = app.actions_runtime.pending.take();
-    app.actions_runtime.pending = Some((id.to_string(), params, app.session.authorize));
+    app.actions_runtime.pending = Some((id.to_string(), params, gate));
     match page.request_leave(app, active) {
         Ok(Some(closed @ editor::Event::Closed { .. })) => {
             event(app, closed)?;
@@ -223,8 +231,9 @@ pub(super) fn leave_for(app: &mut PhotocraftApp, id: &str, params: Value) -> Res
 /// Resume the parked destination with its original authorization gate; defer actual Exit to the close flow.
 fn finish_navigation(app: &mut PhotocraftApp) -> Result<(), String> {
     let Some((id, params, gate)) = app.actions_runtime.pending.take() else { return Ok(()) };
+    let gate = deferred_gate(app, gate)?;
     let saved = app.session.authorize;
-    app.session.authorize = gate.or(saved);
+    app.session.authorize = gate;
     let result = if id == "__actionsExit" {
         app.actions_runtime.pending = Some((id, params, gate));
         Ok(Value::Null)
@@ -920,12 +929,13 @@ fn ask_delete(app: &mut PhotocraftApp, index: Option<usize>, group: Option<Strin
             (Delete::Action(Box::new(action)), message, "Delete action")
         }
     };
+    let gate = deferred_gate(app, None)?;
     let fields = json!({"__label":label,"message":message});
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     if let Some(dialog) = app.ui.dialog_mut(id) {
         dialog.fields.insert(DELETE.into(), json!(id));
     }
-    app.actions_runtime.delete = Some((id, target, effective_gate(app)));
+    app.actions_runtime.delete = Some((id, target, gate));
     Ok(json!({"dialog":id}))
 }
 
@@ -970,8 +980,9 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
             json!({"set":group})
         }
     };
+    let gate = deferred_gate(app, gate)?;
     let saved = app.session.authorize;
-    app.session.authorize = gate.or(saved);
+    app.session.authorize = gate;
     let result = app.run("actions.delete", params);
     app.session.authorize = saved;
     if result.is_ok() {
@@ -985,3 +996,7 @@ pub(crate) fn delete_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<S
 #[cfg(test)]
 #[path = "new_layout_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "deferred_policy_tests.rs"]
+mod deferred_policy_tests;

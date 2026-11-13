@@ -230,29 +230,20 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         }
         sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
     };
+    let mut output_actions = sidecar::portable_actions(&s.actions, &groups, skip).map_err(|error| bad(cmd, error))?;
     // Preserve the old default single-set output name and move its internal calls with it.
-    let renamed_actions = if p.get("action").is_none()
+    if p.get("action").is_none()
         && set_param.is_none()
         && groups.len() == 1
-        && let Some((name, selection)) = groups.first_mut()
+        && let Some((name, _)) = groups.first_mut()
         && name != super::UNGROUPED_SET
     {
         let from = name.clone();
         *name = DEFAULT_SET.to_string();
-        Some(
-            selection
-                .actions
-                .iter()
-                .map(|action| {
-                    let mut action = (**action).clone();
-                    retarget_scopes(&mut action, &from, DEFAULT_SET);
-                    action
-                })
-                .collect::<Vec<_>>(),
-        )
-    } else {
-        None
-    };
+        for action in output_actions.iter_mut().flatten() {
+            retarget_scopes(action, &from, DEFAULT_SET);
+        }
+    }
     let names: Vec<String> = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.name.clone()).collect();
     let set_names: Vec<String> = groups.iter().map(|(name, _)| name.clone()).collect();
     let set = set_param.or_else(|| set_names.first().cloned()).unwrap_or_else(|| DEFAULT_SET.to_string());
@@ -261,8 +252,9 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let steps: usize = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.steps.len()).sum();
     let borrowed: Vec<_> = groups
         .iter()
-        .map(|(name, selection)| {
-            let actions = renamed_actions.as_ref().map_or_else(|| selection.actions.clone(), |actions| actions.iter().collect());
+        .zip(&output_actions)
+        .map(|((name, selection), actions)| {
+            let actions = actions.iter().collect();
             (name.as_str(), sidecar::Selection { actions, source: selection.source.clone(), raw: selection.raw.clone() })
         })
         .collect();
