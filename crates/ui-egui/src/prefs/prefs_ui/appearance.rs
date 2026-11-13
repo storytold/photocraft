@@ -1,4 +1,3 @@
-use super::dialogs::open_preferences;
 use super::fields::{choice_label, color_of, preference_matches};
 use super::{AppearanceMode, Color32, DarkTheme, LightTheme, Map, PhotocraftApp, RichText, SavedTheme, Sense, ThemeKind, Tokens, Value, json, prefs, vec2};
 
