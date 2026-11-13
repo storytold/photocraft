@@ -104,7 +104,7 @@ fn imported_named_set_calls_keep_their_target_through_duplicate_action_renaming(
                 } else {
                     let error = result.unwrap_err().to_string();
                     let expected = match scope {
-                        Some("B") => "ambiguous action call set",
+                        Some("B") => "ambiguous action call target `Finish` in set `B`",
                         Some("Empty") => "missing from set",
                         _ => "ambiguous cross-set",
                     };
