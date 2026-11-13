@@ -129,9 +129,10 @@ fn value_field_alerting_in(
                 d.insert_temp(invalid_id, true);
             }),
             // A number typed after text that was none owes its own range alert: the value may not
-            // have changed (`200000`, `abc`, `200000` again), so `changed()` cannot say.
+            // have changed (`200000`, `abc`, `200000` again), so `changed()` cannot say. An emptied
+            // field owes none: `typed` is still the number from before the text that was none.
             Some(_) => ui.ctx().data_mut(|d| {
-                if d.remove_temp::<bool>(invalid_id).unwrap_or(false) && typed.is_finite() {
+                if d.remove_temp::<bool>(invalid_id).unwrap_or(false) && !blank && typed.is_finite() {
                     d.insert_temp(out_id, !(lo..=hi).contains(&typed));
                 }
             }),
