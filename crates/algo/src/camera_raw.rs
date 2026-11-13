@@ -75,6 +75,7 @@ mod presence;
 mod white_balance;
 mod whites_blacks;
 
+pub use optics::distortion_source;
 pub use per_pixel::{
     CURVE_LUT, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle, WhitesBlacks,
     per_pixel, white_black_points,

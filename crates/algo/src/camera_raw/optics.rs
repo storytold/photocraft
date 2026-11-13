@@ -170,21 +170,42 @@ fn sample(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 4] {
     acc
 }
 
+/// Where Distortion at `amount` takes the result point `(x, y)` of a `w × h` image from (pixel
+/// edges at whole numbers): the radial map in the module docs.
+fn source_of(amount: f32, w: usize, h: usize, x: f64, y: f64) -> (f64, f64) {
+    let a = centre_scale(amount);
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    let half_diag2 = (cx * cx + cy * cy).max(1e-12);
+    let (dx, dy) = (x - cx, y - cy);
+    let k = a + (1.0 - a) * (dx * dx + dy * dy) / half_diag2;
+    (cx + dx * k, cy + dy * k)
+}
+
+/// The point of a `w × h` image before Distortion that the point `(x, y)` after it shows (pixel
+/// edges at whole numbers), or `None` when Distortion uncovers it (its source is off the image)
+/// or the input is not finite. With Distortion off, the point itself.
+pub fn distortion_source(p: &CameraRaw, w: usize, h: usize, x: f64, y: f64) -> Option<(f64, f64)> {
+    if !x.is_finite() || !y.is_finite() || w == 0 || h == 0 {
+        return None;
+    }
+    if distortion_neutral(p) {
+        return Some((x, y));
+    }
+    let (sx, sy) = source_of(p.lens_distortion, w, h, x, y);
+    ((0.0..=w as f64).contains(&sx) && (0.0..=h as f64).contains(&sy)).then_some((sx, sy))
+}
+
 /// Distortion on straight RGBA pixels (`w × h`), in place. Colour keeps values outside 0 … 1:
 /// [`develop`](super::develop) clamps at its end, after the post-crop vignette and grain.
 pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
     if distortion_neutral(p) || w == 0 || h == 0 || px.len() != w.saturating_mul(h) {
         return;
     }
-    let a = centre_scale(p.lens_distortion);
     let src = px.to_vec();
-    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
-    let half_diag2 = cx * cx + cy * cy;
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
-            let k = a + (1.0 - a) * (dx * dx + dy * dy) / half_diag2;
-            let v = sample(&src, w, h, cx + dx * k, cy + dy * k);
+            let (sx, sy) = source_of(p.lens_distortion, w, h, x as f64 + 0.5, y as f64 + 0.5);
+            let v = sample(&src, w, h, sx, sy);
             if v[3] <= 1e-6 {
                 *q = [0.0; 4];
                 continue;
