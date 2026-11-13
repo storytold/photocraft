@@ -436,8 +436,8 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
     image_resolver.set_document_depth(depth);
     parse_at_depth(depth, false, |isolated| {
         let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver));
-        let tree = guarded(|| craft_svg::tree::parse_text(text, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS), &opt));
-        let tree = tree.ok_or_else(|| IoError::Svg("the SVG parser failed on this drawing".into()))?.map_err(|error| IoError::Svg(error.to_string()))?;
+        let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS), &opt))?;
+        let tree = tree.map_err(svg_parse_error)?;
         Ok(Parsed { tree, fontless_text })
     })
     .map_err(IoError::from)
@@ -448,6 +448,23 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
 /// JPEG XL decoders are guarded). Where a panic aborts (wasm) this changes nothing.
 fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
+/// Parsing runs on the bounded SVG worker. Preserve a panic as an isolation failure instead of
+/// turning it into a generic parser error, including when it happens while resolving an embedded
+/// SVG on that same worker.
+fn guarded_parse<T>(f: impl FnOnce() -> T) -> Result<T, IoError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| IoError::Svg("the bounded SVG worker failed; the drawing was not opened".into()))
+}
+
+fn svg_parse_error(error: craft_svg::tree::Error) -> IoError {
+    match error {
+        // PhotoCraft's bounded render walk has always reported a refusal in layer terms. The
+        // shared parser can now reject expanded reference depth before usvg builds a recursive
+        // tree, so retain that user-facing contract at this adapter boundary.
+        craft_svg::tree::Error::TooDeep(_) => IoError::Svg("layers are nested too deeply".into()),
+        error => IoError::Svg(error.to_string()),
+    }
 }
 
 const MAX_BOUNDED_SVG_BYTES: u64 = 16 << 20;
@@ -513,8 +530,8 @@ fn parse_image_bounded_with(
         let opt = options_with_isolation(fontdb, xml_left, isolated, resolver);
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
         let limits = tree_limits(xml_left, MAX_RASTER_PIXELS);
-        let tree = guarded(|| craft_svg::tree::parse_text(text, &limits, &opt));
-        let tree = tree.ok_or_else(|| IoError::Svg("the SVG parser failed on this drawing".into()))?.map_err(|e| IoError::Svg(e.to_string()))?;
+        let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &limits, &opt))?;
+        let tree = tree.map_err(svg_parse_error)?;
         let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
         let usage = counter.resolver.usage();
         counter.pixels = counter.pixels.saturating_sub(usage.raster_pixels);
@@ -523,7 +540,9 @@ fn parse_image_bounded_with(
         counter.svg_chain = usage.embedded_svg_depth as u64;
         if usage.raster_limit_images > 0 {
             counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
-        } else if counter.strict && (usage.svg_limit_images > 0 || usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
+        } else if usage.svg_limit_images > 0 {
+            counter.error.get_or_insert_with(|| "embedded SVG images exceed the byte or nesting budget".into());
+        } else if counter.strict && (usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
             counter.error.get_or_insert_with(|| "can't parse an embedded SVG image".into());
         }
         if let Some(error) = counter.error.clone() {
