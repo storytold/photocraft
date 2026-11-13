@@ -53,7 +53,7 @@ mod flat;
 pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
-pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
+pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient, bake_smooth_opacity as bake_gradient_smooth_opacity};
 mod duotone_map;
 mod kra;
 pub mod linked;
@@ -1041,7 +1041,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
-        Route::Affinity => affinity::import(name, bytes),
+        Route::Affinity => affinity::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
         Route::Xcf => xcf::import(name, bytes, ctl),
