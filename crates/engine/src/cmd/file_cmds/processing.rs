@@ -20,6 +20,10 @@ mod image_processor_tests;
 #[path = "load_stack_name_tests.rs"]
 mod load_stack_name_tests;
 
+#[cfg(test)]
+#[path = "conditional_mode_change_targets_tests.rs"]
+mod conditional_mode_change_targets_tests;
+
 // ---------- Automate ----------
 
 pub(super) fn fit_image(s: &mut Session, p: &Value) -> Result<Value> {

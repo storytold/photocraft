@@ -166,6 +166,7 @@ fn values_set_over_the_control_channel_show_and_reach_the_command() {
         (json!(["lab", "ANY"]), every.as_slice(), "cmyk", "CMYK Color", ColorMode::Cmyk),
         (json!("gray"), &["Grayscale"][..], "cmyk", "CMYK Color", ColorMode::Rgb),
         (json!("rgb"), &["RGB Color"][..], "Lab", "Lab Color", ColorMode::Lab),
+        (json!("rgb"), &["RGB Color"][..], "indexed", "Indexed Color", ColorMode::Indexed),
     ] {
         let (mut h, id) = opened();
         let ctx = h.ctx.clone();
