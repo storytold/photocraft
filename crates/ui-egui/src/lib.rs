@@ -979,6 +979,9 @@ mod mask_thumb_refresh_tests;
 mod new_doc_remember_tests;
 
 #[cfg(test)]
+mod new_doc_dont_color_manage_tests;
+
+#[cfg(test)]
 mod hidden_layer_tests;
 
 #[cfg(test)]
