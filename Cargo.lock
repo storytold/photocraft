@@ -5541,6 +5541,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-pcraft-bundle",
  "craft-pcraft-format",
+ "craft-zip",
  "crc32fast",
  "exacl",
  "flate2",

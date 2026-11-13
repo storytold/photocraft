@@ -49,6 +49,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
 craft-pcraft-bundle = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
 craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "44dc2d875" }
