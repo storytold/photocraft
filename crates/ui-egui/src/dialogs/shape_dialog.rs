@@ -241,9 +241,9 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let mut v = to_unit(px);
             let places = unit.decimals() as u32;
             let range = to_unit(1.0)..=to_unit(MAX_PX);
-            // Create Triangle's pixel fields say when a typed size was out of range (#13358); the other
-            // units and the other shapes' dialogs keep clamping silently.
-            let (resp, out_of_range) = if unit == Unit::Pixels && kind == "triangle" {
+            // Create Triangle's and Create Ellipse's pixel fields say when a typed size was out of range
+            // (#13358, #13230); the other units and the other shapes' dialogs keep clamping silently.
+            let (resp, out_of_range) = if unit == Unit::Pixels && matches!(kind.as_str(), "triangle" | "ellipse") {
                 crate::widgets::value_field_alerting_prec(ui, text, &mut v, range, unit.suffix(), 110.0, places)
             } else {
                 (crate::widgets::value_field_prec(ui, &mut v, range, unit.suffix(), 110.0, places), false)
@@ -338,3 +338,6 @@ mod tests;
 
 #[cfg(test)]
 mod create_triangle_range_alert_tests;
+
+#[cfg(test)]
+mod create_ellipse_range_alert_tests;
