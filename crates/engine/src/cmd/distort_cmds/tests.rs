@@ -593,9 +593,12 @@ fn liquify_job_on_a_smart_object_adds_its_smart_filter() {
     // The same render as the synchronous command.
     let mut inline = session(8);
     inline.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
-    inline.execute(cmd, p).unwrap();
+    let inline_r = inline.execute(cmd, p).unwrap();
     assert_eq!(active_surface(&s), active_surface(&inline));
     assert_ne!(active_surface(&s), original);
+    // The field's largest displacement comes back on a smart object too, measured on the worker.
+    assert!(r["maxDisplacement"].as_f64().is_some_and(|m| m > 0.0), "{r}");
+    assert_eq!(r["maxDisplacement"], inline_r["maxDisplacement"], "{r} vs {inline_r}");
 }
 
 #[test]

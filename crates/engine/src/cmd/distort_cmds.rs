@@ -307,12 +307,16 @@ type MaskFn = Option<Box<dyn Fn(&Surface, Option<&Surface>, &Interrupt) -> Resul
 /// Deforms a layer's pixels (with the selection and canvas); `None` when they would not change.
 /// An `Err` leaves the layer as it was.
 type LayerFn = Box<dyn Fn(&Surface, Option<&Surface>, Rect, &Interrupt) -> Result<Option<Surface>> + Send>;
+/// Work run on the worker before a smart object records its smart filter (Liquify measures its
+/// field there for the result).
+type SmartFn = Option<Box<dyn FnOnce(&Interrupt) -> Result<()> + Send>>;
 
 /// Shared driver: a smart object records `cmd` as a smart filter; a pixel layer is edited in
 /// place by `f(surface, selection)`. A background job when started with `Session::start` (#210):
 /// the edit runs on a worker against a copy of the document, with progress, and can be
 /// cancelled; its result applies as one undo step. When `f` changes nothing there is no step
-/// (`changed: false`). `finish` completes the command's result.
+/// (`changed: false`). `smart` runs on the worker before a smart filter is recorded. `finish`
+/// completes the command's result.
 #[allow(clippy::too_many_arguments)]
 fn run_on_layer(
     s: &mut Session,
@@ -322,6 +326,7 @@ fn run_on_layer(
     moves: bool,
     f: LayerFn,
     mask: MaskFn,
+    smart: SmartFn,
     finish: impl FnOnce(Value) -> Value + Send + 'static,
 ) -> Result<Value> {
     let id = target(s, p)?;
@@ -354,7 +359,13 @@ fn run_on_layer(
                 // doesn't, since the smart object itself stays put).
                 check_locks(l, group, false)?;
                 let sf = SmartFilter { command: cmd, params, blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
-                ctx.stage(0.0, 1.0, &name, |_| crate::smart_cmds::add_smart_filter(&mut doc, id, sf, selection.as_ref()))?;
+                ctx.stage(0.0, 1.0, &name, |ctl| {
+                    if let Some(smart) = smart {
+                        smart(ctl)?;
+                    }
+                    // The job's context, so Cancel and progress reach the re-render.
+                    crate::smart_cmds::add_smart_filter_in(&mut doc, id, sf, selection.as_ref(), ctx)
+                })?;
                 return Ok(Some(doc));
             }
             check_locks(l, group, moves && !colors)?;
@@ -399,10 +410,13 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let t0 = Stopwatch::start();
     // The field is built on the worker with the warp: replaying the strokes over a large canvas
-    // takes a while. Its largest displacement comes back with the result (pixel layers; a smart
-    // object's filter builds its own field when it renders).
+    // takes a while. Its largest displacement comes back with the result. A smart object's
+    // filter builds its own field when it renders, so for the result it is measured on the
+    // worker too, before the filter is recorded.
     let found: Arc<OnceLock<f32>> = Arc::default();
     let report = found.clone();
+    let measured = found.clone();
+    let smart_strokes = strokes.clone();
     run_on_layer(
         s,
         LIQUIFY,
@@ -422,6 +436,14 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
             }))
         }),
         None,
+        Some(Box::new(move |ctl: &Interrupt| {
+            let field = LiquifyField::from_strokes(canvas, cell, &smart_strokes);
+            if ctl.cancelled() {
+                return Err(EngineError::Cancelled);
+            }
+            let _ = measured.set(field.max_displacement());
+            Ok(())
+        })),
         move |mut r| {
             if let Some(max) = found.get() {
                 r["maxDisplacement"] = json!(max);
@@ -479,7 +501,7 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         .map(Some)
     });
     let mask_fn: MaskFn = Some(Box::new(move |m, _, _| Ok(moved_mask.lock().unwrap_or_else(PoisonError::into_inner).take().unwrap_or_else(|| m.clone()))));
-    run_on_layer(s, cmd, "Puppet Warp", p, true, layer_fn, mask_fn, |r| r)
+    run_on_layer(s, cmd, "Puppet Warp", p, true, layer_fn, mask_fn, None, |r| r)
 }
 
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -511,6 +533,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             deform_selected(surf, sel, &|x| perspective_surface_with(x, &warped, it, ctl).ok_or(EngineError::Cancelled)).map(Some)
         }),
         mask_fn,
+        None,
         move |mut r| {
             r["planes"] = json!(planes);
             r
