@@ -160,14 +160,24 @@ fn interp(p: &Value) -> Interp {
 // ---------- pixel operations ----------
 
 /// Mixes `new` over `old` by the selection's coverage (premultiplied when there is alpha).
-fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Surface {
-    let area = old.content_bounds().union(&new.content_bounds());
-    let mut out = new.clone();
+///
+/// Where the selection covers nothing the result is `old`, so only the part of the content
+/// bounds the selection reaches is blended into a copy of `old`: a small selection over distant
+/// sparse content no longer expands the empty space between them. Refused, before any dense
+/// buffer, when that part would still pass the working budget.
+fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Result<Surface> {
+    let content = old.content_bounds().union(&new.content_bounds());
+    // Outside its tiles the selection's coverage is its default: an empty default lets the
+    // blend keep to the selection's bounds.
+    let sel_default_empty = sel.default_pixel().first().is_none_or(|v| *v <= 0.0);
+    let area = if sel_default_empty { content.intersect(&sel.content_bounds()) } else { content };
+    let mut out = old.clone();
     if area.is_empty() {
-        return out;
+        return Ok(out);
     }
     let fmt = old.format();
     let n = fmt.channels();
+    crate::allocation::check_dense(area, (n as u64).saturating_mul(12), "blending Liquify through the selection")?;
     let (o, w) = (old.read_region(area), new.read_region(area));
     let mut r = vec![0.0f32; o.len()];
     let aw = area.width() as usize;
@@ -189,7 +199,7 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Surface {
     }
     out.write_region(area, &r);
     out.prune();
-    out
+    Ok(out)
 }
 
 /// Liquifies a surface over `canvas` (the field's extent).
@@ -344,7 +354,7 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
         &|surf, sel, _| {
             let out = apply_liquify(surf, &field);
             Ok(match sel {
-                Some(sel) => mix_by_selection(surf, &out, sel),
+                Some(sel) => mix_by_selection(surf, &out, sel)?,
                 None => out,
             })
         },
@@ -435,7 +445,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const L: &str = r##"{"strokes":[{"tool":"forwardWarp|reconstruct|smooth|twirlCw|twirlCcw|pucker|bloat|pushLeft|freeze|thaw|lassoMask|reconstructAll","size":px=100,"density":0-100=50,"pressure":0-100=100,"rate":0-100=80,"points":[[x,y,pressure?]…],"amount":%? (twirlCcw: twirlCw reversed, what an Alt-drag with Twirl Clockwise records; reconstructAll; lassoMask: 1 freezes the polygon in points, 0 thaws it)}…],"meshSize":px? (field resolution, px per node; default 2, or 4 above 4 MP),"layer":id?} — strokes replay in order on a fresh field; a selection limits the effect; on a smart object it becomes a smart filter"##;
+    const L: &str = r##"{"strokes":[{"tool":"forwardWarp|reconstruct|smooth|twirlCw|twirlCcw|pucker|bloat|pushLeft|freeze|thaw|lassoMask|reconstructAll","size":px=100,"density":0-100=50,"pressure":0-100=100,"rate":0-100=80,"points":[[x,y,pressure?,ms?]…] (ms: milliseconds since the previous point; a point with it follows the pointer exactly and times the stationary tools in real time, as the dialog records them),"amount":%? (twirlCcw: twirlCw reversed, what an Alt-drag with Twirl Clockwise records; reconstructAll; lassoMask: 1 freezes the polygon in points, 0 thaws it)}…],"meshSize":px? (field resolution, px per node; default 2, or 4 above 4 MP),"layer":id?} — strokes replay in order on a fresh field; a selection limits the effect; on a smart object it becomes a smart filter"##;
     const P: &str = r##"{"pins":[{"src":[x,y],"dst":[x,y],"rotate":deg?,"depth":n?}…],"mode":"rigid|normal|distort"="normal","density":"fewer|normal|more"="normal","expansion":px=2,"interpolation":"bicubic|bilinear|nearest","layer":id?} — mesh over the opaque region, as-rigid-as-possible; on a smart object it becomes a smart filter"##;
     const Q: &str = r##"{"planes":[{"src":[[x,y]×4],"dst":[[x,y]×4]}…] (corners clockwise from top-left; corners that coincide in src are linked),"straighten":"horizontal|vertical|auto"?,"interpolation":"bicubic|bilinear|nearest","layer":id?}"##;
     vec![

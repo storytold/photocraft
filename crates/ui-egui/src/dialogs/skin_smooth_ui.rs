@@ -420,6 +420,7 @@ pub(crate) fn overlay(
     let request = FilterPreviewKey {
         doc: doc_id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: Some(layer),
         target: ChannelTarget::Composite,

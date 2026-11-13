@@ -221,6 +221,7 @@ fn background_mask_discards_stale_samples_and_cancel_releases_it() {
     let other = FilterPreviewKey {
         doc: doc.id,
         revision: 0,
+        sources: Vec::new(),
         dialog: 0,
         active: None,
         target: ChannelTarget::Composite,

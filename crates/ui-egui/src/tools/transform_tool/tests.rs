@@ -1,6 +1,6 @@
 use super::*;
 
-fn session() -> TransformSession {
+pub(super) fn session() -> TransformSession {
     TransformSession {
         session: 1,
         layer: 1,
@@ -221,7 +221,7 @@ fn warp_bar_buttons_follow_the_fields_on_a_wide_bar() {
     h.run_steps(4);
     assert!(h.state().ui.transform.as_ref().unwrap().warp.is_some());
     let commit = h.get_by_label("Commit transform").rect();
-    assert!(commit.right() < width / 2.0, "commit sits next to the fields, not at the far right: {commit:?}");
+    assert!(commit.right() < width * 0.6, "commit sits next to the fields, not at the far right: {commit:?}");
     let reset = h.get_by_label("Reset warp").rect();
     assert!(reset.right() < commit.left() + 1.0, "reset is left of commit");
     h.get_by_label("Reset warp").click();
@@ -325,7 +325,7 @@ fn type_into_bar_field(n: usize, text: &str) -> TransformSession {
 
 /// The transform bar over the test box, after `setup` (e.g. picking the W/H unit). Tall enough
 /// for the fields' unit menu to open below the bar unscrolled.
-fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
+pub(super) fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
     use egui_kittest::Harness;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
@@ -345,7 +345,7 @@ fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<
 }
 
 /// [`type_into_bar_field`] after `setup`.
-fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
+pub(super) fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
     use egui_kittest::kittest::Queryable;
     let mut h = bar_harness(setup);
     h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).unwrap().click();
@@ -879,11 +879,11 @@ fn split_tool_places_the_line_where_the_pointer_releases() {
     warp_pointer(&mut app, ToolEvent::Up { x: 14.0, y: 20.0 }, 2.0, mods);
     let us = knots(&app);
     let has = |ks: &[f64], u: f64| ks.iter().any(|k| (k - u).abs() < 0.02);
-    // The default grid's thirds stay; the release cuts the section that contains it.
-    assert!(has(&us, 0.25) && has(&us, 1.0 / 3.0) && has(&us, 2.0 / 3.0), "{us:?}");
+    // The release cuts the default grid where it is, in place of its vertical thirds.
+    assert!(us.len() == 3 && has(&us, 0.25), "{us:?}");
     let vs = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.as_ref().unwrap().vs.clone();
     assert!(has(&vs, 1.0 / 3.0) && has(&vs, 2.0 / 3.0), "horizontal sections stay: {vs:?}");
-    assert!(app.transform_preview.as_ref().unwrap().split_tool.is_some(), "the tool stays armed");
+    assert!(app.transform_preview.as_ref().unwrap().split_tool.is_none(), "one split ends the mode");
     // Option-click in the open places both lines, without a button armed.
     app.transform_preview.as_mut().unwrap().split_tool = None;
     let alt = egui::Modifiers::ALT;
@@ -939,7 +939,8 @@ fn split_of_a_grid_cuts_one_section_and_keeps_the_rest() {
 fn corner_drag_scales_proportionally_about_opposite_corner() {
     let mut s = session();
     drag(&mut s, [100.0, 50.0], [200.0, 60.0], egui::Modifiers::NONE);
-    assert!(close(s.quad, corners([0.0, 0.0, 200.0, 100.0])), "{:?}", s.quad);
+    // The pointer's projection onto the diagonal: (100·100 + 60·50) / (100² + 50²) = 1.84 (#11096).
+    assert!(close(s.quad, corners([0.0, 0.0, 184.0, 92.0])), "{:?}", s.quad);
     let mut s = session();
     drag(&mut s, [100.0, 50.0], [200.0, 60.0], egui::Modifiers::SHIFT);
     assert!(close(s.quad, corners([0.0, 0.0, 200.0, 60.0])), "shift = free: {:?}", s.quad);
@@ -1129,6 +1130,96 @@ fn a_refused_commit_keeps_the_box_open() {
     app.ui.tool = if app.ui.tool == Tool::Brush { Tool::Move } else { Tool::Brush };
     end_if_left(&mut app);
     assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "another tool ends it");
+}
+
+/// Image Processor must not silently export the pixels from before the visible transform.
+/// Both direct commands and dialog OK preserve the box and write nothing until it is settled.
+#[test]
+fn image_processor_document_sources_wait_for_the_transform() {
+    for source in ["current", "open"] {
+        for through_dialog in [false, true] {
+            for apply in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+                let output = tempfile::tempdir().unwrap();
+                begin(&mut app, &ctx).unwrap();
+                let t = app.ui.transform.as_mut().unwrap();
+                t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+                let quad = t.quad;
+                let before = app.session.active().unwrap().doc.clone();
+                let revision = app.session.active().unwrap().revision;
+                let history = app.session.active().unwrap().history.past_len();
+                let params = json!({"source": source, "output": output.path(), "format": "png"});
+                let result = if through_dialog {
+                    let reply = crate::menus::invoke(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+                    let id = reply["dialog"].as_u64().unwrap();
+                    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+                    fields.insert("source".into(), json!(source));
+                    fields.insert("output".into(), json!(output.path()));
+                    fields.insert("format".into(), json!("png"));
+                    crate::dialogs::confirm(&mut app, id)
+                } else {
+                    app.run("file.scripts.imageProcessor", params.clone())
+                };
+                assert_eq!(result.unwrap_err(), "Commit or cancel the transform first");
+                assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+                assert_eq!(app.ui.transform.as_ref().unwrap().quad, quad);
+                let st = app.session.active().unwrap();
+                assert!(Arc::ptr_eq(&st.doc, &before));
+                assert_eq!((st.revision, st.history.past_len()), (revision, history));
+                if apply {
+                    commit(&mut app);
+                } else {
+                    cancel(&mut app);
+                }
+                assert!(app.ui.transform.is_none());
+                let result = app.run("file.scripts.imageProcessor", params).unwrap();
+                assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+                assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+            }
+        }
+    }
+}
+
+/// Folder input, including the legacy omitted source, does not read the open transform.
+#[test]
+fn image_processor_folder_source_keeps_working_during_a_transform() {
+    for source in [None, Some("folder")] {
+        let ctx = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let input = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        app.run("file.saveACopy", json!({"path": input.path().join("source.png")})).unwrap();
+        begin(&mut app, &ctx).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let mut params = json!({"input": input.path(), "output": output.path(), "format": "png"});
+        if let Some(source) = source {
+            params["source"] = json!(source);
+        }
+        let result = app.run("file.scripts.imageProcessor", params).unwrap();
+        assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+        assert!(app.ui.transform.is_some());
+        assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+    }
+}
+
+/// All open documents includes a transform in another tab; Current only reads its own tab.
+#[test]
+fn image_processor_checks_the_transform_document_for_each_source() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.run("file.new", json!({"name": "Other", "width": 16, "height": 16})).unwrap();
+    assert!(app.session.set_active(0));
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.session.set_active(1));
+    let output = tempfile::tempdir().unwrap();
+    let result = app.run("file.scripts.imageProcessor", json!({"source": "open", "output": output.path(), "format": "png"}));
+    assert_eq!(result.unwrap_err(), "Commit or cancel the transform first");
+    assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+    let result = app.run("file.scripts.imageProcessor", json!({"source": "current", "output": output.path(), "format": "png"})).unwrap();
+    assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
 }
 
 /// #6737: Save for Web exports the committed document, so it is off while a box is pending.
@@ -2091,7 +2182,9 @@ fn the_aspect_link_decides_whether_handle_drags_keep_proportions() {
                 assert!((w - 32.0).abs() < 1e-6 && (h - 16.0).abs() < 1e-6, "{case}");
             } else {
                 assert_eq!((w - h).abs() < 1e-6, proportional, "{case}");
-                assert!((w - 32.0).abs() < 1e-6, "{case}");
+                // A proportional corner follows the projection onto its diagonal: (32·16 + 16·16) / (16² + 16²) = 1.5.
+                let want = if proportional && !at_edge { 24.0 } else { 32.0 };
+                assert!((w - want).abs() < 1e-6, "{case}");
             }
         }
     }
@@ -2144,7 +2237,7 @@ fn right_click_menu_offers_warp_for_a_path() {
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
 }
 
-fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
+pub(super) fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();
     app.sync_views();
@@ -3705,6 +3798,325 @@ fn applying_the_box_hides_no_pointer() {
     // The overlay draws no handles while the box is applied, so no drawn pointer either.
     assert_eq!(cursor(&app, &xf, [32.0, 32.0], cmd()), Some(CursorIcon::ResizeNwSe));
     assert_eq!(cursor(&app, &xf, [96.0, 32.0], cmd()), Some(CursorIcon::ResizeVertical));
+}
+
+// ---- Cylinder (#4112) ----
+
+fn cylinder_of(app: &PhotocraftApp) -> [f64; 7] {
+    cylinder_values(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap()).unwrap()
+}
+
+/// The Warp menu lists Cylinder after the presets, for everything but type (Warp Text has none).
+#[test]
+fn the_warp_menu_lists_cylinder_after_the_presets_except_on_type() {
+    let all: Vec<WarpStyle> = warp_style_options(false).collect();
+    assert_eq!(all.last(), Some(&WarpStyle::Cylinder));
+    assert_eq!(all.len(), WarpStyle::all().count() + 1);
+    assert!(all.contains(&WarpStyle::Custom) && all.contains(&WarpStyle::Twist));
+    let on_type: Vec<WarpStyle> = warp_style_options(true).collect();
+    assert!(!on_type.contains(&WarpStyle::Cylinder) && !on_type.contains(&WarpStyle::Custom));
+    assert!(on_type.contains(&WarpStyle::None) && on_type.contains(&WarpStyle::Arc));
+}
+
+/// The cylinder the menu starts with, as the reference starts it: its four corners on the box,
+/// both arcs half the half axis deep (a quarter of the width), so the lower one hangs below the
+/// box, and the wrap handle 15 % along its travel.
+#[test]
+fn the_warp_menus_cylinder_starts_on_the_box_corners() {
+    let b = [8.0, 8.0, 32.0, 32.0];
+    let w = cylinder_default(b).unwrap();
+    assert_eq!(w.style, WarpStyle::Cylinder);
+    let v = cylinder_values(&w).unwrap();
+    assert_eq!(&v[..6], &[8.0, 32.0, 32.0, 8.0, 0.5, 0.5]);
+    assert!((v[6] - 0.85).abs() < 1e-9, "{v:?}");
+    let wrap = cylinder_handles(&v)[4].0;
+    assert!((wrap[0] - (20.0 + 0.15 * 12.0)).abs() < 1e-9, "the wrap handle starts 15 % of the half axis right of the centre: {wrap:?}");
+    let cb = w.mesh.as_ref().unwrap().control_bounds();
+    assert!(cb[0] >= 8.0 - 1e-9 && cb[2] <= 32.0 + 1e-9 && cb[1] >= 8.0 - 1e-9, "{cb:?}");
+    assert!(cb[3] > 32.0 + 5.0, "the lower arc's front hangs about 6 px below the box: {cb:?}");
+    assert!(cylinder_default([0.0, 0.0, 0.0, 20.0]).is_none() && cylinder_default([0.0, 0.0, 20.0, 0.0]).is_none());
+    assert!(cylinder_values(&Warp::preset(WarpStyle::Arc, 50.0, b)).is_none(), "only a cylinder has values");
+}
+
+/// Five handles, as the reference shows: the top-right and bottom-left corners, the middle of
+/// each arc, and the wrap handle at the grid's centre, which slides right as the wrap goes down.
+#[test]
+fn cylinder_handles_are_two_corners_the_arcs_and_the_wrap() {
+    let v = [10.0, 40.0, 60.0, 10.0, 0.3, 0.2, 0.5];
+    let h = cylinder_handles(&v);
+    assert_eq!(h[0], ([60.0, 10.0], CylinderHandle::Corner(1)));
+    assert_eq!(h[1], ([10.0, 40.0], CylinderHandle::Corner(3)));
+    assert_eq!(h[2], ([35.0, 17.5], CylinderHandle::Bend));
+    assert_eq!(h[3], ([35.0, 45.0], CylinderHandle::Bottom));
+    assert_eq!(h[4], ([35.0 + 0.5 * 25.0, 31.25], CylinderHandle::Wrap), "midway between the arcs' fronts, half way along at wrap 0.5");
+    assert_eq!(cylinder_handles(&[10.0, 40.0, 60.0, 10.0, 0.3, 0.2, 1.0])[4].0, [35.0, 31.25], "at the centre at wrap 1");
+    assert_eq!(cylinder_handles(&[10.0, 40.0, 60.0, 10.0, 0.3, 0.2, 0.0])[4].0, [60.0, 31.25], "at the silhouette at wrap 0");
+    assert!(!h.iter().any(|(_, k)| matches!(k, CylinderHandle::Corner(0 | 2))), "no top-left or bottom-right corner");
+    // The arc handles sit where the mesh puts the front of each arc.
+    let w = Warp::cylinder(&v, [10.0, 10.0, 60.0, 40.0]).unwrap();
+    let m = w.mesh.clone().unwrap();
+    let front_top = m.eval(0.5, 0.0);
+    assert!((front_top[0] - 35.0).abs() < 1e-9 && (front_top[1] - 17.5).abs() < 1e-9, "{front_top:?}");
+    assert!((m.eval(0.5, 1.0)[1] - 45.0).abs() < 1e-9);
+    // A press: the nearest handle within reach, else the surface, else nothing.
+    assert_eq!(cylinder_hit(&w, [60.5, 10.5], 3.0), Some(CylinderHandle::Corner(1)));
+    assert_eq!(cylinder_hit(&w, [10.5, 39.0], 3.0), Some(CylinderHandle::Corner(3)));
+    assert_eq!(cylinder_hit(&w, [35.0, 18.0], 3.0), Some(CylinderHandle::Bend));
+    assert_eq!(cylinder_hit(&w, [35.0, 44.0], 3.0), Some(CylinderHandle::Bottom));
+    assert_eq!(cylinder_hit(&w, [47.0, 31.0], 3.0), Some(CylinderHandle::Wrap));
+    assert_eq!(cylinder_hit(&w, [11.0, 11.0], 3.0), Some(CylinderHandle::Surface), "the top-left corner is just surface");
+    assert_eq!(cylinder_hit(&w, [20.0, 30.0], 3.0), Some(CylinderHandle::Surface));
+    assert_eq!(cylinder_hit(&w, [90.0, 90.0], 3.0), None);
+    assert_eq!(cylinder_hit(&Warp::custom(m, w.bounds), [60.5, 10.5], 3.0), None, "only a cylinder has these handles");
+}
+
+#[test]
+fn cylinder_drags_set_its_values_and_keep_them_sound() {
+    let v = [10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5];
+    // A corner takes its silhouette and its edge along; the opposite corner stays put.
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(1), [2.0, 3.0]), [10.0, 40.0, 62.0, 13.0, 0.3, 0.3, 0.5]);
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(3), [-2.0, 3.0]), [8.0, 43.0, 60.0, 10.0, 0.3, 0.3, 0.5]);
+    // The bend handle follows the pointer and bends both arcs: 5 px down on a 25 px half axis
+    // is 0.2 deeper.
+    let d = cylinder_dragged(v, CylinderHandle::Bend, [0.0, 5.0]);
+    assert!((d[4] - 0.5).abs() < 1e-9 && (d[5] - 0.5).abs() < 1e-9, "{d:?}");
+    assert_eq!(&cylinder_dragged(v, CylinderHandle::Bend, [0.0, -100.0])[4..6], &[-1.0, -1.0], "clamped to the half axis");
+    // Unequal depths from a file keep their difference, and a press that doesn't move keeps a
+    // depth past the limit as it is.
+    let file = [10.0, 40.0, 60.0, 10.0, 1.4, 0.2, 0.5];
+    assert_eq!(cylinder_dragged(file, CylinderHandle::Bend, [0.0, 0.0]), file);
+    let d = cylinder_dragged(file, CylinderHandle::Bend, [0.0, -5.0]);
+    assert!((d[4] - 1.2).abs() < 1e-9 && (d[5] - 0.0).abs() < 1e-9, "{d:?}");
+    assert_eq!(cylinder_dragged(file, CylinderHandle::Bend, [0.0, 50.0])[4], 1.4, "no further than it already reaches");
+    // A move keeps the shape, however narrow the cylinder.
+    let narrow = [10.0, 40.0, 10.5, 10.0, 0.3, 0.3, 0.5];
+    assert_eq!(cylinder_dragged(narrow, CylinderHandle::Surface, [5.0, 0.0]), [15.0, 40.0, 15.5, 10.0, 0.3, 0.3, 0.5]);
+    // The bottom handle moves the lower edge; the arc keeps its depth.
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Bottom, [7.0, 6.0]), [10.0, 46.0, 60.0, 10.0, 0.3, 0.3, 0.5]);
+    // The wrap handle follows the pointer along the half axis: right stretches the middle (wrap down).
+    let d = cylinder_dragged(v, CylinderHandle::Wrap, [6.25, 0.0]);
+    assert!((d[6] - 0.25).abs() < 1e-9, "{d:?}");
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Wrap, [80.0, 0.0])[6], 0.0);
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Wrap, [-80.0, 0.0])[6], 1.0);
+    // The surface moves the whole cylinder.
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Surface, [5.0, -4.0]), [15.0, 36.0, 65.0, 6.0, 0.3, 0.3, 0.5]);
+    // The silhouettes never cross, nor do the edges: the one dragged stops just short of the other.
+    let d = cylinder_dragged(v, CylinderHandle::Corner(3), [70.0, -50.0]);
+    assert_eq!([d[0], d[2], d[1], d[3]], [59.0, 60.0, 11.0, 10.0]);
+    let d = cylinder_dragged(v, CylinderHandle::Corner(1), [-80.0, 60.0]);
+    assert_eq!([d[0], d[2], d[1], d[3]], [10.0, 11.0, 40.0, 39.0]);
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Bottom, [0.0, -80.0])[1], 11.0);
+    // Whatever the drag, the result is a cylinder the geometry accepts.
+    for h in [CylinderHandle::Corner(1), CylinderHandle::Corner(3), CylinderHandle::Bend, CylinderHandle::Bottom, CylinderHandle::Wrap, CylinderHandle::Surface]
+    {
+        assert!(Warp::cylinder(&cylinder_dragged(v, h, [-70.0, 30.0]), [10.0, 10.0, 60.0, 40.0]).is_some(), "{h:?}");
+    }
+}
+
+/// In Warp mode a cylinder's handles drag its values and the preview follows; Undo steps back
+/// through the drags; Enter commits the cylinder, which a smart object keeps as one with the
+/// dragged values, and Warp mode shows it again as a cylinder, whose untouched commit is no step.
+#[test]
+fn warp_mode_drags_a_cylinders_handles_and_commits_it_as_a_cylinder() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    let b = app.ui.transform.as_ref().unwrap().rect;
+    app.ui.transform.as_mut().unwrap().warp = Some(cylinder_default(b).unwrap());
+    track_steps(&mut app, &ctx);
+    let v0 = cylinder_of(&app);
+    let mods = egui::Modifiers::NONE;
+    // The bend handle, dragged 3 px down (a quarter of the 12 px half axis): both arcs bend more.
+    let bend = cylinder_handles(&v0)[2].0;
+    warp_pointer(&mut app, ToolEvent::Down { x: bend[0], y: bend[1], pressure: 1.0 }, 2.0, mods);
+    assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Bend, .. })));
+    warp_pointer(&mut app, ToolEvent::Move { x: bend[0], y: bend[1] + 3.0, pressure: 1.0 }, 2.0, mods);
+    let v = cylinder_of(&app);
+    assert!((v[4] - (v0[4] + 0.25)).abs() < 1e-9 && (v[5] - (v0[5] + 0.25)).abs() < 1e-9, "{v:?}");
+    // The preview is the mesh of the new values, and the warp is still a cylinder.
+    let w = app.ui.transform.as_ref().unwrap().warp.clone().unwrap();
+    assert_eq!(w.style, WarpStyle::Cylinder);
+    assert_eq!(w.mesh, Warp::cylinder(&v, b).unwrap().mesh);
+    assert!(w.mesh != Warp::cylinder(&v0, b).unwrap().mesh);
+    warp_pointer(&mut app, ToolEvent::Up { x: bend[0], y: bend[1] + 3.0 }, 2.0, mods);
+    assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
+    track_steps(&mut app, &ctx);
+    // The wrap handle, dragged 3 px right: a quarter of the 12 px half axis further along.
+    let wrap = cylinder_handles(&cylinder_of(&app))[4].0;
+    warp_pointer(&mut app, ToolEvent::Down { x: wrap[0], y: wrap[1], pressure: 1.0 }, 2.0, mods);
+    assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Wrap, .. })));
+    warp_pointer(&mut app, ToolEvent::Up { x: wrap[0] + 3.0, y: wrap[1] }, 2.0, mods);
+    assert!((cylinder_of(&app)[6] - 0.6).abs() < 1e-9, "{:?}", cylinder_of(&app));
+    assert!((cylinder_handles(&cylinder_of(&app))[4].0[0] - (wrap[0] + 3.0)).abs() < 1e-9, "the wrap handle followed the pointer");
+    track_steps(&mut app, &ctx);
+    // A drag on the surface moves the whole cylinder.
+    let before = cylinder_of(&app);
+    warp_pointer(&mut app, ToolEvent::Down { x: 14.0, y: 20.0, pressure: 1.0 }, 2.0, mods);
+    assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Surface, .. })));
+    warp_pointer(&mut app, ToolEvent::Up { x: 18.0, y: 22.0 }, 2.0, mods);
+    let moved = cylinder_of(&app);
+    assert_eq!([moved[0] - before[0], moved[2] - before[2], moved[1] - before[1], moved[3] - before[3]], [4.0, 4.0, 2.0, 2.0], "{moved:?}");
+    assert_eq!(&moved[4..], &before[4..], "the shape is unchanged");
+    track_steps(&mut app, &ctx);
+    // A press off the cylinder grabs nothing.
+    warp_pointer(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, 2.0, mods);
+    assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
+    warp_pointer(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, 2.0, mods);
+    // Undo and Redo step through the drags inside the session.
+    let _ = intercept(&mut app, "edit.undo");
+    assert_eq!(cylinder_of(&app), before, "undo takes back the move");
+    let _ = intercept(&mut app, "edit.undo");
+    assert!((cylinder_of(&app)[6] - 0.85).abs() < 1e-9, "undo takes back the wrap: {:?}", cylinder_of(&app));
+    let _ = intercept(&mut app, "edit.redo");
+    assert!((cylinder_of(&app)[6] - 0.6).abs() < 1e-9, "redo: {:?}", cylinder_of(&app));
+    let v = cylinder_of(&app);
+    let steps = app.session.active().unwrap().history.past_len();
+    commit(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), steps + 1, "one step");
+    let photocraft_doc::LayerContent::Smart(sm) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("smart") };
+    assert_eq!(sm.warp.as_ref().map(|w| w.style), Some(WarpStyle::Cylinder), "the smart object keeps a cylinder");
+    // Warp mode shows the same cylinder again, with its values, and Enter changes nothing.
+    begin_warp(&mut app, &ctx).unwrap();
+    let shown = app.ui.transform.as_ref().unwrap().warp.clone().unwrap();
+    assert_eq!(shown.style, WarpStyle::Cylinder);
+    for (a, b) in cylinder_values(&shown).unwrap().iter().zip(&v) {
+        assert!((a - b).abs() < 1e-6, "{shown:?} vs {v:?}");
+    }
+    let steps = app.session.active().unwrap().history.past_len();
+    commit(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "untouched: no step");
+}
+
+/// Warp mode on a smart object that already has a warp previews the source placed without it,
+/// over the warp box, so the mesh warps the picture once and it sits on the grid (#9798). The
+/// texels read when the box opened were the warped render, taller than the box by the lower
+/// arc's bulge; warping them again put the picture well inside the lines.
+#[test]
+fn warp_mode_previews_a_stored_smart_warp_from_the_unwarped_source() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
+    // The warped render reaches below the box.
+    let st = app.session.active().unwrap();
+    let warped = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+    assert!(warped.y1 > 36, "{warped:?}");
+    begin_warp(&mut app, &ctx).unwrap();
+    let t = app.ui.transform.as_ref().unwrap();
+    assert_eq!(t.rect, [8.0, 8.0, 32.0, 32.0]);
+    assert_eq!(t.warp.as_ref().map(|w| w.style), Some(WarpStyle::Cylinder));
+    let (img, _) = app.transform_preview.as_ref().unwrap().texture.level_image(0).unwrap();
+    assert_eq!(img.size, [24, 24], "the texels cover the box, not the warped render");
+    // Opaque to its corners: the flat square, not the cylinder's shape (whose corners are clear).
+    for (x, y) in [(0, 0), (23, 0), (0, 23), (23, 23), (12, 12)] {
+        assert_eq!(img.pixels[y * 24 + x].a(), 255, "texel {x},{y}");
+    }
+}
+
+/// Leaving Warp mode, and Undo back into Free Transform, show the render with the stored warp
+/// again (the texels the box opened with), and re-entering shows the source without it (#9798).
+#[test]
+fn leaving_warp_mode_restores_the_stored_warps_render() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let texels = |app: &PhotocraftApp| app.transform_preview.as_ref().unwrap().texture.level_image(0).unwrap().0.size;
+    let rect = |app: &PhotocraftApp| app.ui.transform.as_ref().unwrap().rect;
+    let (warped, box0) = (texels(&app), rect(&app));
+    assert!(warped[1] > 24 && box0[3] > 32.0, "the render with the warp hangs below the box: {warped:?} {box0:?}");
+    enter_warp(&mut app, &ctx);
+    track_steps(&mut app, &ctx);
+    assert_eq!((texels(&app), rect(&app)), ([24, 24], [8.0, 8.0, 32.0, 32.0]), "the source over the warp box");
+    leave_warp(&mut app);
+    track_steps(&mut app, &ctx);
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    assert_eq!((texels(&app), rect(&app)), (warped, box0), "back to the render with the warp");
+    enter_warp(&mut app, &ctx);
+    track_steps(&mut app, &ctx);
+    assert_eq!((texels(&app), rect(&app)), ([24, 24], [8.0, 8.0, 32.0, 32.0]), "and back again, without a re-render");
+    let _ = intercept(&mut app, "edit.undo");
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    assert_eq!((texels(&app), rect(&app)), (warped, box0), "undo into Free Transform");
+    let _ = intercept(&mut app, "edit.redo");
+    assert_eq!((texels(&app), rect(&app)), ([24, 24], [8.0, 8.0, 32.0, 32.0]), "redo into Warp");
+    leave_warp(&mut app);
+    assert_eq!((texels(&app), rect(&app)), (warped, box0), "leaving after a redo");
+}
+
+/// A cylinder on a pixel layer commits as previewed: the pixels wrap round between the
+/// silhouettes and the ones on the back are hidden.
+#[test]
+fn a_cylinder_commits_the_wrapped_pixels() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    begin_warp(&mut app, &egui::Context::default()).unwrap();
+    let b = app.ui.transform.as_ref().unwrap().rect;
+    // Silhouettes pulled in to x 12..28: the square's outer columns go round the back.
+    let w = Warp::cylinder(&[12.0, 29.0, 28.0, 8.0, 0.25, 0.25, 0.5], b).unwrap();
+    app.ui.transform.as_mut().unwrap().warp = Some(w.clone());
+    commit(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let s = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    let alpha = |x: i32, y: i32| {
+        let mut p = [0.0f32; 4];
+        s.read_pixel(x, y, &mut p);
+        p[3]
+    };
+    assert!(alpha(20, 20) > 0.99, "the front is covered: {}", alpha(20, 20));
+    assert!(alpha(9, 20) < 0.01 && alpha(31, 20) < 0.01, "nothing outside the silhouettes: {} {}", alpha(9, 20), alpha(31, 20));
+    // The upper arc's front dips below the top edge at the centre, so the top row there is clear.
+    assert!(alpha(20, 9) < 0.2, "the top bows down in the middle: {}", alpha(20, 9));
+    assert!(alpha(13, 9) > 0.5, "and stays up at the silhouettes: {}", alpha(13, 9));
+}
+
+#[test]
+fn cylinder_cursors_point_along_their_handles() {
+    let w = Warp::cylinder(&[10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5], [10.0, 10.0, 60.0, 40.0]).unwrap();
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let level = ViewXform { rect: screen, zoom: 1.0, center: [35.0, 25.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert_eq!(cylinder_cursor(&w, [60.0, 10.0], 3.0, &level), CursorIcon::ResizeNeSw);
+    assert_eq!(cylinder_cursor(&w, [10.0, 40.0], 3.0, &level), CursorIcon::ResizeNeSw);
+    assert_eq!(cylinder_cursor(&w, [35.0, 17.5], 3.0, &level), CursorIcon::ResizeVertical);
+    assert_eq!(cylinder_cursor(&w, [35.0, 47.5], 3.0, &level), CursorIcon::ResizeVertical);
+    let wrap = cylinder_handles(&cylinder_values(&w).unwrap())[4].0;
+    assert_eq!(cylinder_cursor(&w, wrap, 3.0, &level), CursorIcon::ResizeHorizontal);
+    assert_eq!(cylinder_cursor(&w, [20.0, 30.0], 3.0, &level), CursorIcon::Move);
+    assert_eq!(cylinder_cursor(&w, [90.0, 90.0], 3.0, &level), CursorIcon::Default);
+    // The arrows turn with the view.
+    let turned = ViewXform { rotation: 90.0, ..level };
+    assert_eq!(cylinder_cursor(&w, wrap, 3.0, &turned), CursorIcon::ResizeVertical);
+    assert_eq!(cylinder_cursor(&w, [35.0, 17.5], 3.0, &turned), CursorIcon::ResizeHorizontal);
+    // Through the transform tool's cursor, a cylinder is never a split: its surface moves it.
+    let mut app = app_with_square(128, photocraft_geom::Rect::new(8, 8, 104, 104));
+    begin_warp(&mut app, &egui::Context::default()).unwrap();
+    let b = app.ui.transform.as_ref().unwrap().rect;
+    app.ui.transform.as_mut().unwrap().warp = Some(cylinder_default(b).unwrap());
+    app.transform_preview.as_mut().unwrap().split_tool = Some(SplitTool::Cross);
+    let xf = ViewXform { center: [56.0, 56.0], ..level };
+    assert_eq!(cursor(&app, &xf, [30.0, 56.0], cmd()), Some(CursorIcon::Move));
+}
+
+/// The Warp bar keeps Bend, H and V for a cylinder, greyed like Split, Grid and the orientation
+/// switch: its handles are its only controls, as in the reference.
+#[test]
+fn the_warp_bar_greys_its_fields_for_a_cylinder() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let h = bar_harness(|app| {
+        let t = app.ui.transform.as_mut().unwrap();
+        t.warp = Some(cylinder_default(t.rect).unwrap());
+    });
+    // A field's caption and the field itself share the label: every match is greyed.
+    for name in ["Bend:", "H:", "V:", "Split Warp Crosswise", "Change warp orientation"] {
+        let nodes: Vec<_> = h.get_all_by_label(name).collect();
+        assert!(!nodes.is_empty() && nodes.iter().all(|n| n.accesskit_node().is_disabled()), "{name} is greyed");
+    }
+    assert!(h.query_by_label("Top depth").is_none() && h.query_by_label("Wrap").is_none(), "no cylinder fields");
 }
 
 #[test]

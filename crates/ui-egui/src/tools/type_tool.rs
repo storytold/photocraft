@@ -135,6 +135,8 @@ mod vertical_align_buttons_tests;
 
 #[cfg(test)]
 mod canvas_tests;
+#[cfg(test)]
+mod ctrl_period_cancel_tests;
 
 #[cfg(test)]
 mod font_commit_tests;
@@ -142,6 +144,8 @@ mod font_commit_tests;
 mod font_picker_tests;
 #[cfg(test)]
 mod options_tooltips_tests;
+#[cfg(test)]
+mod panels_toggle_tests;
 
 #[cfg(test)]
 mod tests;
