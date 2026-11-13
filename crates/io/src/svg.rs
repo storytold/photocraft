@@ -36,68 +36,14 @@ const MAX_RASTER_PIXELS: u64 = 24_000_000;
 /// decompression that the destination pixmap's size check never sees.
 const MAX_EMBEDDED_IMAGE_BYTES: u64 = MAX_RASTER_PIXELS * 4;
 
-/// The IHDR width/height of a PNG, read directly from its header (no decoding): the signature
-/// (8 bytes), the IHDR chunk's length and type (8 bytes), then big-endian width and height.
-fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    let sig = data.get(0..8)?;
-    if sig != [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
-        return None;
-    }
-    if data.get(12..16)? != b"IHDR" {
-        return None;
-    }
-    let w = u32::from_be_bytes(data.get(16..20)?.try_into().ok()?);
-    let h = u32::from_be_bytes(data.get(20..24)?.try_into().ok()?);
-    Some((w, h))
-}
-
-/// Intrinsic dimensions of a raster image resvg can embed, from its header alone, for formats
-/// where decoding allocates the full image before any destination scaling (PNG, WebP).
-/// Returns `Some(Some((w, h)))` when the format is PNG/WebP and its header parses cleanly,
-/// `Some(None)` when the format is PNG/WebP (by MIME or magic bytes under `"text/plain"`)
-/// and its header is malformed, or `None` for other formats.
-/// A JPEG's size from its frame header (the first SOF marker), without decoding anything.
-fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    let mut i = 2;
-    loop {
-        if *data.get(i)? != 0xFF {
-            return None;
-        }
-        let marker = *data.get(i + 1)?;
-        match marker {
-            0xFF => i += 1,
-            // SOF0..SOF15, but for DHT (C4), JPG (C8) and DAC (CC).
-            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
-                let h = u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]);
-                let w = u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]);
-                return Some((u32::from(w), u32::from(h)));
-            }
-            // Start of scan or end of image before any frame header.
-            0xD8..=0xDA => return None,
-            0x01 | 0xD0..=0xD7 => i += 2,
-            _ => i += 2 + usize::from(u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?])),
-        }
-    }
-}
-
 fn embedded_image_dimensions(mime: &str, data: &[u8]) -> Option<Option<(u32, u32)>> {
-    match mime {
-        "image/png" => Some(png_dimensions(data)),
-        "image/webp" | "image/gif" => Some(photocraft_codecs::probe_size(data).ok()),
-        "image/jpeg" | "image/jpg" => Some(jpeg_dimensions(data)),
-        "text/plain" => {
-            if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
-                Some(png_dimensions(data))
-            } else if (data.get(0..4) == Some(b"RIFF") && data.get(8..12) == Some(b"WEBP")) || data.starts_with(b"GIF8") {
-                Some(photocraft_codecs::probe_size(data).ok())
-            } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                Some(jpeg_dimensions(data))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    let mime_supports_raster = matches!(mime, "image/png" | "image/webp" | "image/gif" | "image/jpeg" | "image/jpg");
+    let plain_text_has_raster = mime == "text/plain"
+        && matches!(
+            photocraft_codecs::detect(data),
+            Some(photocraft_codecs::Format::Png | photocraft_codecs::Format::WebP | photocraft_codecs::Format::Gif | photocraft_codecs::Format::Jpeg)
+        );
+    if mime_supports_raster || plain_text_has_raster { Some(photocraft_codecs::probe_allocation_size(data).ok()) } else { None }
 }
 /// Aggregate memory for retained fallback surfaces in the document's pixel format.
 const MAX_PIXEL_BYTES: u64 = 1 << 30;
@@ -606,83 +552,6 @@ fn charge_image(budget: &Mutex<ImageBudget>, width: usize, height: usize) -> boo
     }
 }
 
-/// The size declared by a GIF's first image descriptor, skipping extension blocks with checked
-/// offsets; `None` when the stream is truncated or malformed.
-///
-/// A GIF's first frame can exceed its logical screen. resvg allocates the frame's RGBA buffer,
-/// so inspect its descriptor too, without reading any LZW pixels.
-fn gif_frame_size(bytes: &[u8]) -> Option<(usize, usize)> {
-    let packed = *bytes.get(10)?;
-    let table = if packed & 0x80 != 0 { 3usize.checked_mul(1usize.checked_shl(u32::from((packed & 7) + 1))?)? } else { 0 };
-    let mut at = 13usize.checked_add(table)?;
-    loop {
-        match *bytes.get(at)? {
-            0x2c => {
-                let word = |offset: usize| -> Option<usize> {
-                    let pair: [u8; 2] = bytes.get(at.checked_add(offset)?..at.checked_add(offset)?.checked_add(2)?)?.try_into().ok()?;
-                    Some(usize::from(u16::from_le_bytes(pair)))
-                };
-                return Some((word(5)?, word(7)?));
-            }
-            0x21 => {
-                at = at.checked_add(2)?;
-                loop {
-                    let length = usize::from(*bytes.get(at)?);
-                    at = at.checked_add(1)?;
-                    if length == 0 {
-                        break;
-                    }
-                    bytes.get(at..at.checked_add(length)?)?;
-                    at = at.checked_add(length)?;
-                }
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// Widen `dimensions` to the largest frame declared by the WebP RIFF `chunks` (VP8/VP8L
-/// bitstreams and one level of ANMF animation frames); `None` when a chunk is malformed.
-///
-/// VP8X declares a container canvas, while a malformed lossy VP8 chunk may declare a larger
-/// frame which the downstream decoder allocates before comparing it with that canvas.
-fn webp_frame_sizes(chunks: &[u8], dimensions: &mut (usize, usize), nested: bool) -> Option<()> {
-    let mut at = 0usize;
-    while at < chunks.len() {
-        let header = chunks.get(at..at.checked_add(8)?)?;
-        let length = usize::try_from(u32::from_le_bytes(header.get(4..8)?.try_into().ok()?)).ok()?;
-        let from = at.checked_add(8)?;
-        let end = from.checked_add(length)?;
-        let payload = chunks.get(from..end)?;
-        match header.get(..4)? {
-            b"VP8 " | b"VP8L" => {
-                let mut probe = b"RIFF\0\0\0\0WEBP".to_vec();
-                probe.extend_from_slice(header);
-                probe.extend_from_slice(payload.get(..payload.len().min(10))?);
-                let size = imagesize::blob_size(&probe).ok()?;
-                dimensions.0 = dimensions.0.max(size.width);
-                dimensions.1 = dimensions.1.max(size.height);
-            }
-            b"ANMF" if !nested => {
-                let word = |at: usize| -> Option<usize> {
-                    let bytes: [u8; 3] = payload.get(at..at.checked_add(3)?)?.try_into().ok()?;
-                    usize::try_from(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0]).checked_add(1)?).ok()
-                };
-                dimensions.0 = dimensions.0.max(word(6)?);
-                dimensions.1 = dimensions.1.max(word(9)?);
-                webp_frame_sizes(payload.get(16..)?, dimensions, true)?;
-            }
-            b"ANMF" => return None,
-            _ => {}
-        }
-        at = end.checked_add(length & 1)?;
-        if at > chunks.len() {
-            return None;
-        }
-    }
-    Some(())
-}
-
 /// usvg's data-URL image resolver with budgets: nested SVG images are parsed with the same
 /// budget up to [`MAX_EMBEDDED_SVG_DEPTH`] and within the `xml_left` levels of XML nesting the
 /// drawing left them, and PNG/JPEG/GIF/WebP images are charged their largest declared frame
@@ -722,25 +591,17 @@ fn bounded_data_image(
             format,
             Some(photocraft_codecs::Format::Png | photocraft_codecs::Format::Jpeg | photocraft_codecs::Format::Gif | photocraft_codecs::Format::WebP)
         );
-        let size = supported.then(|| imagesize::blob_size(&data).ok()).flatten();
-        let Some(size) = size else { return unreadable_image(budget, "embedded SVG image has unsupported or invalid raster data") };
-        let mut dimensions = (size.width, size.height);
-        if format == Some(photocraft_codecs::Format::Gif) {
-            let Some(frame) = gif_frame_size(&data) else { return unreadable_image(budget, "can't read embedded GIF frame dimensions") };
-            dimensions = (dimensions.0.max(frame.0), dimensions.1.max(frame.1));
-        }
-        if format == Some(photocraft_codecs::Format::WebP) && data.get(12..).and_then(|chunks| webp_frame_sizes(chunks, &mut dimensions, false)).is_none() {
-            return unreadable_image(budget, "can't read embedded WebP frame dimensions");
-        }
+        let dimensions = supported.then(|| photocraft_codecs::probe_allocation_size(&data).ok()).flatten();
+        let Some((width, height)) = dimensions else { return unreadable_image(budget, "embedded SVG image has unsupported or invalid raster data") };
         // usvg's resolver only wraps the bytes (resvg decodes them when drawing): an image under
         // a MIME type it doesn't know, or with no pixels, is left out uncharged, as usvg would.
         let Some(image) = (usvg::ImageHrefResolver::default_data_resolver())(mime, data, options) else {
             return unreadable_image(budget, "embedded SVG raster image has an unsupported MIME type");
         };
-        if dimensions.0 == 0 || dimensions.1 == 0 {
+        if width == 0 || height == 0 {
             return unreadable_image(budget, "embedded SVG image has no pixels");
         }
-        if !charge_image(budget, dimensions.0, dimensions.1) {
+        if !charge_image(budget, width as usize, height as usize) {
             return None;
         }
         Some(image)
