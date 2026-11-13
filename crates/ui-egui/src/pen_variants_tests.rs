@@ -494,3 +494,119 @@ fn the_pen_does_not_carry_on_a_work_path_hidden_by_make_selection() {
     assert_eq!(anchors(&saved.path), [vec![[150.0, 150.0], [200.0, 150.0], [200.0, 190.0]]], "the saved path carried on");
     assert_eq!(anchors(&work_path(&app)).len(), 1, "the hidden Work Path untouched");
 }
+
+/// #9356: in Shape mode a Pen press on an endpoint of the selected shape layer's open path carries
+/// that path on, from either end, and the commit updates the same layer in one History step
+/// instead of making a new shape layer. Elsewhere the press starts a new shape as before.
+#[test]
+fn shape_mode_carries_on_the_selected_shapes_open_path() {
+    let mut app = app(Tool::Pen);
+    app.ui.tool_options.vector_mode = "shape".into();
+    let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layers.len();
+    let shape = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            LayerContent::Shape(sh) => {
+                sh.path.subpaths.iter().map(|s| s.knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect::<Vec<_>>()).collect::<Vec<_>>()
+            }
+            other => panic!("not a shape layer: {other:?}"),
+        }
+    };
+    let steps = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 80.0, 20.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let (n, before) = (layers(&app), steps(&app));
+    assert!(crate::vector_ui::continues_path_at(&app, Tool::Pen, 81.0, 21.0), "the continue pointer over the endpoint");
+    assert!(!crate::vector_ui::continues_path_at(&app, Tool::Pen, 50.0, 20.0), "not mid-segment");
+    click(&mut app, 80.0, 20.0);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(layers(&app), n, "no new shape layer");
+    assert_eq!(steps(&app), before + 1, "one History step");
+    assert_eq!(shape(&app), [vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0]]]);
+    // From the first anchor, reversed.
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 20.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(shape(&app), [vec![[80.0, 80.0], [80.0, 20.0], [20.0, 20.0], [20.0, 80.0]]]);
+    // Anywhere else: a new shape layer.
+    click(&mut app, 150.0, 150.0);
+    click(&mut app, 200.0, 150.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(layers(&app), n + 1);
+}
+
+/// #9356: with a vector mask targeted, the Pen carries on the mask's open subpath in place.
+#[test]
+fn a_targeted_vector_mask_carries_on_its_open_path() {
+    let mut app = app(Tool::Pen);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let open = json!({"subpaths": [{"closed": false, "knots": [{"anchor": [20.0, 20.0]}, {"anchor": [80.0, 20.0]}]}]});
+    app.run("layer.vectorMask.add", json!({"layer": id.0, "path": open})).unwrap();
+    app.ui.vector_mask_target = true;
+    let mask = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let p = &st.doc.layer(id).unwrap().vector_mask.as_ref().unwrap().path;
+        p.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>()
+    };
+    assert_eq!(mask(&app), [2]);
+    click(&mut app, 80.0, 20.0);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(mask(&app), [3], "the same subpath, extended");
+}
+
+/// #9396 review: on a short open path whose two ends are both within reach of the pointer (as
+/// when zoomed out), the press under the continue-path pointer carries the nearer end on and never
+/// closes the path, which it did when the other end was its first anchor.
+#[test]
+fn a_press_in_reach_of_both_ends_carries_the_nearer_one_on_and_does_not_close() {
+    let mut app = app(Tool::Pen);
+    assert_eq!(app.point_zoom(), 1.0, "a 6 px reach in document pixels");
+    // The ends sit beside the first segment, which Auto Add/Delete would put an anchor on.
+    app.ui.tool_options.pen_auto_add_delete = false;
+    for (x, y) in [(20.0, 20.0), (60.0, 20.0), (60.0, 40.0), (26.0, 22.0)] {
+        click(&mut app, x, y);
+    }
+    crate::vector_ui::pen_commit(&mut app, false);
+    let ends = |app: &PhotocraftApp| {
+        let pen = app.ui.pen.as_ref().expect("a resumed draft");
+        assert!(pen.resumes.is_some(), "{pen:?}");
+        pen.knots.last().map(|k| k[0])
+    };
+    // (24, 22): 2 px from the last anchor, 4.5 px from the first.
+    assert!(crate::vector_ui::continues_path_at(&app, Tool::Pen, 24.0, 22.0));
+    click(&mut app, 24.0, 22.0);
+    assert!(!work_path(&app).subpaths[0].closed, "the press carried the path on, it did not close it");
+    assert_eq!(ends(&app), Some([26.0, 22.0]), "from the nearer, last anchor");
+    click(&mut app, 100.0, 100.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let sub = &work_path(&app).subpaths[0];
+    assert!(!sub.closed && sub.knots.len() == 5 && sub.knots[4].anchor.x == 100.0, "{sub:?}");
+    // (21, 20): 1 px from the first anchor, 5.4 px from the last: carried on from the first.
+    click(&mut app, 21.0, 20.0);
+    assert!(!work_path(&app).subpaths[0].closed);
+    assert_eq!(ends(&app), Some([20.0, 20.0]), "from the nearer, first anchor");
+}
+
+/// #9396 review: with the ends of two open subpaths both within reach, the press carries on the
+/// subpath whose end is nearest the pointer, not the first one listed.
+#[test]
+fn a_press_in_reach_of_two_subpaths_ends_carries_the_nearest_on() {
+    let mut app = app(Tool::Pen);
+    assert_eq!(app.point_zoom(), 1.0, "a 6 px reach in document pixels");
+    app.ui.tool_options.pen_auto_add_delete = false;
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 60.0, 20.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    click(&mut app, 100.0, 100.0);
+    click(&mut app, 64.0, 22.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(work_path(&app).subpaths.len(), 2, "two open subpaths");
+    // (63, 21): 3.2 px from the first subpath's last anchor, 1.4 px from the second's.
+    click(&mut app, 63.0, 21.0);
+    let pen = app.ui.pen.as_ref().expect("a resumed draft");
+    assert_eq!(pen.resumes.as_ref().map(|r| r.index), Some(1), "{pen:?}");
+    assert_eq!(pen.knots.last().map(|k| k[0]), Some([64.0, 22.0]), "from the second subpath's nearer end");
+}
