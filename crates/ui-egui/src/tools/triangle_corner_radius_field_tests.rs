@@ -73,6 +73,14 @@ fn knots(app: &PhotocraftApp) -> usize {
     sh.path.subpaths[0].knots.len()
 }
 
+/// The anchor points of the active shape layer's outline.
+fn anchors(app: &PhotocraftApp) -> Vec<(f64, f64)> {
+    let st = app.session.active().unwrap();
+    let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    let LayerContent::Shape(sh) = &l.content else { panic!("not a shape layer") };
+    sh.path.subpaths[0].knots.iter().map(|k| (k.anchor.x, k.anchor.y)).collect()
+}
+
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     let mods = egui::Modifiers::NONE;
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
@@ -146,10 +154,17 @@ fn the_next_triangle_dragged_takes_the_radius() {
     app.ui.tool_options.triangle_corner_radius = 20.0;
     drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
     match live(&app) {
-        LiveShape::Polygon { sides, corner_radius, .. } => assert_eq!((sides, corner_radius), (3, 20.0)),
-        other => panic!("not a polygon: {other:?}"),
+        LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 20.0),
+        other => panic!("not a triangle: {other:?}"),
     }
     assert_eq!(knots(&app), 6, "two anchors per rounded corner");
+    // The arcs' ends on the triangle that fills the 400,300 to 600,400 box (#13350).
+    let want = [(485.858, 314.142), (514.142, 314.142), (565.858, 365.858), (551.716, 400.0), (448.284, 400.0), (434.142, 365.858)];
+    let got = anchors(&app);
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(want) {
+        assert!((g.0 - w.0).abs() < 1e-3 && (g.1 - w.1).abs() < 1e-3, "{got:?}");
+    }
 }
 
 #[test]
@@ -158,8 +173,8 @@ fn a_zero_radius_draws_a_sharp_triangle() {
     app.ui.tool = Tool::Triangle;
     drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
     match live(&app) {
-        LiveShape::Polygon { sides, corner_radius, .. } => assert_eq!((sides, corner_radius), (3, 0.0)),
-        other => panic!("not a polygon: {other:?}"),
+        LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 0.0),
+        other => panic!("not a triangle: {other:?}"),
     }
     assert_eq!(knots(&app), 3, "one anchor per sharp corner");
 }
@@ -189,7 +204,7 @@ fn the_create_triangle_dialog_starts_from_the_radius() {
     assert_eq!(d.fields.get("cornerRadius").and_then(|v| v.as_f64()), Some(15.0));
     crate::dialogs::confirm(&mut app, id).unwrap();
     match live(&app) {
-        LiveShape::Polygon { sides, corner_radius, .. } => assert_eq!((sides, corner_radius), (3, 15.0)),
-        other => panic!("not a polygon: {other:?}"),
+        LiveShape::Triangle { corner_radius, .. } => assert_eq!(corner_radius, 15.0),
+        other => panic!("not a triangle: {other:?}"),
     }
 }

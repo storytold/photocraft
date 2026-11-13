@@ -289,7 +289,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 corner_radius,
                 triangle_corner_radius,
                 polygon_sides,
-                line_weight
+                line_weight,
+                align_edges,
             )
         }
         Tool::Rectangle | Tool::EllipseShape | Tool::Polygon | Tool::Star | Tool::CustomShape => {
@@ -302,6 +303,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 shape_fill_gradient,
                 shape_stroke_gradient,
                 corner_radius,
+                align_edges,
                 polygon_sides,
                 line_weight
             )
