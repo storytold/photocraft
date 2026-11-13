@@ -31,8 +31,10 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             return;
         }
         let (density, feather) = (mask.density, mask.feather);
-        sliders(app, ui, layer.id.0, document, "layer.layerMask.edit", "pixel-mask", density, feather);
-        refine_row(app, ui);
+        crate::props_layout::control_group(ui, |ui| {
+            sliders(app, ui, layer.id.0, document, "layer.layerMask.edit", "pixel-mask", density, feather);
+            refine_row(app, ui);
+        });
     });
 }
 
@@ -45,7 +47,9 @@ pub fn vector_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Lay
             return;
         }
         let (density, feather) = (vm.density, vm.feather);
-        sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "vector-mask", density, feather);
+        crate::props_layout::control_group(ui, |ui| {
+            sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "vector-mask", density, feather);
+        });
     });
 }
 
@@ -62,7 +66,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Laye
             return;
         }
         let (density, feather) = (sh.density, sh.feather);
-        sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "shape-mask", density, feather);
+        crate::props_layout::control_group(ui, |ui| {
+            sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "shape-mask", density, feather);
+        });
     });
 }
 
@@ -119,7 +125,8 @@ fn refine_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(theme::ROW_GAP / 2.0);
     let avail = ui.available_width();
     // Two buttons to a row in a wide panel, as Quick Actions do; a narrow one stacks them.
-    let cols = if avail >= 360.0 { 2 } else { 1 };
+    let labels: Vec<_> = refine.iter().map(|(label, _)| *label).collect();
+    let cols = crate::props_layout::action_columns(ui, &labels);
     for row in refine.chunks(cols) {
         // A short last row (or a lone button) still spans the panel.
         let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
@@ -128,7 +135,7 @@ fn refine_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             for &(label, id) in row {
                 // Greyed when its command can't run, by the same rule as the menu item.
                 let enabled = crate::menus::is_enabled(app, id);
-                if ui.add_enabled_ui(enabled, |ui| widgets::secondary_button(ui, label, w).clicked()).inner {
+                if ui.add_enabled_ui(enabled, |ui| widgets::fitted_secondary_button(ui, label, w).clicked()).inner {
                     let params = if id == INVERT { json!({"target": "mask"}) } else { json!({}) };
                     if let Err(error) = crate::menus::invoke(app, ui.ctx(), id, params) {
                         app.ui.status = error;

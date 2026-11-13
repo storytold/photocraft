@@ -141,7 +141,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     opts.extend(photocraft_engine::artboard_cmds::PRESETS.iter().map(|(n, _, _)| (n.to_string(), *n)));
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Size")).color(t.text_dim).size(12.0));
-        if crate::widgets::dropdown(ui, &key("preset"), tl!("Preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
+        if crate::widgets::dropdown(ui, &key("preset"), tl!("Preset"), &mut preset, &opts, ui.available_width().min(150.0)) && !preset.is_empty() {
             edit = Some(json!({"layer": layer.id.0, "preset": preset}));
         }
     });

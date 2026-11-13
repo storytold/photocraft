@@ -5,7 +5,7 @@
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -29,18 +29,36 @@ fn harness(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static,
 /// Clicks the swatch called `label` (a colour button), answers the Color Picker it opens with
 /// [`PICKED`], and returns the picker's title. Panics when no Color Picker opens.
 fn pick(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> String {
-    // Panels scroll: bring the swatch into view first.
+    // Panels scroll: bring the swatch into view and let scrolling settle before clicking.
     h.get_by_role_and_label(Role::ColorWell, label).scroll_to_me();
-    h.run_steps(2);
-    h.get_by_role_and_label(Role::ColorWell, label).click();
-    answer(h, label)
+    let mut previous = None;
+    for _ in 0..64 {
+        h.step();
+        let Some(swatch) = h.query_by_role_and_label(Role::ColorWell, label) else {
+            previous = None;
+            continue;
+        };
+        let rect = swatch.rect();
+        let swatch_id = swatch.accesskit_node().locate().0;
+        if previous == Some(rect) && h.ctx.interaction_snapshot(|state| state.hovered.iter().any(|id| id.accesskit_id() == swatch_id)) {
+            swatch.click();
+            return answer(h, label);
+        }
+        swatch.hover();
+        previous = Some(rect);
+    }
+    panic!("the {label} swatch did not settle in view within 64 steps (last bounds {previous:?})");
 }
 
 /// Answers the Color Picker a swatch click just opened with [`PICKED`]; returns its title.
 fn answer(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> String {
     let fg = h.state().session.tools.foreground;
-    h.run_steps(4);
-    let id = crate::color_picker_ui::top(h.state()).unwrap_or_else(|| panic!("the {label} swatch opens the Color Picker"));
+    let id = (0..64)
+        .find_map(|_| {
+            h.step();
+            crate::color_picker_ui::top(h.state())
+        })
+        .unwrap_or_else(|| panic!("the {label} swatch did not open the Color Picker within 64 steps"));
     assert!(!egui::Popup::is_any_open(&h.ctx), "{label}: no egui colour popup");
     let title = h.state().ui.dialogs.iter().find(|d| d.id == id).and_then(|d| d.fields.get("__label")).and_then(Value::as_str).unwrap_or("").to_string();
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(PICKED));
