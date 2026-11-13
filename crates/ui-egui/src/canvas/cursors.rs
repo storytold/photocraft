@@ -376,22 +376,22 @@ pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: e
 fn sampled_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
     // Pixel picks preserve native CMYK inks alongside display RGB.
     // Masks and scalar targets keep their grayscale sampling path.
-    if eyedropper_mask_source(app).is_none()
-        && super::paint_target(app) == json!("pixels")
-    {
+    if eyedropper_mask_source(app).is_none() && super::paint_target(app) == json!("pixels") {
         let layers = app.ui.tool_options.eyedropper_sample.clone();
 
         if let Some((rgb, inks)) = sampled_cmyk_color(app, x, y, &layers) {
             let key = if mods.alt { "background" } else { "foreground" };
             let ink_key = format!("{key}Cmyk");
 
-            return app.run(
-                "tools.setColors",
-                json!({
-                    key: [rgb[0], rgb[1], rgb[2], 1.0],
-                    ink_key: inks
-                }),
-            ).is_ok();
+            return app
+                .run(
+                    "tools.setColors",
+                    json!({
+                        key: [rgb[0], rgb[1], rgb[2], 1.0],
+                        ink_key: inks
+                    }),
+                )
+                .is_ok();
         }
     }
     let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
