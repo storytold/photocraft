@@ -68,6 +68,9 @@ pub(super) fn from_svg(bytes: &[u8]) -> Result<Clip> {
         source: None,
         // An image from another app came from no artboard.
         board: None,
+        // SVG colours are sRGB (as `prepare` tags them), so a plain Paste converts the mirror
+        // into the document's profile like Paste As Pixels does.
+        profile: Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
     })
 }
 

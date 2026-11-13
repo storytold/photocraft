@@ -157,7 +157,9 @@ impl PlaceSteps {
                 self.input.name
             )));
         }
-        let src = imported.document;
+        let mut src = imported.document;
+        // In the document's colours, as the smart object renders its source later.
+        crate::smart_cmds::source_into_profile(&mut src, &self.input.dest)?;
         let (w, h) = (src.size.width as f64, src.size.height as f64);
         let (cw, ch) = self.input.canvas;
         let p = &self.input.params;

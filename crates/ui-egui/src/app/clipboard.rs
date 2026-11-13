@@ -1,9 +1,17 @@
 use super::PhotocraftApp;
 
-fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
+/// `icc`, the profile an image from another app is in, counts too: the same pixels in another
+/// profile are another image. Our own exports carry none, so they still match when read back.
+fn clip_signature(w: u32, h: u32, px: &[u8], icc: Option<&[u8]>) -> u64 {
+    use std::hash::{Hash, Hasher};
     let mut sig = (w as u64) << 32 | h as u64;
     for b in px.iter().step_by(997) {
         sig = sig.rotate_left(5) ^ *b as u64;
+    }
+    if let Some(icc) = icc {
+        let mut h = std::hash::DefaultHasher::new();
+        icc.hash(&mut h);
+        sig ^= h.finish();
     }
     sig
 }
@@ -94,7 +102,7 @@ impl PhotocraftApp {
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
             self.os_clip_svg = None;
-            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes, None));
             self.clip_unmirrored = false;
         }
     }
@@ -127,8 +135,8 @@ impl PhotocraftApp {
                 return Err(error);
             }
         };
-        let image = image.filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
-        let Some((w, h, bytes)) = image else {
+        let image = image.filter(|(w, h, bytes, _)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+        let Some((w, h, bytes, icc)) = image else {
             if self.clip_unmirrored && !self.clip_external && self.session.clipboard.is_some() {
                 self.os_clip_sig = None;
                 // Keep remembering an SVG only while it is still there (an SVG-only clipboard),
@@ -148,13 +156,14 @@ impl PhotocraftApp {
             }
             return Ok(false);
         };
-        let sig = clip_signature(w, h, &bytes);
+        let sig = clip_signature(w, h, &bytes, icc.as_deref());
         if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
+        let profile = icc.map(std::sync::Arc::new);
         self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip {
             components: None,
             surface,
@@ -164,6 +173,7 @@ impl PhotocraftApp {
             source: None,
             svg: None,
             board: None,
+            profile,
         });
         // The SVG that came with this image (a vector app puts both): a later internal copy is
         // newer than it, so Paste As must not bring it back while it is unchanged.

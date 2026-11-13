@@ -361,6 +361,9 @@ pub(crate) struct PlaceInput {
     /// The frame the image goes into: the active layer's, `"frame"` in the params, or none
     /// (`"frame": false`). Its image renders through a smart object.
     pub(super) frame: Option<(LayerId, photocraft_doc::Frame)>,
+    /// The document the image goes into: a source with an embedded profile is converted into its
+    /// colours, as the smart object renders its source later.
+    pub(super) dest: Arc<Document>,
 }
 
 impl PlaceInput {
@@ -417,6 +420,7 @@ impl PlaceInput {
                 PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),
             },
             frame,
+            dest: Arc::clone(&d.doc),
             params: p.clone(),
             file,
             linked,
