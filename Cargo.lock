@@ -5645,6 +5645,7 @@ name = "photocraft-raw"
 version = "0.23.1"
 dependencies = [
  "craft-raw",
+ "flate2",
  "image",
  "photocraft-raw",
  "png 0.18.1",
