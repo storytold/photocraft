@@ -653,6 +653,10 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         end_batch(app);
         return;
     }
+    // Export As: a layer composited for its dialog, or the files it wrote.
+    if crate::export_dialog::on_job_event(app, &e) {
+        return;
+    }
     match e.outcome {
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);

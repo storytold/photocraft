@@ -1284,3 +1284,26 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+
+/// Layer › Export As composites the layer on a worker before its dialog opens, and Export writes
+/// the file on a worker like a save does: on a large storyboard each took over 17 s on the UI
+/// thread, and the compositor closed the frozen window.
+#[test]
+fn layer_export_as_prepares_and_writes_in_the_background() {
+    let path = "/tmp/photocraft-test/layer.png";
+    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
+    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert_eq!(r["pending"], true, "the layer is composited on a worker: {r}");
+    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
+    let fields = h.state().ui.dialogs.last().expect("the dialog opens once the layer is ready").fields.clone();
+    assert!(fields.contains_key("__layer"));
+    crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    step_until(&mut h, |a| a.ui.status.starts_with("Exported"));
+    assert_eq!(gates.written(), [path], "written by the worker save");
+    assert!(h.state().ui.status.starts_with(&format!("Exported {path}")), "{}", h.state().ui.status);
+    assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
+}
