@@ -467,6 +467,8 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         // Photoshop's 1-7 Export As presets measured 4:2:0 at 1-4 and 4:4:4 at 5-7.
         // An exact mapping to 1-100 is unestablished; reuse PhotoCraft's Save for Web cutoff.
         jpeg_chroma_subsampling: fmt == "jpg" && quality <= 50,
+        // Progressive (SOF2) at every quality, as the reference application writes (#13724).
+        jpeg_format: photocraft_codecs::JpegFormat::Progressive,
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: metadata == "all",
@@ -1177,6 +1179,9 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod jpg_progressive_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
