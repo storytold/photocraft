@@ -67,6 +67,93 @@ fn the_default_frame_is_the_selected_layers_together() {
     assert!((m[4] - (2.0 * m0[4] - cx)).abs() < 1e-9 && (m[5] - (2.0 * m0[5] - cy)).abs() < 1e-9, "{m:?}");
 }
 
+fn preset_layers(depth: SampleType) -> (Session, [LayerId; 2]) {
+    let mut doc = Document::with_background("preset frame", photocraft_doc::Size::new(32, 24), ColorMode::Rgb, depth, photocraft_color::Color::WHITE);
+    for (name, rect, color) in [("first", Rect::new(2, 4, 6, 8), [1.0, 0.0, 0.0, 1.0]), ("second", Rect::new(18, 12, 22, 16), [0.0, 1.0, 0.0, 1.0])] {
+        let mut surface = Surface::new(doc.pixel_format());
+        surface.fill_rect(rect, &color);
+        surface.write_pixel(rect.x0, rect.y0, &[0.0, 0.0, 1.0, 1.0]);
+        doc.layers.push(Layer::new(name, LayerContent::Raster(surface)));
+    }
+    let ids = [doc.layers[1].id, doc.layers[2].id];
+    let mut s = Session::new();
+    s.add_document(doc, None);
+    s.execute("layer.select", json!({"layer":ids[0].0})).unwrap();
+    s.execute("layer.select", json!({"layer":ids[1].0,"mode":"add"})).unwrap();
+    (s, ids)
+}
+
+#[test]
+fn rotate_and_flip_presets_use_the_frame_of_the_layers_they_transform() {
+    let cases = [
+        ("edit.transform.rotate180", [Rect::new(18, 12, 22, 16), Rect::new(2, 4, 6, 8)]),
+        ("edit.transform.rotate90Cw", [Rect::new(14, 0, 18, 4), Rect::new(6, 16, 10, 20)]),
+        ("edit.transform.rotate90Ccw", [Rect::new(6, 16, 10, 20), Rect::new(14, 0, 18, 4)]),
+        ("edit.transform.flipHorizontal", [Rect::new(18, 4, 22, 8), Rect::new(2, 12, 6, 16)]),
+        ("edit.transform.flipVertical", [Rect::new(2, 12, 6, 16), Rect::new(18, 4, 22, 8)]),
+    ];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (command, expected) in cases {
+            let (mut s, ids) = preset_layers(depth);
+            let before = s.active().unwrap().doc.clone();
+            let steps = s.active().unwrap().history.past_len();
+            s.execute(command, json!({})).unwrap();
+            assert_eq!(ids.map(|id| bounds(&s, id)), expected, "{depth:?}/{command}");
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+            let after = s.active().unwrap().doc.clone();
+            assert!(s.undo());
+            assert!(s.active().unwrap().doc.layers == before.layers);
+            assert!(s.redo());
+            assert!(s.active().unwrap().doc.layers == after.layers);
+        }
+    }
+}
+
+#[test]
+fn preset_frames_keep_explicit_layer_targets_with_a_selected_background() {
+    for list in [false, true] {
+        let (mut s, ids) = preset_layers(SampleType::U16);
+        let before = s.active().unwrap().doc.clone();
+        let bg = before.layers[0].id;
+        s.execute("layer.select", json!({"layer":bg.0,"mode":"add"})).unwrap();
+        let params = if list { json!({"layers":[ids[0].0]}) } else { json!({"layer":ids[1].0}) };
+        s.execute("edit.transform.flipHorizontal", params).unwrap();
+        assert_eq!(ids.map(|id| bounds(&s, id)), [Rect::new(2, 4, 6, 8), Rect::new(18, 12, 22, 16)]);
+        let after = &s.active().unwrap().doc;
+        assert!(after.layer(bg) == before.layer(bg));
+        let untouched = ids[usize::from(list)];
+        assert!(after.layer(untouched) == before.layer(untouched));
+        if list {
+            let target = after.layer(ids[0]).unwrap().surface().unwrap();
+            assert_eq!(target.sample_channel(5, 4, 2), 1.0, "the blue marker must actually flip");
+            assert_eq!(target.sample_channel(2, 4, 2), 0.0);
+        }
+    }
+}
+
+#[test]
+fn whole_layer_presets_refuse_a_background_selected_with_other_layers() {
+    let (mut s, _) = preset_layers(SampleType::U16);
+    let bg = s.active().unwrap().doc.layers[0].id;
+    s.execute("layer.select", json!({"layer":bg.0,"mode":"add"})).unwrap();
+    let st = s.active().unwrap();
+    let (before, revision, steps) = (st.doc.clone(), st.revision, st.history.past_len());
+    for command in ["edit.transform.flipHorizontal", "edit.transform.rotate90Cw"] {
+        let error = s.execute(command, json!({})).unwrap_err().to_string();
+        assert!(error.contains("\"Background\" is locked"), "{command}: {error}");
+        let st = s.active().unwrap();
+        assert!(st.doc == before && st.revision == revision && st.history.past_len() == steps);
+    }
+}
+
+#[test]
+fn select_all_preset_still_uses_the_selection_frame() {
+    let (mut s, ids) = preset_layers(SampleType::U8);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
+    assert_eq!(ids.map(|id| bounds(&s, id)), [Rect::new(26, 4, 30, 8), Rect::new(10, 12, 14, 16)]);
+}
+
 #[test]
 fn an_explicit_layer_still_transforms_that_layer_alone() {
     let (mut s, paint, text) = two_layers();
@@ -435,4 +522,92 @@ fn a_recorded_transform_of_other_layers_than_the_selection_keeps_their_ids() {
     s.execute("edit.transform", json!({"layers": [paint.0], "matrix": [1, 0, 0, 1, 5, 0]})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.actions.list[0].steps[0].1["layers"], json!([paint.0]));
+}
+
+#[test]
+fn explicit_layers_bypass_panel_colour_but_reject_an_explicit_colour_target() {
+    let (mut s, paint, text) = two_layers();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let p0 = bounds(&s, paint);
+    let t0 = bounds(&s, text);
+    let r = s.execute("edit.transform", json!({"layers":[paint.0,text.0],"dx":5,"interpolation":"nearest"})).unwrap();
+    assert_eq!(r["layers"], json!([paint.0, text.0]));
+    assert_eq!(bounds(&s, paint), p0.translate(5, 0));
+    assert_eq!(bounds(&s, text), t0.translate(5, 0));
+    s.undo();
+    let doc = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.transform", json!({"layers":[paint.0,text.0],"target":{"color":0},"dx":5})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
+fn panel_colour_moves_only_the_active_raster_when_several_layers_are_selected() {
+    let (mut s, paint, text) = two_layers();
+    s.execute("layer.select", json!({"layer":paint.0,"mode":"add"})).unwrap();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let t0 = text_matrix(&s, text);
+    s.tools.background = [0.0, 0.0, 0.0, 1.0];
+    let original = s.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().clone();
+    s.execute("edit.transform", json!({"dx":5,"interpolation":"nearest"})).unwrap();
+    let st = s.active().unwrap();
+    let after = st.doc.layer(paint).unwrap().surface().unwrap();
+    assert_eq!(text_matrix(&s, text), t0);
+    assert_eq!(after.read_region(Rect::new(12, 15, 13, 16)), vec![0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(after.read_region(Rect::new(52, 15, 53, 16)), vec![1.0, 0.0, 0.0, 0.0]);
+    for y in 0..40 {
+        for x in 0..60 {
+            let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+            after.read_pixel(x, y, &mut a);
+            original.read_pixel(x, y, &mut b);
+            assert_eq!(a[1..], b[1..]);
+        }
+    }
+    s.undo();
+    assert_eq!(
+        s.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().to_interleaved(Rect::new(0, 0, 60, 40)),
+        original.to_interleaved(Rect::new(0, 0, 60, 40))
+    );
+}
+
+#[test]
+fn scalar_resamplers_observe_cancellation_during_a_plane() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for selected in [false, true] {
+        let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+        let mut source = Surface::new(fmt);
+        let area = Rect::new(0, 0, 256, 256);
+        source.fill_rect(area, &[0.5]);
+        let mut selection = Surface::new(fmt);
+        selection.fill_rect(area, &[0.7]);
+        let before = source.clone();
+        let cancel = AtomicBool::new(false);
+        let check = || cancel.load(Ordering::Relaxed);
+        let progress = |_: f32| cancel.store(true, Ordering::Relaxed);
+        let ctl = Interrupt::new(&check, &progress);
+        let h = Homography([8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 1.0]);
+        let result =
+            if selected { warp_gray_selected_with(&source, &selection, &h, Interp::Bicubic, &ctl) } else { warp_gray_with(&source, &h, Interp::Bicubic, &ctl) };
+        assert!(cancel.load(Ordering::Relaxed), "the native resampler must report progress through the job's interrupt");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(source == before);
+    }
+}
+
+#[test]
+fn ordinary_layer_transform_does_not_use_the_scalar_selection_area_cap() {
+    let (mut s, _) = preset_layers(SampleType::U8);
+    s.edit("large sparse selection", |doc, _| {
+        let mut selection = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+        selection.write_pixel(-10000, 0, &[1.0]);
+        selection.write_pixel(10000, 10000, &[1.0]);
+        doc.selection = Some(selection);
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    s.execute("edit.transform", json!({"matrix":[1,0,0,1,0,0]})).unwrap();
+    assert!(s.active().unwrap().doc.layers == before.layers);
+    assert!(s.active().unwrap().doc.selection == before.selection);
 }

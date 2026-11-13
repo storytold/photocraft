@@ -105,6 +105,10 @@ fn moving_rect(app: &PhotocraftApp, tool: Tool) -> Option<[f64; 4]> {
     if crate::move_ui::moves_selected_pixels_with(app, tool) {
         return selection_rect(app);
     }
+    // A colour-channel Move edits only the active layer's samples; linked layers stay put.
+    if crate::move_ui::color_target(app).is_some() {
+        return layer_rect(&st.doc, st.active_layer?);
+    }
     // What moves, not what is selected: a group carries its layers and linked layers go along.
     union(move_targets(&st.doc, &st.selected_layers()).into_iter().filter_map(|id| tree_rect(&st.doc, id)))
 }
@@ -253,7 +257,12 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // must not snap to its own layers' starting edges. Selected pixels float off the active
         // layer alone, so its linked layers stay put and stay targets.
         let pixels = crate::move_ui::moves_selected_pixels_with(app, tool);
+        let channel = crate::move_ui::color_target(app).is_some();
         let exclude = app.session.active().map_or_else(Vec::new, |s| {
+            // Native colours also move on the active layer alone, with or without a selection.
+            if channel {
+                return s.active_layer.into_iter().collect();
+            }
             let mut ids = s.selected_layers();
             if !pixels {
                 ids.extend(crate::move_ui::with_descendants(&s.doc, &move_targets(&s.doc, &ids)));

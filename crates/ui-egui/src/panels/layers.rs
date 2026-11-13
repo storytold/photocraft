@@ -534,6 +534,9 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::type_tool::commit(app);
         }
         if id == "ui.maskTarget" {
+            if photocraft_engine::channel_transform::locked(&app.session) {
+                continue;
+            }
             app.end_filter_mask_view();
             app.ui.mask_target = p.as_bool().unwrap_or(false);
             app.ui.vector_mask_target = false;
@@ -545,6 +548,9 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             continue;
         }
         if id == "ui.vectorMaskTarget" {
+            if photocraft_engine::channel_transform::locked(&app.session) {
+                continue;
+            }
             app.end_filter_mask_view();
             app.ui.vector_mask_target = p.as_bool().unwrap_or(false);
             app.ui.mask_target = false;

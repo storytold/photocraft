@@ -819,6 +819,37 @@ fn app_on_two_displays() -> PhotocraftApp {
 }
 
 #[test]
+fn pattern_preview_keeps_its_copies_during_a_channel_transform() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("channel.target", json!({"channel":"green"})).unwrap();
+    app.ui.extras.rulers = false;
+    app.sync_views();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    let tex = crate::channel_transform_preview::texture(&mut app, &ctx, 0, None).unwrap();
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [32.0, 32.0];
+    view.fit_pending = false;
+    view.fill_pending = false;
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 256.0));
+    let mut draw = |pattern: bool| {
+        app.ui.view.pattern_preview = pattern;
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            canvas_view(&mut app, ui, 0, rect, view.clone(), false);
+        });
+        let copies = out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == tex)).count();
+        out.textures_delta.clear();
+        copies
+    };
+    assert_eq!(draw(false), 1, "ordinary transform preview draws the centre tile");
+    assert!(draw(true) > 1, "Pattern Preview draws its surrounding copies during a channel transform");
+    crate::transform_tool::cancel(&mut app);
+}
+
+#[test]
 #[ignore = "manual texture-retention measurement on six 6 MP documents"]
 fn closed_canvas_memory_measurement() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -2429,6 +2460,75 @@ fn mixer_alt_with_a_held_temporary_tool_does_not_load_paint() {
 }
 
 #[test]
+fn colour_channel_strokes_stay_coloured_in_live_and_committed_canvas_caches() {
+    for depth in [8, 16, 32] {
+        for (channel, component) in [("red", 0), ("green", 1), ("blue", 2)] {
+            for tool in [Tool::Brush, Tool::Pencil] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.run("file.new", json!({"width":160,"height":80,"depth":depth})).unwrap();
+                app.run("edit.fill", json!({"color":"#000000"})).unwrap();
+                app.run("channel.target", json!({"channel":channel})).unwrap();
+                app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+                app.run("tools.setColors", json!({"foreground":"#ffffff"})).unwrap();
+                app.run("tools.setBrush", json!({"brush":{"size":12,"hardness":1.0,"smoothing":{"amount":0.0}}})).unwrap();
+                app.ui.tool = tool;
+                let ctx = egui::Context::default();
+                let tex = ensure_texture(&mut app, &ctx, 0, None).unwrap().0;
+                let mut delta = ctx.tex_manager().write().take_delta();
+                let egui::ImageData::Color(image) = &delta.set.get(&tex).unwrap()[0].image;
+                let mut cached = (**image).clone();
+                delta.clear();
+                let original = app.session.active().unwrap().doc.clone();
+                let layer = app.session.active().unwrap().active_layer.unwrap();
+                let mut expected = [0.0, 0.0, 0.0, 1.0];
+                expected[component] = 1.0;
+                tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                for x in [40.0, 80.0, 130.0] {
+                    tool_event(&mut app, ToolEvent::Move { x, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                    let shown = display_doc(&mut app, 0).0;
+                    assert_eq!(shown.layer(layer).unwrap().surface().unwrap().rgba(20, 40), expected, "{depth} {channel} {tool:?}: live data");
+                    ensure_texture(&mut app, &ctx, 0, None);
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let upload = &delta.set.get(&tex).unwrap()[0];
+                    let pos = upload.pos.expect("live stroke only uploads damage");
+                    let egui::ImageData::Color(image) = &upload.image;
+                    for row in 0..image.size[1] {
+                        let dst = (pos[1] + row) * cached.size[0] + pos[0];
+                        cached.pixels[dst..dst + image.size[0]].copy_from_slice(&image.pixels[row * image.size[0]..(row + 1) * image.size[0]]);
+                    }
+                    delta.clear();
+                    let (display, _) = canvas_display(&app, &shown, None);
+                    assert_eq!(
+                        cached,
+                        display_image(display.as_deref(), &photocraft_compose::flatten(&shown)),
+                        "{depth} {channel} {tool:?}: partial uploads match full preview"
+                    );
+                    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+                }
+                let shown = display_doc(&mut app, 0).0;
+                tool_event(&mut app, ToolEvent::Up { x: 130.0, y: 40.0 }, egui::Modifiers::NONE);
+                let committed = app.session.active().unwrap().doc.clone();
+                assert_eq!(
+                    shown.layer(layer).unwrap().surface().unwrap().try_to_interleaved(shown.bounds()).unwrap(),
+                    committed.layer(layer).unwrap().surface().unwrap().try_to_interleaved(committed.bounds()).unwrap(),
+                    "{depth} {channel} {tool:?}: commit must exactly match the preview retained by the cache"
+                );
+                ensure_texture(&mut app, &ctx, 0, None);
+                let mut delta = ctx.tex_manager().write().take_delta();
+                let uploaded = delta.set.contains_key(&tex);
+                delta.clear();
+                assert!(!uploaded, "a matching commit needs no corrective upload");
+                assert_eq!(committed.layer(layer).unwrap().surface().unwrap().rgba(20, 40), expected);
+                app.session.undo();
+                assert_eq!(app.session.active().unwrap().doc.layers, original.layers);
+                app.session.redo();
+                assert_eq!(app.session.active().unwrap().doc.layers, committed.layers);
+            }
+        }
+    }
+}
+
+#[test]
 fn brush_drag_shows_the_real_stroke_and_commits_it() {
     // The drag used to draw a hard, flat stand-in and only showed the soft brush on release.
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -3700,4 +3800,136 @@ fn an_armed_eyedropper_hides_no_cursor_on_a_secondary_canvas() {
     };
     assert_eq!(cursor(&mut app, true), egui::CursorIcon::None, "the primary canvas hides the icon under the pipette it draws");
     assert_ne!(cursor(&mut app, false), egui::CursorIcon::None, "a secondary canvas keeps a cursor");
+}
+
+fn paint_move_selection_ants(app: &mut PhotocraftApp, ctx: &egui::Context) -> Rect {
+    let doc = app.session.active().unwrap().doc.clone();
+    let view = app.ui.views[0].clone();
+    let mut bounds = Rect::NOTHING;
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(128.0, 128.0));
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
+        let xf = ViewXform { rect, zoom: 1.0, center: [16.0, 8.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let input = SelectionPaintInput { ctx, painter: &painter, ui, view: &view, xf, rect, doc: &doc, idx: 0 };
+        for shape in paint_selection_outline(app, input) {
+            bounds = bounds.union(shape.visual_bounding_rect());
+        }
+    });
+    out.textures_delta.clear();
+    bounds
+}
+
+#[test]
+fn wrapped_channel_selection_ants_match_commit_with_pixel_preview_on_or_off() {
+    for bounding_box in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":32,"height":16})).unwrap();
+        app.run("select.rect", json!({"x":28,"y":4,"width":4,"height":8})).unwrap();
+        app.run("channel.target", json!({"channel":"red"})).unwrap();
+        app.ui.tool = Tool::Move;
+        app.ui.view.pattern_preview = true;
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = bounding_box);
+        app.sync_views();
+        tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let preview = paint_move_selection_ants(&mut app, &ctx);
+        assert!(preview.is_positive());
+        let cached = app.outline_cache.as_ref().unwrap().2.clone();
+        assert!(!cached.is_empty());
+        assert!(cached.iter().flat_map(|(a, b)| [a, b]).all(|p| (2..=6).contains(&p[0])), "ants wrap to the opposite edge");
+        assert_eq!(paint_move_selection_ants(&mut app, &ctx), preview);
+        assert!(std::sync::Arc::ptr_eq(&cached, &app.outline_cache.as_ref().unwrap().2), "idle frames reuse the projected outline");
+        app.ui.view.pattern_preview = false;
+        assert_ne!(paint_move_selection_ants(&mut app, &ctx), preview);
+        app.ui.view.pattern_preview = true;
+        assert_eq!(paint_move_selection_ants(&mut app, &ctx), preview);
+        for dx in [10, 2, -3, 6] {
+            tool_event(&mut app, ToolEvent::Move { x: 30.0 + f64::from(dx), y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            paint_move_selection_ants(&mut app, &ctx);
+            let source = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+            let moved = photocraft_engine::layer_multi_cmds::wrapped_selection(source, dx, 0, app.session.active().unwrap().doc.bounds()).unwrap();
+            let expected = crate::outline::outline_scaled(&moved, moved.content_bounds(), 1);
+            assert_eq!(*app.outline_cache.as_ref().unwrap().2, expected, "the projected bounds follow offset {dx}");
+        }
+        tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, egui::Modifiers::NONE);
+        assert_eq!(paint_move_selection_ants(&mut app, &ctx), preview, "preview and commit apply the offset once");
+    }
+}
+
+#[test]
+fn implicit_native_move_ants_match_bounded_coverage_before_during_and_after_drag() {
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::Surface;
+    for pattern in [false, true] {
+        for hole in [false, true] {
+            let mut outlines = Vec::new();
+            for implicit in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.run("file.new", json!({"width":32,"height":16})).unwrap();
+                app.session
+                    .edit("equivalent coverage", |doc, _| {
+                        let mut mask = if implicit { Surface::with_default(PixelFormat::GRAY8, &[1.0]) } else { Surface::new(PixelFormat::GRAY8) };
+                        if !implicit {
+                            mask.fill_rect(doc.bounds(), &[1.0]);
+                        }
+                        if hole {
+                            mask.fill_rect(photocraft_geom::Rect::new(8, 4, 12, 8), &[0.0]);
+                        }
+                        doc.selection = Some(mask);
+                        Ok(())
+                    })
+                    .unwrap();
+                app.run("channel.target", json!({"channel":"red"})).unwrap();
+                app.ui.tool = Tool::Move;
+                app.ui.view.pattern_preview = pattern;
+                app.ui.tool_options.move_auto_select = false;
+                app.ui.extras.snap = false;
+                app.ui.view.show.smart_guides = false;
+                app.sync_views();
+                let before = paint_move_selection_ants(&mut app, &ctx);
+                let before_segments = app.outline_cache.as_ref().unwrap().2.clone();
+                tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                tool_event(&mut app, ToolEvent::Move { x: 22.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                let preview = paint_move_selection_ants(&mut app, &ctx);
+                let preview_segments = app.outline_cache.as_ref().unwrap().2.clone();
+                tool_event(&mut app, ToolEvent::Up { x: 22.0, y: 8.0 }, egui::Modifiers::NONE);
+                assert_eq!(paint_move_selection_ants(&mut app, &ctx), preview, "{pattern}/{hole}/{implicit}: preview and commit agree");
+                let committed_segments = app.outline_cache.as_ref().unwrap().2.clone();
+                outlines.push((before, preview, before_segments, preview_segments, committed_segments));
+            }
+            assert_eq!(outlines[0], outlines[1], "{pattern}/{hole}: implicit and explicit coverage have the same boundary");
+        }
+    }
+}
+
+#[test]
+fn implicit_selection_ants_cache_tracks_canvas_size_without_mask_edits() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width":32,"height":16})).unwrap();
+    app.session
+        .edit("implicit selection", |doc, _| {
+            doc.selection = Some(photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    let before = paint_move_selection_ants(&mut app, &ctx);
+    assert!(before.is_positive());
+    let original = app.session.active().unwrap().doc.selection.clone();
+    app.session
+        .edit("grow canvas", |doc, _| {
+            doc.size.width += 4;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(app.session.active().unwrap().doc.selection, original, "selection identity is unchanged");
+    let grown = paint_move_selection_ants(&mut app, &ctx);
+    assert_eq!(grown.max.x, before.max.x + 4.0, "a canvas-sized boundary must invalidate on resize");
+    assert_eq!(grown.min, before.min);
 }

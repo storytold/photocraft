@@ -1,12 +1,16 @@
 use super::history::fix_selection;
 use super::{Arc, EngineError, LayerId, Result, Session, channel_cmds, layer_multi_cmds, type_cmds};
-use crate::TypeLayerRef;
+use crate::{TypeLayerRef, channel_transform};
 
 impl Session {
     /// Replace the active document's active layer without creating a history step.
     pub fn select_layer(&mut self, id: LayerId) -> Result<()> {
         let before = self.active_layer_stamp();
+        let target_locked = channel_transform::locked(self);
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        if target_locked && st.active_layer != Some(id) {
+            return Err(EngineError::Other(channel_transform::LOCKED.into()));
+        }
         if st.doc.layer(id).is_none() {
             return Err(EngineError::NoLayer(id));
         }

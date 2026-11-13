@@ -175,6 +175,23 @@ fn linear_documents_are_encoded_for_the_texture() {
 }
 
 #[test]
+fn channel_pixels_follow_the_document_display_transform() {
+    let s = Session::new();
+    let source = [0.2, 0.4, 0.6, 173.0 / 255.0];
+    for profile in [Builtin::DisplayP3.profile(), Builtin::LinearSrgb.profile()] {
+        let doc = rgb_doc(Some(profile), [0.2, 0.4, 0.6], SampleType::U8);
+        let display = s.color.canvas_display(&doc).unwrap();
+        let channel = display.composite_pixels_to_rgba8(&[source]);
+        let expected = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), source));
+        assert_eq!(channel[0], expected.pixels.as_chunks::<4>().0[0], "{}", profile.description);
+        assert_eq!(channel[0][3], 173, "the display conversion preserves alpha");
+    }
+    let linear = rgb_doc(Some(Builtin::LinearSrgb.profile()), [0.001; 3], SampleType::F32);
+    let shadow = s.color.canvas_display(&linear).unwrap().composite_pixels_to_rgba8(&[[0.001, 0.002, 0.003, 1.0]])[0];
+    assert!(shadow[..3].iter().all(|value| *value > 0), "encode dark linear values before 8-bit quantization: {shadow:?}");
+}
+
+#[test]
 fn exr_round_trip_is_linear() {
     let mut s = Session::new();
     // An sRGB document exported to EXR is linearised; re-opened it is tagged linear sRGB and

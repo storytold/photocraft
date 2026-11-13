@@ -1,5 +1,6 @@
 use super::documents::fix_active;
 use super::{Arc, DocState, Document, LayerId, LayerTarget, Session, channel_cmds, layer_multi_cmds};
+use crate::channel_transform;
 
 impl Session {
     /// Undo a document step or restore Clear History's rows and source without editing pixels.
@@ -12,7 +13,7 @@ impl Session {
 
     fn undo_step(&mut self) -> bool {
         // A background job is computing from the current state: it must not move under it.
-        if self.active_job().is_some() {
+        if self.active_job().is_some() || self.active().is_some_and(|st| st.channel_transform.is_some()) {
             return false;
         }
         // Undo Clear History only restores metadata. It must not establish the new document
@@ -69,7 +70,7 @@ impl Session {
     }
 
     fn redo_step(&mut self) -> bool {
-        if self.active_job().is_some() {
+        if self.active_job().is_some() || self.active().is_some_and(|st| st.channel_transform.is_some()) {
             return false;
         }
         crate::actions_cmds::before_action_edit(self);
@@ -113,7 +114,7 @@ impl Session {
     }
 
     fn rollback_step(&mut self) -> bool {
-        if self.active_job().is_some() {
+        if self.active_job().is_some() || channel_transform::locked(self) {
             return false;
         }
         let keep_visibility = !self.visibility_undoable();

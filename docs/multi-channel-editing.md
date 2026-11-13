@@ -27,17 +27,53 @@ RGB, CMYK and Lab are exercised at 8-bit, 16-bit and 32-bit float depths. Unsele
 encoded samples, including transparency and float NaN payloads, are preserved byte
 for byte. Active pixel selections, including feathering, still constrain editing.
 
-Move and pixel transforms, including Content-Aware Scale and mesh warps, on partial
-sets remain unavailable. Camera Raw requires
+Move, Free Transform, rotate/flip presets and Warp also edit the selected set. One
+box applies the same geometry to every selected native component, including partial
+and feathered selections; the selection outline moves once and the edit has one Undo
+step. Other encoded samples and layer transparency remain unchanged. Starting Free
+Transform preserves all eyes and requires every selected component to be visible.
+The complete target set stays locked until commit/cancel; every eye remains usable,
+including hiding and revealing the selected components. Eye changes survive commit,
+cancel and Undo. Eligible RGB previews cache one source and combine the selected
+components in one GPU pass; different scalar sampling outlines retain the CPU oracle.
+Move drags with a several-component pixel selection use the native CPU preview.
+Their repaint bounds include the stationary transparency extent, so successive offsets
+refresh colour changes there as well as the translated area. Their marching ants follow
+the preview, snapping uses the selection frame without
+snapping back to its starting outline, and Shift constrains movement to axes or 45° diagonals.
+A shown Smart Filter mask keeps Move aimed at the whole object, even with colour rows
+retained behind it. Copying that object keeps its mask view on the copy. Set-copy refusal
+also applies to Cmd/Ctrl+Alt drags started with selection tools.
+Cmd/Ctrl-dragging with a selection tool uses the same native Move path inside or
+outside the selection. Native-set canvas drags cannot become whole-layer copies
+by crossing another document's tab; Layers-panel transfers retain their explicit layer scope.
+Show Transform Controls uses the same native channel frame as Free Transform, including
+on Background samples, and other selected layers do not enlarge that frame. Implicit engine
+Move commands honour viewed raster masks just as the UI does; explicit targets or an explicit
+layer retain their precedence.
+The engine and live Move preview share viewed-mask priority; Alpha and Quick Mask keep
+their existing precedence. Copy refusal is checked after Auto-Select and before duplication,
+and a refused pending copy cancels the gesture without moving the original or rolling back history.
+Free Transform a Copy of a viewed raster mask retains that target and duplicates its full host,
+even with a pixel selection. Cancelling restores the original mask view and keeps current eyes.
+A pixel selection permits native-set movement within Background samples while preserving
+Background identity; pixel/all locks and whole-Background position locking still apply.
+Single-channel pointer drags retain the existing floating-selection and keyboard behaviour.
+Transform → Again uses the active native colour frame even if other layer rows are
+selected behind the Channels panel target, including an active Background.
+
+Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
+a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge
+of a set are also refused;
+Copy and Paste can copy the selected native components. Camera Raw requires
 the composite or one colour channel. HDR Toning requires the composite because it flattens
 the document. Filters that generate transparency cannot edit
 colour-only targets. Options that create a new layer, including Remove’s Create a new layer option, also
 require the composite.
 Rasterize a non-raster layer before editing its colour planes.
-Vector path transforms and moving guides remain available. This work is independent
-of [#4648](https://github.com/storytold/photocraft/pull/4648) and
-[#6864](https://github.com/storytold/photocraft/pull/6864); it does not include their
-isolated-channel geometry or remaining scalar-target tone-dialog changes.
+Vector path transforms and moving guides remain available. Channel-set geometry extends [#4648](https://github.com/storytold/photocraft/pull/4648).
+The remaining scalar-target tone-dialog changes are tracked separately in
+[#6864](https://github.com/storytold/photocraft/pull/6864).
 
 ## Automation
 
@@ -282,3 +318,157 @@ after, the stroke paints the mask while the layer's gradient stays intact.
 ![Before: the displayed mask stays white](images/multi-channel-editing/mask-view-before.png)
 
 ![After: the displayed mask receives the stroke](images/multi-channel-editing/mask-view-after.png)
+
+## 2026-11-01: channel-set geometry
+
+The transform branch extends #9274's colour sets to Move, Free Transform, rotate/flip
+and Warp. Native component planes share one geometry and the original selection;
+the selection outline and history are committed once. Aggregate captured colour
+source buffers are capped at 512 MiB including tile padding, in addition to the
+100 MP logical / 128 Mi-pixel padded working-area limits. Extreme aspect ratios
+are rejected before materialization. Eligible RGB previews sample all selected components in one cached GPU pass.
+Different scalar source outlines and other unsupported GPU cases retain CPU sampling.
+The regression matrix compares a set operation with independent single-component
+oracles across modes, depths, selections and geometry, and covers late allocation
+rollback, target/visibility capture, preview/commit and undo. The earlier performance
+measurements above describe drawing/tone/filter work, not this geometry extension.
+
+Synthetic R+B transform captures, with all channels visible initially and a black
+background colour for vacated samples. The target rows stay selected; Green stays
+in place. Hiding R+B keeps Warp controls active and shows the unchanged Green plane.
+
+![Before transforming R+B](images/multi-channel-editing/set-before.png)
+
+![R+B move together; Green remains fixed](images/multi-channel-editing/set-transform.png)
+
+![R+B hidden; Warp controls remain active](images/multi-channel-editing/set-hidden-warp.png)
+
+## Channel-set geometry performance
+
+The RGB set shader uses the existing source/selection/moved/output textures and
+resampling passes, replacing the selected components with a bitmask. The uniform
+grows from 128 to 144 bytes; no extra full-image texture or per-component draw pass
+is added. Both variants share the interpolation source: scalar previews retain their
+original `vec2` sampler and sets use `vec4`. Pipelines compile lazily for the required
+variant. CPU Move retains tile-local native copies with fixed sample widths. CPU
+transform commits retain native scalar resampling per selected component, so
+editing two components naturally does more commit work than editing one. Unsupported
+GPU source outlines, other colour modes and selected-set Move drags retain the CPU
+oracle. All untargeted samples and transparency remain protected.
+
+Current results, environment and reproduction commands are in the
+[compact benchmark report](benchmarks/channel-transforms.md). Historical results
+and every raw run are retained in its linked checksum-verified archive.
+
+## 2026-11-02: transform review follow-ups
+
+Native colour geometry includes off-canvas samples and preserves other encoded components,
+including transparency. Default frames include the canvas and stored native extent; source
+and writeback allocations remain bounded. Isolated Warp commits run through cancellable jobs.
+A refused interactive commit keeps its box and captured target available for retry. Its last
+valid pixel preview continues to follow channel eyes and display-profile changes.
+Both Warp command IDs keep explicit scalar targets locked while their eyes remain editable;
+Smart Objects Warp keeps its default whole-object behavior.
+Whole-layer rotate/flip presets use the same selected-layer frame as Free Transform, including
+the selection outline and implicit Background exclusion; explicit layer targets stay scoped.
+
+GPU previews retain pending WebGPU validation until both scopes settle, reject the same
+perspective horizons as commit, and apply display encoding to partial linear-RGB views.
+Unsupported sources use the CPU preview. Display-profile and background-colour changes
+invalidate the corresponding view caches. Deferred native and web canvas drops retain their
+original destination document. Inactive destinations keep their queue until the document
+is active again; closing the destination discards those drops. Eligible active-document
+drops are processed without reordering another document's queue.
+
+Affine channel extraction runs inside the cancellable worker. Scalar affine resampling,
+selected lifting/compositing and the selection outline share its interruption flag. Isolated
+Warp prices its destination grid against Preferences › Performance › Memory Usage before
+extracting native planes. Frame queries use the compositor's tile-identity bounds cache.
+Ordinary layer transforms and tiny selected scalar edits retain their existing sparse extent
+semantics. Queued drops also wait for command-started isolated jobs that have no interactive box.
+
+A recovered CPU preview clears only the error it owns. After a CPU refusal, the canvas
+keeps the last valid CPU pixels until the geometry passes the oracle, even if the GPU can
+draw the refused quad. The main GPU Move canvas retains the CPU document preview used by
+secondary displays and Navigator, and a GPU drag commit refreshes the main compositor.
+
+Reduced RGB Move previews retain compact native byte planes (one RGBA8 integer texture-array
+layer per byte of an 8/16/32-bit sample). Each output pixel reads the native integer source
+coordinate for the current drag offset, including offsets between reduced-preview samples.
+The shared display shader still protects stationary transparency and unselected components;
+warm drags change uniforms and draw once. Capture is bounded by the GPU memory budget and
+texture limits. Unsupported adapters, selections, stacks, profiles or native sources use the
+CPU oracle. The reduced path uses the same float-render capability requirement as other
+channel GPU previews; OpenGL adapters without it retain CPU rendering.
+
+Regression coverage includes native sample phases at all depths, HDR values, scalar/set
+targets and eye combinations; unsupported-renderer fallback; deferred pipeline readiness;
+live target changes during Move; per-display cache reuse; uploaded profile-converted pixels;
+worker capture, cancellation and output pricing. Fallback is also forced on capable test
+adapters, and shader specialization is checked with both LF and Windows CRLF checkouts.
+The Move benchmark accepts `--step 21` to
+measure offsets that are not multiples of the preview reduction factor.
+
+### Review follow-ups (2026-11-03)
+
+Windows' legacy HLSL compiler rejects dynamically indexed vector stores in the channel
+shader. Scalar and colour-set shader variants now use fixed component stores, including
+the native Move shader. A Naga IR regression checks every generated variant for this
+portability constraint.
+
+Reduced channel, mask and Quick Mask previews price native geometry before returning a
+GPU texture, using the same reach, output-memory and writeback-area limits as commit.
+Affine preflight normally uses enclosing source bounds. When those overestimate a sparse
+colour component, exact encoded-component bounds are captured once and reused for later
+geometry changes. Custom Warp normally prices its control hull without traversing the
+full native mesh grid. Refused geometry retains the previous pixels and editable handles;
+visibility and display changes still refresh that preview.
+
+Unselected colour Move writes the union of the original and shifted native content,
+preserving shifted samples beyond the previous bounds while keeping other components
+and transparency stationary. Its GPU preview checks the same native work-area limits.
+The explicit `layer.translate` selection flag carries the outline for a single component;
+selected colour-set moves always carry their selected samples and outline together once.
+
+
+### Scratch-storage integration (main `655295b2a`)
+
+Channel captures and bounds use main's scratch generation and document-health checks.
+Unreadable placeholders cannot become a reduced proxy, GPU source, exact component
+bounds, CPU texture memo or Move damage frame. Capture errors remain retryable. An active
+transform retries at most eight failed tiles per batch, with a 250 ms repaint/backoff gate,
+including tiles owned by its native source, reduced proxy and last shown document. Repairing
+the backing file can recover the open transform without changing its geometry or target.
+The regression restores the file without manually reloading tiles and exercises all native
+sample depths, an interior scalar proxy tile, off-canvas RGB samples and subsequent Move
+damage rectangles. The test runs in an isolated process because scratch configuration is
+process-wide.
+
+
+### Selected sparse scalar targets and source admission
+
+A selected mask, saved channel or Quick Mask is framed and checked using its selected
+region. Unselected distant samples remain stationary. Scalar transform targets must
+contain one component without alpha; malformed layouts are refused before capture.
+
+All retained native colour planes are priced together, including tile padding and
+their actual sample depth, against Memory Usage and the existing 512 MiB source cap.
+Each resampled output retains its separate Memory Usage check, since outputs are
+written one at a time. These limits do not describe the entire process's peak memory.
+Affine previews cache immutable source-byte estimates and recheck the current limit;
+Warp preview and commit use the same admission.
+
+When reducing a sparse source would traverse an excessive bounding rectangle, the
+preview keeps its sparse native snapshot and resamples only the selected region.
+The displayed image is sampled separately in bounded bands, including partial-colour
+views after eye changes. This fallback admits canvases up to 100 MP and bands up to
+64 MiB; oversized canvases are refused before allocation. With Low Resolution
+Previews disabled, its native display also has a 512 MiB working limit. Normal
+captures retain their existing reduced-source path.
+
+### Transform and Move measurements
+
+See the [compact current report](benchmarks/channel-transforms.md) for the
+measured revisions, results, limitations and reproduction commands. Its linked
+archive preserves the full historical and intermediate data, including the
+unresolved two-channel software Warp slowdown and earlier CPU Warp observations.

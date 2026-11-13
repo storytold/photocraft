@@ -19,6 +19,8 @@ pub(crate) mod cam_preview;
 pub mod canvas_autoscroll;
 pub(super) mod canvas_popup;
 pub mod canvas_tool_menu;
+pub(crate) mod channel_transform_gpu;
+pub(crate) mod channel_transform_preview;
 pub mod channel_view;
 mod cursors;
 mod display;
@@ -273,6 +275,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     let patch_replaces =
         || refined.is_none() && floated.is_none() && app.session.active_index() == Some(input.idx) && crate::retouch_ui::patch_replaces_selection(app);
     if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()) {
+        let wrapped_move = (refined.is_none() && floated.is_none()).then(|| crate::move_ui::wrapped_selection_offset(app, input.idx)).flatten();
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -309,7 +312,10 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             )
         };
         let bounds_key = if k > 1 { u64::MAX / 2 - input.doc.id.0 } else { u64::MAX - input.doc.id.0 };
-        let carried_bounds = carried.then(|| app.cached_bounds(bounds_key, sel).intersect(&vis));
+        // Stored exceptions do not bound a selection whose default covers the canvas.
+        // The sampler already treats pixels outside its tracing bounds as unselected.
+        let implicit_bounds = (refined.is_none() && floated.is_none() && sel.default_pixel().first().is_some_and(|v| *v != 0.0)).then(|| input.doc.bounds());
+        let carried_bounds = carried.then(|| implicit_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key, sel)).intersect(&vis));
         let step = carried_bounds.map_or(step, |b| crate::outline::bounded_step(b, step));
         let key = crate::surface_fingerprint(sel)
             ^ u64::from(step).rotate_left(56)
@@ -318,15 +324,31 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             ^ (vis.y0 as u64) << 24
             ^ (vis.x1 as u64) << 36
             ^ (vis.y1 as u64) << 48
-            ^ u64::from(k).rotate_left(5);
+            ^ u64::from(k).rotate_left(5)
+            ^ u64::from(input.doc.size.width).rotate_left(19)
+            ^ u64::from(input.doc.size.height).rotate_left(51)
+            ^ wrapped_move.map_or(0, |(dx, dy)| (1 << 63) ^ (dx as u64).rotate_left(7) ^ (dy as u64).rotate_left(39));
         let fresh = matches!(&app.outline_cache, Some((d, k, _)) if *d == input.doc.id && *k == key);
         if !fresh {
             let t0 = crate::gpu_canvas::now_ms();
-            let b = carried_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key, sel).intersect(&vis));
+            let wrapped = match wrapped_move {
+                Some((dx, dy)) => match photocraft_engine::layer_multi_cmds::wrapped_selection(sel, dx, dy, input.doc.bounds()) {
+                    Ok(selection) => Some(selection),
+                    Err(_) => return ants, // A recovered scratch read must retry this projection.
+                },
+                None => None,
+            };
+            let traced = wrapped.as_ref().unwrap_or(sel);
+            // Projected masks live for this trace only: their tile addresses can be reused
+            // for different offsets. The outline cache already reuses idle projections.
+            let b = carried_bounds.unwrap_or_else(|| match &wrapped {
+                Some(_) => traced.content_bounds().intersect(&vis),
+                None => implicit_bounds.unwrap_or_else(|| app.cached_bounds(bounds_key, traced)).intersect(&vis),
+            });
             // Filters can occupy every worker in Rayon's global pool. A parallel scan here would
             // block the UI thread waiting for those workers, preventing job cancellation (#1554).
             let mut segs =
-                if app.session.has_jobs() { crate::outline::outline_scaled_serial(sel, b, step) } else { crate::outline::outline_scaled(sel, b, step) };
+                if app.session.has_jobs() { crate::outline::outline_scaled_serial(traced, b, step) } else { crate::outline::outline_scaled(traced, b, step) };
             if k > 1 {
                 let s = i32::try_from(k).unwrap_or(1);
                 let up = |p: [i32; 2]| [p[0].saturating_mul(s), p[1].saturating_mul(s)];
@@ -340,7 +362,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             let time = input.ui.input(|i| i.time);
             // A floating piece (and a selection being dragged) draws its ants where it is shown.
             let mut shown = input.xf;
-            if let Some((dx, dy)) = selection_shown_offset(app) {
+            if let Some((dx, dy)) = selection_shown_offset(app).filter(|_| wrapped_move.is_none()) {
                 shown.center = [input.xf.center[0] - dx as f32, input.xf.center[1] - dy as f32];
             }
             // Under a Free Transform box they are where the box puts them (#5297).
@@ -400,17 +422,26 @@ fn paint_canvas(
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
+    let channel_texture = crate::channel_transform_preview::texture(app, ctx, idx, output).or_else(|| crate::move_ui::channel_texture(app, idx, output));
+    if app.gpu.as_ref().is_some_and(crate::channel_transform_gpu::poll_validation) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
     // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
     // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
     let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
-    if app.gpu.is_some() {
-        if gpu_ok {
-            crate::render_path::view_ok(app, doc.id.0);
-        } else {
-            crate::render_path::view_cpu(app, doc.id.0);
-        }
+    match (app.gpu.is_some(), gpu_ok) {
+        (true, true) => crate::render_path::view_ok(app, doc.id.0),
+        (true, false) => crate::render_path::view_cpu(app, doc.id.0),
+        (false, _) => {}
     }
-    if app.gpu.is_some()
+    if let Some(tex) = channel_texture {
+        let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, ctx), square));
+        // Channel previews can change mask transparency, so they retain their own checker.
+        paint_cpu_document(painter, &xf, doc.bounds(), view.rotation.abs() > 0.05, checkerboard, Some(tex), false);
+        for &c in &pattern {
+            paint_cpu_document(painter, &pattern_xf(&xf, c, size), doc.bounds(), view.rotation.abs() > 0.05, checkerboard, Some(tex), false);
+        }
+    } else if app.gpu.is_some()
         && gpu_ok
         && let Some((k, key, preview_size)) =
             ensure_adjust_proxy(app, idx, render_zoom).or_else(|| ensure_filter_preview(app, idx, ctx)).or_else(|| ensure_proxy_preview(app, idx, render_zoom))
@@ -531,7 +562,9 @@ fn paint_canvas(
         }
     }
     // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
-    if let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output) {
+    if channel_texture.is_none()
+        && let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output)
+    {
         // Rendered from the live preview, so over the area the preview is shown in.
         let a = shown_area;
         if view.rotation.abs() > 0.05 {
@@ -595,8 +628,9 @@ fn paint_canvas(
         }
     }
 
-    // Pixel grid at high zoom, over pixels with content only (the GPU path draws its own).
-    if !on_gpu && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
+    // The GPU canvas draws its own grid. A channel texture already contains the preview,
+    // while the CPU grid samples the document, so leave the grid off over that texture.
+    if !on_gpu && channel_texture.is_none() && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
         crate::pixel_grid::paint(app, painter, &xf, idx, output, visible_doc_rect(&xf));
     }
 

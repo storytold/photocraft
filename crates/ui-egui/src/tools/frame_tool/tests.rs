@@ -285,6 +285,42 @@ fn free_transform_on_the_frame_thumbnail_previews_and_commits_only_the_clip() {
 }
 
 #[test]
+fn frame_thumbnail_refuses_warp_without_discarding_the_affine_transform() {
+    let mut app = app();
+    drag(&mut app, [20., 30.], [120., 110.]);
+    let st = app.session.active().unwrap();
+    let (doc, steps) = (st.doc.clone(), st.history.past_len());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    ctx.begin_pass(Default::default());
+
+    let error = "A frame supports affine transforms; select its image to warp it";
+    assert_eq!(crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap_err(), error);
+    assert!(app.ui.transform.is_none());
+    assert!(app.transform_preview.is_none());
+
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    assert!(frame_transform(app.ui.transform.as_ref().unwrap()));
+    crate::transform_tool::nudge(&mut app, 10.0, 5.0);
+    let before = app.ui.transform.clone();
+    assert!(!crate::menus::is_enabled(&app, "edit.transform.warp"));
+    crate::canvas_tool_menu::open_transform(&mut app, &ctx, [40.0, 50.0]);
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+    assert_eq!(crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap_err(), error);
+    crate::transform_tool::enter_warp(&mut app, &ctx);
+    assert_eq!(app.ui.transform, before);
+    let st = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&st.doc, &doc));
+    assert_eq!(st.history.past_len(), steps);
+
+    crate::transform_tool::commit(&mut app);
+    assert!(app.ui.transform.is_none());
+    assert_eq!(selected(&app).unwrap().frame.as_ref().unwrap().bounds(), Rect::new(30, 35, 130, 115));
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
 fn real_canvas_clicks_select_both_then_double_click_selects_the_image() {
     let mut app = app();
     app.session

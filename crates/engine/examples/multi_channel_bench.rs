@@ -1,5 +1,6 @@
 //! Interleaved 24 MP command timings. The same harness runs on the pre-change base.
 //! `cargo run --release -p photocraft-engine --example multi_channel_bench -- --subset`
+//! Add `--move` for straight/wrapped native Move, or `--move --region` for selected samples.
 use photocraft_engine::{Session, brush_cmds::LiveStroke};
 use photocraft_geom::Rect;
 use photocraft_paint::StrokePoint;
@@ -10,8 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subset = std::env::args().any(|a| a == "--subset");
     let region = std::env::args().any(|a| a == "--region");
     let clipboard = std::env::args().any(|a| a == "--clipboard");
-    if region && clipboard {
-        return Err("choose --region or --clipboard".into());
+    let geometric = std::env::args().any(|a| a == "--move");
+    if clipboard && (region || geometric) {
+        return Err("choose --clipboard, --region, or --move [--region]".into());
     }
     let mut fixture = Session::new();
     fixture.execute("file.new", json!({"width":6000,"height":4000,"depth":16,"background":"transparent"}))?;
@@ -48,7 +50,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec!["composite", "single"]
     };
     let clipboard_cases = [("edit.paste", json!({}))];
-    let cases = if clipboard { &clipboard_cases[..] } else { &commands[..if region { 5 } else { commands.len() }] };
+    let move_cases = [("layer.translate", json!({"dx":37,"dy":17})), ("layer.translate", json!({"dx":37,"dy":17,"wrap":true}))];
+    let cases = if geometric {
+        &move_cases[..]
+    } else if clipboard {
+        &clipboard_cases[..]
+    } else {
+        &commands[..if region { 5 } else { commands.len() }]
+    };
     let mut rows = Vec::new();
     for (index, (command, params)) in cases.iter().enumerate() {
         let mut samples = vec![Vec::new(); modes.len()];
@@ -105,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{}",
         serde_json::to_string_pretty(
-            &json!({"size":[6000,4000],"depth":16,"clipboard_pixel":clipboard,"selection":if region {json!([2000,1500,16,16])}else{Value::Null},"warmups":1,"repeats":6,"rows":rows})
+            &json!({"size":[6000,4000],"depth":16,"clipboard_pixel":clipboard,"move":geometric,"selection":if region {json!([2000,1500,16,16])}else{Value::Null},"warmups":1,"repeats":6,"rows":rows})
         )?
     );
     Ok(())

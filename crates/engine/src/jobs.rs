@@ -524,6 +524,7 @@ struct Running {
     started_ms: f64,
     coalesce: Option<String>,
     color_restrict: Option<crate::color_channels::Restriction>,
+    isolated_transform: bool,
     filter_mask_layer: Option<LayerId>,
     /// The document's layer selection when the job started: applying targets it, not whatever
     /// got selected meanwhile (a Type click does that without editing the document, #7366).
@@ -878,6 +879,7 @@ fn new_job<T: Send + 'static>(
         started_ms: now_ms(),
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
+        isolated_transform: false,
         filter_mask_layer: s.filter_mask_layer,
         layers,
         rx: None,
@@ -1677,6 +1679,10 @@ impl Session {
         self.active().and_then(|st| self.job_on(st.doc.id))
     }
 
+    pub(crate) fn channel_transform_running(&self) -> bool {
+        self.active().is_some_and(|st| self.jobs.running.iter().any(|job| job.doc == Some(st.doc.id) && job.isolated_transform))
+    }
+
     /// Wait for background workers of cancelled jobs to exit (tests and benchmarks measure
     /// cancel latency with it). Native only; returns at once on wasm.
     pub fn join_cancelled_jobs(&mut self) {
@@ -1695,7 +1701,10 @@ impl Session {
 
     /// Why command `id` can't run now because of a background job (None = no conflict).
     pub(crate) fn job_conflict(&self, id: &str, journal: bool) -> Option<String> {
-        if !journal || independent_of_document(id) {
+        if !journal
+            || independent_of_document(id)
+            || (self.channel_transform_running() && matches!(id, "channel.setVisible" | "view.layerMask" | "layer.toggleMaskOverlay"))
+        {
             return None;
         }
         let job = self.active_job()?;
@@ -1733,6 +1742,9 @@ impl Session {
         // effect.
         if let Some(gate) = self.authorize {
             gate(id, &params)?;
+        }
+        if let Some(reason) = crate::channel_transform::refusal(self, id, &params, spec.journal) {
+            return Err(EngineError::Disabled(id.into(), reason.into()));
         }
         // Whether this request runs under automation's gate: its step, journaled now or when its
         // job is applied, marks the recording that owns it as automation's.
@@ -1842,6 +1854,7 @@ impl Session {
             (Err(e), None) => Err(self.explain_missing_layer(e)),
             (Ok(_), Some(mut job)) => {
                 job.command = id.to_string();
+                job.isolated_transform = crate::channel_transform::isolated_job(id, &run_params);
                 job.params = params;
                 job.journal = spec.journal;
                 job.started_in_take = self.actions.recording.map(|_| self.actions.take);

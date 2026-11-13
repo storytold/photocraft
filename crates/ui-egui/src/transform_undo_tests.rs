@@ -386,3 +386,61 @@ fn free_transform_opens_on_the_selection_and_moves_it_with_the_pixels() {
     // What stayed (160..200 × 100..160) and what moved (to 150..210 × 130..190).
     assert_eq!(st.doc.layer(layer).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(150, 100, 210, 190));
 }
+
+#[test]
+fn selected_channel_ctrl_t_and_inside_drag_moves_only_selected_component() {
+    let mut h = harness();
+    h.state_mut()
+        .session
+        .edit("native samples", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 400, 300), &[0.2, 0.4, 0.6, 0.75]);
+            Ok(())
+        })
+        .unwrap();
+    h.state_mut().run("select.rect", json!({"x":100,"y":100,"width":100,"height":60})).unwrap();
+    h.state_mut().run("channel.target", json!({"channel":"green"})).unwrap();
+    let before = h.state().session.active().unwrap().doc.clone();
+    let id = h.state().session.active().unwrap().active_layer.unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::T);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.transform.as_ref().unwrap().target, Some(json!({"color":1})));
+    drag(&mut h, [130.0, 125.0], [250.0, 125.0]);
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().ui.transform.is_none());
+    let st = h.state().session.active().unwrap();
+    let after = st.doc.layer(id).unwrap().surface().unwrap();
+    let original = before.layer(id).unwrap().surface().unwrap();
+    for y in 0..300 {
+        for x in 0..400 {
+            for c in [0, 2, 3] {
+                assert_eq!(after.sample_channel(x, y, c), original.sample_channel(x, y, c), "({x},{y})/{c}");
+            }
+        }
+    }
+    assert!(after.sample_channel(110, 110, 1) > 0.99, "vacated component uses background");
+    assert!((after.sample_channel(230, 110, 1) - 0.4).abs() < 0.01);
+    assert!((after.sample_channel(0, 0, 1) - 0.4).abs() < 0.01);
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(220, 100, 320, 160));
+}
+
+#[test]
+fn history_aliases_undo_only_channel_transform_geometry_through_automation() {
+    let mut h = harness();
+    h.state_mut().run("channel.target", json!({"channel":"green"})).unwrap();
+    begin(&mut h);
+    let before = h.state().session.active().unwrap().doc.clone();
+    let q0 = quad(&h);
+    drag(&mut h, [150.0, 130.0], [170.0, 140.0]);
+    let q1 = quad(&h);
+    assert!(!close(q0, q1));
+    for (undo, redo) in [("history.undo", "history.redo"), ("edit.undo", "edit.redo")] {
+        assert!(execute(&mut h, undo));
+        assert!(close(quad(&h), q0));
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+        assert!(execute(&mut h, redo));
+        assert!(close(quad(&h), q1));
+        assert!(h.state().session.active().unwrap().channel_transform.is_some());
+    }
+    crate::transform_tool::cancel(h.state_mut());
+}

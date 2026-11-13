@@ -4,7 +4,7 @@ use super::drag::Drag;
 use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
 use super::strokes::{HOLD_REPEAT_MS, LiveStroke, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
-use super::{PhotocraftApp, Tool, json, multiple_color_target};
+use super::{PhotocraftApp, Tool, json};
 
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -265,6 +265,15 @@ fn filter_event_before_tool(
     Some((raw, ev, mods))
 }
 
+fn refuse_colour_set_copy_drag(app: &mut PhotocraftApp, mods: egui::Modifiers) -> bool {
+    if !mods.alt || !crate::move_ui::native_copy_unsupported(app) {
+        return false;
+    }
+    app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
+    app.ui.status_error = true;
+    true
+}
+
 /// Remember a Move-way pick that changed the active layer (with the engine's change count after it, so
 /// any later change invalidates the marker), so the Layers panel's
 /// reveal can honour Expand layer group on click (layer_reveal.rs).
@@ -292,8 +301,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, raw: ToolEvent, ev: ToolEvent, t
                 app.guide_drag = Some(guide);
                 return true;
             }
-            if multiple_color_target(app) {
-                app.ui.status = "Move and transforms on several color channels are not implemented yet".into();
+            if refuse_colour_set_copy_drag(app, mods) {
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -351,6 +359,10 @@ fn handle_move_pointer(app: &mut PhotocraftApp, raw: ToolEvent, ev: ToolEvent, t
                     }
                 }
             }
+            // Picking can end a mask view and expose retained colour rows as the edit target.
+            if refuse_colour_set_copy_drag(app, mods) {
+                return true;
+            }
             // A locked layer: no drag, and Photoshop's message once the pointer moves (`move_lock`).
             if crate::move_lock::blocked(app, tool, [x, y], mods) {
                 app.move_blocked = true;
@@ -358,7 +370,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, raw: ToolEvent, ev: ToolEvent, t
             }
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
-            if crate::move_ui::moves_selected_pixels_with(app, tool) {
+            if crate::move_ui::floats_selected_pixels_with(app, tool) {
                 let before = app.session.active().and_then(photocraft_engine::float_cmds::floating).cloned();
                 if crate::move_ui::float_selected_for_drag(app, mods.alt) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
@@ -459,6 +471,15 @@ fn red_eye_click(app: &mut PhotocraftApp, x: f64, y: f64) {
     }
 }
 
+fn wand_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let o = app.ui.tool_options.clone();
+    let mode = selection_mode(app, mods);
+    if wand_pasteboard_click(app, x, y, mode) {
+        return;
+    }
+    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+}
+
 /// A Paint Bucket click. A Bitmap document gets the reference's alert (#12536), once even if
 /// more clicks arrive while it is open (`ui.pointer` can send them).
 fn bucket_click(app: &mut PhotocraftApp, x: f64, y: f64) {
@@ -556,8 +577,11 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             // without one) it moves the whole layer, ⌘⌥ a duplicate of it. It never combines
             // selections.
             if command_moves_layer(app, tool, [x, y], mods) {
+                if refuse_colour_set_copy_drag(app, mods) {
+                    return;
+                }
                 if mods.alt
-                    && let Err(e) = app.run("layer.duplicate", json!({"inPlace": true}))
+                    && let Err(e) = crate::move_ui::duplicate_for_geometry(app)
                 {
                     app.ui.status = e;
                     app.ui.status_error = true;
@@ -623,12 +647,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    if wand_pasteboard_click(app, x, y, mode) {
-                        return;
-                    }
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    wand_click(app, x, y, mods);
                     return;
                 }
                 Tool::MagicEraser => {
@@ -756,6 +775,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             // not a click: it keeps a floating piece floating (#11392).
             if d.tool == Tool::Move && !d.left_press && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
                 app.move_preview = None;
+                app.move_gpu_preview = None;
                 crate::move_mods::finish(app);
                 if d.sel_move.is_some() {
                     finish_selection_drag(app, true, d.start, d.start);
@@ -943,18 +963,33 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
 /// the modifier with the event.
 pub(crate) fn event_tool(app: &PhotocraftApp, mods: egui::Modifiers) -> Tool {
     match app.active_tool() {
-        t if app.tool_override.is_none() && mods.command && crate::hold_keys::cmd_moves(t) && app.ui.transform.is_none() && app.ui.text_edit.is_none() => {
+        t if app.tool_override.is_none()
+            && mods.command
+            && (crate::hold_keys::cmd_moves(t) || native_set_move_shortcut(app, t, mods))
+            && app.ui.transform.is_none()
+            && app.ui.text_edit.is_none() =>
+        {
             Tool::Move
         }
         t => t,
     }
 }
 
+fn is_selection_move_tool(tool: Tool) -> bool {
+    matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand)
+}
+
+/// A native colour set cannot float, so selection-tool shortcuts use the same native Move
+/// gesture from inside or outside the selection, before snapping or modifiers classify it.
+fn native_set_move_shortcut(app: &PhotocraftApp, tool: Tool, mods: egui::Modifiers) -> bool {
+    is_selection_move_tool(tool) && !mods.shift && app.ui.polygon.is_empty() && crate::move_ui::color_target(app).is_some()
+}
+
 /// Does a ⌘ (⌘⌥) press with selection tool `tool` at `p` move the whole layer (a duplicate with
 /// ⌥), as the Move tool would? Outside the selection or without one; inside it, ⌘ drags the
 /// selected pixels instead (`selection_drag_kind`).
 pub(crate) fn command_moves_layer(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> bool {
-    let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
+    let selection_tool = is_selection_move_tool(tool);
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     selection_tool && mods.command && !mods.shift && !floating && app.ui.polygon.is_empty() && !inside_selection(app, p)
 }

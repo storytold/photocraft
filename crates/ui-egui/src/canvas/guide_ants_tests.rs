@@ -67,3 +67,36 @@ fn a_secondary_view_still_draws_the_ants() {
     assert!(guides.is_empty());
     assert!(!ants.is_empty());
 }
+
+#[test]
+fn isolated_channel_transform_ants_stay_above_guides_in_each_view() {
+    for colors in [vec![1], vec![0, 2]] {
+        for warp in [false, true] {
+            let mut app = app();
+            app.run("channel.target", json!({"colors": colors})).unwrap();
+            let ctx = egui::Context::default();
+            crate::transform_tool::begin(&mut app, &ctx).unwrap();
+            if warp {
+                crate::transform_tool::enter_warp(&mut app, &ctx);
+                let t = app.ui.transform.as_mut().unwrap();
+                t.warp = Some(photocraft_geom::warp::Warp::preset(photocraft_geom::warp::WarpStyle::Arc, 25.0, t.rect));
+            } else {
+                for p in &mut app.ui.transform.as_mut().unwrap().quad {
+                    p[0] += 37.0;
+                    p[1] += 19.0;
+                }
+            }
+            for primary in [true, false] {
+                let (guides, ants) = painted(&mut app, 1.5, 0.5, primary);
+                assert!(!ants.is_empty(), "{colors:?}, warp={warp}, primary={primary}");
+                if primary {
+                    assert_eq!(guides.len(), 4);
+                    assert!(ants.iter().min().unwrap() > guides.iter().max().unwrap());
+                } else {
+                    assert!(guides.is_empty());
+                }
+            }
+            crate::transform_tool::cancel(&mut app);
+        }
+    }
+}

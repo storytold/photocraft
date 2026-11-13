@@ -25,6 +25,7 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
 /// The layers Move › Show Transform Controls frames: every selected layer, the Background too when
 /// it is among several (a handle drag then refuses, [`begin_transform_controls_at`]), but not the
 /// Background alone (#11101).
+/// A native colour target frames only its active layer, including Background samples.
 /// A corner radius drag hides the box, as in Photoshop. So does View › Extras (⌘H, #6699): the
 /// controls are an Extra, hidden and inert until Extras comes back, while Show Transform Controls
 /// keeps its setting.
@@ -39,6 +40,9 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
+    if crate::move_ui::color_target(app).is_some() {
+        return st.active_layer.and_then(|id| st.doc.layer(id)).into_iter().collect();
+    }
     let selected = st.selected_layers();
     let several = selected.len() > 1;
     selected.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| several || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
@@ -57,12 +61,22 @@ impl PhotocraftApp {
     }
 }
 
-/// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
-/// layers, joined into one.
+/// Move tool › Show Transform Controls: the native colour frame, or the boxes Free Transform
+/// would open on the selected layers joined into one.
 pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
     let st = app.session.active()?;
     let layers = transform_controls_layers(app);
-    let b = layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?;
+    if layers.is_empty() {
+        return None;
+    }
+    let b = if let Some(colors) = crate::move_ui::color_target(app) {
+        let LayerContent::Raster(plane) = &st.doc.layer(st.active_layer?)?.content else { return None };
+        // The same scalar frame `source_bounds` opens, without extracting planes or running
+        // allocation preflights each frame. Native samples include default-valued areas too.
+        photocraft_engine::channel_transform::bounds(&st.doc, st.active_layer, plane, &serde_json::json!({"target": colors.params()})).ok()?
+    } else {
+        layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?
+    };
     // Floating selected pixels are framed by their outline, as their ants are (#7538), not by the
     // selection they were cut with; a frame round other selected layers too keeps them all.
     let alone = matches!(layers.as_slice(), [l] if photocraft_engine::float_cmds::floating(st).is_some_and(|f| f.layer == l.id));
@@ -147,7 +161,9 @@ pub(super) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::C
     if !transform_controls_hit(r, p) {
         return ControlsPress::Missed;
     }
-    let background = app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, &st.selected_layers()).is_some());
+    // A channel box uses only the active layer's samples, even with several layers selected.
+    let background = crate::move_ui::color_target(app).is_none()
+        && app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, &st.selected_layers()).is_some());
     if background {
         let message = serde_json::json!({ "message": tl!(CONTROLS_LOCKED) });
         app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());

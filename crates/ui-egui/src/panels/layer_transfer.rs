@@ -10,6 +10,8 @@
 //! document's tile drops there.
 //!
 //! A Move drag with a pixel selection copies only those pixels into a new layer.
+//! Native colour-set drags stay in their source document: a layer transfer would copy
+//! untargeted samples too.
 
 use photocraft_doc::{DocId, LayerId};
 use serde_json::json;
@@ -62,11 +64,14 @@ pub fn begin_from_panel(app: &PhotocraftApp, ctx: &egui::Context, layer: LayerId
     begin(app, ctx, layer, None);
 }
 
-/// A Move-tool drag of whole layers (not a selection or a floating piece) under way.
+/// A Move-tool drag of whole layers or transferable selected pixels under way.
 fn move_drag(app: &PhotocraftApp) -> Option<[f64; 2]> {
     let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move && d.sel_move != Some(false))?;
     let st = app.session.active()?;
-    let plain = app.ui.transform.is_none() && app.guide_drag.is_none() && ((st.doc.selection.is_none() && st.floating.is_none()) || d.sel_move == Some(true));
+    let plain = app.ui.transform.is_none()
+        && app.guide_drag.is_none()
+        && ((st.doc.selection.is_none() && st.floating.is_none()) || d.sel_move == Some(true))
+        && crate::move_ui::color_target(app).is_none_or(|colors| colors.len() <= 1);
     plain.then_some(d.start)
 }
 
@@ -109,6 +114,7 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
         // The Move drag ends without moving anything; an ⌥-drag's copy is taken back.
         app.drag = None;
         app.move_preview = None;
+        app.move_gpu_preview = None;
         crate::move_mods::abandon(app);
         // The rollback raised the revision; the restored document is the one the float was
         // over, so it floats over the new revision (else `floating()` drops it as stale).
