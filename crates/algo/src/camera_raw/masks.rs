@@ -532,7 +532,22 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool
             dev.extend_from_slice(&px[y * w + x0..y * w + x1]);
         }
         let bh = y1 - y0;
+        // On a Black & White result, the local settings go through the B&W mixer too: a colour
+        // they add (a warmer Temperature, say) becomes the mixer's lighter or darker grey for it,
+        // relative to the plain grey of the same level, so local Temperature or Tint shades the
+        // grey instead of colouring it and a grey stays as the local sliders left it. (The Color
+        // swatch, added after, still tints, as it colours a B&W photo in Camera Raw.)
         super::develop(&mut dev, bw, bh, &local, float);
+        if let Some(m) = p.is_bw().then(|| super::black_white::mono(&p.bw_mix)).flatten() {
+            let enc = p.encoding();
+            for d in dev.iter_mut() {
+                let level = (d[0] + d[1] + d[2]) / 3.0;
+                let grey = level + m.apply_encoded([d[0], d[1], d[2]], enc)[0] - m.apply_encoded([level; 3], enc)[0];
+                if grey.is_finite() {
+                    d[..3].fill(grey);
+                }
+            }
+        }
         if extras {
             extra::tint(&mut dev, bw, a.color_hue, a.color_sat);
             extra::moire(&mut dev, bw, bh, w.max(h), a.moire);

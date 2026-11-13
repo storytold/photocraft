@@ -147,6 +147,27 @@ fn local_exposure_brightens_only_under_the_mask() {
 }
 
 #[test]
+fn local_white_balance_on_black_and_white_shades_the_grey() {
+    let (w, h) = (48, 24);
+    let mask = |adjust: Local| Mask { components: vec![comp(Shape::Linear { zero: [0.0, 0.5], full: [0.01, 0.5] })], adjust, ..Mask::default() };
+    let mut mix = [0.0; 8];
+    mix[0] = 60.0; // reds lighter
+    let bw = |adjust: Local| CameraRaw { treatment: "bw".into(), bw_mix: mix, masks: vec![mask(adjust)], ..CameraRaw::default() };
+    let i = (h / 2) * w + w / 2;
+    // A B&W result (grey pixels) under a warm local Temperature stays grey, and lighter.
+    let mut px = flat(w, h, |_, _| [0.4; 3]);
+    apply(&mut px, w, h, &bw(Local { temperature: 60.0, ..Local::default() }), false);
+    let q = px[i];
+    assert!((q[0] - q[1]).abs() < 1e-5 && (q[1] - q[2]).abs() < 1e-5, "stays grey: {q:?}");
+    assert!(q[0] > 0.4 + 1e-3, "the mixer's lighter reds lighten it: {q:?}");
+    // A local Exposure alone changes the grey as it does in colour.
+    let (mut a, mut b) = (flat(w, h, |_, _| [0.4; 3]), flat(w, h, |_, _| [0.4; 3]));
+    apply(&mut a, w, h, &bw(Local { exposure: 0.5, ..Local::default() }), false);
+    apply(&mut b, w, h, &CameraRaw { masks: vec![mask(Local { exposure: 0.5, ..Local::default() })], ..CameraRaw::default() }, false);
+    assert!((a[i][0] - b[i][0]).abs() < 5e-4 && a[i][0] > 0.45, "{:?} vs {:?}", a[i], b[i]);
+}
+
+#[test]
 fn ai_components_run_on_any_image() {
     let (w, h) = (48, 36);
     let px = flat(w, h, |x, y| {
