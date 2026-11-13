@@ -38,8 +38,12 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     for (k, v) in [
         ("printer", json!("")),
         ("copies", json!(1)),
+        ("collate", json!(true)),
+        ("duplex", json!("printerDefault")),
+        ("grayscale", json!(false)),
         ("paper", json!("letter")),
         ("orientation", json!("portrait")),
+        ("autoRotate", json!(true)),
         ("colorHandling", json!("printerManages")),
         ("printerProfile", json!("coated-cmyk")),
         ("intent", json!("relative")),
@@ -94,6 +98,18 @@ pub(super) fn driver_paper_is_wide(f: &Map<String, Value>) -> bool {
     matches!((side(0), side(1)), (Some(w), Some(h)) if w > h)
 }
 
+/// Leaves the Windows driver's already-oriented page representation for editable PDF paper.
+/// Preserve the page's visible direction before clearing the marker, so later orientation edits
+/// are applied once rather than being overridden by the stale driver state.
+pub(super) fn leave_driver_page(f: &mut Map<String, Value>) {
+    if f.remove("__paperAlreadyOriented") == Some(json!(true)) {
+        let orientation = if driver_paper_is_wide(f) { "landscape" } else { "portrait" };
+        f.insert("orientation".into(), json!(orientation));
+    }
+    f.remove("__driverPageInitialized");
+    f.remove("printable");
+}
+
 /// The Orientation buttons: the driver settings (or the printer's own) turned portrait or
 /// landscape through `file.print.page`. An error stays on the dialog, with the settings left as
 /// they were.
@@ -124,6 +140,7 @@ pub(super) fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
     };
     f.insert("printerSettings".into(), json!(settings));
     f.insert("paper".into(), json!([w, h]));
+    f.insert("__paperAlreadyOriented".into(), json!(true));
     // The printable area turns with the paper; left portrait, it wouldn't fit the turned sheet.
     match r.get("printable").filter(|v| v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number))) {
         Some(area) => f.insert("printable".into(), area.clone()),
@@ -140,6 +157,7 @@ pub(super) fn driver_page(f: &mut Map<String, Value>) -> bool {
     match photocraft_engine::print_cmds::try_with_spooler(|| craft_print::rgb::page(&printer, settings.as_ref())) {
         Some(Ok(pg)) => {
             f.insert("paper".into(), json!([pg.paper.0, pg.paper.1]));
+            f.insert("__paperAlreadyOriented".into(), json!(true));
             f.insert("printable".into(), json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]));
             f.insert("orientation".into(), json!("portrait"));
             f.remove("__pageError");
@@ -209,6 +227,7 @@ fn print_paper_label(name: &'static str) -> &'static str {
         "a6" => "A6",
         "4x6" => "4 × 6 in",
         "5x7" => "5 × 7 in",
+        "c5" => "C5 Envelope",
         "postcard" => "はがき (100 × 148 mm)",
         "double-postcard" => "往復はがき (148 × 200 mm)",
         "b5" => "JIS B5 (182 × 257 mm)",
@@ -252,6 +271,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         let mut papers: Vec<_> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), print_paper_label(p.0))).collect();
         papers.push(("custom".to_string(), tl!("Custom")));
         if crate::widgets::dropdown(ui, "print-paper", tl!("Paper"), &mut selected, &papers, 110.0) {
+            f.remove("__paperAlreadyOriented");
             if selected == "custom" {
                 let (w, h) = print_paper_size(f.get("__customPaper").or(previous.as_ref()));
                 f.insert("paper".into(), json!([w, h]));
@@ -275,6 +295,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             })
             .inner;
         if changed {
+            f.remove("__paperAlreadyOriented");
             // Keep points in the command, and let the engine apply orientation and validation.
             f.insert("paper".into(), json!([w, h]));
             f.insert("__customPaper".into(), json!([w, h]));
@@ -367,10 +388,9 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
         }
     } else {
         // PDF output and previews have no driver page: Scale to Fit Media uses the paper.
-        f.remove("__driverPageInitialized");
-        f.remove("printable");
+        leave_driver_page(f);
     }
-    let p = params(f);
+    let p = print_params(f);
     let mut browse = false;
     ui.horizontal_top(|ui| {
         // Page preview.
@@ -401,7 +421,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         && let Some(pointer) = response.interact_pointer_pos()
                         && drag_print_position(f, start, pointer - origin, scale)
                     {
-                        if let Ok(updated) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
+                        if let Ok(updated) = photocraft_engine::print_cmds::layout(&doc, &print_params(f), "file.print") {
                             l = updated;
                             img = print_preview_image(l, page, k);
                         }
@@ -411,22 +431,31 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         ui.data_mut(|d| d.remove::<(photocraft_engine::print_cmds::PrintLayout, egui::Pos2, f32)>(drag_id));
                     }
                     let (x, y, w, h) = l.rect;
-                    let key = egui::Id::unique(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
+                    let grayscale = b(f, "grayscale", false);
+                    let key = egui::Id::unique(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision), grayscale));
                     let tex: Option<Arc<egui::TextureHandle>> = ui.data(|d| d.get_temp(key));
                     let tex = tex.unwrap_or_else(|| {
-                        let th = photocraft_compose::thumbnail(&doc, 400);
+                        let th = photocraft_engine::print_cmds::preview_thumbnail(&doc, grayscale, 400);
                         let ci = egui::ColorImage::from_rgba_unmultiplied([th.width as usize, th.height as usize], &th.pixels);
                         let tx = Arc::new(ui.ctx().load_texture("print-thumb", ci, egui::TextureOptions::LINEAR));
                         ui.data_mut(|d| d.insert_temp(key, tx.clone()));
                         tx
                     });
                     let clip = ui.painter().with_clip_rect(page);
-                    let uv = if l.emulsion_down {
-                        egui::Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0))
+                    let mut uvs = if l.rotate_image {
+                        [egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0), egui::pos2(0.0, 0.0)]
                     } else {
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
+                        [egui::Pos2::ZERO, egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)]
                     };
-                    clip.image(tex.id(), img, uv, egui::Color32::WHITE);
+                    if l.emulsion_down {
+                        uvs = [uvs[1], uvs[0], uvs[3], uvs[2]];
+                    }
+                    let mut mesh = egui::Mesh::with_texture(tex.id());
+                    for (pos, uv) in [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()].into_iter().zip(uvs) {
+                        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: egui::Color32::WHITE });
+                    }
+                    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                    clip.add(egui::Shape::mesh(mesh));
                     let mark = egui::Stroke::new(1.0, egui::Color32::BLACK);
                     if l.marks.corner_crop {
                         // Bleed puts the marks on the trim line, inside the image edge.
@@ -501,6 +530,16 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         }
                     }
                 });
+                check(ui, f, "collate", tl!("Collate"), true);
+                dropdown_str(
+                    ui,
+                    "print-duplex",
+                    tl!("Two-Sided"),
+                    f,
+                    "duplex",
+                    &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))],
+                    220.0,
+                );
                 // Photoshop's Layout: Portrait / Landscape turn the driver settings, so the paper
                 // and the preview turn with them without opening Print Settings….
                 ui.horizontal(|ui| {
@@ -532,8 +571,25 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     }
                 });
                 number(ui, f, "copies", tl!("Copies"), 1.0..=999.0, "", 1.0);
+                check(ui, f, "collate", tl!("Collate"), true);
+                #[cfg(not(target_os = "macos"))]
+                dropdown_str(
+                    ui,
+                    "print-duplex",
+                    tl!("Two-Sided"),
+                    f,
+                    "duplex",
+                    &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))],
+                    220.0,
+                );
+                #[cfg(target_os = "macos")]
+                if !b(f, "dryRun", false) && s(f, "output", "").is_empty() {
+                    ui.label(egui::RichText::new(tl!("Choose two-sided settings in the macOS print sheet.")).color(t.text_dim).size(11.0));
+                }
                 print_paper_controls(ui, f);
             }
+            check(ui, f, "autoRotate", tl!("Auto-Rotate Image"), true);
+            check(ui, f, "grayscale", tl!("Print in Grayscale"), false);
             head(ui, tl!("Color Management"));
             dropdown_str(
                 ui,
@@ -598,7 +654,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             let units = s(f, "units", "cm");
             check(ui, f, "center", tl!("Center"), true);
             let centered = b(f, "center", true);
-            let centered_layout = centered.then(|| photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print").ok()).flatten();
+            let centered_layout = centered.then(|| photocraft_engine::print_cmds::layout(&doc, &print_params(f), "file.print").ok()).flatten();
             // Revealing this row during a drag resizes the centered modal and moves the paper.
             // Keep it present, showing the resolved position while Center owns the offsets.
             ui.add_enabled_ui(!centered, |ui| {
@@ -617,7 +673,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             });
             check(ui, f, "scaleToFit", tl!("Scale to Fit Media"), false);
             // Scaled Print Size: Scale, Height and Width move together; Print Resolution follows.
-            if let Ok(l) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
+            if let Ok(l) = photocraft_engine::print_cmds::layout(&doc, &print_params(f), "file.print") {
                 let (_, _, w, h) = l.rect;
                 let (mut w2, mut h2) = (w, h);
                 let fit = b(f, "scaleToFit", false);
@@ -646,7 +702,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     }
                 });
                 if w > 0.0 {
-                    let ppi = f64::from(doc.size.width) / (w / 72.0);
+                    let ppi = l.resolution_ppi(&doc);
                     ui.label(egui::RichText::new(format!("{} {ppi:.0} PPI", tl!("Print Resolution:"))).color(t.text_dim).size(11.0));
                 }
             }
@@ -686,6 +742,12 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
 /// an output path or a preview set in the same frame as the confirm still drops it.
 pub(super) fn print_params(f: &Map<String, Value>) -> Value {
     let mut p = params(f);
+    if f.get("__paperAlreadyOriented") == Some(&json!(true))
+        && let Some([w, h]) = p.get("paper").and_then(Value::as_array).and_then(|a| <&[Value; 2]>::try_from(a.as_slice()).ok())
+        && let (Some(w), Some(h)) = (w.as_f64(), h.as_f64())
+    {
+        p["orientation"] = json!(if w > h { "landscape" } else { "portrait" });
+    }
     if (b(f, "dryRun", false) || !s(f, "output", "").is_empty())
         && let Some(o) = p.as_object_mut()
     {
@@ -697,7 +759,10 @@ pub(super) fn print_params(f: &Map<String, Value>) -> Value {
 /// Submits the dialog parameters to `file.print`, propagating command errors unchanged.
 /// Updates the status for completed results only; pending jobs report completion later.
 pub(super) fn print_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let r = app.run("file.print", print_params(f))?;
+    let mut p = print_params(f);
+    let saves_pdf = p.get("output").and_then(Value::as_str).is_some_and(|path| !path.is_empty());
+    p["systemDialog"] = json!(app.session.system_print_dialog.is_some() && !saves_pdf && !b(f, "dryRun", false));
+    let r = app.run("file.print", p)?;
     if r["pending"] != json!(true) {
         print_status(app, &r);
     }
@@ -705,8 +770,12 @@ pub(super) fn print_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> 
 }
 
 pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
-    app.ui.status = if let Some(printer) = r["spooler"]["printer"].as_str() {
+    app.ui.status = if r["cancelled"] == json!(true) {
+        crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", tl!("Print"))])
+    } else if let Some(printer) = r["spooler"]["printer"].as_str() {
         crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])
+    } else if r["systemDialog"] == json!(true) && r["sent"] == json!(true) {
+        tl!("Sent to the printer").to_string()
     } else if r["sent"] == json!(true) {
         let template = "Sent to the printer ({spooler})";
         crate::i18n::fmt(tl!(template), &[("spooler", r["spooler"].as_str().unwrap_or(""))])
