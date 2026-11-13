@@ -1095,8 +1095,8 @@ fn closing_the_document_while_its_file_is_placed_places_nothing_elsewhere() {
     assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps));
 }
 
-/// Without background jobs too: leaving A's Free Transform for B cancels that place (#1099) and A's
-/// next file waits for A instead of going into B.
+/// Without background jobs too: leaving A's Free Transform for B applies that place in A (#1099,
+/// #13569) and A's next file waits for A instead of going into B.
 #[test]
 fn inline_drops_stay_with_their_document_when_the_tab_changes() {
     let ctx = egui::Context::default();
@@ -1116,7 +1116,7 @@ fn inline_drops_stay_with_their_document_when_the_tab_changes() {
     app.sync_views();
     app.place_next_dropped(&ctx);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
-    assert_eq!(layer_count(&app), layers + 1, "the first was cancelled by leaving it, the second placed");
+    assert_eq!(layer_count(&app), layers + 2, "the first was applied by leaving it, the second placed");
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
 }
@@ -1199,9 +1199,10 @@ fn a_background_drop_from_a_path_is_tracked_and_later_drops_queue() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// #1099: switching tabs after an actual canvas drop cancels the place in its source document.
+/// #1099, #13569: switching tabs after an actual canvas drop applies the place in its source
+/// document, as clicking outside the canvas does, and leaves the document switched to alone.
 #[test]
-fn switching_documents_after_a_canvas_drop_undoes_only_the_place() {
+fn switching_documents_after_a_canvas_drop_keeps_the_place_in_its_document() {
     let ctx = egui::Context::default();
     let mut app = app_with_canvas();
     let original = app.session.active().unwrap().doc.clone();
@@ -1222,8 +1223,9 @@ fn switching_documents_after_a_canvas_drop_undoes_only_the_place() {
     assert_eq!((st.history.entries(), st.revision), (history, revision));
     assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), redo);
     let origin = &app.session.documents()[0];
-    assert!(std::sync::Arc::ptr_eq(&origin.doc, &original));
-    assert_eq!(origin.history.past_len(), steps);
+    assert_eq!(origin.doc.layers.len(), original.layers.len() + 1, "the dropped file stays");
+    assert_eq!(origin.history.past_len(), steps + 1, "as its own Place step");
+    assert_eq!(origin.history.undo_label(), Some(photocraft_engine::file_cmds::PLACE_EMBEDDED));
     assert!(!origin.history.can_redo());
 }
 
