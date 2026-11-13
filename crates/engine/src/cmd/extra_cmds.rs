@@ -497,7 +497,6 @@ fn paste_into_each(s: &mut Session, _p: &Value) -> Result<Value> {
     if targets.is_empty() {
         return Err(EngineError::Other("Could not paste: none of the selected layers has pixels".into()));
     }
-    let before = d.doc.clone();
     // One key for every sub-step, taken once: each paste moves the revision on.
     let key = step_key(s, "pasteIntoEach");
     let label = "Paste Into Each Selected Layer";
@@ -533,8 +532,6 @@ fn paste_into_each(s: &mut Session, _p: &Value) -> Result<Value> {
     if made.is_empty() {
         return Err(EngineError::Other("Could not paste: none of the selected layers has pixels".into()));
     }
-    // Only where the masked pastes draw needs recompositing (#2901).
-    crate::layer_multi_cmds::note_insert(s, &before);
     Ok(json!({ "layers": made }))
 }
 
