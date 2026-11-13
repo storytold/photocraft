@@ -148,7 +148,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 // Its list has Behind, greyed on the Background (#12879).
                                 opt_label(ui, tl!("Mode"));
                                 let behind = crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind);
-                                super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush, behind);
+                                // An Indexed Color document names Normal "Threshold" (#12887); the other
+                                // entries weren't measured there.
+                                let threshold = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
+                                super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush, behind, threshold);
                             } else if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                                 opt_label(ui, tl!("Mode"));
                                 let mode = crate::blend_keys::brush_tool_mode(tool, brush.mode);

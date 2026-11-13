@@ -127,6 +127,27 @@ fn the_pattern_stamp_mode_dropdown_has_behind() {
     assert_eq!(h.state().ui.tool, Tool::PatternStamp);
 }
 
+/// The centre of a dropdown showing `value`.
+fn combo(h: &Harness<'_, PhotocraftApp>, value: &str) -> Option<Pos2> {
+    h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some(value)).map(|n| n.rect().center())
+}
+
+/// In an Indexed Color document the Pattern Stamp's Mode reads "Threshold" for Normal (#12887); the
+/// other entries weren't measured there, so the list and the wheel stay as today.
+#[test]
+fn the_pattern_stamp_mode_reads_threshold_in_an_indexed_document() {
+    let mut h = harness(Tool::PatternStamp);
+    h.state_mut().run("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    h.run_steps(4);
+    let at = combo(&h, "Threshold").expect("Mode reads Threshold");
+    wheel(&mut h, at, -1.0);
+    assert_eq!(brush_mode(&h), BlendMode::Dissolve);
+    assert!(combo(&h, "Dissolve").is_some() && combo(&h, "Threshold").is_none(), "Dissolve reads as itself");
+    wheel(&mut h, at, 1.0);
+    assert_eq!(brush_mode(&h), BlendMode::Normal);
+    assert!(combo(&h, "Threshold").is_some());
+}
+
 /// The Paint Bucket's Mode dropdown has Clear after Dissolve, as the Brush's does.
 #[test]
 fn the_paint_bucket_mode_dropdown_has_clear() {
