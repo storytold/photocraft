@@ -224,6 +224,9 @@ mod pen_rubber_band_tests;
 mod paint_tests;
 
 #[cfg(test)]
+mod triangle_box_geometry_tests;
+
+#[cfg(test)]
 mod pen_resume_tests;
 
 #[cfg(test)]
