@@ -105,3 +105,7 @@ pub(crate) fn command_params(map: &mut Map<String, Value>) {
         map.insert("placeAcrossFirst".into(), json!(place.as_str() != Some("down")));
     }
 }
+
+#[cfg(test)]
+#[path = "contact_sheet_layout_tests.rs"]
+mod contact_sheet_layout_tests;
