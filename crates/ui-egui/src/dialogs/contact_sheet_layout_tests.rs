@@ -8,10 +8,10 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
+pub(super) type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The open dialogs drawn over `app`, as the window shows them.
-fn harness(app: Box<PhotocraftApp>) -> H {
+pub(super) fn harness(app: Box<PhotocraftApp>) -> H {
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 1000.0)).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -27,7 +27,7 @@ fn harness(app: Box<PhotocraftApp>) -> H {
 
 /// The app's dialogs with Contact Sheet II open from the menu, without a document (the command
 /// needs none).
-fn opened() -> (H, DialogId) {
+pub(super) fn opened() -> (H, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = app.ctx().clone();
     let reply = crate::menus::invoke(&mut app, &ctx, super::COMMAND, json!({})).unwrap();
@@ -36,7 +36,7 @@ fn opened() -> (H, DialogId) {
     (harness(app), id)
 }
 
-fn field(h: &H, id: DialogId, key: &str) -> Value {
+pub(super) fn field(h: &H, id: DialogId, key: &str) -> Value {
     h.state()
         .framework
         .dialogs
@@ -49,10 +49,20 @@ fn num(h: &H, id: DialogId, key: &str) -> f64 {
     field(h, id, key).as_f64().unwrap_or_else(|| panic!("{key} is a number"))
 }
 
-fn set(h: &mut H, id: DialogId, key: &str, value: Value) {
+pub(super) fn set(h: &mut H, id: DialogId, key: &str, value: Value) {
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
     h.run_steps(3);
+}
+
+/// A new folder holding one 40 x 20 PNG, `a.png`.
+pub(super) fn image_folder() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let mut image = photocraft_engine::Session::new();
+    image.execute("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+    let png = photocraft_io::export(&image.active().unwrap().doc, "a.png", &Default::default()).unwrap().bytes;
+    std::fs::write(dir.path().join("a.png"), png).unwrap();
+    dir
 }
 
 /// The options of the list row `key`, as `(id, label)`.
@@ -189,11 +199,7 @@ fn ok_runs_the_command_with_the_same_params() {
         let p = params(&h);
         assert_eq!((&p["depth"], &p["placeAcrossFirst"]), (&json!(16), &json!(false)));
 
-        let dir = tempfile::tempdir().unwrap();
-        let mut image = photocraft_engine::Session::new();
-        image.execute("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
-        let png = photocraft_io::export(&image.active().unwrap().doc, "a.png", &Default::default()).unwrap().bytes;
-        std::fs::write(dir.path().join("a.png"), png).unwrap();
+        let dir = image_folder();
         set(&mut h, id, "input", json!(dir.path().to_string_lossy()));
         set(&mut h, id, "caption", json!(false));
         set(&mut h, id, "depth", json!("8"));
