@@ -112,7 +112,8 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
         json!({"kind": "line", "from": from, "to": to, "weight": weight,
             "arrowStart": o.arrow_start, "arrowEnd": o.arrow_end,
             "arrowWidth": o.arrow_width, "arrowLength": o.arrow_length,
-            "arrowConcavity": o.arrow_concavity})
+            // Settings saved with the old 0..100 range draw at the nearest value (#13258).
+            "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
