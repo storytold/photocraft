@@ -325,6 +325,12 @@ fn hsv_lookup(g: HsvGrid, k: i32, h: f32, s: f32, v: f32) -> vec3<f32> {
     return d;
 }
 
+// Every component is a finite number: NaN fails the comparison, and so does infinity. WGSL
+// has no isinf / isnan.
+fn finite3(v: vec3<f32>) -> bool {
+    return all(abs(v) <= vec3(3.4028235e38));
+}
+
 // `hsv_table::Steps::apply_encoded`: `kinds` tables one after the other in HSV of linear
 // ProPhoto, each at the input's hue and the previous one's saturation and value.
 fn hsv_steps(g: HsvGrid, kinds: i32, c: vec3<f32>) -> vec3<f32> {
@@ -353,6 +359,11 @@ fn hsv_steps(g: HsvGrid, kinds: i32, c: vec3<f32>) -> vec3<f32> {
         return c;
     }
     let y = hsv_to_rgb(h, s, v);
+    // As `hsv_table::Steps::apply`: a value scaled past the f32 range (a float image's
+    // highlight) keeps the original colour.
+    if !finite3(y) {
+        return c;
+    }
     let back = rows_times(P.from_prophoto, y);
     let inside = all(c >= vec3(0.0)) && all(c <= vec3(1.0));
     var o = vec3(encode(back.x), encode(back.y), encode(back.z));
