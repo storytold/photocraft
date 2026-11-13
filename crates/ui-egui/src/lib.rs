@@ -172,6 +172,7 @@ pub use dialogs::new_guide_ui;
 pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
+pub use dialogs::paste_as_prompt;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
@@ -646,6 +647,8 @@ pub struct PhotocraftApp {
     os_clip_sig: Option<u64>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
     os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
+    /// Last observed PDF bytes, the same way for a page-layout app's object copy.
+    os_clip_pdf: Option<std::sync::Arc<Vec<u8>>>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
     /// to recognize unchanged system contents when exporting a newer copy failed or was disabled.
     clip_unmirrored: bool,

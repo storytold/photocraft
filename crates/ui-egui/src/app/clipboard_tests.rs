@@ -62,7 +62,7 @@ const CLIP_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="8" hei
 
 #[test]
 fn svg_clipboard_paste_as_keeps_source_and_creates_the_requested_content() {
-    for mode in ["pixels", "path", "shape"] {
+    for mode in ["pixels", "path", "shape", "smartObject"] {
         let services = Services { clipboard_get_svg: Some(Box::new(|| Ok(Some(CLIP_SVG.as_bytes().to_vec())))), ..Default::default() };
         let mut app = PhotocraftApp::new(Session::new(), services);
         app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
@@ -79,6 +79,7 @@ fn svg_clipboard_paste_as_keeps_source_and_creates_the_requested_content() {
             let content = &state.doc.layer(state.active_layer.unwrap()).unwrap().content;
             assert!(match mode {
                 "pixels" => matches!(content, photocraft_doc::LayerContent::Raster(_)),
+                "smartObject" => matches!(content, photocraft_doc::LayerContent::Smart(_)),
                 _ => matches!(content, photocraft_doc::LayerContent::Shape(_)),
             });
         }
@@ -90,6 +91,62 @@ fn svg_clipboard_paste_as_keeps_source_and_creates_the_requested_content() {
         app.run("edit.redo", json!({})).unwrap();
         assert!(Arc::ptr_eq(&source, app.session.clipboard.as_ref().unwrap().svg.as_ref().unwrap()));
     }
+}
+
+/// An ordinary interactive ⌘V with no explicit mode asks instead of silently flattening, when the
+/// clipboard holds a vector source alongside its raster mirror (an SVG app's clipboard, such as
+/// VectorCraft's, writes both: #4410).
+#[test]
+fn plain_paste_with_a_vector_source_offers_paste_as_instead_of_flattening() {
+    let services = Services {
+        clipboard_get_svg: Some(Box::new(|| Ok(Some(CLIP_SVG.as_bytes().to_vec())))),
+        clipboard_get_image: Some(Box::new(|| Ok(Some((8, 6, vec![0u8; 8 * 6 * 4]))))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    let r = app.run("edit.paste", json!({})).unwrap();
+    assert_eq!(r["confirmationPending"], json!(true), "a vector clipboard asks instead of silently flattening");
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "nothing pasted until the dialog is answered");
+    assert_eq!(app.ui.dialogs.len(), 1);
+    assert_eq!(app.ui.dialogs[0].fields.get("as"), Some(&json!("smartObject")), "Smart Object is the default choice");
+    // Confirming it runs the real paste, through the generic command-dialog path.
+    let id = app.ui.dialogs[0].id;
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let state = app.session.active().unwrap();
+    assert_eq!(state.doc.layers.len(), layers + 1);
+    assert!(matches!(&state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Smart(_)));
+    // Asking again and choosing Pixels instead pastes a raster layer.
+    app.run("edit.paste", json!({})).unwrap();
+    let id = app.ui.dialogs[0].id;
+    app.ui.dialog_mut(id).unwrap().fields.insert("as".into(), json!("pixels"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let state = app.session.active().unwrap();
+    assert!(matches!(&state.doc.layer(state.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Raster(_)));
+}
+
+/// A raster-only clipboard pastes immediately, exactly as before (unaffected by the new dialog).
+/// Automation states its own mode through `edit.paste`'s own `as` param and never sees the dialog,
+/// even with a vector source: an implicit mode keeps the ordinary route, as it always did.
+#[test]
+fn automation_and_raster_only_clipboards_skip_the_paste_as_dialog() {
+    let services = Services { clipboard_get_image: Some(Box::new(|| Ok(Some((3, 2, vec![255; 3 * 2 * 4]))))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    app.run("edit.paste", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
+    assert!(app.ui.dialogs.is_empty());
+
+    let services = Services { clipboard_get_svg: Some(Box::new(|| Ok(Some(CLIP_SVG.as_bytes().to_vec())))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+    app.automation_input = true;
+    let layers = app.session.active().unwrap().doc.layers.len();
+    app.run("edit.paste", json!({})).unwrap();
+    assert!(app.ui.dialogs.is_empty(), "automation never sees the dialog");
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "automation keeps the ordinary route");
 }
 
 #[test]

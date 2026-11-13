@@ -344,6 +344,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
 fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::paste_as_prompt::owns(fields) => crate::paste_as_prompt::body(ui, fields),
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
@@ -916,6 +917,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::new_group_ui::owns,
     crate::mask_trash_prompt::owns,
     crate::rasterize_prompt::owns,
+    crate::paste_as_prompt::owns,
     crate::duplicate_layer_ui::owns,
     crate::stack_dialog::owns,
     crate::tool_reset::owns,
@@ -1335,6 +1337,7 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod paste_as_prompt;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;

@@ -1,6 +1,6 @@
 use super::{
     DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking,
-    smart_svg_ui, state, transform_tool, type_transform, vector_ui,
+    paste_as_prompt, smart_svg_ui, state, transform_tool, type_transform, vector_ui,
 };
 
 impl PhotocraftApp {
@@ -118,16 +118,16 @@ impl PhotocraftApp {
                 match params.get("as") {
                     None => None,
                     Some(value) => match value.as_str() {
-                        Some(mode @ ("pixels" | "path" | "shape")) => Some(mode),
-                        _ => return Err("`as` must be pixels, path or shape".into()),
+                        Some(mode @ ("pixels" | "path" | "shape" | "smartObject")) => Some(mode),
+                        _ => return Err("`as` must be pixels, path, shape or smartObject".into()),
                     },
                 }
             } else {
                 None
             };
             if let Some(mode) = paste_as {
-                // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
-                let (imported, svg_error) = match self.import_os_svg_clipboard() {
+                // Pixels can come from the bitmap when neither vector source can be read; vectors can't.
+                let (imported, vector_error) = match self.import_os_vector_clipboard() {
                     Ok(imported) => (imported, None),
                     Err(error) if mode == "pixels" => (false, Some(error)),
                     Err(error) => return Err(error),
@@ -137,9 +137,9 @@ impl PhotocraftApp {
                     && !clip_read
                     && let Err(error) = self.import_os_clipboard()
                 {
-                    return Err(svg_error.unwrap_or(error));
+                    return Err(vector_error.unwrap_or(error));
                 }
-                if let Some(error) = svg_error {
+                if let Some(error) = vector_error {
                     if self.session.clipboard.is_none() {
                         return Err(error);
                     }
@@ -147,6 +147,15 @@ impl PhotocraftApp {
                     self.ui.status_error = false;
                 }
             } else if !clip_read {
+                if id == "edit.paste" {
+                    // A vector source (an SVG or PDF app's clipboard) offers Paste As before
+                    // falling through to the ordinary bitmap route, which never keeps vectors
+                    // (#4410, #2204 follow-up).
+                    let _ = self.import_os_vector_clipboard();
+                    if let Some(result) = paste_as_prompt::offer(self) {
+                        return result;
+                    }
+                }
                 self.import_os_clipboard()?;
             }
             if paste_as.is_none() && self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {

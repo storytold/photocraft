@@ -19,6 +19,7 @@ pub(super) enum Mode {
     Pixels,
     Path,
     Shape,
+    SmartObject,
 }
 
 fn bad(message: &str) -> EngineError {
@@ -33,9 +34,10 @@ pub(super) fn mode(p: &Value) -> Result<Option<Mode>> {
             "pixels" => Ok(Some(Mode::Pixels)),
             "path" => Ok(Some(Mode::Path)),
             "shape" => Ok(Some(Mode::Shape)),
-            _ => Err(bad("`as` must be pixels, path or shape")),
+            "smartObject" => Ok(Some(Mode::SmartObject)),
+            _ => Err(bad("`as` must be pixels, path, shape or smartObject")),
         },
-        Some(_) => Err(bad("`as` must be pixels, path or shape")),
+        Some(_) => Err(bad("`as` must be pixels, path, shape or smartObject")),
     }
 }
 
@@ -60,6 +62,7 @@ pub(super) fn from_svg(bytes: &[u8]) -> Result<Clip> {
     owned.extend_from_slice(bytes);
     Ok(Clip {
         svg: Some(Arc::new(owned)),
+        pdf: None,
         components: None,
         surface: (*image.surface).clone(),
         bounds: image.bounds,
@@ -67,6 +70,31 @@ pub(super) fn from_svg(bytes: &[u8]) -> Result<Clip> {
         resolution: None,
         source: None,
         // An image from another app came from no artboard.
+        board: None,
+    })
+}
+
+/// A page-layout app's object copy (DesignCraft, say), unlike an SVG's: the PDF importer is
+/// raster-only (no editable Path or Shape reconstruction), so this only ever backs Pixels and
+/// Smart Object (#2204 follow-up).
+pub(super) fn from_pdf(bytes: &[u8]) -> Result<Clip> {
+    let imported = photocraft_io::import("Clipboard.pdf", bytes).map_err(|e| bad(&format!("can't import clipboard PDF: {e}")))?;
+    let page = imported.document.layers.first().ok_or_else(|| bad("the PDF has no pages"))?;
+    let LayerContent::Group(group) = &page.content else { return Err(bad("unexpected PDF import shape")) };
+    let artboard = group.artboard.as_ref().ok_or_else(|| bad("the PDF page has no artboard"))?;
+    let raster = group.children.first().ok_or_else(|| bad("the PDF page has no content"))?;
+    let LayerContent::Raster(surface) = &raster.content else { return Err(bad("the PDF page isn't a raster layer")) };
+    let mut owned = crate::allocation::capacity(bytes.len(), "copying PDF clipboard source")?;
+    owned.extend_from_slice(bytes);
+    Ok(Clip {
+        svg: None,
+        pdf: Some(Arc::new(owned)),
+        components: None,
+        surface: surface.clone(),
+        bounds: artboard.rect,
+        layers: None,
+        resolution: None,
+        source: None,
         board: None,
     })
 }
@@ -191,7 +219,28 @@ pub(super) fn layer_target(s: &Session) -> Result<()> {
 /// Prepare all fallible work before a single insertion, retaining the original clipboard source.
 pub(super) fn paste(s: &mut Session, p: &Value, mode: Mode) -> Result<Value> {
     let center = validate(s, p, false)?;
-    let bytes = s.clipboard.as_ref().and_then(|clip| clip.svg.clone()).ok_or_else(|| bad("this Paste mode requires original vector clipboard source"))?;
+    let (clip_svg, clip_pdf) = s.clipboard.as_ref().map_or((None, None), |clip| (clip.svg.clone(), clip.pdf.clone()));
+    // Embeds the original source and keeps it editable (Layer ▸ Smart Objects ▸ Edit Contents),
+    // through the same place pipeline File ▸ Place Embedded uses, instead of flattening to pixels
+    // or extracting a path/shape: the bytes already proved valid SVG or PDF once, when they
+    // reached the clipboard (`from_svg`'s own `prepare` call, or `from_pdf`'s import), so this
+    // skips a second parse. SVG wins when both are on the clipboard: richer (Path and Shape read
+    // it too), and what a dual-format source (VectorCraft's own copy) means to keep editable.
+    if mode == Mode::SmartObject {
+        let (name, bytes) = match (&clip_svg, &clip_pdf) {
+            (Some(bytes), _) => ("Pasted SVG", bytes.clone()),
+            (None, Some(bytes)) => ("Pasted PDF", bytes.clone()),
+            (None, None) => return Err(bad("this Paste mode requires original vector clipboard source")),
+        };
+        layer_target(s)?;
+        let mut result = crate::file_cmds::place_bytes(s, name, (*bytes).clone(), None, &json!({"smartObject": true}))?;
+        result["as"] = json!("smartObject");
+        return Ok(result);
+    }
+    // Path and Shape need actual vector geometry: the PDF importer is raster-only, so a
+    // PDF-only clipboard source has none to extract (the dialog itself leaves these options out
+    // for one, #2204 follow-up; this refuses an automation `edit.paste` that asks anyway).
+    let bytes = clip_svg.ok_or_else(|| bad("this Paste mode requires original vector clipboard source"))?;
     let (mut copies, warnings) = prepare(&bytes)?;
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let destination = state.doc.clone();
