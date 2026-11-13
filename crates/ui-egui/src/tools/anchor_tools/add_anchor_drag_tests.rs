@@ -239,7 +239,7 @@ fn non_finite_pointer_positions_leave_the_drag_alone() {
 fn an_agents_space_moves_the_anchor() {
     let mut app = square();
     let ctx = egui::Context::default();
-    let mut pointer = |app: &mut PhotocraftApp, params: serde_json::Value| {
+    let pointer = |app: &mut PhotocraftApp, params: serde_json::Value| {
         let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", params);
         match crate::control::handle(app, &ctx, &req) {
             crate::control::Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
