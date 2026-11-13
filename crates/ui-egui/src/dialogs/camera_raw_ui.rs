@@ -46,6 +46,7 @@ pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;
 pub use filmstrip::HeldRaw;
+pub(crate) use masks_panel::drop_drawing_tool;
 pub use menu::menu;
 #[cfg(test)]
 use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};

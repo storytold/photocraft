@@ -1080,6 +1080,17 @@ fn guide_drag(s: &mut MaskUi, d: &mut CameraRawDialog, frame: (ERect, usize, usi
     }
 }
 
+/// Puts down the drawing tool (a mask tool or Guided Upright's guides), as picking the Hand or
+/// Zoom tool does: a drag then pans or zooms rather than painting.
+pub(crate) fn drop_drawing_tool(ctx: &egui::Context) {
+    let mut s = load(ctx);
+    if s.tool != DrawTool::None || s.drag.is_some() {
+        s.tool = DrawTool::None;
+        s.drag = None;
+        store(ctx, s);
+    }
+}
+
 /// Turns the Guided Upright guide tool on or off (the Geometry panel's Guided button and the
 /// preview share it).
 pub(crate) fn set_guide_tool(ctx: &egui::Context, on: bool) {
@@ -1352,6 +1363,23 @@ mod tests {
         assert_eq!(p.masks[0].components.len(), 2);
         assert!(KINDS.iter().all(|(k, _)| kind_available(k, true)));
         assert_eq!(KINDS.iter().filter(|(k, _)| !kind_available(k, false)).count(), 1);
+    }
+
+    /// Picking the Hand or Zoom tool puts the brush and the guide tool down: the drag no longer
+    /// paints or draws.
+    #[test]
+    fn picking_hand_or_zoom_puts_the_drawing_tool_down() {
+        let ctx = egui::Context::default();
+        let p = CameraRaw { masks: vec![Mask::default()], perspective_upright: "guided".into(), ..CameraRaw::default() };
+        let mut view = crate::state::CameraRawPreviewState::default();
+        let mut sampler = true;
+        for (tool, hand) in [("brush", true), ("guides", false)] {
+            control(&ctx, &p, &json!({"open": true, "selected": 0, "tool": tool})).unwrap();
+            assert!(captures_pointer(&ctx, &p, false), "{tool}");
+            crate::camera_raw_preview_ui::pick_view_tool(&ctx, &mut view, &mut sampler, hand);
+            assert!(!captures_pointer(&ctx, &p, false), "{tool} put down");
+            assert_eq!((view.hand, sampler), (hand, false));
+        }
     }
 
     /// Shift+W toggles Masking, but not while a text field (a mask's name) takes the typing.

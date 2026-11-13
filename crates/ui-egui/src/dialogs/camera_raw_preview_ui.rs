@@ -223,6 +223,7 @@ pub(crate) fn interact(
         });
     });
     if !ui.ctx().text_edit_focused() {
+        let mut picked = None;
         ui.input_mut(|i| {
             if i.consume_key(Modifiers::COMMAND | Modifiers::ALT, Key::Num0) {
                 state.zoom_at(1.0, viewport.center(), viewport, size);
@@ -236,14 +237,15 @@ pub(crate) fn interact(
                 state.zoom_at(state.scale(viewport, size) / 1.25, viewport.center(), viewport, size);
             }
             if i.consume_key(Modifiers::NONE, Key::H) {
-                state.hand = true;
-                *sampler = false;
+                picked = Some(true);
             }
             if i.consume_key(Modifiers::NONE, Key::Z) {
-                state.hand = false;
-                *sampler = false;
+                picked = Some(false);
             }
         });
+        if let Some(hand) = picked {
+            pick_view_tool(ui.ctx(), state, sampler, hand);
+        }
     }
     (state.image_rect(viewport, size), response, panning || temporary_zoom, zoom_box)
 }
@@ -262,8 +264,7 @@ pub(crate) fn tools(ui: &mut Ui, state: &mut CameraRawPreviewState, sampler: &mu
         state.fit();
     }
     if hand_tool.clicked() {
-        state.hand = true;
-        *sampler = false;
+        pick_view_tool(ui.ctx(), state, sampler, true);
     }
     let zoom_tool = crate::icons::button(ui, "zoom-in", 30.0, !state.hand && !*sampler, tl!("Zoom Tool"));
     zoom_tool.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Zoom Tool")));
@@ -271,9 +272,16 @@ pub(crate) fn tools(ui: &mut Ui, state: &mut CameraRawPreviewState, sampler: &mu
         state.fit();
     }
     if zoom_tool.clicked() {
-        state.hand = false;
-        *sampler = false;
+        pick_view_tool(ui.ctx(), state, sampler, false);
     }
+}
+
+/// Picks the Hand (`hand`) or Zoom tool: the Color Sampler and any mask or guide drawing tool
+/// are put down, so a drag on the preview pans or zooms instead of painting.
+pub(crate) fn pick_view_tool(ctx: &egui::Context, state: &mut CameraRawPreviewState, sampler: &mut bool, hand: bool) {
+    state.hand = hand;
+    *sampler = false;
+    crate::camera_raw_ui::drop_drawing_tool(ctx);
 }
 
 /// Under the preview: the zoom level menu (Fit in View and the fixed steps), as Camera Raw's.
