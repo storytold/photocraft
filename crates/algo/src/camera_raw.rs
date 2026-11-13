@@ -1029,7 +1029,7 @@ fn develop_impl(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: b
     }
     // 8a. Optics: Distortion (pixels it uncovers become transparent; Vignetting ran with Exposure).
     if !p.optics_neutral() {
-        optics::apply(px, w, h, p, float);
+        optics::apply(px, w, h, p);
     }
     // 8b. Geometry: Upright and Transform (pixels the warp uncovers become transparent).
     if !p.geometry_neutral() {

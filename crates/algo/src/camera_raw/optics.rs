@@ -170,8 +170,9 @@ fn sample(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 4] {
     acc
 }
 
-/// Distortion on straight RGBA pixels (`w × h`), in place.
-pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
+/// Distortion on straight RGBA pixels (`w × h`), in place. Colour keeps values outside 0 … 1:
+/// [`develop`](super::develop) clamps at its end, after the post-crop vignette and grain.
+pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
     if distortion_neutral(p) || w == 0 || h == 0 || px.len() != w.saturating_mul(h) {
         return;
     }
@@ -188,9 +189,7 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, floa
                 *q = [0.0; 4];
                 continue;
             }
-            for c in 0..3 {
-                q[c] = if float { v[c] } else { v[c].clamp(0.0, 1.0) };
-            }
+            q[..3].copy_from_slice(&v[..3]);
             q[3] = v[3].clamp(0.0, 1.0);
         }
     });
@@ -216,15 +215,15 @@ mod tests {
         let (w, h) = (96, 64);
         let src = dots(w, h);
         let mut up = src.clone();
-        apply(&mut up, w, h, &CameraRaw { lens_distortion: 100.0, ..Default::default() }, false);
+        apply(&mut up, w, h, &CameraRaw { lens_distortion: 100.0, ..Default::default() });
         assert_eq!(up[0], src[0], "the corner stays");
         assert_eq!(up[(h / 2) * w][3], 0.0, "the left edge's middle is uncovered");
         let mut down = src.clone();
-        apply(&mut down, w, h, &CameraRaw { lens_distortion: -100.0, ..Default::default() }, false);
+        apply(&mut down, w, h, &CameraRaw { lens_distortion: -100.0, ..Default::default() });
         assert!(down.iter().all(|q| q[3] > 0.99), "lowering keeps the frame covered");
         assert_ne!(down, src);
         let mut same = src.clone();
-        apply(&mut same, w, h, &CameraRaw::default(), false);
+        apply(&mut same, w, h, &CameraRaw::default());
         assert_eq!(same, src);
     }
 
@@ -262,10 +261,30 @@ mod tests {
             assert!(validate(&CameraRaw { lens_distortion: v, ..Default::default() }).is_err());
         }
         let p = CameraRaw { lens_distortion: 50.0, ..Default::default() };
-        apply(&mut [], 0, 0, &p, false);
-        apply(&mut [[0.5; 4]; 3], 2, 2, &p, false);
+        apply(&mut [], 0, 0, &p);
+        apply(&mut [[0.5; 4]; 3], 2, 2, &p);
         let mut one = vec![[0.3, 0.4, 0.5, 1.0]];
-        apply(&mut one, 1, 1, &p, true);
+        apply(&mut one, 1, 1, &p);
         assert!(one[0].iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn distortion_leaves_the_clamp_to_the_end_of_develop() {
+        // Overrange colour survives Distortion, so the post-crop vignette darkens the same
+        // value with or without it, even at integer depths.
+        let mut px = vec![[1.6, 1.2, 0.5, 1.0]; 4];
+        apply(&mut px, 2, 2, &CameraRaw { lens_distortion: -50.0, ..Default::default() });
+        assert!((px[0][0] - 1.6).abs() < 1e-6 && (px[0][1] - 1.2).abs() < 1e-6, "{:?}", px[0]);
+        let (w, h) = (64, 48);
+        let base = CameraRaw { exposure: 1.5, vignette_amount: -60.0, ..Default::default() };
+        let flat = vec![[0.8, 0.6, 0.4, 1.0]; w * h];
+        let (mut plain, mut bent) = (flat.clone(), flat);
+        crate::camera_raw::develop(&mut plain, w, h, &base, false);
+        crate::camera_raw::develop(&mut bent, w, h, &CameraRaw { lens_distortion: -100.0, ..base }, false);
+        let i = (h / 4) * w + w / 8;
+        assert!(plain[i][0] < 0.999, "the vignette darkens there: {:?}", plain[i]);
+        for c in 0..3 {
+            assert!((plain[i][c] - bent[i][c]).abs() < 2e-3, "{:?} vs {:?}", plain[i], bent[i]);
+        }
     }
 }
