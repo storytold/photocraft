@@ -239,6 +239,9 @@ mod pen_enter_deselects_tests;
 mod line_shift_snap_tests;
 
 #[cfg(test)]
+mod ellipse_shift_circle_tests;
+
+#[cfg(test)]
 mod pen_mode_menu_tests;
 
 #[cfg(test)]

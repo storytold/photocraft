@@ -116,7 +116,8 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
-            let m = w.abs().max(h.abs());
+            // The drag's shorter side sets the square, as in the reference application (#13222).
+            let m = w.abs().min(h.abs());
             (w, h) = (m * w.signum(), m * h.signum());
         }
         let (x0, y0) = if mods.alt { (start[0] - w, start[1] - h) } else { (start[0], start[1]) };
