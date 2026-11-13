@@ -138,7 +138,12 @@ fn psd_and_the_formats_without_alpha_keep_todays_file() {
     for format in ["jpg", "jpeg", "bmp", "psd"] {
         let ticked = export(&mut s, red, json!({"format": format}));
         let unticked = export(&mut s, red, json!({"format": format, "includeBackground": false}));
-        assert_eq!((unticked.size, unticked.at(0, 0)), ((200, 150), WHITE), "{format}: flattened on the board's white");
+        assert_eq!(unticked.size, (200, 150), "{format}");
+        // JPEG is lossy, so the red layer may bleed a little into the corner's block; BMP and
+        // PSD must be exactly white there.
+        let corner = unticked.at(0, 0);
+        let flattened = if matches!(format, "jpg" | "jpeg") { corner[3] == 255 && corner.iter().all(|c| *c >= 240) } else { corner == WHITE };
+        assert!(flattened, "{format}: flattened on the board's white, not transparent: {corner:?}");
         assert!(unticked.bytes == ticked.bytes, "{format}: unticked writes the same file as ticked");
     }
     // Lossless, so the whole board can be checked.
