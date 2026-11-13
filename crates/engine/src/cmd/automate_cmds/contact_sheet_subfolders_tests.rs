@@ -2,37 +2,39 @@
 //! Images by Folder (`groupByFolder`, default off), on the issue's measured test folder.
 use super::*;
 
-/// The issue's measured folder: four images at the top, one in `sub/` and one in `sub/deeper/`,
-/// plus what holds no image (a text file, an empty folder). With `extras` it also has a folder
-/// that sorts before the top folder's files (`0_first/`) and one after `sub/` (`sub2/`).
-fn tree(name: &str, extras: bool) -> String {
-    let root = std::env::temp_dir().join(format!("photocraft-contact-subfolders-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    let root = root.to_string_lossy().into_owned();
-    let mut files = vec!["a_red.png", "b_green.jpg", "c_blue.psd", "d gray.tif", "sub/e_yellow.png", "sub/deeper/f_cyan.png"];
-    if extras {
-        files.extend(["0_first/g_white.png", "sub2/h_black.png"]);
-    }
-    for (i, rel) in files.into_iter().enumerate() {
-        let path = join(&root, rel);
-        std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
-        let mut s = Session::new();
-        let grey = 20 + 25 * i;
-        s.execute("file.new", json!({"width": 12, "height": 8, "background": format!("#{grey:02x}{grey:02x}{grey:02x}")})).unwrap();
-        crate::file_cmds::save_doc(&s.active().unwrap().doc, &path, None).unwrap();
-    }
-    std::fs::write(join(&root, "notes.txt"), "not an image").unwrap();
-    std::fs::create_dir_all(join(&root, "sub/empty")).unwrap();
-    root
-}
-
-/// Removes a test folder when the test ends, passed or not.
+/// Removes a test folder when it goes out of scope, also when the test or its setup panics.
 struct Cleanup(String);
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// The issue's measured folder: four images at the top, one in `sub/` and one in `sub/deeper/`,
+/// plus what holds no image (a text file, an empty folder). With `extras` it also has a folder
+/// that sorts before the top folder's files (`0_first/`) and one after `sub/` (`sub2/`). The
+/// returned guard holds the folder's path and removes it when dropped.
+fn tree(name: &str, extras: bool) -> Cleanup {
+    let root = std::env::temp_dir().join(format!("photocraft-contact-subfolders-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let guard = Cleanup(root.to_string_lossy().into_owned());
+    let root = &guard.0;
+    let mut files = vec!["a_red.png", "b_green.jpg", "c_blue.psd", "d gray.tif", "sub/e_yellow.png", "sub/deeper/f_cyan.png"];
+    if extras {
+        files.extend(["0_first/g_white.png", "sub2/h_black.png"]);
+    }
+    for (i, rel) in files.into_iter().enumerate() {
+        let path = join(root, rel);
+        std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
+        let mut s = Session::new();
+        let grey = 20 + 25 * i;
+        s.execute("file.new", json!({"width": 12, "height": 8, "background": format!("#{grey:02x}{grey:02x}{grey:02x}")})).unwrap();
+        crate::file_cmds::save_doc(&s.active().unwrap().doc, &path, None).unwrap();
+    }
+    std::fs::write(join(root, "notes.txt"), "not an image").unwrap();
+    std::fs::create_dir_all(join(root, "sub/empty")).unwrap();
+    guard
 }
 
 /// Runs Contact Sheet II on `input` with `extra` params (2 × 2 cells, no captions) and returns
@@ -69,8 +71,8 @@ const MEASURED: [&str; 6] = ["a_red", "b_green", "c_blue", "d gray", "e_yellow",
 
 #[test]
 fn include_subfolders_is_on_by_default_and_reads_the_measured_order() {
-    let dir = tree("default", false);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("default", false);
+    let dir = fixture.0.clone();
     let big = json!({"columns": 3, "rows": 3});
     let default = sheets(json!(dir), big.clone()).unwrap();
     assert_eq!(default, expect(&[("ContactSheet-001", &MEASURED)]));
@@ -83,8 +85,8 @@ fn include_subfolders_is_on_by_default_and_reads_the_measured_order() {
 
 #[test]
 fn subfolders_come_depth_first_after_the_folders_own_files() {
-    let dir = tree("order", true);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("order", true);
+    let dir = fixture.0.clone();
     let all = sheets(json!(dir), json!({"columns": 3, "rows": 3})).unwrap();
     // `0_first/` sorts before `a_red.png` but comes after the top folder's files; `sub/deeper/`
     // comes before `sub2/`.
@@ -93,8 +95,8 @@ fn subfolders_come_depth_first_after_the_folders_own_files() {
 
 #[test]
 fn include_subfolders_off_keeps_the_top_folder_only() {
-    let dir = tree("off", false);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("off", false);
+    let dir = fixture.0.clone();
     let top = expect(&[("ContactSheet-001", &MEASURED[..4])]);
     assert_eq!(sheets(json!(dir), json!({"includeSubfolders": false})).unwrap(), top);
     // Group Images by Folder does nothing without Include Subfolders.
@@ -103,8 +105,8 @@ fn include_subfolders_off_keeps_the_top_folder_only() {
 
 #[test]
 fn group_by_folder_starts_a_sheet_for_each_folder_with_images() {
-    let dir = tree("group", false);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("group", false);
+    let dir = fixture.0.clone();
     // Measured with a 2 × 2 grid: the top folder fills ContactSheet-001, `sub/` and
     // `sub/deeper/` get one sheet each, and the empty `sub/empty/` none.
     let grouped = sheets(json!(dir), json!({"groupByFolder": true})).unwrap();
@@ -130,8 +132,8 @@ fn group_by_folder_starts_a_sheet_for_each_folder_with_images() {
 
 #[test]
 fn a_file_list_ignores_both_flags() {
-    let dir = tree("list", false);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("list", false);
+    let dir = fixture.0.clone();
     let files = json!([join(&dir, "sub/deeper/f_cyan.png"), join(&dir, "a_red.png"), join(&dir, "sub/e_yellow.png")]);
     let listed = expect(&[("ContactSheet-001", &["f_cyan", "a_red", "e_yellow"])]);
     for extra in [json!({}), json!({"includeSubfolders": false}), json!({"includeSubfolders": true, "groupByFolder": true})] {
@@ -141,8 +143,8 @@ fn a_file_list_ignores_both_flags() {
 
 #[test]
 fn a_flag_of_the_wrong_type_is_an_error() {
-    let dir = tree("types", false);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("types", false);
+    let dir = fixture.0.clone();
     for (key, value) in [("includeSubfolders", json!("yes")), ("includeSubfolders", json!(1)), ("groupByFolder", json!("true")), ("groupByFolder", json!([]))] {
         for input in [json!(dir), json!([join(&dir, "a_red.png")])] {
             let mut p = json!({"input": input, "caption": false});
@@ -159,8 +161,8 @@ fn a_flag_of_the_wrong_type_is_an_error() {
 /// Windows without developer mode can't make a directory symlink, so a junction stands in.
 #[test]
 fn a_link_back_up_the_tree_is_walked_once() {
-    let dir = tree("loop", false);
-    let _cleanup = Cleanup(dir.clone());
+    let fixture = tree("loop", false);
+    let dir = fixture.0.clone();
     let link = join(&dir, "sub/deeper/up");
     #[cfg(unix)]
     let made = std::os::unix::fs::symlink(&dir, &link).is_ok();

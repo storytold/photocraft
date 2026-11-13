@@ -78,8 +78,16 @@ fn group_images_by_folder_is_greyed_while_include_subfolders_is_off() {
 
 #[test]
 fn ok_runs_the_sheet_with_both_settings() {
+    /// Removes the test folder when it goes out of scope, also when the test panics.
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
     let dir = std::env::temp_dir().join(format!("pc-contact-subfolders-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    let _cleanup = Cleanup(dir.clone());
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     for (i, rel) in ["top.png", "sub/inner.png"].into_iter().enumerate() {
         let mut s = photocraft_engine::Session::new();
@@ -106,7 +114,6 @@ fn ok_runs_the_sheet_with_both_settings() {
     };
     // Include Subfolders (on) takes `sub/inner.png` too; Group puts it on its own sheet.
     let ((all, all_status), (grouped, grouped_status)) = (sheets(false), sheets(true));
-    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(all, [("ContactSheet-001".to_string(), 2)], "status: {all_status}");
     assert_eq!(grouped, [("ContactSheet-001".to_string(), 1), ("ContactSheet-002".to_string(), 1)], "status: {grouped_status}");
 }
