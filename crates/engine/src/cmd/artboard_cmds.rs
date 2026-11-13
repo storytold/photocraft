@@ -686,11 +686,10 @@ const HYPHENATED_FORMATS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tga", "tif",
 /// `<prefix><artboard name>` with no separator or index between them, [`sanitize`]d as a whole,
 /// and with each space turned into `-` when `hyphenate`.
 ///
-/// A name equal to an earlier one, ignoring letter case as NTFS does (compared in upper case, so
-/// `σ` and `ς` meet) or equal once sanitized, gets the first `-2`, `-3`… that no other board's own
-/// name and no earlier suffix takes. Every board still gets a file of its own on case-insensitive
-/// file systems (#6613), and the first board of a name, like every board whose name is unique,
-/// keeps the plain name.
+/// A name equal to an earlier one ignoring letter case ([`collision_key`]), or equal once
+/// sanitized, gets the first `-2`, `-3`… that no other board's own name and no earlier suffix
+/// takes. Every board still gets a file of its own on case-insensitive file systems (#6613), and
+/// the first board of a name, like every board whose name is unique, keeps the plain name.
 fn artboard_file_stems(prefix: &str, names: &[&str], hyphenate: bool) -> Vec<String> {
     let plain: Vec<String> = names
         .iter()
@@ -699,24 +698,32 @@ fn artboard_file_stems(prefix: &str, names: &[&str], hyphenate: bool) -> Vec<Str
             if hyphenate { stem.replace(' ', "-") } else { stem }
         })
         .collect();
-    let mut taken: HashSet<String> = plain.iter().map(|stem| stem.to_uppercase()).collect();
+    let mut taken: HashSet<String> = plain.iter().map(|stem| collision_key(stem)).collect();
     let mut seen = HashSet::new();
     plain
         .into_iter()
         .map(|stem| {
-            if seen.insert(stem.to_uppercase()) {
+            if seen.insert(collision_key(&stem)) {
                 return stem;
             }
             let mut n = 2u64;
             loop {
                 let candidate = format!("{stem}-{n}");
-                if taken.insert(candidate.to_uppercase()) {
+                if taken.insert(collision_key(&candidate)) {
                     break candidate;
                 }
                 n += 1;
             }
         })
         .collect()
+}
+
+/// The key two file names are compared by to decide whether a case-insensitive file system would
+/// take them for one file: lower case, then upper case. Upper case alone misses the Kelvin sign
+/// `K`, which macOS folds into `K`; lower case alone misses `σ` and `ς`, which NTFS both reads as
+/// `Σ`. Merging a few names a file system would keep apart only costs a `-2` suffix.
+fn collision_key(stem: &str) -> String {
+    stem.to_lowercase().to_uppercase()
 }
 
 /// File › Export › Artboards to Files: one `<prefix><artboard name>.<format>` per board, named by
