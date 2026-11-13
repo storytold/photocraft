@@ -48,7 +48,7 @@ fn a_400_px_two_by_two_sheet_matches_the_reference_bounds() {
     let dir = folder("geometry-400", false);
     let d = sheet(&dir, json!({"units": "pixels", "width": 400, "height": 400, "resolution": 72, "columns": 2, "rows": 2}));
     assert_near(&d, &[("a_red", [2, 45, 198, 143]), ("b_green", [254, 2, 346, 185]), ("c_blue", [9, 202, 192, 385]), ("d gray", [202, 228, 398, 359])]);
-    let (a, c) = (bounds(&d, "a_red", true), bounds(&d, "c_blue", true));
+    let (a, c) = (bounds(&d, "a_red.png", true), bounds(&d, "c_blue.png", true));
     assert!((a.y0 - 186).abs() <= 3 && a.y1 <= 198 + 3, "a_red caption {a:?}, reference y 186..198");
     assert!((c.y0 - 386).abs() <= 3 && c.y1 <= 398 + 3, "c_blue caption {c:?}, reference y 386..398");
     assert!(c.y0 >= bounds(&d, "c_blue", false).y1, "c_blue caption {c:?} under its image");
@@ -79,7 +79,7 @@ fn manual_spacing_down_first_with_rotation_matches_the_reference_bounds() {
         "autoSpacing": false, "vertical": 20, "horizontal": 10, "rotateForBestFit": true, "fontSize": 20});
     let d = sheet(&dir, p);
     assert_near(&d, &[("a_red", [5, 20, 161, 98]), ("b_green", [5, 170, 161, 248]), ("c_blue", [35, 310, 132, 407]), ("d gray", [10, 460, 156, 557])]);
-    let (a, b) = (bounds(&d, "a_red", true), bounds(&d, "b_green", true));
+    let (a, b) = (bounds(&d, "a_red.png", true), bounds(&d, "b_green.png", true));
     assert!((a.y0 - 112).abs() <= 3 && a.y1 <= 138 + 3, "a_red caption {a:?}, reference y 112..138");
     assert!((b.y0 - 262).abs() <= 3 && b.y1 <= 288 + 3, "b_green caption {b:?}, reference y 262..288");
     assert!(a.y0 >= bounds(&d, "a_red", false).y1, "a_red caption {a:?} under its image");
@@ -90,7 +90,7 @@ fn unmeasured_sizes_keep_every_image_and_caption_apart_on_the_page() {
     let dir = folder("geometry-unmeasured", true);
     let runs = [
         json!({"units": "pixels", "width": 900, "height": 500, "resolution": 72, "columns": 3, "rows": 2, "fontSize": 10}),
-        json!({"units": "cm", "width": 10, "height": 10, "resolution": 150, "columns": 4, "rows": 4, "autoSpacing": false, "horizontal": 0, "vertical": 0}),
+        json!({"units": "cm", "width": 10, "height": 10, "resolution": 150, "columns": 4, "rows": 4, "autoSpacing": false, "horizontal": 0, "vertical": 0, "fontSize": 10}),
         // Whole-point cells would leave about 300 px of this page empty, so the cells stay exact.
         json!({"units": "pixels", "width": 2400, "height": 300, "resolution": 300, "columns": 100, "rows": 1, "caption": false}),
         // Whole points (20.83 px) would put the sixth image's centre left of its 24 px cell.

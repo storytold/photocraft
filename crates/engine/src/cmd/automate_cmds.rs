@@ -636,9 +636,28 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
             })?;
             placed += 1;
             if caption {
-                let size_pt = font_pt;
-                let baseline = y0 + box_h + caption_px * 0.75;
-                s.execute("type.create", json!({"x": x0 + box_w / 2.0, "y": baseline, "text": label, "font": font, "size": size_pt, "align": "center", "color": [0.0, 0.0, 0.0], "name": label}))?;
+                // The caption is the full file name as paragraph text: a box as wide as the cell and
+                // 16 pt high, its top at the caption strip (#13700). That was measured at the default
+                // 12 pt only; other sizes and a name that does not fit the box on one line stay point
+                // text, as today, now with the extension.
+                let text = file_name(path);
+                let style = json!({"text": text, "font": font, "size": font_pt, "align": "center", "color": [0.0, 0.0, 0.0], "name": text});
+                let mut boxed = style.clone();
+                boxed["box"] = json!([x0 - ix, y0 + box_h, cell_w, 16.0 * pt]);
+                let fits = (font_pt - 12.0).abs() < 1e-9 && {
+                    let t = crate::type_cmds::new_text_layer(s, &boxed, cmd)?;
+                    let l = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).layout(&t, res as f32);
+                    l.lines.len() == 1 && !l.overflows(&t.text) && l.bounds().is_some_and(|b| f64::from(b[2] - b[0]) <= cell_w)
+                };
+                let p = if fits {
+                    boxed
+                } else {
+                    let mut point = style;
+                    point["x"] = json!(x0 + box_w / 2.0);
+                    point["y"] = json!(y0 + box_h + caption_px * 0.75);
+                    point
+                };
+                s.execute("type.create", p)?;
             }
         }
         if flatten {
