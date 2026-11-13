@@ -72,6 +72,13 @@ fn other_edits_and_other_shapes_keep_edit_shape() {
     let star = s.execute("shape.create", json!({"kind": "star", "rect": [10, 10, 50, 50], "sides": 3, "starRatio": 0.5})).unwrap()["layer"].as_u64().unwrap();
     s.execute("shape.edit", json!({"layer": star, "cornerRadius": 5.0})).unwrap();
     assert_eq!(last_step(&s), Some("Edit Shape"), "rounding a three-point star");
+    let tri_poly = s.execute("shape.create", json!({"kind": "polygon", "rect": [10, 10, 50, 50], "sides": 3})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("shape.edit", json!({"layer": tri_poly, "cornerRadius": 5.0})).unwrap();
+    assert_eq!(
+        last_step(&s),
+        Some("Edit Shape"),
+        "rounding a three-sided Polygon: Photoshop says \"Change Rounded Polygon\", which is #13300's scope, not this issue"
+    );
     let pent = s.execute("shape.create", json!({"kind": "polygon", "rect": [10, 10, 50, 50], "sides": 5})).unwrap()["layer"].as_u64().unwrap();
     s.execute("shape.edit", json!({"layer": pent, "cornerRadius": 5.0})).unwrap();
     assert_eq!(last_step(&s), Some("Edit Shape"), "rounding a five-sided polygon");
