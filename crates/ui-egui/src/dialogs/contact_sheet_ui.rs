@@ -28,16 +28,22 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
     list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect()
 }
 
-/// The rows of the dialog. A fresh dialog has no folder chosen (#13692): not the working folder, nor that of the
-/// document in front.
-pub(crate) fn rows() -> Vec<Param> {
+/// The values the dialog's own memory leaves out, its folder and caption font, kept in the preferences' dialogs map
+/// after an OK whose run succeeded (#13695). The dialog remembers its other values itself.
+const KEPT_TEXT: [&str; 2] = ["input", "font"];
+
+/// The rows of the dialog. They open with the values of the last OK (#13695); a fresh dialog has no folder chosen
+/// (#13692): not the working folder, nor that of the document in front.
+pub(crate) fn rows(app: &PhotocraftApp) -> Vec<Param> {
+    let saved = app.session.prefs().dialogs.get(COMMAND).cloned().unwrap_or_default();
+    let kept = |key: &str, default: &str| saved.get(key).and_then(Value::as_str).unwrap_or(default).to_owned();
     let resolution = vec![
         NumberUnit::new("in", UnitKind::PixelsPerInch, tl!("pixels/inch"), 1.0),
         NumberUnit::new("cm", UnitKind::PixelsPerCentimetre, tl!("pixels/cm"), 2.54),
     ];
     vec![
         Param::section(tl!("Source Images")),
-        Param::new("input", tl!("Input"), ParamKind::text("")).browse(PathKind::Folder).hint(tl!("[Select Image Folder]")),
+        Param::new("input", tl!("Input"), ParamKind::text(kept("input", ""))).browse(PathKind::Folder).hint(tl!("[Select Image Folder]")),
         // The folder, then Include Subfolders (on) and, right below it, Group Images by Folder (off, greyed while
         // Include Subfolders is off).
         Param::new("includeSubfolders", tl!("Include Subfolders"), ParamKind::bool(true)),
@@ -61,7 +67,7 @@ pub(crate) fn rows() -> Vec<Param> {
         Param::new("autoSpacing", tl!("Use Auto-Spacing"), ParamKind::bool(true)),
         Param::section(tl!("Use Filename as Caption")),
         Param::new("caption", tl!("Use Filename as Caption"), ParamKind::bool(true)),
-        Param::new("font", tl!("Font"), ParamKind::text(photocraft_text::fonts::DEFAULT_FAMILY)).enabled_when("caption", true),
+        Param::new("font", tl!("Font"), ParamKind::text(kept("font", photocraft_text::fonts::DEFAULT_FAMILY))).enabled_when("caption", true),
         Param::new("fontSize", tl!("Font size"), ParamKind::number(Some(1.0), None, 12.0, 1.0, 1)).unit(UnitKind::Points).enabled_when("caption", true),
     ]
 }
@@ -76,6 +82,18 @@ pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(),
     // Repeated confirms (automation) keep one alert.
     crate::dialogs::alerts::alert(app, message);
     Err(Label::from(message))
+}
+
+/// The `ParamFamily::run` of the dialog: runs the command and, when it succeeded, keeps [`KEPT_TEXT`] for the next
+/// open and the next launch. Cancel never reaches here, and a failed run keeps the values from before.
+pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    let kept: Map<String, Value> = KEPT_TEXT.iter().filter_map(|key| result.fields.text(key).map(|v| ((*key).to_owned(), json!(v)))).collect();
+    match crate::filter_dialog::run_command(app, ctx, COMMAND, result) {
+        Ok(_) => app.session.prefs.edit(|p| {
+            p.dialogs.insert(COMMAND.into(), Value::Object(kept));
+        }),
+        Err(error) => crate::notices::error(app, error),
+    }
 }
 
 /// The units Width and Height were last shown in, kept by [`follow_units`].
