@@ -89,7 +89,10 @@ fn ok_runs_the_sheet_with_both_settings() {
     let sheets = |group: bool| {
         let mut h = dialog();
         let id = h.state().ui.dialogs.last().unwrap().id;
-        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("input".into(), json!(dir.to_string_lossy()));
+        let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        fields.insert("input".into(), json!(dir.to_string_lossy()));
+        // No captions: they wait on the app's fonts, which load in the background.
+        fields.insert("caption".into(), json!(false));
         if group {
             h.get_by_label(GROUP).click();
             h.run_steps(4);
@@ -97,14 +100,13 @@ fn ok_runs_the_sheet_with_both_settings() {
         h.get_by_label("OK").click();
         h.run_steps(8);
         assert!(h.state().ui.dialogs.is_empty(), "OK closes the dialog");
-        let docs = h.state().session.documents();
-        // Each sheet's image layers, without its background and the captions.
-        let images = |d: &photocraft_doc::Document| d.layers.iter().filter(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_))).count() - 1;
-        docs.iter().map(|d| (d.doc.name.clone(), images(&d.doc))).collect::<Vec<_>>()
+        // Each sheet's image layers: all but its background.
+        let docs = h.state().session.documents().iter().map(|d| (d.doc.name.clone(), d.doc.layers.len() - 1)).collect::<Vec<_>>();
+        (docs, h.state().ui.status.clone())
     };
     // Include Subfolders (on) takes `sub/inner.png` too; Group puts it on its own sheet.
-    let (all, grouped) = (sheets(false), sheets(true));
+    let ((all, all_status), (grouped, grouped_status)) = (sheets(false), sheets(true));
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(all, [("ContactSheet-001".to_string(), 2)]);
-    assert_eq!(grouped, [("ContactSheet-001".to_string(), 1), ("ContactSheet-002".to_string(), 1)]);
+    assert_eq!(all, [("ContactSheet-001".to_string(), 2)], "status: {all_status}");
+    assert_eq!(grouped, [("ContactSheet-001".to_string(), 1), ("ContactSheet-002".to_string(), 1)], "status: {grouped_status}");
 }
