@@ -23,7 +23,9 @@
 //! about the dots' own centroid noise). Pixels the warp leaves uncovered become transparent,
 //! as in Photoshop. Upright's analysis is ours ([`upright`]): line segments, their vanishing
 //! points, and a homography sending them to infinity; Photoshop's own choices differ.
-//! Constrain Crop scales the result up about the centre until the image's frame covers it.
+//! Constrain Crop scales the result up about the centre until the image's frame covers it, or,
+//! when an Offset moved the frame off the centre, fills the result with the largest
+//! frame-shaped part of the warped image.
 
 #![allow(clippy::needless_range_loop)]
 // `!(x > eps)` on purpose: NaN must take the early return too.
@@ -227,14 +229,111 @@ pub fn fill_factor(m: &[f64; 9], w: f64, h: f64) -> Option<f64> {
 }
 
 /// Scales `m` up about the centre so the source frame covers the whole result (Constrain Crop).
+/// When the warped frame no longer contains the centre (an Offset moved it away), centred
+/// scaling cannot cover the result; then the largest frame-shaped rectangle inside the warped
+/// frame is moved to the centre and scaled up to fill the result instead.
 pub fn constrain(m: &[f64; 9], w: f64, h: f64) -> [f64; 9] {
     match fill_factor(m, w, h) {
-        Some(k) if k > 1e-3 && k < 1.0 => {
+        Some(k) if k >= 1.0 => *m,
+        Some(k) if k > 1e-3 => {
             let z = 1.0 / k;
             mul(&[z, 0.0, 0.0, 0.0, z, 0.0, 0.0, 0.0, 1.0], m)
         }
-        _ => *m,
+        _ => match inscribed(m, w, h) {
+            Some((k, c)) => {
+                let z = 1.0 / k;
+                mul(&[z, 0.0, -z * c[0], 0.0, z, -z * c[1], 0.0, 0.0, 1.0], m)
+            }
+            None => *m,
+        },
     }
+}
+
+/// The largest `k ≤ 1` and a centre `c` for which the `k·w × k·h` rectangle centred on `c` lies
+/// inside the image of the source frame under `m` (centred coordinates), the centre nearest the
+/// origin when several fit; `None` when the frame folds over or no such rectangle exists.
+fn inscribed(m: &[f64; 9], w: f64, h: f64) -> Option<(f64, [f64; 2])> {
+    let (hw, hh) = (w / 2.0, h / 2.0);
+    let corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+    let mut q = [[0.0; 2]; 4];
+    for (i, c) in corners.iter().enumerate() {
+        q[i] = project(m, c[0], c[1])?;
+    }
+    let area: f64 = (0..4).map(|i| q[i][0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * q[i][1]).sum();
+    if !(area.abs() > 1e-9) {
+        return None;
+    }
+    let s = area.signum();
+    // The warped frame is convex (its corners all project in front), so the rectangle is inside
+    // it when, for each edge, `n · c + k · (|nx| hw + |ny| hh) ≤ d`: linear in (cx, cy, k).
+    let mut rows = [[0.0f64; 4]; 5];
+    for i in 0..4 {
+        let (a, b) = (q[i], q[(i + 1) % 4]);
+        let n = [s * (b[1] - a[1]), -s * (b[0] - a[0])];
+        let d = s * ((b[1] - a[1]) * a[0] - (b[0] - a[0]) * a[1]);
+        let len = n[0].hypot(n[1]);
+        if !(len > 1e-12) {
+            return None;
+        }
+        rows[i] = [n[0] / len, n[1] / len, (n[0].abs() * hw + n[1].abs() * hh) / len, d / len];
+    }
+    // k ≥ 0, as −k ≤ 0.
+    rows[4] = [0.0, 0.0, -1.0, 0.0];
+    let tol = 1e-7 * (hw + hh).max(1.0);
+    let feasible = |x: [f64; 3]| rows.iter().all(|r| r[0] * x[0] + r[1] * x[1] + r[2] * x[2] <= r[3] + tol);
+    // The optimum of this small linear programme is at a vertex: try every three constraints.
+    let mut best: Option<f64> = None;
+    for a in 0..5 {
+        for b in a + 1..5 {
+            for c in b + 1..5 {
+                let Some(x) = solve3(rows[a], rows[b], rows[c]) else { continue };
+                if x.iter().all(|v| v.is_finite()) && feasible(x) && best.is_none_or(|k| x[2] > k) {
+                    best = Some(x[2]);
+                }
+            }
+        }
+    }
+    let k = best?.min(1.0);
+    if !(k > 1e-3) {
+        return None;
+    }
+    // With `k` fixed the centres that fit form a convex polygon: the nearest point to the origin
+    // is the origin's projection on an edge line or a corner where two lines meet.
+    let lines: Vec<[f64; 3]> = rows[..4].iter().map(|r| [r[0], r[1], r[3] - r[2] * k]).collect();
+    let fits = |c: [f64; 2]| lines.iter().all(|l| l[0] * c[0] + l[1] * c[1] <= l[2] + tol);
+    let mut cands: Vec<[f64; 2]> = lines.iter().map(|l| [l[0] * l[2], l[1] * l[2]]).collect();
+    for i in 0..4 {
+        for j in i + 1..4 {
+            let (p, r) = (lines[i], lines[j]);
+            let det = p[0] * r[1] - p[1] * r[0];
+            if det.abs() > 1e-12 {
+                cands.push([(p[2] * r[1] - p[1] * r[2]) / det, (p[0] * r[2] - p[2] * r[0]) / det]);
+            }
+        }
+    }
+    let c = cands.into_iter().filter(|c| c[0].is_finite() && c[1].is_finite() && fits(*c)).min_by(|a, b| a[0].hypot(a[1]).total_cmp(&b[0].hypot(b[1])))?;
+    Some((k, c))
+}
+
+/// Solves `[a; b; c] · x = rhs` for three rows `[x0, x1, x2, rhs]` (Cramer's rule).
+fn solve3(a: [f64; 4], b: [f64; 4], c: [f64; 4]) -> Option<[f64; 3]> {
+    let det3 = |m: [[f64; 3]; 3]| {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    };
+    let m = [[a[0], a[1], a[2]], [b[0], b[1], b[2]], [c[0], c[1], c[2]]];
+    let d = det3(m);
+    if !(d.abs() > 1e-12) {
+        return None;
+    }
+    let rhs = [a[3], b[3], c[3]];
+    Some(std::array::from_fn(|col| {
+        let mut mc = m;
+        for r in 0..3 {
+            mc[r][col] = rhs[r];
+        }
+        det3(mc) / d
+    }))
 }
 
 /// Moves `m`'s result so the bounding box of the warped frame is centred, as Photoshop's Upright

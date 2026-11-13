@@ -124,6 +124,24 @@ fn constrain_crop_covers_the_frame() {
     assert!(fill_factor(&[f64::NAN; 9], w, h).is_none());
 }
 
+#[test]
+fn constrain_crop_covers_the_frame_when_an_offset_moves_it_off_centre() {
+    let (w, h) = (1200usize, 800usize);
+    let (fw, fh) = (w as f64, h as f64);
+    for (x, y, rotate) in [(100.0, 0.0, 0.0), (-100.0, 0.0, 0.0), (0.0, 100.0, 0.0), (100.0, -100.0, 0.0), (100.0, 0.0, 5.0)] {
+        let p = CameraRaw { perspective_x: x, perspective_y: y, perspective_rotate: rotate, constrain_crop: true, ..CameraRaw::default() };
+        let raw = manual(&Transform::of(&p), fw, fh);
+        assert!(fill_factor(&raw, fw, fh).is_none(), "the frame must leave the centre for ({x}, {y})");
+        let mut px = image(w, h, |_, _| 0.5);
+        apply(&mut px, w, h, &p, false);
+        // At most the outermost pixels may be partly covered, where the frame's edge meets them.
+        let min = px.iter().map(|q| q[3]).fold(1.0f32, f32::min);
+        assert!(min > 0.5, "transparent pixels for ({x}, {y}, {rotate}): alpha {min}");
+        let inner = (1..h - 1).flat_map(|j| (1..w - 1).map(move |i| j * w + i)).filter(|&i| px[i][3] < 0.999).count();
+        assert_eq!(inner, 0, "transparent pixels inside for ({x}, {y}, {rotate})");
+    }
+}
+
 fn image(w: usize, h: usize, f: impl Fn(f64, f64) -> f32) -> Vec<[f32; 4]> {
     (0..w * h)
         .map(|i| {
