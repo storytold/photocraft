@@ -101,7 +101,22 @@ fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
 
 /// The packet's `xmpRights:Marked` value, as an element or an attribute.
 fn rights_marked(xmp: &str) -> Option<&str> {
-    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| find_attr(xmp, "xmpRights:Marked").map(|(_, _, v)| v))
+    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| marked_attr(xmp))
+}
+
+/// Attribute form `xmpRights:Marked="…"` with either quote, any XML whitespace before the name
+/// and around the `=`, as XMP writers lay attributes out on their own lines.
+fn marked_attr(xmp: &str) -> Option<&str> {
+    const NAME: &str = "xmpRights:Marked";
+    xmp.match_indices(NAME).find_map(|(i, _)| {
+        if !xmp[..i].ends_with(|c: char| c.is_ascii_whitespace()) {
+            return None;
+        }
+        let rest = xmp[i + NAME.len()..].trim_start().strip_prefix('=')?.trim_start();
+        let quote = rest.chars().next().filter(|&c| c == '"' || c == '\'')?;
+        let body = &rest[quote.len_utf8()..];
+        body.find(quote).map(|end| &body[..end])
+    })
 }
 
 /// Whether File Info's Copyright Status reads Copyrighted (`xmpRights:Marked` is `True`): the

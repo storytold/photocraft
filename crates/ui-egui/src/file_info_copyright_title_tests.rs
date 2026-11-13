@@ -64,6 +64,14 @@ fn a_file_opened_with_the_mark_already_set_shows_the_prefix() {
         (r#"<rdf:Description xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/" xmpRights:Marked="True"/>"#, true),
         (r#"<rdf:Description xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/" xmpRights:Marked="False"/>"#, false),
         (r#"<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"/>"#, false),
+        // Single quotes, and the name on its own line or after a tab, with space around the '='.
+        ("<rdf:Description xmlns:xmpRights='http://ns.adobe.com/xap/1.0/rights/' xmpRights:Marked='True'/>", true),
+        ("<rdf:Description\n   xmpRights:Marked=\"True\"/>", true),
+        ("<rdf:Description\txmpRights:Marked = 'True'/>", true),
+        ("<rdf:Description\n   xmpRights:Marked='False'/>", false),
+        // Not an attribute: a longer name, or the name with no '='.
+        ("<rdf:Description xmpRights:MarkedX=\"True\"/>", false),
+        ("<rdf:Description xmpRights:Marked/>", false),
     ];
     for (xmp, marked) in packets {
         let mut app = app();
