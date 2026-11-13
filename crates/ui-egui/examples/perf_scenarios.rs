@@ -1135,6 +1135,20 @@ fn wait_job(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<()> {
     }
 }
 
+/// Waits for job `id` to end and returns how it ended.
+fn wait_outcome(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<photocraft_engine::jobs::JobOutcome> {
+    let t = Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            return Ok(e.outcome);
+        }
+        if t.elapsed().as_secs() > 120 {
+            return Err("job did not finish in 120 s".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 fn start_job(s: &mut Session, id: &str, p: Value) -> Res<photocraft_engine::jobs::JobId> {
     match s.start(id, p).map_err(|e| format!("{id}: {e}"))? {
         photocraft_engine::jobs::Started::Job(j) => Ok(j),
@@ -1336,20 +1350,30 @@ fn distort_commit_scenarios(b: &mut Bench, sz: &Sizes) {
     }
     if b.wanted(cancel) {
         b.time(cancel, &mut s, reps, false, |_, s, i| {
+            use photocraft_engine::jobs::JobOutcome;
             let steps = s.active().map(|d| d.history.past_len()).ok_or("no document")?;
-            let job = start_job(s, "edit.perspectiveWarp", json!({"planes": plane}))?;
-            // Cancel early and midway through the warp.
-            std::thread::sleep(std::time::Duration::from_millis(5 + (i as u64 * 37) % 150));
-            let t = Instant::now();
-            s.cancel_job(job);
-            s.join_cancelled_jobs();
-            let v = ms(t);
-            wait_job(s, job)?;
-            // A warp that finished before the cancel was applied: take it back for the next sample.
-            if s.active().map(|d| d.history.past_len()) != Some(steps) {
-                exec(s, "edit.undo", json!({}))?;
+            // Cancel early and midway through the warp. A sample counts only when the cancel took
+            // and the job ended cancelled; a warp that finished first is retried sooner.
+            let mut delay = 5 + (i as u64 * 37) % 150;
+            for _ in 0..6 {
+                let job = start_job(s, "edit.perspectiveWarp", json!({"planes": plane}))?;
+                std::thread::sleep(std::time::Duration::from_millis(delay));
+                let t = Instant::now();
+                let accepted = s.cancel_job(job);
+                s.join_cancelled_jobs();
+                let v = ms(t);
+                let outcome = wait_outcome(s, job)?;
+                // A warp that finished before the cancel was applied: take it back.
+                if s.active().map(|d| d.history.past_len()) != Some(steps) {
+                    exec(s, "edit.undo", json!({}))?;
+                }
+                match outcome {
+                    JobOutcome::Cancelled if accepted => return Ok(v),
+                    JobOutcome::Failed(e) => return Err(format!("edit.perspectiveWarp: the job failed: {e}")),
+                    _ => delay /= 2,
+                }
             }
-            Ok(v)
+            Err("the Perspective Warp job finished before every cancel".into())
         });
     }
 }
