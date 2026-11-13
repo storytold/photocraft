@@ -16,8 +16,9 @@ concurrency:
 
 jobs:
   sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+    # This version checks out this repo's pinned craft-i18n catalog before coverage tests; update
+    # the ref when intentionally adopting a newer shared SonarCloud workflow.
+    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@20ebee3cb1eef69f886b98d566aa07552ee0196f
     with:
       timeout-minutes: 120
       fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
