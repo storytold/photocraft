@@ -1044,7 +1044,14 @@ fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
 fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Value, String> {
     crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
     if skin_smooth_ui::owns(&d.fields) {
+        // Confirmation can arrive before tick discards samples from a previous source.
+        let changed = d.fields.get("__skinSource") != Some(&skin_smooth_ui::source(app));
         app.skin_smooth_mask = None;
+        if changed {
+            app.filter_preview = None;
+            crate::actions::abandoned(app, &d.fields);
+            return Err("the Skin Smooth source changed; reopen the dialog".into());
+        }
     }
     let Some(cmd) = d.fields.get("__command").and_then(Value::as_str).map(str::to_string) else {
         app.filter_preview = None;

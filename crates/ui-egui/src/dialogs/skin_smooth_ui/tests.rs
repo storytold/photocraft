@@ -462,3 +462,50 @@ fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
         h.get_by_label("Skin sampling and Mask require the RGB composite view, with layer pixels targeted.");
     }
 }
+
+/// Confirmation can arrive between a source change and the frame that clears photo samples.
+#[test]
+fn confirmation_checks_sample_source_before_the_next_frame() {
+    for change in ["unchanged", "document", "layer", "channel", "revision"] {
+        let mut app = app();
+        app.background_jobs = false;
+        field(&mut app, "__skinTool", json!("sample"));
+        assert!(pick(&mut app, [2.0, 3.0], egui::Modifiers::NONE));
+        assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1);
+        field(&mut app, "brightness", json!(50));
+        app.skin_smooth_mask = Some(MaskPreview::default());
+        let id = app.ui.dialogs[0].id;
+        match change {
+            "document" => {
+                app.session.execute("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
+            }
+            "layer" => {
+                app.session.execute("layer.new.layer", json!({})).unwrap();
+                app.session.execute("edit.fill", json!({"color":"#b17d62"})).unwrap();
+            }
+            "channel" => app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Color(0),
+            "revision" => {
+                app.session.execute("edit.fill", json!({"color":"#b27d62"})).unwrap();
+            }
+            _ => {}
+        }
+        assert_eq!(app.ui.dialogs[0].fields.get("__skinSource") == Some(&source(&app)), change == "unchanged", "{change}");
+        let before = app.session.active().unwrap().doc.clone();
+        let revision = app.session.active().unwrap().revision;
+        let history = app.session.active().unwrap().history.entries().to_vec();
+        // Do not call tick or draw a frame: automation can confirm in this exact interval.
+        let result = super::super::confirm(&mut app, id);
+        assert!(app.skin_smooth_mask.is_none(), "{change}: confirmation must release the mask preview");
+        if change == "unchanged" {
+            result.unwrap();
+            assert_ne!(app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(2, 3), before.layers[0].surface().unwrap().pixel(2, 3));
+        } else {
+            assert!(result.is_err(), "{change}: confirmation accepted samples from a different source");
+            assert!(result.unwrap_err().contains("source changed"), "{change}: reject the stale source before running the plug-in");
+            let state = app.session.active().unwrap();
+            assert!(Arc::ptr_eq(&before, &state.doc), "{change}: confirmation must not edit the new source");
+            assert_eq!(state.revision, revision);
+            assert_eq!(state.history.entries(), history);
+        }
+    }
+}

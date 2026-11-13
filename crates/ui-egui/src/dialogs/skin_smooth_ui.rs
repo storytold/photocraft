@@ -26,7 +26,7 @@ fn colors(f: &Map<String, Value>, key: &str) -> Vec<[f32; 3]> {
 }
 
 /// Identifies the document revision, layer and channel/mask target to invalidate photo-specific samples.
-fn source(app: &PhotocraftApp) -> Value {
+pub(super) fn source(app: &PhotocraftApp) -> Value {
     app.session.active().map_or(Value::Null, |st| {
         json!([st.doc.id, st.revision, st.active_layer, st.channel_view.target, app.layer_mask_targeted(), app.filter_mask_targeted()])
     })
