@@ -6,16 +6,20 @@ use super::{Color32, Map, PhotocraftApp, RichText, SECTIONS, Sense, Tokens, Valu
 
 // ------------------------------------------------------------------ bodies
 
-/// Render one of our dialogs' bodies.
-pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// Render one of our dialogs' bodies (`id`: the dialog's, for answers that arrive later).
+pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             let mut info = app.perf.gpu_info.lines();
             info.extend(gpu_memory_lines(app));
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
+            f.insert("__agentLink".into(), serde_json::to_value(&app.agent_link).unwrap_or(Value::Null));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
+            if let Some(action) = f.remove("__agentAction").and_then(|a| a.as_str().map(str::to_string)) {
+                super::agents::agent_action(app, f, &action, id);
+            }
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -34,6 +38,8 @@ pub(super) fn humanize(key: &str) -> String {
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
+        // Units & Rulers › Column Size (in points), as translated for New Guide Layout.
+        "columnWidth" => return "Column width".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
@@ -46,6 +52,14 @@ pub(super) fn humanize(key: &str) -> String {
     // The auto-hide notice settings read best with their own labels (Interface › Notification, #2022).
     if key == "notificationAutoHide" {
         return "Auto Hide Notifications".into();
+    }
+    // MCP: the labels its own rows show (`agents::integration_rows`), also for search.
+    match key {
+        "connectAgents" => return "Let AI agents connect (MCP)".into(),
+        "readRoot" => return "Folder agents can open from".into(),
+        "writeRoot" => return "Folder agents can save to".into(),
+        "whenAppClosed" => return "When PhotoCraft is closed".into(),
+        _ => {}
     }
     if key == "notificationDurationSeconds" {
         return "Notification Duration (seconds)".into();
@@ -121,6 +135,10 @@ pub(super) fn choice_label(v: &str) -> String {
         "ahd" => "AHD (adaptive homogeneity)".into(),
         "mhc" => "Malvar–He–Cutler".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
+        // MCP › When PhotoCraft is closed.
+        "launch" => "Open PhotoCraft".into(),
+        "headless" => "Work without a window".into(),
+        "error" => "Ask to open PhotoCraft".into(),
         v => humanize(v),
     }
 }
@@ -151,26 +169,27 @@ pub(super) fn color_of(s: &str) -> Color32 {
 /// Search the same visible, editable preference labels used in the dialog.
 pub(super) fn preference_matches(section: &str, key: &str, query: &str) -> bool {
     let label = humanize(key);
-    format!("{section}.{key}").to_lowercase().contains(query)
-        || label.to_lowercase().contains(query)
-        || tl!(&label).to_lowercase().contains(query)
+    let en = crate::i18n::Lang::EN;
+    en.contains_ignore_case(&format!("{section}.{key}"), query)
+        || en.contains_ignore_case(&label, query)
+        || crate::i18n::current().contains_ignore_case(tl!(&label), query)
         // The Tablet input row and its Pen Tablet note are the visible terms, not just the key.
-        || (cfg!(target_os = "windows") && section == "tools" && key == "tabletInput" && "windows ink pen tablet wintab tablet input".contains(query))
+        || (cfg!(target_os = "windows") && section == "tools" && key == "tabletInput" && en.contains_ignore_case("windows ink pen tablet wintab tablet input", query))
 }
 
 pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static str, &'static str)> {
-    let query = search.trim().to_lowercase();
+    let query = search.trim();
     SECTIONS
         .iter()
         .copied()
         .filter(|(id, title)| {
             query.is_empty()
-                || title.to_lowercase().contains(&query)
-                || tl!(title).to_lowercase().contains(&query)
+                || crate::i18n::Lang::EN.contains_ignore_case(title, query)
+                || crate::i18n::current().contains_ignore_case(tl!(title), query)
                 || values
                     .get(*id)
                     .and_then(Value::as_object)
-                    .is_some_and(|fields| fields.keys().any(|key| !prefs::is_hidden(&format!("{id}.{key}")) && preference_matches(id, key, &query)))
+                    .is_some_and(|fields| fields.keys().any(|key| !prefs::is_hidden(&format!("{id}.{key}")) && preference_matches(id, key, query)))
         })
         .collect()
 }
@@ -237,8 +256,8 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
             let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
             ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
             let show_all = search.trim().is_empty()
-                || title.to_lowercase().contains(&search.trim().to_lowercase())
-                || tl!(&title).to_lowercase().contains(&search.trim().to_lowercase());
+                || crate::i18n::Lang::EN.contains_ignore_case(title, search.trim())
+                || lang.contains_ignore_case(tl!(&title), search.trim());
             let filter = if show_all { "" } else { search.trim() };
             ui.add_space(6.0);
             egui::ScrollArea::vertical().max_height(content_height - 30.0).id_salt("prefs-scroll").show(ui, |ui| {
@@ -247,6 +266,20 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                 if !has_visible_fields(&values, &section) {
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
+                } else if section == "integrations"
+                    && f.get("__agentLink").and_then(|s| s.get("mcpFlag")).and_then(Value::as_bool) == Some(true)
+                    && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
+                {
+                    super::agents::integration_rows(ui, obj, f);
+                    ui.add_space(8.0);
+                } else if section == "integrations"
+                    && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
+                {
+                    // Without the AI-MCP feature flag: the settings PhotoCraft had before.
+                    let mut shown: Map<String, Value> =
+                        obj.iter().filter(|(k, _)| LEGACY_INTEGRATIONS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+                    section_fields(ui, &section, &mut shown, &order, lang, system, filter);
+                    obj.extend(shown);
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system, filter);
                     if section == "fileHandling" {
@@ -367,6 +400,10 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
 
 /// Where a clicked colour swatch leaves its preference path and label for the dialog body, which
 /// holds the fields the Color Picker request goes in.
+/// Preferences › AI Integrations without the AI-MCP feature flag: the settings PhotoCraft had
+/// before the agent connection page.
+const LEGACY_INTEGRATIONS: [&str; 2] = ["allowAgentControl", "controlPort"];
+
 const PICK_ID: &str = "prefs-pick-color";
 
 /// The colour swatch clicked this frame, if any: (preference path, label).
@@ -404,23 +441,23 @@ pub(super) fn section_fields(
     system: Option<egui::Theme>,
     search: &str,
 ) {
-    let query = search.to_lowercase();
+    let query = search.trim();
     let mut keys: Vec<String> = order.iter().filter(|k| obj.contains_key(*k)).cloned().collect();
     keys.extend(obj.keys().filter(|k| !order.contains(k)).cloned());
     if section == "interface" {
-        interface_groups(ui, obj, &keys, lang, system, &query);
+        interface_groups(ui, obj, &keys, lang, system, query);
         return;
     }
-    if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", &query)) {
+    if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", query)) {
         rendering_mode_row(ui, obj);
     }
-    if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", &query)) {
+    if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", query)) {
         memory_usage_row(ui, obj);
     }
     // WinTab is an explicit Windows choice; Windows Ink stays the default everywhere else.
     if section == "tools"
         && cfg!(target_os = "windows")
-        && (query.is_empty() || preference_matches(section, "tabletInput", &query))
+        && (query.is_empty() || preference_matches(section, "tabletInput", query))
         && obj.contains_key("tabletInput")
     {
         let t = Tokens::get(ui.ctx());
@@ -440,7 +477,7 @@ pub(super) fn section_fields(
             );
         });
     }
-    keys.retain(|k| field_visible(section, obj, k, &query));
+    keys.retain(|k| field_visible(section, obj, k, query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
 }
 
@@ -519,6 +556,11 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 let mut s = s.clone();
                 ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(tl!(&label));
                 obj.insert(k, json!(s));
+                if read_at_launch(&path) {
+                    ui.end_row();
+                    ui.label("");
+                    ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                }
             }
             Value::Number(n) => {
                 let value_label = ui.label(RichText::new(tl!(&label)).color(t.text_dim));
@@ -535,7 +577,9 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     }
                 } else {
                     let mut x = n.as_f64().unwrap_or(0.0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num))
+                    // Column Size is stored in points (Image Size's Columns unit, #6214).
+                    let suffix = if matches!(path.as_str(), "unitsAndRulers.columnWidth" | "unitsAndRulers.gutter") { " pt" } else { "" };
+                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).suffix(suffix).custom_parser(crate::widgets::parse_num))
                         .labelled_by(value_label.id);
                     obj.insert(k, json!(x));
                 }
