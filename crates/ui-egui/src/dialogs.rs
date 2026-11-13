@@ -1148,6 +1148,13 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
+        _ => confirm_command_editors(app, d),
+    }
+}
+
+/// Finish the Actions, layer and tool editors before the remaining command dialogs.
+fn confirm_command_editors(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
+    match d.kind {
         _ if crate::actions::owns_stop_message(&d.fields) => crate::actions::stop_message_confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
         _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
