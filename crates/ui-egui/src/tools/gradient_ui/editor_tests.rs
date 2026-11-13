@@ -418,11 +418,14 @@ fn a_color_panel_drag_on_an_editor_stop_is_one_step() {
     let (mut h, sink) = editor(true);
     select(&mut h, 1.0, false);
     let history = h.state().session.active().unwrap().history.past_len();
+    let before = sink.fill(h.state()).unwrap();
     for g in [0.2, 0.4, 0.6] {
         assert!(panel_color_picked(h.state_mut(), [g, g, g], Some("press-1".into())));
     }
     assert_eq!(stop_hexes(h.state(), sink)[2], hex3([0.6; 3]));
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(sink.fill(h.state()).unwrap(), before, "one Undo takes back the whole drag");
 }
 
 /// Without a selected colour stop (an opacity stop selected, or the editor closed) the Color and
@@ -465,7 +468,8 @@ fn pointer(h: &mut Harness<PhotocraftApp>, pos: Pos2, pressed: Option<bool>) {
 
 /// #10783 through the panels' own widgets: a swatch cell click and the Color panel's White box
 /// recolour the editor's selected stop, and a drag along the Color panel's ramp recolours it as it
-/// goes, all in one history step; the foreground stays throughout.
+/// goes, all in one history step, and a second drag on that stop is a step of its own; the
+/// foreground stays throughout.
 #[test]
 fn swatch_cells_and_color_panel_widgets_recolour_the_selected_editor_stop() {
     for layer in [true, false] {
@@ -497,6 +501,18 @@ fn swatch_cells_and_color_panel_widgets_recolour_the_selected_editor_stop() {
         assert_eq!(h.state().session.tools.foreground, foreground, "the foreground stays");
         if layer {
             assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1, "one drag, one step");
+            // A second drag on the same stop is a step of its own, and one Undo takes back only it.
+            let after_first = stop_hexes(h.state(), sink);
+            pointer(&mut h, pos2(ramp.left() + ramp.width() * 0.6, y), Some(true));
+            for x in [0.7, 0.8] {
+                pointer(&mut h, pos2(ramp.left() + ramp.width() * x, y), None);
+            }
+            pointer(&mut h, pos2(ramp.left() + ramp.width() * 0.8, y), Some(false));
+            h.run_steps(2);
+            assert_ne!(stop_hexes(h.state(), sink), after_first, "the second drag recolours the stop");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 2, "two drags, two steps");
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(stop_hexes(h.state(), sink), after_first, "Undo takes back the second drag only");
         }
     }
 }
