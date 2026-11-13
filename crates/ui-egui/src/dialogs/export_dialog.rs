@@ -112,7 +112,7 @@ fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, St
     f.insert("tgaBits".into(), json!("auto"));
     f.insert("sizing".into(), json!("scale"));
     f.insert("lockAspect".into(), json!(true));
-    f.insert("profile".into(), json!("document"));
+    f.insert("profile".into(), json!("srgb"));
     f.insert("embedProfile".into(), json!(true));
     f.insert("width".into(), json!(src_w));
     f.insert("height".into(), json!(src_h));
@@ -946,17 +946,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     f.insert("metadata".into(), json!(m));
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Color Profile")).color(t.text_dim));
-                let mut profile = s(f, "profile");
-                if profile != "srgb" {
-                    profile = "document".into();
-                }
-                let opts: Vec<(String, &str)> = vec![("document".into(), tl!("Document Profile")), ("srgb".into(), tl!("Convert to sRGB"))];
-                if crate::widgets::dropdown(ui, "export-profile", tl!("Color Profile"), &mut profile, &opts, 130.0) {
-                    f.insert("profile".into(), json!(profile));
-                }
-            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Color Space")).font(crate::theme::semibold(12.0)).color(t.text));
+            let mut srgb = s(f, "profile") == "srgb";
+            if crate::widgets::checkbox(ui, &mut srgb, tl!("Convert to sRGB")).changed() {
+                f.insert("profile".into(), json!(if srgb { "srgb" } else { "document" }));
+            }
             let mut embed = f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true);
             crate::widgets::checkbox(ui, &mut embed, tl!("Embed Color Profile"));
             f.insert("embedProfile".into(), json!(embed));
