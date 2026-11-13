@@ -112,11 +112,13 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
         json!({"kind": "line", "from": from, "to": to, "weight": weight,
             "arrowStart": o.arrow_start, "arrowEnd": o.arrow_end,
             "arrowWidth": o.arrow_width, "arrowLength": o.arrow_length,
-            "arrowConcavity": o.arrow_concavity})
+            // Settings saved with the old 0..100 range draw at the nearest value (#13258).
+            "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
-            let m = w.abs().max(h.abs());
+            // The drag's shorter side sets the square, as in the reference application (#13222).
+            let m = w.abs().min(h.abs());
             (w, h) = (m * w.signum(), m * h.signum());
         }
         let (x0, y0) = if mods.alt { (start[0] - w, start[1] - h) } else { (start[0], start[1]) };
