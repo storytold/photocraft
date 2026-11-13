@@ -438,6 +438,16 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
         let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver));
         let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS), &opt))?;
         let tree = tree.map_err(svg_parse_error)?;
+        let usage = image_resolver.usage();
+        if usage.raster_limit_images > 0 {
+            return Err(IoError::Svg("embedded SVG raster images exceed the decoded pixel budget".into()));
+        }
+        if usage.svg_limit_images > 0 {
+            return Err(IoError::Svg("embedded SVG images exceed the byte or nesting budget".into()));
+        }
+        if usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0 {
+            return Err(IoError::Svg("can't parse an embedded SVG image".into()));
+        }
         Ok(Parsed { tree, fontless_text })
     })
     .map_err(IoError::from)
