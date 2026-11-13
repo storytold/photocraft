@@ -220,6 +220,10 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
             return Err(invalid("unsupported non-deferred or parented pixel memory"));
         }
         total = total.checked_add(length).ok_or_else(|| invalid("pixel length overflow"))?;
+        // The packed rows plus the whole tiles the surface keeps them in (a narrow canvas
+        // stores up to 256 times its packed bytes).
+        let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(bounds, &PixelFormat::RGBA8)).unwrap_or(usize::MAX);
+        total = total.checked_add(tiles).ok_or_else(|| invalid("pixel length overflow"))?;
         if total > MAX_PIXEL_BYTES {
             return Err(invalid("decoded pixels exceed the 1 GiB limit"));
         }

@@ -1,7 +1,7 @@
 //! The Type menu: anti-aliasing, orientation, point ⇄ paragraph conversion, Create Work Path,
-//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the Numerals submenu),
-//! Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the default type
-//! styles.
+//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the Numerals submenu and the 20
+//! Stylistic Sets), Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the
+//! default type styles.
 //!
 //! Everything edits the typed [`TextLayer`] model and re-renders through `type_cmds::refresh`,
 //! so the PSD `TySh` data (and with it warp, anti-aliasing and the OpenType flags) is regenerated
@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, explicit_layer, layer_param};
 use crate::type_cmds::{
-    check_text_unlocked, format_targets, has_format_target, is_auto_named, layer_name, refresh_at, replace_text, style_paragraphs, style_range,
+    check_text_unlocked, format_targets, has_format_target, is_auto_named, layer_name, refresh_at, replace_text, style_paragraphs, style_range, typed_name,
     with_text_targets,
 };
 use crate::{EngineError, Result, Session};
@@ -76,16 +76,19 @@ fn has_defaults(s: &Session) -> std::result::Result<(), String> {
 pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
     let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    let typed = typed_name(s, id);
     s.edit(label, |doc, _| {
         let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let auto_named = is_auto_named(l);
+        let auto_named = is_auto_named(l, typed.as_deref());
         let LayerContent::Text(t) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
+        // Only a text change renames: a style or layout edit keeps a copy's "Title copy" (#9023).
+        let old_text = auto_named.then(|| t.text.clone());
         let r = f(t, dpi)?;
         refresh_at(dpi, format, t);
-        let name = auto_named.then(|| layer_name(&t.text));
+        let name = old_text.is_some_and(|old| old != t.text).then(|| layer_name(&t.text));
         if let Some(n) = name {
             l.name = n;
         }
@@ -366,6 +369,7 @@ fn path_source(doc: &Document, p: &Value) -> Result<Subpath> {
     Ok(sub.clone())
 }
 
+/// Attaches the active type layer to a target subpath with optional start offset and flip orientation.
 fn attach_to_path(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |m: &str| EngineError::BadParams { cmd: "type.attachToPath".into(), msg: m.into() };
     let start = match p.get("start") {
@@ -410,7 +414,7 @@ fn attach_to_path(s: &mut Session, p: &Value) -> Result<Value> {
                 photocraft_text::warp::arc_length_at(&path, flip, q.x, q.y).ok_or_else(|| bad("the path has no length"))? as f32
             }
         };
-        t.shape = TextShape::Path { path, start, flip };
+        t.shape = TextShape::Path { path, start, end: None, flip };
         Ok(start)
     })?;
     Ok(json!({"layer": id.0, "start": start, "flip": flip}))
@@ -428,8 +432,8 @@ pub fn type_path(t: &TextLayer) -> Option<Path> {
 /// Puts an edited [`type_path`] back into `t` (its text space), keeping where the type starts and
 /// which side it runs on. It must still be one subpath with two or more points.
 pub(crate) fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
-    let TextShape::Path { start, flip, .. } = &t.shape else { return Err(EngineError::Other("the type layer is not on a path".into())) };
-    let (start, flip) = (*start, *flip);
+    let TextShape::Path { start, end, flip, .. } = &t.shape else { return Err(EngineError::Other("the type layer is not on a path".into())) };
+    let (start, end, flip) = (*start, *end, *flip);
     let [sub] = edited.subpaths.as_slice() else { return Err(EngineError::Other("type on a path follows one path".into())) };
     if sub.knots.len() < 2 {
         return Err(EngineError::Other("type on a path needs a path of two or more points".into()));
@@ -444,7 +448,7 @@ pub(crate) fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
     if !knots.iter().all(|k| [k.anchor, k.in_ctrl, k.out_ctrl].iter().all(|q| q.x.is_finite() && q.y.is_finite())) {
         return Err(EngineError::Other("the path cannot be mapped into the type layer".into()));
     }
-    t.shape = TextShape::Path { path: Subpath { closed: sub.closed, knots, op: sub.op }, start, flip };
+    t.shape = TextShape::Path { path: Subpath { closed: sub.closed, knots, op: sub.op }, start, end, flip };
     Ok(())
 }
 
@@ -453,6 +457,103 @@ fn is_path_text(s: &Session) -> std::result::Result<(), String> {
         TextShape::Path { .. } | TextShape::Area { .. } => Ok(()),
         _ => Err("the type layer is not on a path".into()),
     }
+}
+
+/// Validates that the active layer contains path text eligible for placement adjustments.
+fn is_path_placement_text(s: &Session) -> std::result::Result<(), String> {
+    match active_text(s)?.shape {
+        TextShape::Path { .. } => Ok(()),
+        _ => Err("the type layer is not on a path".into()),
+    }
+}
+
+/// Updates the path text placement range (`start`, `end`) and `flip` orientation, validating boundaries against curve geometry.
+fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
+    let bad = |msg: &str| EngineError::BadParams { cmd: "type.setPathPlacement".into(), msg: msg.into() };
+    if !p.is_object() {
+        return Err(bad("params must be an object"));
+    }
+    let start = p
+        .get("start")
+        .map(|v| {
+            let n = v.as_f64().ok_or_else(|| bad("start must be a finite number representable as f32"))?;
+            let n = n as f32;
+            if n.is_finite() { Ok(n) } else { Err(bad("start must be a finite number representable as f32")) }
+        })
+        .transpose()?;
+    let end = p
+        .get("end")
+        .map(|v| {
+            if v.is_null() {
+                return Ok(None);
+            }
+            let n = v.as_f64().ok_or_else(|| bad("end must be null or a finite number representable as f32"))? as f32;
+            if n.is_finite() { Ok(Some(n)) } else { Err(bad("end must be null or a finite number representable as f32")) }
+        })
+        .transpose()?;
+    let flip = p.get("flip").map(|v| v.as_bool().ok_or_else(|| bad("flip must be a boolean"))).transpose()?;
+    let id = layer_param(s, p)?;
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let locks = doc.effective_locks(id);
+    if locks.position || locks.all {
+        return Err(EngineError::Other("the type layer's position is locked".into()));
+    }
+    with_text(s, p, "Set Path Placement", |t, _| {
+        let TextShape::Path { path, start: current_start, end: current_end, flip: current_flip } = &mut t.shape else {
+            return Err(EngineError::Other("the type layer is not path text".into()));
+        };
+        let mut new_end = end.unwrap_or(*current_end);
+        let mut new_start = start.unwrap_or(*current_start);
+        let validate_range = start.is_some() || end.is_some();
+        if validate_range && new_end.is_some_and(|end| end < new_start) {
+            return Err(bad("end must not be before start"));
+        }
+        if validate_range {
+            if let Some(mut end_val) = new_end {
+                if !new_start.is_finite() || !end_val.is_finite() {
+                    return Err(bad("range must be finite"));
+                }
+                let geometry = photocraft_text::warp::PathGeometry::new(path, false)
+                    .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
+                    .ok_or_else(|| bad("path must have a finite nonzero length"))?;
+                if !path.closed {
+                    let length = geometry.length();
+                    let max_f32 = length as f32;
+                    if new_start < 0.0 || new_start > max_f32 || end_val > max_f32 {
+                        return Err(bad("range must lie on the path"));
+                    }
+                    let canonical_max = geometry.canonical_length_f32();
+                    if end_val > canonical_max {
+                        end_val = canonical_max;
+                    }
+                    if new_start > canonical_max {
+                        new_start = canonical_max;
+                    }
+                    new_end = Some(end_val);
+                }
+                *current_start = new_start;
+            } else if let Some(start_val) = start {
+                if !path.closed {
+                    let geometry = photocraft_text::warp::PathGeometry::new(path, false)
+                        .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
+                        .ok_or_else(|| bad("path must have a finite nonzero length"))?;
+                    let length = geometry.length();
+                    let max_f32 = length as f32;
+                    if start_val < 0.0 || start_val > max_f32 {
+                        return Err(bad("range must lie on the path"));
+                    }
+                    let canonical_max = geometry.canonical_length_f32();
+                    new_start = start_val.min(canonical_max);
+                }
+                *current_start = new_start;
+            }
+            *current_end = new_end;
+        }
+        if let Some(flip) = flip {
+            *current_flip = flip;
+        }
+        Ok(json!({"start": *current_start, "end": *current_end, "flip": *current_flip}))
+    })
 }
 
 fn detach_from_path(s: &mut Session, p: &Value) -> Result<Value> {
@@ -502,6 +603,12 @@ fn warp_text(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 // ---------- OpenType toggles ----------
+
+/// The OpenType tags of Type › OpenType › Stylistic Sets: `STYLISTIC_SET_TAGS[n - 1]` is Set n.
+pub const STYLISTIC_SET_TAGS: [&str; 20] = [
+    "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09", "ss10", "ss11", "ss12", "ss13", "ss14", "ss15", "ss16", "ss17", "ss18", "ss19",
+    "ss20",
+];
 
 /// OpenType figure tags Type › OpenType › Numerals clears or sets (`lnum`/`onum`/`pnum`/`tnum`).
 pub const NUMERAL_FEATURE_TAGS: [&str; 4] = ["lnum", "onum", "pnum", "tnum"];
@@ -870,6 +977,7 @@ fn load_defaults(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Registers extra type commands including path attachment, detachment, rasterization, and path placement.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -879,7 +987,14 @@ pub fn specs() -> Vec<CommandSpec> {
     const LP: &str = r##"{"layer":id?}"##;
     const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers)}"##;
     const OT: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"on":bool? (default: toggle representative),"range":[startChar,endChar]? (single layer; default all)}"##;
-    vec![
+    // One toggle per stylistic set; a run fn can't capture, so each indexes the tag table itself.
+    macro_rules! stylistic_sets {
+        ($($n:literal),* $(,)?) => {
+            [$(spec!(concat!("type.openType.stylisticSets.set", $n), concat!("Set ", $n), &["Type", "OpenType", "Stylistic Sets"], OT, has_format_target, |s, p| toggle_opentype(s, p, STYLISTIC_SET_TAGS[$n - 1]))),*]
+        };
+    }
+    let sets = stylistic_sets![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+    let mut all = vec![
         spec!("type.antiAlias.none", "None", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::None)),
         spec!("type.antiAlias.sharp", "Sharp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Sharp)),
         spec!("type.antiAlias.crisp", "Crisp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Crisp)),
@@ -963,6 +1078,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_text,
             attach_to_path
         ),
+        spec!(
+            "type.setPathPlacement",
+            "Set Path Placement",
+            &[],
+            r##"{"layer":id? (default active Type layer),"start":finite f32 arc-length pixels?,"end":finite f32 arc-length pixels|null?,"flip":bool?}. Updates existing path text; omitted values are preserved. Offsets are text-space pixels in the current travel direction. end:null clears the limit and restores legacy placement; an explicit end must be at least start. Position-locked and fully locked layers are rejected."##,
+            is_path_placement_text,
+            set_path_placement
+        ),
         spec!("type.detachFromPath", "Release Type from Path", &[], LP, is_path_text, detach_from_path),
         spec!("type.updateAllTextLayers", "Update All Text Layers", &["Type"], "{}", any_text, |s, _| update_all(s)),
         spec!("type.replaceAllMissingFonts", "Replace All Missing Fonts", &["Type"], "{} (with the default family)", any_text, |s, _| replace_fonts(
@@ -995,7 +1118,9 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| save_defaults(s)
         ),
         spec!("type.loadDefaultTypeStyles", "Load Default Type Styles", &["Type"], FP, has_defaults, load_defaults),
-    ]
+    ];
+    all.extend(sets);
+    all
 }
 
 #[cfg(test)]

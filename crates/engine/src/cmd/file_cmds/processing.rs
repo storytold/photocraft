@@ -1,4 +1,4 @@
-use super::batch_run::{batch_inputs_tree, process_tree};
+use super::batch_run::{batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem};
 use super::save::SaveOpts;
@@ -6,6 +6,10 @@ use super::{
     ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Surface, Value, buffer_surface, flattened_checked, json, size_param,
     str_param,
 };
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "image_processor_tests.rs"]
+mod image_processor_tests;
 
 // ---------- Automate ----------
 
@@ -84,17 +88,30 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
         .collect()
 }
 
+/// Resize and export folder inputs or copies of the current/all open documents.
+/// An omitted `source` keeps the folder-input contract; document sources include unsaved
+/// edits without modifying the original documents. Invalid parameters and missing documents
+/// return an error; processing failures and output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.imageProcessor";
+    let source = match p.get("source") {
+        None | Some(Value::Null) => "folder",
+        Some(Value::String(source)) if matches!(source.as_str(), "folder" | "current" | "open") => source.as_str(),
+        _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "source must be folder, current or open".into() }),
+    };
     let output = str_param(p, "output", cmd)?.to_string();
-    let inputs = batch_inputs_tree(p, cmd, &output)?;
     let format = p.get("format").and_then(Value::as_str).unwrap_or("jpg").to_string();
+    // The format becomes a filename extension, never a path supplied by a caller.
+    if format.trim_start_matches('.').is_empty() || format.contains(['/', '\\']) || format.chars().any(char::is_control) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "format must be a filename extension".into() });
+    }
     let fit = match (size_param(p, "width"), size_param(p, "height")) {
         (None, None) => None,
         (w, h) => Some(json!({"width": w.unwrap_or(1e9), "height": h.unwrap_or(1e9), "dontEnlarge": true})),
     };
     let to_srgb = p.get("convertToSrgb").and_then(Value::as_bool).unwrap_or(false);
-    let r = process_tree(s, &inputs, &output, &format, SaveOpts::from_params(s, p, cmd)?.or_quality(8.0), "", &|scratch, _| {
+    let save = SaveOpts::from_params(s, p, cmd)?.or_quality(8.0);
+    let process = |scratch: &mut Session, _: &str| {
         if to_srgb && scratch.active().is_some_and(|d| d.doc.mode != ColorMode::Rgb) {
             scratch.execute("image.mode.rgb", json!({}))?;
         }
@@ -102,7 +119,17 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
             fit_image(scratch, fp)?;
         }
         Ok(false)
-    });
+    };
+    let r = if source == "folder" {
+        let inputs = batch_inputs_tree(p, cmd, &output)?;
+        process_tree(s, &inputs, &output, &format, save, "", &process)
+    } else {
+        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
+        if documents.is_empty() {
+            return Err(EngineError::NoDocument);
+        }
+        process_document_copies(s, &documents, &output, &format, save, &process)
+    };
     Ok(r)
 }
 

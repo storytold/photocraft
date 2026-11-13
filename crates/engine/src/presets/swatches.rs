@@ -11,7 +11,7 @@
 //! The library persists with the preferences document (`presets.swatches`, see
 //! [`super::PresetState::to_json`]). The default set is our own (clean-room): grays, pastels,
 //! pure and dark hues. The commands live in `crate::swatch_cmds`; file formats in
-//! `photocraft_psd::{aco, ase}`.
+//! `craft_psd::{aco, ase}`.
 
 use std::sync::Arc;
 

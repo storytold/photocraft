@@ -82,19 +82,27 @@ impl Fixture {
             (8, _) => out.extend(codes.iter().map(|&c| c as u8)),
             (16, _) => out.extend(codes.iter().flat_map(|&c| self.u16(c))),
             (10, 1 | 2) => {
-                let base = if self.packing == 1 { 22 } else { 20 };
+                // Method A pads the bottom two bits, method B the top two. The first sample sits in
+                // the high bits, except in a luma element, which fills each word from its low end
+                // (as FFmpeg and ImageMagick read and write it).
+                let pad = if self.packing == 1 { 2 } else { 0 };
+                let luma = self.descriptor == 6;
                 for chunk in codes.chunks(3) {
-                    let w = chunk.iter().enumerate().fold(0u32, |w, (i, &c)| w | (u32::from(c) << (base - 10 * i as u32)));
+                    let w = chunk.iter().enumerate().fold(0u32, |w, (i, &c)| {
+                        let slot = if luma { i as u32 } else { 2 - i as u32 };
+                        w | (u32::from(c) << (pad + 10 * slot))
+                    });
                     out.extend(self.u32(w));
                 }
             }
             (12, 1) => out.extend(codes.iter().flat_map(|&c| self.u16(c << 4))),
             _ => {
-                // One bit stream, high bits first, cut into 32-bit words.
-                let mut bits: Vec<bool> = codes.iter().flat_map(|&c| (0..self.bits).rev().map(move |b| (c >> b) & 1 == 1)).collect();
+                // Packing 0: the samples follow each other through the line's 32-bit words, the
+                // first in the low bits (as FFmpeg and ImageMagick read it).
+                let mut bits: Vec<bool> = codes.iter().flat_map(|&c| (0..self.bits).map(move |b| (c >> b) & 1 == 1)).collect();
                 bits.resize(bits.len().div_ceil(32) * 32, false);
                 for word in bits.chunks(32) {
-                    out.extend(self.u32(word.iter().fold(0u32, |w, &b| (w << 1) | u32::from(b))));
+                    out.extend(self.u32(word.iter().rev().fold(0u32, |w, &b| (w << 1) | u32::from(b))));
                 }
             }
         }
@@ -177,6 +185,8 @@ fn written_codes(b: &[u8]) -> (u8, u16, Vec<u16>) {
         for i in 0..per_line {
             codes.push(match bits {
                 8 => u16::from(line[i]),
+                // A luma element fills each word from its low end.
+                10 if nc == 1 => ((be32_at(line, i / 3 * 4) >> (2 + 10 * (i % 3) as u32)) & 0x3FF) as u16,
                 10 => ((be32_at(line, i / 3 * 4) >> (22 - 10 * (i % 3) as u32)) & 0x3FF) as u16,
                 12 => u16::from_be_bytes([line[i * 2], line[i * 2 + 1]]) >> 4,
                 _ => u16::from_be_bytes([line[i * 2], line[i * 2 + 1]]),
@@ -405,9 +415,10 @@ fn unsupported_and_damaged_files_error_instead_of_panicking() {
     let mut float = Fixture::new(50, 16, 0, 2, 2).bytes();
     float[ELEMENT0 + 23] = 32;
     unsupported(float, "32-bit float");
+    // 12-bit method B (the value in the low bits of each 16-bit word) is read since craft-dpx.
     let mut method_b = Fixture::new(50, 12, 1, 2, 2).bytes();
     method_b[ELEMENT0 + 24..ELEMENT0 + 26].copy_from_slice(&2u16.to_be_bytes());
-    unsupported(method_b, "12-bit method B");
+    assert!(decode(&method_b).is_ok(), "12-bit method B");
 
     let good = Fixture::new(51, 10, 1, 9, 9).bytes();
     let mut no_elements = good.clone();
@@ -438,9 +449,13 @@ fn cineon_bytes(channels: u8, width: u32, height: u32, codes: &[u16]) -> Vec<u8>
     b[0..4].copy_from_slice(&0x802A_5FD7u32.to_be_bytes());
     b[4..8].copy_from_slice(&2048u32.to_be_bytes());
     b[193] = channels;
-    b[198] = 10;
-    b[200..204].copy_from_slice(&width.to_be_bytes());
-    b[204..208].copy_from_slice(&height.to_be_bytes());
+    // One descriptor per channel, all alike.
+    for c in 0..usize::from(channels) {
+        let at = 196 + 28 * c;
+        b[at + 2] = 10;
+        b[at + 4..at + 8].copy_from_slice(&width.to_be_bytes());
+        b[at + 8..at + 12].copy_from_slice(&height.to_be_bytes());
+    }
     for line in codes.chunks(width as usize * usize::from(channels)) {
         for chunk in line.chunks(3) {
             let w = chunk.iter().enumerate().fold(0u32, |w, (i, &c)| w | (u32::from(c) << (22 - 10 * i as u32)));

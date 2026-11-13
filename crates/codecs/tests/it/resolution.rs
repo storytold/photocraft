@@ -511,10 +511,12 @@ fn exports_drop_the_source_exif_thumbnail() {
             assert!(out.windows(6).any(|w| w == b"NIKON\0"), "the rest of the EXIF is kept");
             near(exif_resolution(&out), ppi.map_or(300.0, |p| p.0));
         }
-        // Only the pointer changes.
+        // Only the pointer and the thumbnail's own bytes (the JPEG at the end) change.
         let out = export_exif(&exif, None);
+        let thumb_len = b"\xFF\xD8stale thumbnail\xFF\xD9".len();
         let differing: Vec<usize> = (0..exif.len()).filter(|&i| exif[i] != out[i]).collect();
-        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i)), "{differing:?}");
+        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i) || i >= exif.len() - thumb_len), "{differing:?}");
+        assert!(!out.windows(5).any(|w| w == b"stale"), "the thumbnail bytes are blanked, not just unlinked");
         // With a JPEG-style prefix too.
         let prefixed = [b"Exif\0\0".as_slice(), &exif].concat();
         assert_eq!(next_ifd(e, &export_exif(&prefixed, None)[6..]), 0);
@@ -534,6 +536,44 @@ fn exports_drop_the_source_exif_thumbnail() {
     }
 }
 
+/// A thumbnail range that covers IFD0, or tags that are not one SHORT/LONG value, are not blanked.
+#[test]
+fn thumbnail_blanking_keeps_ifd0_and_ignores_malformed_tags() {
+    for e in [&LE, &BE] {
+        let exif = exif_with_thumbnail(e);
+        let ifd1 = camera_exif(e).len();
+        let table = 8..8 + 2 + 4 * 12;
+        // Offset 8, length 60: the range covers IFD0's table.
+        let mut over = exif.clone();
+        over[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(8));
+        over[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(60));
+        let out = export_exif(&over, None);
+        assert_eq!(next_ifd(e, &out), 0, "IFD1 is still unlinked");
+        assert_eq!(out[table.start..table.end], over[table.start..table.end], "IFD0's table is untouched");
+        // Offset 0, length 8: the range covers the TIFF header, which must stay parseable.
+        let mut header = exif.clone();
+        header[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(0));
+        header[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(8));
+        let out = export_exif(&header, None);
+        assert_eq!(out[..8], header[..8], "the TIFF header is untouched");
+        // IFD0's last entry (Unit) turned into an ExifIFD pointer at IFD1's table: that range is not a thumbnail.
+        let mut sub = exif.clone();
+        let entry = 8 + 2 + 3 * 12;
+        sub[entry..entry + 2].copy_from_slice(&e.u16(0x8769));
+        sub[entry + 2..entry + 4].copy_from_slice(&e.u16(LONG));
+        sub[entry + 4..entry + 8].copy_from_slice(&e.u32(1));
+        sub[entry + 8..entry + 12].copy_from_slice(&e.u32(ifd1 as u32));
+        sub[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(ifd1 as u32 + 2));
+        sub[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(4));
+        let out = export_exif(&sub, None);
+        assert_eq!(out[ifd1 + 2..ifd1 + 6], sub[ifd1 + 2..ifd1 + 6], "the sub-IFD's table is untouched");
+        // A count of 2 on the offset tag: the thumbnail bytes are not blanked.
+        let mut counted = exif.clone();
+        counted[ifd1 + 2 + 4..ifd1 + 2 + 8].copy_from_slice(&e.u32(2));
+        assert!(export_exif(&counted, None).windows(5).any(|w| w == b"stale"));
+    }
+}
+
 #[test]
 fn thumbnail_removal_never_panics_on_truncated_exif() {
     for e in [&LE, &BE] {
@@ -542,5 +582,77 @@ fn thumbnail_removal_never_panics_on_truncated_exif() {
             let _ = export_exif(&exif[..n], None);
             let _ = export_exif(&exif[..n], Some((300.0, 300.0)));
         }
+    }
+}
+
+/// Many Exif pointers to one huge sub-IFD must not cost a full scan each: past the scan budget the
+/// thumbnail bytes are left alone (the IFD1 pointer is still cleared).
+#[test]
+fn thumbnail_overlap_scan_is_bounded_by_a_budget() {
+    let e = &LE;
+    let (pointers, sub_entries) = (100usize, 65_535usize);
+    let sub = 8 + 2 + pointers * 12 + 4;
+    let ifd1 = sub + 2 + sub_entries * 12 + 4;
+    let thumb = b"\xFF\xD8stale thumbnail\xFF\xD9";
+    let mut v = b"II*\0".to_vec();
+    v.extend_from_slice(&e.u32(8));
+    v.extend_from_slice(&e.u16(pointers as u16));
+    for _ in 0..pointers {
+        v.extend_from_slice(&[e.u16(0x8769), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(sub as u32)].concat());
+    }
+    v.extend_from_slice(&e.u32(ifd1 as u32));
+    v.extend_from_slice(&e.u16(sub_entries as u16));
+    v.resize(ifd1, 0); // the sub-IFD's entries are type 0: nothing to hit
+    v.extend_from_slice(&e.u16(2));
+    for (tag, value) in [(0x0201u16, (ifd1 + 2 + 2 * 12 + 4) as u32), (0x0202, thumb.len() as u32)] {
+        v.extend_from_slice(&[e.u16(tag), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(value)].concat());
+    }
+    v.extend_from_slice(&e.u32(0));
+    v.extend_from_slice(thumb);
+    let out = export_exif(&v, None);
+    assert_eq!(next_ifd_at(e, &out, 8 + 2 + pointers * 12), 0, "IFD1 is unlinked");
+    assert!(out.windows(5).any(|w| w == b"stale"), "over the scan budget the thumbnail bytes stay");
+}
+
+fn next_ifd_at(e: &Exif, exif: &[u8], at: usize) -> u32 {
+    let b: [u8; 4] = exif[at..at + 4].try_into().unwrap();
+    if e.big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
+}
+
+/// A thumbnail range that covers the Interoperability IFD (an Exif sub-IFD's 0xA005 target) is not
+/// blanked: its pointer would stay behind, aimed at zeroes.
+#[test]
+fn thumbnail_blanking_keeps_the_interoperability_ifd() {
+    for e in [&LE, &BE] {
+        let (ifd0, sub, interop, ifd1) = (8usize, 8 + 2 + 12 + 4, 8 + 2 + 12 + 4 + 2 + 12 + 4, 8 + 2 + 12 + 4 + 2 + 12 + 4 + 2 + 12 + 4);
+        let mut v = if e.big { b"MM\0*".to_vec() } else { b"II*\0".to_vec() };
+        v.extend_from_slice(&e.u32(ifd0 as u32));
+        // IFD0: one ExifIFD pointer, then IFD1.
+        v.extend_from_slice(&e.u16(1));
+        v.extend_from_slice(&[e.u16(0x8769), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(sub as u32)].concat());
+        v.extend_from_slice(&e.u32(ifd1 as u32));
+        // The Exif IFD: one Interoperability pointer.
+        v.extend_from_slice(&e.u16(1));
+        v.extend_from_slice(&[e.u16(0xA005), e.u16(LONG)].concat());
+        v.extend_from_slice(&[e.u32(1), e.u32(interop as u32)].concat());
+        v.extend_from_slice(&e.u32(0));
+        // The Interoperability IFD: one inline ASCII entry (InteroperabilityIndex).
+        v.extend_from_slice(&e.u16(1));
+        v.extend_from_slice(&[e.u16(1), e.u16(ASCII)].concat());
+        v.extend_from_slice(&[e.u32(4), b"R98\0".to_vec().try_into().unwrap_or([0; 4])].concat());
+        v.extend_from_slice(&e.u32(0));
+        assert_eq!(v.len(), ifd1);
+        // IFD1: a thumbnail whose range is the Interoperability IFD.
+        v.extend_from_slice(&e.u16(2));
+        for (tag, value) in [(0x0201u16, interop as u32), (0x0202, 18)] {
+            v.extend_from_slice(&[e.u16(tag), e.u16(LONG)].concat());
+            v.extend_from_slice(&[e.u32(1), e.u32(value)].concat());
+        }
+        v.extend_from_slice(&e.u32(0));
+        let out = export_exif(&v, None);
+        assert_eq!(out[interop..interop + 18], v[interop..interop + 18], "the Interoperability IFD is untouched");
     }
 }

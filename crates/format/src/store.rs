@@ -119,11 +119,25 @@ impl Compressor {
     }
 }
 
+/// Smallest zstd window [`decompress_bounded`] accepts, whatever the object's size.
+const MAX_ZSTD_WINDOW_FLOOR: u64 = 8 << 20;
+
 /// Decodes a zstd frame of at most `max` bytes (`LimitExceeded` beyond). With `exact`, the
 /// decoded length must be exactly that (`Corrupt` otherwise).
 fn decompress_bounded(data: &[u8], max: usize, exact: Option<usize>, what: &str) -> Result<Vec<u8>> {
     let zstd = |e: &dyn std::fmt::Display| FormatError::corrupt(format!("{what}: zstd: {e}"));
-    let mut dec = ruzstd::decoding::StreamingDecoder::new(data).map_err(|e| zstd(&e))?;
+    // The decoder allocates its window up front, before any output reaches the length check:
+    // hold it to what this object may decode to (our frames use a 128 KiB window; libzstd's
+    // defaults stay under 8 MiB), not ruzstd's 128 MiB default.
+    let window = u64::try_from(exact.unwrap_or(max)).unwrap_or(u64::MAX).max(MAX_ZSTD_WINDOW_FLOOR);
+    let mut dec = match ruzstd::decoding::StreamingDecoder::new_with_max_window_size(data, window) {
+        Ok(dec) => dec,
+        // A well-formed frame asking for more window than this object may decode to is over its limit.
+        Err(ruzstd::decoding::errors::FrameDecoderError::WindowSizeTooBig { requested, .. }) => {
+            return Err(FormatError::LimitExceeded(format!("{what}: zstd window of {requested} bytes exceeds {window}")));
+        }
+        Err(e) => return Err(zstd(&e)),
+    };
     let mut out = Vec::with_capacity(exact.unwrap_or(0).min(max).min(64 << 20));
     // `max` may be `usize::MAX`: one byte past it must not overflow.
     let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
@@ -379,6 +393,7 @@ impl Fetch for LoadFetch<'_> {
         Ok(data)
     }
 
+    /// Fetch a content-addressed blob under the load options' per-blob limit.
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>> {
         self.blob_bounded(hash, self.opts.max_blob_bytes)
     }
@@ -430,7 +445,14 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
     Ok(())
 }
 
+/// Load a checked native bundle while discarding the internal decoded-byte accounting result.
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    load_measured(src, opts).map(|(doc, _)| doc)
+}
+
+/// Admit native canvas dimensions and return both the reconstructed document and the bytes actually fetched for its
+/// content.
+pub(crate) fn load_measured(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, u64)> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
@@ -442,7 +464,8 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    loader.document(&m.document)
+    let document = loader.document(&m.document)?;
+    Ok((document, fetch.total))
 }
 
 // ---------------------------------------------------------------------------
@@ -870,18 +893,19 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
         validate_bundle_file(root, path)?;
         file.write_all(data)?;
         file.sync_all()?;
-        drop(file);
-        // Preserve the existing mode where possible, as the generic atomic writer does.
+        // Preserve the existing mode where possible, as the generic atomic writer does: through
+        // the open handle, so a staging entry swapped meanwhile is not what gets the mode.
         if let Ok(permissions) = std::fs::metadata(path).map(|m| m.permissions()) {
-            let _ = std::fs::set_permissions(&tmp, permissions);
+            let _ = file.set_permissions(permissions);
         }
+        drop(file);
         // Recheck the parent and target just before publishing. rename replaces a symlink
         // itself, never its referent, even if one appears after this check.
         validate_bundle_file(root, path)?;
         crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
         #[cfg(windows)]
         {
-            fs.sync_dir(parent).map_err(|e| crate::atomic::publication_error(e, path))?;
+            crate::atomic::dir_synced(fs.sync_dir(parent)).map_err(|e| crate::atomic::publication_error(e, path))?;
         }
         // Elsewhere a failed flush is reported too (#4968), but a file system that can't flush a
         // directory at all still saves, as in `atomic_write`.
@@ -1066,6 +1090,8 @@ impl PcraftWriter {
         self.lock_wait = wait;
     }
 
+    /// Validate nesting, bounded conversion reports and finite manifest data, then collect content-addressed objects
+    /// while pruning expired hash-cache entries. Preview encoding is scheduled separately by the save path.
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         doc.scratch_health().map_err(FormatError::corrupt)?;
         let generation = photocraft_raster::spill::read_error_generation();
@@ -1084,7 +1110,7 @@ impl PcraftWriter {
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
-        let document = convert::doc_m(doc, &mut c);
+        let document = convert::doc_m(doc, &mut c)?;
         let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
@@ -1299,7 +1325,7 @@ impl PcraftWriter {
             // both object directories again before publishing a manifest that references them.
             // This also persists the fixed subdirectories of a newly created bundle.
             for sub in [TILES_DIR, BLOBS_DIR] {
-                fs.sync_dir(&dir.join(sub)).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
+                crate::atomic::dir_synced(fs.sync_dir(&dir.join(sub))).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
             }
         }
         #[cfg(not(windows))]
@@ -1515,6 +1541,34 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
     assert!(!dir.join(FULL_COMPOSITE).exists());
     assert!(dir.join(COMPOSITE).exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Keep bounded report blobs and their validation on the parallel-preview ZIP path, independently checking serialized preview bytes.
+#[cfg(test)]
+#[test]
+fn parallel_previews_preserve_conversion_blobs_and_propagate_report_limits() {
+    use photocraft_doc::import_conversion::{ImportConversion, MAX_CONVERSION_ATTACHMENTS};
+    let mut doc = Document::new("Report with previews", photocraft_geom::Size::new(3, 2), photocraft_color::ColorMode::Rgb, SampleType::U16);
+    let record = Arc::new(b"future inert report".to_vec());
+    let attachment = Arc::new(vec![7, 19, 31]);
+    let report = Arc::new(ImportConversion::Opaque { schema_version: 2, record: record.clone(), attachments: vec![attachment.clone()] });
+    doc.metadata.import_conversion = Some(report.clone());
+    let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 1)), composite: Some(Rgba8Image::new(3, 2)), ..Default::default() };
+    let mut writer = PcraftWriter::new();
+    let (bytes, stats) = writer.save_zip(&doc, &opts).unwrap();
+    assert_eq!(stats.blobs_total, 2, "the inert record and attachment remain content-addressed blobs");
+    let archive = ZipReader::new(&bytes).unwrap();
+    assert_eq!(archive.read_by_name(THUMB, usize::MAX).unwrap(), png(opts.thumbnail.as_ref().unwrap()).unwrap());
+    assert_eq!(archive.read_by_name(COMPOSITE, usize::MAX).unwrap(), png(opts.composite.as_ref().unwrap()).unwrap());
+    let (reopened, decoded) = crate::load_from_bytes_measured(&bytes, &LoadOptions::default()).unwrap();
+    assert_eq!(reopened.metadata.import_conversion, Some(report.clone()));
+    assert!(decoded >= (record.len() + attachment.len()) as u64, "report blobs remain included in measured decode admission");
+    doc.metadata.import_conversion =
+        Some(Arc::new(ImportConversion::Opaque { schema_version: 2, record, attachments: vec![attachment; MAX_CONVERSION_ATTACHMENTS + 1] }));
+    assert!(matches!(writer.save_zip(&doc, &opts), Err(FormatError::LimitExceeded(_))), "fallible manifest collection must not discard report limits");
+    doc.metadata.import_conversion = Some(report);
+    let recovered = writer.save_zip(&doc, &opts).unwrap().0;
+    assert_eq!(crate::load_from_bytes(&recovered).unwrap().metadata.import_conversion, doc.metadata.import_conversion);
 }
 
 #[cfg(test)]
@@ -1758,4 +1812,15 @@ fn an_incompressible_blob_at_its_limit_still_loads() {
     assert!(spent(9 * data.len() as u64).blob_bounded(&hash, usize::MAX).is_ok());
     let e = spent(9 * data.len() as u64 + 1).blob_bounded(&hash, usize::MAX).unwrap_err();
     assert!(matches!(e, FormatError::LimitExceeded(ref m) if m.contains(&format!("exceeds {} bytes", data.len() - 1))), "{e}");
+}
+
+/// A well-formed zstd frame that asks for a larger window than the object may decode to is over
+/// its limit, not damaged; one within the window decodes.
+#[test]
+fn a_zstd_window_past_the_limit_is_a_limit_not_corruption() {
+    // Magic, a header with a window descriptor only (exponent 15: a 32 MiB window), then one empty last raw block.
+    let frame = |window_descriptor: u8| [0x28, 0xB5, 0x2F, 0xFD, 0x00, window_descriptor, 0x01, 0x00, 0x00];
+    let e = decompress_bounded(&frame(15 << 3), 100, None, "tile").unwrap_err();
+    assert!(matches!(e, FormatError::LimitExceeded(_)), "{e}");
+    assert_eq!(decompress_bounded(&frame(0), 100, None, "tile").unwrap(), Vec::<u8>::new());
 }

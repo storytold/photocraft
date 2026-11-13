@@ -269,3 +269,59 @@ fn hostile_input_never_panics() {
     let e = cryptomatte_layers(&bytes, &Limits { max_alloc: 8, ..Limits::default() }).unwrap_err();
     assert!(e.to_string().contains("exceed"), "{e}");
 }
+
+/// Many keys naming the same layer (in different spellings) list it once, so the listing
+/// stays proportional to the channels rather than keys * channels.
+#[test]
+fn keys_naming_one_layer_list_it_once() {
+    let (w, h) = (4usize, 4usize);
+    let mk = |n: &str, v: f32| AnyChannel::new(n, FlatSamples::F32(vec![v; w * h]));
+    let list = vec![mk("crypto_asset00.red", cryptomatte_id("cube")), mk("crypto_asset00.green", 1.0)];
+    let mut attrs = LayerAttributes::named("crypto_asset");
+    let spellings = ["CryptoAsset", "crypto_asset", "Crypto-Asset", "CRYPTO_ASSET", "crypto__asset"];
+    for i in 0..200 {
+        let name = spellings[i % spellings.len()];
+        attrs.other.insert(text(&format!("cryptomatte/k{i:04}/name")), AttributeValue::Text(text(name)));
+    }
+    let layer = Layer::new(
+        (w, h),
+        attrs,
+        Encoding { compression: Compression::Uncompressed, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
+        AnyChannels::sort(list.into_iter().collect()),
+    );
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (w, h))), vec![layer]);
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write().to_buffered(&mut out).expect("synthetic cryptomatte exr writes");
+    let bytes = out.into_inner();
+    let found = cryptomatte_layers(&bytes, &Limits::default()).unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].channels, ["crypto_asset00"]);
+    let buf = decode_cryptomatte(&bytes, &found[0].name, &Limits::default()).unwrap();
+    assert_eq!(buf.at(0, 0).len(), 1);
+}
+
+/// Of keys naming one layer, the first with a usable manifest lists it, not an earlier one
+/// whose manifest is missing.
+#[test]
+fn a_later_key_with_a_manifest_beats_an_earlier_one_without() {
+    let (w, h) = (4usize, 4usize);
+    let mk = |n: &str, v: f32| AnyChannel::new(n, FlatSamples::F32(vec![v; w * h]));
+    let list = vec![mk("crypto_asset00.red", cryptomatte_id("cube")), mk("crypto_asset00.green", 1.0)];
+    let mut attrs = LayerAttributes::named("crypto_asset");
+    attrs.other.insert(text("cryptomatte/a/name"), AttributeValue::Text(text("CryptoAsset")));
+    attrs.other.insert(text("cryptomatte/b/name"), AttributeValue::Text(text("crypto_asset")));
+    attrs.other.insert(text("cryptomatte/b/manifest"), AttributeValue::Text(text("{\"cube\":\"3f800000\"}")));
+    let layer = Layer::new(
+        (w, h),
+        attrs,
+        Encoding { compression: Compression::Uncompressed, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
+        AnyChannels::sort(list.into_iter().collect()),
+    );
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (w, h))), vec![layer]);
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write().to_buffered(&mut out).expect("synthetic cryptomatte exr writes");
+    let found = cryptomatte_layers(&out.into_inner(), &Limits::default()).unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].key, "b");
+    assert_eq!(found[0].manifest.len(), 1);
+}
