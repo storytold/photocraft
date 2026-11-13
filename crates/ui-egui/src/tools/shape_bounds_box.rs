@@ -279,7 +279,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     }
 }
 
-/// The box and its handles, and while a handle is dragged the scaled outlines.
+/// The box and its handles (with the Ellipse tool, its centre mark too), and while a handle is
+/// dragged the scaled outlines.
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
     if !shows(app) {
         return;
@@ -302,9 +303,23 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
     let [x0, y0, x1, y1] = shown;
     let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(to_scr);
     painter.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, accent)));
+    // Under the handles: on a small box the middle ones keep their white squares on top.
+    if app.ui.tool == Tool::EllipseShape {
+        draw_center_mark(painter, to_scr([(x0 + x1) / 2.0, (y0 + y1) / 2.0]), accent);
+    }
     for (_, at) in handles(shown) {
         let h = egui::Rect::from_center_size(to_scr(at), vec2(7.0, 7.0));
         painter.rect_filled(h, 0.0, Color32::WHITE);
         painter.rect_stroke(h, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
     }
+}
+
+/// The Ellipse tool's centre mark (#13239): a crosshair in a small circle at the box centre, a
+/// fixed size on screen as the handles are. It takes no press.
+fn draw_center_mark(painter: &egui::Painter, c: Pos2, accent: Color32) {
+    const R: f32 = 4.0;
+    let stroke = Stroke::new(1.0, accent);
+    painter.circle_stroke(c, R, stroke);
+    painter.line_segment([c - vec2(R, 0.0), c + vec2(R, 0.0)], stroke);
+    painter.line_segment([c - vec2(0.0, R), c + vec2(0.0, R)], stroke);
 }
