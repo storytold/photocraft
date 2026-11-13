@@ -362,6 +362,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
             d.scope.preview_rect = Some(r);
+            // Split's line (the view's centre) in image coordinates: readouts left of it read Before.
+            d.scope.split = (compare == Compare::Split).then(|| (view.center().x - r.left()) / r.width().max(1e-3)).filter(|s| s.is_finite());
             crate::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
         }
         if let Some(region) = zoom_box {

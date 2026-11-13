@@ -1841,3 +1841,18 @@ fn done_leaves_out_hidden_panels_for_every_raw() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Split view shows Before left of its line: a readout there reads the Before pixels, one right
+/// of it the After pixels.
+#[test]
+fn split_view_readouts_read_the_side_they_sample() {
+    let (mut app, ctx) = grey_dialog();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.scope.split = Some(0.5);
+    let red = |d: &CameraRawDialog, x: f32| d.readout([x, 0.5], false).expect("a readout")["values"][0].as_f64().unwrap();
+    assert!((red(d, 0.25) - 128.0).abs() < 1.0, "Before, left of the line");
+    assert!(red(d, 0.75) > 140.0, "After, right of it");
+    d.scope.split = None;
+    assert!(red(d, 0.25) > 140.0, "no Split: After everywhere");
+}

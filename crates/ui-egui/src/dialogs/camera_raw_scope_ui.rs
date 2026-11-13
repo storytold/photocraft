@@ -115,6 +115,9 @@ pub(crate) struct ScopeView {
     pub(crate) preview_rect: Option<Rect>,
     pub(crate) rect: Option<Rect>,
     pub(crate) vectorscope_rect: Option<Rect>,
+    /// Split view's line, as a fraction of the image width: Before shows left of it, so
+    /// readouts there read the Before pixels. `None` outside Split.
+    pub(crate) split: Option<f32>,
 }
 
 /// One visible proxy pixel, in the histogram RGB domain and ICC-managed vectorscope domain.
@@ -142,10 +145,13 @@ impl CameraRawDialog {
         }
         let x = ((p[0] * self.pw as f32) as usize).min(self.pw - 1);
         let y = ((p[1] * self.ph as f32) as usize).min(self.ph - 1);
+        // Split view shows Before left of its line: a sample there reads what it shows.
+        let before = self.show_before || self.scope.split.is_some_and(|s| p[0] < s);
+        let pixels: &[[f32; 4]] = if before { &self.proxy } else { &self.processed };
         let q = self
             .detail
-            .sample(p, self.preview_revision, self.show_before, &self.effective_params())
-            .or_else(|| self.pixels().get(y.checked_mul(self.pw)?.checked_add(x)?).copied())?;
+            .sample(p, self.preview_revision, before, &self.effective_params())
+            .or_else(|| pixels.get(y.checked_mul(self.pw)?.checked_add(x)?).copied())?;
         (q[3] > 0.0 && q.iter().all(|v| v.is_finite())).then_some(q)
     }
     pub(crate) fn readout(&self, p: [f32; 2], lab: bool) -> Option<Value> {
