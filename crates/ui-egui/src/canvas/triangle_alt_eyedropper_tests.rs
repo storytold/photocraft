@@ -159,8 +159,10 @@ fn unmeasured_cases_keep_drawing() {
     assert!(!shape_alt_samples(&mut app, Modifiers::NONE, ON_RED[0], ON_RED[1]));
     assert!(!shape_alt_samples(&mut app, Modifiers::ALT | Modifiers::CTRL, ON_RED[0], ON_RED[1]), "Control+⌥ is the brush resize");
     assert!(!shape_alt_samples(&mut app, Modifiers::ALT, -40.0, -40.0), "nothing to sample off the image");
-    app.ui.tool_options.shape_mode = "path".into();
-    assert!(!shape_alt_samples(&mut app, Modifiers::ALT, ON_RED[0], ON_RED[1]), "Path mode wasn't measured");
+    for mode in ["path", "pixels"] {
+        app.ui.tool_options.shape_mode = mode.into();
+        assert!(!shape_alt_samples(&mut app, Modifiers::ALT, ON_RED[0], ON_RED[1]), "{mode} mode wasn't measured");
+    }
     app.ui.tool_options.shape_mode = "shape".into();
     app.ui.tool = Tool::Rectangle;
     assert!(!shape_alt_samples(&mut app, Modifiers::ALT, ON_RED[0], ON_RED[1]), "the other shape tools are their own items");

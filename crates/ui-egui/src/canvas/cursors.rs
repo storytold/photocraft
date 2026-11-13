@@ -330,14 +330,14 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
 }
 
 /// The Triangle tool samples with ⌥ held at the press at (x, y) only in Shape mode and with no
-/// shape layer active (#13364): with one, ⌥ subtracts from it. Path mode and a press with nothing
-/// to sample (off the image, over transparency) weren't measured and keep drawing from the centre.
-/// Control+⌥ stays the brush-resize drag, as in [`alt_samples`].
+/// shape layer active (#13364): with one, ⌥ subtracts from it. Path or Pixels mode and a press
+/// with nothing to sample (off the image, over transparency) weren't measured and keep drawing
+/// from the centre. Control+⌥ stays the brush-resize drag, as in [`alt_samples`].
 fn shape_alt_samples(app: &mut PhotocraftApp, mods: egui::Modifiers, x: f64, y: f64) -> bool {
     mods.alt
         && !mods.ctrl
         && app.active_tool() == Tool::Triangle
-        && !crate::vector_ui::draws_path(&app.ui.tool_options)
+        && app.ui.tool_options.shape_mode == "shape"
         && crate::vector_ui::active_shape_path(app).is_none()
         && eyedropper_color(app, x, y).is_some()
 }
