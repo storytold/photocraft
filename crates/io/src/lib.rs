@@ -838,7 +838,8 @@ pub fn import_file_for_open_verified(
         // A flat scanline EXR is decoded block by block straight into tiles; other EXR
         // layouts, and EXR headers the band decoder refuses, are read whole below.
         let mut streamed = None;
-        if !has_extension(name, photocraft_format::EXTENSION) && photocraft_formats::detect("", &magic) == Some(photocraft_formats::Format::OpenExr) {
+        let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
+        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
             let before = photocraft_raster::spill::read_error_generation();
             if let Some(mut result) = exr_native::import(&mut file, ctl)? {
                 // A rewrite in place while the blocks were read must not become the document.
