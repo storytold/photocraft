@@ -336,6 +336,7 @@ sync_github_name = false
 [people.sbjwin]
 real_name = "Baekjin Sung"
 display_name = "Baekjin"
+sync_github_name = false
 
 [people.tomgardenart]
 display_name = "Nostella"
