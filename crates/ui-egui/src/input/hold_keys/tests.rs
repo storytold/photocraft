@@ -1159,3 +1159,106 @@ fn command_or_alt_space_right_click_opens_no_view_menu() {
         }
     }
 }
+
+/// A right-click at `p` with Space already held (the Hand over the selected tool).
+fn right_click_at(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+    h.event(Event::PointerMoved(p));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+/// A pending crop frame on the Crop tool, as the held-key test above sets one up.
+fn with_pending_crop(h: &mut Harness<'static, PhotocraftApp>) -> [f64; 4] {
+    let frame = [100.0, 50.0, 300.0, 200.0];
+    h.state_mut().ui.crop_rect = Some(frame);
+    h.state_mut().crop.default_frame = false;
+    h.run_steps(2);
+    assert!(crate::crop_ui::pending(h.state()));
+    frame
+}
+
+/// The Space-Hand view menu over a pending crop (#11271): Esc closes only the menu and Enter
+/// commits nothing, as under the crop's own menu; with the menu closed Esc discards the crop.
+#[test]
+fn space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop() {
+    let mut h = harness(Tool::Crop);
+    let frame = with_pending_crop(&mut h);
+    let size = h.state().session.active().map(|s| s.doc.size);
+    let steps = h.state().session.active().map(|s| s.history.past_len());
+    let p = screen(&h, 200.0, 125.0);
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    right_click_at(&mut h, p);
+    assert!(
+        h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_none() && crate::canvas_tool_menu::is_view_tool(m.tool)),
+        "Space's Hand opens the view menu"
+    );
+    tap(&mut h, Key::Escape, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
+    assert_eq!(h.state().ui.crop_rect, Some(frame), "and only the menu: the crop is not discarded");
+    assert!(crate::crop_ui::pending(h.state()));
+    right_click_at(&mut h, p);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "the view menu opens again");
+    tap(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().map(|s| s.doc.size), size, "Enter under the menu doesn't crop");
+    assert_eq!(h.state().session.active().map(|s| s.history.past_len()), steps, "no history step");
+    assert_eq!(h.state().ui.crop_rect, Some(frame));
+    // Close the menu and let Space go: Esc discards the pending crop as ever.
+    h.state_mut().ui.canvas_tool_menu = None;
+    key(&mut h, Key::Space, false, Modifiers::NONE);
+    h.run_steps(3);
+    tap(&mut h, Key::Escape, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(!crate::crop_ui::pending(h.state()), "with no menu open Esc discards the crop");
+}
+
+/// Only a plain Esc and Enter are the view menu's (#11271): Ctrl+Alt+Enter dispatches with the menu
+/// open (it leaves the menu open), and Esc with a tool key in one pass closes the menu and picks
+/// the tool.
+#[test]
+fn space_hand_view_menu_reserves_only_plain_escape_and_enter() {
+    let mut h = harness(Tool::Move);
+    let p = screen(&h, 200.0, 125.0);
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    right_click_at(&mut h, p);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "Space's Hand opens the view menu");
+    let mods = platform(Modifiers::COMMAND | Modifiers::ALT);
+    let steps = h.state().session.active().map(|s| s.history.past_len());
+    h.input_mut()
+        .events
+        .extend([Event::ModifiersChanged(mods), Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: mods }]);
+    h.run_steps(2);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "a modified Enter leaves the menu open");
+    assert_eq!(h.state().session.active().map(|s| s.history.past_len()), steps, "and changes nothing");
+    h.input_mut().events.extend([
+        Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
+    assert_eq!(h.state().ui.tool, Tool::Brush, "and B in the same pass still picks the Brush");
+}
+
+/// Space's Hand outside the image opens the pasteboard menu, which outlives the held Space and
+/// closes when the tool underneath changes (#11271).
+#[test]
+fn space_hand_pasteboard_menu_opens_outside_the_image_and_outlives_space() {
+    let mut h = harness(Tool::Move);
+    let outside = screen(&h, -60.0, -60.0);
+    key(&mut h, Key::Space, true, Modifiers::NONE);
+    right_click_at(&mut h, outside);
+    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "Space's Hand opens the pasteboard menu outside");
+    assert_eq!(h.state().ui.tool, Tool::Move, "the Move tool stays selected");
+    key(&mut h, Key::Space, false, Modifiers::NONE);
+    h.run_steps(3);
+    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "the pasteboard menu outlives the held Space");
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "another tool selected closes it");
+}
