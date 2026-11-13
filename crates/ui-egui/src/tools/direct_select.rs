@@ -292,6 +292,9 @@ impl Edit {
     fn command(&self, start: [f64; 2], end: [f64; 2]) -> (&'static str, Value) {
         let d = [end[0] - start[0], end[1] - start[1]];
         match self {
+            // One anchor is "Drag Anchor Point" in History, two or more the default "Drag Anchor
+            // Points", as in Photoshop (#13205).
+            Edit::Anchors(a) if a.len() == 1 => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Anchor Point"})),
             Edit::Anchors(a) => ("path.moveAnchors", json!({"anchors": a, "move": d})),
             Edit::Curvature(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "curvature": true})),
             Edit::Handle([s, k], h, from, independent) => {
@@ -1006,6 +1009,9 @@ mod convert_point_tolerance_tests;
 
 #[cfg(test)]
 mod convert_point_drag_segment_tests;
+
+#[cfg(test)]
+mod history_names_tests;
 
 #[cfg(test)]
 mod shift_angle_tests;
