@@ -15,8 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
+use craft_psd::PsdFile;
 use photocraft_doc::{Document, LayerContent};
-use photocraft_psd::PsdFile;
 
 /// Within two 8-bit steps of Photoshop (same tolerance as the io corpus).
 const PASS_TOL: f32 = 2.0 / 255.0;
@@ -124,7 +124,7 @@ fn photoshop_oracles_rerendered() {
             }
         };
         let Ok(merged) = photocraft_io::merged_composite(&file) else { continue };
-        let ours = photocraft_compose::flatten(&doc).px;
+        let ours = photocraft_compose::flatten(&doc).into_px();
         let (m, bad) = max_diff(&ours, &merged);
         let group = name.split(['/', '\\']).next().unwrap_or(".").to_string();
         let g = groups.entry(group).or_default();

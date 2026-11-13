@@ -47,18 +47,19 @@ fn invert_sample(bytes: &mut [u8], s: SampleType) {
 /// are filled with `fill[c]` (a native-endian encoded sample). Channels whose
 /// `invert[c]` is set are inverted (PSD stores CMYK as `max - ink`).
 pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: SampleType, invert: &[bool]) -> Vec<u8> {
-    let mut out = vec![0u8; n * planes.len() * s.bytes()];
+    // Large results come from (and callers may return them to) the scratch pool.
+    let mut out = photocraft_raster::scratch::take(n * planes.len() * s.bytes(), 0u8);
     interleave_into(planes, fill, n, s, invert, &mut out);
     out
 }
 
 /// Fallible interleave for file imports. Validate sizes and missing-plane fills before
 /// workers write disjoint slices of one reserved output buffer.
-pub fn try_interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: SampleType, invert: &[bool]) -> photocraft_psd::Result<Vec<u8>> {
-    use photocraft_psd::PsdError;
+pub fn try_interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: SampleType, invert: &[bool]) -> craft_psd::Result<Vec<u8>> {
+    use craft_psd::PsdError;
     let plane_bytes = n.checked_mul(s.bytes()).ok_or(PsdError::LimitExceeded("interleave size overflow"))?;
     let len = plane_bytes.checked_mul(planes.len()).ok_or(PsdError::LimitExceeded("interleave size overflow"))?;
-    if len as u64 > photocraft_psd::compression::MAX_DECODED_BYTES {
+    if len as u64 > craft_psd::compression::MAX_DECODED_BYTES {
         return Err(PsdError::LimitExceeded("interleave exceeds MAX_DECODED_BYTES"));
     }
     if n > 0 && planes.is_empty() {
@@ -69,9 +70,7 @@ pub fn try_interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: S
             return Err(PsdError::Invalid("interleave fill has the wrong sample size".into()));
         }
     }
-    let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(|_| PsdError::OutOfMemory("not enough memory to interleave PSD pixels"))?;
-    out.resize(len, 0);
+    let mut out = photocraft_raster::scratch::try_take_exact(len, 0u8).ok_or(PsdError::OutOfMemory("not enough memory to interleave PSD pixels"))?;
     interleave_into(planes, fill, n, s, invert, &mut out);
     Ok(out)
 }
