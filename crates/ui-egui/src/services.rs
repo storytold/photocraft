@@ -476,6 +476,8 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
+/// What the pen's barrel button did since the last frame (Windows; see `pen_barrel`).
+pub type PenBarrelFn = Box<dyn FnMut() -> crate::pen_barrel::BarrelInput>;
 
 /// Where the pen in range is on the screen, in physical pixels ([`Services::pen_screen_px`]).
 pub type PenScreenFn = Box<dyn Fn() -> Option<[i32; 2]> + Send + Sync>;
@@ -616,6 +618,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// The pen's barrel button, read once a frame to turn pen presses made with it into
+    /// right-clicks (Windows, where winit drops it; `pen_barrel`). `None` elsewhere.
+    pub pen_barrel: Option<PenBarrelFn>,
     /// Which end of the pen is in use, where the platform reports it outside the stylus feed
     /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
     pub pen_end: Option<PenEndFn>,

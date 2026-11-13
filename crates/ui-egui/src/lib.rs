@@ -199,6 +199,7 @@ use input::layout_keys;
 pub use input::nudge_bundle;
 use input::opacity_keys;
 use input::page_keys;
+pub use input::pen_barrel;
 use input::scrub_wrap;
 pub use input::shortcut_dispatch;
 pub use input::shortcuts;
@@ -264,8 +265,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn,
-    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LastUpdateFn, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenBarrelFn, PenEndFn, PenScreenFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn,
+    RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::bidi_text;

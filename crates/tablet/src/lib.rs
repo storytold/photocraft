@@ -7,7 +7,9 @@
 //!   has its pen sample.
 //! - **Windows** ([`windows::Monitor`]): thread-local message hooks inspect `WM_POINTER*`
 //!   messages on the UI thread to read `PEN_FLAG_BARREL` and the eraser end (`PEN_FLAG_INVERTED`)
-//!   from `GetPointerPenInfo`, which winit 0.30 drops by mapping pen inputs to touch events.
+//!   from `GetPointerPenInfo`, which winit 0.30 drops by mapping pen inputs to touch events. The
+//!   pure [`pen_buttons`] tracks the barrel button: held, pressed since the UI last looked, and a
+//!   quick click (a driver's Right Click).
 //! - **Windows WinTab** ([`wintab`]): with Windows Ink disabled for the tablet, a WinTab 1.4
 //!   system context on PhotoCraft's window supplies pressure, tilt, rotation and the eraser end.
 //!   The vendor driver still moves the cursor; [`wintab::poll`] is called once per frame.
@@ -34,6 +36,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod appkit;
+pub mod pen_buttons;
 pub mod xi;
 
 #[cfg(target_os = "macos")]

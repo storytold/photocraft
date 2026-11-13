@@ -6,6 +6,7 @@ pub(super) mod layout_keys;
 pub mod nudge_bundle;
 pub(super) mod opacity_keys;
 pub(super) mod page_keys;
+pub mod pen_barrel;
 pub(super) mod scrub_wrap;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
