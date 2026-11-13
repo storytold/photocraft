@@ -135,8 +135,11 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    // A `layer` of its own (a recorded step names its layer) is what the grouping below takes
+    // in, so the frame fits that layer, not whatever is selected.
+    let explicit = crate::commands::explicit_layer(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let ids = st.selected_layers();
+    let ids = explicit.map_or_else(|| st.selected_layers(), |id| vec![id]);
     let bounds = ids
         .iter()
         .filter_map(|id| st.doc.layer(*id))
@@ -359,7 +362,10 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             new_frame,
         ),
-        CommandSpec { menu: &["Layer", "New"], ..spec("layer.new.frameFromLayers", "Frame from Layers", r#"{name?:str}"#, has_layer, frame_from_layers) },
+        CommandSpec {
+            menu: &["Layer", "New"],
+            ..spec("layer.new.frameFromLayers", "Frame from Layers", r#"{"layer":id?,"name":str?}"#, has_layer, frame_from_layers)
+        },
         spec("layer.frame.set", "Frame Properties", r#"{"layer":id?,"transform":[a,b,c,d,x,y]?,"stroke":object|null?,"name":str?}"#, has_doc, set),
         CommandSpec { journal: false, ..spec("layer.frame.info", "Frame Info", r#"{"layer":id?}"#, has_doc, query) },
         spec("layer.frame.convert", "Convert to Frame", r#"{"layer":id?,"name":str?,"width":px?,"height":px?}"#, has_doc, convert),
