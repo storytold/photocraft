@@ -236,6 +236,9 @@ mod delete_anchor_options_bar_tests;
 mod pen_enter_deselects_tests;
 
 #[cfg(test)]
+mod line_shift_snap_tests;
+
+#[cfg(test)]
 mod pen_mode_menu_tests;
 
 #[cfg(test)]
