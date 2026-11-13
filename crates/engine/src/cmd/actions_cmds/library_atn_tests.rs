@@ -1063,7 +1063,7 @@ fn review_interleaved_scoped_calls_load_across_rows_but_duplicate_targets_refuse
     assert_eq!(super::playback_index(&restored.list, calls).unwrap(), 3, "the second physical A row owns Child");
     session.execute("actions.play", calls.clone()).unwrap();
     assert_eq!(session.active().unwrap().doc.size.width, 7);
-    let ambiguous = native_archive(&[("A", std::slice::from_ref(&child)), ("B", &[]), ("A", &[child.clone()]), ("C", &[caller])]);
+    let ambiguous = native_archive(&[("A", std::slice::from_ref(&child)), ("B", &[]), ("A", std::slice::from_ref(&child)), ("C", &[caller])]);
     let mut imported = atn_cmds::import(&ambiguous).unwrap();
     assert!(atn_cmds::normalize_import(&mut imported, [], false).unwrap_err().contains("ambiguous action call target"));
     let before = encode(&session.actions);
