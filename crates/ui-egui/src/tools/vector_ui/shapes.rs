@@ -27,6 +27,18 @@ pub(super) fn stroke_param(app: &PhotocraftApp) -> Value {
     p
 }
 
+/// An open Pen shape needs a visible fallback when no stroke is configured.
+pub(super) fn open_pen_stroke_param(app: &PhotocraftApp) -> Value {
+    let stroke = stroke_param(app);
+    if !stroke.is_null() {
+        return stroke;
+    }
+    let mut fallback = app.ui.tool_options.shape_stroke.params();
+    fallback["width"] = json!(1.0);
+    fallback["color"] = json!(app.session.tools.foreground);
+    fallback
+}
+
 /// The paint the next shape's fill (`stroke` false) or stroke takes: the options bar's gradient,
 /// else the foreground / background colour.
 fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
