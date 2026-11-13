@@ -83,6 +83,11 @@ fn tile_rects(r: Rect) -> impl Iterator<Item = Rect> {
 
 const TOO_SPARSE: &str = "the adjustment would have to fill too large an area around the pixels the layer holds";
 
+/// Refuse adjustments that would materialize too much previously unstored pixel data.
+pub(crate) fn check_adjustment_tile_budget(area: Rect, stored: usize, format: &photocraft_color::PixelFormat) -> Result<(), String> {
+    if unstored_bytes(area, stored as u64, format) > MAX_UNSTORED_BYTES { Err(TOO_SPARSE.into()) } else { Ok(()) }
+}
+
 /// Apply an adjustment destructively to a surface, weighted by an optional selection.
 /// Applies `adj` to a surface (any colour model and depth, via straight RGBA) through the
 /// selection; `mode` is the document's, for the tone transfer (e.g. Exposure in Grayscale).
@@ -479,6 +484,7 @@ fn edit_tiles(
                 None => {}
             }
             let Some(src) = current.map(|t| &**t).or(blank.as_ref()) else { return Ok(None) };
+            let source = src.try_bytes().map_err(|e| crate::EngineError::Other(format!("could not read pixels while {purpose}: {e}")))?;
             let mut out: Option<Tile> = None;
             let (mut px, mut enc) = ([0.0f32; 8], [0u8; 32]);
             let (Some(px), Some(enc)) = (px.get_mut(..n), enc.get_mut(..bpp)) else { return Ok(None) };
@@ -486,7 +492,7 @@ fn edit_tiles(
                 let row = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize;
                 for x in tr.x0..tr.x1 {
                     let i = (row + (x - tc.tx * TILE_SIZE) as usize) * bpp;
-                    let Some(old) = src.bytes().get(i..i + bpp) else { continue };
+                    let Some(old) = source.get(i..i + bpp) else { continue };
                     for (c, v) in px.iter_mut().enumerate() {
                         *v = photocraft_color::read_sample(old, fmt.sample, c);
                     }
@@ -498,10 +504,15 @@ fn edit_tiles(
                         continue;
                     }
                     if out.is_none() {
-                        out = Some(src.try_clone().map_err(oom)?);
+                        let mut tile = surf.try_default_tile().map_err(oom)?;
+                        tile.bytes_mut().copy_from_slice(&source);
+                        out = Some(tile);
                     }
-                    if let Some(dst) = out.as_mut().and_then(|t| t.bytes_mut().get_mut(i..i + bpp)) {
-                        dst.copy_from_slice(enc);
+                    if let Some(tile) = out.as_mut() {
+                        let mut bytes = tile.bytes_mut();
+                        if let Some(dst) = bytes.get_mut(i..i + bpp) {
+                            dst.copy_from_slice(enc);
+                        }
                     }
                 }
             }
@@ -526,12 +537,16 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
     let r = s.content_bounds();
     let mut out = Surface::with_default(s.format(), &s.default_pixel());
     let n = s.channels();
-    let raw = s.read_region(r);
-    let w = r.width() as usize;
-    for (i, px) in raw.chunks_exact(n).enumerate() {
-        let (x, y) = (r.x0 + (i % w) as i32, r.y0 + (i / w) as i32);
-        let (nx, ny) = map(x, y);
-        out.write_pixel(nx, ny, px);
+    // Tile by tile: unstored pixels read as the default `out` already has, and the content
+    // bounds of a sparse surface can span a grid of mostly nothing.
+    for tr in s.tiles().map(|(c, _)| c.rect().intersect(&r)).filter(|t| !t.is_empty()) {
+        let raw = s.read_region(tr);
+        let w = tr.width() as usize;
+        for (i, px) in raw.chunks_exact(n).enumerate() {
+            let (x, y) = (tr.x0 + (i % w) as i32, tr.y0 + (i / w) as i32);
+            let (nx, ny) = map(x, y);
+            out.write_pixel(nx, ny, px);
+        }
     }
     out
 }
