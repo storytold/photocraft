@@ -88,6 +88,12 @@ pub struct CameraRawDevelop {
 }
 
 impl CameraRawDevelop {
+    /// Spatial plans cached, for tests: at most 64 however many settings a session tries.
+    #[doc(hidden)]
+    pub fn cached_plans(&self) -> usize {
+        self.tone_frame.as_ref().map_or(0, ToneFrame::plans)
+    }
+
     /// Whether `adapter` can render the passes' `Rgba32Float`, `R32Float` and `Rgba32Uint` targets.
     pub fn supported(adapter: &wgpu::Adapter) -> bool {
         [FORMAT, wgpu::TextureFormat::R32Float, wgpu::TextureFormat::Rgba32Uint]

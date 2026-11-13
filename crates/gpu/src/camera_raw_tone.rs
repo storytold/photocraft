@@ -50,6 +50,10 @@ const ROUNDS: usize = rounds();
 /// at most [`SUM_MAX`] tiles remain, which a round's update sums.
 const COUNT_TILE: u32 = 16;
 const SUM_MAX: u32 = 256;
+/// Plans kept at most. Each distinct setting of a key's values (luminance noise reduction's
+/// regularisation and kept share, for one) makes a plan with its own buffers, so a slider drag
+/// would otherwise keep adding them; past this many the cache starts again.
+pub(crate) const MAX_PLANS: usize = 64;
 
 /// [`ROUNDS`]: the widest part `fs_update` can leave of an interval `span` keys wide (less one),
 /// until it is 0.
@@ -1007,11 +1011,20 @@ impl ToneFrame {
         }
         let key = PlanKey::new(stages);
         if !self.plans.contains_key(&key) {
+            // `current` is set below, so the frame records the plan made here.
+            if self.plans.len() >= MAX_PLANS {
+                self.plans.clear();
+            }
             let plan = self.plan(device, queue, pipes, &key, luts);
             self.plans.insert(key.clone(), plan);
         }
         self.current = Some(key);
         Ok(())
+    }
+
+    /// Plans cached ([`MAX_PLANS`] at most).
+    pub(crate) fn plans(&self) -> usize {
+        self.plans.len()
     }
 
     /// Records segment `seg` of the plan [`prepare`](Self::prepare) picked; results go into `stats`.
