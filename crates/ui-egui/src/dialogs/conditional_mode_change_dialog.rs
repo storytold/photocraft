@@ -1,6 +1,6 @@
 //! File › Automate › Conditional Mode Change… (#13676), laid out like Photoshop's dialog: a
 //! Source Mode group of eight independent checkboxes in two columns with All and None, and a
-//! Target Mode group whose Mode: list holds the modes the command converts to.
+//! Target Mode group whose Mode: list holds the same eight modes (#13678).
 //!
 //! It is the command's form dialog with its own body: `from` is the list of ticked source ids
 //! and `to` the target id, so OK, Alt+Reset and `ui.dialog.set` work as for every form.
@@ -9,9 +9,9 @@ use serde_json::{Map, Value, json};
 
 pub(crate) const COMMAND: &str = "file.automate.conditionalModeChange";
 
-/// Photoshop's mode order. The checkboxes fill the left column, then the right one, and the
-/// ticked ones go to `from` in this order.
-const SOURCES: [(&str, &str); 8] = [
+/// Photoshop's mode order, for the sources and the targets alike. The checkboxes fill the left
+/// column, then the right one, and the ticked ones go to `from` in this order.
+const MODES: [(&str, &str); 8] = [
     ("bitmap", "Bitmap"),
     ("grayscale", "Grayscale"),
     ("duotone", "Duotone"),
@@ -21,9 +21,6 @@ const SOURCES: [(&str, &str); 8] = [
     ("lab", "Lab Color"),
     ("multichannel", "Multichannel"),
 ];
-
-/// The targets the command converts to, in the same order.
-const TARGETS: [(&str, &str); 4] = [("grayscale", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
 
 /// The fields the dialog opens with: every source ticked ("any") and RGB Color.
 pub(crate) fn fields() -> Value {
@@ -58,7 +55,7 @@ fn ticked(f: &Map<String, Value>, id: &str) -> bool {
 /// The dialog body.
 pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
-    let mut on = SOURCES.map(|(id, _)| ticked(f, id));
+    let mut on = MODES.map(|(id, _)| ticked(f, id));
     let mut changed = false;
 
     crate::widgets::section_label(ui, tl!("Source Mode"));
@@ -66,7 +63,7 @@ pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     egui::Grid::new("conditional-mode-sources").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
         for row in 0..4 {
             for i in [row, row + 4] {
-                changed |= crate::widgets::checkbox(ui, &mut on[i], SOURCES[i].1).changed();
+                changed |= crate::widgets::checkbox(ui, &mut on[i], MODES[i].1).changed();
             }
             ui.end_row();
         }
@@ -79,7 +76,7 @@ pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.end_row();
     });
     if changed {
-        let from: Vec<&str> = SOURCES.iter().zip(on).filter(|(_, on)| *on).map(|((id, _), _)| *id).collect();
+        let from: Vec<&str> = MODES.iter().zip(on).filter(|(_, on)| *on).map(|((id, _), _)| *id).collect();
         f.insert("from".into(), json!(from));
     }
 
@@ -89,7 +86,7 @@ pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         ui.label(tl!("Mode:"));
         let mut to = norm(f.get("to").and_then(Value::as_str).unwrap_or("rgb"));
-        let opts: Vec<(String, &str)> = TARGETS.iter().map(|(id, l)| (id.to_string(), tl!(l))).collect();
+        let opts: Vec<(String, &str)> = MODES.iter().map(|(id, l)| (id.to_string(), tl!(l))).collect();
         if crate::widgets::dropdown(ui, "conditional-mode-target", tl!("Mode"), &mut to, &opts, 150.0) {
             f.insert("to".into(), json!(to));
         }

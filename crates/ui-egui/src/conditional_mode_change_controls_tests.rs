@@ -116,7 +116,8 @@ fn the_mode_list_names_the_targets_in_full_and_escape_closes_only_the_list() {
         .collect();
     rows.sort_by(|a, b| a.0.total_cmp(&b.0));
     let names: Vec<&str> = rows.iter().map(|(_, l)| l.as_str()).collect();
-    assert_eq!(names, ["Grayscale", "RGB Color", "CMYK Color", "Lab Color"]);
+    // #13678: all eight modes, in Photoshop's order.
+    assert_eq!(names, ["Bitmap", "Grayscale", "Duotone", "Indexed Color", "RGB Color", "CMYK Color", "Lab Color", "Multichannel"]);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "Escape on the open list keeps the dialog");
