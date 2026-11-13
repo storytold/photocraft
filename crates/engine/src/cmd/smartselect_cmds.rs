@@ -257,26 +257,27 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
-/// Hard Edge off: [`soften_edge`]'s horizontal taps in 64ths, for the pixel to the left, the
-/// pixel itself and the pixel to the right.
-const SOFT_EDGE_ACROSS: [f64; 3] = [11.0 / 64.0, 27.0 / 64.0, 26.0 / 64.0];
-/// Hard Edge off: [`soften_edge`]'s vertical taps in 64ths, for the pixel above, the pixel itself
-/// and the pixel below.
-const SOFT_EDGE_DOWN: [f64; 3] = [12.0 / 64.0, 22.0 / 64.0, 30.0 / 64.0];
+/// Hard Edge off: [`soften_edge`]'s horizontal taps in 256ths, for the pixels two and one to the
+/// left, the pixel itself and the pixel to the right.
+const SOFT_EDGE_ACROSS: [f64; 4] = [30.0 / 256.0, 6.0 / 256.0, 118.0 / 256.0, 102.0 / 256.0];
+/// Hard Edge off: [`soften_edge`]'s vertical taps in 256ths, for the pixels two and one above,
+/// the pixel itself and the pixel below.
+const SOFT_EDGE_DOWN: [f64; 4] = [29.0 / 256.0, 11.0 / 256.0, 99.0 / 256.0, 117.0 / 256.0];
 /// Hard Edge off: the filtered coverage that maps to 0 and the one that maps to 1 (#12855).
 const SOFT_EDGE_RAMP: (f64, f64) = (0.10, 0.55);
 
 /// Object Selection with Hard Edge off (#12855): `region` with the reference application's
-/// softer rim. A three-tap filter runs across ([`SOFT_EDGE_ACROSS`]) and then down
+/// softer rim. A four-tap filter runs across ([`SOFT_EDGE_ACROSS`]) and then down
 /// ([`SOFT_EDGE_DOWN`]), and a ramp maps [`SOFT_EDGE_RAMP`] to 0..1. On the reference
 /// application's test rectangle that softens both sides by one pixel, as it measures: the outer
-/// pixel on the left drops to about 176 and on the top to about 198, the old rim pixel on the
-/// right and bottom becomes fully selected, and a new rim pixel of about 65 follows it. The
-/// result can reach one pixel further out on every side. Pixels past `canvas` repeat the canvas
-/// edge, so an object that touches the document border stays fully selected there.
+/// pixel on the left drops to about 176 and on the top to about 197, the old rim pixel on the
+/// right and bottom becomes fully selected, a new rim pixel of about 65 follows it, and then a
+/// line of value 1, which sets the right and bottom bounds. The result can reach one pixel
+/// further out on the left and top and two on the right and bottom. Pixels past `canvas` repeat
+/// the canvas edge, so an object that touches the document border stays fully selected there.
 fn soften_edge(region: &Region, canvas: Rect) -> Region {
     let src = region.bbox;
-    let bbox = Rect::new(src.x0.saturating_sub(1), src.y0.saturating_sub(1), src.x1.saturating_add(1), src.y1.saturating_add(1)).intersect(&canvas);
+    let bbox = Rect::new(src.x0.saturating_sub(1), src.y0.saturating_sub(1), src.x1.saturating_add(2), src.y1.saturating_add(2)).intersect(&canvas);
     if bbox.is_empty() || src.is_empty() {
         return region.clone();
     }
@@ -293,26 +294,25 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
         region.mask.get(cy * sw + cx).map_or(0.0, |v| f64::from(*v) / 255.0)
     };
     let (w, h) = (bbox.width() as usize, bbox.height() as usize);
-    let [left, mid, right] = SOFT_EDGE_ACROSS;
-    let [up, centre, down] = SOFT_EDGE_DOWN;
     let (lo, hi) = SOFT_EDGE_RAMP;
-    // The vertical pass reads only the rows above and below, so the horizontal pass keeps three
+    // The vertical pass reads two rows above and one below, so the horizontal pass keeps four
     // rows, not the whole box: a large found object costs its 8-bit mask, not eight bytes a pixel
     // more.
     let across = |y: i32, row: &mut Vec<f64>| {
         row.clear();
-        row.extend((bbox.x0..).take(w).map(|x| left * at(x.saturating_sub(1), y) + mid * at(x, y) + right * at(x.saturating_add(1), y)));
+        row.extend((bbox.x0..).take(w).map(|x| SOFT_EDGE_ACROSS.iter().zip(-2i32..).map(|(k, dx)| k * at(x.saturating_add(dx), y)).sum::<f64>()));
     };
-    let (mut above, mut row, mut below) = (Vec::with_capacity(w), Vec::with_capacity(w), Vec::with_capacity(w));
-    across(bbox.y0.saturating_sub(1), &mut above);
-    across(bbox.y0, &mut row);
+    // `rows` holds the horizontal pass of rows y - 2, y - 1, y and y + 1.
+    let mut rows: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::with_capacity(w));
+    for (dy, row) in (-2i32..).zip(rows.iter_mut().take(3)) {
+        across(bbox.y0.saturating_add(dy), row);
+    }
     let mut mask = Vec::with_capacity(w * h);
     for y in bbox.y0..bbox.y1 {
-        across(y.saturating_add(1), &mut below);
-        let filtered = row.iter().zip(&above).zip(&below).map(|((m, u), d)| up * u + centre * m + down * d);
+        across(y.saturating_add(1), &mut rows[3]);
+        let filtered = (0..w).map(|i| SOFT_EDGE_DOWN.iter().zip(&rows).map(|(k, row)| k * row[i]).sum::<f64>());
         mask.extend(filtered.map(|v| (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8));
-        std::mem::swap(&mut above, &mut row);
-        std::mem::swap(&mut row, &mut below);
+        rows.rotate_left(1);
     }
     trimmed(Region { bbox, mask }, w)
 }
@@ -653,7 +653,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out on the left and top and two on the right and bottom)"##,
             has_doc,
             object_selection
         ),

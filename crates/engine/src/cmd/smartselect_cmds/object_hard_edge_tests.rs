@@ -71,16 +71,14 @@ fn hard_edge_is_on_by_default_and_leaves_the_result_alone() {
 
 /// The rim of the object found in [`session`], across the middle row and down the middle
 /// column: `[outside, the outer pixel, inside]` on the left (top), then `[the last pixel inside,
-/// the pixel after it, outside]` on the right (bottom).
-fn rim(m: &[u8]) -> [[u8; 3]; 4] {
+/// the two pixels after it, outside]` on the right (bottom).
+fn rim(m: &[u8]) -> ([[u8; 3]; 2], [[u8; 4]; 2]) {
     let at = |x: i32, y: i32| m[(y * W + x) as usize];
     // The object is x 60..140, y 50..110.
-    [
-        [at(58, 80), at(59, 80), at(60, 80)],
-        [at(139, 80), at(140, 80), at(141, 80)],
-        [at(100, 48), at(100, 49), at(100, 50)],
-        [at(100, 109), at(100, 110), at(100, 111)],
-    ]
+    (
+        [[at(58, 80), at(59, 80), at(60, 80)], [at(100, 48), at(100, 49), at(100, 50)]],
+        [[at(139, 80), at(140, 80), at(141, 80), at(142, 80)], [at(100, 109), at(100, 110), at(100, 111), at(100, 112)]],
+    )
 }
 
 #[test]
@@ -91,12 +89,14 @@ fn hard_edge_off_softens_both_sides_by_a_pixel_at_each_depth() {
         assert_eq!(r["changed"], true, "depth {depth}");
         let (hb, sb) = (bounds(&hard), bounds(&soft));
         assert_eq!(hb, Rect::new(59, 49, 141, 111), "depth {depth}: Hard Edge on, as before");
-        assert_eq!(sb, hb, "depth {depth}: the edge stays where it was");
+        // The left and top stay; the line of 1s takes the right and bottom one pixel further out.
+        assert_eq!(sb, Rect::new(hb.x0, hb.y0, hb.x1 + 1, hb.y1 + 1), "depth {depth}");
         assert_eq!(r["bounds"], json!([sb.x0, sb.y0, sb.width(), sb.height()]), "depth {depth}");
-        assert_eq!(rim(&sel(&hard)), [[0, 43, 213], [213, 43, 0], [0, 43, 213], [213, 43, 0]], "depth {depth}: Hard Edge on");
-        // Off: the outer pixel on the left (top) softens to about 176 (198), the old rim pixel on
-        // the right (bottom) fills and the one after it gets about 65, as the reference measures.
-        assert_eq!(rim(&sel(&soft)), [[0, 176, 255], [255, 65, 0], [0, 198, 255], [255, 65, 0]], "depth {depth}: Hard Edge off");
+        assert_eq!(rim(&sel(&hard)), ([[0, 43, 213], [0, 43, 213]], [[213, 43, 0, 0], [213, 43, 0, 0]]), "depth {depth}: Hard Edge on");
+        // Off: the outer pixel on the left (top) softens to about 176 (197), the old rim pixel on
+        // the right (bottom) fills, the one after it gets about 65 and the next one 1, as the
+        // reference measures.
+        assert_eq!(rim(&sel(&soft)), ([[0, 176, 255], [0, 197, 255]], [[255, 65, 1, 0], [255, 65, 1, 0]]), "depth {depth}: Hard Edge off");
     }
 }
 
@@ -160,12 +160,13 @@ fn soften_edge_stays_full_at_the_canvas_border() {
     // A hard 4x4 block in the top-left corner: its left and top sides are the document's, so the
     // pixels past the canvas repeat it and those sides stay full.
     let r = soften_edge(&Region { bbox: Rect::new(0, 0, 4, 4), mask: vec![255; 16] }, canvas);
-    assert_eq!(r.bbox, Rect::new(0, 0, 5, 5));
-    assert_eq!(r.mask.len(), 25);
+    assert_eq!(r.bbox, Rect::new(0, 0, 6, 6));
+    assert_eq!(r.mask.len(), 36);
     let at = |x: i32, y: i32| (r.at(x, y) * 255.0).round() as u8;
-    assert_eq!([at(0, 0), at(3, 0), at(4, 0)], [255, 255, 41], "the top row, along the border");
-    assert_eq!([at(0, 0), at(0, 3), at(0, 4)], [255, 244, 50], "the left column, along the border");
-    // Away from the border the box grows a pixel on every side.
+    assert_eq!([at(0, 0), at(3, 0), at(4, 0), at(5, 0)], [255, 255, 23, 10], "the top row, along the border");
+    assert_eq!([at(0, 0), at(0, 3), at(0, 4), at(0, 5)], [255, 251, 32, 8], "the left column, along the border");
+    // Away from the border the box grows a pixel on the left and top; on the right and bottom the
+    // filter reaches two pixels, of which a 2x2 block's ramp keeps one.
     let r = soften_edge(&Region { bbox: Rect::new(4, 4, 6, 6), mask: vec![255; 4] }, canvas);
     assert_eq!(r.bbox, Rect::new(3, 3, 7, 7));
     // A block at the canvas' right and bottom edges doesn't grow past them and stays full there.
@@ -184,7 +185,7 @@ fn soften_edge_survives_odd_regions() {
     assert_eq!(soften_edge(&outside, canvas), outside);
     let short = soften_edge(&Region { bbox: Rect::new(2, 2, 6, 6), mask: vec![255; 3] }, canvas);
     assert_eq!(short.mask.len(), (short.bbox.width() * short.bbox.height()) as usize);
-    assert_eq!(short.bbox, Rect::new(1, 1, 5, 4), "trimmed to the pixels the three samples reach");
+    assert_eq!(short.bbox, Rect::new(1, 1, 5, 3), "trimmed to the pixels the three samples reach");
     assert_eq!(short.at(8, 8), 0.0);
     let far = Region { bbox: Rect::new(i32::MAX - 2, i32::MAX - 2, i32::MAX, i32::MAX), mask: vec![255; 4] };
     assert_eq!(soften_edge(&far, canvas), far);
@@ -263,41 +264,43 @@ fn commonest(v: &[u8], x: i32, row: bool) -> Option<(u8, usize)> {
 /// row by row (#12855; the rectangle is drawn at x 100-299, y 100-249). It softens both sides by
 /// a pixel: x = 99 at 175-177 (134 of its 151 pixels) and y = 99 at 196-200 (177), x = 299 and
 /// y = 249 fully selected (145, 195), then x = 300 and y = 250 at about 65 (135, 195), and a line
-/// of value 1 at x = 301 and y = 251. That faint line is the one thing left out, so our right and
-/// bottom bounds are one pixel in (301, 251 against 302, 252) and its 350 pixels are missing from
-/// our partly selected count (707 against 1066). Each line holds its value along its whole
-/// straight edge; the few other pixels are at the corners.
+/// of value 1 at x = 301 and y = 251 (150, 200), which sets the bounds 99,99,302,252. Its counts
+/// are 29988 fully and 1066 partly selected, 710 of them below 128. Each line holds its value
+/// along its whole straight edge; the few other pixels are at the corners.
 #[test]
 fn hard_edge_off_matches_the_reference_rectangle() {
     let (b, v) = measure([200, 175], false);
-    assert_eq!(b, [99, 99, 301, 251]);
+    assert_eq!(b, [99, 99, 302, 252], "the reference's bounds");
     let at = |x: i32, y: i32| v[(y * 800 + x) as usize];
     assert_eq!((97..=101).map(|x| at(x, 175)).collect::<Vec<_>>(), [0, 0, 176, 255, 255]);
-    assert_eq!((297..=302).map(|x| at(x, 175)).collect::<Vec<_>>(), [255, 255, 255, 65, 0, 0]);
-    assert_eq!((97..=101).map(|y| at(200, y)).collect::<Vec<_>>(), [0, 0, 198, 255, 255]);
-    assert_eq!((247..=252).map(|y| at(200, y)).collect::<Vec<_>>(), [255, 255, 255, 65, 0, 0]);
-    assert_eq!(commonest(&v, 99, false), Some((176, 146)), "x = 99");
-    assert_eq!(commonest(&v, 299, false), Some((255, 147)), "x = 299");
-    assert_eq!(commonest(&v, 300, false), Some((65, 146)), "x = 300");
-    assert_eq!(commonest(&v, 301, false), None, "x = 301: the reference's line of 1s is left out");
-    assert_eq!(commonest(&v, 99, true), Some((198, 196)), "y = 99");
-    assert_eq!(commonest(&v, 249, true), Some((255, 196)), "y = 249");
-    assert_eq!(commonest(&v, 250, true), Some((65, 196)), "y = 250");
-    assert_eq!(commonest(&v, 251, true), None, "y = 251");
+    assert_eq!((297..=303).map(|x| at(x, 175)).collect::<Vec<_>>(), [255, 255, 255, 65, 1, 0, 0]);
+    assert_eq!((97..=101).map(|y| at(200, y)).collect::<Vec<_>>(), [0, 0, 197, 255, 255]);
+    assert_eq!((247..=253).map(|y| at(200, y)).collect::<Vec<_>>(), [255, 255, 255, 65, 1, 0, 0]);
+    assert_eq!(commonest(&v, 99, false), Some((176, 145)), "x = 99");
+    assert_eq!(commonest(&v, 299, false), Some((255, 146)), "x = 299");
+    assert_eq!(commonest(&v, 300, false), Some((65, 145)), "x = 300");
+    assert_eq!(commonest(&v, 301, false), Some((1, 145)), "x = 301: the line of 1s");
+    assert_eq!(commonest(&v, 99, true), Some((197, 195)), "y = 99");
+    assert_eq!(commonest(&v, 249, true), Some((255, 195)), "y = 249");
+    assert_eq!(commonest(&v, 250, true), Some((65, 195)), "y = 250");
+    assert_eq!(commonest(&v, 251, true), Some((1, 195)), "y = 251: the line of 1s");
     assert_eq!((commonest(&v, 98, false), commonest(&v, 98, true)), (None, None), "nothing further out on the left and top");
-    assert_eq!(counts(&v), (29994, 707, 354));
+    assert_eq!((commonest(&v, 302, false), commonest(&v, 252, true)), (None, None), "nor past the line of 1s");
+    assert_eq!(counts(&v), (29992, 1049, 694), "the reference: 29988, 1066, 710");
 }
 
-/// The disc: the reference keeps its bounds (423,99,578,252) with Hard Edge on and off, and
-/// mostly changes the low values (1057 partly selected below 128 on, 978 off). Ours keeps its
-/// bounds too and has fewer low values off, but changes more than the reference: our partly
-/// selected count halves (1200 to 612) where the reference's stays at about 1570.
+/// The disc: the reference gives 423,99,578,252 with Hard Edge on and off, and mostly changes
+/// the low values (1057 partly selected below 128 on, 978 off). Ours with Hard Edge on is
+/// 424,99,576,251, narrower than the reference's; off, the line of 1s takes the right and bottom
+/// a pixel further, to within a pixel of the reference's bounds on every side. Off has fewer low
+/// values, as in the reference, but our partly selected count drops (1200 to 724) where the
+/// reference's stays at about 1570.
 #[test]
 fn hard_edge_off_on_the_reference_disc() {
     let (on_bounds, on) = measure([500, 175], true);
     let (off_bounds, off) = measure([500, 175], false);
-    assert_eq!(off_bounds, on_bounds);
-    assert_eq!((off_bounds, counts(&off)), ([424, 99, 576, 251], (17427, 612, 333)));
+    assert_eq!(on_bounds, [424, 99, 576, 251]);
+    assert_eq!((off_bounds, counts(&off)), ([424, 99, 577, 252], (17419, 724, 432)));
     assert!(counts(&off).2 < counts(&on).2, "fewer low values with Hard Edge off");
 }
 
