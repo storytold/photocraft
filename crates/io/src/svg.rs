@@ -12,6 +12,8 @@
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use craft_svg::tree::draw::{self, tiny_skia};
+use craft_svg::tree::usvg;
 use photocraft_color::blend::BlendMode;
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::effects::GradientStyle;
@@ -19,32 +21,17 @@ use photocraft_doc::vector::{FillRule, Knot, LineCap, LineJoin, Path, PathOp, Sh
 use photocraft_doc::{Document, Fill, Group, Layer, LayerContent, MAX_GROUP_DEPTH};
 use photocraft_geom::{Point, Rect, Size};
 use photocraft_raster::Surface;
-use resvg::tiny_skia;
-use resvg::usvg;
 
 use crate::{ImportResult, IoError};
 
+#[cfg(test)]
 mod limits;
 
 /// Largest canvas side an SVG opens at; a larger drawing is scaled down to fit.
 pub const MAX_SIDE: u32 = 16_384;
 /// A rasterised fallback layer or a smart-object render never exceeds this many pixels.
 const MAX_RASTER_PIXELS: u64 = 24_000_000;
-/// Largest decoded byte size (RGBA8) accepted for an embedded raster image before resvg decodes
-/// it. resvg/tiny-skia allocate the full intrinsic image before any destination-size scaling,
-/// so a highly compressed PNG or WebP could otherwise trigger gigabyte-scale allocation and
-/// decompression that the destination pixmap's size check never sees.
-const MAX_EMBEDDED_IMAGE_BYTES: u64 = MAX_RASTER_PIXELS * 4;
 
-fn embedded_image_dimensions(mime: &str, data: &[u8]) -> Option<Option<(u32, u32)>> {
-    let mime_supports_raster = matches!(mime, "image/png" | "image/webp" | "image/gif" | "image/jpeg" | "image/jpg");
-    let plain_text_has_raster = mime == "text/plain"
-        && matches!(
-            photocraft_codecs::detect(data),
-            Some(photocraft_codecs::Format::Png | photocraft_codecs::Format::WebP | photocraft_codecs::Format::Gif | photocraft_codecs::Format::Jpeg)
-        );
-    if mime_supports_raster || plain_text_has_raster { Some(photocraft_codecs::probe_allocation_size(data).ok()) } else { None }
-}
 /// Aggregate memory for retained fallback surfaces in the document's pixel format.
 const MAX_PIXEL_BYTES: u64 = 1 << 30;
 /// Estimated peak during raster conversion (retained surfaces + RGBA8 pixmap + f32 staging + tiles).
@@ -56,15 +43,19 @@ const MAX_RECURSION: usize = 200;
 /// Most filter work beyond the ordinary a drawing may ask of resvg, in pixel reads (see
 /// [`filter_cost`]): about ten seconds in a release build (resvg manages roughly 200 million reads
 /// a second, and its filters can't be interrupted).
+#[cfg(test)]
 const MAX_FILTER_COST: u64 = 2_000_000_000;
 /// Reads per pixel any primitive may take for free (a 16 × 16 morphology window or kernel, 16
 /// turbulence octaves), so ordinary filters open on any canvas.
+#[cfg(test)]
 const ORDINARY_FILTER_READS: u64 = 256;
 /// Most elements [`filter_cost`] visits, counting a shared mask, clip path or pattern once per
 /// use, as resvg renders it: patterns that fill and stroke with the next one double the work at
 /// each level, so a few dozen levels would keep the check (and the render) busy for hours.
+#[cfg(test)]
 const MAX_FILTER_VISITS: usize = 10_000_000;
 /// One `feTurbulence` octave per pixel, in pixel reads (it measures about 15 times a read).
+#[cfg(test)]
 const TURBULENCE_OCTAVE_COST: u64 = 16;
 /// Deepest element nesting accepted. The XML parser recurses once per level, so a file nested
 /// a few thousand deep (70 KB of `<g>`) overflows a 2 MB thread stack, an abort no guard can
@@ -375,7 +366,7 @@ fn parse_at_depth<T: Send>(depth: usize, isolated: bool, parse: impl FnOnce(bool
 /// Supplies bounded parsing options to direct resolver tests without changing their existing interface.
 #[cfg(test)]
 fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
-    options_with_isolation(fontdb, depth_left, false, Arc::new(Mutex::new(None)))
+    options_with_isolation(fontdb, depth_left, false, Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(depth_left, MAX_RASTER_PIXELS))))
 }
 
 /// Parse options for an untrusted drawing. `<image href>` resolves only `data:` URLs: a file path
@@ -385,64 +376,11 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Opti
 /// parsed on top of the drawing's own recursion, so the two depths share [`MAX_XML_DEPTH`].
 fn options_with_isolation(
     fontdb: Arc<usvg::fontdb::Database>,
-    depth_left: usize,
-    isolated: bool,
-    parser_error: Arc<Mutex<Option<IoError>>>,
+    _depth_left: usize,
+    _isolated: bool,
+    image_resolver: Arc<craft_svg::tree::ImageResolver>,
 ) -> usvg::Options<'static> {
-    let default_resolver = usvg::ImageHrefResolver::default_data_resolver();
-    let resolve_data: usvg::ImageHrefDataResolverFn<'static> = Box::new(move |mime, data, opts| {
-        // Reject embedded images whose decoded RGBA storage would exceed the budget before
-        // resvg (which allocates the full intrinsic image before any destination scaling) ever
-        // sees them. Formats without a cheap header probe fall through unchanged; their decode
-        // path is bounded elsewhere or accepted as-is, matching the previous behavior.
-        let probed = embedded_image_dimensions(mime, &data);
-        if let Some(probed) = probed {
-            let (w, h) = probed?;
-            let decoded = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(4);
-            if decoded > MAX_EMBEDDED_IMAGE_BYTES {
-                return None;
-            }
-        }
-        // An embedded SVG (`image/svg+xml`, or `text/plain` that isn't one of the raster
-        // formats probed above) is parsed by the default resolver with none of `parse_with`'s
-        // checks, so they run here. It can itself be gzip-compressed (SVGZ-in-data-URL), and the
-        // default resolver's sub-SVG loader would decompress again with no byte limit of its
-        // own: hand it our bounded inflate's output instead, which no longer starts with the
-        // gzip magic. Nesting deeper than `depth_left` drops the image rather than overflowing
-        // the parser's stack.
-        if mime == "image/svg+xml" || (mime == "text/plain" && probed.is_none()) {
-            let (mime, xml) = match inflate(&data) {
-                Ok(std::borrow::Cow::Borrowed(_)) => (mime, Arc::clone(&data)),
-                Ok(std::borrow::Cow::Owned(xml)) if !xml.starts_with(&[0x1f, 0x8b]) => ("image/svg+xml", Arc::new(xml)),
-                _ => return None,
-            };
-            let Ok(depth) = nesting_depth(&xml, depth_left) else { return None };
-            if depth > depth_left {
-                return None;
-            }
-            // An already isolated outer parse lends its fixed stack to the child. Otherwise a
-            // deep child gets one worker of its own; usvg disables further embedded images there.
-            let shared_depth = MAX_XML_DEPTH.saturating_sub(depth_left).saturating_add(depth);
-            return match parse_at_depth(shared_depth, isolated, |_| Ok(default_resolver(mime, xml, opts))) {
-                Ok(image) => image,
-                Err(error) => {
-                    let mut failure = parser_error.lock().unwrap_or_else(PoisonError::into_inner);
-                    if failure.is_none() {
-                        *failure = Some(error.into());
-                    }
-                    None
-                }
-            };
-        }
-        default_resolver(mime, data, opts)
-    });
-    usvg::Options {
-        resources_dir: None,
-        image_href_resolver: usvg::ImageHrefResolver { resolve_data, resolve_string: Box::new(|_, _| None) },
-        fontdb,
-        font_resolver: font_resolver(),
-        ..usvg::Options::default()
-    }
+    usvg::Options { resources_dir: None, image_href_resolver: image_resolver.resolver(), fontdb, font_resolver: font_resolver(), ..usvg::Options::default() }
 }
 
 /// A parsed drawing.
@@ -463,6 +401,17 @@ fn parse(bytes: &[u8]) -> Result<Parsed, IoError> {
     parse_with(bytes, fonts)
 }
 
+fn tree_limits(depth: usize, raster_pixels: u64) -> craft_svg::tree::Limits {
+    craft_svg::tree::Limits {
+        bytes: usize::try_from(MAX_INFLATED_BYTES).unwrap_or(usize::MAX),
+        depth,
+        embedded_bytes: usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX),
+        embedded_depth: MAX_EMBEDDED_SVG_DEPTH,
+        embedded_raster_pixels: raster_pixels.min(MAX_RASTER_PIXELS),
+        ..Default::default()
+    }
+}
+
 /// [`parse`] with the font database `fonts` supplies (the tests hand in an empty one).
 fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<Parsed, IoError> {
     let xml = inflate(bytes)?;
@@ -477,13 +426,11 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
     // re-checks the gzip magic and would decompress a second time without our size limit if
     // the inflated content happened to start with a nested gzip stream.
     let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-    let parser_error = Arc::new(Mutex::new(None));
+    let image_resolver = Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS)));
+    image_resolver.set_document_depth(depth);
     parse_at_depth(depth, false, |isolated| {
-        let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&parser_error));
-        let tree = guarded(|| usvg::Tree::from_str(text, &opt));
-        if let Some(error) = parser_error.lock().unwrap_or_else(PoisonError::into_inner).take() {
-            return Err(error);
-        }
+        let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver));
+        let tree = guarded(|| craft_svg::tree::parse_text(text, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS), &opt));
         let tree = tree.ok_or_else(|| IoError::Svg("the SVG parser failed on this drawing".into()))?.map_err(|error| IoError::Svg(error.to_string()))?;
         Ok(Parsed { tree, fontless_text })
     })
@@ -516,14 +463,7 @@ struct ImageBudget {
     /// stored display preview must draw completely, or it isn't used.
     strict: bool,
     error: Option<String>,
-}
-
-/// Leave out an embedded image that can't be read, or with a strict budget record `error`.
-fn unreadable_image(budget: &Mutex<ImageBudget>, error: &str) -> Option<usvg::ImageKind> {
-    if budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).strict {
-        image_error(budget, error);
-    }
-    None
+    resolver: Arc<craft_svg::tree::ImageResolver>,
 }
 
 /// Record the first budget or decoding failure seen while usvg resolves images. Resolver
@@ -535,96 +475,10 @@ fn image_error(budget: &Mutex<ImageBudget>, error: impl Into<String>) {
     }
 }
 
-/// Deduct one image's `width × height` decoded pixels from the shared budget before it is
-/// decoded. A zero-sized, overflowing or over-budget image records an error and returns `false`.
-fn charge_image(budget: &Mutex<ImageBudget>, width: usize, height: usize) -> bool {
-    let pixels = u64::try_from(width).ok().zip(u64::try_from(height).ok()).and_then(|(w, h)| w.checked_mul(h));
-    let mut budget = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    match pixels.filter(|pixels| *pixels != 0).and_then(|pixels| budget.pixels.checked_sub(pixels)) {
-        Some(remaining) => {
-            budget.pixels = remaining;
-            true
-        }
-        None => {
-            budget.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
-            false
-        }
-    }
-}
-
-/// usvg's data-URL image resolver with budgets: nested SVG images are parsed with the same
-/// budget up to [`MAX_EMBEDDED_SVG_DEPTH`] and within the `xml_left` levels of XML nesting the
-/// drawing left them, and PNG/JPEG/GIF/WebP images are charged their largest declared frame
-/// before decoding. An overrun records an error and resolves to no image so the enclosing parse
-/// fails. An image that isn't one of those formats, is invalid, or has a MIME type usvg doesn't
-/// know is left out and the rest still draws, as usvg's own resolver does (with a strict budget
-/// it is an error too).
-fn bounded_data_image(
-    mime: &str,
-    data: Arc<Vec<u8>>,
-    options: &usvg::Options,
-    budget: &Arc<Mutex<ImageBudget>>,
-    depth: usize,
-    xml_left: usize,
-    isolated: bool,
-) -> Option<usvg::ImageKind> {
-    if budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error.is_some() {
-        return None;
-    }
-    let format = photocraft_codecs::detect(&data);
-    if mime == "image/svg+xml" || (mime == "text/plain" && format.is_none()) {
-        if depth >= MAX_EMBEDDED_SVG_DEPTH {
-            image_error(budget, "embedded SVG images exceed the nesting limit");
-            return None;
-        }
-        // A budget overrun inside the image is already recorded; any other failure (not an
-        // SVG, nested deeper than the drawing left room for) only leaves the image out.
-        let Ok(tree) = parse_image_bounded(&data, budget.clone(), depth + 1, xml_left, isolated) else {
-            return unreadable_image(budget, "can't parse an embedded SVG image");
-        };
-        let mut counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        counter.svg_images = counter.svg_images.saturating_add(1);
-        counter.svg_chain = counter.svg_chain.max(u64::try_from(depth + 1).unwrap_or(u64::MAX));
-        Some(usvg::ImageKind::SVG(tree))
-    } else {
-        let supported = matches!(
-            format,
-            Some(photocraft_codecs::Format::Png | photocraft_codecs::Format::Jpeg | photocraft_codecs::Format::Gif | photocraft_codecs::Format::WebP)
-        );
-        let dimensions = supported.then(|| photocraft_codecs::probe_allocation_size(&data).ok()).flatten();
-        let Some((width, height)) = dimensions else { return unreadable_image(budget, "embedded SVG image has unsupported or invalid raster data") };
-        // usvg's resolver only wraps the bytes (resvg decodes them when drawing): an image under
-        // a MIME type it doesn't know, or with no pixels, is left out uncharged, as usvg would.
-        let Some(image) = (usvg::ImageHrefResolver::default_data_resolver())(mime, data, options) else {
-            return unreadable_image(budget, "embedded SVG raster image has an unsupported MIME type");
-        };
-        if width == 0 || height == 0 {
-            return unreadable_image(budget, "embedded SVG image has no pixels");
-        }
-        if !charge_image(budget, width as usize, height as usize) {
-            return None;
-        }
-        Some(image)
-    }
-}
-
-/// [`parse_image_bounded_with`] using the shared system font database.
-fn parse_image_bounded(bytes: &[u8], budget: Arc<Mutex<ImageBudget>>, depth: usize, xml_left: usize, isolated: bool) -> Result<usvg::Tree, IoError> {
-    parse_image_bounded_with(bytes, budget, depth, xml_left, fonts, isolated)
-}
-
-/// Parse one (possibly gzip-compressed) SVG at nesting `depth` against `budget`: the byte,
-/// inflated-size and XML-depth limits apply first, embedded images go through
-/// [`bounded_data_image`], and the tree's drawing-node count and repeatable image resources are
-/// added to the budget for the caller's work estimate. Fonts load only when text is present.
-/// usvg parses an embedded SVG on top of the drawing's own recursion, so the drawing and the
-/// images inside it share `xml_left` levels of XML nesting ([`MAX_XML_DEPTH`] for the drawing).
-/// Byte and decode overruns are also recorded in `budget`, so they fail the whole drawing; a
-/// nesting or syntax error only fails this SVG.
+/// Parse one bounded SVG with the shared tree parser and its format-neutral image resolver.
 fn parse_image_bounded_with(
     bytes: &[u8],
     budget: Arc<Mutex<ImageBudget>>,
-    depth: usize,
     xml_left: usize,
     fonts: fn() -> Arc<usvg::fontdb::Database>,
     isolated: bool,
@@ -637,48 +491,41 @@ fn parse_image_bounded_with(
         return Err(overrun(IoError::Svg("embedded SVG source exceeds the 16 MiB byte limit".into())));
     }
     let xml = inflate_with_limit(bytes, MAX_BOUNDED_SVG_BYTES).map_err(overrun)?;
-    // Charged before anything can leave the image out, so skipped images still use up the budget.
-    let xml_len = u64::try_from(xml.len()).unwrap_or(u64::MAX);
-    let left = {
-        let mut counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let left = counter.xml_bytes.checked_sub(xml_len);
-        if let Some(left) = left {
-            counter.xml_bytes = left;
-        }
-        left
-    };
-    if left.is_none() {
-        return Err(overrun(IoError::Svg("embedded SVG XML exceeds the decoded byte budget".into())));
-    }
     let nesting = nesting_depth(&xml, xml_left)?;
     if nesting > xml_left {
         return Err(IoError::Svg(format!("elements are nested more than {xml_left} levels deep")));
     }
     let shared_depth = MAX_XML_DEPTH.saturating_sub(xml_left).saturating_add(nesting);
+    budget.lock().unwrap_or_else(PoisonError::into_inner).resolver.set_document_depth(nesting);
     parse_at_depth(shared_depth, isolated, |isolated| {
         let has_text = xml.windows(4).any(|w| w == b"text");
         let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
         if has_text && fontdb.faces().next().is_none() {
-            budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fontless_text = true;
+            budget.lock().unwrap_or_else(PoisonError::into_inner).fontless_text = true;
         }
-        // The resolver below replaces `options`' own, so its embedded-SVG depth argument is unused.
-        let mut opt = options_with_isolation(fontdb, 0, isolated, Arc::new(Mutex::new(None)));
-        let shared = budget.clone();
-        let image_xml_left = xml_left.saturating_sub(nesting);
-        opt.image_href_resolver.resolve_data =
-            Box::new(move |mime, data, options| bounded_data_image(mime, data, options, &shared, depth, image_xml_left, isolated));
-        // The bounded inflate above is the only decompression step. from_data would detect a
-        // nested gzip payload and inflate it again without the source-byte limit.
+        let resolver = Arc::clone(&budget.lock().unwrap_or_else(PoisonError::into_inner).resolver);
+        let opt = options_with_isolation(fontdb, xml_left, isolated, resolver);
         let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
-        let tree = guarded(|| usvg::Tree::from_str(text, &opt));
-        if let Some(error) = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error.clone() {
+        let limits = tree_limits(xml_left, MAX_RASTER_PIXELS);
+        let tree = guarded(|| craft_svg::tree::parse_text(text, &limits, &opt));
+        let tree = tree.ok_or_else(|| IoError::Svg("the SVG parser failed on this drawing".into()))?.map_err(|e| IoError::Svg(e.to_string()))?;
+        let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
+        let usage = counter.resolver.usage();
+        counter.pixels = counter.pixels.saturating_sub(usage.raster_pixels);
+        counter.xml_bytes = counter.xml_bytes.saturating_sub(u64::try_from(usage.embedded_svg_bytes).unwrap_or(u64::MAX));
+        counter.svg_images = usage.embedded_svg_count as u64;
+        counter.svg_chain = usage.embedded_svg_depth as u64;
+        if usage.raster_limit_images > 0 {
+            counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
+        } else if counter.strict && (usage.svg_limit_images > 0 || usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
+            counter.error.get_or_insert_with(|| "can't parse an embedded SVG image".into());
+        }
+        if let Some(error) = counter.error.clone() {
             return Err(IoError::Svg(error));
         }
-        let tree = tree.ok_or_else(|| IoError::Svg("the SVG parser failed on this drawing".into()))?.map_err(|e| IoError::Svg(e.to_string()))?;
-        // Include nested SVG trees too. Paint servers can reuse one parsed raster in many
-        // drawing nodes, so the work estimate must not assume every source is decoded once.
+        drop(counter);
         let nodes = u64::try_from(count_nodes_with_limit(tree.root(), true, usize::MAX, false)).unwrap_or(u64::MAX);
-        let mut counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut counter = budget.lock().unwrap_or_else(PoisonError::into_inner);
         counter.draw_nodes = counter.draw_nodes.saturating_add(nodes);
         let (raster, svg) = repeatable_image_resources(&tree);
         counter.repeatable_raster |= raster;
@@ -687,8 +534,6 @@ fn parse_image_bounded_with(
     })
     .map_err(|failure| match failure {
         ParseFailure::Isolation(error) => {
-            // A missing isolated parse must never silently remove embedded artwork,
-            // even when ordinary invalid images are allowed to be omitted.
             image_error(&budget, error.to_string());
             error
         }
@@ -797,8 +642,9 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         fontless_text: false,
         strict,
         error: None,
+        resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, max_pixels.min(MAX_RASTER_PIXELS)))),
     }));
-    let tree = parse_image_bounded_with(bytes, budget.clone(), 0, MAX_XML_DEPTH, fonts, false)?;
+    let tree = parse_image_bounded_with(bytes, budget.clone(), MAX_XML_DEPTH, fonts, false)?;
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
@@ -1135,10 +981,10 @@ fn import_parsed_with_limits(
             conv.warnings.push(format!("SVG: more than {MAX_NODES} elements; opened as one pixel layer instead of shapes"));
         }
         let (w, h) = (cv.size.width, cv.size.height);
-        if let Some(mut pixmap) = pixmap(w, h) {
-            check_render_memory(&tree, global, w, h)?;
-            if guarded(|| resvg::render(&tree, global, &mut pixmap.as_mut())).is_some() {
-                doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&pixmap, doc.bounds(), fmt))));
+        if u64::from(w) * u64::from(h) <= MAX_RASTER_PIXELS {
+            let rendered = guarded(|| draw::render(&tree, global, w, h, 0, MAX_PEAK_PIXEL_BYTES));
+            if let Some(Ok(rendered)) = rendered {
+                doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&rendered, doc.bounds(), fmt))));
             } else {
                 conv.note("raster-panic", "SVG: the drawing could not be rendered".to_string());
             }
@@ -1224,16 +1070,10 @@ fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     check_filter_cost(tree, k)?;
     let side = |v: f32| ((v * k).ceil() as u32).max(1);
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
-    let mut pixmap = pixmap(w, h).ok_or_else(|| IoError::Svg(format!("{w} × {h} px is too large to rasterise")))?;
     let ts = tiny_skia::Transform::from_scale(k, k);
-    check_render_memory(tree, ts, w, h)?;
-    guarded(|| resvg::render(tree, ts, &mut pixmap.as_mut())).ok_or_else(|| IoError::Svg("the drawing could not be rendered".into()))?;
-    Ok(pixmap)
-}
-
-/// An error when drawing the whole `tree` at `ts` onto a `w × h` pixmap would break a [`limits`] cap.
-fn check_render_memory(tree: &usvg::Tree, ts: tiny_skia::Transform, w: u32, h: u32) -> Result<(), IoError> {
-    limits::check(tree.root().children(), ts, w, h, 0).map_err(|r| IoError::Svg(format!("can't rasterise this drawing: {}", r.message)))
+    guarded(|| draw::render(tree, ts, w, h, 0, MAX_PEAK_PIXEL_BYTES))
+        .ok_or_else(|| IoError::Svg("the drawing could not be rendered".into()))?
+        .map_err(|r| IoError::Svg(format!("can't rasterise this drawing: {}", r.message)))
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -1298,6 +1138,7 @@ fn count_nodes_with_limit(root: &usvg::Group, include_text: bool, limit: usize, 
 /// count too, at the scale of the element that uses them, as resvg renders them. Past `visits`
 /// elements, or with a referenced root nested past [`MAX_RECURSION`], the drawing counts as too
 /// costly.
+#[cfg(test)]
 fn filter_cost(root: &usvg::Group, base: tiny_skia::Transform, rec: usize, visits: &mut usize) -> u64 {
     use usvg::filter::Kind;
     let mut cost = 0u64;
@@ -1369,12 +1210,8 @@ fn filter_cost(root: &usvg::Group, base: tiny_skia::Transform, rec: usize, visit
 
 /// An error when the drawing's filters are too costly to render at `scale` (see [`filter_cost`]).
 fn check_filter_cost(tree: &usvg::Tree, scale: f32) -> Result<(), IoError> {
-    if filter_cost(tree.root(), tiny_skia::Transform::from_scale(scale, scale), 0, &mut { MAX_FILTER_VISITS }) > MAX_FILTER_COST {
-        return Err(IoError::Svg(
-            "the drawing's filters are too costly to render (a huge morphology radius, convolution kernel or turbulence octave count, or patterns nested too deep)".into(),
-        ));
-    }
-    Ok(())
+    draw::check_filter_cost(tree, tiny_skia::Transform::from_scale(scale, scale), 2_000_000_000, 10_000_000, 200)
+        .map_err(|refusal| IoError::Svg(format!("the drawing's filters are too costly to render: {}", refusal.message)))
 }
 
 /// Converts a parsed tree into layers.
@@ -1708,35 +1545,36 @@ impl Conv {
         };
         let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
         let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
-        // resvg's own buffers for this element (nested layers, filters, clips, pattern tiles) come on
-        // top of the layers already kept.
-        if let Err(refusal) = limits::check(std::slice::from_ref(node), ts, w, h, self.retained_pixel_bytes) {
-            let why = if refusal.complex {
-                "is too complex to check"
-            } else if refusal.memory {
-                "needs too much memory to rasterise"
-            } else {
-                "exceeds a rasterising limit"
-            };
-            // one key per reason: a refusal for one reason must not hide a later one for another
-            let key = if refusal.complex {
-                "raster-scratch-complex"
-            } else if refusal.memory {
-                "raster-scratch-memory"
-            } else {
-                "raster-scratch-limit"
-            };
-            self.note(key, format!("SVG: an element was dropped because it {why}: {}", refusal.message));
-            return None;
-        }
-        // resvg renders the node in its parent's space after shifting its absolute bounding box
-        // to the origin: undo that shift, apply the parent's transform, then scale to the canvas
-        // and shift so the pixmap starts at (x0, y0).
-        let Some(rendered) = guarded(|| resvg::render_node(node, ts, &mut pixmap.as_mut())) else {
+        // The shared renderer charges this element's scratch buffers on top of already retained layers.
+        let Some(rendered) = guarded(|| draw::render_node(node, ts, &mut pixmap, self.retained_pixel_bytes, MAX_PEAK_PIXEL_BYTES)) else {
             self.note("raster-panic", "SVG: an element that could not be rendered was dropped".to_string());
             return None;
         };
-        rendered?;
+        let rendered = match rendered {
+            Ok(rendered) => rendered,
+            Err(refusal) => {
+                let why = if refusal.complex {
+                    "is too complex to check"
+                } else if refusal.memory {
+                    "needs too much memory to rasterise"
+                } else {
+                    "exceeds a rasterising limit"
+                };
+                // one key per reason: a refusal for one reason must not hide a later one for another
+                let key = if refusal.complex {
+                    "raster-scratch-complex"
+                } else if refusal.memory {
+                    "raster-scratch-memory"
+                } else {
+                    "raster-scratch-limit"
+                };
+                self.note(key, format!("SVG: an element was dropped because it {why}: {}", refusal.message));
+                return None;
+            }
+        };
+        if !rendered {
+            return None;
+        }
         let surf = surface(&pixmap, Rect::new(x0, y0, x1, y1), self.fmt);
         // Charge what the layer keeps: surface() prunes transparent tiles.
         let bytes = photocraft_raster::stored_tiles_bytes(surf.tile_count() as u64, &self.fmt);

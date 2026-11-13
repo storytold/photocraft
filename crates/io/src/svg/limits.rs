@@ -17,8 +17,8 @@
 
 use std::collections::HashMap;
 
-use resvg::tiny_skia;
-use resvg::usvg;
+use craft_svg::tree::draw::tiny_skia;
+use craft_svg::tree::usvg;
 
 use super::MAX_PEAK_PIXEL_BYTES;
 

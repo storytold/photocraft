@@ -51,7 +51,7 @@ craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f"
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f" }
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f" }
-craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f" }
+craft-svg = { git = "https://github.com/dylanmtaylor/craft-libs", rev = "f7d76eec548a77a79fd2e056e7846a8655ee3f43", features = ["tree-render", "tree-render-system-fonts"] }
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "d9b17697f" }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
