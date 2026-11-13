@@ -28,9 +28,9 @@ pub(crate) mod params {
     use serde_json::Value;
 
     use super::{
-        PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
-        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, conditional_mode_change_dialog,
+        count_group_name_ui, duplicate_layer_ui, equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui,
+        new_group_ui, new_layer_ui, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -102,6 +102,10 @@ pub(crate) mod params {
             check: Some(image_processor_ui::check),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
+        },
+        ParamFamily {
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == conditional_mode_change_dialog::COMMAND, conditional_mode_change_dialog::run)
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
@@ -618,7 +622,7 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 }
 
 /// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move.
-const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy"];
+const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy", conditional_mode_change_dialog::COMMAND];
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
