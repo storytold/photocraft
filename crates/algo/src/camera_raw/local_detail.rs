@@ -34,6 +34,8 @@ pub(super) const KNOTS: usize = 8;
 
 /// One slider's model.
 pub(super) struct Model {
+    /// The slider's name, for errors.
+    name: &'static str,
     scales: &'static [f32],
     amps: &'static [f32],
     /// Per channel with colour detail (Texture), or luminance only (Clarity).
@@ -45,6 +47,7 @@ pub(super) struct Model {
 }
 
 pub(super) const TEXTURE: Model = Model {
+    name: "Texture",
     scales: &[0.001, 0.002, 0.004, 0.008, 0.016],
     amps: &[0.02],
     colour: true,
@@ -55,6 +58,7 @@ pub(super) const TEXTURE: Model = Model {
 };
 
 pub(super) const CLARITY: Model = Model {
+    name: "Clarity",
     scales: &[0.004, 0.008, 0.016, 0.03, 0.06, 0.12],
     amps: &[0.02, 0.08],
     colour: false,
@@ -99,8 +103,8 @@ fn lstar(y: f32) -> f32 {
     if y > 216.0 / 24389.0 { 116.0 * y.cbrt() - 16.0 } else { 24389.0 / 27.0 * y }
 }
 
-/// `n` copies of `v`, or `None` when that much memory can't be had (the stage is then skipped
-/// rather than aborting the app).
+/// `n` copies of `v`, or `None` when that much memory can't be had (the stage then fails with
+/// an error rather than aborting the app).
 fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
     let mut out = Vec::new();
     out.try_reserve_exact(n).ok()?;
@@ -110,15 +114,22 @@ fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
 
 /// Applies `model` at slider `v` (−100 … 100) to straight RGBA pixels (`w × h`, encoded with
 /// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture, a
-/// little more with transparency) or for a blur's scratch row the pixels are left unchanged.
+/// little more with transparency) or for a blur's scratch row the pixels are left unchanged
+/// and an error says so, so a result without the stage is never taken for a complete one.
 /// The blurs weight each pixel by its alpha, so the colour hidden under transparent pixels takes
 /// no part; a fully opaque image skips the weighting.
-pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
-    let Some(k) = model.coefficients(v) else { return };
+pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) -> Result<(), String> {
+    apply_within(model, px, w, h, v, enc, usize::MAX)
+}
+
+/// [`apply`] with at most `budget` bytes for the working planes (the blurs' scratch rows aside).
+fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding, budget: usize) -> Result<(), String> {
+    let Some(k) = model.coefficients(v) else { return Ok(()) };
     let n = w.saturating_mul(h);
     if n == 0 || px.len() != n {
-        return;
+        return Ok(());
     }
+    let no_memory = || format!("not enough memory for {} ({w}×{h} px)", model.name);
     let long = w.max(h) as f32;
     let to = |x: f32| if enc.0 > 0.0 { linear_to_srgb(enc.decode(x)) } else { x };
     let from = |x: f32| if enc.0 > 0.0 { enc.encode(srgb_to_linear(x)) } else { x };
@@ -128,7 +139,13 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
     // With any transparency the blurs run on alpha-weighted planes plus the alpha itself.
     let weighted = px.iter().any(|q| cover(q) < 1.0);
     let nb = np + usize::from(weighted);
-    let (Some(planes_len), Some(blur_len)) = (n.checked_mul(np), n.checked_mul(nb)) else { return };
+    let (Some(planes_len), Some(blur_len)) = (n.checked_mul(np), n.checked_mul(nb)) else { return Err(no_memory()) };
+    // Planes and blur (and its weighted source) of f32, knots, luminance and moves.
+    let floats = planes_len.saturating_add(blur_len.saturating_mul(1 + usize::from(weighted)));
+    let bytes = floats.saturating_mul(4).saturating_add(n.saturating_mul(size_of::<(usize, f32)>() + 4 + 12));
+    if bytes > budget {
+        return Err(no_memory());
+    }
     let (Some(mut planes), Some(mut knot), Some(mut lum), Some(mut mv), Some(mut blur), Some(mut src)) = (
         filled(planes_len, 0.0f32),
         filled(n, (0usize, 0.0f32)),
@@ -137,7 +154,7 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
         filled(blur_len, 0.0f32),
         filled(if weighted { blur_len } else { 0 }, 0.0f32),
     ) else {
-        return;
+        return Err(no_memory());
     };
     for (i, q) in px.iter().enumerate() {
         // A value that is not a number would spread through the blurs to its neighbours.
@@ -185,7 +202,7 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
         blur.copy_from_slice(if weighted { &src } else { &planes });
         // Without the memory for the blur's scratch row, the pixels are left unchanged.
         if try_gauss_blur_n(&mut blur, w, h, nb, s * long).is_none() {
-            return;
+            return Err(no_memory());
         }
         // Plane `c` blurred at pixel `i`: the weighted blur over the blurred alpha; where nothing
         // visible is near, no detail.
@@ -223,6 +240,7 @@ pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -233,6 +251,21 @@ mod tests {
     fn working_planes_too_large_for_memory_are_refused() {
         assert!(filled(usize::MAX / 2, 0.0f32).is_none());
         assert_eq!(filled(3, 1u8), Some(vec![1, 1, 1]));
+    }
+
+    /// Without the memory for its working planes a stage fails with an error and leaves the
+    /// pixels as they were, rather than passing off the image without it as developed.
+    #[test]
+    fn a_stage_without_memory_fails_and_leaves_the_pixels() {
+        let (w, h) = (24, 16);
+        for m in [&TEXTURE, &CLARITY] {
+            let mut px = image(w, h);
+            let err = apply_within(m, &mut px, w, h, 60.0, Encoding(0.0), 1024).unwrap_err();
+            assert!(err.contains(m.name) && err.contains("memory"), "{err}");
+            assert_eq!(px, image(w, h));
+            assert!(apply_within(m, &mut px, w, h, 60.0, Encoding(0.0), usize::MAX).is_ok());
+            assert_ne!(px, image(w, h));
+        }
     }
 
     /// The blur's scratch row is reserved fallibly: a row too large for memory is refused with
@@ -258,8 +291,8 @@ mod tests {
             let mut clean = image(w, h);
             let mut bad = clean.clone();
             bad[24 * w + 24] = [f32::NAN, f32::INFINITY, 0.5, 1.0];
-            apply(m, &mut clean, w, h, 80.0, Encoding(0.0));
-            apply(m, &mut bad, w, h, 80.0, Encoding(0.0));
+            apply(m, &mut clean, w, h, 80.0, Encoding(0.0)).unwrap();
+            apply(m, &mut bad, w, h, 80.0, Encoding(0.0)).unwrap();
             for (i, q) in bad.iter().enumerate().filter(|(i, _)| *i != 24 * w + 24) {
                 assert!(q[..3].iter().all(|v| v.is_finite()), "pixel {i}: {q:?}");
             }
@@ -276,8 +309,8 @@ mod tests {
         for m in [&TEXTURE, &CLARITY] {
             let hide = |hidden: [f32; 4]| -> Vec<[f32; 4]> { image(w, h).into_iter().enumerate().map(|(i, q)| if visible(i) { q } else { hidden }).collect() };
             let (mut white, mut black) = (hide([1.0, 1.0, 1.0, 0.0]), hide([0.0, 0.0, 0.0, 0.0]));
-            apply(m, &mut white, w, h, 100.0, Encoding(0.0));
-            apply(m, &mut black, w, h, 100.0, Encoding(0.0));
+            apply(m, &mut white, w, h, 100.0, Encoding(0.0)).unwrap();
+            apply(m, &mut black, w, h, 100.0, Encoding(0.0)).unwrap();
             for i in (0..w * h).filter(|i| visible(*i)) {
                 assert!(white[i][..3].iter().zip(&black[i][..3]).all(|(a, b)| (a - b).abs() < 1e-5), "pixel {i}: {:?} {:?}", white[i], black[i]);
             }
@@ -307,7 +340,7 @@ mod tests {
         ];
         for ((m, v), want) in [(&TEXTURE, 70.0), (&CLARITY, -60.0)].into_iter().zip(before) {
             let mut px = image(w, h);
-            apply(m, &mut px, w, h, v, Encoding(0.0));
+            apply(m, &mut px, w, h, v, Encoding(0.0)).unwrap();
             for (i, b) in [0usize, 5 * w + 7, 24 * w + 24, 47 * w + 30, w * h - 1].into_iter().zip(want) {
                 assert!(px[i][..3].iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6), "pixel {i}: {:?} vs {b:?}", px[i]);
             }
@@ -343,9 +376,9 @@ mod tests {
         let (w, h) = (300, 200);
         let base = image(w, h);
         let mut up = base.clone();
-        apply(&TEXTURE, &mut up, w, h, 100.0, Encoding(0.0));
+        apply(&TEXTURE, &mut up, w, h, 100.0, Encoding(0.0)).unwrap();
         let mut down = base.clone();
-        apply(&TEXTURE, &mut down, w, h, -100.0, Encoding(0.0));
+        apply(&TEXTURE, &mut down, w, h, -100.0, Encoding(0.0)).unwrap();
         assert!(contrast(&up) > contrast(&base) && contrast(&down) < contrast(&base), "{} {} {}", contrast(&up), contrast(&base), contrast(&down));
         assert!(up.iter().chain(&down).all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) && q[3] == 1.0));
     }
@@ -361,9 +394,9 @@ mod tests {
             })
             .collect();
         let mut up = base.clone();
-        apply(&CLARITY, &mut up, w, h, 100.0, Encoding(0.0));
+        apply(&CLARITY, &mut up, w, h, 100.0, Encoding(0.0)).unwrap();
         let mut down = base.clone();
-        apply(&CLARITY, &mut down, w, h, -100.0, Encoding(0.0));
+        apply(&CLARITY, &mut down, w, h, -100.0, Encoding(0.0)).unwrap();
         assert!(contrast(&up) > contrast(&base) && contrast(&down) < contrast(&base), "{} {} {}", contrast(&up), contrast(&base), contrast(&down));
     }
 
@@ -372,12 +405,12 @@ mod tests {
         let (w, h) = (40, 30);
         for m in [&TEXTURE, &CLARITY] {
             let mut flat = vec![[0.5f32, 0.4, 0.3, 1.0]; w * h];
-            apply(m, &mut flat, w, h, 100.0, Encoding(2.2));
+            apply(m, &mut flat, w, h, 100.0, Encoding(2.2)).unwrap();
             assert!(flat.iter().all(|q| (q[1] - 0.4).abs() < 0.05));
             let mut odd = vec![[f32::NAN, 2.0, -1.0, 1.0]; 6];
-            apply(m, &mut odd, 3, 2, 60.0, Encoding(0.0));
-            apply(m, &mut odd, 5, 5, 60.0, Encoding(0.0)); // wrong size: left alone
-            apply(m, &mut [], 0, 0, 60.0, Encoding(0.0));
+            apply(m, &mut odd, 3, 2, 60.0, Encoding(0.0)).unwrap();
+            apply(m, &mut odd, 5, 5, 60.0, Encoding(0.0)).unwrap(); // wrong size: left alone
+            apply(m, &mut [], 0, 0, 60.0, Encoding(0.0)).unwrap();
             assert!(m.coefficients(0.0).is_none() && m.coefficients(f32::NAN).is_none());
             assert_eq!(m.coefficients(300.0), m.coefficients(100.0));
         }

@@ -645,11 +645,21 @@ pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
 
 /// Runs the Camera Raw pipeline on straight RGBA pixels (`w × h`, display-encoded RGB).
 /// `float` keeps values above 1 (32-bit documents). Pixels that don't fill `w × h` exactly are
-/// left unchanged.
+/// left unchanged. A stage that can't get the memory it needs is skipped: for previews; a
+/// result that is kept goes through [`try_develop`], which reports it.
 pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
+    // The error only says a stage was skipped; the pixels are as complete as they can be.
+    let _ = try_develop(px, w, h, p, float);
+}
+
+/// [`develop`], failing when a stage (Texture, Clarity) can't get the memory it needs, so an
+/// incomplete result isn't committed as the developed image. The pixels are then partly
+/// developed and should be discarded.
+pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) -> Result<(), String> {
     if px.is_empty() || p.is_identity() || px.len() != w.saturating_mul(h) {
-        return;
+        return Ok(());
     }
+    let mut skipped: Option<String> = None;
     let ps = p.pixel_scale.clamp(0.01, 1.0);
     // 1. White balance (per-channel curves, see `white_balance`), then Exposure.
     white_balance::apply(px, w, p.temperature, p.tint, Encoding::of(p.encoding_gamma));
@@ -690,11 +700,17 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         local_tone::apply(px, w, h, p.shadows, p.highlights, Encoding::of(p.encoding_gamma));
     }
     // Texture and Clarity: fitted multi-scale models of local detail (see `local_detail`).
-    if p.texture != 0.0 {
-        local_detail::apply(&local_detail::TEXTURE, px, w, h, p.texture, Encoding::of(p.encoding_gamma));
+    // Without memory a stage is skipped and the rest still runs (a preview stays useful); the
+    // first failure is returned at the end.
+    if p.texture != 0.0
+        && let Err(e) = local_detail::apply(&local_detail::TEXTURE, px, w, h, p.texture, Encoding::of(p.encoding_gamma))
+    {
+        skipped.get_or_insert(e);
     }
-    if p.clarity != 0.0 {
-        local_detail::apply(&local_detail::CLARITY, px, w, h, p.clarity, Encoding::of(p.encoding_gamma));
+    if p.clarity != 0.0
+        && let Err(e) = local_detail::apply(&local_detail::CLARITY, px, w, h, p.clarity, Encoding::of(p.encoding_gamma))
+    {
+        skipped.get_or_insert(e);
     }
     // 3b. Whites and Blacks: global curves, Whites up adapted to the image's tones.
     if p.whites != 0.0 || p.blacks != 0.0 {
@@ -788,6 +804,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
             }
         }
     }
+    skipped.map_or(Ok(()), Err)
 }
 
 /// The image's 1st, 50th and 99th percentiles and the mean of the log2 luminance, on cells of

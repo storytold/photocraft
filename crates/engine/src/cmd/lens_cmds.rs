@@ -180,17 +180,33 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
 /// Camera Raw on a surface over `area` (RGB / Gray via RGBA, at the surface's depth).
 ///
 /// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
-/// error first, and this keeps the preview and Smart Filter paths from overflowing.
+/// error first, and this keeps the preview and Smart Filter paths from overflowing. A stage
+/// that can't get its memory is skipped; [`try_camera_raw_surface`] reports it instead.
 pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
+    develop_surface(surf, area, p, false).unwrap_or_else(|_| surf.clone())
+}
+
+/// [`camera_raw_surface`], failing when a develop stage can't get the memory it needs, so the
+/// command doesn't commit an incomplete result.
+pub fn try_camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> std::result::Result<Surface, String> {
+    develop_surface(surf, area, p, true)
+}
+
+fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> std::result::Result<Surface, String> {
     let area = area.intersect(&surf.content_bounds().union(&area));
     if area.is_empty() || p.is_identity() {
-        return surf.clone();
+        return Ok(surf.clone());
     }
-    let Some(len) = raw_pixels(area) else { return surf.clone() };
+    let Some(len) = raw_pixels(area) else { return Ok(surf.clone()) };
     let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
-    camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
+    let float = fmt.sample == SampleType::F32;
+    if strict {
+        camera_raw::try_develop(&mut px, w, h, p, float)?;
+    } else {
+        camera_raw::develop(&mut px, w, h, p, float);
+    }
     let n = fmt.channels();
     let orig = surf.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
@@ -204,7 +220,7 @@ pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface 
     let mut out = surf.clone();
     out.write_region(area, &data);
     out.prune();
-    out
+    Ok(out)
 }
 
 /// Mixes `new` over `old` by the selection's coverage.
@@ -282,7 +298,15 @@ fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// Runs `f` on the target layer (pixel layer edited in place inside the selection; smart object
 /// gets a smart filter with `stored` params).
-fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value, float_bg: bool, f: &dyn Fn(&Surface, Rect) -> Surface) -> Result<LayerId> {
+fn run_filter(
+    s: &mut Session,
+    cmd: &str,
+    label: &str,
+    p: &Value,
+    stored: Value,
+    float_bg: bool,
+    f: &dyn Fn(&Surface, Rect) -> Result<Surface>,
+) -> Result<LayerId> {
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let _working = photocraft_raster::memory::try_reserve_operation(state.doc.size.area().saturating_mul(64)).map_err(EngineError::Other)?;
     let id = target(s, p)?;
@@ -314,7 +338,7 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value,
         let LayerContent::Raster(surf) = &mut l.content else {
             return Err(EngineError::Other(format!("{label} needs a pixel layer")));
         };
-        let out = f(surf, canvas);
+        let out = f(surf, canvas)?;
         *surf = match &selection {
             Some(sel) => mix_by_selection(surf, &out, sel),
             None => out,
@@ -331,8 +355,9 @@ fn lens_correction(s: &mut Session, p: &Value) -> Result<Value> {
     let lc = lens_params(LENS, p, frame, info.as_ref())?;
     let stored = resolved_lens_params(p, &lc, profile_focal(LENS, p, info.as_ref())?);
     let t0 = Stopwatch::start();
-    let id =
-        run_filter(s, LENS, "Lens Correction", p, stored.clone(), matches!(lc.edge, EdgeMode::Transparency), &|surf, canvas| lens::correct(surf, canvas, &lc))?;
+    let id = run_filter(s, LENS, "Lens Correction", p, stored.clone(), matches!(lc.edge, EdgeMode::Transparency), &|surf, canvas| {
+        Ok(lens::correct(surf, canvas, &lc))
+    })?;
     Ok(json!({"layer": id.0, "profile": lc.profile.as_ref().map(|p| p.name.clone()), "angle": lc.angle, "scale": lc.scale, "params": stored, "ms": t0.ms()}))
 }
 
@@ -351,11 +376,11 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let id = run_filter(s, WIDE, "Adaptive Wide Angle", p, stored.clone(), true, &|surf, canvas| {
         let tris = mesh.triangles();
-        if canvas == frame {
+        Ok(if canvas == frame {
             photocraft_algo::warp::warp_triangles(surf, canvas, &mesh.verts, &tris, interp)
         } else {
             wideangle::apply(surf, canvas, &wa, interp)
-        }
+        })
     })?;
     let model = match cam.model {
         wideangle::WideModel::Fisheye => "fisheye",
@@ -417,8 +442,9 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
-    let id =
-        run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
+        try_camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr).map_err(|e| bad(RAW, e))
+    })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
