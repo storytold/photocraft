@@ -314,6 +314,27 @@ fn upright_finds_lines_in_pixels() {
 }
 
 #[test]
+fn upright_keeps_lines_that_cross_the_frame_and_drops_ones_along_it() {
+    let (fw, fh, m) = (480.0, 360.0, 10.0);
+    // A building edge from the top edge to the bottom one, a horizon from side to side.
+    assert!(!upright::along_frame([200.0, 0.5], [210.0, 359.5], fw, fh, m));
+    assert!(!upright::along_frame([0.5, 170.0], [479.5, 190.0], fw, fh, m));
+    // A line hugging the left edge, and one along the bottom.
+    assert!(upright::along_frame([3.0, 0.5], [4.0, 359.5], fw, fh, m));
+    assert!(upright::along_frame([20.0, 356.0], [400.0, 357.0], fw, fh, m));
+
+    // In pixels: a dark post running the full height in the middle is kept, a dark band along
+    // the left edge (the picture's border) is not.
+    let (w, h) = (480usize, 360usize);
+    let px = image(w, h, |x, _| if (236.0..244.0).contains(&x) || x < 4.0 { 0.1 } else { 0.8 });
+    let segs = upright::segments(&px, w, h);
+    let centred = |x: f64| x - w as f64 / 2.0;
+    let full_height = |s: &Segment| (s.a[1] - s.b[1]).abs() > 0.8 * h as f64;
+    assert!(segs.iter().any(|s| full_height(s) && s.mid()[0].abs() < 10.0), "the post touching the top and bottom edges was dropped: {segs:?}");
+    assert!(!segs.iter().any(|s| s.mid()[0] < centred(20.0)), "a line along the left edge was kept: {segs:?}");
+}
+
+#[test]
 fn guided_upright_follows_the_guides() {
     let (w, h) = (1000.0, 800.0);
     let tilted = manual(&t(|t| t.vertical = 30.0), w, h);

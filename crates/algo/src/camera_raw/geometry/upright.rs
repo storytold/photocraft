@@ -81,8 +81,16 @@ fn luminance_proxy(px: &[[f32; 4]], w: usize, h: usize) -> Option<(Vec<f32>, usi
     Some((out, lw, lh, f as f64))
 }
 
+/// Whether the segment `a`–`b` runs along an edge of a `fw × fh` frame: both its ends within
+/// `margin` of the same edge. A line that merely reaches the edge (a horizon, a facade crossing
+/// the frame) does not.
+pub(super) fn along_frame(a: [f64; 2], b: [f64; 2], fw: f64, fh: f64, margin: f64) -> bool {
+    let near = |v: f64, edge: f64| (v - edge).abs() <= margin;
+    (near(a[0], 0.0) && near(b[0], 0.0)) || (near(a[0], fw) && near(b[0], fw)) || (near(a[1], 0.0) && near(b[1], 0.0)) || (near(a[1], fh) && near(b[1], fh))
+}
+
 /// Detected segments in centred full-image coordinates.
-fn segments(px: &[[f32; 4]], w: usize, h: usize) -> Vec<Segment> {
+pub(super) fn segments(px: &[[f32; 4]], w: usize, h: usize) -> Vec<Segment> {
     let Some((lum, lw, lh, f)) = luminance_proxy(px, w, h) else { return Vec::new() };
     // Long lines only: short ones come in crowds from textures (planks, rugs, fringes).
     let min_len = (lw.min(lh) as f64 * 0.07).max(16.0);
@@ -92,7 +100,7 @@ fn segments(px: &[[f32; 4]], w: usize, h: usize) -> Vec<Segment> {
     // scene's verticals.
     let margin = (lw.min(lh) as f64 * 0.03).max(3.0);
     let (fw, fh) = (lw as f64, lh as f64);
-    segs.retain(|s| [s.a, s.b].iter().all(|p| p[0] > margin && p[1] > margin && p[0] < fw - margin && p[1] < fh - margin));
+    segs.retain(|s| !along_frame(s.a, s.b, fw, fh, margin));
     segs.truncate(600);
     segs.into_iter().map(|s| Segment { a: [s.a[0] * f - cx, s.a[1] * f - cy], b: [s.b[0] * f - cx, s.b[1] * f - cy] }).collect()
 }
