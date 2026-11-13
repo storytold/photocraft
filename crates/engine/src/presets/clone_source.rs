@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn resample_extreme_sources_are_transparent_without_overflow_or_nan() {
         let mut source = Region::new(Rect::new(0, 0, 2, 2), 4);
-        for px in source.data.chunks_exact_mut(4) {
+        for px in source.data.as_chunks_mut::<4>().0.iter_mut() {
             px.copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
         }
         for at in [(3.0e9, 0.0), (0.0, 3.0e9), (-3.0e9, 0.0), (f64::MAX, f64::MAX), (f64::INFINITY, 0.0), (f64::NAN, 0.0)] {
