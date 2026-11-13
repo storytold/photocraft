@@ -1,6 +1,6 @@
 use super::{
-    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
-    browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
+    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, ShapeView, Stroke, TextureHandle, Tokens, Tool,
+    Value, browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
 // ------------------------------------------------------------------ Gradients
@@ -334,6 +334,165 @@ fn shape_fill(app: &PhotocraftApp) -> Value {
     if app.ui.tool_options.shape_fill { json!(format!("#{:02x}{:02x}{:02x}", q(f[0]), q(f[1]), q(f[2]))) } else { Value::Null }
 }
 
+/// An entry of the Custom Shape picker's gear menu or right-click menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ShapeMenu {
+    Rename,
+    Delete,
+    View(ShapeView),
+    AppendDefaults,
+    Import,
+    ExportSelected,
+    NewGroup,
+}
+
+impl ShapeMenu {
+    /// The entry's text; the gear menu's Delete Shape has no ellipsis, the right-click menu's has.
+    pub(super) fn label(self, context: bool) -> &'static str {
+        match self {
+            Self::Rename => "Rename Shape…",
+            Self::Delete if context => "Delete Shape…",
+            Self::Delete => "Delete Shape",
+            Self::View(ShapeView::TextOnly) => "Text Only",
+            Self::View(ShapeView::SmallThumbnail) => "Small Thumbnail",
+            Self::View(ShapeView::LargeThumbnail) => "Large Thumbnail",
+            Self::View(ShapeView::SmallList) => "Small List",
+            Self::View(ShapeView::LargeList) => "Large List",
+            Self::AppendDefaults => "Append Default Shapes…",
+            Self::Import => "Import Shapes…",
+            Self::ExportSelected => "Export Selected Shapes…",
+            Self::NewGroup => "New Shape Group…",
+        }
+    }
+}
+
+/// The picker's gear menu, top to bottom; `None` is a separator.
+pub(super) const SHAPE_GEAR_MENU: &[Option<ShapeMenu>] = &[
+    Some(ShapeMenu::Rename),
+    Some(ShapeMenu::Delete),
+    None,
+    Some(ShapeMenu::View(ShapeView::TextOnly)),
+    Some(ShapeMenu::View(ShapeView::SmallThumbnail)),
+    Some(ShapeMenu::View(ShapeView::LargeThumbnail)),
+    Some(ShapeMenu::View(ShapeView::SmallList)),
+    Some(ShapeMenu::View(ShapeView::LargeList)),
+    None,
+    Some(ShapeMenu::AppendDefaults),
+    Some(ShapeMenu::Import),
+    Some(ShapeMenu::ExportSelected),
+];
+
+/// The menu a right-click on a shape (or a group's caption) opens.
+pub(super) const SHAPE_CONTEXT_MENU: &[Option<ShapeMenu>] = &[
+    Some(ShapeMenu::AppendDefaults),
+    Some(ShapeMenu::Import),
+    Some(ShapeMenu::ExportSelected),
+    Some(ShapeMenu::Rename),
+    Some(ShapeMenu::Delete),
+    None,
+    Some(ShapeMenu::NewGroup),
+];
+
+/// `PresetUi::renaming`'s panel for the picker's own rename row, so the Shapes panel (panel
+/// "shapes") does not show it.
+const PICKER_PANEL: &str = "shapePicker";
+
+/// Which of the picker's menus is open. Kept here rather than in egui's memory, which holds one
+/// open popup: opening a menu through it would close the picker.
+#[derive(Clone, Debug, PartialEq)]
+enum PickerMenu {
+    Gear,
+    Context { shape: Option<String>, at: Pos2 },
+}
+
+/// What the picker's content asked for; run after it is drawn.
+enum PickerAct {
+    Menu(ShapeMenu, Option<String>),
+    Rename(String, String),
+    RenameGroup(String, String),
+}
+
+/// A button's accessible name, so tests and screen readers find it by its text.
+fn named(resp: egui::Response, label: &str) -> egui::Response {
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp
+}
+
+/// The menu's entries; returns the one chosen. Rename and Delete need a `target`; Export has no
+/// command behind it yet, so it stays greyed.
+fn shape_menu_entries(ui: &mut egui::Ui, entries: &[Option<ShapeMenu>], context: bool, has_target: bool, view: ShapeView) -> Option<ShapeMenu> {
+    let mut chosen = None;
+    for entry in entries {
+        let Some(entry) = *entry else {
+            ui.separator();
+            continue;
+        };
+        let label = tl!(entry.label(context));
+        let clicked = match entry {
+            ShapeMenu::View(v) => ui.radio(view == v, label).clicked(),
+            _ => {
+                let enabled = match entry {
+                    ShapeMenu::Rename | ShapeMenu::Delete => has_target,
+                    ShapeMenu::ExportSelected => false,
+                    _ => true,
+                };
+                ui.add_enabled(enabled, egui::Button::new(label)).clicked()
+            }
+        };
+        if clicked {
+            chosen = Some(entry);
+        }
+    }
+    chosen
+}
+
+/// One shape in the picker, drawn for `view`: a thumbnail cell or a row.
+fn shape_cell(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    ctx: &egui::Context,
+    sh: &photocraft_engine::presets::shapes::ShapePreset,
+    on: bool,
+    view: ShapeView,
+) -> egui::Response {
+    let thumb = match view {
+        ShapeView::TextOnly => 0.0,
+        ShapeView::SmallThumbnail => 32.0,
+        ShapeView::LargeThumbnail => 64.0,
+        ShapeView::SmallList => 16.0,
+        ShapeView::LargeList => 32.0,
+    };
+    let grid = matches!(view, ShapeView::SmallThumbnail | ShapeView::LargeThumbnail);
+    let size = if grid { vec2(thumb, thumb) } else { vec2(ui.available_width(), if view == ShapeView::TextOnly { 20.0 } else { thumb + 4.0 }) };
+    let (cr, resp) = ui.allocate_exact_size(size, Sense::click());
+    let fill = if on {
+        t.accent_soft
+    } else if resp.hovered() {
+        t.hover
+    } else if grid {
+        t.field
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(cr, 2.0, fill);
+    let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+    if grid {
+        let tex = shape_texture(ctx, sh);
+        ui.painter().image(tex.id(), cr.shrink(4.0), uv, t.text);
+    } else {
+        let mut x = cr.left() + 4.0;
+        if thumb > 0.0 {
+            let tex = shape_texture(ctx, sh);
+            ui.painter().image(tex.id(), Rect::from_min_size(pos2(x, cr.center().y - thumb / 2.0), vec2(thumb, thumb)), uv, t.text);
+            x += thumb + 6.0;
+        }
+        ui.painter().text(pos2(x, cr.center().y), Align2::LEFT_CENTER, &sh.name, FontId::proportional(12.0), t.text);
+    }
+    // A list names its shapes already; a thumbnail's name is its tooltip.
+    let resp = if grid { resp.on_hover_text(&sh.name) } else { resp };
+    named(resp, &sh.name)
+}
+
 /// Options-bar shape picker for the Custom Shape tool.
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -354,39 +513,184 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         );
     }
     crate::icons::paint(ui, Rect::from_center_size(pos2(r.right() - 8.0, r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_dim);
-    let resp = resp.on_hover_text(&cur);
-    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    let resp = named(resp.on_hover_text(&cur), "Custom Shape Picker");
+    let menu_id = egui::Id::new("shape-picker-menu");
+    let cur_exists = groups.iter().any(|g| g.items.iter().any(|s| s.name == cur));
+    let mut acts: Vec<PickerAct> = Vec::new();
+    let shown = egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_width(232.0);
+        let view = app.ui.presets_ui.shape_picker_view;
+        let mut gear: Option<egui::Response> = None;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let g = named(crate::icons::button(ui, "settings", 24.0, false, tl!("Custom Shape Options")), "Custom Shape Options");
+            if g.clicked() {
+                let open = ctx.data(|d| d.get_temp::<PickerMenu>(menu_id));
+                ctx.data_mut(|d| match open {
+                    Some(PickerMenu::Gear) => d.remove::<PickerMenu>(menu_id),
+                    _ => d.insert_temp(menu_id, PickerMenu::Gear),
+                });
+            }
+            gear = Some(g);
+        });
+        // The inline rename row, like the Shapes panel's.
+        if let Some((p, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == PICKER_PANEL) {
+            let mut done = None;
+            ui.horizontal(|ui| {
+                let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
+                let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
+                if !r.has_focus() && !r.lost_focus() {
+                    r.request_focus();
+                }
+                if r.lost_focus() {
+                    done = Some(ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                }
+            });
+            app.ui.presets_ui.renaming = Some((p, key.clone(), text.clone()));
+            if let Some(ok) = done {
+                app.ui.presets_ui.renaming = None;
+                if ok && !text.trim().is_empty() {
+                    let text = text.trim().to_string();
+                    acts.push(match key.strip_prefix("group:") {
+                        Some(g) => PickerAct::RenameGroup(g.to_string(), text),
+                        None => PickerAct::Rename(key, text),
+                    });
+                }
+            }
+        }
+        let open_menu = |at: Option<Pos2>, shape: Option<String>| {
+            if let Some(at) = at {
+                ctx.data_mut(|d| d.insert_temp(menu_id, PickerMenu::Context { shape, at }));
+            }
+        };
+        let list = !matches!(view, ShapeView::SmallThumbnail | ShapeView::LargeThumbnail);
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for g in &groups {
-                ui.label(egui::RichText::new(&g.name).color(t.text_dim).size(11.0));
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+                let cap = ui.add(egui::Label::new(egui::RichText::new(&g.name).color(t.text_dim).size(11.0)).sense(Sense::click()));
+                if cap.secondary_clicked() {
+                    open_menu(cap.interact_pointer_pos().or_else(|| ctx.pointer_hover_pos()), cur_exists.then(|| cur.clone()));
+                }
+                let mut cells = |ui: &mut egui::Ui| {
                     for sh in &g.items {
-                        let (cr, cresp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-                        let on = sh.name == cur;
-                        ui.painter().rect_filled(
-                            cr,
-                            2.0,
-                            if on {
-                                t.accent_soft
-                            } else if cresp.hovered() {
-                                t.hover
-                            } else {
-                                t.field
-                            },
-                        );
-                        let tex = shape_texture(&ctx, sh);
-                        ui.painter().image(tex.id(), cr.shrink(4.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
-                        if cresp.on_hover_text(&sh.name).clicked() {
+                        let cresp = shape_cell(ui, &t, &ctx, sh, sh.name == cur, view);
+                        if cresp.secondary_clicked() {
+                            open_menu(cresp.interact_pointer_pos().or_else(|| ctx.pointer_hover_pos()), Some(sh.name.clone()));
+                        }
+                        if cresp.clicked() {
                             app.ui.presets_ui.custom_shape = sh.name.clone();
                             ui.close();
                         }
                     }
-                });
+                };
+                if list {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
+                    cells(ui);
+                } else {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+                        cells(ui);
+                    });
+                }
             }
         });
+        // The open menu, shown from here so the picker counts it as its sub-menu: a click in it is
+        // not a click outside the picker.
+        let child = match ctx.data(|d| d.get_temp::<PickerMenu>(menu_id)) {
+            Some(PickerMenu::Gear) => gear.as_ref().map(|g| (egui::Popup::from_response(g).id(menu_id.with("gear")), true, cur_exists.then(|| cur.clone()))),
+            Some(PickerMenu::Context { shape, at }) => {
+                Some((egui::Popup::new(menu_id.with("context"), ctx.clone(), egui::PopupAnchor::Position(at), ui.layer_id()), false, shape))
+            }
+            None => None,
+        };
+        if let Some((popup, gear_menu, target)) = child {
+            let popup_id = popup.get_id();
+            egui::containers::menu::MenuState::from_ui(ui, |s, _| s.open_item = Some(popup_id));
+            let entries = if gear_menu { SHAPE_GEAR_MENU } else { SHAPE_CONTEXT_MENU };
+            let has_target = target.is_some();
+            let out = popup
+                .kind(egui::PopupKind::Menu)
+                .layout(egui::Layout::top_down_justified(egui::Align::Min))
+                .style(egui::containers::menu::menu_style)
+                .gap(0.0)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .open(true)
+                .show(|ui| shape_menu_entries(ui, entries, !gear_menu, has_target, view));
+            if let Some(out) = out {
+                let chosen = out.inner;
+                if let Some(entry) = chosen {
+                    acts.push(PickerAct::Menu(entry, target));
+                }
+                if chosen.is_some() || out.response.should_close() {
+                    ctx.data_mut(|d| d.remove::<PickerMenu>(menu_id));
+                }
+            }
+        }
     });
+    if shown.is_none() {
+        ctx.data_mut(|d| d.remove::<PickerMenu>(menu_id));
+        if app.ui.presets_ui.renaming.as_ref().is_some_and(|r| r.0 == PICKER_PANEL) {
+            app.ui.presets_ui.renaming = None;
+        }
+    }
+    for act in acts {
+        match act {
+            PickerAct::Menu(entry, target) => shape_menu_action(app, entry, target),
+            PickerAct::Rename(old, new) => {
+                if let Some(r) = run(app, "shape.presets.edit", json!({"action": "rename", "preset": old, "name": new})) {
+                    let new = r["name"].as_str().map(str::to_string).unwrap_or(new);
+                    if app.ui.presets_ui.shape() == old {
+                        app.ui.presets_ui.custom_shape = new.clone();
+                    }
+                    if app.ui.presets_ui.selected.get("shapes") == Some(&old) {
+                        app.ui.presets_ui.selected.insert("shapes".into(), new);
+                    }
+                }
+            }
+            PickerAct::RenameGroup(group, name) => drop(run(app, "shape.presets.edit", json!({"action": "renameGroup", "group": group, "name": name}))),
+        }
+    }
+}
+
+/// Runs a chosen gear or right-click menu entry; `target` is the shape it acts on.
+fn shape_menu_action(app: &mut PhotocraftApp, entry: ShapeMenu, target: Option<String>) {
+    match (entry, target) {
+        (ShapeMenu::View(v), _) => app.ui.presets_ui.shape_picker_view = v,
+        (ShapeMenu::Rename, Some(name)) => app.ui.presets_ui.renaming = Some((PICKER_PANEL.into(), name.clone(), name)),
+        (ShapeMenu::Delete, Some(name)) => {
+            if run(app, "shape.presets.edit", json!({"action": "delete", "preset": name})).is_some() {
+                if app.ui.presets_ui.shape() == name {
+                    app.ui.presets_ui.custom_shape.clear();
+                }
+                if app.ui.presets_ui.selected.get("shapes") == Some(&name) {
+                    app.ui.presets_ui.selected.remove("shapes");
+                }
+            }
+        }
+        (ShapeMenu::AppendDefaults, _) => drop(run(app, "shape.presets.reset", json!({"append": true}))),
+        (ShapeMenu::NewGroup, _) => {
+            if let Some(r) = run(app, "shape.presets.edit", json!({"action": "newGroup", "name": "Group"})) {
+                let g = r["group"].as_str().unwrap_or_default().to_string();
+                app.ui.presets_ui.renaming = Some((PICKER_PANEL.into(), format!("group:{g}"), g));
+            }
+        }
+        (ShapeMenu::Import, _) => {
+            let r = app.pick_file_bytes_filtered(&["csh"], |app, name, bytes| {
+                let mut p = json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes)});
+                let stem = std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().trim().to_string()).filter(|s| !s.is_empty());
+                if let Some(stem) = stem {
+                    p["group"] = json!(stem);
+                }
+                app.run("shape.presets.importCsh", p)
+            });
+            if let Err(e) = r
+                && e != crate::file_dialog::CANCELLED
+            {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
+        // Rename/Delete without a target are greyed; Export has no command yet.
+        _ => {}
+    }
 }
 
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
@@ -697,3 +1001,7 @@ pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[
         _ => Some(src),
     }
 }
+
+#[cfg(test)]
+#[path = "custom_shape_picker_menu_tests.rs"]
+mod custom_shape_picker_menu_tests;
