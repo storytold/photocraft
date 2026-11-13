@@ -27,6 +27,11 @@ pub struct CommandSpec {
     pub journal: bool,
 }
 
+/// Image › Adjustments › Desaturate: Hue/Saturation with saturation at -100.
+pub(crate) fn desaturate_adjustment() -> Adjustment {
+    Adjustment::HueSaturation { hue: 0.0, saturation: -100.0, lightness: 0.0, colorize: false, ranges: photocraft_doc::adjust::HueRange::defaults() }
+}
+
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
     if let Some(d) = s.active() {
@@ -37,7 +42,7 @@ fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Val
         s.set_canvas_map(a, half.then(&a).then(&photocraft_geom::Affine::translate(-0.5, -0.5)));
     }
     s.edit(label, |doc, _| {
-        crate::canvas_geom::turn_canvas(doc, t);
+        crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::turn_canvas(doc, t));
         Ok(())
     })?;
     Ok(Value::Null)
@@ -73,6 +78,8 @@ mod count_delete_group_tests;
 mod count_history_names_tests;
 #[cfg(test)]
 mod count_record_label_tests;
+#[cfg(test)]
+mod count_resize_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
@@ -93,6 +100,8 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+#[cfg(test)]
+mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod history_cmds;
@@ -178,7 +187,7 @@ pub(crate) use adjust_params::inject_kind;
 use adjust_params::{adjust_mode, destructive_adjust, doc_mode, new_adjustment};
 pub use adjust_params::{adjustment_from_params, adjustment_kind};
 pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable, is_mask_target, paint_surface};
-use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_layer, has_pixel_or_channel, has_selection};
+use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_or_channel, has_selection};
 pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
@@ -1020,20 +1029,12 @@ fn build() -> Vec<CommandSpec> {
             ["Image", "Adjustments"],
             Some("Cmd+Shift+U"),
             r##"{"target":"pixels"|"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active}"##,
-            has_pixel_layer,
+            crate::adjust_cmds::has_adjustable,
             |s, p| {
-                destructive_adjust(
-                    s,
-                    "Desaturate",
-                    Adjustment::HueSaturation {
-                        hue: 0.0,
-                        saturation: -100.0,
-                        lightness: 0.0,
-                        colorize: false,
-                        ranges: photocraft_doc::adjust::HueRange::defaults(),
-                    },
-                    p,
-                )
+                if crate::adjust_cmds::adjust_as_smart_filter(s, "desaturate", "Desaturate", p)? {
+                    return Ok(Value::Null);
+                }
+                destructive_adjust(s, "Desaturate", desaturate_adjustment(), p)
             }
         ),
         // Paint
