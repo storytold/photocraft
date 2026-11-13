@@ -824,7 +824,10 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
 /// [`inflate`] with an explicit `limit`, which also applies to uncompressed input.
 fn inflate_with_limit(bytes: &[u8], limit: u64) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-    craft_svg::svgz::inflate(bytes, limit).map_err(|e| IoError::Svg(e.to_string()))
+    craft_svg::svgz::inflate(bytes, limit).map_err(|e| match e {
+        craft_svg::svgz::Error::TooLarge(_) if bytes.starts_with(&[0x1f, 0x8b]) => IoError::Svg(format!("compressed SVG inflates past {limit} bytes")),
+        error => IoError::Svg(error.to_string()),
+    })
 }
 
 /// The deepest element nesting in `xml`, stopping as soon as it passes `limit` (the result is
