@@ -1317,6 +1317,15 @@ fn coverage_operation(params: &FilterParams) -> Option<coverage::Operation<'_>> 
     }
 }
 
+/// Working-copy samples per pixel a Filter Gallery stack holds beside the source read: none for an
+/// empty stack, which returns the cropped source.
+fn gallery_working_samples(params: &FilterParams) -> usize {
+    match params {
+        FilterParams::FilterGallery { effects } if !effects.is_empty() => 12,
+        _ => 0,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Dispatch checked whole-domain filters or bounded native tiles, publishing a result only after successful processing
 /// and cancellation checks.
@@ -1390,7 +1399,12 @@ fn apply_tiled_with_impl(
     // caller-supplied, so a short parameter set can ask for a huge source window per tile.
     if let Halo::Radius(reach) = halo {
         let (w, h) = (area.width().min(tile as u32) as usize, area.height().min(tile as u32) as usize);
-        let read_samples = w.checked_add(2 * reach as usize)?.checked_mul(h.checked_add(2 * reach as usize)?)?.checked_mul(fmt.channels())?;
+        // A Filter Gallery applies every effect to one working window. Beside the source read (`channels`
+        // samples per pixel) one effect holds the three-channel window plus its worst temporaries: two more
+        // three-channel copies and a plane or gradient set, 12 samples per pixel however many effects there
+        // are. An empty stack makes no working window (it returns the cropped source), so it is not charged.
+        let per_pixel = fmt.channels().checked_add(gallery_working_samples(params))?;
+        let read_samples = w.checked_add(2 * reach as usize)?.checked_mul(h.checked_add(2 * reach as usize)?)?.checked_mul(per_pixel)?;
         let tile_count = u64::from(area.width()).div_ceil(tile as u64).checked_mul(u64::from(area.height()).div_ceil(tile as u64))?;
         // Reject hostile source-window sizes before Image::read allocates them.
         // Ordinary filter parameters and automatic tiles fit these bounds.
