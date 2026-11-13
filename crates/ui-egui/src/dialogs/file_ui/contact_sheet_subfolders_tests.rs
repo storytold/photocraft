@@ -103,6 +103,8 @@ fn ok_runs_the_sheet_with_both_settings() {
         docs.iter().map(|d| (d.doc.name.clone(), images(&d.doc))).collect::<Vec<_>>()
     };
     // Include Subfolders (on) takes `sub/inner.png` too; Group puts it on its own sheet.
-    assert_eq!(sheets(false), [("ContactSheet-001".to_string(), 2)]);
-    assert_eq!(sheets(true), [("ContactSheet-001".to_string(), 1), ("ContactSheet-002".to_string(), 1)]);
+    let (all, grouped) = (sheets(false), sheets(true));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(all, [("ContactSheet-001".to_string(), 2)]);
+    assert_eq!(grouped, [("ContactSheet-001".to_string(), 1), ("ContactSheet-002".to_string(), 1)]);
 }
