@@ -691,3 +691,7 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         PathRef::TypePath(_) | PathRef::Pen => return,
     };
 }
+
+#[cfg(test)]
+#[path = "../path_selection_shift_constrain_tests.rs"]
+mod path_selection_shift_constrain_tests;
