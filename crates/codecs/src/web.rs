@@ -227,7 +227,7 @@ fn put_multibyte(out: &mut Vec<u8>, v: u32) {
 /// WBMP type 0 (1 bit per pixel, rows padded to bytes, 1 = white). `white[i]` per pixel.
 pub fn encode_wbmp(width: u32, height: u32, white: &[bool]) -> Result<Vec<u8>, CodecError> {
     let (w, h) = (width as usize, height as usize);
-    if width == 0 || height == 0 || w.checked_mul(h) != Some(white.len()) {
+    if width == 0 || height == 0 || white.len() != w * h {
         return Err(CodecError::InvalidImage("WBMP size must match the pixel data".into()));
     }
     let mut out = vec![0u8, 0u8];
@@ -304,7 +304,7 @@ pub fn encode_jpeg_rgb8(
     let (Ok(w16), Ok(h16)) = (u16::try_from(width), u16::try_from(height)) else {
         return Err(CodecError::encode(Format::Jpeg, "JPEG dimensions are limited to 65535"));
     };
-    if (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(3)) != Some(rgb.len()) {
+    if rgb.len() != width as usize * height as usize * 3 {
         return Err(CodecError::InvalidImage("RGB data does not match the size".into()));
     }
     let mut out = Vec::new();
@@ -479,6 +479,21 @@ mod subsampling_tests {
                 assert!(err < 24, "q{q} progressive={prog} optimized={opt}: max error {err}");
             }
         }
+    }
+
+    /// #11342: a flat image's optimised baseline tables have a one-bit Huffman code, which
+    /// zune-jpeg 0.5 decodes as black/green at the bottom. Such files must take the craft-jpeg
+    /// route, so the Save for Web preview shows the exported pixels.
+    #[test]
+    fn flat_optimized_baseline_decodes_to_the_source() {
+        let (w, h) = (100u32, 100u32);
+        let rgb = vec![128u8; (w * h * 3) as usize];
+        let bytes = encode_jpeg_rgb8(w, h, &rgb, 60, false, true, None, None, None, None).unwrap();
+        assert!(crate::codecs::jpeg::scan_metadata(&bytes).one_bit_huffman);
+        let ours = crate::decode(&bytes).unwrap().convert(crate::ChannelLayout::Rgb, crate::SampleType::U8);
+        assert_eq!(ours.dimensions(), (w, h));
+        let err = ours.data().iter().zip(&rgb).map(|(a, b)| i32::from(*a).abs_diff(i32::from(*b))).max().unwrap();
+        assert!(err <= 2, "max error {err}");
     }
 }
 
