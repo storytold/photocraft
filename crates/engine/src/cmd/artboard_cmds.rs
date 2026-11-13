@@ -658,9 +658,46 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
 }
 
 /// [`artboard_document`] for each chosen board, all built before any file is written so a
-/// board that can't be exported fails the export without leaving a partial set behind.
+/// board that can't be exported fails the export without leaving a partial set behind. With
+/// `"includeBackground": false` (Artboards to Files' Include Background in Export unticked,
+/// #13631) each board's fill is left out where [`without_background`] can.
 fn chosen_documents(doc: &Document, p: &Value) -> Result<Vec<Document>> {
-    chosen_artboards(doc, p).into_iter().filter_map(|id| artboard_document(doc, id).transpose()).collect()
+    let background = includes_background(p);
+    chosen_artboards(doc, p)
+        .into_iter()
+        .filter_map(|id| artboard_document(doc, id).transpose())
+        .map(|one| one.map(|one| if background { one } else { without_background(one) }))
+        .collect()
+}
+
+/// The formats Include Background in Export leaves the fill out of: those that keep transparency.
+const TRANSPARENT_FORMATS: &[&str] = &["png", "tif", "tiff", "webp"];
+
+/// Whether the exported boards keep their fill: yes unless `"includeBackground": false` asks
+/// otherwise for a format in [`TRANSPARENT_FORMATS`]. PSD and the formats without alpha (JPEG,
+/// BMP) keep today's file, as #13631 asks: the reference application was not measured there.
+fn includes_background(p: &Value) -> bool {
+    let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true) || !TRANSPARENT_FORMATS.contains(&format.as_str())
+}
+
+/// `one`, an [`artboard_document`], without its board's white fill, so what the board's layers
+/// don't cover comes out transparent while their own pixels stay as they are. An empty board, a
+/// fill other than white and a document other than 8-bit RGB keep theirs, as #13631 asks: the
+/// reference application was not measured there.
+fn without_background(mut one: Document) -> Document {
+    if one.mode != ColorMode::Rgb || one.depth != SampleType::U8 {
+        return one;
+    }
+    for board in &mut one.layers {
+        if board.children().is_some_and(|layers| !layers.is_empty())
+            && let Some(artboard) = board.artboard_mut()
+            && artboard.background == ArtboardBackground::White
+        {
+            artboard.background = ArtboardBackground::Transparent;
+        }
+    }
+    one
 }
 
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
@@ -829,7 +866,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?,"includeBackground":bool=true (false: each board's white fill is left out of PNG, TIFF and WebP files, so they come out transparent where the board's layers have no pixels; an empty board, other fills, documents other than 8-bit RGB, PSD and formats without alpha keep it)} → {files}"##,
             export_artboards,
             artboards_to_files
         ),
@@ -847,6 +884,9 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/include_background_tests.rs"]
+mod include_background_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;

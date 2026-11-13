@@ -310,6 +310,18 @@ fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
     });
 }
 
+/// Artboards to Files' Include Background in Export checkbox (#13631): ticked at every open, the
+/// last control before the file type. Unticked, the command gets `"includeBackground": false`.
+fn with_include_background(mut fields: Value) -> Value {
+    fields["includeBackground"] = json!(true);
+    fields["__labels"]["includeBackground"] = json!(tl!("Include Background in Export"));
+    if let Some(order) = fields["__order"].as_array_mut() {
+        let at = order.iter().position(|k| k == "format").unwrap_or(order.len());
+        order.insert(at, json!("includeBackground"));
+    }
+    fields
+}
+
 /// Folder the batch dialogs start from: next to the active document, else the working directory.
 fn default_dir(app: &PhotocraftApp) -> String {
     app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
@@ -495,6 +507,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             } else {
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
             };
+            let fields = if id == "file.export.artboardsToFiles" { with_include_background(fields) } else { fields };
             dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
         }
         "file.export.artboardsToPdf" => {
