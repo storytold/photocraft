@@ -13,12 +13,24 @@ use serde_json::json;
 /// One upload of `tex` this frame: where (`None` for the whole texture), its size and sampling.
 type Upload = (Option<[usize; 2]>, [usize; 2], TextureOptions);
 
-/// The uploads of `tex` since the last call.
-fn take_uploads(ctx: &egui::Context, tex: egui::TextureId) -> Vec<Upload> {
+/// The uploads of each of `texs` since the last call (every texture's are taken).
+fn take_uploads_of<const N: usize>(ctx: &egui::Context, texs: [egui::TextureId; N]) -> [Vec<Upload>; N] {
     let mut delta = ctx.tex_manager().write().take_delta();
-    let seen = delta.set.get(&tex).into_iter().flatten().map(|d| (d.pos, d.image.size(), d.options)).collect();
+    let seen = texs.map(|tex| delta.set.get(&tex).into_iter().flatten().map(|d| (d.pos, d.image.size(), d.options)).collect());
     delta.clear();
     seen
+}
+
+/// The uploads of `tex` since the last call.
+fn take_uploads(ctx: &egui::Context, tex: egui::TextureId) -> Vec<Upload> {
+    let [seen] = take_uploads_of(ctx, [tex]);
+    seen
+}
+
+/// Runs one pass of `ctx`, so the root viewport's pass count moves on; its texture changes are
+/// dropped.
+fn next_pass(ctx: &egui::Context) {
+    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
 }
 
 /// A white `w` × `h` document with a black diagonal stroke.
@@ -106,4 +118,57 @@ fn cpu_canvas_detail_samples_like_the_gpu_canvas() {
     }
     ensure_texture_in_view(&mut app, &ctx, 0, None, view(2.0)).unwrap();
     assert!(take_uploads(&ctx, detail).is_empty(), "unchanged: nothing sent");
+}
+
+/// #13505 review: the sampling travels with the whole-document texture's uploads, so two views of
+/// one document that need different sampling (two windows at 108.3 % and 200 %) took turns
+/// switching it, and both showed whichever came last. While both are shown, the second view gets
+/// its own texture at its own sampling, both stay current through an edit without being uploaded
+/// again each frame, and the second texture goes once its view stops asking.
+#[test]
+fn two_views_at_different_zooms_keep_their_own_sampling() {
+    let mut app = stroked(64, 48);
+    let ctx = egui::Context::default();
+    let view = |key: u64, zoom: f32| Some(InView { visible: DRect::new(0, 0, 64, 48), zoom, key });
+    let (near, far) = (view(1, 1.083), view(2, 2.0));
+    let a = ensure_texture_in_view(&mut app, &ctx, 0, None, near).unwrap().texture;
+    let b = ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap().texture;
+    assert_ne!(a, b, "the second view has its own texture");
+    assert_eq!(take_uploads_of(&ctx, [a, b]), [vec![(None, [64, 48], TextureOptions::LINEAR)], vec![(None, [64, 48], CRISP)]]);
+    // Shown together frame after frame, neither texture is uploaded again.
+    for _ in 0..3 {
+        assert_eq!(ensure_texture_in_view(&mut app, &ctx, 0, None, near).unwrap().texture, a);
+        assert_eq!(ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap().texture, b);
+        assert_eq!(take_uploads_of(&ctx, [a, b]), [vec![], vec![]], "no upload while nothing changed");
+    }
+    // The Navigator's call keeps the first view's texture and sampling.
+    assert_eq!(ensure_texture(&mut app, &ctx, 0, None).unwrap().0, a);
+    // An edit reaches both as partial updates, each with its own sampling.
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 4, "height": 4})).unwrap();
+    ensure_texture_in_view(&mut app, &ctx, 0, None, near).unwrap();
+    ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap();
+    take_uploads_of(&ctx, [a, b]);
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    ensure_texture_in_view(&mut app, &ctx, 0, None, near).unwrap();
+    ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap();
+    for (up, want) in take_uploads_of(&ctx, [a, b]).into_iter().zip([TextureOptions::LINEAR, CRISP]) {
+        assert!(!up.is_empty() && up.iter().all(|u| u.0.is_some() && u.2 == want), "{up:?}");
+    }
+    // The second window closed: two passes later its texture is freed and the first view's stays.
+    for _ in 0..2 {
+        next_pass(&ctx);
+        assert_eq!(ensure_texture_in_view(&mut app, &ctx, 0, None, near).unwrap().texture, a);
+    }
+    let mut delta = ctx.tex_manager().write().take_delta();
+    assert!(delta.free.contains(&b), "the second texture is freed");
+    assert!(!delta.free.contains(&a));
+    delta.clear();
+    // Two passes on, the first view is gone too: the other view, alone, switches the first
+    // texture's sampling with one texel.
+    for _ in 0..2 {
+        next_pass(&ctx);
+    }
+    take_uploads(&ctx, a);
+    assert_eq!(ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap().texture, a);
+    assert_eq!(take_uploads(&ctx, a), vec![(Some([0, 0]), [1, 1], CRISP)]);
 }

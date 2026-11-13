@@ -161,6 +161,27 @@ pub struct CanvasCache {
     pub detail: Vec<(u64, DetailTexture)>,
     /// The sampling `texture` was last uploaded with: the renderer takes it from each upload.
     pub options: TextureOptions,
+    /// The view (`InView::key`) that last showed `texture`, and in which pass of the root
+    /// viewport: while it is current, another view needing other sampling gets `variant`.
+    pub owner: Option<(u64, u64)>,
+    /// The whole document at the other sampling, for a view that needs it while another view
+    /// shows `texture` (two windows of a document at 108 % and 200 %).
+    pub variant: Option<SamplingVariant>,
+}
+
+/// [`CanvasCache::variant`]: a second whole-document texture, kept up to date like the first
+/// and dropped once no view has asked for it for two passes.
+pub struct SamplingVariant {
+    texture: Option<egui::TextureHandle>,
+    /// All its texels are opaque (see [`CanvasCache::texture_opaque`]).
+    opaque: bool,
+    /// The sampling it was last uploaded with.
+    options: TextureOptions,
+    /// Revision and preview key (display key folded in) it was rendered at.
+    revision: u64,
+    preview_key: u64,
+    /// The root viewport's pass a view last asked for it in.
+    used: u64,
 }
 
 /// [`CanvasCache::detail`]: the part of the document `DetailPlan` chose, uploaded at its factor.
@@ -188,6 +209,8 @@ pub(crate) struct CpuTextures {
     pub bounds: DRect,
     /// The detail texture and the document area it covers (x0, y0, x1, y1 in document pixels).
     pub detail: Option<(egui::TextureId, [f32; 4])>,
+    /// All texels of `texture` are opaque, so the checkerboard under it can be left out.
+    pub opaque: bool,
 }
 
 /// The part of a CPU canvas view in sight: its document area and zoom (physical pixels per
@@ -517,7 +540,7 @@ fn paint_canvas(
         let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, ctx), square));
         // Repeated-quad coverage is not proven identical on all Pattern Preview adapters.
         // Retain its legacy checker submissions, including the central document's.
-        let opaque = !app.ui.view.pattern_preview && app.canvases.get(&cache_key(doc.id, output)).is_some_and(|c| c.texture_opaque) && tex.is_some();
+        let opaque = !app.ui.view.pattern_preview && textures.as_ref().is_some_and(|t| t.opaque);
         paint_cpu_document(painter, &xf, area, rotated, checkerboard, tex, opaque);
         if let Some((detail, area)) = textures.and_then(|t| t.detail) {
             paint_cpu_detail(painter, &xf, doc.bounds(), rotated, checkerboard, detail, area);
