@@ -489,62 +489,8 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
 /// Photoshop writes it. The layers, global mask and global blocks move out of `file` (the
 /// export's own model), which keeps its header, resources and merged image. `ifd_alpha`: the
 /// composite in the IFD keeps its transparency as the first extra sample (Save Transparency).
-fn tiff_image_source(doc: &Document, file: &mut photocraft_psd::PsdFile, ifd_alpha: bool) -> ImageSourceData {
-    // Photoshop pairs alpha-name resources with samples past the colour channels and ignores
-    // the ExtraSamples kind. Layer transparency stays in each layer's channel −1.
-    let spot_extras = file.header.channels as usize > {
-        let cc = doc.pixel_format().mode.color_channels();
-        let alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
-        cc + usize::from(alpha)
-    };
-    let mut isd = ImageSourceData::take_from_psd(file);
-    if ifd_alpha && spot_extras {
-        // Save Transparency next to spot or alpha channels, as Photoshop (27.11) writes it: a
-        // positive layer count and an `MTrn` block first in the layer data mark the first extra
-        // sample as the merged transparency.
-        if let Some(info) = &mut isd.layer_info {
-            info.merged_alpha = false;
-        }
-    } else if !ifd_alpha {
-        // Positive layer count: the merged image's first extra sample, if any, is not
-        // transparency (Photoshop's own spot TIFF does this; a negative count would claim the
-        // spot plane is alpha).
-        if let Some(info) = &mut isd.layer_info {
-            info.merged_alpha = false;
-        }
-        // A merged-transparency marker kept from an opened file (Photoshop's `MTrn`) would make
-        // the first spot read back as transparency. The PSD export already drops it over an
-        // opaque composite; a transparent one keeps it there, but the IFD leaves that sample out.
-        isd.global_blocks.retain(|b| !b.is_merged_transparency_marker());
-    }
-    if let Some(info) = &mut isd.layer_info {
-        for layer in &mut info.layers {
-            // Photoshop sets flag bit 3 on every record it writes, group dividers included (299 of
-            // the 305 dividers in the corpus's Photoshop files). PhotoCraft's PSDs set it on
-            // layers only, unchanged here.
-            layer.flags.0 |= photocraft_psd::layer::LayerFlags::BIT4_USEFUL;
-            photoshop_layer_blocks(&mut layer.blocks);
-        }
-    }
-    // Photoshop reads a fixed 14-byte user-mask record from `LMsk` and an empty `Patt`
-    // before the filter mask. A zero-length `LMsk` is what makes it report that the
-    // layer data could not be read.
-    if let Some(mask) = &mut isd.global_layer_mask
-        && mask.data.len() < 14
-    {
-        *mask = photocraft_psd::GlobalLayerMask::photoshop_default();
-    }
-    if !isd.global_blocks.iter().any(|b| matches!(&b.key, b"Patt" | b"Pat2" | b"Pat3")) {
-        isd.global_blocks.insert(0, photocraft_psd::TaggedBlock::new(*b"Patt", Vec::new()));
-    }
-    if !isd.global_blocks.iter().any(|b| &b.key == b"FMsk") {
-        isd.global_blocks.push(photocraft_psd::TaggedBlock::new(*b"FMsk", FILTER_MASK_DEFAULT.to_vec()));
-    }
-    // Photoshop writes the marker first, ahead of `Patt`.
-    if ifd_alpha && spot_extras && !isd.global_blocks.iter().any(|b| b.is_merged_transparency_marker()) {
-        isd.global_blocks.insert(0, photocraft_psd::TaggedBlock::new(*b"MTrn", Vec::new()));
-    }
-    isd
+fn tiff_image_source(_doc: &Document, file: &mut photocraft_psd::PsdFile, ifd_alpha: bool) -> ImageSourceData {
+    ImageSourceData::for_tiff(file, ifd_alpha)
 }
 
 /// Removes the leading transparency entry from the channel-name resources (1006, 1045) and
@@ -631,68 +577,25 @@ fn drop_first_display_record(data: &[u8]) -> Vec<u8> {
 /// overlay as [`photocraft_psd::GlobalLayerMask::photoshop_default`], without the kind byte.
 const FILTER_MASK_DEFAULT: &[u8] = &[0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 50];
 
-/// Blocks Photoshop writes on every layer of a layered TIFF, when the layer does not
-/// already carry them. Defaults match a plain pixel layer (clipped-as-group on, nothing
-/// locked, no label).
-fn photoshop_layer_blocks(blocks: &mut Vec<photocraft_psd::TaggedBlock>) {
-    let has = |k: &[u8; 4]| blocks.iter().any(|b| &b.key == k);
-    let mut add = Vec::new();
-    if !has(b"lnsr") {
-        add.push(photocraft_psd::TaggedBlock::name_source(*b"layr"));
-    }
-    if !has(b"clbl") {
-        add.push(photocraft_psd::TaggedBlock::blend_clipped_as_group(true));
-    }
-    if !has(b"infx") {
-        add.push(photocraft_psd::TaggedBlock::blend_interior_elements(false));
-    }
-    if !has(b"knko") {
-        add.push(photocraft_psd::TaggedBlock::knockout(0));
-    }
-    if !has(b"lspf") {
-        add.push(photocraft_psd::TaggedBlock::protection(0));
-    }
-    if !has(b"lclr") {
-        add.push(photocraft_psd::TaggedBlock::sheet_color(0));
-    }
-    let at = blocks
-        .iter()
-        .position(|b| &b.key == b"lyid")
-        .map(|i| i + 1)
-        .or_else(|| blocks.iter().position(|b| &b.key == b"luni").map(|i| i + 1))
-        .unwrap_or(blocks.len());
-    for (i, block) in add.into_iter().enumerate() {
-        blocks.insert(at.saturating_add(i), block);
-    }
-}
-
 /// Removes the blocks a document kept verbatim from a little-endian TIFF because their layout
 /// is unknown ([`photocraft_psd::TaggedBlock::is_foreign_order`]) before `file` is written as a
 /// PSD: their bytes are in the wrong order for a PSD and cannot be converted. Returns a warning
 /// per block dropped. A save back to TIFF keeps them (see [`photocraft_psd::tiff`]).
 pub fn strip_foreign_order_blocks(file: &mut photocraft_psd::PsdFile) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let mut strip = |blocks: &mut Vec<photocraft_psd::TaggedBlock>, owner: &str| {
-        blocks.retain(|b| {
-            let keep = !b.is_foreign_order();
-            if !keep {
-                warnings.push(format!(
-                    "{owner}: {} block ({} bytes) kept from a little-endian TIFF cannot be written to PSD and was dropped",
-                    b.key_str(),
-                    b.data.len()
-                ));
-            }
-            keep
-        });
-    };
-    if let Some(info) = &mut file.layer_info {
-        for l in &mut info.layers {
-            let name = l.name();
-            strip(&mut l.blocks, &format!("layer \"{name}\""));
-        }
-    }
-    strip(&mut file.global_blocks, "document");
-    warnings
+    photocraft_psd::tiff::layered::strip_foreign_order_blocks(file)
+        .into_iter()
+        .map(|block| {
+            let owner = block
+                .layer
+                .and_then(|i| file.layer_info.as_ref()?.layers.get(i).map(|layer| format!("layer \"{}\"", layer.name())))
+                .unwrap_or_else(|| "document".into());
+            format!(
+                "{owner}: {} block ({} bytes) kept from a little-endian TIFF cannot be written to PSD and was dropped",
+                String::from_utf8_lossy(&block.key),
+                block.len
+            )
+        })
+        .collect()
 }
 
 /// Big-endian planar samples (a PSD merged-image plane) to native endian, or the reverse.
