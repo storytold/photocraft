@@ -1,5 +1,7 @@
 use super::*;
+use craft_ora::{MAX_NODES, MIMETYPE};
 use photocraft_doc::{Adjustment, Color, Fill, LayerMask};
+use photocraft_format::zip::{ZipReader, ZipWriter};
 
 const CANVAS: Size = Size { width: 70, height: 50 };
 
@@ -202,7 +204,7 @@ fn deeply_nested_stack_xml_is_an_error_not_a_stack_overflow() {
     let stack = format!("<image w=\"4\" h=\"4\">{}{}</image>", "<stack>".repeat(20_000), "</stack>".repeat(20_000));
     let bytes = archive(&stack, &[]);
     let e = std::thread::Builder::new().stack_size(512 * 1024).spawn(move || crate::import("deep.ora", &bytes).err()).unwrap().join().unwrap();
-    assert!(matches!(&e, Some(IoError::Ora(m)) if m.contains("nested")), "{e:?}");
+    assert!(matches!(&e, Some(IoError::Ora(m)) if m.contains("nest")), "{e:?}");
 }
 
 fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
@@ -464,17 +466,6 @@ fn truncated_and_corrupted_files_never_panic() {
         }
         let _ = crate::import("x.ora", &b);
     }
-}
-
-#[test]
-fn zip_mimetype_reads_only_a_leading_stored_entry() {
-    assert_eq!(zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
-    assert_eq!(zip_mimetype(b"PK\x03\x04"), None);
-    assert_eq!(zip_mimetype(&[]), None);
-    let mut z = ZipWriter::new();
-    z.add("stack.xml", b"x").unwrap();
-    z.add("mimetype", MIMETYPE).unwrap();
-    assert_eq!(zip_mimetype(&z.finish().unwrap()), None);
 }
 
 #[test]
