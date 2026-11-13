@@ -196,6 +196,32 @@ fn export_to_files_and_pdf() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// From the desktop app ([`Session::start`]) both exports run on a worker: the command returns
+/// a job at once, and the files are there once it ends. A storyboard's PDF took over a minute on
+/// the UI thread, and the compositor closed the frozen window.
+#[test]
+fn exports_run_as_background_jobs() {
+    let mut s = session(8);
+    add_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    s.execute("layer.new.artboardFromLayers", json!({"name": "Red Board"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("photocraft-artboards-job-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_string_lossy().into_owned();
+    let pdf = join(&d, "boards.pdf");
+    let crate::jobs::Started::Job(job) = s.start("file.export.artboardsToPdf", json!({"path": pdf})).unwrap() else {
+        panic!("the PDF export runs on a worker");
+    };
+    assert_eq!(s.wait_job(job).unwrap()["pages"], 1);
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-1.4"));
+    let crate::jobs::Started::Job(job) = s.start("file.export.artboardsToFiles", json!({"dir": d, "prefix": "site"})).unwrap() else {
+        panic!("the files export runs on a worker");
+    };
+    let out = s.wait_job(job).unwrap();
+    assert_eq!(out["files"].as_array().map(Vec::len), Some(1), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn raster_pdf_xref_offsets_point_at_objects() {
     let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])]);
