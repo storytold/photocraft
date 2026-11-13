@@ -186,9 +186,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 ds.subpath_press = Some([x, y]);
                 // A stale press is dropped with the selection (`cancel_stale`).
                 ds.owner = owner;
-            } else if tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods) {
-                return true;
-            } else if app.ui.tool == Tool::AddAnchorPoint && edit_existing(app, [x, y], mods) {
+            } else if (tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods))
+                || (app.ui.tool == Tool::AddAnchorPoint && edit_existing(app, [x, y], mods))
+            {
                 return true;
             } else {
                 click(app, tool, [x, y]);

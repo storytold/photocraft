@@ -38,7 +38,7 @@ fn path(app: &PhotocraftApp) -> Path {
 }
 
 fn knot(app: &PhotocraftApp, s: usize, k: usize) -> photocraft_doc::Knot {
-    path(app).subpaths[s].knots[k].clone()
+    path(app).subpaths[s].knots[k]
 }
 
 fn label(app: &PhotocraftApp) -> Option<String> {
