@@ -87,7 +87,7 @@ pub fn dir_for_code(code: &str) -> Dir {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The registry. English first: it is the fallback and the source language. Plural forms follow
 /// each language's CLDR rules (the craft-i18n crate).
@@ -157,6 +157,8 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Georgian: nouns stay singular after a numeral (`შრე: 5`, `5 შრე`), so both plural forms read
     // the same.
     LangInfo { code: "ka", complete_menus: true },
+    // Bulgarian; `bg-BG` and `bg_BG.UTF-8` locales resolve here.
+    LangInfo { code: "bg", complete_menus: true },
 ];
 
 /// Per language of [`LANGUAGES`], PhotoCraft's own catalog rows as written (escaped): (context,
