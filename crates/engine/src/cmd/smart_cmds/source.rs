@@ -89,11 +89,85 @@ const CACHE_ENTRIES: usize = 32;
 #[cfg(target_arch = "wasm32")]
 const CACHE_ENTRIES: usize = 4;
 
-/// Accounted tile bytes; a source larger than this on its own isn't kept.
+/// Default budget in accounted tile bytes; a source larger than the budget on its own isn't kept.
 #[cfg(not(target_arch = "wasm32"))]
-const CACHE_BYTES: usize = 1 << 30;
+pub(super) const CACHE_BYTES: usize = 1 << 30;
 #[cfg(target_arch = "wasm32")]
-const CACHE_BYTES: usize = 384 << 20;
+pub(super) const CACHE_BYTES: usize = 384 << 20;
+
+/// The budget in force (Preferences › Performance `smartSourceCacheMb`).
+static CACHE_BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(CACHE_BYTES);
+
+/// Sets the source cache budget, dropping the oldest entries over it.
+pub fn set_source_cache_budget(bytes: usize) {
+    CACHE_BUDGET.store(bytes, std::sync::atomic::Ordering::Relaxed);
+    trim(&mut cache(), bytes);
+}
+
+/// The source cache budget in force, in accounted bytes.
+fn source_budget() -> usize {
+    #[cfg(test)]
+    if let Some(b) = BUDGET_OVERRIDE.with(std::cell::Cell::get) {
+        return b;
+    }
+    CACHE_BUDGET.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+thread_local! {
+    static BUDGET_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: a source cache budget for this thread only (other tests keep theirs) while alive.
+#[cfg(test)]
+pub(crate) struct SourceBudgetOverride(Option<usize>);
+
+#[cfg(test)]
+impl SourceBudgetOverride {
+    pub(crate) fn new(bytes: usize) -> Self {
+        Self(BUDGET_OVERRIDE.with(|o| o.replace(Some(bytes))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for SourceBudgetOverride {
+    fn drop(&mut self) {
+        BUDGET_OVERRIDE.with(|o| o.set(self.0));
+    }
+}
+
+thread_local! {
+    /// The sources of the open [`reuse_sources`] scope on this thread (`None`: no scope).
+    static SCOPE: std::cell::RefCell<Option<Vec<(CacheKey, SourceImage)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Open while alive: see [`reuse_sources`]. Bound to the thread that opened it.
+pub(super) struct SourceScope {
+    owner: bool,
+    _thread: std::marker::PhantomData<*const ()>,
+}
+
+impl Drop for SourceScope {
+    fn drop(&mut self) {
+        if self.owner {
+            SCOPE.with(|s| *s.borrow_mut() = None);
+        }
+    }
+}
+
+/// While the returned guard lives, sources decoded on this thread are also kept for it whatever
+/// the budget, so one command decodes a file once for all the instances it re-renders even when
+/// nothing is kept between commands. Dropping it frees them. Scopes nest; the outermost owns them.
+pub(super) fn reuse_sources() -> SourceScope {
+    SCOPE.with(|s| {
+        let mut s = s.borrow_mut();
+        let owner = s.is_none();
+        if owner {
+            *s = Some(Vec::new());
+        }
+        SourceScope { owner, _thread: std::marker::PhantomData }
+    })
+}
 
 fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
     SOURCE_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
@@ -104,16 +178,26 @@ pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
+    // The shared cache first, so a hit refreshes its recency there too; then the open scope's.
     let mut c = cache();
-    let i = c.iter().position(|e| e.key == *key)?;
-    let e = c.remove(i);
-    let img = e.image.clone();
-    c.push(e);
-    Some(img)
+    if let Some(i) = c.iter().position(|e| e.key == *key) {
+        let e = c.remove(i);
+        let img = e.image.clone();
+        c.push(e);
+        return Some(img);
+    }
+    drop(c);
+    SCOPE.with(|s| s.borrow().as_ref().and_then(|v| v.iter().find(|(k, _)| k == key).map(|(_, img)| img.clone())))
 }
 
 pub(super) fn cache_put(key: CacheKey, image: SourceImage) {
-    cache_put_within(key, image, CACHE_BYTES);
+    SCOPE.with(|s| {
+        if let Some(v) = s.borrow_mut().as_mut() {
+            v.retain(|(k, _)| *k != key);
+            v.push((key, image.clone()));
+        }
+    });
+    cache_put_within(key, image, source_budget());
 }
 
 /// [`cache_put`] with `limit` as the byte budget.
@@ -128,7 +212,12 @@ fn cache_put_within(key: CacheKey, image: SourceImage, limit: usize) {
         return;
     }
     c.push(CacheEntry { key, image, decodes, bytes });
-    while c.len() > CACHE_ENTRIES || c.iter().map(|e| e.bytes).sum::<usize>() > limit {
+    trim(&mut c, limit);
+}
+
+/// Drops the oldest entries of `c` until it is within [`CACHE_ENTRIES`] and `budget`.
+fn trim(c: &mut Vec<CacheEntry>, budget: usize) {
+    while c.len() > CACHE_ENTRIES || c.iter().map(|e| e.bytes).sum::<usize>() > budget {
         c.remove(0);
     }
 }
@@ -395,6 +484,20 @@ mod tests {
         assert_eq!(block_size(4096), (4096, 256));
         assert_eq!(block_size(1000), (1024, 1024));
         assert_eq!(block_size(300_000), (4096, 256));
+    }
+
+    /// Trimming keeps the newest entries within the budget; 0 keeps none.
+    #[test]
+    fn trimming_to_a_budget_drops_the_oldest_entries() {
+        let fmt = PixelFormat::RGBA8;
+        let bytes = super::super::stack_cache::surface_bytes(&image(256).surface);
+        let entry = |k: u8| CacheEntry { key: ([k; 32], fmt), image: image(256), decodes: 1, bytes };
+        let mut c = vec![entry(1), entry(2), entry(3)];
+        trim(&mut c, 2 * bytes);
+        assert_eq!(c.iter().map(|e| e.key.0[0]).collect::<Vec<_>>(), [2, 3]);
+        // A budget of 0 (Preferences › Performance `smartSourceCacheMb`) keeps none.
+        trim(&mut c, 0);
+        assert!(c.is_empty());
     }
 
     #[test]
