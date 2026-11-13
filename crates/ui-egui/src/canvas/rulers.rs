@@ -97,24 +97,68 @@ pub(crate) fn unit_menu_of(ui: &mut egui::Ui, current: Unit, units: &[Unit]) -> 
 }
 
 /// A guide being dragged: from a ruler (new) or an existing one (index).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GuideDrag {
     pub vertical: bool,
     pub index: Option<usize>,
     pub pos: f64,
+    /// Where the guide follows the pointer to before a Shift snap to a ruler tick moves it to
+    /// `pos` (`follow_pointer`): what a release is judged by, a click there and a drop off the
+    /// document there.
+    pub pointer: f64,
     /// Where the pointer went down, on the guide's axis: released there, an existing guide is
     /// clicked (selected), not moved.
     pub press: f64,
     /// Whether the pointer was over a ruler when the guide was let go (#6286): a guide released
     /// there is removed, whatever its own axis reads.
     pub over_ruler: bool,
+    pub flipped: bool,
 }
 
 impl GuideDrag {
+    pub fn shows_vertical(&self) -> bool {
+        self.vertical != self.flipped
+    }
+    pub fn track(&mut self, at: [f64; 2], alt: bool) {
+        self.flipped = alt;
+        self.pos = if self.shows_vertical() { at[0] } else { at[1] };
+    }
+
     /// An existing guide taken at document point `p`.
     pub fn existing(vertical: bool, index: usize, p: [f64; 2]) -> Self {
         let at = if vertical { p[0] } else { p[1] };
-        Self { vertical, index: Some(index), pos: at, press: at, over_ruler: false }
+        Self { vertical, index: Some(index), pos: at, pointer: at, press: at, over_ruler: false, flipped: false }
+    }
+
+    /// Whether the pointer is still where it went down: let go there, an existing guide is clicked
+    /// (selected), not moved. One ⌥ turned is never held in place.
+    fn held_in_place(&self, app: &PhotocraftApp) -> bool {
+        !self.flipped && (self.pointer - self.press).abs() * f64::from(app.point_zoom().max(0.01)) < 0.5
+    }
+
+    /// An existing guide follows the pointer (`track`, ⌥ turning it): `p` is the document point
+    /// View › Snap made of the pointer's `raw` one. With Shift the guide lands on the ruler tick
+    /// nearest the pointer instead, as a guide dragged out of a ruler does (#3770) and as in
+    /// Photoshop: Snap To targets (layer edges, the grid, the document's centre) neither pull it
+    /// first nor hold it on a target it sits on. Not while the pointer is still where it went down,
+    /// so a Shift-click selects the guide without moving it, nor off the document, where letting go
+    /// removes the guide; a tick past the document's edge leaves the guide on the edge.
+    pub fn follow_pointer(&mut self, app: &mut PhotocraftApp, raw: [f64; 2], p: [f64; 2], mods: egui::Modifiers) {
+        self.track(if mods.shift { raw } else { p }, mods.alt);
+        self.pointer = self.pos;
+        if !mods.shift {
+            return;
+        }
+        // The snap lines View › Snap drew for this move don't apply.
+        app.prefs_rt.snap_lines.clear();
+        let vertical = self.shows_vertical();
+        let extent = app.session.active().map_or(0.0, |s| f64::from(if vertical { s.doc.size.width } else { s.doc.size.height }));
+        if (0.0..=extent).contains(&self.pointer)
+            && !self.held_in_place(app)
+            && let Some(xf) = ViewXform::active(app)
+        {
+            self.pos = snap_to_tick(app, &xf, vertical, self.pointer).clamp(0.0, extent);
+        }
     }
 }
 
@@ -207,7 +251,8 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     let drag = app.guide_drag;
     let g = &app.session.prefs().guides_grid_and_slices;
     let preview = crate::guide_layout_ui::preview(app, doc);
-    let guides = preview.as_ref().map(|(guides, _)| guides).unwrap_or(&doc.guides);
+    let edit = crate::new_guide_ui::edit_preview(app, doc);
+    let guides = edit.or_else(|| preview.as_ref().map(|(guides, _)| guides)).unwrap_or(&doc.guides);
     let (guide, style) =
         (preview.as_ref().map(|(_, color)| *color).unwrap_or_else(|| pref_color(&g.guide_color, Color32::from_rgb(74, 255, 255))), g.guide_style);
     let line = |vertical: bool, pos: f64, color: Color32| {
@@ -217,12 +262,12 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     // A guide given a colour in New Guide keeps it; the rest use the preference colour (or, while
     // New Guide Layout previews, the colour it will set). The selected guide is Photoshop's blue.
     let own = |vertical: bool, p: f64| {
-        if crate::guide_select::is_selected(app, vertical, p) {
+        if edit.is_none() && crate::guide_select::is_selected(app, vertical, p) {
             return crate::guide_select::SELECTED_COLOR;
         }
         guides.color(vertical, p).map_or(guide, |[r, g, b]| Color32::from_rgb(r, g, b))
     };
-    if app.ui.extras.guides || preview.is_some() {
+    if app.ui.extras.guides || preview.is_some() || edit.is_some() {
         for (vertical, list) in [(true, &guides.vertical), (false, &guides.horizontal)] {
             for (i, p) in list.iter().enumerate() {
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {
@@ -235,7 +280,7 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     if let Some(d) = drag {
         // A guide being moved shows its own colour; a new one dragged from a ruler the preference's.
         let list = if d.vertical { &doc.guides.vertical } else { &doc.guides.horizontal };
-        line(d.vertical, d.pos, d.index.and_then(|i| list.get(i)).map_or(guide, |p| own(d.vertical, *p)));
+        line(d.shows_vertical(), d.pos, d.index.and_then(|i| list.get(i)).map_or(guide, |p| own(d.vertical, *p)));
     }
 }
 
@@ -245,14 +290,14 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
 pub fn guide_drag_readout(app: &PhotocraftApp, d: GuideDrag) -> Option<(&'static str, String)> {
     let doc = &app.session.active()?.doc;
     let ur = &app.session.prefs().units_and_rulers;
-    let axis = usize::from(!d.vertical);
+    let axis = usize::from(!d.shows_vertical());
     let px = d.pos - doc.ruler_origin.get(axis).copied().unwrap_or(0.0);
-    let extent = if d.vertical { doc.size.width } else { doc.size.height } as f64;
+    let extent = if d.shows_vertical() { doc.size.width } else { doc.size.height } as f64;
     let value = match ur.rulers {
         Unit::Pixels => photocraft_engine::prefs::fmt_decimals(px, 1),
         _ => ur.format(px, f64::from(doc.resolution_dpi), extent),
     };
-    Some((if d.vertical { "X:" } else { "Y:" }, format!("{value} {}", ur.rulers.suffix())))
+    Some((if d.shows_vertical() { "X:" } else { "Y:" }, format!("{value} {}", ur.rulers.suffix())))
 }
 
 /// Draw [`guide_drag_readout`] beside the pointer while a guide is dragged.
@@ -294,20 +339,28 @@ pub fn finish_drag(app: &mut PhotocraftApp, d: GuideDrag) {
     // reads as a click: dragged sideways onto the left ruler, a horizontal guide never moves in y.
     if let Some(i) = d.index
         && !d.over_ruler
-        && (d.pos - d.press).abs() * f64::from(app.point_zoom().max(0.01)) < 0.5
+        && d.held_in_place(app)
     {
         crate::guide_select::select(app, d.vertical, i);
         return;
     }
-    let extent = if d.vertical { size.width } else { size.height } as f64;
+    let shows = d.shows_vertical();
+    let extent = if shows { size.width } else { size.height } as f64;
     let orientation = if d.vertical { "vertical" } else { "horizontal" };
-    let inside = !d.over_ruler && d.pos >= 0.0 && d.pos <= extent;
+    let inside = !d.over_ruler && d.pointer >= 0.0 && d.pointer <= extent;
     let pos = (d.pos * 1000.0).round() / 1000.0;
     let _ = match (d.index, inside) {
-        (None, true) => app.run("view.newGuide", json!({"orientation": orientation, "position": pos})),
+        (None, true) => app.run("view.newGuide", json!({"orientation": if shows {"vertical"}else{"horizontal"}, "position": pos})),
         (Some(i), true) => app
-            .run("view.moveGuide", json!({"orientation": orientation, "index": i, "position": pos}))
-            .inspect(|_| crate::guide_select::select(app, d.vertical, i)),
+            .run("view.moveGuide", json!({"orientation": orientation,"toOrientation":if shows {"vertical"}else{"horizontal"}, "index": i, "position": pos}))
+            .inspect(|_| {
+                let index = if d.flipped {
+                    app.session.active().map_or(0, |st| if shows { st.doc.guides.vertical.len() } else { st.doc.guides.horizontal.len() }).saturating_sub(1)
+                } else {
+                    i
+                };
+                crate::guide_select::select(app, shows, index);
+            }),
         (Some(i), false) => app.run("view.deleteGuide", json!({"orientation": orientation, "index": i})),
         (None, false) => Ok(serde_json::Value::Null),
     };
@@ -396,14 +449,24 @@ fn ruler_scale_of(app: &PhotocraftApp, doc: Option<&photocraft_doc::Document>, x
     (px_per_unit, nice_step(60.0 / (zoom as f64 * px_per_unit).max(1e-6), unit == Unit::Pixels))
 }
 
+/// The spacing (document px) of the ruler ticks Shift snaps to: the minor ticks, tenths of the
+/// labelled `step` in `unit` (`px_per_unit` px each). A ruler in pixels snaps no closer than a
+/// whole pixel: deep in, its minor ticks fall between pixels, and a guide or the zero point put on
+/// one would sit across a pixel.
+fn snap_tick(unit: Unit, px_per_unit: f64, step: f64) -> f64 {
+    let tick = step / 10.0 * px_per_unit;
+    if unit == Unit::Pixels { tick.max(1.0) } else { tick }
+}
+
 /// `pos` (document px) moved to the nearest tick mark the ruler draws (counted from the zero point): where a guide lands when
-/// Shift is held while dragging it out of a ruler, as in Photoshop (#3770).
+/// Shift is held while dragging it out of a ruler or moving it, as in Photoshop (#3770). In pixels, on whole pixels at least
+/// ([`snap_tick`]).
 fn snap_to_tick(app: &PhotocraftApp, xf: &ViewXform, vertical: bool, pos: f64) -> f64 {
     // A vertical guide sits at an x position, which the top ruler measures.
     let (px_per_unit, step) = ruler_scale(app, xf, !vertical);
     // Ticks count from the zero point (#2955), which a vertical guide measures along x.
     let origin = app.session.active().map_or(0.0, |d| d.doc.ruler_origin[usize::from(!vertical)]);
-    snap_px_to_tick(pos, origin, step / 10.0 * px_per_unit)
+    snap_px_to_tick(pos, origin, snap_tick(app.session.prefs().units_and_rulers.rulers, px_per_unit, step))
 }
 
 /// The number a ruler prints at the tick `v` (in ruler units). Like Photoshop, rulers show the
@@ -414,7 +477,8 @@ fn ruler_label(v: f64, step: f64, whole: bool) -> String {
 }
 
 /// The rulers of `doc`'s view in `full`: background, ticks and labels from its zero point.
-/// Returns the top, left and corner rects, the painter, the zero point and the minor tick sizes.
+/// Returns the top, left and corner rects, the painter, the zero point and the tick sizes Shift
+/// snaps to ([`snap_tick`]).
 #[allow(clippy::type_complexity)]
 fn paint(
     app: &PhotocraftApp,
@@ -445,7 +509,7 @@ fn paint(
     for vertical in [false, true] {
         let p = p.with_clip_rect(if vertical { left } else { top });
         let (px_per_unit, step) = ruler_scale_of(app, Some(doc), xf, vertical);
-        ticks[usize::from(vertical)] = step * px_per_unit / 10.0;
+        ticks[usize::from(vertical)] = snap_tick(unit, px_per_unit, step);
         let (u0, u1) = if vertical {
             ruler_range(xf, left.left_top(), left.left_bottom(), 1, px_per_unit, origin)
         } else {
@@ -519,7 +583,7 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
             let d = xf.to_doc(pos);
             let along = if vertical { d[0] } else { d[1] };
             let pos = if ui.input(|i| i.modifiers.shift) { snap_to_tick(app, xf, vertical, along) } else { crate::snap_ui::snap_guide(app, vertical, along) };
-            app.guide_drag = Some(GuideDrag { vertical, index: None, pos, press: pos, over_ruler: false });
+            app.guide_drag = Some(GuideDrag { vertical, index: None, pos, pointer: pos, press: pos, over_ruler: false, flipped: false });
         }
         if resp.drag_stopped()
             && let Some(mut d) = app.guide_drag.take()

@@ -122,6 +122,52 @@ fn write_replaces_atomically_and_leaves_no_temp_file() {
     assert!(temp_files(&inside).is_empty());
 }
 
+/// #5333: a streamed write (a PSD/PSB serialized as it goes, lengths patched by seeking back)
+/// replaces the file the same way; a writer that fails leaves the original and no temp file.
+#[test]
+fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
+    use std::io::SeekFrom;
+    let (inside, _, workspace) = roots("stream");
+    workspace.write("big.psb", b"original").unwrap();
+    workspace
+        .write_stream("big.psb", &mut |w| {
+            w.write_all(b"....body")?;
+            w.seek(SeekFrom::Start(0))?;
+            w.write_all(b"head")?;
+            w.seek(SeekFrom::End(0))?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(std::fs::read(inside.join("big.psb")).unwrap(), b"headbody");
+    let failed = workspace.write_stream("big.psb", &mut |w| {
+        w.write_all(b"partial")?;
+        Err(std::io::Error::other("encoder failed"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(std::fs::read(inside.join("big.psb")).unwrap(), b"headbody");
+    assert!(temp_files(&inside).is_empty());
+    // The same refusals as a plain write.
+    std::fs::write(inside.join("notes.txt"), b"keep").unwrap();
+    assert!(workspace.write_stream("notes.txt", &mut |w| w.write_all(b"x")).is_err());
+    assert_eq!(std::fs::read(inside.join("notes.txt")).unwrap(), b"keep");
+}
+
+/// A writer that panics leaves the original and no temporary file behind.
+#[test]
+fn write_stream_cleans_up_after_a_panicking_writer() {
+    let (inside, _, workspace) = roots("stream-panic");
+    workspace.write("big.psb", b"original").unwrap();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = workspace.write_stream("big.psb", &mut |w| {
+            w.write_all(b"partial")?;
+            panic!("encoder bug")
+        });
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(std::fs::read(inside.join("big.psb")).unwrap(), b"original");
+    assert!(temp_files(&inside).is_empty());
+}
+
 /// A directory at the target is refused before anything is opened, even under an image name.
 #[test]
 fn write_refuses_a_directory_target_before_opening_it() {
@@ -160,6 +206,22 @@ fn write_refuses_a_fifo_target_without_blocking() {
         assert!(error.contains("is not a regular file"), "{name}: {error}");
     }
     assert!(temp_files(&inside).is_empty());
+}
+
+/// #9401 review: replacing a file through the automation path keeps its creation time, the
+/// same as a save through `atomic_write` does on macOS (#9388).
+#[cfg(target_os = "macos")]
+#[test]
+fn write_keeps_the_replaced_files_creation_time() {
+    use std::os::macos::fs::FileTimesExt;
+    let (inside, _, workspace) = roots("created");
+    let path = inside.join("doc.psd");
+    workspace.write("doc.psd", b"original").unwrap();
+    let born = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_created(born)).unwrap();
+    workspace.write("doc.psd", b"replacement").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+    assert_eq!(std::fs::metadata(&path).unwrap().created().unwrap(), born, "the creation time survives the automation write");
 }
 
 /// #7095: replacing a file through the automation path keeps the old file's extended
@@ -307,6 +369,275 @@ fn windows_junction_escape_is_rejected_when_supported() {
     assert!(workspace.write("junction/new.txt", b"blocked").is_err());
     assert!(!outside.join("new.txt").exists());
     let _ = std::fs::remove_dir(link);
+}
+
+/// #10317: below a UNC root (`\\wsl.localhost\...`, any share) `cap-std`'s Windows rename,
+/// remove and mkdir fail with `ERROR_PATH_NOT_FOUND`, so a save left only its `.pcsave.tmp`
+/// behind, an export into a new directory failed, and a cancelled export leaked its frames.
+/// There a save still goes through its temporary file and is renamed into place on the
+/// canonical root path below pinned directories, cleanup deletes through handles opened
+/// relative to the export directory, and directory creation goes through the root path the
+/// same pinned way. The administrative share of the temp directory's drive stands in for a
+/// network share; a runner without one has nothing to check here.
+#[cfg(windows)]
+#[test]
+fn windows_unc_root_writes_and_exports_when_supported() {
+    let (inside, outside, _) = roots("unc-root");
+    let Some(unc) = loopback_unc(&inside) else { return };
+    if std::fs::metadata(&unc).is_err() {
+        return;
+    }
+    let canonical = std::fs::canonicalize(&unc).unwrap();
+    assert!(matches!(canonical.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::VerbatimUNC(..))), "{}", canonical.display());
+    let workspace = AuthorizedWorkspace::new(Some(&unc), Some(&unc)).unwrap();
+
+    workspace.write("out.png", b"first").unwrap();
+    workspace.write("out.png", b"second").unwrap();
+    std::fs::create_dir(inside.join("sub")).unwrap();
+    workspace.write("sub/nested.png", b"nested").unwrap();
+    assert_eq!(std::fs::read(inside.join("out.png")).unwrap(), b"second");
+    assert_eq!(std::fs::read(inside.join("sub/nested.png")).unwrap(), b"nested");
+    assert!(temp_files(&inside).is_empty());
+    assert!(temp_files(&inside.join("sub")).is_empty());
+    // Still atomic: a writer that fails leaves the previous bytes and no temporary file.
+    let failed = workspace.write_stream("out.png", &mut |w| {
+        w.write_all(b"partial")?;
+        Err(std::io::Error::other("encoder gave up"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(std::fs::read(inside.join("out.png")).unwrap(), b"second");
+    assert!(temp_files(&inside).is_empty());
+    // A large streamed save takes the same route as everywhere else.
+    workspace.write_stream("sub/streamed.png", &mut |w| w.write_all(&[7u8; 1 << 20])).unwrap();
+    assert_eq!(std::fs::metadata(inside.join("sub/streamed.png")).unwrap().len(), 1 << 20);
+    assert!(temp_files(&inside.join("sub")).is_empty());
+    // A missing parent is still an error, with nothing left behind, as on every other root.
+    assert!(workspace.write("missing/out.png", b"no parent").is_err());
+    assert!(!inside.join("missing").exists());
+
+    let mut export = workspace.export_sequence("frames/nested").unwrap();
+    export.write("clip_0000.png", b"frame").unwrap();
+    assert_eq!(std::fs::read(inside.join("frames/nested/clip_0000.png")).unwrap(), b"frame");
+    export.cleanup().unwrap();
+    assert!(!inside.join("frames/nested/clip_0000.png").exists());
+    let mut export = workspace.export_sequence("frames/nested").unwrap();
+    export.write("clip_0001.png", b"kept").unwrap();
+    export.commit();
+    drop(export);
+    assert_eq!(std::fs::read(inside.join("frames/nested/clip_0001.png")).unwrap(), b"kept");
+    // The share honours the held ancestors' share mode: no swap while the chain is open.
+    let root = workspace.write.as_ref().unwrap();
+    let chain = held_directory_chain(root, Path::new("frames/nested/deeper")).unwrap();
+    assert!(std::fs::rename(inside.join("frames"), inside.join("frames-moved")).is_err());
+    assert!(inside.join("frames/nested/deeper").is_dir());
+    drop(chain);
+
+    // Neither the rename into place nor directory creation follows a link out of the root.
+    let link = inside.join("junction");
+    if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
+        assert!(workspace.write("junction/escape.png", b"blocked").is_err());
+        assert!(workspace.export_sequence("junction/frames").is_err());
+        assert!(!outside.join("escape.png").exists());
+        assert!(!outside.join("frames").exists());
+        assert!(temp_files(&outside).is_empty());
+        let _ = std::fs::remove_dir(link);
+    }
+}
+
+/// The handle-relative helpers that stand in for `cap-std`'s path-concatenating Windows
+/// operations below a UNC root (#10317) behave like the operations they replace, on any root.
+#[cfg(windows)]
+#[test]
+fn windows_handle_relative_helpers_match_the_capability_operations() {
+    let (inside, _outside, workspace) = roots("unc-helpers");
+    let root = workspace.write.as_ref().unwrap();
+    assert!(!is_unc_root(root));
+
+    std::fs::write(inside.join("gone.png"), b"x").unwrap();
+    delete_on_close(&root.dir, Path::new("gone.png")).unwrap();
+    assert!(!inside.join("gone.png").exists());
+    std::fs::write(inside.join("gone.png"), b"x").unwrap();
+    remove_file_in(&root.dir, Path::new("gone.png")).unwrap();
+    assert!(!inside.join("gone.png").exists());
+    assert_eq!(delete_on_close(&root.dir, Path::new("missing.png")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(remove_file_in(&root.dir, Path::new("missing.png")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    std::fs::create_dir(inside.join("dir")).unwrap();
+    assert!(delete_on_close(&root.dir, Path::new("dir")).is_err());
+    assert!(inside.join("dir").is_dir());
+}
+
+/// The ambient rename that stands in for the capability's below a UNC root (#10317).
+#[cfg(windows)]
+#[test]
+fn windows_rename_unc_matches_the_capability_rename() {
+    let (inside, outside, workspace) = roots("unc-rename");
+    let root = workspace.write.as_ref().unwrap();
+    std::fs::create_dir(inside.join("dir")).unwrap();
+    // The ambient rename on the canonical root path behaves like the capability's: it creates,
+    // replaces a file, replaces a link instead of writing through it, and refuses a directory.
+    std::fs::write(inside.join("plain.tmp"), b"the longer first version").unwrap();
+    rename_unc(root, Path::new("plain.tmp"), Path::new("plain.png")).unwrap();
+    std::fs::write(inside.join("plain.tmp"), b"short").unwrap();
+    rename_unc(root, Path::new("plain.tmp"), Path::new("plain.png")).unwrap();
+    rename_in(root, Path::new("plain.png"), Path::new("plain.png")).unwrap();
+    assert_eq!(std::fs::read(inside.join("plain.png")).unwrap(), b"short");
+    assert!(!inside.join("plain.tmp").exists());
+    assert_eq!(rename_unc(root, Path::new("absent.tmp"), Path::new("plain.png")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(rename_unc(root, Path::new("plain.png"), Path::new("missing/plain.png")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert!(!inside.join("missing").exists());
+    std::fs::write(inside.join("plain.tmp"), b"x").unwrap();
+    assert!(rename_unc(root, Path::new("plain.tmp"), Path::new("dir")).is_err());
+    assert!(inside.join("dir").is_dir());
+    std::fs::write(outside.join("target.png"), b"outside").unwrap();
+    if std::os::windows::fs::symlink_file(outside.join("target.png"), inside.join("linked.png")).is_ok() {
+        rename_unc(root, Path::new("plain.tmp"), Path::new("linked.png")).unwrap();
+        assert_eq!(std::fs::read(inside.join("linked.png")).unwrap(), b"x");
+        assert_eq!(std::fs::read(outside.join("target.png")).unwrap(), b"outside");
+    }
+    let _ = std::fs::remove_file(inside.join("plain.tmp"));
+}
+
+/// The directory walk that stands in for the capability's `create_dir_all` below a UNC root
+/// (#10317) creates, refuses files on the way and never follows a junction outside.
+#[cfg(windows)]
+#[test]
+fn windows_create_dir_all_unc_matches_the_capability_operation() {
+    let (inside, outside, workspace) = roots("unc-dirs");
+    let root = workspace.write.as_ref().unwrap();
+    create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
+    assert!(inside.join("a/b/c").is_dir());
+    create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
+    assert_eq!(held_directory_chain(root, Path::new("a/b/c")).unwrap().len(), 3);
+    std::fs::write(inside.join("a/file"), b"x").unwrap();
+    assert_eq!(create_dir_all_unc(root, Path::new("a/file")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(create_dir_all_unc(root, Path::new("a/file/below")).is_err());
+    assert!(inside.join("a/file").is_file());
+    assert!(ensure_export_dir(root, Path::new("a/b/d")).is_ok());
+    assert!(inside.join("a/b/d").is_dir());
+
+    let link = inside.join("junction");
+    if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
+        assert!(create_dir_all_unc(root, Path::new("junction")).is_err());
+        assert!(create_dir_all_unc(root, Path::new("junction/frames")).is_err());
+        assert!(!outside.join("frames").exists());
+        assert_eq!(pinned_directory_chain(root, Path::new("junction")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        std::fs::write(inside.join("escape.tmp"), b"blocked").unwrap();
+        assert_eq!(rename_unc(root, Path::new("escape.tmp"), Path::new("junction/escape.png")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(rename_unc(root, Path::new("junction/source.png"), Path::new("escape.png")).is_err());
+        assert!(!outside.join("escape.png").exists());
+        assert!(inside.join("escape.tmp").is_file());
+        let _ = std::fs::remove_dir(link);
+    }
+}
+
+/// The ancestor-swap race against [`create_dir_all_unc`]: between verifying an ancestor and the
+/// ambient `create_dir`, an attacker renames the ancestor away and puts a junction to the
+/// outside in its place. The walk holds a handle on every verified ancestor, opened by
+/// `cap-std` without `FILE_SHARE_DELETE`, so the rename (and a removal) fails with
+/// `ERROR_SHARING_VIOLATION` for as long as the chain is held, and the directory is created
+/// inside the root. A junction that is already in place is refused before anything is created.
+#[cfg(windows)]
+#[test]
+fn windows_held_ancestors_cannot_be_swapped_during_directory_creation() {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let (inside, outside, workspace) = roots("unc-held-chain");
+    let root = workspace.write.as_ref().unwrap();
+    std::fs::create_dir(inside.join("a")).unwrap();
+
+    let chain = held_directory_chain(root, Path::new("a/b")).unwrap();
+    assert_eq!(chain.len(), 2);
+    assert!(inside.join("a/b").is_dir());
+    let swap = std::fs::rename(inside.join("a"), inside.join("a-moved"));
+    assert_eq!(swap.unwrap_err().raw_os_error(), Some(ERROR_SHARING_VIOLATION));
+    assert_eq!(std::fs::remove_dir(inside.join("a/b")).unwrap_err().raw_os_error(), Some(ERROR_SHARING_VIOLATION));
+    // With the ancestors pinned, the one ambient step lands inside the root.
+    let held_parent = &chain[1];
+    open_or_create_plain_dir(held_parent, Path::new("c"), Path::new("a/b/c"), &root.path.join("a/b/c")).unwrap();
+    assert!(inside.join("a/b/c").is_dir());
+    assert!(inside.join("a").is_dir());
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    drop(chain);
+    // The chain that guards the rename pins the same way, and creates nothing.
+    let pinned = pinned_directory_chain(root, Path::new("a/b/c")).unwrap();
+    assert_eq!(pinned.len(), 3);
+    assert_eq!(std::fs::rename(inside.join("a"), inside.join("a-moved")).unwrap_err().raw_os_error(), Some(ERROR_SHARING_VIOLATION));
+    assert_eq!(pinned_directory_chain(root, Path::new("a/b/c/d")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert!(!inside.join("a/b/c/d").exists());
+    std::fs::write(inside.join("a/b/c/new.tmp"), b"renamed below pinned ancestors").unwrap();
+    rename_unc(root, Path::new("a/b/c/new.tmp"), Path::new("a/b/c/new.png")).unwrap();
+    assert_eq!(std::fs::read(inside.join("a/b/c/new.png")).unwrap(), b"renamed below pinned ancestors");
+    drop(pinned);
+    std::fs::rename(inside.join("a"), inside.join("a-moved")).unwrap();
+
+    // The swap already done: the junction is seen through the parent handle and refused.
+    let link = inside.join("a");
+    if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
+        let refused = open_or_create_plain_dir(&root.dir, Path::new("a"), Path::new("a"), &root.path.join("a"));
+        assert_eq!(refused.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(held_directory_chain(root, Path::new("a/b/c")).is_err());
+        assert!(pinned_directory_chain(root, Path::new("a/b/c")).is_err());
+        assert!(ensure_export_dir(root, Path::new("a/b/c")).is_err());
+        assert!(workspace.export_sequence("a/b/c").is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        let _ = std::fs::remove_dir(link);
+    }
+}
+
+/// The rules that do not depend on the root hold below a UNC root too (#10317): `..` is refused
+/// in a request and climbs no further than the root in the configured spelling, a directory at
+/// the target is refused before it is opened and survives, and a path past `MAX_PATH` works,
+/// since the canonical root is verbatim (`\\?\UNC\...`) and every step below it goes through a
+/// handle or that verbatim root path.
+#[cfg(windows)]
+#[test]
+fn windows_unc_root_refuses_traversal_and_accepts_long_paths_when_supported() {
+    let (inside, outside, _) = roots("unc-rules");
+    let Some(unc) = loopback_unc(&inside) else { return };
+    if std::fs::metadata(&unc).is_err() {
+        return;
+    }
+    let workspace = AuthorizedWorkspace::new(Some(&unc), Some(&unc)).unwrap();
+
+    for path in ["../escape.png", "sub/../../escape.png", r"sub\..\..\escape.png", r"..\frames"] {
+        assert!(workspace.write(path, b"no").is_err(), "write accepted {path:?}");
+        assert!(workspace.export_sequence(path).is_err(), "export accepted {path:?}");
+    }
+    let spelled = unc.join("..").join("inside");
+    let aliased = AuthorizedWorkspace::new(Some(&spelled), Some(&spelled)).unwrap();
+    aliased.write("spelled.png", b"same grant").unwrap();
+    assert_eq!(std::fs::read(inside.join("spelled.png")).unwrap(), b"same grant");
+    assert!(aliased.write(&spelled.join("..").join("outside").join("climb.png").to_string_lossy(), b"no").is_err());
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+
+    std::fs::create_dir(inside.join("adir")).unwrap();
+    assert!(workspace.write("adir", b"x").is_err());
+    assert!(inside.join("adir").is_dir());
+    assert!(temp_files(&inside).is_empty());
+
+    let long = format!("frames/{}/{}", "x".repeat(120), "y".repeat(120));
+    assert!(unc.join(&long).as_os_str().len() > 260);
+    let mut export = workspace.export_sequence(&long).unwrap();
+    export.write("clip_0000.png", b"deep").unwrap();
+    export.commit();
+    drop(export);
+    assert_eq!(std::fs::read(inside.join(&long).join("clip_0000.png")).unwrap(), b"deep");
+    workspace.write(&format!("{long}/saved.png"), b"long save").unwrap();
+    assert_eq!(std::fs::read(inside.join(&long).join("saved.png")).unwrap(), b"long save");
+    assert!(temp_files(&inside.join(&long)).is_empty());
+}
+
+/// `\\localhost\C$\...` for a path on drive `C:`; `None` for a path without a drive letter.
+#[cfg(windows)]
+fn loopback_unc(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else { return None };
+    let drive = match prefix.kind() {
+        Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => char::from(drive),
+        _ => return None,
+    };
+    let mut unc = PathBuf::from(format!(r"\\localhost\{drive}$"));
+    unc.extend(components.filter(|component| matches!(component, Component::Normal(_))));
+    Some(unc)
 }
 
 #[test]
@@ -510,6 +841,145 @@ fn registry_filesystem_path_params_are_classified() {
     assert!(unclassified.is_empty(), "filesystem path parameters in the command registry need an automation policy: {unclassified:?}");
 }
 
+/// Shape Blur uses inline vector geometry without granting a headless caller filesystem access.
+#[test]
+fn shape_blur_accepts_inline_geometry_and_rejects_filesystem_strings() {
+    let mut headless = crate::headless::Headless::new();
+    headless.command_run("file.new", serde_json::json!({"width":8,"height":8})).unwrap();
+    headless
+        .command_run("filter.blur.shapeBlur", serde_json::json!({"radius":5,"shapePath":{"subpaths":[{"knots":[[0,0],[1,0],[1,1],[0,1]],"closed":true}]}}))
+        .unwrap();
+    let error = headless.command_run("filter.blur.shapeBlur", serde_json::json!({"radius":5,"shapePath":"/outside/shape.svg"})).unwrap_err();
+    assert!(error.to_string().contains("nonempty vector path"), "{error}");
+}
+
+#[test]
+fn native_vector_preview_updates_are_not_an_untrusted_automation_capability() {
+    let params = serde_json::json!({"document":1,"layer":1,"contentsId":1,"fingerprint":"00".repeat(32),"extension":"ai","sourceBase64":"JVBERi0=","previewSvg":"<svg/>"});
+    assert!(authorize_engine_command("layer.smartObjects.updateVectorSource", &params).is_err());
+    assert!(authorize_desktop_engine_command("layer.smartObjects.updateVectorSource", &params).is_err());
+}
+
+#[test]
+fn svg_smart_handoff_is_memory_only_and_linked_sources_stay_denied() {
+    let mut headless = crate::Headless::new();
+    headless.command_run("file.new", serde_json::json!({"width": 16, "height": 16})).unwrap();
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
+    let inserted = photocraft_engine::file_cmds::place_bytes(
+        &mut headless.session,
+        "Artwork.svg",
+        svg.as_bytes().to_vec(),
+        None,
+        &serde_json::json!({"smartObject":true}),
+    )
+    .unwrap();
+    let layer = inserted["layer"].clone();
+    let handoff = headless.command_run("layer.smartObjects.exportSvg", serde_json::json!({"layer": layer})).unwrap();
+    assert_eq!(handoff["svg"], svg);
+    let params = serde_json::json!({
+        "document": handoff["document"], "layer": layer,
+        "contentsId": handoff["contentsId"], "fingerprint": handoff["fingerprint"],
+        "svg": svg.replace("red", "blue"),
+    });
+    assert!(authorize_desktop_engine_command("layer.smartObjects.updateSvg", &params).is_ok());
+    assert_eq!(headless.command_run("layer.smartObjects.updateSvg", params.clone()).unwrap()["updated"], true);
+    for id in ["layer.smartObjects.exportSvg", "layer.smartObjects.updateSvg"] {
+        let mut ambient = params.clone();
+        ambient["path"] = serde_json::json!("/outside/source.svg");
+        assert!(authorize_engine_command(id, &ambient).is_err(), "{id}");
+        assert!(authorize_desktop_engine_command(id, &ambient).is_err(), "{id}");
+        assert!(headless.command_run(id, ambient).is_err(), "{id}");
+    }
+    let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+    let id = photocraft_doc::LayerId(layer.as_u64().unwrap());
+    let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("SVG smart object") };
+    sm.source = photocraft_doc::SmartSource::Linked { path: "/outside/source.svg".into() };
+    let before = headless.session.active().unwrap().doc.clone();
+    assert!(headless.command_run("layer.smartObjects.exportSvg", serde_json::json!({"layer": layer})).is_err());
+    assert!(headless.command_run("layer.smartObjects.updateSvg", params).is_err());
+    assert_eq!(headless.session.active().unwrap().doc, before);
+    assert!(headless.command_run("layer.smartObjects.exportContents", serde_json::json!({"layer": layer, "path": "/outside/export.svg"})).is_err());
+}
+
+#[test]
+fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
+    let (_, outside, _) = roots("svg-stored-filter");
+    let lut = outside.join("private.cube");
+    let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    std::fs::write(&lut, cube).unwrap();
+    for shared_only in [false, true] {
+        let mut headless = crate::Headless::new();
+        headless.command_run("file.new", serde_json::json!({"width": 16, "height": 16})).unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
+        let pasted = photocraft_engine::file_cmds::place_bytes(
+            &mut headless.session,
+            "Artwork.svg",
+            svg.as_bytes().to_vec(),
+            None,
+            &serde_json::json!({"smartObject":true}),
+        )
+        .unwrap();
+        let target = photocraft_doc::LayerId(pasted["layer"].as_u64().unwrap());
+        let filtered = if shared_only {
+            let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+            let duplicate = doc.layer(target).unwrap().duplicate();
+            let id = duplicate.id;
+            doc.layers.push(duplicate);
+            id
+        } else {
+            target
+        };
+        headless.session.select_layer(filtered).unwrap();
+        // Record a natural desktop Color Lookup operation with its original file params,
+        // then restore the untrusted automation hook as for an imported document.
+        let authorization = headless.session.authorize.take();
+        headless.session.execute("image.adjustments.colorLookup", serde_json::json!({"file":lut.to_string_lossy()})).unwrap();
+        headless.session.authorize = authorization;
+        let photocraft_doc::LayerContent::Smart(sm) = &headless.session.active().unwrap().doc.layer(filtered).unwrap().content else { panic!("smart object") };
+        assert_eq!(sm.smart_filters.last().unwrap().params["file"], lut.to_string_lossy().as_ref());
+        let handoff = headless.command_run("layer.smartObjects.exportSvg", serde_json::json!({"layer":target.0})).unwrap();
+        let params = serde_json::json!({"document":handoff["document"],"layer":target.0,"contentsId":handoff["contentsId"],"fingerprint":handoff["fingerprint"],"svg":svg.replace("red","blue")});
+        let before = headless.session.active().unwrap().doc.clone();
+        let revision = headless.session.active().unwrap().revision;
+        let error = headless.command_run("layer.smartObjects.updateSvg", params.clone()).unwrap_err();
+        assert!(error.to_string().contains("ambient filesystem paths"), "{error}");
+        assert_eq!(headless.session.active().unwrap().doc, before);
+        assert_eq!(headless.session.active().unwrap().revision, revision);
+        // A hidden stored filter is not executed, so its unused filename grants no access.
+        let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(filtered).unwrap().content else { panic!("smart object") };
+        sm.smart_filters.last_mut().unwrap().visible = false;
+        assert_eq!(headless.command_run("layer.smartObjects.updateSvg", params).unwrap()["updated"], true);
+    }
+}
+
+#[test]
+fn svg_update_keeps_inline_and_builtin_smart_filters_working() {
+    let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    for filter_params in [serde_json::json!({"lut":"warm"}), serde_json::json!({"data":cube,"fileName":"look.cube"})] {
+        let mut headless = crate::Headless::new();
+        headless.command_run("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
+        let pasted = photocraft_engine::file_cmds::place_bytes(
+            &mut headless.session,
+            "Artwork.svg",
+            svg.as_bytes().to_vec(),
+            None,
+            &serde_json::json!({"smartObject":true}),
+        )
+        .unwrap();
+        let id = photocraft_doc::LayerId(pasted["layer"].as_u64().unwrap());
+        headless.command_run("image.adjustments.colorLookup", filter_params).unwrap();
+        let handoff = headless.command_run("layer.smartObjects.exportSvg", serde_json::json!({"layer":id.0})).unwrap();
+        let result = headless.command_run("layer.smartObjects.updateSvg",serde_json::json!({"document":handoff["document"],"layer":id.0,"contentsId":handoff["contentsId"],"fingerprint":handoff["fingerprint"],"svg":svg.replace("red","blue")})).unwrap();
+        assert_eq!(result["updated"], true);
+        let photocraft_doc::LayerContent::Smart(sm) = &headless.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("smart object") };
+        assert_eq!(sm.smart_filters.len(), 1);
+        assert!(!sm.cache.as_ref().unwrap().content_bounds().is_empty());
+    }
+}
+
+/// Distinguish filesystem parameters from descriptions of inline vector paths.
 fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
     // These commands return settings or installed-profile paths; they do not accept a host
     // filesystem path as an automation input.
@@ -519,7 +989,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
     // These registry descriptions refer to document vector paths, not host files.
     if matches!(
         id,
-        "filter.blurGallery.pathBlur"
+        "filter.blur.shapeBlur"
+            | "filter.blurGallery.pathBlur"
             | "filter.render.flame"
             | "shape.create"
             | "shape.edit"
@@ -528,7 +999,11 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "shape.presets.new"
             | "path.list"
             | "path.info"
+            | "path.addToSelection"
+            | "path.subtractFromSelection"
+            | "path.intersectWithSelection"
             | "path.set"
+            | "actions.insertPath"
             | "path.transform"
             | "path.moveAnchors"
             | "path.moveHandle"
@@ -536,10 +1011,14 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.convertPoint"
             | "path.addAnchor"
             | "path.deleteAnchor"
+            | "path.mergeShapeComponents"
+            | "path.setOperation"
             | "path.clippingPath.set"
             | "path.rename"
             | "path.stroke"
+            | "path.toShape"
             | "type.attachToPath"
+            | "type.setPathPlacement"
             | "type.fillPath"
             | "type.detachFromPath"
             | "select.toWorkPath"
@@ -548,11 +1027,16 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.info"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
+            // `"as":"path"` pastes the clipboard as a vector path (#10694).
+            | "edit.paste"
             | "layer.combineShapes.unite"
             | "layer.combineShapes.subtractFrontShape"
             | "layer.combineShapes.intersectShapeAreas"
             | "layer.combineShapes.excludeOverlappingShapes"
             | "layer.combineShapes.mergeShapeComponents"
+            | "layer.new.frame"
+            // `"stepName":"Transform Path"` names the History step, not a host file.
+            | "edit.transform"
     ) || id.starts_with("layer.newFillLayer.")
         || id.starts_with("layer.newAdjustmentLayer.")
     {
@@ -638,6 +1122,217 @@ fn absolute_paths_beneath_the_root_are_translated_and_others_refused() {
     assert_eq!(std::fs::read(inside.join("a.bin")).unwrap(), b"one");
 }
 
+/// Equivalent drive, UNC and ASCII-case root spellings need no ambient path resolution.
+#[cfg(windows)]
+#[test]
+fn canonical_windows_prefixes_match_without_ambient_resolution() {
+    for (request, root) in [
+        (r"c:\root\new.bin", r"\\?\C:\root"),
+        (r"\\?\C:\root\new.bin", r"C:\root"),
+        (r"\\server\share\root\new.bin", r"\\?\UNC\SERVER\SHARE\root"),
+        (r"c:\ROOT\new.bin", r"\\?\C:\root"),
+        (r"\\?\C:\ROOT\new.bin", r"c:\root"),
+        (r"\\server\share\ROOT\new.bin", r"\\?\UNC\SERVER\SHARE\root"),
+    ] {
+        let remaining = path_beneath_root(Path::new(request), Path::new(root)).unwrap();
+        assert_eq!(remaining.as_path(), Path::new("new.bin"));
+    }
+    for request in [r"C:\root-sibling\new.bin", r"D:\root\new.bin", r"\\.\C:\root\new.bin", r"\\other\share\root\new.bin"] {
+        assert!(path_beneath_root(Path::new(request), Path::new(r"\\?\C:\root")).is_none());
+    }
+}
+
+/// Case variants of the granted Windows prefix still use its held directory capability.
+#[cfg(windows)]
+#[test]
+fn windows_root_case_variants_keep_io_inside_the_grant() {
+    let (inside, outside, workspace) = roots("root-case");
+    let configured = PathBuf::from(inside.to_string_lossy().to_ascii_uppercase());
+    let canonical = PathBuf::from(std::fs::canonicalize(&inside).unwrap().to_string_lossy().to_ascii_uppercase());
+    for spelling in [&configured, &canonical] {
+        let path = spelling.join("new.png");
+        workspace.write(&path.to_string_lossy(), b"inside").unwrap();
+        assert_eq!(workspace.read(&path.to_string_lossy()).unwrap(), b"inside");
+        assert!(workspace.write(&spelling.join("..").join("outside").join("blocked.bin").to_string_lossy(), b"no").is_err());
+    }
+    assert_eq!(std::fs::read(inside.join("new.png")).unwrap(), b"inside");
+    assert!(workspace.write(&configured.with_file_name("INSIDE-SIBLING").join("blocked.bin").to_string_lossy(), b"no").is_err());
+    assert!(!outside.join("blocked.bin").exists());
+    // Case normalization must not bypass the refusal to replace unrelated existing files.
+    std::fs::write(inside.join("notes.bin"), b"keep").unwrap();
+    assert!(workspace.write(&configured.join("notes.bin").to_string_lossy(), b"no").is_err());
+    assert_eq!(std::fs::read(inside.join("notes.bin")).unwrap(), b"keep");
+}
+
+/// Unix roots with different case must not become aliases of the granted prefix.
+#[cfg(unix)]
+#[test]
+fn unix_root_prefixes_remain_case_sensitive() {
+    assert!(path_beneath_root(Path::new("/Root/new.bin"), Path::new("/root")).is_none());
+}
+
+#[test]
+fn configured_parent_components_accept_resolved_absolute_paths() {
+    let (inside, outside, _) = roots("resolved-parent-root");
+    let configured = inside.join("..").join("inside");
+    let workspace = AuthorizedWorkspace::new(Some(&configured), Some(&configured)).unwrap();
+    let resolved = std::fs::canonicalize(&inside).unwrap();
+    workspace.write(&resolved.join("new.bin").to_string_lossy(), b"new").unwrap();
+    assert_eq!(workspace.read(&resolved.join("new.bin").to_string_lossy()).unwrap(), b"new");
+    workspace.write(&configured.join("launch-spelling.bin").to_string_lossy(), b"trusted prefix").unwrap();
+    assert_eq!(workspace.read(&configured.join("launch-spelling.bin").to_string_lossy()).unwrap(), b"trusted prefix");
+    assert_eq!(workspace.read(&resolved.join("launch-spelling.bin").to_string_lossy()).unwrap(), b"trusted prefix");
+    assert!(workspace.write(&configured.join("..").join("outside/escaped.bin").to_string_lossy(), b"no").is_err());
+    assert!(!outside.join("escaped.bin").exists());
+    assert!(workspace.write(&outside.join("blocked.bin").to_string_lossy(), b"no").is_err());
+    assert!(!outside.join("blocked.bin").exists());
+}
+
+#[test]
+fn relative_configured_root_accepts_resolved_absolute_paths() {
+    let relative = PathBuf::from("target").join(format!("automation-relative-root-{}", std::process::id()));
+    std::fs::create_dir_all(&relative).unwrap();
+    let workspace = AuthorizedWorkspace::new(Some(&relative), Some(&relative)).unwrap();
+    let resolved = std::fs::canonicalize(&relative).unwrap();
+    workspace.write(&resolved.join("new.bin").to_string_lossy(), b"relative").unwrap();
+    assert_eq!(workspace.read(&resolved.join("new.bin").to_string_lossy()).unwrap(), b"relative");
+    std::fs::remove_file(resolved.join("new.bin")).unwrap();
+    drop(workspace);
+    std::fs::remove_dir(resolved).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_root_names_are_not_validated_as_relative_request_names() {
+    let (inside, outside, _) = roots("trusted-root-names");
+    let root = inside.join("aux");
+    std::fs::create_dir(&root).unwrap();
+    let alias = outside.join("CON");
+    link_directory(&root, &alias);
+    let workspace = AuthorizedWorkspace::new(Some(&alias), Some(&alias)).unwrap();
+    for (index, spelling) in [&root, &alias].into_iter().enumerate() {
+        let fresh = spelling.join(format!("new-{index}.bin"));
+        workspace.write(&fresh.to_string_lossy(), b"trusted").unwrap();
+        assert_eq!(workspace.read(&fresh.to_string_lossy()).unwrap(), b"trusted");
+        assert!(workspace.write(&fresh.to_string_lossy(), b"replacement").is_err(), "unknown existing files remain protected");
+        assert!(workspace.write(&spelling.join("NUL").to_string_lossy(), b"no").is_err());
+    }
+    assert!(!root.join("NUL").exists());
+    remove_directory_link(&alias);
+}
+
+// Windows junctions exercise the same root alias without requiring Developer Mode.
+#[cfg(any(unix, windows))]
+fn link_directory(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap().status.success());
+}
+
+#[cfg(any(unix, windows))]
+fn remove_directory_link(link: &Path) {
+    #[cfg(unix)]
+    std::fs::remove_file(link).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(link).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn linked_root_accepts_both_spellings_and_new_nested_exports() {
+    let (inside, outside, _) = roots("linked-root");
+    let link = outside.join("root-link");
+    link_directory(&inside, &link);
+    let workspace = AuthorizedWorkspace::new(Some(&link), Some(&link)).unwrap();
+    let resolved = std::fs::canonicalize(&inside).unwrap();
+    for (i, spelling) in [resolved, link.clone()].iter().enumerate() {
+        let name = format!("new-{i}.bin");
+        workspace.write(&spelling.join(&name).to_string_lossy(), b"new").unwrap();
+        assert_eq!(workspace.read(&spelling.join(&name).to_string_lossy()).unwrap(), b"new");
+        assert_eq!(workspace.read(&name).unwrap(), b"new");
+        let mut export = workspace.export_sequence(&spelling.join(format!("frames-{i}")).join("nested").to_string_lossy()).unwrap();
+        export.write("frame.png", b"frame").unwrap();
+        export.commit();
+        assert_eq!(std::fs::read(inside.join(format!("frames-{i}/nested/frame.png"))).unwrap(), b"frame");
+    }
+    remove_directory_link(&link);
+}
+
+/// TEMP can name the same directory differently from canonicalize (8.3 on Windows).
+/// A junction makes that mismatch deterministic even when 8.3 names are disabled.
+#[cfg(windows)]
+#[test]
+fn root_alias_tests_work_with_an_aliased_windows_temp() {
+    let (inside, outside, _) = roots("aliased-temp");
+    let temp_alias = outside.join("temp-alias");
+    link_directory(&inside, &temp_alias);
+    let exe = std::env::current_exe().unwrap();
+    for test in [
+        "workspace::tests::ungranted_absolute_aliases_and_link_escapes_are_refused",
+        "workspace::tests::retargeting_root_alias_does_not_regrant_the_held_authority",
+    ] {
+        // Set TEMP only in the child; changing the process environment races other tests.
+        let output = std::process::Command::new(&exe).args(["--exact", test, "--nocapture"]).env("TEMP", &temp_alias).env("TMP", &temp_alias).output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{test}: {stdout}\n{stderr}");
+        assert!(stdout.contains("1 passed;"), "child must run the requested test: {stdout}");
+    }
+    remove_directory_link(&temp_alias);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn ungranted_absolute_aliases_and_link_escapes_are_refused() {
+    let (inside, outside, workspace) = roots("request-alias");
+    // TEMP may use an 8.3 name or a junction. A grant through `alias` below recognises
+    // that configured alias and the canonical target, not every other name for `inside`.
+    let resolved_inside = std::fs::canonicalize(&inside).unwrap();
+    let alias = outside.join("inside-alias");
+    link_directory(&inside, &alias);
+    workspace.write("new.bin", b"inside").unwrap();
+    assert!(workspace.read(&alias.join("new.bin").to_string_lossy()).is_err());
+    assert!(workspace.write(&alias.join("ungranted.bin").to_string_lossy(), b"no").is_err());
+    assert!(!inside.join("ungranted.bin").exists());
+    std::fs::write(outside.join("secret.bin"), b"outside").unwrap();
+    let escape = inside.join("escape");
+    link_directory(&outside, &escape);
+    assert!(workspace.read(&escape.join("secret.bin").to_string_lossy()).is_err());
+    assert!(workspace.write(&escape.join("blocked.bin").to_string_lossy(), b"no").is_err());
+    assert!(workspace.export_sequence(&escape.join("frames").join("nested").to_string_lossy()).is_err());
+    assert!(!outside.join("blocked.bin").exists());
+    assert!(!outside.join("frames").exists());
+    assert_eq!(std::fs::read(outside.join("secret.bin")).unwrap(), b"outside");
+    let read_only = AuthorizedWorkspace::new(Some(&alias), Some(&outside)).unwrap();
+    assert_eq!(read_only.read(&resolved_inside.join("new.bin").to_string_lossy()).unwrap(), b"inside");
+    assert!(read_only.write(&alias.join("denied.bin").to_string_lossy(), b"no").is_err());
+    assert!(!inside.join("denied.bin").exists());
+    remove_directory_link(&escape);
+    remove_directory_link(&alias);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn retargeting_root_alias_does_not_regrant_the_held_authority() {
+    let (inside, outside, _) = roots("retargeted-root");
+    let resolved_inside = std::fs::canonicalize(&inside).unwrap();
+    let alias = outside.join("root-alias");
+    link_directory(&inside, &alias);
+    let workspace = AuthorizedWorkspace::new(Some(&alias), Some(&alias)).unwrap();
+    remove_directory_link(&alias);
+    link_directory(&outside, &alias);
+    std::fs::write(outside.join("secret.bin"), b"secret").unwrap();
+    workspace.write("held.bin", b"held").unwrap();
+    assert_eq!(workspace.read(&resolved_inside.join("held.bin").to_string_lossy()).unwrap(), b"held");
+    assert!(workspace.read(&alias.join("secret.bin").to_string_lossy()).is_err());
+    workspace.write(&alias.join("held-alias.bin").to_string_lossy(), b"original grant").unwrap();
+    assert_eq!(std::fs::read(inside.join("held-alias.bin")).unwrap(), b"original grant");
+    assert!(!outside.join("held-alias.bin").exists());
+    assert_eq!(std::fs::read(outside.join("secret.bin")).unwrap(), b"secret");
+    remove_directory_link(&alias);
+}
+
 /// Each authority is checked against its own root, and none granted refuses absolute paths.
 #[test]
 fn absolute_paths_are_checked_against_the_authority_s_own_root() {
@@ -648,4 +1343,208 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     assert!(workspace.read(&target.to_string_lossy()).is_err(), "not under the read root");
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
+}
+
+#[test]
+fn ordered_read_roots_keep_write_authority_and_save_provenance_separate() {
+    let (library, work, _) = roots("multiple-roots");
+    std::fs::write(library.join("photo.txt"), b"library").unwrap();
+    std::fs::write(work.join("draft.txt"), b"draft").unwrap();
+    std::fs::write(library.join("same.txt"), b"first").unwrap();
+    std::fs::write(work.join("same.txt"), b"second").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path(), library.as_path()], Some(&work)).unwrap();
+    assert_eq!(workspace.read_with_save_path("photo.txt").unwrap(), (b"library".to_vec(), None));
+    assert_eq!(workspace.read_with_save_path("draft.txt").unwrap(), (b"draft".to_vec(), Some("draft.txt".into())));
+    assert_eq!(workspace.read("same.txt").unwrap(), b"first");
+    let absolute = work.join("same.txt").to_string_lossy().into_owned();
+    assert_eq!(workspace.read_with_save_path(&absolute).unwrap(), (b"second".to_vec(), Some(absolute)));
+    let reverse = AuthorizedWorkspace::with_read_roots([work.as_path(), library.as_path()], Some(&work)).unwrap();
+    assert_eq!(reverse.read("same.txt").unwrap(), b"second");
+    // Identical configured spellings share the held handle, including the write grant.
+    assert!(Arc::ptr_eq(&workspace.read[0].dir, &workspace.read[2].dir));
+    assert!(Arc::ptr_eq(&workspace.read[1].dir, &workspace.write.as_ref().unwrap().dir));
+    workspace.write("result.txt", b"output").unwrap();
+    assert_eq!(std::fs::read(work.join("result.txt")).unwrap(), b"output");
+    assert!(!library.join("result.txt").exists());
+    assert!(workspace.write(&library.join("photo.txt").to_string_lossy(), b"blocked").is_err());
+    assert_eq!(std::fs::read(library.join("photo.txt")).unwrap(), b"library");
+    let error = workspace.read("missing.txt").unwrap_err().to_string();
+    assert!(error.contains("NotFound"), "{error}");
+}
+
+#[test]
+fn streamed_save_follows_read_provenance_across_ordered_roots() {
+    let (library, work, _) = roots("stream-provenance");
+    std::fs::write(library.join("same.png"), b"library").unwrap();
+    std::fs::write(work.join("same.png"), b"work").unwrap();
+    std::fs::write(work.join("draft.png"), b"draft").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    // Read from the library root: no implicit save, so a streamed save needs an explicit target.
+    assert_eq!(workspace.read_with_save_path("same.png").unwrap(), (b"library".to_vec(), None));
+    // Read from the root that shares the write handle: the streamed save replaces that file only.
+    let (_, save_path) = workspace.read_with_save_path("draft.png").unwrap();
+    let save_path = save_path.unwrap();
+    workspace.write_stream(&save_path, &mut |w| w.write_all(b"streamed")).unwrap();
+    assert_eq!(std::fs::read(work.join("draft.png")).unwrap(), b"streamed");
+    assert!(!library.join("draft.png").exists());
+    // An absolute library path never reaches the write root, streamed or not.
+    assert!(workspace.write_stream(&library.join("same.png").to_string_lossy(), &mut |w| w.write_all(b"blocked")).is_err());
+    assert_eq!(std::fs::read(library.join("same.png")).unwrap(), b"library");
+    assert_eq!(std::fs::read(work.join("same.png")).unwrap(), b"work");
+}
+
+#[test]
+fn every_read_root_is_validated_and_write_roots_never_imply_reads() {
+    let (library, work, _) = roots("root-validation");
+    std::fs::write(work.join("file.txt"), b"work").unwrap();
+    for invalid in [library.join("missing"), work.join("file.txt"), PathBuf::new()] {
+        assert!(AuthorizedWorkspace::with_read_roots([library.as_path(), invalid.as_path(), work.as_path()], Some(&work)).is_err());
+    }
+    let write_only = AuthorizedWorkspace::with_read_roots(std::iter::empty(), Some(&work)).unwrap();
+    assert!(write_only.read("file.txt").is_err());
+    assert!(write_only.read(&work.join("file.txt").to_string_lossy()).is_err());
+    let read_only = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], None).unwrap();
+    assert_eq!(read_only.read_with_save_path("file.txt").unwrap(), (b"work".to_vec(), None));
+    assert!(read_only.write("file.txt", b"blocked").is_err());
+}
+
+#[test]
+fn an_earlier_directory_or_invalid_path_never_falls_back_to_a_later_file() {
+    let (library, work, _) = roots("root-errors");
+    std::fs::create_dir(library.join("same.txt")).unwrap();
+    std::fs::write(work.join("same.txt"), b"later").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    assert!(workspace.read("same.txt").is_err());
+    for invalid in ["", "../same.txt", "a/../same.txt", "a\\same.txt", "a//same.txt", "NUL", "same.txt:stream"] {
+        assert!(workspace.read(invalid).is_err(), "accepted {invalid:?}");
+        assert!(workspace.write(invalid, b"blocked").is_err(), "wrote {invalid:?}");
+    }
+    let traversal = library.join("../outside/same.txt");
+    assert!(workspace.read(&traversal.to_string_lossy()).is_err());
+    assert_eq!(std::fs::read(work.join("same.txt")).unwrap(), b"later");
+}
+
+#[cfg(unix)]
+#[test]
+fn multiple_roots_do_not_allow_link_escapes_or_alias_save_back() {
+    use std::os::unix::fs::symlink;
+    let (library, work, _) = roots("multi-root-links");
+    std::fs::write(work.join("photo.txt"), b"work").unwrap();
+    symlink(&work, library.join("escape")).unwrap();
+    std::fs::create_dir(work.join("escape")).unwrap();
+    std::fs::write(work.join("escape/photo.txt"), b"later").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    // Being separately granted does not allow following a link out of the selected root.
+    assert!(workspace.read("escape/photo.txt").is_err());
+    assert_eq!(workspace.read("photo.txt").unwrap(), b"work");
+    let alias = library.join("alias");
+    symlink(&work, &alias).unwrap();
+    let aliased = AuthorizedWorkspace::new(Some(&alias), Some(&work)).unwrap();
+    assert_eq!(aliased.read_with_save_path("photo.txt").unwrap(), (b"work".to_vec(), None));
+    let nested = AuthorizedWorkspace::new(Some(&work.join("escape")), Some(&work)).unwrap();
+    assert_eq!(nested.read_with_save_path("photo.txt").unwrap(), (b"later".to_vec(), None));
+    symlink(&library, work.join("escape-write")).unwrap();
+    assert!(workspace.write("escape-write/output.txt", b"blocked").is_err());
+    assert!(!library.join("output.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn same_root_leaf_link_save_replaces_the_link_without_writing_its_target() {
+    let (inside, _, workspace) = roots("leaf-link");
+    std::fs::write(inside.join("target.txt"), b"target").unwrap();
+    std::os::unix::fs::symlink("target.txt", inside.join("link.png")).unwrap();
+    let (bytes, save_path) = workspace.read_with_save_path("link.png").unwrap();
+    assert_eq!(bytes, b"target");
+    workspace.write(&save_path.unwrap(), b"replacement").unwrap();
+    assert_eq!(std::fs::read(inside.join("target.txt")).unwrap(), b"target");
+    assert_eq!(std::fs::read(inside.join("link.png")).unwrap(), b"replacement");
+    assert!(!std::fs::symlink_metadata(inside.join("link.png")).unwrap().file_type().is_symlink());
+}
+
+#[test]
+fn directory_pcraft_uses_ordered_roots_without_falling_back_after_selection() {
+    let (library, work, _) = roots("pcraft-ordered");
+    let save = |root: &Path, name: &str| {
+        let doc = photocraft_doc::Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        photocraft_format::PcraftWriter::new().save_dir(&doc, &root.join("native.pcraft"), &photocraft_format::SaveOptions::default()).unwrap();
+    };
+    save(&work, "Later");
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    assert_eq!(workspace.open_pcraft("native.pcraft").unwrap().unwrap().name, "Later");
+    save(&library, "First");
+    assert_eq!(workspace.open_pcraft("native.pcraft").unwrap().unwrap().name, "First");
+    assert_eq!(workspace.open_pcraft(&work.join("native.pcraft").to_string_lossy()).unwrap().unwrap().name, "Later");
+    std::fs::remove_dir_all(library.join("native.pcraft")).unwrap();
+    std::fs::write(library.join("native.pcraft"), b"zip placeholder").unwrap();
+    assert!(workspace.open_pcraft("native.pcraft").unwrap().is_none());
+    std::fs::remove_file(library.join("native.pcraft")).unwrap();
+    std::fs::create_dir(library.join("native.pcraft")).unwrap();
+    assert!(workspace.open_pcraft("native.pcraft").is_err());
+    for invalid in ["../native.pcraft", "a//native.pcraft", "a\\native.pcraft"] {
+        assert!(workspace.open_pcraft(invalid).is_err());
+    }
+    let write_only = AuthorizedWorkspace::with_read_roots(std::iter::empty(), Some(&work)).unwrap();
+    assert!(write_only.open_pcraft("native.pcraft").is_err());
+}
+
+#[test]
+fn csh_import_requires_inline_data_in_automation() {
+    let id = "shape.presets.importCsh";
+    for path in ["/outside/set.csh", "set.csh", "../set.csh", ""] {
+        let params = serde_json::json!({"path": path});
+        assert!(authorize_engine_command(id, &params).is_err(), "{path}");
+        assert!(authorize_desktop_engine_command(id, &params).is_err(), "{path}");
+    }
+    // The importer gives inline data precedence, even when a path is also supplied.
+    for params in [serde_json::json!({"data": "QUJD"}), serde_json::json!({"data": "QUJD", "path": "/outside/set.csh"})] {
+        assert!(authorize_engine_command(id, &params).is_ok());
+        assert!(authorize_desktop_engine_command(id, &params).is_ok());
+    }
+    let mut headless = crate::headless::Headless::new();
+    let error = headless.command_run(id, serde_json::json!({"path": "/outside/set.csh"})).unwrap_err();
+    assert!(error.to_string().contains("uses ambient filesystem paths and is disabled"), "{error}");
+}
+
+/// A one-shape CSH set (version 2) named `name`, with a single open one-knot subpath.
+fn one_shape_csh(name: &str) -> Vec<u8> {
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath};
+    let mut bytes = b"cush".to_vec();
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    let units: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    bytes.extend_from_slice(&(units.len() as u32).to_be_bytes());
+    for unit in units {
+        bytes.extend_from_slice(&unit.to_be_bytes());
+    }
+    while !bytes.len().is_multiple_of(4) {
+        bytes.push(0);
+    }
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    let mut body = vec![2, b'i', b'd'];
+    for bound in [0i32, 0, 100, 100] {
+        body.extend_from_slice(&bound.to_be_bytes());
+    }
+    let knot = PsdKnot { linked: true, pre: (0.25, 0.25), anchor: (0.5, 0.5), post: (0.75, 0.75) };
+    body.extend_from_slice(&PathData::from_subpaths(&[PsdSubpath { closed: false, operation: 0, knots: vec![knot] }], false).to_bytes());
+    while !body.len().is_multiple_of(4) {
+        body.push(0);
+    }
+    bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+/// The headless import itself reads inline `data` before `path`: a valid set imports even when
+/// the path beside it cannot be read (and would be refused as an ambient path on its own).
+#[test]
+fn csh_import_with_inline_data_ignores_an_unreadable_path() {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(one_shape_csh("Inline"));
+    let mut headless = crate::headless::Headless::new();
+    let params = serde_json::json!({"data": data, "path": "/outside/missing-set.csh", "group": "Inline Set"});
+    let result = headless.command_run("shape.presets.importCsh", params).unwrap();
+    assert_eq!(result["count"], 1, "{result}");
+    assert_eq!(result["names"], serde_json::json!(["Inline"]), "{result}");
+    assert_eq!(result["group"], "Inline Set", "{result}");
 }

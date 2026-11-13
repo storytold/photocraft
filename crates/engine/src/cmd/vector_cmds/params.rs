@@ -1,13 +1,10 @@
 use super::{
-    Color, EngineError, Fill, FillRule, GradientStyle, Knot, LayerId, LineCap, LineJoin, LiveShape, Path, PathOp, Point, Result, Session, ShapeStroke,
-    StrokeAlign, Subpath, Value, bad, json,
+    Color, Fill, FillRule, GradientStyle, Knot, LayerId, LineCap, LineJoin, LiveShape, Path, PathOp, Point, Result, Session, ShapeStroke, StrokeAlign, Subpath,
+    Value, bad, json,
 };
 
 pub(crate) fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => Ok(LayerId(id)),
-        None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
-    }
+    crate::commands::layer_param(s, p)
 }
 
 pub(super) fn f64p(p: &Value, k: &str) -> Option<f64> {
@@ -72,7 +69,7 @@ fn hex(c: &Color) -> String {
     if c.alpha < 1.0 { format!("#{:02x}{:02x}{:02x}{:02x}", q(r), q(g), q(b), q(c.alpha)) } else { format!("#{:02x}{:02x}{:02x}", q(r), q(g), q(b)) }
 }
 
-pub(super) fn op_from(s: &str) -> Option<PathOp> {
+pub(crate) fn op_from(s: &str) -> Option<PathOp> {
     Some(match s.to_ascii_lowercase().as_str() {
         "combine" | "add" | "union" => PathOp::Combine,
         "subtract" | "minus" => PathOp::Subtract,
@@ -323,7 +320,7 @@ pub(super) fn live_json(l: &LiveShape) -> Value {
 /// Builds a live shape from `kind` + geometry params.
 pub(super) fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) -> Result<LiveShape> {
     let prev_rect = match prev {
-        Some(LiveShape::Rect { rect, .. } | LiveShape::Ellipse { rect } | LiveShape::Polygon { rect, .. }) => Some(*rect),
+        Some(LiveShape::Rect { rect, .. } | LiveShape::Ellipse { rect } | LiveShape::Polygon { rect, .. } | LiveShape::Triangle { rect, .. }) => Some(*rect),
         _ => None,
     };
     let rect = || nums::<4>(p, "rect").or(prev_rect).ok_or_else(|| bad(cmd, "`rect`: [x, y, w, h] is required"));
@@ -343,6 +340,14 @@ pub(super) fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&L
             LiveShape::Rect { rect: rect()?, radii: radii(p).unwrap_or(r) }
         }
         "ellipse" => LiveShape::Ellipse { rect: rect()? },
+        "triangle" => {
+            let pc = match prev {
+                Some(LiveShape::Triangle { corner_radius, .. }) => *corner_radius,
+                _ => 0.0,
+            };
+            let corner_radius = f64p(p, "cornerRadius").map_or(pc, |v| if v.is_finite() { v.clamp(0.0, 1.0e6) } else { pc });
+            LiveShape::Triangle { rect: rect()?, corner_radius }
+        }
         "polygon" | "star" => {
             let (ps, pr, pc) = match prev {
                 Some(LiveShape::Polygon { sides, star_ratio, corner_radius, .. }) => (*sides, *star_ratio, *corner_radius),
@@ -360,13 +365,53 @@ pub(super) fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&L
         }
         "line" => {
             let (pf, pto, pw) = match prev {
-                Some(LiveShape::Line { from, to, weight }) => (Some(*from), Some(*to), *weight),
+                Some(LiveShape::Line { from, to, weight }) | Some(LiveShape::ArrowLine { from, to, weight, .. }) => (Some(*from), Some(*to), *weight),
                 _ => (None, None, 1.0),
             };
-            LiveShape::Line {
-                from: nums::<2>(p, "from").or(pf).ok_or_else(|| bad(cmd, "`from`: [x, y] is required"))?,
-                to: nums::<2>(p, "to").or(pto).ok_or_else(|| bad(cmd, "`to`: [x, y] is required"))?,
-                weight: f64p(p, "weight").unwrap_or(pw).max(0.0),
+            let from = nums::<2>(p, "from").or(pf).ok_or_else(|| bad(cmd, "`from`: [x, y] is required"))?;
+            let to = nums::<2>(p, "to").or(pto).ok_or_else(|| bad(cmd, "`to`: [x, y] is required"))?;
+            let weight = f64p(p, "weight").unwrap_or(pw).max(0.0);
+            let arrow_fields = ["arrowStart", "arrowEnd", "arrowWidth", "arrowLength", "arrowConcavity"];
+            let is_arrow = matches!(prev, Some(LiveShape::ArrowLine { .. })) || arrow_fields.iter().any(|k| p.get(*k).is_some());
+            if is_arrow {
+                let (ps, pe, pwidth, plen, pc) = match prev {
+                    Some(LiveShape::ArrowLine { start, end, width, length, concavity, .. }) => (*start, *end, *width, *length, *concavity),
+                    _ => (false, false, 52.0, 50.0, 0.0),
+                };
+                let dim = |key: &str, fallback: f64, min: f64, max: f64| -> Result<f64> {
+                    let value = match p.get(key) {
+                        Some(v) => v.as_f64().ok_or_else(|| bad(cmd, format!("`{key}` must be numeric")))?,
+                        None => fallback,
+                    };
+                    // Preserve scaled arrowhead dimensions when editing other properties.
+                    let preserved_scaled_size = p.get(key).is_none() && matches!(key, "arrowWidth" | "arrowLength") && value.is_finite();
+                    let value = if preserved_scaled_size { value.max(min) } else { value };
+                    if !value.is_finite() || (!preserved_scaled_size && !(min..=max).contains(&value)) {
+                        return Err(bad(cmd, format!("`{key}` must be within {min}..={max}")));
+                    }
+                    Ok(value)
+                };
+                // Reject invalid flag types rather than silently using defaults.
+                let flag = |key: &str, fallback: bool| -> Result<bool> {
+                    match p.get(key) {
+                        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, format!("`{key}` must be a boolean"))),
+                        None => Ok(fallback),
+                    }
+                };
+                LiveShape::ArrowLine {
+                    from,
+                    to,
+                    weight,
+                    start: flag("arrowStart", ps)?,
+                    end: flag("arrowEnd", pe)?,
+                    width: dim("arrowWidth", pwidth, 1.0, 4096.0)?,
+                    length: dim("arrowLength", plen, 1.0, 4096.0)?,
+                    // A whole -50..50 % as in Photoshop (#13258); a shape saved with the old 0..100
+                    // range keeps working when another property is edited.
+                    concavity: dim("arrowConcavity", if pc.is_finite() { pc.clamp(-50.0, 50.0) } else { 0.0 }, -50.0, 50.0)?.round(),
+                }
+            } else {
+                LiveShape::Line { from, to, weight }
             }
         }
         o => return Err(bad(cmd, format!("unknown kind `{o}`"))),

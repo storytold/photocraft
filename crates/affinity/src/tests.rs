@@ -298,6 +298,42 @@ mod archive {
     }
 
     #[test]
+    fn allocation_records_are_charged_before_they_are_walked() {
+        let d = doc();
+        let mut file = synth::container(&[("doc.dat", &d, Method::Stored)], None);
+        let fat = u64::from_le_bytes(file[16..24].try_into().unwrap()) as usize;
+        // The table's file count sits after its tag, next, date and 24 reserved bytes.
+        let files = fat + 4 + 8 + 8 + 24;
+        file[files..files + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+        // A count within the budget still reaches the records (and here fails on missing data).
+        file[files..files + 4].copy_from_slice(&1_000_000u32.to_le_bytes());
+        assert!(matches!(Archive::open(&file, Limits::default()), Err(Error::Malformed(_))));
+    }
+
+    #[test]
+    fn allocation_records_are_charged_across_every_table() {
+        let d = doc();
+        let mut file = synth::container(&[("doc.dat", &d, Method::Stored), ("other.dat", &d, Method::Stored)], None);
+        let fat = u64::from_le_bytes(file[16..24].try_into().unwrap()) as usize;
+        // Chain a copy of the (valid, two-record) table after it; the copy is the last table.
+        let second = file.len();
+        let table = file[fat..].to_vec();
+        file.extend(&table);
+        file[fat + 4..fat + 12].copy_from_slice(&(second as u64).to_le_bytes());
+        let files = second + 4 + 8 + 8 + 24;
+        // Each count alone is within the archive budget of 2^25; together they exceed it by one.
+        file[files..files + 4].copy_from_slice(&((1u32 << 25) - 1).to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+        // Exactly the budget is allowed: the second table is walked (and fails on missing data).
+        file[files..files + 4].copy_from_slice(&((1u32 << 25) - 2).to_le_bytes());
+        assert!(matches!(Archive::open(&file, Limits::default()), Err(Error::Malformed(_))));
+        // Directory records count too: one more (after the file count and 8 bytes) is over.
+        file[files + 12..files + 14].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+    }
+
+    #[test]
     fn hostile_streams_fail_cleanly() {
         let deep = (0..2000).fold(Vec::new(), |inner, _| vec![(tag(b"Chld"), F::Obj(tag(b"Grup"), inner))]);
         assert_eq!(stream::parse(&synth::stream(&deep)).unwrap_err(), Error::Limit("objects nested too deeply"));
@@ -416,6 +452,20 @@ mod shapes {
         rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_else(|_| panic!("reading the document did not finish")).unwrap()
     }
 
+    #[test]
+    fn empty_subpaths_of_a_shared_curve_are_charged_for_every_occurrence() {
+        // One curve of 100k empty subpaths, placed 100 times: no records and no points, but
+        // ten million subpaths walked unless each one is charged.
+        let mut data = vec![F::U8(0), F::U32(100_000)];
+        for _ in 0..100_000 {
+            data.extend([F::Bool(false), F::Records(18, Vec::new())]);
+        }
+        let curve = F::Def(5, vec![tag(b"PCrv")], vec![(tag(b"Crvs"), F::Obj(tag(b"PCvD"), vec![(tag(b"Data"), F::Pos(data))]))]);
+        let group = F::Def(6, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..100).map(|_| F::Ref(5)).collect()))]);
+        let d = read(vec![curve, group], 6);
+        assert!(d.warnings.iter().any(|w| w.contains("curve geometry budget exhausted")), "{:?}", d.warnings);
+    }
+
     fn path(document: &Document) -> &Path {
         match &document.spreads[0].nodes[0].kind {
             Kind::Shape { path, .. } => path,
@@ -444,6 +494,61 @@ mod shapes {
         assert_eq!(t.align, crate::model::Align::Left);
         assert_eq!(t.anchor, Point { x: 0.0, y: 0.0 });
         assert!(t.frame.is_none());
+    }
+
+    #[test]
+    fn a_shared_story_placed_many_times_is_charged_against_the_text_budget() {
+        // One ~1 MiB story referenced 100 times would retain ~100 MiB of text without a budget.
+        let glyphs = F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("a".repeat((1 << 20) - 1)))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(1 << 20)), (tag(b"Item"), run)]]))]);
+        let block = vec![(tag(b"Glyp"), glyphs), (tag(b"GAtt"), attributes)];
+        let text = F::Def(
+            100,
+            vec![tag(b"TxtA")],
+            vec![
+                (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))])),
+                (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![block]))])),
+            ],
+        );
+        let group = F::Def(101, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..100).map(|_| F::Ref(100)).collect()))]);
+        let d = read(vec![text, group], 101);
+        assert!(d.warnings.iter().any(|w| w.contains("document text budget")), "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn text_past_the_character_limit_is_not_charged_so_a_later_text_node_survives() {
+        // 64 references to one segment of 1 MiB + 1 characters: only the first is scanned (the
+        // block is cut at the character limit), so only that scan is charged to the text budget.
+        let frame = || (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))]));
+        let segment = F::Def(200, vec![tag(b"Segm")], vec![(tag(b"Utf8"), F::Str("a".repeat((1 << 20) + 1)))]);
+        let mut refs = vec![segment];
+        refs.extend((0..63).map(|_| F::Ref(200)));
+        let big_block = vec![(tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Mixd"), F::Shared(refs))]))];
+        let big =
+            F::Def(100, vec![tag(b"TxtA")], vec![frame(), (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![big_block]))]))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(2)), (tag(b"Item"), run)]]))]);
+        let small_block = vec![(tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("ok".into()))])), (tag(b"GAtt"), attributes)];
+        let small = F::Def(
+            101,
+            vec![tag(b"TxtA")],
+            vec![frame(), (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![small_block]))]))],
+        );
+        let group = F::Def(102, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared(vec![F::Ref(100), F::Ref(101)]))]);
+        let d = read(vec![big, small, group], 102);
+        assert!(!d.warnings.iter().any(|w| w.contains("document text budget")), "{:?}", d.warnings);
+        fn collect(nodes: &[crate::model::Node], out: &mut Vec<String>) {
+            for n in nodes {
+                if let Kind::Text(t) = &n.kind {
+                    out.push(t.runs.iter().map(|r| r.text.as_str()).collect());
+                }
+                collect(&n.children, out);
+            }
+        }
+        let mut texts = Vec::new();
+        collect(&d.spreads[0].nodes, &mut texts);
+        assert!(texts.iter().any(|t| t == "ok"), "{texts:?}");
     }
 
     #[test]
@@ -755,5 +860,242 @@ mod spot_colours {
         let doc = read(vec![filled(10, spots(100, 5))]);
         assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
         assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
+    }
+}
+
+/// The raster fast paths against the code they replaced.
+mod raster_identity {
+    use crate::raster::{copy, interleave};
+
+    /// Deterministic filler (xorshift).
+    fn bytes(n: usize, mut x: u64) -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The per-pixel `f64` conversion `decode` used before the tables.
+    fn reference(planes: &[Vec<u8>], channels: usize, bps: usize, n: usize) -> Vec<u8> {
+        let sample = |p: &Vec<u8>, i: usize| -> f64 {
+            if bps == 2 {
+                f64::from(u16::from_le_bytes([p.get(2 * i).copied().unwrap_or(0), p.get(2 * i + 1).copied().unwrap_or(0)])) / 65535.0
+            } else {
+                f64::from(p.get(i).copied().unwrap_or(0)) / 255.0
+            }
+        };
+        let mut rgba = vec![0u8; n * 4];
+        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let v: Vec<f64> = planes.iter().map(|p| sample(p, i)).collect();
+            let (r, g, b, a) = if channels == 1 {
+                (v[0], v[0], v[0], 1.0)
+            } else if channels == 5 {
+                let k = 1.0 - v[3];
+                ((1.0 - v[0]) * k, (1.0 - v[1]) * k, (1.0 - v[2]) * k, v[4])
+            } else {
+                (v[0], v[1], v[2], v[3])
+            };
+            px.copy_from_slice(&[r, g, b, a].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+        }
+        rgba
+    }
+
+    #[test]
+    fn eight_bit_samples_round_trip() {
+        // Every byte through every position of the 4-channel and the grey path.
+        let ramp: Vec<u8> = (0..=255).collect();
+        let planes = vec![ramp.clone(), ramp.iter().rev().copied().collect(), ramp.clone(), ramp.iter().rev().copied().collect()];
+        assert_eq!(interleave(&planes, 4, 1, 256), reference(&planes, 4, 1, 256));
+        assert_eq!(interleave(&planes[..1], 1, 1, 256), reference(&planes[..1], 1, 1, 256));
+    }
+
+    #[test]
+    fn sixteen_bit_samples_are_exhaustive() {
+        // All 65536 values in each channel position (rotated so the channels differ).
+        let all: Vec<u8> = (0..=u16::MAX).flat_map(u16::to_le_bytes).collect();
+        let rot = |k: usize| -> Vec<u8> { (0..=u16::MAX).flat_map(|v| v.wrapping_add((k * 4099) as u16).to_le_bytes()).collect() };
+        let planes = vec![all, rot(1), rot(2), rot(3)];
+        assert_eq!(interleave(&planes, 4, 2, 65536), reference(&planes, 4, 2, 65536));
+        assert_eq!(interleave(&planes[..1], 1, 2, 65536), reference(&planes[..1], 1, 2, 65536));
+    }
+
+    #[test]
+    fn cmyk_is_exhaustive_over_colour_and_black() {
+        // Every (c, k) pair in each of the c, m and y positions; alpha is arbitrary.
+        let n = 256 * 256;
+        let k: Vec<u8> = (0..n).map(|i| (i >> 8) as u8).collect();
+        let c: Vec<u8> = (0..n).map(|i| i as u8).collect();
+        let m: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(7).wrapping_add(3)).collect();
+        let y: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(13).wrapping_add(250)).collect();
+        let planes = vec![c, m, y, k, bytes(n, 9)];
+        assert_eq!(interleave(&planes, 5, 1, n), reference(&planes, 5, 1, n));
+    }
+
+    #[test]
+    fn random_planes_match_for_every_format() {
+        for (channels, bps) in [(1, 1), (1, 2), (4, 1), (4, 2), (5, 1)] {
+            let n = 5000;
+            let planes: Vec<Vec<u8>> = (0..channels).map(|c| bytes(n * bps, 1 + c as u64)).collect();
+            assert_eq!(interleave(&planes, channels, bps, n), reference(&planes, channels, bps, n), "{channels}x{bps}");
+        }
+    }
+
+    /// The per-byte closure copy `plane` used before the row copies.
+    fn copy_reference(
+        out: &mut [u8],
+        row: usize,
+        (bx0, py0, bx1, py1): (usize, usize, usize, usize),
+        (ox, oy): (usize, usize),
+        at: impl Fn(usize, usize) -> u8,
+    ) {
+        for y in oy.max(py0)..(oy + 256).min(py1) {
+            for x in ox.max(bx0)..(ox + 256).min(bx1) {
+                if let Some(b) = out.get_mut((y - py0) * row + (x - bx0)) {
+                    *b = at(x - ox, y - oy);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tile_copy_matches_the_byte_loop_for_every_crop() {
+        let tile = bytes(256 * 256, 77);
+        // Crops that cut the tile on each side, sit inside it, and miss it.
+        for &(bx0, bx1, py0, py1) in
+            &[(0, 600, 0, 600), (10, 300, 20, 200), (100, 150, 100, 130), (256, 512, 0, 256), (0, 256, 300, 400), (255, 257, 255, 257), (300, 301, 0, 1)]
+        {
+            for &(ox, oy) in &[(0, 0), (256, 0), (0, 256), (256, 256), (512, 256)] {
+                let row = bx1 - bx0;
+                let mut old = vec![0xAAu8; row * (py1 - py0)];
+                let mut new = old.clone();
+                copy_reference(&mut old, row, (bx0, py0, bx1, py1), (ox, oy), |x, y| tile[y * 256 + x]);
+                copy(&mut new, row, (bx0, py0, bx1, py1), (ox, oy), Some(&tile), 0);
+                assert_eq!(old, new, "tile {ox},{oy} crop {bx0}..{bx1} x {py0}..{py1}");
+                copy_reference(&mut old, row, (bx0, py0, bx1, py1), (ox, oy), |_, _| 0xFF);
+                copy(&mut new, row, (bx0, py0, bx1, py1), (ox, oy), None, 0xFF);
+                assert_eq!(old, new, "fill {ox},{oy} crop {bx0}..{bx1} x {py0}..{py1}");
+            }
+        }
+    }
+}
+
+/// `Archive::read_many` against the same reads made one at a time.
+mod read_many {
+    use crate::synth::{self, Method};
+    use crate::{Archive, Error, Limits};
+
+    fn entry(i: usize) -> Vec<u8> {
+        (0..4096 + i * 37).map(|b| (b * 31 + i * 7) as u8).collect()
+    }
+
+    fn archive(count: usize, method: Method) -> Vec<u8> {
+        let datas: Vec<Vec<u8>> = (0..count).map(entry).collect();
+        let names: Vec<String> = (0..count).map(|i| format!("d/{i}")).collect();
+        let entries: Vec<(&str, &[u8], Method)> = names.iter().zip(&datas).map(|(n, d)| (n.as_str(), d.as_slice(), method)).collect();
+        synth::container(&entries, None)
+    }
+
+    #[test]
+    fn matches_serial_reads_and_charges_the_same() {
+        for method in [Method::Stored, Method::Zlib, Method::Zstd] {
+            for count in [1, 3, 4, 5, 40] {
+                let file = archive(count, method);
+                let names: Vec<String> = (0..count).map(|i| format!("d/{i}")).collect();
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let mut one = Archive::open(&file, Limits::default()).unwrap();
+                let serial: Vec<Vec<u8>> = names.iter().map(|n| one.read(n).unwrap()).collect();
+                let mut many = Archive::open(&file, Limits::default()).unwrap();
+                assert_eq!(many.read_many(&names).unwrap(), serial);
+                assert_eq!(many.extracted(), one.extracted());
+                assert_eq!(serial[count - 1], entry(count - 1));
+            }
+        }
+    }
+
+    #[test]
+    fn the_limit_stops_at_the_same_entry_as_serial_reads() {
+        let file = archive(12, Method::Zstd);
+        let names: Vec<String> = (0..12).map(|i| format!("d/{i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let limits = Limits { max_total: (0..7).map(|i| entry(i).len()).sum(), ..Limits::default() };
+        let mut one = Archive::open(&file, limits).unwrap();
+        let failed = names.iter().position(|n| one.read(n).is_err()).unwrap();
+        assert_eq!(failed, 7);
+        let mut many = Archive::open(&file, limits).unwrap();
+        assert!(matches!(many.read_many(&names), Err(Error::Limit(_))));
+        assert_eq!(many.extracted(), one.extracted());
+    }
+
+    #[test]
+    fn the_first_failing_entry_in_order_is_reported() {
+        let mut file = archive(12, Method::Stored);
+        // Flip a data byte of entry 2 (checksum failure); entry 9 is missing from the list.
+        let at = file.windows(4).position(|w| w == b"#Fil").unwrap();
+        let second = at + 4 + entry(0).len();
+        let third = second + 4 + entry(1).len();
+        file[third + 4 + 10] ^= 0xFF;
+        let names: Vec<String> = (0..12).map(|i| if i == 9 { "gone".to_string() } else { format!("d/{i}") }).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut a = Archive::open(&file, Limits::default()).unwrap();
+        assert_eq!(a.read_many(&names).unwrap_err(), Error::Malformed("archive entry checksum mismatch"));
+        // Without the corrupt entry the missing one is what fails.
+        let intact = archive(12, Method::Stored);
+        let mut a = Archive::open(&intact, Limits::default()).unwrap();
+        assert_eq!(a.read_many(&names).unwrap_err(), Error::Malformed("missing archive entry"));
+    }
+}
+
+/// Object lookup and record arrays against the structures they replaced.
+mod stream_storage {
+    use crate::stream::{self, Kind, Object, Tag, Value};
+    use crate::synth::{self, F, tag};
+
+    /// The per-object map `Object::get` used before: first occurrence of each real tag.
+    fn reference(fields: &[(Tag, Value)], t: Tag) -> Option<&Value> {
+        let mut index = std::collections::HashMap::new();
+        for (i, (ft, _)) in fields.iter().enumerate() {
+            if ft.0 != 0 {
+                index.entry(*ft).or_insert(i);
+            }
+        }
+        index.get(&t).map(|&i| &fields[i].1)
+    }
+
+    #[test]
+    fn lookup_keeps_first_match_for_every_object_size() {
+        for n in 0..60u32 {
+            // Tags repeat (n % 7 distinct tags) and every fifth field is positional (tag 0).
+            let fields: Vec<(Tag, Value)> = (0..n).map(|i| (if i % 5 == 0 { Tag(0) } else { Tag(100 + i % 7) }, Value::UInt(u64::from(i)))).collect();
+            let object = Object::new(Tag(1), Kind::Inline, vec![Tag(1)], fields.clone());
+            for t in 0..120 {
+                assert_eq!(object.get(Tag(t)), reference(&fields, Tag(t)), "{n} fields, tag {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn last_lookup_keeps_last_match_for_every_object_size() {
+        for n in 0..60u32 {
+            let fields: Vec<(Tag, Value)> = (0..n).map(|i| (if i % 5 == 0 { Tag(0) } else { Tag(100 + i % 7) }, Value::UInt(u64::from(i)))).collect();
+            let object = Object::new(Tag(1), Kind::Inline, vec![Tag(1)], fields.clone());
+            for t in 0..120 {
+                let expected = if t == 0 { None } else { fields.iter().rev().find(|(k, _)| *k == Tag(t)).map(|(_, v)| v) };
+                assert_eq!(object.get_last(Tag(t)), expected, "{n} fields, tag {t}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_fixed_size_array_is_one_buffer_and_one_value_per_record() {
+        let records: Vec<u8> = (0..18 * 5).map(|i| i as u8).collect();
+        let bytes = synth::stream(&[(tag(b"Nods"), F::Records(18, records.chunks(18).map(<[u8]>::to_vec).collect()))]);
+        let s = stream::parse(&bytes).unwrap();
+        let root = s.object(s.root).unwrap();
+        assert_eq!(root.get(Tag::of(b"Nods")), Some(&Value::Records { size: 18, data: records }));
+        assert_eq!(root.get(Tag::of(b"Nods")).and_then(Value::array_len), Some(5));
     }
 }

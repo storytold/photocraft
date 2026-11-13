@@ -28,25 +28,50 @@ fn autosave_then_recover() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A recovered document opened from a multi-frame GIF comes back at its original path with its
+/// frame count, so File › Save still goes through Save As rather than writing one frame over
+/// the animation (#5733).
+#[test]
+fn recovery_keeps_the_source_image_count() {
+    let dir = temp_dir("recovery-source-images");
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    doc.file_encoding.source_images = Some(4);
+    let saver = Autosaver::new(&dir, "gif-1");
+    saver.request(Arc::new(doc), 1, Some("/work/anim.gif".into()), SaveOptions::default());
+    saver.flush().expect("a save ran").unwrap();
+    let entries = list_recovery(&dir);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].info.original_path.as_deref(), Some("/work/anim.gif"));
+    assert_eq!(recover(&entries[0]).unwrap().file_encoding.source_images, Some(4));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A queued snapshot can fail later; callers must observe and retry that revision.
 #[test]
 fn background_save_outcomes_report_failure_then_recovery() {
     let root = temp_dir("retry-failed-write");
     let blocked = root.join("recovery");
     std::fs::write(&blocked, b"not a directory").unwrap();
-    let saver = Autosaver::new(&blocked, "doc");
+    // Not dropped on a failure: dropping joins the worker, which waits for a write in progress,
+    // so a stuck write would hold the test past its own bound until nextest kills it.
+    let saver = std::mem::ManuallyDrop::new(Autosaver::new(&blocked, "doc"));
     let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
     saver.request_checked(doc.clone(), 7, None, SaveOptions::default()).unwrap();
 
+    // The bound only turns a worker that never reports into a failure instead of a hang. A real
+    // write flushes every tile to disk and took over 30 s on a busy Windows CI runner (normally
+    // 2-3 s), so it is generous, and still under the 10 minutes after which nextest's `ci`
+    // profile kills a test.
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
     let receive = |saver: &Autosaver| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + PATIENCE;
         while std::time::Instant::now() < deadline {
             if let Some(outcome) = saver.take_completed().into_iter().next() {
                 return outcome;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("autosave worker did not report its completed write within 30 seconds");
+        panic!("autosave worker did not report its completed write within {PATIENCE:?}");
     };
     let (revision, result) = receive(&saver);
     assert_eq!(revision, 7);
@@ -60,7 +85,7 @@ fn background_save_outcomes_report_failure_then_recovery() {
     result.unwrap();
     assert_eq!(list_recovery(&blocked).len(), 1);
     assert_eq!(recover(&list_recovery(&blocked)[0]).unwrap(), *doc);
-    drop(saver);
+    drop(std::mem::ManuallyDrop::into_inner(saver));
     std::fs::remove_dir_all(root).unwrap();
 }
 

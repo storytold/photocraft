@@ -86,11 +86,13 @@ pub type DialogEdits = HashMap<u64, EditHistory<Map<String, Value>>>;
 /// Once a frame: records each open parameter dialog's settings and forgets closed dialogs.
 pub fn track_dialogs(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let busy = ctx.input(|i| i.pointer.any_down());
+    // A colour an open Color Picker only shows in a dialog is no step of it until the picker's OK.
+    let previewed = crate::color_picker_ui::live_preview::previewed_dialogs(app);
     let dialogs = &app.ui.dialogs;
     app.dialog_edits.retain(|id, _| dialogs.iter().any(|d| d.id == *id));
     for d in dialogs.iter().filter(|d| d.kind == DialogKind::Command) {
         let now = settings(&d.fields);
-        app.dialog_edits.entry(d.id).or_insert_with(|| EditHistory::new(&now)).settle(&now, busy);
+        app.dialog_edits.entry(d.id).or_insert_with(|| EditHistory::new(&now)).settle(&now, busy || previewed.contains(&d.id));
     }
 }
 
@@ -101,17 +103,30 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     if let Some(top) = app.ui.dialogs.last() {
-        if top.kind != DialogKind::Command {
+        // A shortcut field waiting for keys (Keyboard Shortcuts) records ⌘Z like any other key
+        // (#9487); stepping back here undid the click that started the capture.
+        if top.kind != DialogKind::Command || crate::prefs_ui::capturing_shortcut(app) {
             return;
         }
         let id = top.id;
         let mut now = settings(&top.fields);
+        let history = app.dialog_edits.entry(id).or_insert_with(|| EditHistory::new(&now));
         if let Some(step) = take_step(ctx)
-            && app.dialog_edits.entry(id).or_insert_with(|| EditHistory::new(&now)).step(&mut now, step)
-            && let Some(d) = app.ui.dialog_mut(id)
+            && history.step(&mut now, step)
         {
-            d.fields.retain(|k, _| k.starts_with("__"));
-            d.fields.extend(now);
+            // A step back to before a recorded shortcut doesn't wait for keys again (and, like
+            // the dialog itself, keeps no capture modifiers then). That isn't an edit of its own:
+            // the step's settled settings say so too, or the next frame would record it and
+            // lose Redo.
+            if let Some(c) = now.get_mut("capture") {
+                *c = Value::Bool(false);
+                now.remove("captureMods");
+                history.settled = now.clone();
+            }
+            if let Some(d) = app.ui.dialog_mut(id) {
+                d.fields.retain(|k, _| k.starts_with("__"));
+                d.fields.extend(now);
+            }
         }
     } else if let Some(d) = app.distort.gallery.as_mut() {
         if let Some(step) = take_step(ctx) {

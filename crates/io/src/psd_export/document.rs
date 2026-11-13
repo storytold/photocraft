@@ -10,8 +10,15 @@ use super::{
 };
 
 /// Converts a document to a PSD file model (see [`document_to_psd_with`]).
-pub fn document_to_psd(doc: &Document) -> PsdFile {
-    document_to_psd_with(doc, &PsdExportOptions::default()).0
+/// Pattern export failures return an error because this API cannot report omissions as warnings.
+/// Other representation warnings retain the convenience API's existing policy of being omitted.
+pub fn document_to_psd(doc: &Document) -> Result<PsdFile, crate::IoError> {
+    document_to_psd_with_pattern_limit(doc, photocraft_doc::pattern::MAX_WORKING_BYTES)
+}
+
+fn document_to_psd_with_pattern_limit(doc: &Document, limit: u64) -> Result<PsdFile, crate::IoError> {
+    let patterns = crate::pattern_map::export_global_blocks_with_limit(doc, limit).map_err(crate::IoError::Unsupported)?;
+    Ok(document_to_psd_sized_with_patterns(doc, &PsdExportOptions::default(), 0, &Interrupt::NONE, PSD_MAX_FILE_SIZE, Some(&patterns)).0)
 }
 
 /// Converts a document to a PSD/PSB file model, returning warnings about
@@ -35,15 +42,26 @@ pub(super) fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, de
 
 /// Export with a caller-selected PSD size limit; the test suite lowers it to exercise promotion.
 pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, depth: u32, ctl: &Interrupt, size_limit: u64) -> (PsdFile, Vec<String>) {
+    document_to_psd_sized_with_patterns(doc, opts, depth, ctl, size_limit, None)
+}
+
+fn document_to_psd_sized_with_patterns(
+    doc: &Document,
+    opts: &PsdExportOptions,
+    depth: u32,
+    ctl: &Interrupt,
+    size_limit: u64,
+    patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
+) -> (PsdFile, Vec<String>) {
     let layerless_limit = opts.size_limit_psb.then_some(size_limit);
     if doc.mode == ColorMode::Multichannel {
-        return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit);
+        return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns);
     }
-    if let Some(file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit) {
+    if let Some(file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit, patterns) {
         return file;
     }
     let fmt = doc.pixel_format();
-    export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
+    export_supported_document(doc, opts, depth, ctl, fmt, size_limit, patterns)
 }
 
 fn export_supported_document(
@@ -53,6 +71,7 @@ fn export_supported_document(
     ctl: &Interrupt,
     fmt: PixelFormat,
     size_limit: u64,
+    patterns: Option<&[photocraft_doc::PsdGlobalBlock]>,
 ) -> (PsdFile, Vec<String>) {
     // A Duotone is written over its grey plate with its inks: the block it was imported with,
     // verbatim, while the inks are unedited, else one made from them (`duotone_map`). Photoshop
@@ -67,6 +86,7 @@ fn export_supported_document(
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;
     let version = psd_version(doc, opts.force_psb);
     let mut ex = Ex {
+        ctl: *ctl,
         fmt,
         dpi: doc.resolution_dpi,
         document: opts.document_path.clone(),
@@ -88,6 +108,10 @@ fn export_supported_document(
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),
         background: psd_background(doc),
+        stage: {
+            let raw = doc.size.area().saturating_mul(fmt.bytes_per_pixel() as u64).saturating_mul(doc.walk().len() as u64 + 1);
+            super::stage::Stage::for_document(raw, opts.stage_on_scratch_from)
+        },
     };
     add_format_warnings(doc, opts, fmt, big, duotone_inks.is_some(), &mut ex.warnings);
     index_layer_ids_and_text(doc, &mut ex);
@@ -103,7 +127,6 @@ fn export_supported_document(
     };
     let space = photocraft_compose::cmyk_space(doc);
     photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers, &mut tick));
-    drop(tick);
     ctl.progress(layers_share);
 
     let merged = prepare_merged_planes(doc, &mut ex, opts, ctl, fmt, duotone_inks.is_some(), layers_share);
@@ -152,7 +175,10 @@ fn export_supported_document(
         resources.push(ImageResource::new(ids::EXIF, photocraft_codecs::export_exif(e, ppi).into_owned()));
     }
     let mut global_blocks = Vec::new();
-    let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc)));
+    // The warning-free entry point has already encoded every pattern successfully.
+    // Reuse those blocks rather than allocating and converting the library a second time.
+    let patterns = patterns.map_or_else(|| crate::pattern_map::export_global_blocks_with_warnings(doc, &mut ex.warnings), <[_]>::to_vec);
+    let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, patterns));
     // The type layers' `Txt2` is regenerated (the auto-kern modes live there, and a preserved
     // block goes stale as text is edited): one object per `TextIndex`, at the slot each layer's
     // `TySh` names (unused slots stay empty; see `photocraft_text::psd::build_txt2`). The block
@@ -167,14 +193,17 @@ fn export_supported_document(
         })
         .collect();
     let previous = (!text_layers.is_empty()).then(|| preserved.iter().find(|(_, key, _)| key == b"Txt2").map(|(_, _, data)| data.to_vec())).flatten();
-    // A fresh document of ordinary (Metrics) text has nothing to put in `Txt2`, and Photoshop never
-    // writes its empty `<< /0 << >> >>` stub — readers such as Photopea reject it (#3514). Keep the
-    // block when the file had one (round-trip its pen positions/extras) or a layer is Optical (the
-    // one mode EngineData can't carry; #1348).
+    // A fresh document of ordinary (Metrics) text with no Txt2-only OpenType settings has nothing
+    // to put in `Txt2`, and Photoshop never writes its empty `<< /0 << >> >>` stub — readers such
+    // as Photopea reject it (#3514). Keep the block when the file had one (round-trip its pen
+    // positions/extras), a layer is Optical (#1348), or a layer carries stylistic sets / other
+    // Txt2-only features (#10308).
     let txt2 = (previous.is_some() || photocraft_text::psd::needs_txt2(&text_layers))
         .then(|| photocraft_text::psd::build_txt2_at(&text_layers, previous.as_deref(), ex.dpi));
     for (sig, key, data) in preserved {
-        if txt2.is_some() && key == *b"Txt2" {
+        // With no type layers left the opened file's `Txt2` describes text that is gone (fonts and
+        // layout caches, often most of the file): Photoshop drops it, and so does the save (#9563).
+        if key == *b"Txt2" && (txt2.is_some() || text_layers.is_empty()) {
             continue;
         }
         // A kept layer block (one the import could not read, #2700) describes layers the
@@ -227,6 +256,7 @@ fn export_supported_document(
     if let Some(data) = crate::annotations_map::fresh_scale_resource(doc) {
         resources.push(ImageResource::new(crate::annotations_map::MEASUREMENT_SCALE, data));
     }
+    resources.extend(crate::annotations_map::fresh_count_resource(doc, &mut ex.warnings));
     if let Some(Some(data)) = comps_resource {
         resources.push(ImageResource::new(crate::comps_map::LAYER_COMPS, data));
     }
@@ -262,7 +292,7 @@ fn export_supported_document(
     // open a 32-bit file without them (#291).
     let color_mode_data = match duotone_inks {
         Some(raw) => raw,
-        None => photocraft_psd::hdr::color_mode_data_for_depth(header.depth),
+        None => craft_psd::hdr::color_mode_data_for_depth(header.depth),
     };
     let mut file = PsdFile {
         header,
@@ -305,7 +335,7 @@ struct MergedExport<'a> {
 
 fn prepare_merged_planes<'a>(
     doc: &'a Document,
-    ex: &mut Ex,
+    ex: &mut Ex<'_>,
     opts: &PsdExportOptions,
     ctl: &Interrupt,
     fmt: PixelFormat,
@@ -329,13 +359,17 @@ fn prepare_merged_planes<'a>(
         data: planes,
         stored: None,
     });
+    let image_data = match &ex.stage {
+        Some(stage) => stage.image(image_data),
+        None => image_data,
+    };
     ctl.progress(1.0);
     MergedExport { header, image_data, extra, has_alpha, quick_mask_id, real_merged }
 }
 
 fn append_extra_channels<'a>(
     doc: &'a Document,
-    ex: &mut Ex,
+    ex: &mut Ex<'_>,
     planes: &mut Vec<u8>,
     has_alpha: bool,
     sample: SampleType,
@@ -385,7 +419,7 @@ fn merged_image(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt, fmt: &
     (planes, has_alpha)
 }
 
-fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex) {
+fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
     // Assign layer ids up front (stable across round trips): keep unique
     // `psd_id`s, number the rest after them; dividers come after all.
     {
@@ -458,4 +492,43 @@ pub(super) fn mask_parameters(user: Option<(f32, f32)>, vector: Option<(f32, f32
         | u8::from(p.vector_density.is_some()) << 2
         | u8::from(p.vector_feather.is_some()) << 3;
     (flags != 0).then_some(MaskParameters { flags, ..p })
+}
+
+#[cfg(test)]
+mod pattern_failure_tests {
+    use super::*;
+    use photocraft_doc::Pattern;
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+    use std::sync::Arc;
+
+    #[test]
+    fn warning_free_export_refuses_shared_pattern_budget_loss_in_every_export_path() {
+        // Each tiny pattern takes 16 dense bytes. The second fits by itself but cannot
+        // share a 16-byte file allowance with the first: no huge allocation is needed.
+        for mode in [ColorMode::Rgb, ColorMode::Multichannel, ColorMode::Bitmap] {
+            let mut doc = Document::new("Pattern admission", Size::new(1, 1), mode, SampleType::U8);
+            for name in ["Retained first", "Refused second"] {
+                let mut surface = Surface::new(PixelFormat::RGBA8);
+                surface.fill_rect(photocraft_geom::Rect::new(0, 0, 2, 2), &[0.25, 0.5, 0.75, 1.]);
+                doc.patterns.push(Pattern { id: name.into(), name: name.into(), width: 2, height: 2, surface });
+            }
+            let before = doc.clone();
+            let error = document_to_psd_with_pattern_limit(&doc, 16).unwrap_err();
+            assert!(matches!(error, crate::IoError::Unsupported(_)), "{mode:?}: {error}");
+            let error = error.to_string();
+            assert!(error.contains("Refused second") && error.contains("memory budget"), "{mode:?}: {error}");
+            assert_eq!(doc, before, "refusal must leave every native pattern intact");
+
+            let file = document_to_psd_with_pattern_limit(&doc, 32).unwrap();
+            let mut restored = doc.clone();
+            restored.metadata.psd_global_blocks = file.global_blocks.iter().map(|b| (b.signature, b.key, Arc::new(b.data.clone()))).collect();
+            assert_eq!(crate::pattern_map::from_global_blocks(&restored), doc.patterns, "{mode:?}: sufficient allowance keeps both patterns");
+
+            // The public warning-enabled API continues to return a complete model when
+            // these ordinary patterns fit the production allowance.
+            let (_, warnings) = document_to_psd_with(&doc, &PsdExportOptions::default());
+            assert!(!warnings.iter().any(|warning| warning.contains("omitted from PSD/PSB")), "{mode:?}: {warnings:?}");
+        }
+    }
 }

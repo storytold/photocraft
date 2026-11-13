@@ -26,9 +26,27 @@ fn stroke_backwards_compatible() {
     assert_eq!(r["damage"].as_array().unwrap().len(), 4);
     assert_eq!(rgba(&s, 30, 20), [0.0, 0.0, 1.0, 1.0]);
     assert_eq!(rgba(&s, 30, 30)[3], 0.0);
-    // [x, y, pressure] with the default pressure-size brush: light pressure → thinner line.
-    s.execute("paint.stroke", json!({"points": [[4, 5, 0.2], [60, 5, 0.2]], "size": 10})).unwrap();
+    // [x, y, pressure] with Pressure for Size on: light pressure → a thinner line. The default
+    // brush has it off since #11809, so this stroke asks for it.
+    s.execute("paint.stroke", json!({"points": [[4, 5, 0.2], [60, 5, 0.2]], "size": 10, "brush": {"pressureSize": true}})).unwrap();
     assert!(rgba(&s, 30, 5)[3] > 0.9 && rgba(&s, 30, 8)[3] < 0.01);
+}
+
+#[test]
+fn a_stroke_from_far_off_the_canvas_paints_only_what_reaches_it() {
+    // Dabs that cannot reach the canvas are not rasterized (their coverage is never read).
+    let mut s = session(80, 80);
+    let r = s
+        .execute(
+            "paint.stroke",
+            json!({"points": [[-100_000, 20], [70, 20], [70, 60]], "size": 6, "color": "#0000ff", "brush": {"hardness": 0.5, "smoothing": {"amount": 0.0}}}),
+        )
+        .unwrap();
+    assert!(rgba(&s, 40, 20)[3] > 0.9, "the part on the canvas is painted: {:?} {r}", rgba(&s, 40, 20));
+    assert!(rgba(&s, 70, 50)[3] > 0.9);
+    assert_eq!(rgba(&s, 40, 40)[3], 0.0);
+    let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
+    assert!(d[0] > -100, "the damage does not span the off-canvas path: {r}");
 }
 
 #[test]
@@ -209,6 +227,35 @@ fn pencil_is_aliased_and_auto_erases() {
     // Starting elsewhere: paints foreground.
     s.execute("paint.pencil", json!({"points": [[40, 25], [40, 28]], "size": 3, "autoErase": true})).unwrap();
     assert_eq!(rgba(&s, 40, 26), [0.0, 0.0, 0.0, 1.0]);
+}
+
+/// #13060: in a CMYK document a foreground picked as CMYK inks (a rich black, which its sRGB
+/// stand-in does not convert back to) is painted as those inks, and Pencil Auto Erase recognises
+/// them: a stroke that starts on it paints the background colour, live and committed.
+#[test]
+fn pencil_auto_erase_probes_a_cmyk_pick_with_the_picked_inks() {
+    let rich_black = [0.6f32, 0.4, 0.4, 1.0];
+    let rgb = photocraft_color::convert::cmyk_to_rgb(rich_black).map(|c| c.clamp(0.0, 1.0));
+    let mut s = session(40, 20);
+    s.execute("image.mode.cmyk", json!({})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": rgb, "foregroundCmyk": rich_black, "background": "#ffffff"})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[5, 10], [35, 10]], "size": 5})).unwrap();
+    let pixel = |s: &Session, x: i32, y: i32| -> Vec<f32> { surface(s).read_region(Rect::new(x, y, x + 1, y + 1)).into_iter().take(4).collect() };
+    let painted = pixel(&s, 20, 10);
+    assert!(painted.iter().zip(rich_black).all(|(a, b)| (a - b).abs() < 0.01), "the stroke paints the picked inks: {painted:?}");
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+
+    // Live: the stroke that starts on the rich black paints the background.
+    let p = json!({"points": [[12, 10]], "autoErase": true, "smoothing": 0.0});
+    let mut live = LiveStroke::begin_with(&s, "paint.pencil", &p).unwrap();
+    live.push(&[StrokePoint::new(12.0, 18.0, 1.0)]).unwrap();
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(12, 17);
+    assert!(shown.iter().zip(white).all(|(a, b)| (a - b).abs() < 1e-3), "live: {shown:?}");
+
+    // Committed: the same.
+    s.execute("paint.pencil", json!({"points": [[20, 10], [20, 18]], "size": 3, "autoErase": true})).unwrap();
+    let erased = rgba(&s, 20, 17);
+    assert!(erased.iter().zip(white).all(|(a, b)| (a - b).abs() < 1e-3), "committed: {erased:?}");
 }
 
 #[test]
@@ -467,7 +514,7 @@ fn every_size_change_scales_the_dual_tip_and_keeps_its_proportion() {
     s.execute("tools.setBrush", json!({"brush": {"size": 100, "dualBrush": {"enabled": true, "size": 20}}})).unwrap();
     let sizes = |s: &Session| (s.tools.brush.size, s.tools.brush.dual_brush.size);
     s.execute("tools.decreaseBrushSize", json!({})).unwrap();
-    assert_eq!(sizes(&s), (80.0, 16.0));
+    assert_eq!(sizes(&s), (90.0, 18.0));
     s.execute("tools.increaseBrushSize", json!({})).unwrap();
     assert_eq!(sizes(&s), (100.0, 20.0));
     // A coalesced drag (options bar slider, Alt+right-drag) is a run of size-only patches.
@@ -984,7 +1031,11 @@ fn mixer_brush_uses_the_brush_mixer_settings() {
     let mut s = session(200, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     // No wet/load params: the brush's Mixer settings (a dry brush with 0 % Load) apply.
-    s.execute("tools.setBrush", json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}}})).unwrap();
+    s.execute(
+        "tools.setBrush",
+        json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}, "smoothing": {"catchUpOnEnd": true}}}),
+    )
+    .unwrap();
     s.execute("paint.mixerBrush", json!({"points": [[5, 15], [195, 15]], "size": 8})).unwrap();
     assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "the brush's 0 % Load dries out");
     // A param still overrides the brush.
@@ -1152,12 +1203,15 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     assert!(s.execute("tools.setBrush", json!({ "brush": scatter(1e38) })).is_err());
     assert!(s.execute("paint.stroke", stroke.clone()).is_ok());
     // The maximum (1000 %) is accepted and paints a finite, well-formed dab.
-    for patch in [scatter(10.0), dual(10.0)] {
+    for (patch, primary_on_canvas) in [(scatter(10.0), false), (dual(10.0), true)] {
         let mut s = new();
         s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
         let r = s.execute("paint.stroke", stroke.clone()).unwrap();
         let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
-        assert!(d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0, "{r}");
+        // A dab scattered clear of the canvas is not rasterized, so its damage is empty. The dual
+        // brush scatters only its own tip: the primary dab stays on the canvas and always paints.
+        let off_canvas = !primary_on_canvas && d[2] == 0 && d[3] == 0;
+        assert!(off_canvas || (d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0), "{r}");
     }
     // Control: 200 % scatter paints where it did before the cap (the soft default tip reaches a
     // little past its radius).
@@ -1379,6 +1433,22 @@ fn restored_brush_settings_are_clamped_or_rejected() {
     }
 }
 
+/// #11812: a brush remembered at 0 % opacity (saved before the 1 % floor) reads back at 1 %, the
+/// value its options-bar field shows, so it paints instead of laying down nothing.
+#[test]
+fn restored_brush_opacity_floors_at_one_percent() {
+    let s = Session::new();
+    for opacity in [0.0, -1.0, 0.004] {
+        let b = restored_settings(&s, &json!({"opacity": opacity})).unwrap();
+        assert_eq!(b.opacity, 0.01, "{opacity}");
+    }
+    assert_eq!(restored_settings(&s, &json!({"opacity": 0.37})).unwrap().opacity, 0.37, "values above the floor are kept");
+    let mut t = Session::new();
+    t.prefs.edit(|p| p.last_brush = json!({"brush": {"opacity": 0.0}}));
+    restore_brush(&mut t);
+    assert_eq!(t.tools.brush.opacity, 0.01, "the remembered session brush");
+}
+
 #[test]
 fn remembered_brushes_never_embed_large_bitmaps() {
     use std::sync::Arc;
@@ -1407,6 +1477,23 @@ fn clear_mode_erases_with_the_brush_or_pencil() {
     }
 }
 
+#[test]
+fn behind_brush_and_pencil_preserve_foreground_and_round_trip_history() {
+    for cmd in ["paint.stroke", "paint.pencil"] {
+        let mut s = session(40, 20);
+        s.execute(cmd, json!({"points": [[10, 10]], "size": 6, "color": "#ff0000", "hardness": 1.0})).unwrap();
+        let before = surface(&s);
+        s.execute(cmd, json!({"points": [[2, 10], [38, 10]], "size": 6, "color": "#0000ff", "mode": "behind", "hardness": 1.0})).unwrap();
+        assert_eq!(rgba(&s, 10, 10), [1.0, 0.0, 0.0, 1.0], "{cmd}: existing opaque paint");
+        assert_eq!(rgba(&s, 25, 10), [0.0, 0.0, 1.0, 1.0], "{cmd}: transparent pixels");
+        let painted = surface(&s);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(same_pixels(&surface(&s), &before, Rect::new(0, 0, 40, 20)));
+        s.execute("edit.redo", json!({})).unwrap();
+        assert!(same_pixels(&surface(&s), &painted, Rect::new(0, 0, 40, 20)));
+    }
+}
+
 /// #4344: a foreground picked as CMYK 100/0/0/0 is painted into a CMYK document as those inks by
 /// the Brush and the Pencil, not as whatever its sRGB stand-in converts back to (100/28/0/17).
 #[test]
@@ -1423,4 +1510,37 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         let got: Vec<f32> = surf.read_region(Rect::new(8, 8, 9, 9)).into_iter().take(4).collect();
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
+}
+
+#[test]
+fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
+    let mut s = session(80, 40);
+    s.execute("paint.stroke", json!({"points": [[4, 20], [60, 20]], "size": 6, "color": "#0000ff"})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
+    // Over transparency nothing is loaded.
+    let r = s.execute("paint.mixerLoad", json!({"x": 30, "y": 5})).unwrap();
+    assert_eq!(r["loaded"], json!(false));
+    assert!(s.tools.mixer.reservoir.is_none());
+    // On the blue stroke the reservoir takes its colour; the foreground stays red.
+    let r = s.execute("paint.mixerLoad", json!({"x": 30, "y": 20})).unwrap();
+    assert_eq!(r["loaded"], json!(true));
+    assert_eq!(s.tools.mixer.reservoir, Some([0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(s.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
+    // The next dry stroke paints the sampled blue, not the foreground.
+    let brush = json!({"pressureSize": false, "spacing": 0.25});
+    let dry = |y: i32, size: u32| json!({"points": [[5, y], [40, y]], "size": size, "wet": 0, "load": 100, "mix": 0, "brush": brush});
+    s.execute("paint.mixerBrush", dry(30, 8)).unwrap();
+    assert_eq!(rgba(&s, 20, 30), [0.0, 0.0, 1.0, 1.0]);
+    // A new foreground colour takes the reservoir back.
+    s.execute("tools.setColors", json!({"foreground": "#00ff00"})).unwrap();
+    s.execute("paint.mixerBrush", dry(36, 4)).unwrap();
+    assert_eq!(rgba(&s, 20, 36), [0.0, 1.0, 0.0, 1.0]);
+    // Bad coordinates are an error, not a panic, and leave the reservoir, the foreground and the
+    // document untouched.
+    let (mixer, foreground) = (s.tools.mixer.clone(), s.tools.foreground);
+    let revision = s.active().unwrap().revision;
+    assert!(s.execute("paint.mixerLoad", json!({"x": "a", "y": 1})).is_err());
+    assert_eq!(s.tools.mixer, mixer);
+    assert_eq!(s.tools.foreground, foreground);
+    assert_eq!(s.active().unwrap().revision, revision);
 }

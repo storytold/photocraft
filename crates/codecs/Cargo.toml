@@ -13,10 +13,10 @@ default = []
 # AVIF *encode* via ravif (pure Rust). Decoding AVIF needs dav1d (C), so AVIF
 # stays read-unsupported and therefore asymmetric; it is off by default.
 avif = ["image/avif"]
-# HEIC/HEIF decode via the optional photocraft-heif crate (heic-rs, pure Rust). Off by default so
+# HEIC/HEIF decode via the optional craft-heif crate from craft-libs (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time; official builds and CI enable it (`--features heif` on the
 # apps). Without it HEIF files are still recognised and opening one is a clear "unsupported" error.
-heif = ["dep:photocraft-heif"]
+heif = ["dep:craft-heif"]
 
 [dependencies]
 thiserror.workspace = true
@@ -33,7 +33,14 @@ zune-core = "0.5"
 jpeg-encoder = "0.6"
 # 12-bit and arithmetic-coded JPEG, which zune-jpeg does not decode.
 craft-jpeg.workspace = true
-photocraft-heif = { path = "../heif", optional = true }
+craft-raster-codecs.workspace = true
+craft-dpx.workspace = true
+craft-tga.workspace = true
+craft-gif.workspace = true
+craft-exr.workspace = true
+# Pure-Rust modular JPEG XL lossless encoder.
+zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
+craft-heif = { workspace = true, optional = true }
 
 # Orientation is applied a band of rows per task on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -45,6 +52,12 @@ exr = { version = "1.73", default-features = false, features = ["rayon"] }
 proptest.workspace = true
 # Oracle decoders for cross-checking in tests only.
 image = { workspace = true, features = ["png", "jpeg", "tiff"] }
+# Lossless synthetic HEIC files for the `heif` feature's tests.
+craft-heif = { workspace = true, features = ["testdata"] }
+
+# Independent JPEG XL decoder oracle; not linked into the application.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"] }
 
 [lints]
 workspace = true
