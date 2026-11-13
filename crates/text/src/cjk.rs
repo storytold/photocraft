@@ -238,7 +238,35 @@ pub fn bplist_first_language(b: &[u8]) -> Option<String> {
 /// Family names (as the Type tool's font database knows them) per script, most preferred first.
 pub fn families(script: CjkScript) -> &'static [&'static str] {
     match script {
-        CjkScript::Japanese => &["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP", "IPAexGothic"],
+        CjkScript::Japanese => &[
+            "Hiragino Sans",
+            "Hiragino Kaku Gothic ProN",
+            "Hiragino Mincho ProN",
+            "Yu Gothic",
+            "Yu Mincho",
+            "Meiryo",
+            "MS Gothic",
+            "MS PGothic",
+            "MS UI Gothic",
+            "MS Mincho",
+            "MS PMincho",
+            "UD Digi Kyokasho N-R",
+            "UD Digi Kyokasho N-B",
+            "Noto Sans CJK JP",
+            "Noto Sans JP",
+            "Noto Serif CJK JP",
+            "Noto Serif JP",
+            "Source Han Sans",
+            "Source Han Serif",
+            "HG行書体",
+            "HGGyoshotai",
+            "HG正楷書体-PRO",
+            "HGSeikaishotaiPRO",
+            "IPAexGothic",
+            "IPAexMincho",
+            "IPAGothic",
+            "IPAMincho",
+        ],
         CjkScript::SimplifiedChinese => {
             &["PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Heiti SC"]
         }
@@ -419,7 +447,17 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
         let dir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
         let w = |file: &str, family: &'static str| FontFile { path: std::path::Path::new(&dir).join("Fonts").join(file), family: family.to_string() };
         match script {
-            Japanese => vec![w("YuGothR.ttc", "Yu Gothic"), w("YuGothM.ttc", "Yu Gothic"), w("meiryo.ttc", "Meiryo"), w("msgothic.ttc", "")],
+            Japanese => vec![
+                w("YuGothR.ttc", "Yu Gothic"),
+                w("YuGothM.ttc", "Yu Gothic"),
+                w("yumin.ttf", "Yu Mincho"),
+                w("meiryo.ttc", "Meiryo"),
+                w("msgothic.ttc", "MS Gothic"),
+                w("msmincho.ttc", "MS Mincho"),
+                w("UDDigiKyokashoN-R.ttc", "UD Digi Kyokasho N-R"),
+                w("NotoSansJP-VF.ttf", "Noto Sans JP"),
+                w("NotoSerifJP-VF.ttf", "Noto Serif JP"),
+            ],
             SimplifiedChinese => vec![w("msyh.ttc", "Microsoft YaHei"), w("msyh.ttf", ""), w("simsun.ttc", "")],
             TraditionalChinese => vec![w("msjh.ttc", "Microsoft JhengHei"), w("msjh.ttf", ""), w("mingliu.ttc", "")],
             Korean => vec![w("malgun.ttf", ""), w("gulim.ttc", "")],

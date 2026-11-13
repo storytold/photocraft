@@ -503,7 +503,30 @@ impl FontDb {
             let face = info.fonts().iter().min_by_key(|f| (!matches!(f.style(), FontStyle::Normal), (f.weight().value() - 400.0).abs() as u32))?.clone();
             let blob = face.load(Some(&mut self.fcx.source_cache))?;
             let font = skrifa::FontRef::from_index(blob.as_ref(), face.index()).ok()?;
-            Some(crate::font_class::traits_of(family, &font))
+            let mut t = crate::font_class::traits_of(family, &font);
+            if t.class.is_none() {
+                let names = |id| -> Vec<(String, Option<String>)> {
+                    font.localized_strings(id).map(|s| (s.chars().collect(), s.language().map(str::to_string))).collect()
+                };
+                // Typographic records first (the modern table), then the legacy family records, so
+                // a font that names itself only in the legacy table still classifies. Every
+                // candidate is tried in record order: the first name that carries a class marker
+                // wins, which keeps a Chinese `黑體` hint from overriding an earlier Japanese
+                // `明朝` one and lets a later `ポップ` name reach the handwritten filter.
+                let mut candidates = localized_candidates(family, &names(StringId::TYPOGRAPHIC_FAMILY_NAME));
+                for c in localized_candidates(family, &names(StringId::FAMILY_NAME)) {
+                    if !candidates.contains(&c) {
+                        candidates.push(c);
+                    }
+                }
+                for local in candidates {
+                    if let Some(cls) = crate::font_class::traits_of(&local, &font).class {
+                        t.class = Some(cls);
+                        break;
+                    }
+                }
+            }
+            Some(t)
         })();
         self.traits_cache.insert(family.to_string(), traits.clone());
         traits
@@ -1008,23 +1031,141 @@ pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     v
 }
 
-/// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
-/// picked by default.
-/// The localized family name among a font's `(name, language)` family-name records: the first
-/// one in a language other than English that differs from `english` (the name the font menus
-/// store). `None` when the font only names itself in English (most fonts).
-pub fn localized_name(english: &str, names: &[(String, Option<String>)]) -> Option<String> {
+/// Returns all candidate localized family names among a font's `(name, language)` family-name
+/// records. Candidates include all non-English tagged names in the font's own record order,
+/// followed by untagged non-ASCII names. The result is deduplicated and excludes the English
+/// family name itself as well as folded accented spellings of the English name. Returns an empty
+/// vector when the font only names itself in English.
+/// A Latin letter with a diacritic (`é`, `ü`, `ñ`, `ç`, `ß` …): an accented spelling of a Latin
+/// name, not another script.
+fn is_latin_accent(c: char) -> bool {
+    matches!(
+        c,
+        'à' | 'á'
+            | 'â'
+            | 'ã'
+            | 'ä'
+            | 'å'
+            | 'À'
+            | 'Á'
+            | 'Â'
+            | 'Ã'
+            | 'Ä'
+            | 'Å'
+            | 'è'
+            | 'é'
+            | 'ê'
+            | 'ë'
+            | 'È'
+            | 'É'
+            | 'Ê'
+            | 'Ë'
+            | 'ì'
+            | 'í'
+            | 'î'
+            | 'ï'
+            | 'Ì'
+            | 'Í'
+            | 'Î'
+            | 'Ï'
+            | 'ò'
+            | 'ó'
+            | 'ô'
+            | 'õ'
+            | 'ö'
+            | 'Ò'
+            | 'Ó'
+            | 'Ô'
+            | 'Õ'
+            | 'Ö'
+            | 'ù'
+            | 'ú'
+            | 'û'
+            | 'ü'
+            | 'Ù'
+            | 'Ú'
+            | 'Û'
+            | 'Ü'
+            | 'ñ'
+            | 'Ñ'
+            | 'ç'
+            | 'Ç'
+            | 'ý'
+            | 'ÿ'
+            | 'Ý'
+            | 'ß'
+    )
+}
+
+pub fn localized_candidates(english: &str, names: &[(String, Option<String>)]) -> Vec<String> {
     let is_english = |lang: &str| {
         let primary = lang.split(['-', '_']).next().unwrap_or(lang);
         primary.eq_ignore_ascii_case("en")
     };
-    names
-        .iter()
-        .filter(|(name, lang)| lang.as_deref().is_some_and(|l| !l.is_empty() && !is_english(l)) && !name.trim().is_empty() && name != english)
-        .map(|(name, _)| name.clone())
-        .next()
+    // An English name written with accents (`MyFämily` for `MyFamily`) is a spelling of the same
+    // name, not a localization, so it is compared folded.
+    let fold = |s: &str| {
+        s.chars()
+            .map(|c| match c {
+                'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' => 'a',
+                'è' | 'é' | 'ê' | 'ë' | 'È' | 'É' | 'Ê' | 'Ë' => 'e',
+                'ì' | 'í' | 'î' | 'ï' | 'Ì' | 'Í' | 'Î' | 'Ï' => 'i',
+                'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' => 'o',
+                'ù' | 'ú' | 'û' | 'ü' | 'Ù' | 'Ú' | 'Û' | 'Ü' => 'u',
+                'ñ' | 'Ñ' => 'n',
+                'ç' | 'Ç' => 'c',
+                'ý' | 'ÿ' | 'Ý' => 'y',
+                'ß' => 's',
+                c => c,
+            })
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    let english_folded = fold(english);
+    let english_trimmed = english.trim();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // 1. Names tagged with a non-English language, in the font's own record order.
+    for (name, lang) in names {
+        let trimmed = name.trim();
+        if trimmed.is_empty() || trimmed == english_trimmed {
+            continue;
+        }
+        if let Some(l) = lang.as_deref()
+            && !l.is_empty()
+            && !is_english(l)
+            && seen.insert(trimmed)
+        {
+            out.push(name.clone());
+        }
+    }
+    // 2. Untagged non-ASCII names, except an accented spelling of the English name.
+    for (name, lang) in names {
+        let trimmed = name.trim();
+        if lang.is_some() || trimmed.is_empty() || trimmed == english_trimmed {
+            continue;
+        }
+        // An accented spelling is the same Latin name; a name that also carries another script
+        // (`Example明朝`) is a localization and must survive the fold.
+        let latin_only = name.chars().all(|c| c.is_ascii() || is_latin_accent(c));
+        if !name.chars().any(|c| (c as u32) > 0x7F) || (!english_folded.is_empty() && latin_only && fold(name) == english_folded) || seen.contains(trimmed) {
+            continue;
+        }
+        seen.insert(trimmed);
+        out.push(name.clone());
+    }
+    out
 }
 
+/// The primary localized family name, returning the first candidate from [`localized_candidates`],
+/// or `None` if no non-English localization exists.
+pub fn localized_name(english: &str, names: &[(String, Option<String>)]) -> Option<String> {
+    localized_candidates(english, names).into_iter().next()
+}
+
+/// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
+/// picked by default.
 pub fn is_hidden_family(name: &str) -> bool {
     name.starts_with('.')
 }
@@ -1107,6 +1248,23 @@ mod tests {
         assert_eq!(super::localized_name("MS Gothic", &ms_gothic).as_deref(), Some("ＭＳ ゴシック"));
         let yahei = names(&[("Microsoft YaHei", Some("en")), ("微软雅黑", Some("zh-CN")), ("微軟雅黑", Some("zh-TW"))]);
         assert_eq!(super::localized_name("Microsoft YaHei", &yahei).as_deref(), Some("微软雅黑"));
+        // Untagged non-ASCII localized names are returned
+        assert_eq!(super::localized_name("MyFamily", &names(&[("MyFamily", Some("en")), ("日本語名", None)])).as_deref(), Some("日本語名"));
+        // English-tagged non-ASCII aliases are not chosen as localized fallback
+        assert_eq!(super::localized_name("MyFamily", &names(&[("MyFamily", Some("en")), ("MyFämily", Some("en"))])), None);
+        // An untagged accented spelling of the English name is not a localization either
+        assert_eq!(super::localized_name("MyFamily", &names(&[("MyFamily", None), ("MyFämily", None)])), None);
+        // A name that mixes Latin with another script is a localization, not an accent
+        assert_eq!(super::localized_name("Example", &names(&[("Example", None), ("Example明朝", None)])).as_deref(), Some("Example明朝"));
+        // An untagged non-ASCII name is preserved when the base family name folds to empty
+        let cjk_base = names(&[("日本語", None), ("明朝", None)]);
+        assert_eq!(super::localized_candidates("日本語", &cjk_base), vec!["明朝".to_string()]);
+        // Every tagged candidate is listed in record order, so classification can try them all
+        let mixed = names(&[("MyFamily", Some("en")), ("明朝", Some("ja-JP")), ("黑體", Some("zh-TW")), ("ポップ体", Some("ja-JP"))]);
+        assert_eq!(super::localized_candidates("MyFamily", &mixed), vec!["明朝".to_string(), "黑體".to_string(), "ポップ体".to_string()]);
+        // An untagged non-ASCII name follows the tagged ones
+        let untagged_after = names(&[("MyFamily", Some("en")), ("日本語名", None), ("明朝", Some("ja-JP"))]);
+        assert_eq!(super::localized_candidates("MyFamily", &untagged_after), vec!["明朝".to_string(), "日本語名".to_string()]);
         // English-only fonts, other English locales, unknown languages and copies of the English
         // name give no localized name.
         assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-US"))])), None);

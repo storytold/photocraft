@@ -129,8 +129,16 @@ pub fn traits_of(family: &str, font: &FontRef) -> FamilyTraits {
 /// Name fragments (lowercase) that mark a blackletter face; the tables have no class for it.
 const BLACKLETTER: [&str; 7] = ["fraktur", "blackletter", "black letter", "textura", "old english", "schwabacher", "rotunda"];
 
+/// Character boundary for CJK ranges (CJK Radicals, Symbols, Kana, Hangul, CJK Unified
+/// Ideographs 0x2E80..=0x9FFF, Compatibility Ideographs 0xF900..=0xFAFF, and Halfwidth/Fullwidth
+/// Forms 0xFF00..=0xFFEF). Used to split Latin and CJK tokens for style matching (such as
+/// `hei`, `maru`, or `pop`).
+fn is_cjk_boundary(c: char) -> bool {
+    matches!(c as u32, 0x2E80..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+}
+
 /// Classify from the OS/2 `sFamilyClass` (high byte: the IBM class), the PANOSE digits, the
-/// `post` fixed-pitch flag and, last, the family name.
+/// `post` fixed-pitch flag and, last, the family name (including CJK and Japanese style markers).
 pub fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_pitch: bool) -> Option<FontClass> {
     let name = family.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
@@ -170,18 +178,34 @@ pub fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_pitch: 
         }
     }
     // Last, the name.
-    if words.iter().any(|w| matches!(*w, "mono" | "monospace" | "monospaced" | "code" | "courier") || w.starts_with("consol")) {
+    if words.iter().any(|w| matches!(*w, "mono" | "monospace" | "monospaced" | "code" | "courier" | "等幅") || w.starts_with("consol")) || has(&["等幅"]) {
         Some(FontClass::Monospace)
     } else if has(&["slab"]) {
         Some(FontClass::SlabSerif)
-    } else if has(&["sans", "grotesk", "grotesque", "gothic"]) {
+    } else if has(&["sans", "grotesk", "grotesque", "gothic", "ゴシック", "ｺﾞｼｯｸ", "meiryo", "メイリオ", "黑体", "黑體", "丸ゴシック"])
+    {
         Some(FontClass::SansSerif)
-    } else if has(&["serif", "roman", "garamond", "times", "bodoni", "baskerville", "caslon"]) {
+    } else if has(&["serif", "roman", "garamond", "times", "bodoni", "baskerville", "caslon", "mincho", "明朝", "宋体", "宋體"])
+        || name
+            .split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c))
+            .any(|w| matches!(w, "sung" | "song" | "sungti" | "songti") || w.ends_with("song") || w.ends_with("sungti") || w.ends_with("songti"))
+    {
         Some(FontClass::Serif)
-    } else if has(&["hand", "marker", "brush", "chalk"]) {
+    } else if name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| matches!(w, "hei" | "heiti") || w.ends_with("hei") || w.ends_with("heiti"))
+    {
+        Some(FontClass::SansSerif)
+    } else if has(&["hand", "marker", "brush", "chalk", "kyokasho", "教科書", "ポップ", "ﾎﾟｯﾌﾟ"])
+        || name.ends_with("poptai")
+        || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "poptai")
+        || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "pop")
+    {
         Some(FontClass::Handwritten)
-    } else if has(&["script"]) {
+    } else if has(&["script", "gyosho", "行書", "kaisho", "楷書", "sousho", "草書", "reisho", "隷書", "kanteiryu", "勘亭流"]) {
         Some(FontClass::Script)
+    } else if name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| matches!(w, "maru")) {
+        // A standalone `maru` is a round gothic, so a sans serif, but only after the handwritten
+        // and script markers: `Maru Script` and `Maru Hand` keep their own class.
+        Some(FontClass::SansSerif)
     } else {
         None
     }
@@ -254,6 +278,55 @@ mod tests {
         assert_eq!(classify("Code Pro Sans", 0x0805, NONE, false), Some(FontClass::SansSerif), "the class beats the name");
         assert_eq!(classify("Permanent Marker", 0, NONE, false), Some(FontClass::Handwritten));
         assert_eq!(classify("Unknowable", 0, NONE, false), None);
+    }
+
+    #[test]
+    fn japanese_names_and_their_markers_are_read() {
+        // `hei` and `maru` match as standalone markers, so unrelated Latin names such as `Theia Serif` are not misclassified.
+        assert_eq!(classify("Poppins", 0, [0, 0, 5, 0, 0, 0, 0, 0, 0, 0], false), None);
+        assert_eq!(classify("Popüler Display", 0, NONE, false), None);
+        assert_eq!(classify("HG Pop体", 0, NONE, false), Some(FontClass::Handwritten));
+        assert_eq!(classify("HGSoeiKakupoptai", 0, NONE, false), Some(FontClass::Handwritten));
+        // `poptai` must end a word, so an unrelated substring such as `Poptail` does not match.
+        assert_eq!(classify("Poptail", 0, NONE, false), None);
+        assert_eq!(classify("Poptail Sans", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("Theia Serif", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("Theia", 0, NONE, false), None);
+        assert_eq!(classify("SimHei", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("Microsoft YaHei", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("Maru Gothic", 0, NONE, false), Some(FontClass::SansSerif));
+        // Japanese font classification coverage
+        assert_eq!(classify("MS Mincho", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("游明朝", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("MS Gothic", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("游ゴシック", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("Meiryo", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("メイリオ", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("HGGyoshotai", 0, NONE, false), Some(FontClass::Script));
+        assert_eq!(classify("HG行書体", 0, NONE, false), Some(FontClass::Script));
+        assert_eq!(classify("HG正楷書体-PRO", 0, NONE, false), Some(FontClass::Script));
+        assert_eq!(classify("UD デジタル 教科書体 N", 0, NONE, false), Some(FontClass::Handwritten));
+    }
+
+    #[test]
+    fn cjk_and_localized_family_names_classify_accurately() {
+        // Serif/sans CJK markers match whole words only, so unrelated Latin names stay unclassified.
+        assert_eq!(classify("Thei Serif", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("Maru Mincho", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("丸明朝体", 0, NONE, false), Some(FontClass::Serif));
+        // A standalone `maru` is a sans serif, but only after the handwritten and script markers.
+        assert_eq!(classify("Maru Script", 0, NONE, false), Some(FontClass::Script));
+        assert_eq!(classify("Maru Hand", 0, NONE, false), Some(FontClass::Handwritten));
+        assert_eq!(classify("Maru", 0, NONE, false), Some(FontClass::SansSerif));
+        // `sung` and `song` match as CJK markers, not as arbitrary substrings of Latin names such as `SamsungOne`.
+        assert_eq!(classify("SamsungOne", 0, NONE, false), None);
+        assert_eq!(classify("SamsungOne Sans", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("STSong", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("Songti SC", 0, NONE, false), Some(FontClass::Serif));
+    }
+
+    #[test]
+    fn odd_tables_do_not_panic_or_misfile() {
         // Out-of-range or garbage table values don't panic or misfile.
         assert_eq!(classify("X", i16::MIN, [255; 10], false), None);
         assert_eq!(classify("X", -1, [2, 200, 0, 0, 0, 0, 0, 0, 0, 0], false), None);
