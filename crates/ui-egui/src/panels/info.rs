@@ -11,17 +11,19 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 }
 
 /// The colour the Info panel reads at document pixel `(x, y)`, straight RGBA 0..1: averaged over
-/// the Eyedropper's Sample Size, as in Photoshop (#1649), cached per document activation, pixel and revision.
+/// the Eyedropper's Sample Size over the box it reads at the view zoom, as in Photoshop (#1649,
+/// #11751), and cached per document activation, pixel, revision, size and zoom.
 pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
     let st = app.session.active()?;
     let sample_size = app.ui.tool_options.eyedropper_size;
-    let key = (st.doc.id, app.session.active_generation(), x, y, st.revision, sample_size);
+    let zoom = app.current_zoom();
+    let key = (st.doc.id, app.session.active_generation(), x, y, st.revision, sample_size, zoom.to_bits());
     if let Some((cached, v)) = app.info_sample
         && cached == key
     {
         return Some(v);
     }
-    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
+    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size, "zoom": f64::from(zoom)});
     let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
     let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
     app.info_sample = Some((key, v));
@@ -281,7 +283,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let sample = Sample { v: values.as_ref(), proof: proof.as_ref(), read: read.as_deref() };
             ui.horizontal(|ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
-                cell(ui, format!("X: {}  Y: {}", fx(at.0), fy(at.1)));
+                // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
+                cell(ui, format!("X: {}  Y: {}", fx(at.0.floor()), fy(at.1.floor())));
             });
             for line in shown.iter().flat_map(|r| sampler_lines(&doc_info, *r, sample)) {
                 ui.horizontal(|ui| {
@@ -300,8 +303,8 @@ mod readout_tests;
 mod cache_tests;
 
 /// What a document's Color Sampler readouts were composited for: document ID, activation,
-/// revision and Proof Setup (profile, intent, black point compensation).
-type SamplerKey = (photocraft_doc::DocId, u64, u64, (u64, photocraft_cms::Intent, bool));
+/// revision, Proof Setup (profile, intent, black point compensation) and Sample Size.
+type SamplerKey = (photocraft_doc::DocId, u64, u64, (u64, photocraft_cms::Intent, bool), u32);
 
 /// Color Sampler readouts and the [`SamplerKey`] they were composited for.
 pub(crate) type SamplerReadouts = (SamplerKey, std::sync::Arc<Vec<Value>>);
@@ -310,12 +313,15 @@ pub(crate) type SamplerReadouts = (SamplerKey, std::sync::Arc<Vec<Value>>);
 /// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
 /// the Info panel reuses them instead of compositing each point through the stack every frame.
 /// Activation also matters: reopened documents can reuse an ID and reach the same revision. A new
-/// View › Proof Setup changes the Proof Color readout without a new revision.
+/// View › Proof Setup changes the Proof Color readout without a new revision. They average over
+/// the Sample Size shared with the Eyedropper (#11732), which is part of the key, so changing it
+/// re-reads every sampler at once.
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
+    let size = app.ui.tool_options.eyedropper_size;
     let Some(key) = app
         .session
         .active()
-        .map(|s| (s.doc.id, app.session.active_generation(), s.revision, photocraft_engine::sampler_cmds::proof_key(&app.session.color, &s.doc)))
+        .map(|s| (s.doc.id, app.session.active_generation(), s.revision, photocraft_engine::sampler_cmds::proof_key(&app.session.color, &s.doc), size))
     else {
         return std::sync::Arc::default();
     };
@@ -324,7 +330,7 @@ pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Va
     {
         return v.clone();
     }
-    let list = app.session.execute("view.colorSamplers.list", json!({})).ok();
+    let list = app.session.execute("view.colorSamplers.list", json!({"size": size})).ok();
     let v = std::sync::Arc::new(list.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default());
     app.info_samplers = Some((key, v.clone()));
     v

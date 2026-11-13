@@ -398,7 +398,9 @@ pub(super) fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&L
                     end: flag("arrowEnd", pe)?,
                     width: dim("arrowWidth", pwidth, 1.0, 4096.0)?,
                     length: dim("arrowLength", plen, 1.0, 4096.0)?,
-                    concavity: dim("arrowConcavity", pc, 0.0, 100.0)?,
+                    // A whole -50..50 % as in Photoshop (#13258); a shape saved with the old 0..100
+                    // range keeps working when another property is edited.
+                    concavity: dim("arrowConcavity", if pc.is_finite() { pc.clamp(-50.0, 50.0) } else { 0.0 }, -50.0, 50.0)?.round(),
                 }
             } else {
                 LiveShape::Line { from, to, weight }
