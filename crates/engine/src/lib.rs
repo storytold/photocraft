@@ -110,6 +110,7 @@ pub use cmd::history_select_cmds;
 pub use cmd::history_source_cmds;
 pub use cmd::image_cmds;
 pub use cmd::layer_copy_cmds;
+pub use cmd::layer_css_cmds;
 pub use cmd::layer_label_cmds;
 pub use cmd::layer_list_cmds;
 pub use cmd::layer_mask_props_cmds;
@@ -283,6 +284,12 @@ pub struct Session {
     /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
+    /// The gate automation runs under in this process (the desktop's policy). An action
+    /// automation wrote ([`actions_cmds::Action::automation`]) plays under it when no gate is
+    /// installed, as when the user presses its key, so it never gets the user's file access.
+    /// `None` when there is no automation policy to keep (headless sessions gate everything
+    /// with `authorize`).
+    pub automation_gate: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
     /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
     pub print_spooler: Option<print_cmds::Spooler>,
@@ -337,6 +344,9 @@ pub struct Session {
     /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
     /// tests read it.
     pub damage_misses: usize,
+    /// Commands that left the whole document to redraw (`last_damage` None) while changing under
+    /// 25 % of it ([`Session::dispatch`]). Counted in debug and test builds only; tests read it.
+    pub whole_redraws: usize,
 }
 
 #[cfg(test)]
@@ -344,7 +354,14 @@ mod brush_pressure_size_default_tests;
 #[cfg(test)]
 mod embed_all_linked_tests;
 #[cfg(test)]
+mod eraser_gray_background_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
+#[cfg(test)]
+mod mixer_indexed_bitmap_tests;
+
+#[cfg(test)]
+mod mixer_toggle_commands_tests;
 #[cfg(test)]
 mod pattern_mode_tests;
 #[cfg(test)]
@@ -355,4 +372,11 @@ mod tests;
 #[cfg(test)]
 mod fx_mode_tests;
 
+#[cfg(test)]
+mod dense_budget_tests;
+
+#[cfg(test)]
+mod brush_clear_background_tests;
 pub mod command_hints;
+#[cfg(test)]
+mod pencil_auto_erase_exact_tests;
