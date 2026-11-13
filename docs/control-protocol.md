@@ -17,6 +17,8 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
 
 If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents. A flag wins over its variable and an empty variable counts as unset; with `--control` (or `PHOTOCRAFT_CONTROL_PORT`), a token together with a token file, from flags or variables, is a usage error (exit status 2). Without it no token is read, so the pair is ignored.
 
+In the web build the same methods are `window.photocraft.request(method, params)` for the app's own page (no token: the page already runs the app); an embedding page gets document calls only (`packaging/web/README.md` › Driving the embedded app).
+
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds. There are two ways; a refused frame gets `{"ok": false, "error": "authentication required"}` and the connection is closed.
 
 **Challenge authentication** (what `photocraft-cli mcp --bridge` uses) never sends the token, and the server proves it holds the token before the client reveals anything derived from it, so a process that took the port (the app is not running yet, or has exited) learns nothing:

@@ -59,6 +59,7 @@ pub fn start() {
             return;
         };
         let q = query();
+        let embed_query = q.clone();
         let force_cpu = q.contains("cpu");
         // `?free-mb=N`: the memory gates and the low-memory warning see only N MiB (diagnostics).
         if let Some(mb) = crate::diagnostics::free_mb(&q) {
@@ -102,7 +103,9 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let control = crate::embed::install(&embed_query, cc.egui_ctx.clone());
+                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)))
+                        .with_control(control);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -465,6 +468,7 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
+        crate::embed::process(&mut self.app);
         self.save_presets(ctx);
         self.app.finish_type_reset_logic(ctx);
     }

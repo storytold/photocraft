@@ -213,6 +213,74 @@ fetches them with `fetch()`, so a Content Security Policy needs them allowed by 
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+### Driving the embedded app (#1614)
+
+A page can hand the app a document and take the edited one back.
+
+**Same origin:** `window.photocraft` in the app's page.
+
+```js
+photocraft.info()                       // {app: "<version>", format: <the .pcraft format version>, doc: {id, name} | null}
+photocraft.isDirty()                    // unsaved changes in an open document?
+await photocraft.open(bytes, "a.psd")   // ArrayBuffer, typed array or Blob, at most 64 MiB
+                                        //   → {warnings, doc: {id, name}} once the document is in the session
+await photocraft.save("psd")            // the active document as a Uint8Array (default "pcraft",
+                                        //   the app's own layered format), its export warnings on it as .warnings
+await photocraft.request("ui.inspect")  // a control-channel method (docs/control-protocol.md)
+window.addEventListener("photocraft-dirty", e => e.detail)   // true / false as it changes
+```
+
+`open` settles only once its document has entered the session — never before, so a `save` asked
+after it gets the new document, not an older one — and its `doc.id` can be checked against
+`info().doc.id`. A `name` is a claim: the open settles only on a document of that very name.
+Without one, the import runs under the name `document` but settles as the document it admits,
+under whatever name the app gave it — a `.pcraft` keeps the name it was saved with — so
+reopening a default save needs no name to match. Only one open runs at a time, and its turn is
+taken as the open's first step —
+before a byte of the data is read — so a second `open` while one is in
+flight (reading, importing, or waiting behind a dialog) is answered `busy` at once. An import
+still decoding, or one held behind a dialog the app shows over it (an embedded profile
+mismatch, a damaged-file question), keeps the promise waiting; after 30 s it rejects, as a
+failed import rejects at once — and at that deadline the app stops the underlying import too
+(its own Cancel), so a document of a timed-out open can never turn up later in a following
+same-name open's answer. The one dialog that cancel can't answer — the damaged-file question —
+keeps the timed-out open holding the `busy` turn until the app is done with the file either
+way: the turn is only ever released once nothing can still land in it. A dialog cancelled in
+the app ends the wait at once. Files over 64 MiB are refused without being read.
+A save marks the document clean (a PSD, PSB, OpenRaster or `.pcraft`, as File › Save does) only once its
+bytes have reached the caller — an export that fails, or bytes that can't be handed over, leave
+it dirty. The `.warnings` on the saved bytes are the same export warnings the app shows the user
+(an adjustment layer that didn't fit the format, text that was rasterized).
+
+**Cross-origin iframe:** add the embedding page's origin to the app's URL,
+`…/photocraft/?embed=https://admin.example.com`. The app then takes the same calls over
+`postMessage` from that origin and from the framing page's window only — a sibling iframe at
+the same origin is refused — and posts only to that window:
+
+```js
+frame.contentWindow.postMessage({photocraft: 1, method: "open", name: "a.psd", data: buffer}, appOrigin, [buffer]);
+frame.contentWindow.postMessage({photocraft: 3, method: "save", format: "psd"}, appOrigin);
+// replies: {photocraft: 3, ok: true, result: ArrayBuffer (transferred), warnings: ["…"]}
+//       or {photocraft: 3, ok: false, error}
+// isDirty and info work the same way
+```
+
+An open's `data` rides the message itself (a transferred ArrayBuffer works); it is never read
+as JSON. Everything else in the message is weighed before anything decodes it:
+over 64 KiB without its `data`, or nested deeper than 8 levels, the call is answered
+`{ok: false, error: "the message is larger than 64 KiB (65536 bytes) or deeper than 8 levels …"}`.
+At most 8 calls may wait for their reply at once — the 9th is answered
+`{ok: false, error: "busy: …"}`. It posts `{photocraft: "ready", info}` once it is up, and
+`{photocraft: "dirty", dirty}` when that changes. `open` replies once the document is in the
+session, or with the error File › Open would show; a value that isn't bytes, or that can't be
+read as them, rejects with a fixed message instead of hanging.
+A save the page takes counts as a save once its bytes have been transferred to it. `request`
+isn't offered over `postMessage`.
+
+`?embed=` decides who may talk to the app and hear from it, not who may embed it: any site can
+iframe the app and name itself there. To keep other sites from embedding your copy at all, send a
+`frame-ancestors` CSP from the app's host that lists the pages allowed to embed it.
+
 ## Renderer selection and fallback flags
 
 PhotoCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
