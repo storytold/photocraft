@@ -390,7 +390,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         match live {
             photocraft_doc::vector::LiveShape::Rect { rect, .. }
             | photocraft_doc::vector::LiveShape::Ellipse { rect }
-            | photocraft_doc::vector::LiveShape::Polygon { rect, .. } => {
+            | photocraft_doc::vector::LiveShape::Polygon { rect, .. }
+            | photocraft_doc::vector::LiveShape::Triangle { rect, .. } => {
                 ui.horizontal(|ui| {
                     let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
                     let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
@@ -440,6 +441,16 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     let mut sr = (*star_ratio * 100.0) as f32;
                     if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
                         edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
+                    }
+                })
+                .inner
+            }
+            photocraft_doc::vector::LiveShape::Triangle { corner_radius, .. } => {
+                // One radius rounds all three corners of a triangle; it has no sides or star ratio.
+                ui.horizontal(|ui| {
+                    let mut r = *corner_radius as f32;
+                    if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {
+                        edit = Some(json!({"cornerRadius": r, "coalesce": key("corner-radius")}));
                     }
                 })
                 .inner
