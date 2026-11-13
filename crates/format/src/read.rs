@@ -129,6 +129,10 @@ fn refuses_traversal(e: &io::Error) -> bool {
 
 /// The other routes to `path`: its links followed by hand, then the OS's canonical form.
 fn fallback_paths(path: &Path) -> Fallbacks {
+    // Windows folds ordinary path parents before link traversal; verbatim paths stay unchanged.
+    #[cfg(windows)]
+    let by_hand = std::path::absolute(path).ok().and_then(|path| follow_links(&path, &link_target));
+    #[cfg(not(windows))]
     let by_hand = follow_links(path, &link_target);
     let path = path.to_path_buf();
     // Canonicalizing touches the disk, so it waits until the by-hand route has failed.
@@ -518,6 +522,33 @@ mod tests {
         assert_ne!(by_hand, through);
         // On Windows a junction is removed like a folder; on Unix the link is a file.
         let _ = std::fs::remove_dir(&link).or_else(|_| std::fs::remove_file(&link));
+    }
+
+    /// Ordinary Windows paths fold parents before traversing junctions; verbatim paths do not.
+    #[cfg(windows)]
+    #[test]
+    fn windows_fallback_normalizes_the_original_path_before_following_links() {
+        let real = temp("normalize-before-links", b"right document");
+        let root = real.parent().unwrap();
+        let other = root.join("other");
+        std::fs::create_dir_all(other.join("sub")).unwrap();
+        let wrong = other.join("cloud");
+        std::fs::create_dir(&wrong).unwrap();
+        std::fs::write(wrong.join("f.bin"), b"wrong document").unwrap();
+        for (link, target) in [(root.join("alias"), other.join("sub")), (root.join("cloud"), root.to_path_buf())] {
+            let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output().unwrap();
+            assert!(made.status.success(), "junction creation failed: {made:?}");
+        }
+        let path = root.join(r"alias\..\cloud\f.bin");
+        let open = |p: &Path| if p == path { Err(untrusted_mount_point()) } else { File::open(p) };
+        let mut file = open_with(&path, &open, &is_448, &fallback_paths).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"right document", "fallback must open the document named by the original Windows path");
+        let verbatim = PathBuf::from(format!(r"\\?\{}", path.display()));
+        assert_eq!(fallback_paths(&verbatim).next(), Some(wrong.join("f.bin")), "verbatim paths keep their existing link-first semantics");
+        std::fs::remove_dir(root.join("alias")).unwrap();
+        std::fs::remove_dir(root.join("cloud")).unwrap();
     }
 
     #[test]
