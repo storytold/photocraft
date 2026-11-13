@@ -83,6 +83,12 @@ impl HsvMap {
         HsvMap { data, ..self.clone() }
     }
 
+    /// The value axis works on sRGB-encoded values: encoding 1, and a value axis to apply it to
+    /// (the encoding tag doesn't apply to a 2.5D map).
+    fn encoded_value(&self) -> bool {
+        self.srgb_value && self.val_divs > 1
+    }
+
     fn entry(&self, v: usize, h: usize, s: usize) -> [f32; 3] {
         let i = (v * self.hue_divs + h) * self.sat_divs + s;
         self.data.get(i).copied().unwrap_or([0.0, 1.0, 1.0])
@@ -99,7 +105,7 @@ impl HsvMap {
         let s0 = (sf as usize).min(self.sat_divs - 2);
         let st = sf - s0 as f32;
         let (v0, v1, vt) = if self.val_divs > 1 {
-            let vv = if self.srgb_value { srgb_encode(v) } else { v };
+            let vv = if self.encoded_value() { srgb_encode(v) } else { v };
             let vf = vv.clamp(0.0, 1.0) * (self.val_divs - 1) as f32;
             let v0 = (vf as usize).min(self.val_divs - 2);
             (v0, v0 + 1, vf - v0 as f32)
@@ -147,7 +153,9 @@ impl HsvMap {
         let [shift, sat_scale, val_scale] = self.lookup(h6, s, max);
         let h = (h6 + shift / 60.0).rem_euclid(6.0);
         let s = (s * sat_scale).clamp(0.0, 1.0);
-        let v = max * val_scale;
+        // ProfileHueSatMapEncoding / ProfileLookTableEncoding 1: the table result applies to the
+        // encoded value, which is then decoded (only for maps with a value axis, as the lookup).
+        let v = if self.encoded_value() { srgb_decode(srgb_encode(max) * val_scale) } else { max * val_scale };
         hsv_to_rgb(h, s, v)
     }
 }
@@ -171,6 +179,10 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 
 fn srgb_encode(v: f32) -> f32 {
     if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+}
+
+fn srgb_decode(v: f32) -> f32 {
+    if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
 }
 
 /// The rendering tags of a DNG camera profile.
@@ -372,7 +384,9 @@ mod tests {
     }
 
     /// With encoding 1 the value axis is indexed by the sRGB-encoded value: linear 0.2 sits at
-    /// encoded 0.4845, so the value scale there is about 1.48, not the 1.2 a linear index gives.
+    /// encoded 0.4845, so the value scale there is about 1.48, not the 1.2 a linear index gives;
+    /// and the scale applies to the encoded value, which is then decoded (DNG specification,
+    /// ProfileHueSatMapEncoding / ProfileLookTableEncoding, steps 4 and 5).
     #[test]
     fn the_encoded_value_axis_is_looked_up_encoded() {
         // Value divisions at 0 and 1 (value scale 1 → 2), saturation divisions at 0 and 1.
@@ -381,7 +395,8 @@ mod tests {
         // Fully saturated red at linear value 0.2.
         let scale = |m: &HsvMap| m.apply([0.2, 0.0, 0.0])[0] / 0.2;
         let encoded = srgb_encode(0.2);
-        assert!((scale(&srgb) - (1.0 + encoded)).abs() < 1e-4, "{}", scale(&srgb));
+        let expected = srgb_decode(encoded * (1.0 + encoded)) / 0.2;
+        assert!((scale(&srgb) - expected).abs() < 1e-4, "{} vs {expected}", scale(&srgb));
         assert!((scale(&linear) - 1.2).abs() < 1e-4, "{}", scale(&linear));
     }
 
