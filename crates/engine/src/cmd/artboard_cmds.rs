@@ -678,14 +678,11 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
 /// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?;
-    if dir.is_empty() {
-        return Err(bad(cmd, "Choose a destination folder."));
-    }
+    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd)).map_err(|_| EngineError::Other("Choose a destination folder.".into()))?;
     // Leave other filesystem errors to the existing save path.
     #[cfg(not(target_arch = "wasm32"))]
     if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
-        return Err(bad(cmd, format!("Destination does not exist: {dir}")));
+        return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
     }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
@@ -858,3 +855,7 @@ mod first_board_background_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/destination_tests.rs"]
+mod destination_tests;

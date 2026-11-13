@@ -498,7 +498,7 @@ fn ask_folder_uses_the_async_dialog_and_returns_the_selected_path() {
         json!({"fileDialog": "folder"})
     );
     app.poll_file_dialog(&ctx, None);
-    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Folder { initial_dir: Some(dir) }, _)] if dir == "/pics"));
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Folder { initial_dir: Some(dir), title: None }, _)] if dir == "/pics"));
 
     answer(&open, Some(FileDialogAnswer::FolderTo("/pics/frames".into())));
     app.poll_file_dialog(&ctx, None);
