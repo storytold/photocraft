@@ -52,11 +52,10 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, role: Role, label: &str) {
     h.run_steps(6);
 }
 
-fn open_dialog(h: &mut Harness<'_, PhotocraftApp>) -> u64 {
+fn open_dialog(h: &mut Harness<'_, PhotocraftApp>) {
     let ctx = h.ctx.clone();
-    let result = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
+    crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
     h.run_steps(6);
-    result["dialog"].as_u64().unwrap()
 }
 
 fn snapshot(h: &mut Harness<'_, PhotocraftApp>, dir: Option<&Path>, file: &str) {
@@ -114,13 +113,10 @@ fn checkbox_defaults_on_and_controls_png_pixels_and_embedding() {
 #[test]
 fn existing_document_profile_preset_and_recorded_export_keep_source_colors() {
     let (mut h, writes) = harness(false);
-    let id = open_dialog(&mut h);
-    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
-    let mut saved = preset_settings(f);
-    saved["profile"] = json!("document");
-    saved["format"] = json!("jpg");
-    let preset = serde_json::from_value(saved).unwrap();
-    apply_preset(f, &preset, 200.0, 150.0);
+    h.state_mut().run("file.export.presets.save", json!({"name": "Original colors", "settings": {"profile": "document", "format": "jpg"}})).unwrap();
+    open_dialog(&mut h);
+    click(&mut h, Role::ComboBox, "Preset");
+    h.get_by_label("Original colors").click();
     h.run_steps(4);
     assert_eq!(checkbox(&h, CONVERT), Toggled::False, "existing JPEG preset");
     assert_eq!(checkbox(&h, EMBED), Toggled::True);
