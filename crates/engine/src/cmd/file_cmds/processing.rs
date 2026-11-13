@@ -1,6 +1,6 @@
 use super::batch_run::{batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
-use super::paths::{file_name, list_images, read_file, stem};
+use super::paths::{file_name, list_images, read_file, stem, untitled_name};
 use super::save::SaveOpts;
 use super::{
     ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Surface, Value, buffer_surface, flattened_checked, json, size_param,
@@ -10,6 +10,10 @@ use super::{
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "image_processor_tests.rs"]
 mod image_processor_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "load_stack_name_tests.rs"]
+mod load_stack_name_tests;
 
 // ---------- Automate ----------
 
@@ -151,7 +155,11 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let first = &docs[0].1;
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
-    let mut stack = Document::new(stem(&paths[0]), photocraft_doc::Size::new(w, h), first.mode, first.depth);
+    // A new unsaved "Untitled-N" document, like Photoshop's Load Layers, not one named after a file.
+    let doc_name = untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
+    // The smart object (Create Smart Object) keeps the first file's name.
+    let smart_name = stem(&paths[0]);
+    let mut stack = Document::new(doc_name, photocraft_doc::Size::new(w, h), first.mode, first.depth);
     stack.resolution_dpi = first.resolution_dpi;
     stack.icc_profile = first.icc_profile.clone();
     let fmt = stack.pixel_format();
@@ -169,7 +177,7 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         // for Layer › Smart Objects › Stack Mode. Like Photoshop, they sit at the top level of the
         // contents, with no wrapper group.
         let layers = std::mem::take(&mut stack.layers);
-        let smart = crate::smart_cmds::layers_to_smart(&stack, &stem(&paths[0]), layers)?;
+        let smart = crate::smart_cmds::layers_to_smart(&stack, &smart_name, layers)?;
         stack.layers = vec![smart];
     }
     let i = s.add_document(stack, None);
@@ -177,10 +185,9 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         s.execute("select.allLayers", json!({}))?;
         s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
         if smart {
-            let name = s.active().map(|d| d.doc.name.clone()).unwrap_or_default();
             s.edit("Convert to Smart Object", |doc, active| {
                 let layers = std::mem::take(&mut doc.layers);
-                let smart = crate::smart_cmds::layers_to_smart(doc, &name, layers)?;
+                let smart = crate::smart_cmds::layers_to_smart(doc, &smart_name, layers)?;
                 *active = Some(smart.id);
                 doc.layers = vec![smart];
                 Ok(())
