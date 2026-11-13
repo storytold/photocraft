@@ -99,6 +99,17 @@ fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
     Some((i, v1 + 1, &xmp[v0..v1]))
 }
 
+/// The packet's `xmpRights:Marked` value, as an element or an attribute.
+fn rights_marked(xmp: &str) -> Option<&str> {
+    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| find_attr(xmp, "xmpRights:Marked").map(|(_, _, v)| v))
+}
+
+/// Whether File Info's Copyright Status reads Copyrighted (`xmpRights:Marked` is `True`): the
+/// document's tab and window title then start with "© " (#13821).
+pub fn copyright_marked(xmp: Option<&str>) -> bool {
+    xmp.and_then(rights_marked) == Some("True")
+}
+
 /// File Info fields read from an XMP packet.
 pub fn read_file_info(xmp: Option<&str>) -> Value {
     let mut m = serde_json::Map::new();
@@ -117,11 +128,9 @@ pub fn read_file_info(xmp: Option<&str>) -> Value {
         };
         m.insert(key.into(), v);
     }
-    let marked =
-        find_element(x, "xmpRights:Marked").map(|(_, _, v)| v.trim().to_string()).or_else(|| find_attr(x, "xmpRights:Marked").map(|(_, _, v)| v.to_string()));
     m.insert(
         "copyrightStatus".into(),
-        json!(match marked.as_deref() {
+        json!(match rights_marked(x) {
             Some("True") => "copyrighted",
             Some("False") => "publicDomain",
             _ => "unknown",
