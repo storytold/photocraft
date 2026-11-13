@@ -186,7 +186,9 @@ fn path_elements(elements: &[photocraft_text::render::PathEl]) -> Option<Vec<Pat
 #[cfg(test)]
 fn write_path_elements(out: &mut String, elements: &[photocraft_text::render::PathEl]) -> Option<()> {
     let commands = path_elements(elements)?;
-    let path = ContentPath { elements: commands, ..ContentPath::default() };
+    // A PDF path must have a paint operation. The test exercises geometry encoding, so use a
+    // neutral fill while preserving the shared writer's production validation.
+    let path = ContentPath { elements: commands, fill: Some((DeviceColor::Gray(0.0), ContentFillRule::NonZero)), ..ContentPath::default() };
     let encoded = craft_pdf::write_raster::encode_vector_content(&craft_pdf::write_raster::VectorContent { operations: vec![ContentOp::Path(path)] })?;
     out.push_str(&encoded);
     Some(())
