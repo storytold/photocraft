@@ -88,7 +88,7 @@ fn document(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
         });
     }
     row(ui, w, tl!("Resolution:"), |ui| {
-        let mut unit = text(f, RES_UNIT, "in");
+        let mut unit = text(f, RES_UNIT, "cm");
         let k = if unit == "cm" { CM } else { 1.0 };
         let mut v = (res / k) as f32;
         if crate::widgets::value_field_prec(ui, &mut v, (1.0 / k as f32)..=(10_000.0 / k as f32), "", 90.0, 2).accessible_name(tl!("Resolution")).changed() {
@@ -98,7 +98,7 @@ fn document(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
             f.insert(RES_UNIT.into(), json!(unit));
         }
     });
-    checkbox_row(ui, f, w, "flatten", tl!("Flatten All Layers"), false);
+    checkbox_row(ui, f, w, "flatten", tl!("Flatten All Layers"), true);
     row(ui, w, tl!("Mode:"), |ui| {
         let mut mode = text(f, "mode", "rgb");
         if choice(ui, "cs2-mode", tl!("Mode"), &mut mode, &MODES) {

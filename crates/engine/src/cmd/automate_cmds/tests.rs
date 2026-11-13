@@ -631,7 +631,7 @@ fn contact_sheet_places_thumbnails_with_captions() {
     for depth in [8, 16] {
         let mut s = Session::new();
         let r = s
-            .execute("file.automate.contactSheetII", json!({"input": dir, "units": "pixels", "width": 400, "height": 300, "resolution": 72, "columns": 2, "rows": 2, "depth": depth, "fontSize": 10, "rotateForBestFit": true}))
+            .execute("file.automate.contactSheetII", json!({"input": dir, "units": "pixels", "width": 400, "height": 300, "resolution": 72, "columns": 2, "rows": 2, "depth": depth, "fontSize": 10, "rotateForBestFit": true, "flatten": false}))
             .unwrap();
         assert_eq!(r["pages"], 2, "5 images on 2×2 sheets");
         assert_eq!(r["images"], 5);

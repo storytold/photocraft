@@ -101,6 +101,8 @@ fn ok_runs_the_sheet_with_both_settings() {
         fields.insert("input".into(), json!(dir.to_string_lossy()));
         // No captions: they wait on the app's fonts, which load in the background.
         fields.insert("caption".into(), json!(false));
+        // Image layers are counted, so the sheet stays unflattened.
+        fields.insert("flatten".into(), json!(false));
         if group {
             h.get_by_label(GROUP).click();
             h.run_steps(4);

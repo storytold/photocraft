@@ -128,8 +128,9 @@ fn switching_units_converts_width_and_height() {
         let mut h = harness();
         let size = |h: &H| (num(h, "width"), num(h, "height"));
         let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
-        assert_eq!(size(&h), (8.0, 10.0));
-        for (unit, want) in [("cm", (20.32, 25.4)), ("pixels", (2400.0, 3000.0)), ("inches", (8.0, 10.0)), ("pixels", (2400.0, 3000.0)), ("cm", (20.32, 25.4))]
+        assert_eq!(size(&h), (20.32, 25.4));
+        for (unit, want) in
+            [("inches", (8.0, 10.0)), ("pixels", (2400.0, 3000.0)), ("cm", (20.32, 25.4)), ("pixels", (2400.0, 3000.0)), ("inches", (8.0, 10.0))]
         {
             pick(&mut h, "Units", unit);
             assert_eq!(fields(&h)["units"], unit);
@@ -137,6 +138,7 @@ fn switching_units_converts_width_and_height() {
         }
         assert_eq!(num(&h, "resolution"), 300.0, "the resolution stays");
         // A typed value reaches the command as typed, not as the field's f32.
+        pick(&mut h, "Units", "cm");
         type_into(&mut h, "Width", "20.33");
         assert_eq!(fields(&h)["width"], json!(20.33));
     });
@@ -147,10 +149,12 @@ fn switching_the_resolution_unit_converts_the_shown_value_only() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let mut h = harness();
         let shown = |h: &H| shown(h, "Resolution");
-        assert!((shown(&h) - 300.0).abs() < 1e-3);
-        pick(&mut h, "Resolution Unit", "pixels/cm");
         assert!((shown(&h) - 118.11).abs() < 0.01, "300 pixels/inch is 118.11 pixels/cm, got {}", shown(&h));
         assert_eq!(num(&h, "resolution"), 300.0, "the command still gets pixels/inch");
+        pick(&mut h, "Resolution Unit", "pixels/inch");
+        assert!((shown(&h) - 300.0).abs() < 1e-3);
+        assert_eq!(num(&h, "resolution"), 300.0, "switching the unit keeps the param");
+        pick(&mut h, "Resolution Unit", "pixels/cm");
         type_into(&mut h, "Resolution", "100");
         assert!((num(&h, "resolution") - 254.0).abs() < 1e-9, "100 pixels/cm is 254 pixels/inch, got {}", num(&h, "resolution"));
         pick(&mut h, "Resolution Unit", "pixels/inch");
@@ -174,8 +178,8 @@ fn unticking_the_caption_greys_the_font_settings() {
     });
 }
 
-/// OK sends the params the form sent before the layout: the same keys and values, the resolution
-/// in pixels/inch whatever unit it is shown in, and `placeAcrossFirst` and `depth` as before.
+/// OK sends the form's params: the size in `units`, the resolution in pixels/inch whatever unit it
+/// is shown in. The defaults make the same 2400 x 3000 px sheet at 300 ppi as before #13685.
 #[test]
 fn ok_runs_the_command_with_the_same_params() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
@@ -183,9 +187,9 @@ fn ok_runs_the_command_with_the_same_params() {
         let before = crate::filter_dialog::params_of(fields(&h));
         assert_eq!(
             before,
-            json!({"input": ".", "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false, "includeSubfolders": true, "groupByFolder": false})
+            json!({"input": ".", "units": "cm", "width": 20.32, "height": 25.4, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": true, "includeSubfolders": true, "groupByFolder": false})
         );
-        pick(&mut h, "Resolution Unit", "pixels/cm");
+        pick(&mut h, "Resolution Unit", "pixels/inch");
         assert_eq!(crate::filter_dialog::params_of(fields(&h)), before, "the unit is view state");
 
         let dir = std::env::temp_dir().join(format!("pc-contact-sheet-layout-{}", std::process::id()));
@@ -203,5 +207,6 @@ fn ok_runs_the_command_with_the_same_params() {
         assert_eq!(app.session.documents().len(), 1, "one sheet");
         let sheet = &app.session.active().unwrap().doc;
         assert_eq!((sheet.size.width, sheet.size.height, sheet.resolution_dpi), (2400, 3000, 300.0));
+        assert_eq!(sheet.layers.len(), 1, "Flatten All Layers is on");
     });
 }

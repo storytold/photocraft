@@ -102,7 +102,8 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             app,
             id,
             tl!("Contact Sheet II"),
-            json!({"input": dir, "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false, "includeSubfolders": true, "groupByFolder": false}),
+            // The reference defaults (#13685): 8 x 10 in at 300 ppi, shown in cm and pixels/cm.
+            json!({"input": dir, "units": "cm", "width": 20.32, "height": 25.4, "resolution": 300.0, "__resUnit": "cm", "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": true, "includeSubfolders": true, "groupByFolder": false}),
             json!({}),
         ),
         "file.automate.createDroplet" => {
