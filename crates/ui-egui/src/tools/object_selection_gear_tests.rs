@@ -65,9 +65,7 @@ fn defaults_and_old_settings() {
 
 #[test]
 fn options_round_trip() {
-    let mut o = ToolOptions::default();
-    o.object_subtract = false;
-    o.object_finder_mode = ObjectFinderMode::Manual;
+    let o = ToolOptions { object_subtract: false, object_finder_mode: ObjectFinderMode::Manual, ..ToolOptions::default() };
     let back: ToolOptions = serde_json::from_value(serde_json::to_value(&o).unwrap()).unwrap();
     assert!(!back.object_subtract);
     assert_eq!(back.object_finder_mode, ObjectFinderMode::Manual);
@@ -75,10 +73,7 @@ fn options_round_trip() {
 
 #[test]
 fn reset_tool_restores_them() {
-    let mut o = ToolOptions::default();
-    o.object_finder = false;
-    o.object_subtract = false;
-    o.object_finder_mode = ObjectFinderMode::Manual;
+    let mut o = ToolOptions { object_finder: false, object_subtract: false, object_finder_mode: ObjectFinderMode::Manual, ..ToolOptions::default() };
     crate::tools::tool_reset::reset_options(&mut o, Tool::Lasso);
     assert!(!o.object_finder && !o.object_subtract && o.object_finder_mode == ObjectFinderMode::Manual);
     crate::tools::tool_reset::reset_options(&mut o, Tool::ObjectSelection);
