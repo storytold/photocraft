@@ -248,12 +248,8 @@ fn near_end(r: Ruler, p: [f64; 2], tol: f64) -> bool {
 }
 
 /// Is the pointer at document point `p` over the ruler's end points? The very hit test a press
-/// makes its decision with ([`near_end`], `dist` with [`tolerance`]), so the Ruler tool's 
-⌥
- pointer
-/// shows exactly where an 
-⌥
--drag starts the protractor arm (#12037).
+/// makes its decision with ([`near_end`], `dist` with [`tolerance`]), so the Ruler tool's ⌥ pointer
+/// shows exactly where an ⌥-drag starts the protractor arm (#12037).
 pub(crate) fn ruler_end_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     let tol = tolerance(app);
     app.session.active().is_some_and(|d| d.doc.measurement.ruler.is_some_and(|r| near_end(r, p, tol)))

@@ -208,7 +208,7 @@ fn an_empty_document_has_no_end_to_mark() {
     assert!(app.session.active().is_some_and(|d| d.doc.measurement.ruler.is_none()));
     assert!(!crate::analysis_ui::ruler_end_at(&app, START), "no ruler, no end point");
     crate::analysis_ui::pointer(&mut app, ToolEvent::Down { x: START[0], y: START[1], pressure: 1.0 }, Modifiers::ALT);
-    assert_eq!(app.ui.analysis.drag, Some(Drag::RulerNew), "and a press there starts a new ruler");
+    assert!(matches!(app.ui.analysis.drag, Some(Drag::RulerNew(_))), "and a press there starts a new ruler");
 }
 
 /// Over an end point without ⌥ the press grabs that end, so the plain ruler pointer stays.
