@@ -194,7 +194,12 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     if editing_placed_smart_object {
         app.ui.transform = None;
         app.transform_preview = None;
-    } else if switched_document || moving_layers(t).iter().any(|id| st.doc.layer(*id).is_none()) || st.doc.layer(layer).is_none() {
+    } else if switched_document && made == Some(MadeLayer::Place) {
+        // A dropped file placed in A and left for B is not wanted any more (#1099): it is cancelled.
+        cancel(app);
+    } else if switched_document {
+        apply_in_its_document(app, preview_doc_id);
+    } else if moving_layers(t).iter().any(|id| st.doc.layer(*id).is_none()) || st.doc.layer(layer).is_none() {
         cancel(app);
     } else if switched_away(app) {
         commit(app);
@@ -205,6 +210,27 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
         if app.ui.transform.is_some() && committing(app).is_none() {
             cancel(app);
         }
+    }
+}
+
+/// Another document became active while the box was open (a tab click, Window menu, Ctrl+Tab, the
+/// » list, the control channel): the box is applied to the document it belongs to, as for another
+/// tool or layer, and the document switched to stays active. When
+/// the box's document is no longer open, it ends as Esc would.
+fn apply_in_its_document(app: &mut PhotocraftApp, document: Option<DocId>) {
+    let now = app.session.active().map(|st| st.doc.id);
+    let index = document.and_then(|id| app.session.documents().iter().position(|d| d.doc.id == id));
+    let Some(index) = index else { return cancel(app) };
+    app.session.set_active(index);
+    commit(app);
+    // A commit still running in the background lands later (`on_job_event`); a refused one ends,
+    // as Esc would, rather than stay open over a document it doesn't belong to.
+    let refused = app.ui.transform.is_some() && committing(app).is_none();
+    if let Some(back) = now.and_then(|id| app.session.documents().iter().position(|d| d.doc.id == id)) {
+        app.session.set_active(back);
+    }
+    if refused {
+        cancel(app);
     }
 }
 

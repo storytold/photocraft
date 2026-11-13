@@ -4154,3 +4154,81 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
     assert_eq!(st.active_layer, Some(new));
 }
+
+/// Two documents: A (the red square, Free Transform open and moved by (20, 10)) and B (active).
+fn box_open_on_a_then_b() -> (PhotocraftApp, photocraft_doc::DocId, LayerId) {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let (a, layer) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.active_layer.unwrap())
+    };
+    begin(&mut app, &ctx).unwrap();
+    if let Some(t) = app.ui.transform.as_mut() {
+        t.quad = t.quad.map(|[x, y]| [x + 20.0, y + 10.0]);
+    }
+    app.session.execute("file.new", json!({"width": 32, "height": 32, "name": "docb"})).unwrap();
+    app.sync_views();
+    (app, a, layer)
+}
+
+fn bounds_in(app: &PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId) -> photocraft_geom::Rect {
+    let st = app.session.documents().iter().find(|st| st.doc.id == doc).unwrap();
+    st.doc.layer(layer).unwrap().surface().unwrap().content_bounds()
+}
+
+fn steps_of(app: &PhotocraftApp, doc: photocraft_doc::DocId) -> usize {
+    app.session.documents().iter().find(|st| st.doc.id == doc).unwrap().history.past_len()
+}
+
+/// #13569: switching to another document takes the box with it: the move lands in the document it
+/// was made in, as one undo step, and the switched-to document stays active and untouched.
+#[test]
+fn switching_documents_applies_the_box_to_its_own_document() {
+    let (mut app, a, layer) = box_open_on_a_then_b();
+    let b = app.session.active().unwrap().doc.id;
+    let (steps_a, steps_b) = (steps_of(&app, a), steps_of(&app, b));
+    end_if_left(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box is gone");
+    assert_eq!(app.session.active().unwrap().doc.id, b, "the document switched to stays active");
+    assert_eq!(bounds_in(&app, a, layer), photocraft_geom::Rect::new(28, 18, 44, 34), "the move was applied, not reverted");
+    assert_eq!(steps_of(&app, a), steps_a + 1, "one undo step in A");
+    assert_eq!(steps_of(&app, b), steps_b, "B is unchanged");
+    app.session.set_active(app.session.documents().iter().position(|st| st.doc.id == a).unwrap());
+    app.sync_views();
+    assert!(app.ui.transform.is_none(), "no box reopens on A");
+    assert_eq!(bounds_in(&app, a, layer), photocraft_geom::Rect::new(28, 18, 44, 34));
+}
+
+/// #13569 through the real route: clicking the other document's tab.
+#[test]
+fn clicking_another_documents_tab_keeps_the_transform() {
+    use egui_kittest::kittest::Queryable;
+    let (mut app, a, layer) = box_open_on_a_then_b();
+    let a_index = app.session.documents().iter().position(|st| st.doc.id == a).unwrap();
+    app.session.set_active(a_index);
+    let mut slot = Some(app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::Pro);
+        slot.take().unwrap()
+    });
+    assert!(h.state().ui.transform.is_some(), "the box is open with A active");
+    h.get_by_label_contains("docb").click();
+    h.run_steps(6);
+    land_jobs(h.state_mut());
+    h.run_steps(2);
+    assert!(h.state().ui.transform.is_none(), "the box ended");
+    assert_eq!(bounds_in(h.state(), a, layer), photocraft_geom::Rect::new(28, 18, 44, 34), "and applied");
+}
+
+/// A document closed while its box is open still ends the box, without panicking.
+#[test]
+fn closing_the_document_under_an_open_box_cancels_it() {
+    let (mut app, a, _) = box_open_on_a_then_b();
+    let index = app.session.documents().iter().position(|st| st.doc.id == a).unwrap();
+    app.session.close(index);
+    app.sync_views();
+    end_if_left(&mut app);
+    assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+}
