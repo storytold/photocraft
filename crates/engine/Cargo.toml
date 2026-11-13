@@ -30,6 +30,7 @@ photocraft-algo = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }
+craft-xml = { workspace = true }
 photocraft-psd = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-plugins = { workspace = true }
@@ -40,9 +41,6 @@ photocraft-formats = { workspace = true }
 flate2 = { workspace = true }
 craft-print = { workspace = true }
 
-# Photoshop `.kys` shortcut sets (`edit.keyboardShortcuts` `importKys`); already in the tree
-# through photocraft-ui-egui and usvg.
-roxmltree = "0.21"
 # Release tags use the same semantic versions as Cargo.
 semver = "1"
 
