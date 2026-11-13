@@ -191,3 +191,26 @@ fn a_hidden_handle_is_not_grabbed() {
     drag(&mut app, [624.7, 340.0], [624.7, 300.0], Modifiers::NONE);
     assert_eq!((path(&app), steps(&app)), (before, n));
 }
+
+/// ⌥-drag on a shown handle that lies on a straight segment moves the handle alone; the segment
+/// under it is not bent (⌥ makes the press Delete Anchor Point, whose segment drag must not win).
+#[test]
+fn alt_drag_on_a_shown_handle_over_a_straight_segment_moves_the_handle() {
+    let (mut app, _) = setup(Tool::AddAnchorPoint);
+    let doc_path = json!({"subpaths": [
+        {"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]},
+        {"closed": false, "knots": [
+            [100, 200],
+            {"anchor": [200, 250], "in": [150, 250], "out": [200, 300], "smooth": false},
+            [300, 200]]},
+    ]});
+    app.run("path.set", json!({"name": "Path 1", "path": doc_path})).unwrap();
+    app.ui.selected_path = Some("Path 1".into());
+    click(&mut app, [200.0, 250.0], Modifiers::NONE);
+    let (square, n) = (path(&app).subpaths[0].clone(), steps(&app));
+    drag(&mut app, [200.0, 300.0], [220.0, 330.0], Modifiers::ALT);
+    assert_eq!(path(&app).subpaths[0], square, "the square's top edge is not bent");
+    assert_eq!(knot(&app, 1, 1).out_ctrl, Point::new(220.0, 330.0));
+    assert_eq!(knot(&app, 1, 1).in_ctrl, Point::new(150.0, 250.0));
+    assert_eq!(steps(&app), n + 1);
+}
