@@ -47,7 +47,7 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
-fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
+fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Send + 'static) -> DabEffect {
     /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
     /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
     /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
@@ -144,7 +144,7 @@ fn smudge_mode(p: &Value, cmd: &str) -> Result<BlendMode> {
 }
 
 /// One dab's edit of the working copy.
-pub(crate) type DabEffect = Box<dyn FnMut(&mut Region, &Footprint)>;
+pub(crate) type DabEffect = Box<dyn FnMut(&mut Region, &Footprint) + Send>;
 
 /// Pixels an effect reads beyond the dab it writes. Smudge's pickup is a fixed-size square,
 /// independent of pressure, roundness and the dab's current angle.
@@ -280,13 +280,18 @@ impl DabTool {
     }
 }
 
-/// The reference application refuses a Dodge or Sharpen stroke in Indexed Color and Bitmap
-/// documents, with its alert's words (#12686, #12953); other modes (Multichannel and Duotone were
-/// not measured) paint as before. The live stroke checks this too, so it previews nothing there.
+/// The reference application refuses a Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke in
+/// Indexed Color and Bitmap documents, with its alert's words (#12686, #12673, #13033, #12656,
+/// #12953, #12967); other modes (Multichannel and Duotone were not measured) paint as before. The
+/// live stroke checks this too, so it previews nothing there.
 fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
     let tool = match cmd {
         "paint.dodge" => "dodge tool",
+        "paint.burn" => "burn tool",
+        "paint.sponge" => "sponge tool",
+        "paint.blur" => "blur tool",
         "paint.sharpen" => "sharpen tool",
+        "paint.smudge" => "smudge tool",
         _ => return Ok(()),
     };
     let why = match s.active().map(|st| st.doc.mode) {
@@ -316,10 +321,11 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         let fmt = surf.format();
         let mut effect = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        Ok(apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
+        apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
             None => effect(work, fp),
-        }))
+        })
+        .map_err(|e| bad(cmd, e.to_string()))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
     if from_live {
@@ -715,6 +721,22 @@ mod dodge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "sharpen_refuses_indexed_tests.rs"]
 mod sharpen_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "burn_refuses_indexed_tests.rs"]
+mod burn_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "sponge_refuses_indexed_tests.rs"]
+mod sponge_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "blur_refuses_indexed_tests.rs"]
+mod blur_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "smudge_refuses_indexed_tests.rs"]
+mod smudge_refuses_indexed_tests;
 
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]

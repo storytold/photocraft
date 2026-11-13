@@ -90,7 +90,10 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let opts = photocraft_io::ImportOptions {
+            keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
+            ..photocraft_engine::jobs::import_options(self.session.prefs())
+        };
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
@@ -318,6 +321,7 @@ impl PhotocraftApp {
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
         FormatChoices { jpeg: None, ..choices }.record(&mut step);
+        photocraft_engine::actions_cmds::note_automation_step(&mut self.session, "file.save", &step);
         self.session.journal.push(("file.save".into(), step));
         Ok(r)
     }
@@ -363,6 +367,7 @@ impl PhotocraftApp {
             step["tiffLayers"] = layers.into();
         }
         choices.record(&mut step);
+        photocraft_engine::actions_cmds::note_automation_step(&mut self.session, "file.saveAs", &step);
         self.session.journal.push(("file.saveAs".into(), step));
         Ok(r)
     }
@@ -768,6 +773,7 @@ impl PhotocraftApp {
             app.write_document(path, settings, copy)
         });
         if written.is_ok() {
+            photocraft_engine::actions_cmds::note_automation_step(&mut self.session, record, &step);
             self.session.journal.push((record.into(), step));
         }
         match written {

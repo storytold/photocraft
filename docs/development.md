@@ -36,7 +36,7 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
-On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+On Linux and FreeBSD, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
 
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
@@ -179,6 +179,8 @@ the `memory` sample, effective allowances and current working reservations.
 The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (Linux `~/.config/photocraft/logs/`, macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. A launch while another PhotoCraft is still running leaves that instance's log where it is and writes its own `photocraft-<pid>.log` next to it (the newest two of those are kept once their instances have exited; the `PhotoCraft <version>, log file <path>` line at startup names the file in use). The file stops growing at 16 MiB. `--version` and command-line errors write no file. A desktop start that fails before any window exists logs the error and, when no terminal, automation client or headless session can report it, shows it in a dialog naming this file (#7643).
 
 By default PhotoCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`; the web build logs to the browser console instead.
+
+A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; file names are left out): `N file(s) dragged over the window` when the drag reaches the window, and `N file(s) dropped on the window: <target>, pointer known|unknown` when it is released. Neither line means the operating system never offered the files to PhotoCraft: on Windows, a PhotoCraft started with Run as administrator gets nothing from a File Explorer that is not elevated, and a drag from a browser or a zip folder carries no file path. Only the first line means PhotoCraft saw the drag but not the drop. Both lines with no document opened are normal for a drop on the canvas (the file is placed as a layer) and for a preset file (it is imported into its library). A routing or open error also shows as a notice.
 
 ## Environment variables
 
@@ -770,19 +772,19 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+`craft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
 (Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
 
 ```sh
-cargo run -p photocraft-psd --example atn_dump -- "Default Actions.atn"
-cargo run -p photocraft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
+cargo run -p craft-psd --example atn_dump -- "Default Actions.atn"
+cargo run -p craft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
 
 The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
-corpora*): `photocraft-psd`'s corpus test parses every file and rewrites it byte for byte;
+corpora*): `craft-psd`'s corpus test parses every file and rewrites it byte for byte;
 `photocraft-engine`'s loads, saves and reloads every set and caps the steps that still have no
 PhotoCraft equivalent.
 
@@ -807,7 +809,7 @@ recorded rectangle/preset are retained for saving, without resizing the target.
 
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
 encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
-its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+its README): `cargo test -p craft-psd --test it atn_contract::`.
 Recorded layer indexes and ordinals resolve against the full stack, including collapsed children
 and hidden group-end positions. Indexed moves use the stack before the move. Recorded document
 indexes are one-based opening order; a native numeric `document` parameter remains a zero-based
@@ -883,7 +885,7 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
 - These budgets apply to an import's **aggregate peak estimate**, not to one allocation: a peak
   may sum many layer, mask, merged and workspace buffers. Each individual buffer must still fit
   the target's layout limit (`isize::MAX`) and the decoder's own per-buffer allowance
-  (`photocraft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
+  (`craft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
   enforced by fallible allocation or an explicit cap where that buffer is created. A 64-bit
   native process has no measurable aggregate address-space cap, so admission relies on explicit
   approval plus those per-buffer checks; 32-bit native uses a 2 GiB project cap
@@ -1049,7 +1051,7 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 **Opt-in locally, strict when opted in, always in CI.**
 
-- The corpus tests sit behind the `corpus` cargo feature of `photocraft-psd`, `photocraft-codecs`,
+- The corpus tests sit behind the `corpus` cargo feature of `craft-psd`, `photocraft-codecs`,
   `photocraft-io` and `photocraft-engine`, so plain `cargo test` neither compiles nor needs them.
   The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` (test-corpus
   turns it on).

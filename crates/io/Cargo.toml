@@ -28,7 +28,7 @@ photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-algo = { workspace = true }
-photocraft-psd = { workspace = true }
+craft-psd = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-raw = { workspace = true }
 photocraft-affinity = { workspace = true }
@@ -69,7 +69,7 @@ miniz_oxide = "0.9"
 crc32fast = "1.5"
 photocraft-affinity = { workspace = true, features = ["synth"] }
 flate2 = { workspace = true }
-photocraft-psd = { workspace = true, features = ["testgen"] }
+craft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 photocraft-testkit = { workspace = true }
 proptest = { workspace = true }
