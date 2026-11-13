@@ -44,6 +44,9 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "plugIns.allowScriptsToConnect",
     "type.textEngine",
     "enhancedControls.scrubbySliderAcceleration",
+    // Only the top bar's appearance button menu listed the favourite themes, and the top bar no
+    // longer has that button (#13577). Kept in the model so older settings files still load.
+    "interface.favoriteThemes",
 ];
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?

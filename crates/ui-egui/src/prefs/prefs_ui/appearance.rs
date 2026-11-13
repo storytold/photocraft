@@ -1,5 +1,5 @@
 use super::fields::{choice_label, color_of, preference_matches};
-use super::{AppearanceMode, Color32, DarkTheme, LightTheme, Map, PhotocraftApp, RichText, SavedTheme, Sense, ThemeKind, Tokens, Value, json, prefs, vec2};
+use super::{AppearanceMode, Color32, DarkTheme, LightTheme, Map, PhotocraftApp, RichText, Sense, ThemeKind, Tokens, Value, json, prefs, vec2};
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
 pub fn canvas_style(app: &PhotocraftApp) -> crate::gpu_canvas::CanvasStyle {
@@ -161,11 +161,8 @@ pub(crate) fn sync_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// One theme as a Color Theme swatch: its panel colour under a chrome strip with an accent dot,
-/// outlined when chosen. The name is the tooltip and the accessible label. A star badge on its
-/// corner adds the theme to (or removes it from) the favourites listed by the appearance
-/// button's menu; it shows while the swatch is hovered, and stays for a favourite.
-fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut String, favorites: &mut Vec<SavedTheme>) {
-    const BADGE: f32 = 7.0;
+/// outlined when chosen. The name is the tooltip and the accessible label.
+fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut String) {
     let t = Tokens::get(ui.ctx());
     let p = Tokens::for_kind(kind);
     let label = tl!(&choice_label(id)).to_string();
@@ -188,40 +185,16 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
     if resp.on_hover_text(&label).clicked() {
         *selected = id.to_string();
     }
-    let Some(theme) = SavedTheme::parse(id) else { return };
-    let favorite = favorites.contains(&theme);
-    let center = rect.right_top() + vec2(-3.0, 3.0);
-    let badge = egui::Rect::from_center_size(center, vec2(BADGE * 2.0, BADGE * 2.0));
-    if !(favorite || ui.rect_contains_pointer(rect.union(badge))) {
-        return;
-    }
-    ui.painter().circle(center, BADGE, t.card, egui::Stroke::new(1.0, t.card_border));
-    let (icon, tint) = if favorite { ("star-filled", t.accent) } else { ("star", t.text_dim) };
-    let action = if favorite { tl!("Remove from favorites") } else { tl!("Add to favorites") };
-    // Interact and paint without allocating: a widget placed at `badge` would grow the row by the
-    // 4 px the badge overhangs the swatch, re-centring the swatches after this one whenever the
-    // pointer arrives, and oscillating when that moves the swatch out from under it.
-    let response = ui.interact(badge, ui.scope_id().with((id, "favorite")), Sense::click()).on_hover_text(action);
-    crate::icons::paint(ui, badge, icon, 10.0, tint);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{action}: {label}")));
-    if response.clicked() {
-        if favorite {
-            favorites.retain(|saved| *saved != theme);
-        } else {
-            favorites.push(theme);
-        }
-    }
 }
 
 /// A grid row of theme swatches, marked Active when the appearance mode shows this family.
-fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, favorites: &mut Vec<SavedTheme>, options: &[(&str, ThemeKind)]) {
+fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, options: &[(&str, ThemeKind)]) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!(title)).color(t.text_dim));
     ui.horizontal(|ui| {
-        // Room for the favourite star badges on the swatch corners.
         ui.spacing_mut().item_spacing.x = 6.0;
         for (id, kind) in options {
-            theme_swatch(ui, *kind, id, selected, favorites);
+            theme_swatch(ui, *kind, id, selected);
         }
         if active {
             ui.add_space(6.0);
@@ -266,14 +239,12 @@ pub(super) fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, s
     obj.insert("appearanceMode".into(), json!(mode));
     let mut light = obj.get("lightTheme").and_then(Value::as_str).unwrap_or("studioLight").to_string();
     let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
-    let mut favorites: Vec<SavedTheme> = obj.get("favoriteThemes").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     if rows.light {
-        theme_row(ui, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS);
+        theme_row(ui, "Light Theme", light_active, &mut light, LIGHT_THEME_OPTIONS);
     }
     if rows.dark {
-        theme_row(ui, "Dark Theme", !light_active, &mut dark, &mut favorites, DARK_THEME_OPTIONS);
+        theme_row(ui, "Dark Theme", !light_active, &mut dark, DARK_THEME_OPTIONS);
     }
     obj.insert("lightTheme".into(), json!(light));
     obj.insert("darkTheme".into(), json!(dark));
-    obj.insert("favoriteThemes".into(), json!(favorites));
 }

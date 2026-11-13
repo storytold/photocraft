@@ -494,47 +494,6 @@ fn preferences_interface_offers_and_applies_sync_with_system() {
 }
 
 #[test]
-fn theme_star_saves_favorite() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, _) = app_with_store();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    h.get_by_label("Classic").hover();
-    h.run_steps(2);
-    h.get_by_label("Add to favorites: Classic").click();
-    h.run_steps(2);
-    h.get_by_label("Apply").click();
-    h.run_steps(2);
-    assert_eq!(h.state().session.prefs().interface.favorite_themes, vec![SavedTheme::Classic]);
-    assert!(h.query_by_label("Remove from favorites: Classic").is_some());
-}
-
-/// The favourite star badge overhangs its swatch; showing it on hover must not move the swatches
-/// after it, or the row would shift under the pointer.
-#[test]
-fn theme_star_badge_on_hover_does_not_move_the_next_swatch() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, _) = app_with_store();
-    open_preferences(&mut app, "interface");
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        app
-    });
-    h.run_steps(4);
-    let first = h.get_by_label("Classic").rect();
-    let next = h.get_by_label("Adwaita").rect();
-    h.hover_at(first.right_top() + vec2(-3.0, 3.0));
-    h.run_steps(3);
-    assert!(h.query_by_label("Add to favorites: Classic").is_some(), "the badge shows while the swatch is hovered");
-    assert_eq!(h.get_by_label("Classic").rect(), first);
-    assert_eq!(h.get_by_label("Adwaita").rect(), next);
-}
-
-#[test]
 fn preferences_interface_shows_language_without_scrolling() {
     // #2532: in a small window the theme cards filled the page and Language sat out of view
     // below them. Like Photoshop, Presentation follows Appearance and both fit.
