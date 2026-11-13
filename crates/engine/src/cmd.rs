@@ -890,7 +890,7 @@ fn build() -> Vec<CommandSpec> {
                 let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
                     Some(k) => Some(k),
                     None if p.get("color").is_none_or(Value::is_null) => s.tools.picked_role_cmyk(0),
-                    None => None,
+                    None => s.tools.matching_cmyk([c[0], c[1], c[2]]),
                 };
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Color Fill Layer", |doc, active| {

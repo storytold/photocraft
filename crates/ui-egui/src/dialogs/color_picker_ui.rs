@@ -230,8 +230,17 @@ pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialo
     let mut f = fields_with_web(app, "field", label, rgb);
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
-    if let Some(st) = app.session.active() {
-        f.insert("__document".into(), json!(st.doc.id.0));
+    // Keep the document associated with the parent dialog.
+    let parent_document = app.ui.dialog_mut(dialog).and_then(|d| d.fields.get("__document").cloned());
+    match parent_document {
+        Some(document) => {
+            f.insert("__document".into(), document);
+        }
+        None => {
+            if let Some(st) = app.session.active() {
+                f.insert("__document".into(), json!(st.doc.id.0));
+            }
+        }
     }
     let id = app.ui.open_dialog(DialogKind::Command, f);
     live_preview::begin_field(app, id, dialog, field);
