@@ -1088,6 +1088,57 @@ fn review_conditional_import_keeps_each_resolved_literal_set_scope() {
 }
 
 #[test]
+fn review_numeric_import_scopes_keep_aliases_indices_and_session_prefixes() {
+    for (index, shifted) in [(json!(1), json!(3)), (json!(1.0), json!(3.0))] {
+        let params = json!({"action":index,"set":"Ungrouped Actions"});
+        let embedded = json!({"steps":[["actions.play",{"action":0,"set":"Ungrouped Actions"}]],"calledActions":[{"name":"Own","steps":[]}]});
+        let literal = Action::new("Literal", vec![("file.new".into(), json!({"width":7,"height":1}))]);
+        let loose = Action::new("Loose", vec![("file.new".into(), json!({"width":3,"height":1}))]);
+        let callers = vec![
+            literal,
+            Action::new("Caller", vec![("actions.play".into(), params.clone())]),
+            Action::new("Inline", vec![("file.automate.batch".into(), json!({"steps":[["actions.play",params.clone()]]}))]),
+            Action::new("Embedded", vec![("file.automate.batch".into(), embedded.clone())]),
+            Action::new("Wrong", vec![("actions.play".into(), json!({"action":0,"set":"Ungrouped Actions"}))]),
+            Action::new("Batch", vec![("file.automate.batch".into(), json!({"action":index}))]),
+        ];
+        let bytes = native_archive(&[("", &[loose]), ("Ungrouped Actions", &callers)]);
+        let mut imported = atn_cmds::import(&bytes).unwrap();
+        atn_cmds::normalize_import(&mut imported, [], false).unwrap();
+        assert_eq!(imported.actions[2].steps[0].1, json!({"action":index,"set":"Ungrouped Actions 2"}));
+        assert_eq!(imported.actions[3].steps[0].1["steps"][0][1], imported.actions[2].steps[0].1);
+        assert_eq!(imported.actions[4].steps[0].1, embedded, "an embedded Batch retains its own namespace");
+        assert_eq!(
+            imported.actions[5].steps[0].1,
+            json!({"action":0,"set":"Ungrouped Actions 2"}),
+            "a literal wire scope must not fall through to the empty set"
+        );
+        assert_eq!(imported.actions[6].steps[0].1, json!({"action":index}), "unscoped numeric Batch selection stays numeric");
+        let mut session = crate::Session::new();
+        session.actions.list =
+            vec![Action { set: Some("Kept".into()), ..Action::new("Existing", vec![]) }, Action { set: Some("Kept".into()), ..Action::new("Literal", vec![]) }];
+        session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":false})).unwrap();
+        let expected = json!({"action":shifted,"set":"Ungrouped Actions 2"});
+        assert_eq!(session.actions.list[3].name, "Literal 2", "name collisions do not change numeric occurrence identity");
+        assert_eq!(session.actions.list[4].steps[0].1, expected);
+        assert_eq!(session.actions.list[5].steps[0].1["steps"][0][1], expected);
+        assert_eq!(session.actions.list[6].steps[0].1, embedded);
+        assert_eq!(session.actions.list[7].steps[0].1, json!({"action":2,"set":"Ungrouped Actions 2"}));
+        assert_eq!(session.actions.list[8].steps[0].1, json!({"action":shifted}));
+        session.actions = library::decode(&encode(&session.actions)).unwrap();
+        assert_eq!(session.actions.list[4].steps[0].1, expected, "durable reopen preserves the numeric selector and logical scope");
+        let played = session.execute("actions.play", json!({"action":"Caller","set":"Ungrouped Actions 2"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(session.active().unwrap().doc.size.width, 7);
+        let document = session.active().unwrap().doc.id;
+        let played = session.execute("actions.play", json!({"action":"Wrong","set":"Ungrouped Actions 2"})).unwrap();
+        assert!(played["failed"]["error"].as_str().unwrap().contains("not in set"), "{played}");
+        assert_eq!(session.active().unwrap().doc.id, document, "a mismatched scope cannot run Loose");
+        assert_eq!(session.active().unwrap().doc.size.width, 7);
+    }
+}
+
+#[test]
 fn review_same_row_scoped_duplicate_targets_refuse_without_rejecting_occurrences() {
     let children = vec![
         Action::new("Child", vec![("file.new".into(), json!({"width":5,"height":1}))]),
@@ -1164,6 +1215,54 @@ fn review_interleaved_scoped_calls_load_across_rows_but_duplicate_targets_refuse
     assert!(session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&ambiguous)})).is_err());
     assert_eq!(encode(&session.actions), before, "ambiguous import publishes no partial library");
     assert_eq!(session.actions.rev, revision);
+}
+
+#[test]
+fn review_portable_batch_contents_obey_native_admission_without_changing_local_bytes() {
+    assert!(crate::commands::find("plugin.install").is_some());
+    for params in [
+        json!({"source":"open","steps":[["plugin.install",{}]]}),
+        json!({"source":"open","action":[{"command":"plugin.install","params":{}}]}),
+        json!({"source":"open","steps":["plugin.install"]}),
+        json!({"source":"open","steps":[{"id":"file.automate.batch","params":{"steps":[{"id":"plugin.install"}]}}]}),
+        json!({"source":"open","steps":[["actions.play",{"action":"Inner"}]],"calledActions":[{"name":"Inner","steps":[["plugin.install",{}]]}]}),
+        json!({"source":"open","steps":[["actions.play",{"action":"Inner"}]],"calledActions":[{"name":"Inner","steps":[["file.automate.batch",{"action":["plugin.install"]}]]}]}),
+    ] {
+        let action = Action::new("Nested", vec![("file.automate.batch".into(), params.clone())]);
+        let bytes = native_archive(&[("S", &[action])]);
+        let error = atn_cmds::import(&bytes).unwrap_err();
+        assert!(error.contains("native action command `plugin.install` is not permitted"), "{error}");
+        let mut session = crate::Session::new();
+        session.actions.list.push(Action::new("Kept", vec![]));
+        let before = session.actions.clone();
+        let error = session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap_err();
+        assert!(error.to_string().contains("native action command `plugin.install` is not permitted"), "{error}");
+        assert_eq!(session.actions, before, "nested refusal publishes no partial library");
+        // Durable libraries retain these bytes without executing the nested command.
+        session.actions = library::decode(&bytes).unwrap();
+        assert_eq!(session.actions.list[0].steps[0].1, params);
+        assert_eq!(encode(&session.actions), bytes);
+        let before = session.actions.clone();
+        let error = session.execute("actions.save", json!({"action":"Nested"})).unwrap_err();
+        assert!(error.to_string().contains("plugin.install"), "{error}");
+        assert_eq!(session.actions, before, "refused portable export preserves local data");
+        let saved = session.execute("actions.save", json!({"action":"Nested","skipUnsupported":true})).unwrap();
+        assert_eq!(saved["skipped"], json!([{"action":"Nested","step":0,"id":"file.automate.batch"}]));
+        let omitted = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+        assert!(atn::parse_sets(&omitted).unwrap()[0].actions[0].items.is_empty(), "skip omits the whole Batch step");
+    }
+    for params in [
+        json!({"steps":[["file.new",{"width":5,"height":1}],"file.close",{"id":"actions.stopMessage","params":{"message":"kept"}}]}),
+        json!({"steps":[["file.automate.batch",{"action":[{"command":"file.close"}]}]]}),
+        json!({"steps":[["actions.play",{"action":"Inner"}]],"calledActions":[{"name":"Inner","steps":[["file.close",{}]]}]}),
+        json!({"steps":[["future.portableNested",{"steps":[["plugin.install",{}]]}]]}),
+        json!({"steps":["file.close"],"action":[["plugin.install",{}]]}),
+        json!({"steps":[{"command":"file.close","id":"plugin.install"}]}),
+    ] {
+        let action = Action::new("Accepted", vec![("file.automate.batch".into(), params.clone())]);
+        let bytes = native_archive(&[("S", &[action])]);
+        assert_eq!(atn_cmds::import(&bytes).unwrap().actions[0].steps[0].1, params);
+    }
 }
 
 #[test]

@@ -102,6 +102,12 @@ pub fn normalize_import(
             // All branches resolve in the original wire namespace before publishing
             // their logical display aliases.
             let shared_scope = params.get("set").and_then(Value::as_str).map(str::to_owned);
+            if id == "actions.play"
+                && let Some(scope) = shared_scope.as_deref()
+                && let Some(logical) = params.get("action").and_then(|target| numeric_call_scope(&imp.sets, &set_for, target, scope))
+            {
+                params["set"] = json!(logical);
+            }
             let mut shared_scopes = Vec::new();
             for key in keys {
                 if let Some(target) = params.get(*key).and_then(Value::as_str) {
@@ -153,6 +159,18 @@ pub fn normalize_import(
     imp.actions = added;
     imp.function_keys = names.iter().zip(&imp.action_keys).filter_map(|(name, key)| key.as_ref().map(|key| (name.clone(), key.clone()))).collect();
     Ok(names)
+}
+
+/// Keep numeric identity in the imported list; session loading rebases it after normalization.
+/// Scope aliases follow the indexed row when it belongs to the requested wire scope. A mismatched
+/// target keeps that scope's constraint, so the empty-set display alias cannot make it valid.
+fn numeric_call_scope<'a>(sets: &'a [ImportedSet], set_for: &[usize], target: &Value, scope: &str) -> Option<&'a String> {
+    let index = target.as_i64().or_else(|| target.as_f64().filter(|v| v.is_finite()).map(|v| v.round() as i64)).and_then(|v| usize::try_from(v).ok())?;
+    let row = *set_for.get(index)?;
+    let wire = sets.iter().any(|set| set.wire_name == scope);
+    let mut matching = sets.iter().enumerate().filter(|(_, set)| if wire { set.wire_name == scope } else { set.name == scope });
+    let (_, first) = matching.next()?;
+    Some(matching.find(|(index, _)| *index == row).map_or(&first.name, |(_, set)| &set.name))
 }
 
 /// Resolve wire names before logical aliases; repeated rows require one unique named target.
@@ -331,6 +349,43 @@ fn native_text(descriptor: &Descriptor, key: &str) -> std::result::Result<String
     String::from_utf16(units).map_err(|_| format!("invalid UTF16 native action {key}"))
 }
 
+/// Match Batch's three accepted step forms, including its command-key precedence and default params.
+fn portable_step(step: &Value) -> Option<(&str, Option<&Value>)> {
+    match step {
+        Value::Array(values) => Some((values.first()?.as_str()?, values.get(1))),
+        Value::Object(fields) => Some((fields.get("command").or_else(|| fields.get("id"))?.as_str()?, fields.get("params"))),
+        Value::String(id) => Some((id, None)),
+        _ => None,
+    }
+}
+
+/// Nested Batch commands have the same portable policy as top-level native steps.
+/// Borrow the already bounded JSON and leave opaque params and embedded references unchanged.
+fn portable_native_contents(id: &str, params: &Value) -> std::result::Result<(), String> {
+    let mut pending = vec![(id, Some(params))];
+    while let Some((id, params)) = pending.pop() {
+        if !portable_native(id) {
+            return Err(format!("native action command `{id}` is not permitted in a portable Actions file"));
+        }
+        if id != "file.automate.batch" {
+            continue;
+        }
+        let Some(params) = params else { continue };
+        // A present `steps` wins, even when invalid; the ignored action array cannot execute.
+        if let Some(steps) = params.get("steps").or_else(|| params.get("action").filter(|action| action.is_array())) {
+            pending.extend(steps.as_array().into_iter().flatten().filter_map(portable_step));
+        }
+        if let Some(actions) = params.get("calledActions").and_then(Value::as_array) {
+            for action in actions {
+                if let Some(steps) = action.get("steps").and_then(Value::as_array) {
+                    pending.extend(steps.iter().filter_map(portable_step));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Decode only the reserved native event with its exact two-field schema; never dispatch its command.
 fn read_native(item: &AtnItem, input: NativeInput) -> std::result::Result<Option<(String, Value)>, String> {
     if item.event != AtnEvent::name(NATIVE_EVENT) {
@@ -355,6 +410,9 @@ fn read_native(item: &AtnItem, input: NativeInput) -> std::result::Result<Option
     let params = native_text(descriptor, "params")?;
     // serde's bounded recursion remains enabled; load never dispatches or resolves the command.
     let params = serde_json::from_str(&params).map_err(|error| format!("invalid native action JSON: {error}"))?;
+    if matches!(input, NativeInput::Portable) {
+        portable_native_contents(&id, &params)?;
+    }
     Ok(Some((id, params)))
 }
 
