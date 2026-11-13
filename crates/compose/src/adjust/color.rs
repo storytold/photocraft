@@ -123,6 +123,17 @@ pub fn bayer4(x: i32, y: i32) -> f32 {
     (M[((y & 3) * 4 + (x & 3)) as usize] + 0.5) / 16.0 - 0.5
 }
 
+/// A `.3dl` shaper's 1-D curve on each input channel, ahead of the 3-D table (#8982, #11452):
+/// Photoshop shapes the input and *then* looks it up, and baking the curve into a table that isn't
+/// the identity can't keep the breakpoints that order makes. Empty `knots` is the identity, so the
+/// common (`.cube`, even-ramp) case costs one predictable branch.
+pub fn shape_input(knots: &[f32], c: [f32; 3]) -> [f32; 3] {
+    if knots.is_empty() {
+        return c;
+    }
+    c.map(|v| photocraft_cms::lutfile::shape(knots, v))
+}
+
 /// Samples a 3D LUT (`n`³ RGB triplets, red fastest) at `c`, trilinear or tetrahedral.
 pub fn lut3d_sample(lut: &[f32], n: usize, c: [f32; 3], tetrahedral: bool) -> [f32; 3] {
     // A degenerate or short table can't be sampled: leave the colour alone.

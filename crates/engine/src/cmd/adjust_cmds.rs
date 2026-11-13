@@ -108,11 +108,11 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 /// error.
 pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
     const CMD: &str = "colorLookup";
-    let (mut name, mut lut, mut size, mut tetrahedral, mut dither, mut source) = match base {
-        Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source }) => {
-            (name.clone(), lut.clone(), *size, *tetrahedral, *dither, source.clone())
+    let (mut name, mut lut, mut size, mut tetrahedral, mut dither, mut source, mut shaper) = match base {
+        Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source, shaper }) => {
+            (name.clone(), lut.clone(), *size, *tetrahedral, *dither, source.clone(), shaper.clone())
         }
-        _ => (String::new(), None, 0, false, false, None),
+        _ => (String::new(), None, 0, false, false, None, None),
     };
     let encoding = opt_str(CMD, p, "dataEncoding")?.unwrap_or("text");
     if !matches!(encoding, "text" | "base64") {
@@ -133,6 +133,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             lut = None;
             size = 0;
             source = None;
+            shaper = None;
         } else {
             let f = photocraft_cms::lutfile::builtin(id).ok_or_else(|| bad(CMD, format!("unknown look `{id}` (built-ins: {})", builtin_ids())))?;
             let label = f.title.clone();
@@ -170,6 +171,8 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         name = label;
         size = f.size as u32;
         lut = Some(std::sync::Arc::new(f.data));
+        // A .3dl shaper travels beside the table as its own step, never baked into it (#11452).
+        shaper = f.shaper;
         source = src;
     }
     match opt_str(CMD, p, "interpolation")? {
@@ -184,7 +187,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
     if let Some(b) = opt_bool(CMD, p, "dither")? {
         dither = b;
     }
-    Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source })
+    Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source, shaper })
 }
 
 /// A loaded LUT file, tagged with the format [`photocraft_cms::lutfile::parse`] read it as.

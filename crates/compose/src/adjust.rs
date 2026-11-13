@@ -25,7 +25,7 @@ use color::gradient;
 pub use color::{
     BalanceCurve, VIBRANCE_BOOST, VIBRANCE_GREY, bayer4, black_white_gray, color_balance_channel, colorize_saturation, hdr_saturation_factor, hsl_to_rgb,
     hue_range_tables, hue_saturation, hue_saturation_in, lut3d_sample, photo_filter_matrix, range_lightness, rgb_to_hsl, selective_color,
-    selective_color_weights, vibrance_lin, vibrance_px,
+    selective_color_weights, shape_input, vibrance_lin, vibrance_px,
 };
 #[cfg(test)]
 use tone::LUT_SIZE;
@@ -272,13 +272,15 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             map_rgb(buf, |c| std::array::from_fn(|ch| curves[ch].eval(c[ch])))
         }
         Adjustment::SelectiveColor { relative, adjustments } => map_rgb(buf, |c| selective_color(c, *relative, adjustments)),
-        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
+        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, shaper, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
             let (n, w, x0, y0) = (*size as usize, buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
+            let knots = shaper.as_deref().map_or(&[] as &[f32], |a| a.as_slice());
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {
                     continue;
                 }
-                let mut o = lut3d_sample(table, n, [p[0], p[1], p[2]], *tetrahedral);
+                // The shaper is a 1-D step ahead of the table, never baked into it (#11452).
+                let mut o = lut3d_sample(table, n, shape_input(knots, [p[0], p[1], p[2]]), *tetrahedral);
                 if *dither {
                     let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
                     o = o.map(|v| (v + d).clamp(0.0, 1.0));

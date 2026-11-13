@@ -61,9 +61,12 @@ fn mesh_three_value_shaper_is_applied() {
                 }
             }
         }
+        // #11452: the shaper is its own 1-D step beside the table, so the look of the file is
+        // what its lookup renders at a node's input, not the node's stored value.
         let lut = photocraft_cms::lutfile::parse_3dl(&text).unwrap();
-        let mid = ((lut.size / 2 * lut.size + lut.size / 2) * lut.size + lut.size / 2) * 3;
-        assert!((lut.data[mid] - expected).abs() < 0.002, "{shaper}: {}", lut.data[mid]);
+        let at = (lut.size / 2) as f32 / (lut.size - 1) as f32;
+        let got = photocraft_cms::lutfile::sample(&lut, [at, at, at])[0];
+        assert!((got - expected).abs() < 0.002, "{shaper}: {got} at {at}");
     }
 }
 
