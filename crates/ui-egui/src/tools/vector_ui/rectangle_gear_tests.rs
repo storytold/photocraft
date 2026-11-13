@@ -29,14 +29,14 @@ fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
 
 /// A canvas drag from `from` to `to`, pressed with `press` held and moved and released with `held`
 /// (a key pressed after the drag starts), as the canvas sends it.
-fn drag(app: &mut PhotocraftApp, from: [f32; 2], to: [f32; 2], press: Modifiers, held: Modifiers) {
+fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], press: Modifiers, held: Modifiers) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, press);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, held);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, held);
 }
 
 /// The live rectangle a drag with `tool` and options `set` draws, as `[x0, y0, x1, y1]`.
-fn drawn(tool: Tool, set: impl FnOnce(&mut ToolOptions), from: [f32; 2], to: [f32; 2], held: Modifiers) -> [f64; 4] {
+fn drawn(tool: Tool, set: impl FnOnce(&mut ToolOptions), from: [f64; 2], to: [f64; 2], held: Modifiers) -> [f64; 4] {
     let mut app = app(tool, set);
     let layers = layer_count(&app);
     drag(&mut app, from, to, Modifiers::NONE, held);
