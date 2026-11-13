@@ -28,7 +28,7 @@ fn open_with_renderer(gpu: bool) -> (Harness<'static, PhotocraftApp>, u64) {
 }
 
 fn type_side(h: &mut Harness<'static, PhotocraftApp>, label: &str, input: &str) {
-    let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().label() == Some(label)).unwrap();
+    let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().label().as_deref() == Some(label)).unwrap();
     field.click();
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
