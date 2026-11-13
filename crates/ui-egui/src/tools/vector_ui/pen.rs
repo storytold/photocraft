@@ -744,27 +744,39 @@ pub(crate) fn path_op_field(app: &mut PhotocraftApp) -> &mut String {
     if super::shapes::is_shape_tool(app.ui.tool) { &mut app.ui.tool_options.shape_path_op } else { &mut app.ui.tool_options.pen_path_op }
 }
 
+/// The path a drawing tool's menus act on, as `path.*` target params: in Shape mode the selected
+/// shape layer's; in Path mode the path the Pen draws into (a targeted vector mask, the selected
+/// path, else the Work Path).
+fn drawn_path(app: &PhotocraftApp) -> Option<(Value, &Path)> {
+    let st = app.session.active()?;
+    if tool_in_shape_mode(app) {
+        let id = st.active_layer?;
+        let LayerContent::Shape(sh) = &st.doc.layer(id)?.content else { return None };
+        return Some((json!({"name": "layer", "layer": id.0}), &sh.path));
+    }
+    let mask = targeted_vector_mask_id(app).and_then(|id| Some((id, &st.doc.layer(photocraft_doc::LayerId(id))?.vector_mask.as_ref()?.path)));
+    if let Some((id, path)) = mask {
+        return Some((json!({"name": "layer", "layer": id}), path));
+    }
+    let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
+    let path = doc_path(&st.doc, &name)?;
+    Some((json!({"name": name}), path))
+}
+
 /// What the Path Operations menu's Merge Shape Components merges, as a command, its params and
-/// the number of shape components there: with Path Selection the path it selects in; in Shape
-/// mode the selected shape layer; in Path mode the path the Pen draws into (a targeted vector
-/// mask, the selected path, else the Work Path).
+/// the number of shape components there: with Path Selection the path it selects in; otherwise
+/// the tool's [`drawn_path`], a shape layer through its own Combine Shapes command.
 fn merge_target(app: &PhotocraftApp) -> Option<(&'static str, Value, usize)> {
     if app.ui.tool == Tool::PathSelection {
         let (r, p) = crate::direct_select::active_paths(app).into_iter().next()?;
         return Some(("path.mergeShapeComponents", r.params(app), p.components().len()));
     }
-    let st = app.session.active()?;
+    let (params, path) = drawn_path(app)?;
+    let n = path.components().len();
     if tool_in_shape_mode(app) {
-        let id = st.active_layer?;
-        let LayerContent::Shape(sh) = &st.doc.layer(id)?.content else { return None };
-        return Some(("layer.combineShapes.mergeShapeComponents", json!({"layer": id.0}), sh.path.components().len()));
+        return Some(("layer.combineShapes.mergeShapeComponents", json!({"layer": params["layer"]}), n));
     }
-    if let Some((id, p)) = targeted_vector_mask(app) {
-        return Some(("path.mergeShapeComponents", json!({"name": "layer", "layer": id}), p.components().len()));
-    }
-    let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
-    let path = if name == "work" { st.doc.work_path.as_ref() } else { st.doc.paths.iter().find(|p| p.name == name).map(|p| &p.path) }?;
-    Some(("path.mergeShapeComponents", json!({"name": name}), path.components().len()))
+    Some(("path.mergeShapeComponents", params, n))
 }
 
 /// The Path Operations button of the Pen, Freeform Pen, Curvature Pen and Path Selection (#1397),
@@ -837,31 +849,56 @@ pub(crate) const PATH_SPACING_ENTRIES: [(&str, &str); 2] =
 /// Path arrangement's entries, front to back.
 pub(crate) const PATH_ARRANGE_ENTRIES: [&str; 4] = ["Bring Shape To Front", "Bring Shape Forward", "Send Shape Backward", "Send Shape To Back"];
 
-/// The Path alignment button of the Shape tools (#13235). Every entry is greyed: the engine has no
-/// command that aligns or distributes the components of a path yet.
-pub(super) fn path_alignment_menu(_app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// `path.alignComponents` `edge` of each [`PATH_ALIGN_ENTRIES`] entry, in the same order.
+const PATH_ALIGN_EDGES: [&str; 6] = ["leftEdges", "horizontalCenters", "rightEdges", "topEdges", "verticalCenters", "bottomEdges"];
+
+/// `path.distributeComponents` `edge` of each [`PATH_SPACING_ENTRIES`] entry, in the same order
+/// (the Distribute entries use [`PATH_ALIGN_EDGES`]).
+const PATH_SPACING_EDGES: [&str; 2] = ["horizontally", "vertically"];
+
+/// The components of `path` that have an anchor: the ones alignment can move.
+fn alignable_components(path: &Path) -> usize {
+    path.components().into_iter().filter(|c| path.subpaths.get(c.clone()).is_some_and(|s| s.iter().any(|sp| !sp.knots.is_empty()))).count()
+}
+
+/// The Path alignment button of the Shape tools (#13235). Its entries move the components of the
+/// path the tool draws into ([`drawn_path`]: the selected shape layer in Shape mode), one History
+/// step each (#13456). The Shape tools show no component selection, so they act on every
+/// component, as Merge Shape Components does: Align needs two of them (one to align to the
+/// canvas), Distribute and Distribute Spacing three. The popup stays open after a click.
+pub(super) fn path_alignment_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let resp = crate::icons::button_with_icon_size(ui, "align-edge-left", 24.0, 16.0, false, tl!("Path alignment"));
     let resp = crate::brush_picker::named(resp, "Path alignment");
+    let target = drawn_path(app).map(|(params, path)| (params, alignable_components(path)));
+    let count = target.as_ref().map_or(0, |(_, n)| *n);
+    let mut run = None;
     // Stays open while the Align To dropdown is used.
     egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let key = egui::Id::unique("path-align-to");
+        let mut canvas = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+        let (align, distribute) = (count >= if canvas { 1 } else { 2 }, count >= 3);
         ui.set_min_width(240.0);
         ui.label(tl!("Align:"));
-        for (label, glyph) in PATH_ALIGN_ENTRIES {
-            ui.add_enabled_ui(false, |ui| path_op_button(ui, glyph, tl!(label), false));
+        for ((label, glyph), edge) in PATH_ALIGN_ENTRIES.into_iter().zip(PATH_ALIGN_EDGES) {
+            if ui.add_enabled_ui(align, |ui| path_op_button(ui, glyph, tl!(label), false)).inner.clicked() {
+                run = Some(("path.alignComponents", edge, Some(canvas)));
+            }
         }
         ui.separator();
         ui.label(tl!("Distribute:"));
-        for (label, glyph) in PATH_DISTRIBUTE_ENTRIES {
-            ui.add_enabled_ui(false, |ui| path_op_button(ui, glyph, tl!(label), false));
+        for ((label, glyph), edge) in PATH_DISTRIBUTE_ENTRIES.into_iter().zip(PATH_ALIGN_EDGES) {
+            if ui.add_enabled_ui(distribute, |ui| path_op_button(ui, glyph, tl!(label), false)).inner.clicked() {
+                run = Some(("path.distributeComponents", edge, None));
+            }
         }
         ui.separator();
         ui.label(tl!("Distribute Spacing:"));
-        for (label, glyph) in PATH_SPACING_ENTRIES {
-            ui.add_enabled_ui(false, |ui| path_op_button(ui, glyph, tl!(label), false));
+        for ((label, glyph), edge) in PATH_SPACING_ENTRIES.into_iter().zip(PATH_SPACING_EDGES) {
+            if ui.add_enabled_ui(distribute, |ui| path_op_button(ui, glyph, tl!(label), false)).inner.clicked() {
+                run = Some(("path.distributeComponents", edge, None));
+            }
         }
         ui.separator();
-        let key = egui::Id::unique("path-align-to");
-        let mut canvas = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
         ui.horizontal(|ui| {
             ui.label(tl!("Align To:"));
             let text = if canvas { tl!("Canvas") } else { tl!("Selection") };
@@ -872,6 +909,18 @@ pub(super) fn path_alignment_menu(_app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
         ui.data_mut(|d| d.insert_temp(key, canvas));
     });
+    if let Some((id, edge, canvas)) = run
+        && let Some((mut params, _)) = target
+    {
+        params["edge"] = json!(edge);
+        if let Some(canvas) = canvas {
+            params["to"] = json!(if canvas { "canvas" } else { "selection" });
+        }
+        if let Err(e) = app.run(id, params) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
 }
 
 /// The Path arrangement button of the Shape tools (#13235). Its entries are greyed: the engine

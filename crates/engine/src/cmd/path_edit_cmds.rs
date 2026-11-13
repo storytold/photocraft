@@ -19,6 +19,8 @@ use crate::commands::CommandSpec;
 use crate::vector_cmds::{bad, has_doc, layer_id, nums, path_json, path_mut, pt, with_shape};
 use crate::{Result, Session};
 
+mod align;
+
 /// Coordinates and offsets beyond this are mistakes (the same bound as `path.transform`).
 const MAX: f64 = 1_000_000.0;
 
@@ -332,6 +334,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Path Operation",
             r#""subpaths":[i,…],"op":"combine|subtract|intersect|exclude" (the shape components holding these subpaths take the operation; the first component always combines and keeps its own; the Path Operations menu with components selected)"#.into(),
             set_operation,
+        ),
+        spec(
+            "path.alignComponents",
+            "Align Path Components",
+            r#""subpaths":[i,…]? (the shape components holding these subpaths; default every component),"edge":"leftEdges|horizontalCenters|rightEdges|topEdges|verticalCenters|bottomEdges","to":"selection|canvas"="selection" (each component moves, with its handles, so that edge or centre of its bounds lines up with that of the components' combined bounds, or of the canvas; selection needs two or more components; the Path alignment popup's Align entries)"#.into(),
+            align::align_components,
+        ),
+        spec(
+            "path.distributeComponents",
+            "Distribute Path Components",
+            r#""subpaths":[i,…]? (default every component),"edge":"leftEdges|horizontalCenters|rightEdges|topEdges|verticalCenters|bottomEdges|horizontally|vertically" (three or more components; the outermost two stay put: an edge or centre spaces those evenly, horizontally or vertically makes the gaps between neighbours equal; the Path alignment popup's Distribute and Distribute Spacing entries)"#.into(),
+            align::distribute_components,
         ),
     ]
 }
@@ -807,3 +821,7 @@ mod path_delete_last_anchor_tests;
 #[cfg(test)]
 #[path = "direct_select_history_names_tests.rs"]
 mod direct_select_history_names_tests;
+
+#[cfg(test)]
+#[path = "path_align_components_tests.rs"]
+mod path_align_components_tests;
