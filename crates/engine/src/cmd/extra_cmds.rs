@@ -242,7 +242,23 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(only)) => !only,
         Some(_) => return Err(EngineError::BadParams { cmd: "image.adjustments.equalize".into(), msg: "selectedAreaOnly must be true or false".into() }),
     };
-    map_pixels_in(s, "Equalize", p, whole, |_, px, cover| {
+    // A smart filter's selection is its output mask, so it cannot also stand for "histogram from
+    // the selection, applied to everything": refuse instead of quietly leaving the rest unchanged.
+    if whole && s.active().is_some_and(|d| d.doc.selection.is_some()) && crate::adjust_cmds::smart_pixel_target(s, p)?.is_some() {
+        return Err(EngineError::BadParams {
+            cmd: "image.adjustments.equalize".into(),
+            msg: "Equalize Entire Image Based On Selected Area is not available on a smart object yet".into(),
+        });
+    }
+    if crate::adjust_cmds::adjust_as_smart_filter(s, "equalize", "Equalize", p)? {
+        return Ok(Value::Null);
+    }
+    map_pixels_in(s, "Equalize", p, whole, |_, px, cover| equalize_pixels(px, cover))
+}
+
+/// [`equalize`] on straight RGBA pixels with a coverage weight each (also run as a smart filter).
+pub(crate) fn equalize_pixels(px: &mut [[f32; 4]], cover: &[f32]) {
+    {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -269,7 +285,7 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
                 *v = map(*v);
             }
         }
-    })
+    }
 }
 
 // ---------- transform presets ----------
@@ -954,7 +970,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &["Image", "Adjustments"],
             None,
             r#"{"selectedAreaOnly":bool=true (with a selection, false equalizes the layer within the canvas by the selection's histogram)}"#,
-            has_pixels,
+            crate::adjust_cmds::has_adjustable,
             equalize
         ),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
