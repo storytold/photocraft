@@ -15,6 +15,7 @@ mod batch;
 mod document;
 mod error;
 mod gpu;
+mod models;
 mod output;
 
 pub use actions::{ActionsError, Steps, load_actions, load_actions_file, parse_actions};
@@ -57,6 +58,7 @@ where
         Command::Batch(a) => batch(a, out, err),
         Command::Droplet(a) => droplet(a, out, err),
         Command::Commands(a) => commands(a, out),
+        Command::Models(a) => models::run(a, out),
         Command::Mcp(a) => mcp(a, err),
         Command::Serve(a) => serve(a, err),
     };

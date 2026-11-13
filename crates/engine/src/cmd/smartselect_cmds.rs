@@ -325,10 +325,21 @@ pub struct SubjectCache {
     doc_id: Option<photocraft_doc::DocId>,
     /// The sampled layer; `None` = the composite.
     target: Option<LayerId>,
+    /// The `engine` param it was computed with: the neural and classical finders differ.
+    engine: String,
+    /// Installing, removing or disabling the model invalidates an automatic fallback.
+    model_available: bool,
     region: Option<std::sync::Arc<Region>>,
 }
 
 impl SubjectCache {
+    fn valid(&self, doc: &Document, target: Option<LayerId>, engine: &str, model_available: bool) -> bool {
+        self.target == target
+            && self.engine == engine
+            && self.model_available == model_available
+            && self.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, doc))
+    }
+
     /// Forget the result if it was computed from the document `id` (it is closing).
     pub(crate) fn forget_doc(&mut self, id: photocraft_doc::DocId) {
         if self.doc_id == Some(id) {
@@ -337,23 +348,138 @@ impl SubjectCache {
     }
 }
 
+/// Largest area (pixels) Select Subject's network reads at full resolution; bigger canvases are
+/// box-downsampled first and the matte is stretched back (the network sees 1024 px anyway).
+const MODEL_MAX_PX: usize = 16_000_000;
+
+/// The expanded neural mask must also fit a bounded allocation, even for sparse PSB canvases.
+const MODEL_MASK_MAX_PX: usize = 64_000_000;
+
+fn subject_model_available() -> bool {
+    !cfg!(target_arch = "wasm32") && photocraft_ml::model_path(photocraft_ml::Model::BirefnetLite).is_some()
+}
+
+/// The subject's coverage from the neural matte (BiRefNet), or why the model could not run.
+fn model_subject(smp: &dyn Sampler, canvas: Rect, ctl: &photocraft_raster::Interrupt) -> std::result::Result<Option<Region>, photocraft_ml::MlError> {
+    ctl.check().map_err(|_| photocraft_ml::MlError::Cancelled)?;
+    let (w, h) = (canvas.width() as usize, canvas.height() as usize);
+    let count = w.checked_mul(h).filter(|n| *n <= MODEL_MASK_MAX_PX).ok_or_else(|| {
+        photocraft_ml::MlError::BadInput(format!(
+            "the neural subject mask exceeds the {MODEL_MASK_MAX_PX}-pixel budget; use engine: classical or crop the document"
+        ))
+    })?;
+    let step = photocraft_algo::segment::scale_for(canvas, MODEL_MAX_PX);
+    let small = smp.rgb_scaled(canvas, step);
+    ctl.check().map_err(|_| photocraft_ml::MlError::Cancelled)?;
+    let rgb = photocraft_ml::Rgb::new(small.w, small.h, small.px.iter().flatten().copied().collect())?;
+    let matte = photocraft_ml::segment_subject_with(&rgb, &|| ctl.cancelled())?;
+    ctl.check().map_err(|_| photocraft_ml::MlError::Cancelled)?;
+    let mut mask = crate::allocation::filled(count, 0u8, "neural subject mask").map_err(|e| photocraft_ml::MlError::BadInput(e.to_string()))?;
+    for y in 0..h {
+        ctl.check().map_err(|_| photocraft_ml::MlError::Cancelled)?;
+        let sy = (y / step).min(small.h.saturating_sub(1));
+        for x in 0..w {
+            let sx = (x / step).min(small.w.saturating_sub(1));
+            let m = matte.get(sy * small.w + sx).copied().unwrap_or(0.0);
+            if let Some(o) = mask.get_mut(y * w + x) {
+                *o = (m.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+    }
+    Ok(photocraft_algo::segment::trim_region(Region { bbox: canvas, mask }))
+}
+
+fn try_model_subject(
+    smp: &dyn Sampler,
+    canvas: Rect,
+    ctl: &photocraft_raster::Interrupt,
+    available: bool,
+) -> std::result::Result<Option<Region>, photocraft_ml::MlError> {
+    if cfg!(target_arch = "wasm32") {
+        return Err(photocraft_ml::MlError::Unsupported);
+    }
+    if !available {
+        return Err(photocraft_ml::MlError::Backend(
+            "the BiRefNet-lite model is unavailable or disabled; install it in AI Models or use engine: classical".into(),
+        ));
+    }
+    model_subject(smp, canvas, ctl)
+}
+
+/// Finds the subject of `doc` within `area`: with `engine` `"auto"` the neural matte when the model is installed
+/// and the classical Select Subject otherwise (or when the model finds nothing it can use);
+/// `"model"` insists on the model and `"classical"` skips it. Returns the region and which engine
+/// found it (`"model"` / `"classical"`). Stops with `Cancelled` through `ctl`.
+pub(crate) fn find_subject_region(
+    doc: &Document,
+    layer: Option<LayerId>,
+    all_layers: bool,
+    area: Rect,
+    engine: &str,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Option<(Region, &'static str)>> {
+    if !matches!(engine, "auto" | "model" | "classical") {
+        return Err(bad("select.subject", "\"engine\" is auto, model or classical"));
+    }
+    // Unit tests run the classical finder even where a developer has the model installed, so
+    // results match CI (which has no models) and the suite stays fast.
+    let engine = if cfg!(test) && engine == "auto" { "classical" } else { engine };
+    if engine != "classical" {
+        let available = subject_model_available();
+        let tried = with_doc_sampler(doc, layer, all_layers, |smp, _| try_model_subject(smp, area, ctl, available));
+        match tried {
+            Ok(Some(r)) => return Ok(Some((r, "model"))),
+            Ok(None) if engine == "model" => return Ok(None),
+            Err(photocraft_ml::MlError::Cancelled) => return Err(EngineError::Cancelled),
+            // A mask beyond the output budget (or failed allocation) must not fall through to
+            // another finder that may allocate the same full-resolution area.
+            Err(photocraft_ml::MlError::BadInput(message)) => return Err(EngineError::Other(message)),
+            Err(e) if engine == "model" => return Err(EngineError::Other(e.to_string())),
+            // Model missing, unsupported or failed: the classical finder still works.
+            Ok(None) | Err(_) => {}
+        }
+    }
+    let found = with_doc_sampler(doc, layer, all_layers, |smp, _| subject::select_subject_with(smp, area, ctl)).map_err(|_| EngineError::Cancelled)?;
+    Ok(found.map(|r| (r, "classical")))
+}
+
 fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
     // The selected layer's pixels; the composite only when no pixel layer is selected.
     let all_layers = b(p, "sampleAllLayers", false);
+    let m = mode(p, "replace");
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
     let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
+    let engine = p.get("engine").and_then(Value::as_str).unwrap_or("auto").to_string();
     let c = &s.subject_cache;
-    let hit = c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
-    let region = if hit {
-        c.region.clone()
-    } else {
-        let doc = std::sync::Arc::clone(&d.doc);
-        let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, doc| subject::select_subject(smp, doc.bounds())).map(std::sync::Arc::new);
-        s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, region: region.clone() };
-        region
-    };
-    let out = apply(s, "Select Subject", region.as_deref(), mode(p, "replace"))?;
+    let available = subject_model_available();
+    let hit = c.valid(&d.doc, target, &engine, available);
+    if hit {
+        let region = c.region.clone();
+        return apply_subject(s, region.as_deref(), m);
+    }
+    let doc = std::sync::Arc::clone(&d.doc);
+    let layer = d.active_layer;
+    // A background job when started with `Session::start`: the neural matte takes seconds, so the
+    // UI shows progress and Esc cancels it instead of freezing.
+    crate::jobs::run(
+        s,
+        "Select Subject",
+        true,
+        move |ctx| {
+            let found = ctx.stage(0.0, 1.0, "Finding subject", |ctl| find_subject_region(&doc, layer, all_layers, doc.bounds(), &engine, ctl))?;
+            Ok((doc, engine, found.map(|(r, _)| std::sync::Arc::new(r))))
+        },
+        move |s, (doc, engine, region)| {
+            s.subject_cache =
+                SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, engine, model_available: available, region: region.clone() };
+            apply_subject(s, region.as_deref(), m)
+        },
+    )
+}
+
+fn apply_subject(s: &mut Session, region: Option<&Region>, m: SelectionMode) -> Result<Value> {
+    let out = apply(s, "Select Subject", region, m)?;
     // Follow the document past the selection edit just made (same pixels), so a short history
     // dropping the older state doesn't turn the next repeat into a miss.
     if let Some(d) = s.active()
@@ -568,7 +694,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.subject",
             "Subject",
             ["Select"],
-            r##"{"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the selected layer; the composite when no pixel layer is selected)"##,
+            r##"{"sampleAllLayers":bool=false (false = the selected layer, true = all visible layers),"mode":"replace|add|subtract|intersect"="replace","engine":"auto|model|classical"="auto" (auto = the neural matte when its model is installed, else the classical finder)}"##,
             has_doc,
             select_subject
         ),

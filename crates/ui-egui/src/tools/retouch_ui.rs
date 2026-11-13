@@ -1138,7 +1138,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                let r = app.run("select.subject", json!({}));
+                let r = app.run("select.subject", json!({"sampleAllLayers": app.ui.tool_options.sample_all.quick_selection}));
                 report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
         }
@@ -1150,7 +1150,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Drag a rectangle around the object"));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                let r = app.run("select.subject", json!({}));
+                let r = app.run("select.subject", json!({"sampleAllLayers": app.ui.tool_options.sample_all.object_selection}));
                 report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
             }
         }

@@ -36,6 +36,7 @@ pub(crate) enum Command {
     Batch(BatchArgs),
     Droplet(DropletArgs),
     Commands(CommandsArgs),
+    Models(ModelsArgs),
     Mcp(McpArgs),
     Serve(ServeArgs),
 }
@@ -268,6 +269,32 @@ pub(crate) struct CommandsArgs {
     /// Only the commands matching this text
     #[arg(long, value_name = "TEXT", allow_negative_numbers = true)]
     pub(crate) filter: Option<String>,
+}
+
+/// List, download and verify the optional local AI models
+#[derive(Args)]
+pub(crate) struct ModelsArgs {
+    #[command(subcommand)]
+    pub(crate) action: ModelsAction,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ModelsAction {
+    /// List model names, licences, expected paths and installation status
+    List,
+    /// Download and verify model weights
+    Fetch {
+        /// The model to fetch
+        #[arg(long, value_enum, default_value_t = ModelChoice::All)]
+        model: ModelChoice,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ModelChoice {
+    Birefnet,
+    Lama,
+    All,
 }
 
 /// Run the MCP server on stdio (headless engine, or bridge to a running `photocraft --control <port>`)

@@ -503,7 +503,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.magic_wand, tl!("Sample All Layers"));
             widgets::vline(ui, 22.0);
             if widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
-                let r = app.run("select.subject", json!({}));
+                let r = app.run("select.subject", json!({"sampleAllLayers": app.ui.tool_options.sample_all.magic_wand}));
                 crate::retouch_ui::report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
             select_and_mask_button(app, ui);

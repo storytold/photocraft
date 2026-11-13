@@ -240,6 +240,54 @@ fn object_selection_on_an_empty_active_layer_says_so() {
     assert!(e.contains("no pixels in that area"), "{e}");
 }
 
+#[derive(Default)]
+struct ModelSamplingCounter(std::sync::atomic::AtomicUsize);
+
+impl Sampler for ModelSamplingCounter {
+    fn rgba(&self, _: Rect) -> Vec<[f32; 4]> {
+        panic!("the model sampler uses rgb_scaled")
+    }
+
+    fn rgb_scaled(&self, _: Rect, _: usize) -> photocraft_algo::segment::RgbImage {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Invalid small input stops inference deterministically, even on a machine with models.
+        photocraft_algo::segment::RgbImage { w: 0, h: 0, px: Vec::new() }
+    }
+}
+
+#[test]
+fn model_subject_rejects_a_huge_sparse_canvas_before_sampling() {
+    let doc = Document::new("Sparse", photocraft_geom::Size::new(300_000, 300_000), photocraft_doc::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    assert!(doc.layers.is_empty());
+    let sampler = ModelSamplingCounter::default();
+    let ctl = photocraft_raster::Interrupt::default();
+    let error = model_subject(&sampler, doc.bounds(), &ctl).unwrap_err().to_string();
+    assert!(error.contains("mask") && error.contains("budget"), "{error}");
+    assert_eq!(sampler.0.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
+fn unavailable_subject_model_skips_sampling() {
+    let sampler = ModelSamplingCounter::default();
+    let ctl = photocraft_raster::Interrupt::default();
+    let _ = try_model_subject(&sampler, Rect::new(0, 0, 4_000, 4_000), &ctl, false);
+    assert_eq!(sampler.0.load(std::sync::atomic::Ordering::Relaxed), 0, "an unavailable model sampled neural input");
+}
+
+#[test]
+fn subject_cache_invalidates_when_model_availability_changes() {
+    let (s, _) = disc(8);
+    let doc = &s.active().unwrap().doc;
+    let target = s.active().unwrap().active_layer;
+    let mut cache = SubjectCache { doc: std::sync::Arc::downgrade(doc), doc_id: Some(doc.id), target, engine: "auto".into(), ..SubjectCache::default() };
+    assert!(cache.valid(doc, target, "auto", false));
+    assert!(!cache.valid(doc, target, "auto", true), "installing a model reused a classical result");
+    cache.model_available = true;
+    cache.region = Some(std::sync::Arc::new(Region { bbox: Rect::new(0, 0, 1, 1), mask: vec![255] }));
+    assert!(cache.valid(doc, target, "auto", true));
+    assert!(!cache.valid(doc, target, "auto", false), "removing a model reused a neural result");
+}
+
 #[test]
 fn select_subject_centred_object() {
     let (mut s, inside) = disc(8);
@@ -266,6 +314,61 @@ fn select_subject_samples_the_selected_layer_else_the_composite() {
     s.execute("select.deselectLayers", json!({})).unwrap();
     s.execute("select.subject", json!({})).unwrap();
     assert!(sel_iou(&s, 200, 160, &inside) > 0.9);
+}
+
+/// The finder runs as a background job (the neural matte takes seconds): the selection lands
+/// as one undo step when it finishes, a cancelled job leaves the document alone, and a repeat
+/// on unchanged pixels answers at once from the cache.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn select_subject_runs_as_a_cancellable_background_job() {
+    let (mut s, inside) = disc(8);
+    let steps = s.active().unwrap().history.past_len();
+    let crate::jobs::Started::Job(job) = s.start("select.subject", json!({})).unwrap() else { panic!("expected a background job") };
+    s.wait_job(job).unwrap();
+    assert!(sel_iou(&s, 200, 160, &inside) > 0.9);
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    // Cached: no job needed.
+    s.execute("select.deselect", json!({})).unwrap();
+    assert!(matches!(s.start("select.subject", json!({})).unwrap(), crate::jobs::Started::Done(_)));
+    assert!(sel_iou(&s, 200, 160, &inside) > 0.9);
+    // A cancelled miss changes nothing.
+    s.execute("select.deselect", json!({})).unwrap();
+    let crate::jobs::Started::Job(job) = s.start("select.subject", json!({"sampleAllLayers": true})).unwrap() else { panic!("expected a background job") };
+    s.cancel_job(job);
+    let _ = s.wait_job(job);
+    assert!(s.active().unwrap().doc.selection.is_none());
+}
+
+/// Like Remove Background and Remove Subject, Select Subject reads the selected layer unless
+/// asked to sample all layers: an opaque plain layer above it doesn't hide its subject.
+#[test]
+fn select_subject_reads_the_selected_layer_by_default() {
+    let (mut s, inside) = disc(8);
+    let photo = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("cover", |doc, _| {
+        let top = doc.layers.last_mut().unwrap().surface_mut().unwrap();
+        let n = top.channels();
+        let grey: Vec<f32> = [0.5, 0.5, 0.5, 1.0].iter().copied().take(n).cycle().take(200 * 160 * n).collect();
+        top.write_region(Rect::new(0, 0, 200, 160), &grey);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.select", json!({"layer": photo.0})).unwrap();
+    s.execute("select.subject", json!({})).unwrap();
+    assert!(sel_iou(&s, 200, 160, &inside) > 0.9, "the selected layer's subject");
+    // Sampling all layers sees only the grey cover.
+    s.execute("select.deselect", json!({})).unwrap();
+    let _ = s.execute("select.subject", json!({"sampleAllLayers": true}));
+    assert!(sel_iou(&s, 200, 160, &inside) < 0.5, "the composite has no disc");
+}
+
+#[test]
+fn select_subject_rejects_an_unknown_engine() {
+    let (mut s, _) = disc(8);
+    assert!(s.execute("select.subject", json!({"engine": "magic"})).is_err());
+    assert!(s.active().unwrap().doc.selection.is_none());
 }
 
 /// #2865: a repeat on unchanged pixels reuses the last mask (an identical selection, even
@@ -302,6 +405,10 @@ fn select_subject_repeat_reuses_the_mask_until_pixels_change() {
     assert!(!std::sync::Arc::ptr_eq(&mask, &cached(&s)));
     let v = sel_iou(&s, 200, 160, inside);
     assert!(v > 0.9, "IoU {v}");
+    // Another engine is a miss too: the neural and classical finders differ.
+    let mask = cached(&s);
+    s.execute("select.subject", json!({"engine": "classical"})).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&mask, &cached(&s)));
 }
 
 /// A vertical Gaussian-blurred edge at x = 40 (warm left, cool right) with the left half selected.

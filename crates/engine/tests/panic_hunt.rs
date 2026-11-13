@@ -12,6 +12,8 @@ use std::time::Duration;
 fn fresh() -> Session {
     // Belt and braces with the EXTERNAL skip below: nothing in this process may reach a printer.
     photocraft_engine::print_cmds::disable_printing();
+    // A real model takes seconds, past the hang deadline: fuzz the paths CI has (no models).
+    photocraft_ml::disable_models();
     let mut s = Session::new();
     // `file.printers` and `file.print.printers` list no printers and do not ask the spooler.
     s.printer_source = Some(std::sync::Arc::new(Vec::new));

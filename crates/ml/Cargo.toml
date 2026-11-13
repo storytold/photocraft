@@ -1,0 +1,20 @@
+[package]
+name = "photocraft-ml"
+description = "Local ONNX model inference (subject segmentation, inpainting) on tract; models are fetched, never committed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# tract is pure Rust and would build for wasm32, but the browser build has no models to run
+# (they are hundreds of MB and are never embedded there), so it stays out of the wasm binary.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tract-onnx = "0.23.9"
+# Model downloads (Settings › AI Models, `photocraft-cli models fetch`); both already in the lockfile.
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"] }
+sha2 = "0.10.9"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

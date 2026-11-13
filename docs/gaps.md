@@ -235,8 +235,9 @@ what an agent can't finish alone.
 
 ### G15. AI and generative features
 - **Missing:** Generative Fill and Expand, Generative Upscale, Neural Filters, Sky Replacement,
-  Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
-  exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
+  Super Zoom, ML Select Sky. ML Select Subject and Remove Subject exist as an optional
+  local-model path (`tract-onnx`, [Local ML models](ml.md)); the classical substitutes
+  (GrabCut/max-flow selection, non-local patch completion) run when the models are missing.
 - **Evidence:** Photoshop's `Required/UXP` ships the Neural Filters gallery and its `.kys` has
   a Neural Filters taskspace; users ask for local models (#2313, #1996, #2682).
 - **Progress (2026-10-17):** classical Object Finder no longer rejects a foreground solely for covering over 60% of the canvas (#6548); canvas-boundary coverage distinguishes it from the surrounding backdrop. This does not add semantic recognition or close #2788.

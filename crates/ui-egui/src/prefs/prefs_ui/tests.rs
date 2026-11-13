@@ -139,7 +139,22 @@ fn preferences_search_matches_editable_fields_across_sections() {
     assert!(contains("performance", "performance"));
     assert!(contains("interface.uiScale", "interface"));
     assert!(preference_sections(&values, "this setting does not exist").is_empty());
-    assert_eq!(preference_sections(&values, "").len(), SECTIONS.len());
+    assert_eq!(preference_sections(&values, "").len(), sections().count());
+}
+
+#[test]
+fn ai_models_section_is_native_only_and_not_a_saved_preference() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let values = app.session.prefs_value();
+    assert!(values.get("aiModels").is_none());
+    let found = preference_sections(&values, "AI Models");
+    if cfg!(target_arch = "wasm32") {
+        assert!(found.is_empty());
+    } else {
+        assert_eq!(found, vec![("aiModels", "AI Models")]);
+        let id = open_preferences(&mut app, "aiModels");
+        assert_eq!(app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["section"], "aiModels");
+    }
 }
 
 /// The preview language controls translated search; English schema paths keep their aliases.

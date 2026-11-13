@@ -142,6 +142,7 @@ pub mod preset_import_cmds;
 pub mod print_cmds;
 pub mod rasterize_style_cmds;
 pub mod redeye_cmds;
+mod remove_subject_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
@@ -1360,6 +1361,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::path_edit_cmds::specs());
     v.extend(crate::smartselect_cmds::specs());
     v.extend(crate::cutout_cmds::specs());
+    v.extend(remove_subject_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());
     v.extend(crate::edit_cmds::specs());
     v.extend(crate::smart_svg_cmds::specs());

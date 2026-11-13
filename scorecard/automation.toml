@@ -56,9 +56,9 @@ note = "runtime.rs:15 ABI_VERSION = 1; manifest.rs:18 Kind::Filter only"
 [[item]]
 id = "AUTO-219-7"
 target = "Local ONNX models behind a flag, managed in Preferences; subject select, background removal"
-status = "missing"
+status = "partial"
 issue = 219
-note = "No ONNX runtime dependency"
+note = "photocraft-ml (tract-onnx): optional BiRefNet/LaMa models downloaded from Preferences > AI Models; Select Subject, Remove Background, Remove Subject. Runtime-optional (classical fallback), not a cargo feature flag"
 
 [[item]]
 id = "AUTO-219-8"

@@ -25,6 +25,8 @@ use crate::theme::{ThemeKind, Tokens};
 /// Shell runtime state for preferences, autosave and snapping (not serialised).
 #[derive(Default)]
 pub struct Runtime {
+    #[cfg(not(target_arch = "wasm32"))]
+    ai_models: ai_models::Runtime,
     loaded: bool,
     /// Preferences revision last written to storage (or loaded from it).
     saved_rev: u64,
@@ -64,6 +66,8 @@ pub struct Runtime {
 
 pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod ai_models;
 mod appearance;
 mod dialogs;
 mod fields;
@@ -71,6 +75,16 @@ mod graphics;
 mod save;
 mod shortcuts;
 mod startup;
+
+/// Shell-only sections have runtime actions rather than saved preference fields.
+const SHELL_SECTIONS: &[(&str, &str)] = &[
+    #[cfg(not(target_arch = "wasm32"))]
+    ("aiModels", "AI Models"),
+];
+
+fn sections() -> impl Iterator<Item = (&'static str, &'static str)> {
+    SECTIONS.iter().chain(SHELL_SECTIONS).copied()
+}
 
 #[cfg(test)]
 use appearance::{DARK_THEME_OPTIONS, LIGHT_THEME_OPTIONS, display_scale, favorite_theme_groups, selected_theme};

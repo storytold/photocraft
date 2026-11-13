@@ -4,6 +4,8 @@ use super::{DocId, HashMap, PhotocraftApp, Value, prefs};
 
 /// Per-frame upkeep: theme sync, persistence, autosave and the history log.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    app.prefs_rt.ai_models.repaint_while_active(ctx);
     if !app.prefs_rt.loaded {
         load(app);
     }
