@@ -253,6 +253,9 @@ mod ellipse_path_menus_tests;
 #[cfg(test)]
 mod triangle_align_edges_tests;
 
+#[cfg(test)]
+mod rectangle_gear_tests;
+
 pub(crate) use pen::freeform_locked_shape;
 #[cfg(test)]
 use pen_resume::pen_finish_on_redo;
