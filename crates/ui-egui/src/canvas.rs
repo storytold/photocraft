@@ -1041,9 +1041,13 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         ctx.request_repaint();
     }
     // Capture intent at the press, before egui's drag threshold or click replay on release:
-    // Type transforms keep Command; selections keep Add/Subtract if Shift/Alt is released.
-    let capture_press =
-        tool.is_type() || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
+    // Type transforms keep Command; selections keep Add/Subtract if Shift/Alt is released; Add
+    // Anchor Point keeps its Alt subpath duplicate (#12709).
+    let capture_press = tool.is_type()
+        || matches!(
+            tool,
+            Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection | Tool::AddAnchorPoint
+        );
     let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
     // Read from the raw events, so a dialog's modal layer doesn't block it: gated here, or a ⌘-press
     // under a dialog would start a type transform (#12896).

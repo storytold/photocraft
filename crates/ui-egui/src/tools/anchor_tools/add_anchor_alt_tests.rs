@@ -141,3 +141,42 @@ fn alt_shows_no_anchor_to_add_and_the_plus_badge_everywhere() {
     assert_eq!(crate::anchor_tools::effective(Tool::AddAnchorPoint, Modifiers::ALT), Some(Tool::AddAnchorPoint));
     assert_eq!(crate::anchor_tools::effective(Tool::DeleteAnchorPoint, Modifiers::ALT), Some(Tool::AddAnchorPoint));
 }
+
+#[test]
+fn letting_go_of_alt_before_the_drag_starts_still_duplicates_the_subpath() {
+    // Through the real canvas: the tool sees the press only once egui recognises the drag, so the
+    // keys held at the press decide, as for the selection tools (CodeRabbit on #13977).
+    use egui::{Pos2, Rect, vec2};
+    let ctx = egui::Context::default();
+    let mut app = path_one();
+    app.run("view.actualPixels", json!({})).unwrap();
+    app.sync_views();
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [400.0, 300.0];
+    view.fit_pending = false;
+    view.fill_pending = false;
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+        let input = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
+        });
+        out.textures_delta.clear();
+    };
+    let press = |pos: Pos2, pressed: bool, modifiers: Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    let (alt, none) = (Modifiers::ALT, Modifiers::NONE);
+    let (before, n) = (path(&app), steps(&app));
+    // C's middle, (550,450) in the document, is the same screen point at 100 % centred on the document.
+    let start = Pos2::new(550.0, 450.0);
+    frame(&mut app, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(start)]);
+    frame(&mut app, vec![press(start, true, alt)]);
+    frame(&mut app, vec![egui::Event::ModifiersChanged(none), egui::Event::PointerMoved(start + vec2(0.0, 25.0))]);
+    frame(&mut app, vec![egui::Event::PointerMoved(start + vec2(0.0, 50.0))]);
+    frame(&mut app, vec![press(start + vec2(0.0, 50.0), false, none)]);
+    let p = path(&app);
+    assert_eq!(p.subpaths.len(), 4, "the subpath was copied, no anchor added: {:?}", p.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>());
+    assert_eq!(p.subpaths[..3], before.subpaths[..]);
+    assert_eq!((p.subpaths[3].knots[0].anchor, p.subpaths[3].knots[1].anchor), (Point::new(400.0, 500.0), Point::new(700.0, 500.0)));
+    assert_eq!((steps(&app), undo_label(&app)), (n + 1, Some("Drag Path")));
+}
