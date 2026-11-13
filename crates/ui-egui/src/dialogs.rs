@@ -703,6 +703,7 @@ pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
 pub(crate) mod conditional_mode_change_dialog;
+pub(crate) mod contact_sheet_ui;
 pub mod count_group_name_ui;
 pub mod credits;
 pub mod dds_options_ui;
