@@ -319,19 +319,21 @@ pub fn encode_jpeg_rgb8(
     enc.set_sampling_factor(if subsampled { jpeg_encoder::SamplingFactor::R_4_2_0 } else { jpeg_encoder::SamplingFactor::R_4_4_4 });
     if let Some(d) = dpi.filter(|d| *d >= 1.0) {
         let v = d.round().min(65535.0) as u16;
-        enc.set_density(jpeg_encoder::Density::Inch { x: v, y: v });
+        enc.set_density(jpeg_encoder::PixelDensity { density: (v, v), unit: jpeg_encoder::PixelDensityUnit::Inches });
     }
     let ppi = dpi.filter(|d| *d >= 1.0).map(|d| (d, d));
     // Upright, without the source's thumbnail, at the JFIF resolution, as Save As writes it.
     if let Some(seg) = exif.and_then(|x| crate::codecs::jpeg::exif_segment(x, ppi)) {
-        enc.add_app_segment(1, &seg).map_err(e)?;
+        // Complete APP1 payload (Exif\0\0 header included): add_app_segment, not
+        // add_exif_metadata, which would prepend the header a second time.
+        enc.add_app_segment(1, seg).map_err(e)?;
     }
     if let Some(x) = xmp {
         // Its `tiff:` resolution, if any, says what the JFIF density says (#1691).
         let x = crate::resolution::export_xmp(x, ppi);
         let mut seg = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
         seg.extend_from_slice(x.as_bytes());
-        enc.add_app_segment(1, &seg).map_err(e)?;
+        enc.add_app_segment(1, seg).map_err(e)?;
     }
     if let Some(icc) = icc {
         enc.add_icc_profile(icc).map_err(e)?;
