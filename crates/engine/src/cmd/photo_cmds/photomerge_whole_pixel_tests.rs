@@ -30,7 +30,7 @@ pub(super) fn tile(pixels: &[[f32; 3]], x: usize, mode: ColorMode, sample: Sampl
     let mut doc = Document::new(format!("tile-{x}"), Size::new(300, 300), mode, sample);
     let mut surf = Surface::new(doc.pixel_format());
     let mut data = Vec::new();
-    for row in pixels.chunks_exact(700) {
+    for row in pixels.as_chunks::<700>().0 {
         for rgb in &row[x..x + 300] {
             if mode == ColorMode::Grayscale {
                 data.push(photocraft_color::convert::rgb_to_gray(*rgb));
