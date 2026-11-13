@@ -547,12 +547,14 @@ fn button_row(
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
+        // Enter is the default button, except where a popup takes it or Export As waits for a click.
+        let enter_confirms = can_ok && !popup_blocks_enter && crate::export_dialog::enter_confirms(fields);
         match clicked {
             Some(ButtonRole::Cancel) if reset => crate::dialog_alt_reset::apply(app, ui.ctx(), fields),
             Some(ButtonRole::Cancel) => outcome = Some(false),
             Some(ButtonRole::Apply) => apply_requested = true,
             Some(_) => outcome = Some(true),
-            None if interactive && can_ok && !popup_blocks_enter && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+            None if interactive && enter_confirms && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
             None => {}
         }
     }
