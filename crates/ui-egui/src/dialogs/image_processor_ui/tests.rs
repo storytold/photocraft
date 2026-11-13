@@ -12,7 +12,7 @@ const COMMAND: &str = "file.scripts.imageProcessor";
 fn open(gpu: bool) -> Result<(Harness<'static, PhotocraftApp>, u64), String> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 40, "height": 20}))?;
-    let builder = Harness::builder().with_size(egui::vec2(1000.0, 760.0));
+    let builder = Harness::builder().with_size(egui::vec2(1000.0, 920.0));
     let builder = if gpu { builder.wgpu() } else { builder };
     let mut h = builder.build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
@@ -104,7 +104,7 @@ fn run_dispatches_all_enabled_formats_with_their_own_dimensions() {
 fn numeric_fields_clamp_and_restore_the_last_value() {
     let (mut h, id) = open(false).unwrap();
     edit_number(&mut h, "Quality", "7.6");
-    assert_eq!(field(&h, id, "jpeg")["quality"], 7.6);
+    assert_eq!(field(&h, id, "jpeg")["quality"].as_f64(), Some(7.6));
     for (input, value, message) in [
         ("abc", 7.6, super::invalid_entry("quality")),
         ("", 7.6, super::invalid_entry("quality")),
@@ -114,7 +114,7 @@ fn numeric_fields_clamp_and_restore_the_last_value() {
     ] {
         edit_number(&mut h, "Quality", input);
         alert(&h, message);
-        assert_eq!(field(&h, id, "jpeg")["quality"], value);
+        assert_eq!(field(&h, id, "jpeg")["quality"].as_f64(), Some(value));
         dismiss(&mut h);
     }
     // Only JPEG's resize checkbox is enabled. Click its first row.
@@ -128,7 +128,7 @@ fn numeric_fields_clamp_and_restore_the_last_value() {
     h.key_press(Key::Enter);
     h.run_steps(4);
     alert(&h, super::closest_value("width"));
-    assert_eq!(field(&h, id, "jpeg")["width"], 30_000.0);
+    assert_eq!(field(&h, id, "jpeg")["width"].as_f64(), Some(30_000.0));
     assert_eq!(field(&h, id, "psd")["width"].as_f64(), Some(1.0));
     assert_eq!(field(&h, id, "tiff")["width"].as_f64(), Some(1.0));
 }

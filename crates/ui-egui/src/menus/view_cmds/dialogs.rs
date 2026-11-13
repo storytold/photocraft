@@ -138,7 +138,9 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
-    let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
+    let command = f.get("__command").and_then(Value::as_str);
+    let file_info = command == Some("file.fileInfo");
+    let image_processor = command == Some("file.scripts.imageProcessor");
     let label = |k: &str| {
         if file_info {
             match k {
@@ -154,7 +156,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut browse: Option<String> = None;
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
-            if f.get("__command").and_then(Value::as_str) == Some("file.scripts.imageProcessor")
+            if image_processor
                 && f.get("source").and_then(Value::as_str).is_some_and(|source| source != "folder")
                 && matches!(k.as_str(), "input" | "includeSubfolders")
             {
@@ -224,7 +226,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
+                                    let field = ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
+                                    if image_processor && crate::dialogs::is_folder_field(&k) {
+                                        crate::field_tab::register(ui.ctx(), field.id);
+                                        if crate::field_tab::reached(ui.ctx(), field.id) {
+                                            crate::field_tab::select_all(ui.ctx(), field.id, &s);
+                                        }
+                                    }
                                     // A folder field gets the system folder picker (#7942, #9357).
                                     if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                                         browse = Some(k.clone());
