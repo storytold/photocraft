@@ -19,6 +19,9 @@ pub struct ToolOptions {
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
     pub feather: f32,
+    /// Lasso freehand stabilising, 0..100 %. A PhotoCraft addition: Photoshop's Lasso has no
+    /// smoothing, so 0 (off) is the parity default.
+    pub lasso_smoothing: f32,
     /// linear | radial | angle | reflected | diamond
     pub gradient_style: String,
     pub gradient_reverse: bool,
@@ -467,6 +470,7 @@ impl Default for ToolOptions {
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,
+            lasso_smoothing: 0.0,
             gradient_style: "linear".into(),
             gradient_reverse: false,
             gradient_dither: true,

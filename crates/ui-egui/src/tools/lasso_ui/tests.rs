@@ -560,3 +560,82 @@ fn a_menu_dismissal_press_never_draws_a_lasso_selection() {
     h.run_steps(2);
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "an ordinary Lasso drag draws again");
 }
+
+/// The Lasso's Smoothing (a PhotoCraft extension) is off by default, so the outline is exactly
+/// the pointer's path as it always was.
+#[test]
+fn smoothing_is_off_by_default_and_the_outline_follows_the_pointer() {
+    let mut app = app();
+    assert_eq!(app.ui.tool_options.lasso_smoothing, 0.0, "Photoshop's Lasso has no smoothing");
+    begin(&mut app, Modifiers::NONE);
+    assert_eq!(app.drag.as_ref().unwrap().points, vec![[50.0, 50.0, 1.0], [90.0, 40.0, 1.0], [120.0, 50.0, 1.0]]);
+}
+
+/// With Smoothing on, the freehand outline lags behind the pointer (the brush's exponential pull)
+/// and still finishes exactly at the release point, so the selection closes where the button came
+/// up. Alt stays held on the release to keep the outline open for inspection.
+#[test]
+fn smoothing_stabilises_the_freehand_outline_and_finishes_at_the_release() {
+    let mut app = app();
+    app.ui.tool_options.lasso_smoothing = 80.0;
+    event(&mut app, "down", 50.0, 50.0, Modifiers::NONE);
+    event(&mut app, "move", 60.0, 52.0, Modifiers::NONE);
+    let pts = app.drag.as_ref().unwrap().points.clone();
+    assert_eq!(pts[0], [50.0, 50.0, 1.0], "the outline starts at the press");
+    assert_eq!(pts.len(), 2);
+    assert!(pts[1][0] > 50.0 && pts[1][0] < 60.0 && pts[1][1] > 50.0 && pts[1][1] < 52.0, "80 % lags the pointer: {pts:?}");
+    event(&mut app, "up", 80.0, 52.0, Modifiers::ALT);
+    let pts = app.drag.as_ref().unwrap().points.clone();
+    assert!(active(&app), "the Alt-held release keeps the outline open");
+    assert_eq!(*pts.last().unwrap(), [80.0, 52.0, 1.0], "Catch-up on Stroke End: it finishes at the pointer");
+}
+
+/// A straight Alt-click segment is exact whatever the Smoothing: the vertex is not pulled, and the
+/// freehand that carries on from it starts there rather than behind it.
+#[test]
+fn straight_alt_segments_are_not_smoothed() {
+    let mut app = app();
+    app.ui.tool_options.lasso_smoothing = 80.0;
+    event(&mut app, "down", 50.0, 50.0, Modifiers::NONE);
+    event(&mut app, "move", 70.0, 50.0, Modifiers::NONE);
+    let lagging = app.drag.as_ref().unwrap().points[1];
+    assert!(lagging[0] < 70.0, "the freehand part is smoothed: {lagging:?}");
+    // Alt-click two corners: the segments into them are straight.
+    event(&mut app, "up", 70.0, 50.0, Modifiers::ALT);
+    for [x, y] in [[150.0, 50.0], [150.0, 150.0]] {
+        event(&mut app, "down", x, y, Modifiers::ALT);
+        event(&mut app, "up", x, y, Modifiers::ALT);
+    }
+    let pts = app.drag.as_ref().unwrap().points.clone();
+    assert_eq!(pts[pts.len() - 2], [150.0, 50.0, 1.0], "a straight vertex is exact");
+    assert_eq!(*pts.last().unwrap(), [150.0, 150.0, 1.0], "a straight vertex is exact");
+}
+
+/// The options bar offers Smoothing on the Lasso only: the Polygonal Lasso has no freehand
+/// outline to stabilise, and the Magnetic Lasso has Width, Contrast and Frequency instead.
+#[test]
+fn the_smoothing_field_is_on_the_lassos_bar_only() {
+    use egui_kittest::kittest::Queryable;
+    let bar = |tool: Tool| {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+        app.ui.tool = tool;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 300.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                // As the canvas harness does: the theme's fonts land on the pass after
+                // `setup_context`, so the first frame draws nothing.
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    };
+    let fields = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.query_all_by_role(egui::accesskit::Role::SpinButton).count();
+    assert_eq!(fields(&bar(Tool::Lasso)), 2, "Feather and Smoothing");
+    assert_eq!(fields(&bar(Tool::PolygonLasso)), 1, "Feather only");
+}

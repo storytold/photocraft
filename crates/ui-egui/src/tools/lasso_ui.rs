@@ -15,6 +15,9 @@ use crate::{
     state::Tool,
 };
 use egui::{Event, Modifiers, PointerButton};
+use photocraft_paint::StrokePoint;
+use photocraft_paint::brush::Smoothing;
+use photocraft_paint::dynamics::Smoother;
 
 #[derive(Clone, Debug)]
 pub struct Lasso {
@@ -24,12 +27,58 @@ pub struct Lasso {
     document: Option<photocraft_doc::DocId>,
     /// Indices of the points an Alt-click added: the segment into each one is straight.
     straight: Vec<usize>,
+    /// The freehand smoothing filter (the options bar's Smoothing %): every freehand pointer
+    /// sample goes through it and the outline is built from what it emits, so the selection is
+    /// exactly the path the canvas showed. `None` for the Freeform Pen, whose path is not
+    /// stabilised.
+    smoother: Option<Smoother>,
 }
 
 impl Lasso {
     /// Indices into the drag's points whose incoming segment is straight (an Alt-click).
     pub fn straight(&self) -> &[usize] {
         &self.straight
+    }
+
+    /// Start the smoothing filter at `p`: the press point, or a straight Alt-click vertex where
+    /// the outline goes on freehand. The first point of a stretch is never pulled off its vertex,
+    /// so straight segments stay exactly where they were clicked.
+    fn restart_smoothing(&mut self, cfg: &Smoothing, zoom: f32, p: [f64; 2]) {
+        let mut smoother = Smoother::new(cfg, zoom);
+        let mut out = Vec::new();
+        smoother.push(StrokePoint::new(p[0], p[1], 1.0), &mut out);
+        self.smoother = Some(smoother);
+    }
+}
+
+/// The Lasso's smoothing: the options bar's Smoothing %, always finishing the outline at the
+/// pointer (the selection has to close where the button came up).
+fn smoothing_config(app: &PhotocraftApp) -> Smoothing {
+    Smoothing { amount: (app.ui.tool_options.lasso_smoothing / 100.0).clamp(0.0, 1.0), catch_up_on_end: true, ..Default::default() }
+}
+
+/// Feed a freehand pointer sample through the drag's smoothing filter, appending what it emits.
+/// At 0 % the sample itself is appended, exactly as an unsmoothed outline always has.
+fn append_smoothed(d: &mut Drag, p: [f64; 2]) {
+    let mut out = Vec::new();
+    match d.lasso.as_mut().and_then(|l| l.smoother.as_mut()) {
+        Some(smoother) => smoother.push(StrokePoint::new(p[0], p[1], 1.0), &mut out),
+        None => out.push(StrokePoint::new(p[0], p[1], 1.0)),
+    }
+    for q in out {
+        append(d, [q.x, q.y]);
+    }
+}
+
+/// The end of a freehand stretch: finish at the pointer (Catch-up on Stroke End), so the outline
+/// closes where the button came up rather than where the smoothed brush lagged behind.
+fn finish_smoothed(d: &mut Drag) {
+    let mut out = Vec::new();
+    if let Some(smoother) = d.lasso.as_mut().and_then(|l| l.smoother.as_mut()) {
+        smoother.finish(&mut out);
+    }
+    for q in out {
+        append(d, [q.x, q.y]);
     }
 }
 
@@ -106,6 +155,7 @@ fn append(d: &mut Drag, p: [f64; 2]) {
 }
 
 fn modifiers(app: &mut PhotocraftApp, mods: Modifiers) {
+    let (cfg, zoom) = (smoothing_config(app), app.point_zoom());
     let Some(d) = app.drag.as_mut().filter(|d| owns(d.tool)) else { return };
     d.track(mods);
     // Alt held before the initial press still means subtract, until released and pressed again.
@@ -113,8 +163,13 @@ fn modifiers(app: &mut PhotocraftApp, mods: Modifiers) {
     // Alt released between straight segments (button up): the outline is done.
     let close = d.lasso.as_ref().is_some_and(|l| l.polygonal && !polygonal && !l.down);
     let anchor = d.lasso.as_ref().and_then(|l| (l.polygonal && !polygonal && l.down).then_some(l.cursor));
+    let stabilised = d.tool == Tool::Lasso;
     if let Some(p) = anchor {
         append(d, p);
+        // The freehand stretch that follows starts at this exact vertex.
+        if stabilised && let Some(lasso) = &mut d.lasso {
+            lasso.restart_smoothing(&cfg, zoom, p);
+        }
     }
     if let Some(lasso) = &mut d.lasso {
         lasso.polygonal = polygonal;
@@ -195,15 +250,22 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                     commit(app);
                     return true;
                 }
+                let cfg = smoothing_config(app);
                 if let Some(d) = &mut app.drag {
                     let n = d.points.len();
                     append(d, p);
                     let added = d.points.len() > n;
+                    let stabilised = d.tool == Tool::Lasso;
                     if let Some(lasso) = &mut d.lasso {
                         lasso.cursor = p;
                         lasso.down = true;
                         if added {
                             lasso.straight.push(n);
+                        }
+                        // This Alt-click is a fixed vertex: freehand that carries on from it is
+                        // smoothed from it, never pulled back across the straight segment.
+                        if stabilised {
+                            lasso.restart_smoothing(&cfg, point_zoom, p);
                         }
                     }
                 }
@@ -214,12 +276,19 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 let nothing_selected = tool == Tool::FreeformPen || app.session.active().is_none_or(|st| st.doc.selection.is_none());
                 let polygonal = mods.alt && nothing_selected;
                 let intent = if polygonal { Modifiers { alt: false, ..mods } } else { mods };
+                let (cfg, zoom) = (smoothing_config(app), app.point_zoom());
                 let mut d = Drag::new(tool, p, vec![[p[0], p[1], 1.0]], intent, false);
                 if tool == Tool::FreeformPen {
                     d.capture_vector_owners(app);
                 }
                 let document = app.session.active().map(|st| st.doc.id);
-                d.lasso = Some(Lasso { cursor: p, down: true, polygonal, document, straight: Vec::new() });
+                d.lasso = Some(Lasso { cursor: p, down: true, polygonal, document, straight: Vec::new(), smoother: None });
+                // The outline starts at the press, so the first freehand stretch is pulled from it.
+                if tool == Tool::Lasso
+                    && let Some(lasso) = &mut d.lasso
+                {
+                    lasso.restart_smoothing(&cfg, zoom, p);
+                }
                 app.drag = Some(d);
             }
         }
@@ -243,8 +312,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 d.shift_to([last[0] + p[0] - previous[0], last[1] + p[1] - previous[1]]);
             } else if down {
                 // While the button is down the outline follows the pointer (freehand), Alt or
-                // not; between Alt clicks only the rubber band moves.
-                append(d, p);
+                // not; between Alt clicks only the rubber band moves. The Lasso draws it through
+                // its smoothing filter and finishes at the release point.
+                if tool == Tool::Lasso {
+                    append_smoothed(d, p);
+                    if up {
+                        finish_smoothed(d);
+                    }
+                } else {
+                    append(d, p);
+                }
             }
             if let Some(lasso) = &mut d.lasso {
                 lasso.cursor = p;

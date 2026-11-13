@@ -451,6 +451,14 @@ fn lasso_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     opt_label(ui, tl!("Feather"));
     widgets::value_field(ui, &mut app.ui.tool_options.feather, 0.0..=1000.0, "px", 62.0);
     widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
+    // The Lasso smooths its freehand outline (a PhotoCraft extension; the Polygonal and Magnetic
+    // Lassos have their own controls and no freehand to stabilise).
+    if app.ui.tool == Tool::Lasso {
+        widgets::vline(ui, 22.0);
+        opt_label(ui, tl!("Smoothing"));
+        widgets::value_field(ui, &mut app.ui.tool_options.lasso_smoothing, 0.0..=100.0, "%", 58.0)
+            .on_hover_text(tl!("Set smoothing for the lasso outline\nUse higher values to reduce the shakiness of the stroke"));
+    }
     widgets::vline(ui, 22.0);
     if app.ui.tool == Tool::MagneticLasso {
         let o = &mut app.ui.tool_options;
