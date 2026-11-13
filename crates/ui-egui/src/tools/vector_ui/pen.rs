@@ -101,7 +101,7 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
         return;
     }
     let p = match pen.knots.last() {
-        Some(prev) => shift_45(prev[0], [x, y], shift),
+        Some(prev) => shift_click_45(prev[0], [x, y], shift),
         None => [x, y],
     };
     pen.knots.push([p; 3]);
@@ -146,6 +146,20 @@ pub fn pen_move(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
 /// `p`, or with ⇧ `p` projected onto the nearest 45° ray from `origin` (Pen tool constraint).
 pub(super) fn shift_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
     if shift { crate::stroke_constraint::snap45(origin, p) } else { p }
+}
+
+/// Where a Pen click at `p` puts the next anchor after `origin`: with ⇧ on the nearest 0/45/90°
+/// ray, as `shift_45`, but on a diagonal at `min(|dx|, |dy|)` on both axes rather than at the
+/// projection, so the anchor does not leave the click's shorter axis (#12893).
+fn shift_click_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
+    let (dx, dy) = (p[0] - origin[0], p[1] - origin[1]);
+    let (short, long) = (dx.abs().min(dy.abs()), dx.abs().max(dy.abs()));
+    // Within 22.5° of an axis the nearest ray is 0/90°, where the projection already keeps the
+    // click's long axis; that (and a non-finite click) stays with `shift_45`.
+    if !shift || !(short.is_finite() && long.is_finite()) || short < long * std::f64::consts::FRAC_PI_8.tan() {
+        return shift_45(origin, p, shift);
+    }
+    [origin[0] + dx.signum() * short, origin[1] + dy.signum() * short]
 }
 
 /// Undo the most recently placed Pen anchor while its path is still in progress.
