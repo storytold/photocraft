@@ -101,7 +101,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
-    let mut radius_alert = false;
+    let (mut radius_alert, mut sides_alert) = (false, false);
     let mut radius_invalid = false;
     match tool {
         Tool::Rectangle => {
@@ -119,11 +119,9 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         }
         Tool::Polygon => {
             crate::widgets::vline(ui, 22.0);
-            lbl(ui, tl!("Sides:"));
-            let mut s = o.polygon_sides as f32;
-            if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 48.0).changed() {
-                o.polygon_sides = s.round().clamp(3.0, 100.0) as u32;
-            }
+            let label = tl!("Sides:");
+            lbl(ui, label);
+            sides_alert = sides_field(ui, label, &mut o.polygon_sides);
         }
         Tool::Line => {
             crate::widgets::vline(ui, 22.0);
@@ -198,8 +196,9 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let Some(rgb) = recent {
         crate::paint_picker::remember(app, rgb);
     }
-    radius_range_alert(app, radius_alert);
-    radius_alert_message(app, radius_invalid, RADIUS_INVALID_ALERT);
+    range_alert(app, radius_alert, RADIUS_RANGE_ALERT);
+    range_alert(app, radius_invalid, RADIUS_INVALID_ALERT);
+    range_alert(app, sides_alert, SIDES_RANGE_ALERT);
 }
 
 /// The Rectangle tool's corner radius in px, as the reference takes it (#13336).
@@ -212,16 +211,27 @@ pub(crate) const RADIUS_RANGE_ALERT: &str = "A value between 0.000 pixel and 150
 pub(crate) const RADIUS_INVALID_ALERT: &str =
     "Invalid numeric entry. A number between 0.000 pixel and 150000.000 Pixels is required. Restored last valid value.";
 
-/// Shows [`RADIUS_RANGE_ALERT`] as a modal with OK when `owed`, once even if more than one pass asks.
-fn radius_range_alert(app: &mut PhotocraftApp, owed: bool) {
-    radius_alert_message(app, owed, RADIUS_RANGE_ALERT);
+/// The Polygon tool's Sides: whole numbers 3..100. Returns true once the field is left with a
+/// value typed past them, so the caller shows [`SIDES_RANGE_ALERT`] (#13304).
+fn sides_field(ui: &mut egui::Ui, label: &str, sides: &mut u32) -> bool {
+    let mut s = *sides as f32;
+    let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut s, 3.0..=100.0, "", 48.0);
+    if r.changed() {
+        *sides = s.round().clamp(3.0, 100.0) as u32;
+    }
+    out_of_range
 }
 
-fn radius_alert_message(app: &mut PhotocraftApp, owed: bool, text: &'static str) {
+/// The reference's alert for a Polygon Sides value typed past 3..100 (#13304).
+pub(crate) const SIDES_RANGE_ALERT: &str = "An integer between 3 and 100 is required. Closest value inserted.";
+
+/// Shows `alert` ([`RADIUS_RANGE_ALERT`], [`SIDES_RANGE_ALERT`]) as a modal with OK when `owed`,
+/// once even if more than one pass asks.
+fn range_alert(app: &mut PhotocraftApp, owed: bool, alert: &str) {
     if !owed {
         return;
     }
-    let message = tl!(text).to_owned();
+    let message = tl!(alert).to_owned();
     let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
     if !shown {
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
@@ -235,6 +245,10 @@ mod rectangle_radius_range_tests;
 #[cfg(test)]
 #[path = "rectangle_radius_target_tests.rs"]
 mod rectangle_radius_target_tests;
+
+#[cfg(test)]
+#[path = "polygon_sides_alert_tests.rs"]
+mod polygon_sides_alert_tests;
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
