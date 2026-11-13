@@ -602,6 +602,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     if let Some(st) = app.session.active()
                         && let Some(id) = crate::vector_ui::pick_shape_at(&st.doc, [x, y], tol)
                     {
+                        crate::path_components::untarget_saved_path_off(app, [x, y], tol);
                         let _ = app.run("layer.select", json!({"layer": id.0}));
                     }
                     // The component pressed is selected, so the drag moves it (and the others selected).
