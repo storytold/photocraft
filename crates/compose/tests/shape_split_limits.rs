@@ -83,6 +83,13 @@ fn splits_past_the_cache_budget_draw_as_before_and_past_the_draw_limit_fall_back
     shape_split::set_split_limits(defaults.0, defaults.1);
     shape_split::purge_cache();
     assert!(render(&doc, canvas) == stacked, "the defaults split again");
+
+    // Lowering the cache's budget below what it holds trims it at once.
+    let held = shape_split::set_split_limits(defaults.0, defaults.1);
+    assert_eq!(held, defaults);
+    shape_split::set_split_limits(64 << 10, defaults.1);
+    assert_eq!(shape_split::purge_cache(), 0, "nothing past the lowered budget is held");
+    shape_split::set_split_limits(defaults.0, defaults.1);
 }
 
 fn white_only(canvas: Rect) -> Document {

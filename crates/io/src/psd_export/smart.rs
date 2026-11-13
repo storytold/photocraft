@@ -67,7 +67,7 @@ pub(super) struct SmartOut {
     /// Their filter masks and unfiltered pixels, decoded once each (by placed id) and charged to
     /// [`Self::fx_budget`].
     pub(super) old_masks: std::collections::HashMap<String, Result<Option<photocraft_doc::LayerMask>, crate::smart_map::FilterCacheError>>,
-    pub(super) old_unfiltered: std::collections::HashMap<String, Option<Surface>>,
+    pub(super) old_unfiltered: std::collections::HashMap<String, Result<Option<Surface>, crate::smart_map::FilterCacheError>>,
     pub(super) fx_budget: crate::smart_map::FilterCacheBudget,
     /// Placed ids whose preserved `FEid` item stays.
     pub(super) keep_fx: std::collections::HashSet<String>,

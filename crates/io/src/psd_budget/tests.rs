@@ -729,3 +729,30 @@ fn a_stored_shape_is_not_split_over_a_huge_canvas_when_composited() {
     let first = photocraft_compose::render(&doc, viewport);
     assert!(first == photocraft_compose::render(&unsplit(&doc), viewport), "the stored pixels, unsplit");
 }
+
+/// A folder is imported as a group, never as a shape: a Photoshop Frame's stroke (`vstk`) along
+/// its vector mask is drawn by the compositor, not rendered at import, so a frame around a huge
+/// canvas costs the import nothing and the file opens.
+#[test]
+fn a_folder_with_a_frame_stroke_is_not_charged_as_a_shape() {
+    use craft_psd::path::{PathData, PsdKnot, PsdSubpath, VectorMaskBlock};
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    let before = estimate(&file);
+    file.header.width = 300_000;
+    file.header.height = 4096;
+    let corner = |x: f64, y: f64| PsdKnot { linked: false, pre: (x, y), anchor: (x, y), post: (x, y) };
+    let frame = PsdSubpath { closed: true, operation: 1, knots: vec![corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0), corner(0.0, 1.0)] };
+    let vsms = VectorMaskBlock { version: 3, flags: 0, path: PathData::from_subpaths(&[frame], false) }.to_bytes();
+    let stroke = photocraft_doc::ShapeStroke { width: 8.0, ..Default::default() };
+    let folder = &mut file.layers_mut()[3];
+    assert!(folder.section_type().is_folder());
+    folder.blocks.push(craft_psd::TaggedBlock::new(*b"vsms", vsms));
+    folder.blocks.push(craft_psd::TaggedBlock::new(*b"vstk", crate::vector_map::vstk_bytes(Some(&stroke), true, 72.0)));
+    let est = check(&file, DEFAULT_PSD_IMPORT_PIXEL_BYTES).expect("the frame costs the import nothing");
+    assert_eq!(est.total_bytes, before, "only the layers' own pixels");
+    let (doc, warnings) = crate::psd_to_document(&file);
+    let group = doc.layers.iter().find(|l| l.is_group()).unwrap_or_else(|| panic!("{warnings:?}"));
+    assert!(group.vector_mask.is_some());
+    let photocraft_doc::LayerContent::Group(g) = &group.content else { panic!("{:?}", group.content) };
+    assert!(g.frame_stroke.is_some(), "the frame keeps its stroke");
+}

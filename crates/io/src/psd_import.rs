@@ -68,7 +68,8 @@ pub(crate) struct Ctx<'a> {
     /// a surface clones by sharing its tiles.
     pub filter_masks: std::collections::HashMap<String, Option<LayerMask>>,
     /// The same for the unfiltered pixels the mask mixes back in.
-    pub unfiltered: std::collections::HashMap<String, Option<Surface>>,
+    /// `Err` when the source was refused for the smart-filter cache budget.
+    pub unfiltered: std::collections::HashMap<String, Result<Option<Surface>, crate::smart_map::FilterCacheError>>,
     /// The pixels kept in [`Self::filter_masks`] and [`Self::unfiltered`], and the smart objects
     /// mixed through them, charged as they are made (the import budget doesn't cover them).
     pub smart_filter_budget: crate::smart_map::FilterCacheBudget,
@@ -192,8 +193,14 @@ fn has_shape_blocks(rec: &LayerRecord, vector: bool, fill: bool) -> bool {
 }
 
 /// Whether [`Ctx::layer_from_record`] makes `rec` a shape layer: it has shape blocks and is not
-/// an adjustment, type or placed layer, nor a pattern-filled shape (a fill layer).
+/// an adjustment, type or placed layer, nor a pattern-filled shape (a fill layer). Folders and
+/// their end markers are groups ([`Ctx::build`]): a Frame's `vstk` there is drawn by the
+/// compositor, never rendered at import.
 fn is_shape_record(rec: &LayerRecord) -> bool {
+    use craft_psd::tagged::SectionType;
+    if matches!(rec.section_type(), SectionType::OpenFolder | SectionType::ClosedFolder | SectionType::BoundingDivider) {
+        return false;
+    }
     let (fill, vector) = (fill_key(rec), vector_key(rec).is_some());
     let other = ADJUSTMENT_KEYS.into_iter().any(|k| rec.block(k).is_some())
         || rec.block(b"TySh").is_some()
@@ -758,6 +765,10 @@ impl Ctx<'_> {
         // ones (`FEid`) back in through it; our smart objects hold the mixed result.
         let stored = self.record_surface(rec, name);
         let shown = stack.enabled && stack.filters.iter().any(|f| f.visible);
+        // A mask that would show but can't be mixed in for the cache budget is dropped with the
+        // mix: the layer keeps its stored pixels, and a mask kept over pixels it wasn't mixed
+        // into would be unmixed from them again on save.
+        let mut ignore_mask = false;
         let cache = match (&placed, filter_mask.as_ref().filter(|m| m.enabled && shown)) {
             (Some(p), Some(m)) => {
                 let unfiltered = match self.unfiltered.get(&p.placed) {
@@ -767,16 +778,16 @@ impl Ctx<'_> {
                         // bounded: past the limit the layer keeps its stored pixels, unmixed.
                         let item = self.filter_effects.iter().find(|i| i.id == p.placed);
                         let made = match item.map(|i| crate::smart_map::unfiltered_from_item(i, self.fmt, &mut self.smart_filter_budget)) {
-                            Some(Ok(made)) => made,
+                            Some(Ok(made)) => Ok(made),
                             Some(Err(crate::smart_map::FilterCacheError::Allocation(e))) => {
                                 self.allocation_failed(format!("layer \"{name}\" unfiltered smart object pixels: {e}"));
-                                None
+                                Ok(None)
                             }
                             Some(Err(e)) => {
-                                self.warn(format!("layer \"{name}\": {e}; its filter mask was not applied to its pixels"));
-                                None
+                                self.warn(format!("layer \"{name}\": {e}; its filter mask was ignored"));
+                                Err(e)
                             }
-                            None => None,
+                            None => Ok(None),
                         };
                         self.unfiltered.insert(p.placed.clone(), made.clone());
                         made
@@ -786,19 +797,27 @@ impl Ctx<'_> {
                     // Every layer of a source mixes its own copy, up to as many new tiles as the
                     // source has beyond its stored ones: charged per layer, as many layers can
                     // share one source.
-                    Some(u) if self.smart_filter_budget.try_charge(photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt)) => {
+                    Ok(Some(u)) if self.smart_filter_budget.try_charge(photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt)) => {
                         photocraft_compose::filter_mask::mix(&u, &stored, m)
                     }
-                    Some(_) => {
+                    Ok(Some(_)) => {
                         let e = crate::smart_map::FilterCacheError::TooLarge;
-                        self.warn(format!("layer \"{name}\": {e}; its filter mask was not applied to its pixels"));
+                        self.warn(format!("layer \"{name}\": {e}; its filter mask was ignored"));
+                        ignore_mask = true;
                         stored
                     }
-                    None => stored,
+                    Err(_) => {
+                        ignore_mask = true;
+                        stored
+                    }
+                    // A source that can't be read: the stored pixels, as Photoshop's cache would
+                    // be without it (saving keeps the cache as it is).
+                    Ok(None) => stored,
                 }
             }
             _ => stored,
         };
+        let filter_mask = if ignore_mask { None } else { filter_mask };
         // The global blocks' data lives in `self.global` (an owned open moves it out of the file).
         let vector_preview = rec.block(&crate::vector_preview::PSD_KEY).and_then(|block| {
             let global = &self.global;

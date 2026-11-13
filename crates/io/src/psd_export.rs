@@ -677,7 +677,11 @@ impl Ex<'_> {
             mask_linked: sm.filter_mask.as_ref().is_some_and(|m| m.linked),
         };
         let same_source = template.as_ref().filter(|t| t.idnt == src.uuid);
-        let unchanged = same_source.zip(sm.psd_raw.as_ref()).is_some_and(|(t, data)| self.placed_unchanged(t, data, sm, &stack));
+        let kept = match (same_source, sm.psd_raw.as_ref()) {
+            (Some(t), Some(data)) => self.placed_verdict(t, data, sm, &stack),
+            _ => Kept::Changed,
+        };
+        let unchanged = !matches!(kept, Kept::Changed);
         let placed = match same_source {
             Some(t) if t.placed.is_empty() && unchanged && self.smart.unplaced_owners.get(&sm.contents_id) == Some(&l.id) => String::new(),
             Some(t) if self.smart.placed_owners.get(&t.placed) == Some(&l.id) && self.smart.placed_used.insert(t.placed.clone()) => t.placed.clone(),
@@ -703,11 +707,32 @@ impl Ex<'_> {
                 None => raw.push((*b"SoLd", data.to_vec())),
             }
             if !stack.filters.is_empty() {
-                self.smart.keep_fx.insert(t.placed.clone());
-                if masked(sm)
-                    && let Some(u) = self.preserved_unfiltered(&t.placed, &l.name)
-                {
-                    self.smart.unfiltered.insert(l.id, u);
+                let mut drop = match kept {
+                    Kept::DropCache(why) => Some(why),
+                    _ => None,
+                };
+                // The layer's record holds the filtered pixels without the mask: unmixed with the
+                // unfiltered ones, or the cache would apply the mask a second time on opening.
+                if drop.is_none() && masked(sm) {
+                    match self.preserved_unfiltered(&t.placed) {
+                        Ok(Some(u)) => {
+                            self.smart.unfiltered.insert(l.id, u);
+                        }
+                        // A source that can't be read couldn't be mixed in on opening either:
+                        // the pixels are as stored.
+                        Ok(None) => {}
+                        Err(e) => drop = Some(Some(e.to_string())),
+                    }
+                }
+                match drop {
+                    None => {
+                        self.smart.keep_fx.insert(t.placed.clone());
+                    }
+                    Some(Some(why)) => self.warnings.push(format!(
+                        "layer \"{}\": {why}; its smart filter cache was left out, so Photoshop renders its filters again, without the filter mask",
+                        l.name
+                    )),
+                    Some(None) => {}
                 }
             }
             return;
@@ -801,21 +826,28 @@ impl Ex<'_> {
         blocks::plld_transform(&corners, size, warp.as_ref()) != (sm.transform, sm.perspective)
     }
 
-    /// Whether an imported placed layer still says what the smart object is: transform, warp,
-    /// filter stack and filter mask as stored.
-    fn placed_unchanged(&mut self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> bool {
+    /// Whether an imported placed layer still says what the smart object is (transform, warp,
+    /// filter stack and filter mask as stored), so its placement is written as it was read.
+    fn placed_verdict(&mut self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> Kept {
         if t.transform != sm.transform || blocks::parse_placed_warp(b"SoLd", data) != sm.warp || t.stack.clone().unwrap_or_default() != *stack {
-            return false;
+            return Kept::Changed;
         }
         if stack.filters.is_empty() {
-            return true;
+            return Kept::Unchanged;
         }
         if !self.smart.old_fx.iter().any(|i| i.id == t.placed) {
-            return sm.filter_mask.is_none();
+            return if sm.filter_mask.is_none() { Kept::Unchanged } else { Kept::Changed };
         }
         match self.preserved_mask(&t.placed, stack) {
-            Ok(m) => m == sm.filter_mask,
-            Err(_) => false,
+            Ok(m) if m == sm.filter_mask => Kept::Unchanged,
+            // The document shows no filter mask (removed, or ignored when the file was opened):
+            // the placement stays, the cache that holds the mask is left out. Photoshop renders
+            // the filters again; nothing is redrawn here.
+            Ok(_) | Err(crate::smart_map::FilterCacheError::Unreadable(_)) if sm.filter_mask.is_none() => Kept::DropCache(None),
+            Ok(_) | Err(crate::smart_map::FilterCacheError::Unreadable(_)) => Kept::Changed,
+            // Past the save's smart-filter cache budget the mask can't even be compared: the
+            // placement stays and the cache is left out, rather than redrawn without a bound.
+            Err(e) => Kept::DropCache(Some(e.to_string())),
         }
     }
 
@@ -843,23 +875,16 @@ impl Ex<'_> {
 
     /// The unfiltered pixels in the preserved `FEid` item of `placed`: decoded once per export
     /// (layers of one source share their tiles) and charged to its smart-filter cache budget.
-    /// Without them the layer is written with its filter mask applied, as it shows.
-    fn preserved_unfiltered(&mut self, placed: &str, layer: &str) -> Option<Surface> {
+    /// `Ok(None)` when the item holds none that can be read.
+    fn preserved_unfiltered(&mut self, placed: &str) -> Result<Option<Surface>, crate::smart_map::FilterCacheError> {
         if let Some(done) = self.smart.old_unfiltered.get(placed) {
             return done.clone();
         }
         let fmt = self.fmt;
         let smart = &mut self.smart;
         let item = smart.old_fx.iter().find(|i| i.id == placed);
-        let made = match item.map(|i| crate::smart_map::unfiltered_from_item(i, fmt, &mut smart.fx_budget)) {
-            Some(Ok(made)) => made,
-            Some(Err(e)) => {
-                self.warnings.push(format!("layer \"{layer}\": {e}; it was written with its filter mask applied"));
-                None
-            }
-            None => None,
-        };
-        self.smart.old_unfiltered.insert(placed.to_string(), made.clone());
+        let made = item.map_or(Ok(None), |i| crate::smart_map::unfiltered_from_item(i, fmt, &mut smart.fx_budget));
+        smart.old_unfiltered.insert(placed.to_string(), made.clone());
         made
     }
 
@@ -1152,6 +1177,16 @@ impl Ex<'_> {
             }
         }
     }
+}
+
+/// What saving does with an imported placed layer's own blocks ([`Ex::placed_verdict`]).
+enum Kept {
+    /// Edited: its blocks are regenerated.
+    Changed,
+    /// Written as read, its smart-filter cache with it.
+    Unchanged,
+    /// Written as read, without its smart-filter cache (why, to warn about, if worth a word).
+    DropCache(Option<String>),
 }
 
 #[cfg(test)]

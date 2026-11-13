@@ -211,8 +211,31 @@ pub struct FilterCacheBudget {
 
 impl Default for FilterCacheBudget {
     fn default() -> Self {
+        #[cfg(test)]
+        if let Some(cap) = TEST_CACHE_CAP.with(std::cell::Cell::get) {
+            return Self::new(cap);
+        }
         Self::new(MAX_SMART_FILTER_CACHE_BYTES)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHE_CAP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with every [`FilterCacheBudget`] made on this thread capped at `cap` (an import's or
+/// an export's), so a test needs no gigabyte of caches to reach the cap.
+#[cfg(test)]
+pub(crate) fn with_test_cache_cap<R>(cap: u64, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<u64>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_CACHE_CAP.with(|c| c.set(self.0));
+        }
+    }
+    let _reset = Reset(TEST_CACHE_CAP.with(|c| c.replace(Some(cap))));
+    f()
 }
 
 impl FilterCacheBudget {
@@ -255,7 +278,7 @@ impl std::fmt::Display for FilterCacheError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreadable(why) => f.write_str(why),
-            Self::TooLarge => write!(f, "the smart filter caches are too large to keep (over {} MiB)", MAX_SMART_FILTER_CACHE_BYTES >> 20),
+            Self::TooLarge => f.write_str("the smart filter caches are too large to keep in memory"),
             Self::Allocation(e) => write!(f, "the smart filter cache could not be allocated: {e}"),
         }
     }

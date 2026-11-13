@@ -66,13 +66,26 @@ fn limits() -> Limits {
 /// previous `(cache, draw)` limits. For memory preferences and tests.
 pub fn set_split_limits(cache_bytes: usize, draw_bytes: u64) -> (usize, u64) {
     let before = (CACHE_BUDGET.swap(cache_bytes, Ordering::Relaxed), DRAW_LIMIT.swap(draw_bytes, Ordering::Relaxed));
-    // Refusals were measured against the old limit.
+    // Refusals were measured against the old limit; what the cache holds may exceed the new one.
     refused().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    trim(cache(), cache_bytes);
     before
 }
 
-/// What drawing `parts` over `canvas` in `fmt` takes at most ([`MAX_SPLIT_DRAW_BYTES`]).
-fn split_bytes(parts: [&ShapeLayer; 2], canvas: Rect, fmt: &PixelFormat) -> u64 {
+/// Evicts the least recently used splits until what the cache holds fits `budget`.
+fn trim(c: &Mutex<Cache>, budget: usize) {
+    let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
+    let mut held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).fold(0, usize::saturating_add);
+    while held > budget {
+        let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
+        let Some(removed) = c.0.remove(&old) else { break };
+        held = held.saturating_sub(entry_bytes(&removed.0, removed.2.as_ref()));
+    }
+}
+
+/// What drawing `parts` (fill, stroke) over `canvas` in `fmt` takes at most
+/// ([`MAX_SPLIT_DRAW_BYTES`]), the stroke fitted to the shape's own pixels `stored`.
+fn split_bytes(parts: [&ShapeLayer; 2], stored: Option<&Surface>, canvas: Rect, fmt: &PixelFormat) -> u64 {
     parts
         .into_iter()
         .map(|part| {
@@ -80,6 +93,19 @@ fn split_bytes(parts: [&ShapeLayer; 2], canvas: Rect, fmt: &PixelFormat) -> u64 
             photocraft_raster::tile_storage_bytes(area, fmt).saturating_add(photocraft_vector::feather_workspace_bytes(part, area))
         })
         .fold(0, u64::saturating_add)
+        .saturating_add(fitted_bytes(stored, canvas, fmt))
+}
+
+/// The tiles [`fit_stroke`] adds to the stroke part where the shape's own pixels reach past its
+/// vector bounds: one per tile of them in the canvas, or every canvas tile when their default
+/// pixel isn't transparent (the fit then covers their whole extent).
+fn fitted_bytes(stored: Option<&Surface>, canvas: Rect, fmt: &PixelFormat) -> u64 {
+    let Some(stored) = stored else { return 0 };
+    if stored.default_pixel().iter().any(|v| *v != 0.0) {
+        return photocraft_raster::tile_storage_bytes(canvas, fmt);
+    }
+    let tiles = stored.tiles().filter(|(c, _)| !c.rect().intersect(&canvas).is_empty()).count();
+    photocraft_raster::stored_tiles_bytes(tiles as u64, fmt)
 }
 
 /// Pixel-byte budget for split parts and their pinned source surfaces (#4530).
@@ -176,7 +202,7 @@ fn split_in(
     let fmt = PixelFormat::RGBA8.with_sample(depth);
     let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
     let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
-    if split_bytes([&fill_only, &stroke_only], canvas, &fmt) > limits.draw {
+    if split_bytes([&fill_only, &stroke_only], sh.cache.as_ref(), canvas, &fmt) > limits.draw {
         let mut refused = refused.lock().unwrap_or_else(|e| e.into_inner());
         if refused.len() >= MAX_REFUSED {
             refused.clear();
@@ -472,6 +498,25 @@ mod tests {
         assert!(split_in(&sh, Rect::new(0, 0, 64, 64), SampleType::U8, &store, &refusals, limits).is_some());
         assert_eq!(store.lock().unwrap().0.len(), 1);
         assert_eq!(refusals.lock().unwrap().len(), 1);
+    }
+
+    /// The stroke part is fitted to the shape's own pixels wherever they reach, past its vector
+    /// bounds: the draw limit counts those tiles too. A small stroked shape whose stored pixels
+    /// cover a much larger area is refused at a limit its vector bounds alone fit.
+    #[test]
+    fn the_draw_limit_counts_the_stroke_fitted_to_the_stored_pixels() {
+        let (store, refusals) = (Mutex::new(Cache::default()), Mutex::new(HashSet::new()));
+        let canvas = Rect::new(0, 0, 2048, 2048);
+        let mut sh = shape(10.0);
+        // Stored pixels over 64 tiles (16 MiB as RGBA8), the vector parts over 8 (2 MiB).
+        let mut stored = Surface::new(PixelFormat::RGBA8);
+        stored.fill_rect(canvas, &[0.2, 0.4, 0.6, 1.0]);
+        sh.cache = Some(stored);
+        let limits = Limits { cache: 1 << 20, draw: 4 << 20 };
+        assert!(split_in(&sh, canvas, SampleType::U8, &store, &refusals, limits).is_none(), "the fitted stroke would take 16 MiB");
+        let roomy = Limits { cache: 1 << 20, draw: 32 << 20 };
+        let (_, stroke) = split_in(&sh, canvas, SampleType::U8, &store, &Mutex::new(HashSet::new()), roomy).expect("fits");
+        assert!(stroke.tile_count() >= 64, "the stroke covers the stored pixels: {} tiles", stroke.tile_count());
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and
