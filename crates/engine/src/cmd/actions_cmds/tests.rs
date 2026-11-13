@@ -358,7 +358,9 @@ fn record_script_that_plays_an_action_keeps_each_step_once() {
     s.execute("file.scripts.browse", script.clone()).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     let got = s.execute("actions.get", json!({"action": "Outer"})).unwrap();
-    assert_eq!(got["steps"], script["steps"]);
+    let mut expected = script["steps"].clone();
+    expected[1][1]["set"] = json!("Ungrouped Actions");
+    assert_eq!(got["steps"], expected, "the script steps are recorded once, with the resolved action scope");
 }
 
 #[test]
@@ -1207,7 +1209,7 @@ fn nested_call_records_one_named_step_and_tracks_child_edits() {
     s.execute("actions.record", json!({"name": "Parent"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Before"})).unwrap();
     s.execute("actions.play", json!({"action": 0})).unwrap();
-    assert_eq!(pending_steps(&s, 1).cloned().collect::<Vec<_>>(), [("actions.play".into(), json!({"action": "Child"}))]);
+    assert_eq!(pending_steps(&s, 1).cloned().collect::<Vec<_>>(), [("actions.play".into(), json!({"action": "Child", "set": "Ungrouped Actions"}))]);
     s.execute("layer.new.layer", json!({"name": "After"})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.actions.list[1].steps.iter().map(|st| st.0.as_str()).collect::<Vec<_>>(), ["layer.new.layer", "actions.play", "layer.new.layer"]);

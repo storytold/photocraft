@@ -1,13 +1,13 @@
 //! Assertions for the shared ATN library's native fallback and opt-in Photoshop omission.
+use craft_psd::{
+    atn::{self, AtnItem},
+    descriptor::Value as D,
+};
 use photocraft_engine::{
     Session,
     actions_cmds::Action,
     atn_cmds,
     preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend},
-};
-use craft_psd::{
-    atn::{self, AtnItem},
-    descriptor::Value as D,
 };
 
 /// Persist and reopen every native ID and JSON value, then check the portable export/import contract.

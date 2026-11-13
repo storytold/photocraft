@@ -25,6 +25,43 @@ fn opacities(s: &Session) -> Vec<f64> {
     s.active().unwrap().doc.walk().iter().skip(1).map(|(_, _, l)| l.opacity as f64).collect()
 }
 
+/// An unavailable Photoshop mapping must remain one exact native step, not a partial Set
+/// or an active-layer fallback. Decoding that step does not bypass command validation.
+fn assert_native_layer_fallback(s: &mut Session, action: &Action) {
+    assert_eq!(action.steps.len(), 1);
+    let (id, params) = &action.steps[0];
+    assert!(super::convert::export_items(id, params, "S").is_none(), "the Photoshop projection must still refuse {params}");
+    let before_actions = s.actions.list.clone();
+    let before_revision = s.active().unwrap().revision;
+    let before_history = s.active().unwrap().history.past_len();
+    let layers = |s: &Session| s.active().unwrap().doc.walk().iter().map(|(_, _, layer)| (layer.id.0, layer.name.clone(), layer.opacity)).collect::<Vec<_>>();
+    let before_layers = layers(s);
+    let (bytes, skipped) = export("S", &[action], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let file = atn::parse(&bytes).unwrap();
+    let [item] = file.actions[0].items.as_slice() else { panic!("one whole native step, no partial Photoshop Sets") };
+    assert_eq!(item.event, AtnEvent::name("photocraftCommand"));
+    assert_eq!(item.enabled, action.step_enabled(0));
+    assert_eq!(item.with_dialog, action.dialogs.contains(&0));
+    let descriptor = item.descriptor.as_ref().unwrap();
+    let Some(D::Text(command)) = descriptor.get("command") else { panic!("missing native command") };
+    let Some(D::Text(stored)) = descriptor.get("params") else { panic!("missing native params") };
+    assert_eq!(command.to_string_lossy(), *id);
+    assert_eq!(serde_json::from_str::<Value>(&stored.to_string_lossy()).unwrap(), *params);
+    let imported = import(&bytes).unwrap();
+    assert_eq!(imported.actions.len(), 1);
+    assert_eq!(imported.actions[0].steps, action.steps, "all layer selectors and property values survive exactly");
+    let (decoded_id, decoded_params) = &imported.actions[0].steps[0];
+    assert!(s.execute(decoded_id, decoded_params.clone()).is_err(), "native encoding must not bypass layer validation");
+    assert_eq!(s.actions.list, before_actions);
+    assert_eq!(s.active().unwrap().revision, before_revision);
+    assert_eq!(s.active().unwrap().history.past_len(), before_history);
+    assert_eq!(layers(s), before_layers, "an invalid target must not edit the active or a partial first layer");
+    let (bytes, skipped) = export("S", &[action], &[], true).unwrap();
+    assert_eq!(skipped, [Skipped { action: action.name.clone(), step: 0, id: id.clone() }]);
+    assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty(), "skipUnsupported omits the whole native step");
+}
+
 /// The issue's procedure: an opacities step that named both layers, undone, and strictly
 /// exported/imported, replays on both layers of the same document — the id keeps exactly
 /// the ones it changed (#7246).
@@ -111,45 +148,38 @@ fn a_one_layer_list_exports_one_exact_set() {
     assert_eq!(steps, [("layer.setProps".to_string(), json!({"layer": first, "opacity": 0.5}))]);
 }
 
-/// A list the format can't carry exactly (`Idnt` holds u32) refuses: strict export fails,
-/// and `skipUnsupported` reports the whole step.
+/// Idnt holds u32: retain a larger layer id natively instead of retargeting the active layer.
 #[test]
-fn export_refuses_a_layer_id_beyond_the_idnt_range() {
+fn an_out_of_idnt_range_layers_list_stays_exact_native_data() {
+    let (mut s, _, _) = two_layers();
     let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [u32::MAX as u64 + 1], "opacity": 0.5}))]);
-    let e = export("S", &[&action], &[], false).unwrap_err();
-    assert!(e.contains("layer.setProps"), "{e}");
-    let (_, skipped) = export("S", &[&action], &[], true).unwrap();
-    assert_eq!(skipped, [Skipped { action: "Targets".into(), step: 0, id: "layer.setProps".into() }]);
+    assert_native_layer_fallback(&mut s, &action);
 }
 
-/// A name on a several-layers change can't be exact either: PhotoCraft's own command refuses
-/// that step, and strict export refuses it too.
+/// A multiple-layer rename stays unprojectable and fails validation after a native roundtrip.
 #[test]
-fn export_refuses_a_rename_carrying_a_layers_list() {
-    let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [1, 2], "name": "Both"}))]);
-    let e = export("S", &[&action], &[], false).unwrap_err();
-    assert!(e.contains("layer.setProps"), "{e}");
+fn a_native_layers_list_rename_still_refuses_to_edit() {
+    let (mut s, first, second) = two_layers();
+    let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first, second], "name": "Both"}))]);
+    assert_native_layer_fallback(&mut s, &action);
 }
 
-/// A present `layers` that isn't an array ("7,8" etc.) can't be exact either: exporting it as
-/// one item would aim the step at the active layer instead (#7246, review).
+/// A present non-array layers value must not become an implicit active-layer Set (#7246).
 #[test]
-fn export_refuses_a_non_array_layers_value() {
+fn a_native_non_array_layers_value_does_not_target_the_active_layer() {
+    let (mut s, _, _) = two_layers();
     let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": "7,8", "opacity": 0.5}))]);
-    let e = export("S", &[&action], &[], false).unwrap_err();
-    assert!(e.contains("layer.setProps"), "{e}");
-    let (_, skipped) = export("S", &[&action], &[], true).unwrap();
-    assert_eq!(skipped, [Skipped { action: "Targets".into(), step: 0, id: "layer.setProps".into() }]);
+    assert_native_layer_fallback(&mut s, &action);
 }
 
 /// Several explicit layers with several properties: per layer (in list order), per property
 /// (the step's exact keys and values, opacity then blend), each pitched to that layer's
 /// `Idnt`; the step's enabled/dialog flags ride the expansion; an unrepresentable id anywhere
-/// refuses the whole source step, so no partial first-layer Set escapes into the skipped
-/// bytes (#7246, coord with #8371).
+/// retains the whole source step natively or omits it with skipUnsupported, so no partial
+/// first-layer Set escapes (#7246, coord with #8371).
 #[test]
 fn a_list_with_properties_exports_exact_targets_in_order() {
-    let (s, first, second) = two_layers();
+    let (mut s, first, second) = two_layers();
     let mut action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first, second], "opacity": 0.5, "blend": "Multiply"}))]);
     // The panel's unchecked and dialog columns: the expansion must not lose them.
     action.disabled.insert(0);
@@ -178,24 +208,15 @@ fn a_list_with_properties_exports_exact_targets_in_order() {
     assert!(s.active().unwrap().doc.walk()[1].2.blend == photocraft_color::BlendMode::Normal, "export writes no edit into the document");
 
     let malformed = Action::new("Targets", vec![("layer.setProps".into(), json!({"layers": [first, "nope"], "opacity": 0.5}))]);
-    let e = export("S", &[&malformed], &[], false).unwrap_err();
-    assert!(e.contains("layer.setProps"), "{e}");
-    let (bytes, skipped) = export("S", &[&malformed], &[], true).unwrap();
-    assert_eq!(skipped, [Skipped { action: "Targets".into(), step: 0, id: "layer.setProps".into() }]);
-    let file = atn::parse(&bytes).unwrap();
-    assert!(file.actions[0].items.is_empty(), "no partial first-layer Set escapes the skipped step");
+    assert_native_layer_fallback(&mut s, &malformed);
 }
 
-/// A numeric `layer` the reference can't hold refuses as well: exporting it silently would
-/// aim the step at the active layer instead (#7246, review).
+/// Numeric selectors outside Idnt remain exact native JSON, never the current selection.
 #[test]
-fn export_refuses_a_numeric_layer_beyond_the_idnt_range() {
+fn a_native_numeric_layer_outside_idnt_range_does_not_target_the_active_layer() {
+    let (mut s, _, _) = two_layers();
     for bad in [json!(u32::MAX as u64 + 1), json!(-5)] {
         let action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layer": bad, "opacity": 0.5}))]);
-        let e = export("S", &[&action], &[], false).unwrap_err();
-        assert!(e.contains("layer.setProps"), "{e}");
+        assert_native_layer_fallback(&mut s, &action);
     }
-    let skipped_action = Action::new("Targets", vec![("layer.setProps".into(), json!({"layer": -5, "opacity": 0.5}))]);
-    let (_, skipped) = export("S", &[&skipped_action], &[], true).unwrap();
-    assert_eq!(skipped, [Skipped { action: "Targets".into(), step: 0, id: "layer.setProps".into() }]);
 }

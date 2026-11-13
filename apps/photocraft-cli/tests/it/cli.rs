@@ -2156,8 +2156,8 @@ fn batch_external_atn_input_is_not_limited_by_the_preset_store_size() {
 /// CLI import must bind a nested call to its own physical set before Batch playback.
 #[test]
 fn batch_nested_atn_calls_keep_physical_set_targets() {
-    use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
     use craft_psd::{atn, descriptor::UnicodeString};
+    use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
     for explicit in [false, true] {
         let directory = tmp(if explicit { "nested-atn-explicit-set" } else { "nested-atn-local-set" });
         let file = directory.join("sets.atn");
@@ -2190,8 +2190,8 @@ fn batch_nested_atn_calls_keep_physical_set_targets() {
 /// An unscoped cross-set call with no local candidate must fail before output creation.
 #[test]
 fn batch_refuses_ambiguous_nested_atn_calls_before_output() {
-    use photocraft_engine::{actions_cmds::Action, atn_cmds};
     use craft_psd::atn;
+    use photocraft_engine::{actions_cmds::Action, atn_cmds};
     let directory = tmp("nested-atn-ambiguous");
     let file = directory.join("sets.atn");
     let finish = Action::new("Finish", vec![("layer.new.layer".into(), json!({}))]);
@@ -2232,8 +2232,8 @@ fn batch_refuses_ambiguous_nested_atn_calls_before_output() {
 /// An explicit archive scope cannot fall back to a namesake in another physical set.
 #[test]
 fn batch_refuses_missing_or_ambiguous_explicit_atn_scopes_before_output() {
-    use photocraft_engine::{actions_cmds::Action, atn_cmds};
     use craft_psd::atn;
+    use photocraft_engine::{actions_cmds::Action, atn_cmds};
     for failure in ["missing-target", "missing-set", "ambiguous-set"] {
         for call in ["play", "shared", "then", "else"] {
             let directory = tmp(&format!("nested-atn-scope-{failure}-{call}"));
