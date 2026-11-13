@@ -7,16 +7,6 @@ use super::{GradientChoices, LayerContent, PaintChange, PhotocraftApp, Tokens, T
 // ---------------------------------------------------------------------------------------------
 // Options bars
 
-/// The Pen's gear, before Auto Add/Delete as in Photoshop: a popup with the Rubber Band check
-/// item, off by default and saved with the tool options (#12900).
-fn pen_gear(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
-    let gear = crate::icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Set additional pen and path options"));
-    egui::Popup::menu(&gear).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_min_width(140.0);
-        ui.checkbox(&mut o.pen_rubber_band, tl!("Rubber Band"));
-    });
-}
-
 /// Options bar for vector tools; false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !(is_shape_tool(tool)
@@ -86,11 +76,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         crate::widgets::vline(ui, 22.0);
         path_operations_menu(app, ui);
-        let o = &mut app.ui.tool_options;
+        let (o, view) = (&mut app.ui.tool_options, &mut app.ui.view);
         if tool == Tool::Pen {
+            // The Pen's one gear sits before Auto Add/Delete, as in Photoshop: the Path Options
+            // and the Rubber Band check item (#9713, #12900).
             crate::widgets::vline(ui, 22.0);
-            pen_gear(o, ui);
+            path_options(ui, &mut view.path_options, Some(&mut o.pen_rubber_band));
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
+        } else {
+            path_options(ui, &mut view.path_options, None);
         }
         let enter = crate::shortcuts::pretty("Enter");
         match tool {
@@ -181,7 +175,34 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
         }
     }
+    crate::widgets::vline(ui, 22.0);
+    path_options(ui, &mut app.ui.view.path_options, None);
     true
+}
+
+/// The options-bar gear of the Pen and shape tools: Photoshop's Path Options, the outline's
+/// Thickness and Color (#9713). One display setting shared by every path tool
+/// (`ViewOptions::path_options`), not a tool option. The Pen's gear passes its `rubber_band`: it
+/// is Photoshop's "Set additional pen and path options", with the Rubber Band check item under
+/// Thickness and Color, off by default and the Pen's own tool option (#12900).
+pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::view_cmds::PathOptions, rubber_band: Option<&mut bool>) {
+    let name = if rubber_band.is_some() { "Set additional pen and path options" } else { "Path Options" };
+    let resp = crate::icons::button(ui, "settings", 24.0, false, tl!(name));
+    let resp = crate::brush_picker::named(resp, name);
+    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        egui::Grid::new("path-options").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label(tl!("Thickness:"));
+            crate::widgets::value_field(ui, &mut o.thickness, super::PATH_THICKNESS, "px", 58.0).accessible_name(tl!("Thickness:"));
+            ui.end_row();
+            ui.label(tl!("Color:"));
+            let colors: Vec<(String, &str)> = super::PATH_COLORS.iter().map(|c| (c.0.to_string(), tl!(c.1))).collect();
+            crate::widgets::dropdown(ui, "path-color", tl!("Color:"), &mut o.color, &colors, 120.0);
+            ui.end_row();
+        });
+        if let Some(on) = rubber_band {
+            ui.checkbox(on, tl!("Rubber Band"));
+        }
+    });
 }
 
 /// Arrowhead Concavity in percent of the head's length, as the reference takes it (#13258).

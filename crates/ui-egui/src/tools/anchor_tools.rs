@@ -19,7 +19,7 @@
 //! Each click (or add and drag) is one history step; a click on nothing it can edit does nothing;
 //! ⌥-click on an anchor with Delete Anchor Point only selects.
 
-use egui::{Color32, Modifiers, Pos2, Stroke};
+use egui::{Modifiers, Pos2, Stroke};
 use photocraft_doc::vector::Path;
 use photocraft_doc::{LayerContent, LayerId, Locks};
 use photocraft_geom::Point;
@@ -29,6 +29,7 @@ use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
 use crate::direct_select::{DirectSelection, Owner, PathRef};
 use crate::state::Tool;
+use crate::vector_ui::PathLook;
 
 /// The anchor tool in effect, if the current tool is one: ⌥ swaps Add and Delete.
 pub fn effective(tool: Tool, mods: Modifiers) -> Option<Tool> {
@@ -370,37 +371,37 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
 
 /// The hover feedback over the Direct Selection overlay: Add highlights the segment under the
 /// pointer and shows the anchor a click would add; Delete highlights the anchor it would remove.
-pub fn draw_hover(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, mods: Modifiers) {
+pub fn draw_hover(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &PathLook, mods: Modifiers) {
     let (Some(tool), Some(p)) = (effective(app.ui.tool, mods), app.hover_doc) else { return };
     if mods.command {
         return;
     }
     let Some((_, path, hit)) = target(app, tool, p) else { return };
-    draw_hit(painter, to_scr, accent, &path, hit);
+    draw_hit(painter, to_scr, look, &path, hit);
 }
 
 /// The same feedback for the Pen when Auto Add/Delete would act on a click.
-pub fn draw_pen_hover(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, mods: Modifiers) {
+pub fn draw_pen_hover(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &PathLook, mods: Modifiers) {
     let Some(p) = app.hover_doc else { return };
     if let Some((_, _, path, hit)) = pen_auto(app, app.ui.tool, mods, p) {
-        draw_hit(painter, to_scr, accent, &path, hit);
+        draw_hit(painter, to_scr, look, &path, hit);
     }
 }
 
-fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, path: &Path, hit: Hit) {
+fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &PathLook, path: &Path, hit: Hit) {
     match hit {
         Hit::Segment([s, k], t) => {
             let Some(seg) = path.subpaths.get(s).and_then(|sp| sp.segments().get(k).copied()) else { return };
             let pts: Vec<Pos2> = (0..=48).map(|i| edit::eval(&seg, f64::from(i) / 48.0)).map(|q| to_scr([q.x, q.y])).collect();
-            painter.add(egui::Shape::line(pts, Stroke::new(2.5, accent)));
+            painter.add(egui::Shape::line(pts, Stroke::new(look.width + 1.5, look.color)));
             let q = edit::eval(&seg, t);
-            crate::vector_ui::draw_anchor(painter, to_scr([q.x, q.y]), false, accent);
+            crate::vector_ui::draw_anchor(painter, to_scr([q.x, q.y]), false, look);
         }
         Hit::Anchor([s, k]) => {
             let Some(kn) = path.subpaths.get(s).and_then(|sp| sp.knots.get(k)) else { return };
             let c = to_scr([kn.anchor.x, kn.anchor.y]);
-            painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(11.0, 11.0)), 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Inside);
-            crate::vector_ui::draw_anchor(painter, c, true, accent);
+            painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(11.0, 11.0)), 0.0, Stroke::new(1.5, look.color), egui::StrokeKind::Inside);
+            crate::vector_ui::draw_anchor(painter, c, true, look);
         }
         Hit::Handle(..) => {}
     }

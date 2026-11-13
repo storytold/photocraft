@@ -392,7 +392,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
         if let Some(st) = app.session.active() {
             for id in &d.layers {
                 if let Some(LayerContent::Shape(sh)) = st.doc.layer(photocraft_doc::LayerId(*id)).map(|l| &l.content) {
-                    crate::vector_ui::draw_outline(painter, &sh.path.transform(&map), to_scr, accent);
+                    crate::vector_ui::draw_outline(painter, &sh.path.transform(&map), to_scr, &crate::vector_ui::PathLook::of(app, accent));
                 }
             }
         }

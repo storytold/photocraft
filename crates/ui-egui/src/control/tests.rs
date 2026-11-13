@@ -1085,6 +1085,41 @@ fn ui_set_drives_the_eyedropper_options() {
     assert_eq!(app.ui.tool_options.eyedropper_size, 1);
 }
 
+/// #9713: the Path Options display setting over the control channel, reported by `ui.inspect`
+/// under `view.path_options`. It is not a tool option.
+#[test]
+fn ui_set_drives_the_path_options() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let good = call(&mut app, &ctx, "ui.set", json!({"pathColor": "red", "pathThickness": 2.5}));
+    assert_eq!(good["ok"], true, "{good}");
+    let o = &app.ui.view.path_options;
+    assert_eq!((o.color.as_str(), o.thickness), ("red", 2.5));
+    let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"];
+    assert_eq!(shown["view"]["path_options"], json!({"color": "red", "thickness": 2.5}));
+    for key in ["path_color", "path_thickness", "anchor_size", "path_mark_start"] {
+        assert!(shown["toolOptions"].get(key).is_none(), "{key} is not a tool option");
+    }
+    for bad in [
+        json!({"pathColor": "plaid"}),
+        json!({"pathColor": 3}),
+        json!({"pathThickness": 0.1}),
+        json!({"pathThickness": 9}),
+        json!({"pathThickness": "thin"}),
+        // Anchor Size and Highlight Start Point are not Photoshop's: no such fields.
+        json!({"anchorSize": 3}),
+        json!({"pathMarkStart": true}),
+    ] {
+        let r = call(&mut app, &ctx, "ui.set", bad.clone());
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+    }
+    // A rejected call applies none of its fields.
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "pathThickness": 99}));
+    assert_eq!(r["ok"], false, "{r}");
+    let o = &app.ui.view.path_options;
+    assert_eq!((o.color.as_str(), o.thickness), ("red", 2.5));
+}
+
 /// #1046: the Color Sampler tool is selectable over the control channel and reported as active.
 #[test]
 fn ui_set_selects_the_color_sampler_tool() {

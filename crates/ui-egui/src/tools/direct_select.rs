@@ -22,7 +22,7 @@
 //! step per drag, and the same commands drive it over MCP and the control channel. The Pen path
 //! being drawn is not in the document yet: its edits apply to it directly, without a command.
 
-use egui::{Color32, Modifiers, Pos2};
+use egui::{Modifiers, Pos2};
 use photocraft_doc::vector::Path;
 use photocraft_geom::Point;
 use photocraft_vector::edit::{self, Handle, Hit};
@@ -960,7 +960,7 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// Paths with their anchors (selected ones filled), the shown handles, the drag's preview in
 /// place of its path, and the marquee. `paths` false (View › Show › Target Path off) leaves only
 /// the marquee.
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, paths: bool) {
+pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &crate::vector_ui::PathLook, paths: bool) {
     let ds = &app.ui.direct_selection;
     // The idle Curvature Pen shows the anchors of the path it edits, not every shape's.
     let shown = if !paths {
@@ -975,17 +975,17 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn F
             Some(Drag::Edit { target, preview: Some(p), .. }) if *target == r => p.clone(),
             _ => path,
         };
-        crate::vector_ui::draw_outline(painter, &path, to_scr, accent);
+        crate::vector_ui::draw_outline(painter, &path, to_scr, look);
         let ours = ds.target.as_ref() == Some(&r);
         for &(k, h) in if ours { shown_handles(ds, &path) } else { Vec::new() }.iter() {
             if let Some(kn) = path.subpaths.get(k[0]).and_then(|s| s.knots.get(k[1])) {
                 let c = if h == Handle::In { kn.in_ctrl } else { kn.out_ctrl };
-                crate::vector_ui::draw_handle(painter, to_scr([kn.anchor.x, kn.anchor.y]), to_scr([c.x, c.y]), accent);
+                crate::vector_ui::draw_handle(painter, to_scr([kn.anchor.x, kn.anchor.y]), to_scr([c.x, c.y]), look);
             }
         }
         for (s, sp) in path.subpaths.iter().enumerate().filter(|(s, _)| !ours || anchors_shown(app, r, *s)) {
             for (k, kn) in sp.knots.iter().enumerate() {
-                crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), accent);
+                crate::vector_ui::draw_anchor(painter, to_scr([kn.anchor.x, kn.anchor.y]), ours && ds.anchors.contains(&[s, k]), look);
             }
         }
     }

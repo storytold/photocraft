@@ -37,9 +37,9 @@ pub use overlay::draw_overlay;
 pub(crate) use overlay::selected_saved_path_index;
 #[cfg(test)]
 use overlay::{MAX_CURVE_PIECES, bezier};
+pub(crate) use overlay::{PATH_COLORS, PATH_THICKNESS, PathLook, draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
 pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_anchors};
-pub(crate) use overlay::{draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
 use path_ops::target_path;
 pub use path_ops::{
@@ -214,6 +214,8 @@ mod path_selection_tests;
 #[cfg(test)]
 mod pen_draw_tests;
 
+#[cfg(test)]
+mod path_options_tests;
 #[cfg(test)]
 mod pen_path_ops_tests;
 

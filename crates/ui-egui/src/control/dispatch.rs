@@ -320,6 +320,8 @@ struct ToolSet {
     move_show_transform: Option<bool>,
     tile_grid: Option<bool>,
     layer_filter: Option<crate::layer_filter_ui::Filter>,
+    path_color: Option<String>,
+    path_thickness: Option<f32>,
     pen_mode: Option<String>,
     pen_path_op: Option<String>,
 }
@@ -346,6 +348,9 @@ impl ToolSet {
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?,
+            // The Pen and shape tools' Path Options, one display setting (#9713).
+            path_color: path_color_param(p)?,
+            path_thickness: path_thickness_param(p)?,
             pen_mode: pen_mode_param(p)?,
             pen_path_op: pen_path_op_param(p)?,
         })
@@ -370,6 +375,13 @@ impl ToolSet {
         }
         if let Some(sides) = self.frame_sides {
             app.ui.frame_tool.sides = sides;
+        }
+        let paths = &mut app.ui.view.path_options;
+        if let Some(id) = self.path_color.clone() {
+            paths.color = id;
+        }
+        if let Some(px) = self.path_thickness {
+            paths.thickness = px;
         }
         if let Some(stroke) = &self.shape_stroke {
             if let Some(stroke) = stroke {
@@ -523,6 +535,20 @@ fn eyedropper_size_param(p: &Value) -> std::result::Result<Option<u32>, String> 
     photocraft_engine::sample_cmds::size_param("ui.set", &json!({"size": v}))
         .map(Some)
         .map_err(|_| format!("eyedropperSampleSize must be \"point\" or one of {:?}", photocraft_engine::sample_cmds::SAMPLE_SIZES))
+}
+
+fn path_color_param(p: &Value) -> std::result::Result<Option<String>, String> {
+    let Some(v) = p.get("pathColor") else { return Ok(None) };
+    let ids: Vec<&str> = crate::vector_ui::PATH_COLORS.iter().map(|c| c.0).collect();
+    let id = v.as_str().filter(|id| ids.contains(id)).ok_or_else(|| format!("pathColor must be one of {}", ids.join(", ")))?;
+    Ok(Some(id.to_string()))
+}
+
+fn path_thickness_param(p: &Value) -> std::result::Result<Option<f32>, String> {
+    let range = crate::vector_ui::PATH_THICKNESS;
+    let Some(px) = num_field(p, "pathThickness")? else { return Ok(None) };
+    let px = px as f32;
+    range.contains(&px).then_some(Some(px)).ok_or_else(|| format!("pathThickness must be {}..={} px", range.start(), range.end()))
 }
 
 fn eyedropper_sample_param(p: &Value) -> std::result::Result<Option<String>, String> {

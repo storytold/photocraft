@@ -87,6 +87,24 @@ impl Default for SnapTo {
     }
 }
 
+/// Path Options, the gear in the Pen and shape tools' options bars (#9713): how paths are drawn
+/// on the canvas. One display setting shared by every path tool, as in Photoshop, not a tool
+/// option: remembered with the View items (`persist`), not reset by Reset Tool.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PathOptions {
+    /// A `vector_ui::PATH_COLORS` id; "default" is the theme accent.
+    pub color: String,
+    /// The outline's width in screen px, `vector_ui::PATH_THICKNESS`.
+    pub thickness: f32,
+}
+
+impl Default for PathOptions {
+    fn default() -> Self {
+        Self { color: "default".into(), thickness: 1.0 }
+    }
+}
+
 /// View-, window- and type-preference state of the shell.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -120,6 +138,8 @@ pub struct ViewOptions {
     /// Developer overlay of the active layer's storage tiles (tile_overlay.rs), set with the
     /// control channel's `ui.set {"tileGrid": true}`.
     pub tile_grid: bool,
+    /// The Pen and shape tools' Path Options (#9713).
+    pub path_options: PathOptions,
 }
 
 /// Factory New Guide Layout values (Alt+Reset and a fresh ViewOptions).
@@ -147,6 +167,7 @@ impl Default for ViewOptions {
             middle_eastern_composer: false,
             guide_layout: default_guide_layout(),
             tile_grid: false,
+            path_options: PathOptions::default(),
         }
     }
 }
