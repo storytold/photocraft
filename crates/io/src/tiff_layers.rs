@@ -421,40 +421,10 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // alpha channels. With it on, the samples are the PSD merged image's channels in order, so
     // the PSD model's channel resources (which list the transparency first) are kept as they are.
     let write_alpha = has_alpha && save_transparency;
-    // One identifier per extra sample actually stored. The PSD model's 1053 lists the merged
-    // transparency too, which the IFD leaves out without it, so it is not copied then.
-    if !write_alpha {
-        resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS);
-        if kept > 0 {
-            resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(false, kept)));
-        }
-    }
-    // Resource 1022 names a channel of the PSD merged image, which counts the transparency plane.
-    // An IFD without it does not, so the id moves back by one.
-    if has_alpha
-        && !write_alpha
-        && kept > 0
-        && let Some(r) = resources.iter_mut().find(|r| r.id == crate::channel_map::QUICK_MASK_INFO)
-        && r.data.len() >= 2
-    {
-        let id = u16::from_be_bytes([r.data[0], r.data[1]]).saturating_sub(1);
-        let be = id.to_be_bytes();
-        r.data[0] = be[0];
-        r.data[1] = be[1];
-    }
-    // The name and DisplayInfo resources list the merged transparency plane first. The IFD
-    // leaves that plane out, so the resources must too: Photoshop pairs each name with the
-    // next sample past the colour channels.
-    if has_alpha && !write_alpha {
-        drop_merged_transparency(&mut resources);
-    }
-    // Past MAX_EXTRA_SAMPLES the TIFF stores only the first `kept` channels: the name and
-    // DisplayInfo resources describe just those, and a Quick Mask among the rest is dropped.
-    // With the transparency written, those lists hold it ahead of the channels, and the
-    // channels sit one sample later in the IFD.
-    if extra_n > kept {
-        keep_first_channels(&mut resources, kept + usize::from(write_alpha), cc);
-    }
+    photocraft_psd::tiff::layered::ifd_channel_resources(
+        &mut resources,
+        photocraft_psd::tiff::layered::IfdChannels { color: cc, merged_alpha: has_alpha, write_alpha, extra: extra_n, kept },
+    );
     let resources = resources_to_bytes(&resources)?;
     let ifd_channels = cc + usize::from(write_alpha);
     let sample = csample(fmt.sample);
@@ -491,86 +461,6 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
 /// composite in the IFD keeps its transparency as the first extra sample (Save Transparency).
 fn tiff_image_source(_doc: &Document, file: &mut photocraft_psd::PsdFile, ifd_alpha: bool) -> ImageSourceData {
     ImageSourceData::for_tiff(file, ifd_alpha)
-}
-
-/// Removes the leading transparency entry from the channel-name resources (1006, 1045) and
-/// from DisplayInfo (1077). Each is left unchanged when it is too short to hold that entry.
-fn drop_merged_transparency(resources: &mut [ImageResource]) {
-    for r in resources {
-        r.data = match r.id {
-            1006 => drop_first_pascal(&r.data),
-            1045 => drop_first_unicode(&r.data),
-            id if id == crate::channel_map::DISPLAY_INFO => drop_first_display_record(&r.data),
-            _ => continue,
-        };
-    }
-}
-
-fn drop_first_pascal(data: &[u8]) -> Vec<u8> {
-    let Some(&n) = data.first() else { return data.to_vec() };
-    let end = 1usize.saturating_add(usize::from(n));
-    data.get(end..).unwrap_or(data).to_vec()
-}
-
-fn drop_first_unicode(data: &[u8]) -> Vec<u8> {
-    let Some(nbe) = data.get(..4) else { return data.to_vec() };
-    let n = u32::from_be_bytes([nbe[0], nbe[1], nbe[2], nbe[3]]) as usize;
-    let end = 4usize.saturating_add(n.saturating_mul(2));
-    data.get(end..).unwrap_or(data).to_vec()
-}
-
-/// Trims the channel-name resources (1006, 1045) and DisplayInfo (1077) to their first `kept`
-/// entries, and drops Quick Mask info (1022) when its channel is not one of the `kept` extra
-/// samples, which start at sample `first_extra`. A resource too short for `kept` entries is
-/// left as it is.
-fn keep_first_channels(resources: &mut Vec<ImageResource>, kept: usize, first_extra: usize) {
-    for r in resources.iter_mut() {
-        r.data = match r.id {
-            1006 => first_pascal_names(&r.data, kept),
-            1045 => first_unicode_names(&r.data, kept),
-            id if id == crate::channel_map::DISPLAY_INFO => first_display_records(&r.data, kept),
-            _ => continue,
-        };
-    }
-    let end = first_extra.saturating_add(kept);
-    resources.retain(|r| r.id != crate::channel_map::QUICK_MASK_INFO || r.data.get(..2).is_none_or(|b| usize::from(u16::from_be_bytes([b[0], b[1]])) < end));
-}
-
-fn first_pascal_names(data: &[u8], n: usize) -> Vec<u8> {
-    let mut at = 0usize;
-    for _ in 0..n {
-        let Some(&len) = data.get(at) else { return data.to_vec() };
-        at = at.saturating_add(1).saturating_add(usize::from(len));
-    }
-    data.get(..at).unwrap_or(data).to_vec()
-}
-
-fn first_unicode_names(data: &[u8], n: usize) -> Vec<u8> {
-    let mut at = 0usize;
-    for _ in 0..n {
-        let Some(b) = data.get(at..at.saturating_add(4)) else { return data.to_vec() };
-        let len = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-        at = at.saturating_add(4).saturating_add(len.saturating_mul(2));
-    }
-    data.get(..at).unwrap_or(data).to_vec()
-}
-
-/// Resource 1077: a 4-byte version, then 13-byte records. Keeps the first `n` records.
-fn first_display_records(data: &[u8], n: usize) -> Vec<u8> {
-    let end = 4usize.saturating_add(n.saturating_mul(13));
-    data.get(..end).unwrap_or(data).to_vec()
-}
-
-/// Resource 1077: a 4-byte version, then 13-byte records. Drops the first record.
-fn drop_first_display_record(data: &[u8]) -> Vec<u8> {
-    const RECORD: usize = 13;
-    if data.len() < 4 + RECORD {
-        return data.to_vec();
-    }
-    let mut out = Vec::with_capacity(data.len() - RECORD);
-    out.extend_from_slice(&data[..4]);
-    out.extend_from_slice(&data[4 + RECORD..]);
-    out
 }
 
 /// Filter-mask block (`FMsk`) Photoshop writes next to a layered TIFF: the same red 50%
