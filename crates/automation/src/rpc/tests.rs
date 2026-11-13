@@ -312,7 +312,7 @@ fn doc_save_takes_maximize_compatibility() {
     let mut h = Headless::trusted_local();
     h.handle("doc.new", json!({"width": 64, "height": 32})).unwrap();
     h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
-    let real_merged = |p: &std::path::Path| photocraft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
+    let real_merged = |p: &std::path::Path| craft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
     for (name, maximize, real) in [("default.psd", json!(null), true), ("off.psd", json!(false), false), ("on.psd", json!(true), true)] {
         let path = dir.join(name);
         h.handle("doc.save", json!({"path": path.to_string_lossy(), "maximizeCompatibility": maximize})).unwrap();
@@ -1155,7 +1155,7 @@ fn doc_place_forwards_high_memory_approval() {
     let gb = 1u64 << 30;
     let root = std::env::temp_dir().join(format!("pc-doc-place-approval-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
-    let psd = photocraft_psd::testgen::small(photocraft_psd::Version::Psd, photocraft_psd::Compression::Zip).to_bytes().unwrap();
+    let psd = craft_psd::testgen::small(craft_psd::Version::Psd, craft_psd::Compression::Zip).to_bytes().unwrap();
     std::fs::write(root.join("high.psd"), &psd).unwrap();
     // Known 5 GiB RAM: S = 2.5 GiB, H = 3.75 GiB. A 3 GiB estimate charge lands in (S, H].
     let snap = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
