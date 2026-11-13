@@ -4,7 +4,7 @@
 use super::atn_video_frames::{file, fixture, item, load, pixels, saved};
 use photocraft_doc::{LayerContent, LayerId};
 use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
-use photocraft_psd::{
+use craft_psd::{
     atn::AtnEvent,
     descriptor::{Descriptor, Value as D},
 };
