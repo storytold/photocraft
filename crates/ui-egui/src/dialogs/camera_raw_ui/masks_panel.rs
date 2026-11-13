@@ -263,7 +263,8 @@ pub(crate) fn captures_pointer(ctx: &egui::Context, p: &CameraRaw, before: bool)
 pub(crate) fn strip_button(ui: &mut egui::Ui) {
     let mut s = load(ui.ctx());
     let r = crate::icons::button(ui, "layer-mask", 30.0, s.open, trc("Masking (Shift+W)"));
-    let key = ui.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::W));
+    // Not while a text field has the keyboard: a capital W typed into a mask's name is a letter.
+    let key = !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.modifiers.shift && i.key_pressed(egui::Key::W));
     if r.clicked() || key {
         s.open = !s.open;
         if s.open {
@@ -1314,6 +1315,39 @@ mod tests {
         let d = describe(&ctx);
         assert_eq!((d["open"].clone(), d["selected"].clone(), d["tool"].clone()), (json!(false), Value::Null, json!("none")));
         assert!((load(&ctx).brush.size - 0.1).abs() < 1e-6, "the brush carries over");
+    }
+
+    /// Shift+W toggles Masking, but not while a text field (a mask's name) takes the typing.
+    #[test]
+    fn shift_w_is_a_letter_while_typing() {
+        let ctx = egui::Context::default();
+        let shift = egui::Modifiers::SHIFT;
+        let shift_w = || egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(shift),
+                egui::Event::Key { key: egui::Key::W, physical_key: None, pressed: true, repeat: false, modifiers: shift },
+            ],
+            ..Default::default()
+        };
+        let frame = |input: egui::RawInput, typing: bool| {
+            ctx.run_ui(input, |ui| {
+                let mut name = String::from("Mask 1");
+                let r = ui.text_edit_singleline(&mut name);
+                if typing {
+                    r.request_focus();
+                } else {
+                    r.surrender_focus();
+                }
+                strip_button(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(egui::RawInput::default(), true);
+        frame(shift_w(), true);
+        assert!(!is_open(&ctx), "typed into the name field");
+        frame(egui::RawInput::default(), false);
+        frame(shift_w(), false);
+        assert!(is_open(&ctx), "the shortcut");
     }
 
     /// Guides are relative to the canvas when the layer extends past it (Geometry warps the
