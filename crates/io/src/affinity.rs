@@ -254,6 +254,20 @@ impl Builder {
             Kind::Layer | Kind::Group => self.group(n, children),
             Kind::Unsupported if children.is_empty() => return None,
             Kind::Unsupported => self.group(n, children),
+            Kind::Table(_) => {
+                self.warn("Affinity tables are not imported; the remaining child layers were kept");
+                if children.is_empty() {
+                    return None;
+                }
+                self.group(n, children)
+            }
+            Kind::MasterInstance { .. } => {
+                self.warn("Affinity master-page instances are not imported");
+                if children.is_empty() {
+                    return None;
+                }
+                self.group(n, children)
+            }
             Kind::Shape { path, fills, strokes, even_odd } => {
                 let path = self.path(path, to_doc, *even_odd);
                 let shape = self.shape(path.clone(), fills, strokes, to_doc);
@@ -273,7 +287,7 @@ impl Builder {
                     g
                 }
             }
-            Kind::Artboard { rect, background } => {
+            Kind::Artboard { rect, background, .. } => {
                 let r = self.bbox(to_doc, *rect);
                 let bg = match background.first() {
                     Some(ap::Paint::Solid(c)) => {
@@ -514,6 +528,14 @@ impl Builder {
     fn pixels(&mut self, img: &af::Image) -> Option<(u32, u32, Vec<u8>)> {
         match &img.pixels {
             Pixels::Rgba8(v) => Some((img.width, img.height, v.clone())),
+            Pixels::Cmyka8(v) => {
+                let bytes = u64::from(img.width).saturating_mul(u64::from(img.height)).saturating_mul(4);
+                if !charge(&mut self.pixel_budget, bytes) {
+                    self.warn("the document's embedded images need more pixel memory than the import allows; the rest were left out");
+                    return None;
+                }
+                Some((img.width, img.height, Pixels::cmyka8_to_rgba8(v)))
+            }
             Pixels::Encoded(bytes) => {
                 let opts = photocraft_codecs::DecodeOptions {
                     limits: photocraft_codecs::Limits { max_width: 65_535, max_height: 65_535, max_pixels: MAX_PIXELS, max_alloc: 512 << 20 },
@@ -551,7 +573,7 @@ impl Builder {
                 m,
                 Some(surface),
             )),
-            Pixels::Rgba8(_) => LayerContent::Raster(surface),
+            Pixels::Rgba8(_) | Pixels::Cmyka8(_) => LayerContent::Raster(surface),
         })
     }
 
@@ -634,6 +656,8 @@ fn default_name(k: &Kind) -> String {
         Kind::Text(_) => "Text",
         Kind::Image(_) => "Image",
         Kind::Unsupported => "Group",
+        Kind::Table(_) => "Table",
+        Kind::MasterInstance { .. } => "Master Page",
     }
     .into()
 }
