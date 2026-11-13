@@ -216,6 +216,7 @@ mod tests {
             height,
             samples: 1,
             data: Vec::new(),
+            float_data: None,
             cfa: None,
             linearization: None,
             black: BlackLevels::uniform(0.0),

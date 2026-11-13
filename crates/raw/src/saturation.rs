@@ -175,6 +175,7 @@ mod tests {
             height: 64,
             samples: 1,
             data,
+            float_data: None,
             cfa: Cfa::bayer("RGGB"),
             linearization: None,
             black: BlackLevels::uniform(528.0),

@@ -143,6 +143,8 @@ pub struct Sensor {
     pub samples: usize,
     /// Row-major interleaved samples, `width * height * samples`.
     pub data: Vec<u16>,
+    /// Floating-point sensor samples, kept without quantizing. When present, `data` is empty.
+    pub float_data: Option<Vec<f32>>,
     /// The CFA pattern (CFA data only).
     pub cfa: Option<Cfa>,
     /// Maps stored values to linear values (DNG LinearizationTable).
@@ -175,6 +177,15 @@ pub struct Sensor {
 }
 
 impl Sensor {
+    pub fn sample_count(&self) -> usize {
+        self.float_data.as_ref().map_or(self.data.len(), Vec::len)
+    }
+
+    #[inline]
+    pub fn sample(&self, index: usize) -> f32 {
+        self.float_data.as_ref().map_or_else(|| f32::from(self.data[index]), |samples| samples[index])
+    }
+
     /// `true` for monochrome data (one-sample LinearRaw: monochrome cameras, scanner DNGs), which
     /// develops to neutral grey with no white balance or colour calibration.
     pub fn is_monochrome(&self) -> bool {

@@ -320,6 +320,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
         height,
         samples: 1,
         data,
+        float_data: None,
         cfa: Some(cfa),
         linearization: None,
         black,

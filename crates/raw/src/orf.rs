@@ -138,6 +138,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         height: plane.height,
         samples: 1,
         data,
+        float_data: None,
         cfa: Some(cfa),
         linearization: None,
         black,

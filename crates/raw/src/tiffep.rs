@@ -245,6 +245,7 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
         height: plane.height,
         samples: 1,
         data: plane.data,
+        float_data: None,
         cfa: Some(cfa),
         linearization: None,
         black,

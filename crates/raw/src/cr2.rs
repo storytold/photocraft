@@ -256,6 +256,7 @@ fn decode_sraw(t: &Tiff, ifds: &[Ifd], ifd0: &Ifd, slices: &[u32], src: &[u8], f
         height,
         samples: 3,
         data,
+        float_data: None,
         cfa: None,
         linearization: None,
         // Y is stored black-subtracted.
@@ -361,6 +362,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         height,
         samples: 1,
         data,
+        float_data: None,
         cfa: Some(cfa),
         linearization: None,
         black,
