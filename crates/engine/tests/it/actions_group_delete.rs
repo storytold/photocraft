@@ -158,7 +158,7 @@ fn duplicate_group_preserves_complete_actions_and_keeps_original_shortcuts() {
     assert_eq!(s.actions.list[1], source);
     assert_eq!(s.prefs().shortcuts["actions.play:A"], "F5");
     assert!(!s.prefs().shortcuts.contains_key("actions.play:A copy"));
-    assert_eq!(s.execute("actions.duplicate", json!({"set":"Empty"})).unwrap()["actions"], json!([]));
+    assert_eq!(s.execute("actions.duplicate", json!({"set":"Empty"})).unwrap()["actions"], 0);
     assert!(s.actions.sets.iter().any(|name| name == "Empty copy"));
 }
 
@@ -169,7 +169,7 @@ fn ungrouped_group_commands_share_one_identity_for_legacy_none_and_explicit_cate
     let groups = photocraft_engine::actions_edit_cmds::set_names(&s);
     assert_eq!(groups, [photocraft_engine::atn_cmds::UNGROUPED_SET, "Named"]);
     let copied = s.execute("actions.duplicate", json!({"set":photocraft_engine::atn_cmds::UNGROUPED_SET})).unwrap();
-    assert_eq!(copied["actions"].as_array().unwrap().len(), 2);
+    assert_eq!(copied["actions"], 2);
     let deleted = s.execute("actions.delete", json!({"set":photocraft_engine::atn_cmds::UNGROUPED_SET})).unwrap();
     assert_eq!(deleted["deleted"], json!(["Legacy", "Explicit"]));
     assert_eq!(s.actions.list.len(), 3);

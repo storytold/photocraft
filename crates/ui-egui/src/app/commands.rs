@@ -191,7 +191,7 @@ impl PhotocraftApp {
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
         let r = if id == "actions.play" {
-            actions::play(self, &params)
+            actions::play_command(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
             actions::run_view(self, id, params)
         } else {

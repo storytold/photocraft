@@ -42,6 +42,12 @@ pub(crate) fn definition_copy(state: &ActionState) -> ActionState {
 /// Use the durable encoder's complete limits before publishing a proposed definition.
 /// This checks eligibility, while backend I/O retains its ordinary warning/retry semantics.
 pub(crate) fn check_definition(state: &ActionState, shortcuts: &std::collections::BTreeMap<String, String>) -> Result<()> {
+    state
+        .list
+        .iter()
+        .try_fold(0usize, |total, action| total.checked_add(action.steps.len()))
+        .filter(|total| *total <= atn::MAX_TOTAL_ITEMS)
+        .ok_or("too many native steps in Actions library")?;
     let keys: Vec<_> =
         shortcuts.iter().filter_map(|(key, value)| key.strip_prefix(super::PLAY_SHORTCUT_PREFIX).map(|name| (name.to_string(), value.clone()))).collect();
     encode(state, &keys).map(|_| ())

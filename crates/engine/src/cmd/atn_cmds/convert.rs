@@ -93,8 +93,8 @@ pub fn normalize_import(
     // duplicate display name for metadata or shortcuts. Ambiguous cross-set calls fail before commit.
     for (index, a) in added.iter_mut().enumerate() {
         let local = set_for.get(index).and_then(|set| renamed.get(*set)).ok_or_else(|| "invalid imported action position".to_string())?;
-        for (id, params) in &mut a.steps {
-            let keys: &[&str] = match id.as_str() {
+        let normalize = |id: &str, params: &mut Value| -> std::result::Result<(), String> {
+            let keys: &[&str] = match id {
                 "actions.play" | "file.automate.batch" | "file.automate.createDroplet" => &["action"],
                 "actions.conditional" => &["then", "else"],
                 _ => &[],
@@ -126,7 +126,15 @@ pub fn normalize_import(
                     }
                 }
             }
-        }
+            Ok(())
+        };
+        let mut result = Ok(());
+        crate::actions_cmds::visit_calls(&mut a.steps, &mut |id, params, _| {
+            if result.is_ok() {
+                result = normalize(id, params);
+            }
+        });
+        result?;
     }
     imp.actions = added;
     imp.function_keys = names.iter().zip(&imp.action_keys).filter_map(|(name, key)| key.as_ref().map(|key| (name.clone(), key.clone()))).collect();

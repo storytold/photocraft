@@ -1967,3 +1967,34 @@ fn review_editor_scope_admission_and_noop_save_keep_projected_steps() {
     let got = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
     assert_eq!(got["action"]["steps"], json!([["select.all", {}]]), "ending capture retains its projected replacement");
 }
+
+#[test]
+fn review_editor_rename_follows_inline_batch_calls_without_crossing_embedded_libraries() {
+    let mut s = Session::new();
+    let embedded = json!({"steps":[["actions.play",{"action":"A","set":"S"}]],"calledActions":[{"name":"A","steps":[]}]});
+    let mut target = Action::new("A", vec![("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":"A","set":"S"}]]}))]);
+    target.set = Some("S".into());
+    let mut other = Action::new("A", vec![]);
+    other.set = Some("T".into());
+    let caller = Action::new(
+        "Caller",
+        vec![
+            (
+                "file.automate.batch".into(),
+                json!({"steps":[["actions.play",{"action":"A","set":"S"}],{"command":"actions.play","params":{"action":"A","set":"T"}}]}),
+            ),
+            ("file.automate.batch".into(), json!({"action":[["actions.play",{"action":"A","set":"S"}]]})),
+            ("file.automate.batch".into(), embedded.clone()),
+        ],
+    );
+    s.actions.list = vec![target, other, caller];
+    let draft = s.execute("actions.editor.open", json!({"action":0})).unwrap()["draft"].clone();
+    s.execute("actions.editor.update", json!({"draft":draft,"name":"Renamed"})).unwrap();
+    s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(s.actions.list[0].steps[0].1["steps"][0][1]["action"], "Renamed", "the draft's own existing reference follows its definition");
+    let calls = &s.actions.list[2].steps;
+    assert_eq!(calls[0].1["steps"][0][1], json!({"action":"Renamed","set":"S"}));
+    assert_eq!(calls[0].1["steps"][1]["params"], json!({"action":"A","set":"T"}), "another set still owns its definition");
+    assert_eq!(calls[1].1["action"][0][1]["action"], "Renamed", "the legacy inline action-array spelling uses the same namespace");
+    assert_eq!(calls[2].1, embedded, "embedded calledActions has its own unchanged namespace");
+}

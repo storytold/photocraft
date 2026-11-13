@@ -443,23 +443,26 @@ fn unchanged(s: &Session, draft: &Draft) -> Result<()> {
 fn references(s: &Session, draft: &Draft, value: &mut Action) -> Vec<(usize, usize, Value)> {
     let mut changes = Vec::new();
     let Some(source) = draft.source.filter(|_| draft.opening.name != value.name) else { return changes };
-    for (id, params) in &mut value.steps {
+    let name = &value.name;
+    super::visit_calls(&mut value.steps, &mut |id, params, _| {
         for key in super::rename_call_keys(&s.actions.list, source, id, params) {
             if params.get(*key).and_then(Value::as_str) == Some(draft.opening.name.as_str()) {
-                params[*key] = json!(value.name);
+                params[*key] = json!(name);
             }
         }
-    }
+    });
     for (action, item) in s.actions.list.iter().enumerate().filter(|(i, _)| *i != source) {
         for (step, (id, params)) in item.steps.iter().enumerate() {
-            let mut next = params.clone();
-            for key in super::rename_call_keys(&s.actions.list, source, id, params) {
-                if params.get(*key).and_then(Value::as_str) == Some(draft.opening.name.as_str()) {
-                    next[*key] = json!(value.name);
+            let mut next = (id.clone(), params.clone());
+            super::visit_calls(std::slice::from_mut(&mut next), &mut |id, params, _| {
+                for key in super::rename_call_keys(&s.actions.list, source, id, params) {
+                    if params.get(*key).and_then(Value::as_str) == Some(draft.opening.name.as_str()) {
+                        params[*key] = json!(value.name);
+                    }
                 }
-            }
-            if next != *params {
-                changes.push((action, step, next));
+            });
+            if next.1 != *params {
+                changes.push((action, step, next.1));
             }
         }
     }

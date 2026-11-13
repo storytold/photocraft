@@ -176,7 +176,7 @@ fn a_stop_restores_a_suspended_recording_once_for_every_exit() {
             assert!(app.session.actions.recording.is_some());
             app.run("actions.stop", json!({})).unwrap();
             let owner = app.session.actions.list.iter().find(|a| a.name == "Owner").unwrap();
-            assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Stop Test"}))]);
+            assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Stop Test", "set":"Stops"}))]);
             assert_idle(&app);
         }
     }
@@ -211,7 +211,7 @@ fn continue_inside_a_called_action_finishes_every_caller_once() {
     assert!(app.session.actions.recording.is_some());
     app.run("actions.stop", json!({})).unwrap();
     let owner = app.session.actions.list.iter().find(|a| a.name == "Owner").unwrap();
-    assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Grandparent"}))]);
+    assert_eq!(owner.steps, vec![("actions.play".into(), json!({"action": "Grandparent", "set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]);
 }
 
 #[test]

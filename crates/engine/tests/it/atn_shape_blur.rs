@@ -367,7 +367,7 @@ fn noncanonical_shape_outer_metadata_stays_on_the_preserved_path() {
 
 /// Neither unknown recording settings nor portable native geometry may be dropped during export.
 #[test]
-fn unrepresented_shape_fields_stay_whole_and_native_geometry_refuses_atn_export() {
+fn unrepresented_shape_fields_and_native_geometry_stay_whole() {
     for (key, value) in [
         ("keyOriginType", D::Integer(8)),
         ("Rds ", D::Double(5.0)),
@@ -386,7 +386,7 @@ fn unrepresented_shape_fields_stay_whole_and_native_geometry_refuses_atn_export(
     for (key, value) in [("shapePath", json!({"subpaths":[]})), ("shape", json!("star")), ("target", json!("mask")), ("shapeId", json!(""))] {
         let mut a = imported.actions[0].clone();
         a.steps[0].1[key] = value;
-        assert!(atn_cmds::export("Shapes", &[&a], &[], false).is_err());
+        super::atn_export::fallback("Shapes", &a);
     }
 }
 

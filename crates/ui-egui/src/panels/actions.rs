@@ -306,6 +306,11 @@ impl Frame {
     }
 }
 
+/// Enter panel-queued playback through the same registered command as ordinary callers.
+pub(crate) fn play_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
+    if let Some(result) = modern::queued_library_play(app, params) { result } else { play(app, params) }
+}
+
 /// Replay a deliberate named library call, capturing one call in either recorder.
 pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
     playback::stop(app);
@@ -345,7 +350,10 @@ fn run_owned(
         }
         let mut value = run_with_parents(app, frame.clone(), &parents, used, preserve_tail)?;
         used = app.session.actions.playback_steps;
-        ran = ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
+        // Nested slices consume the shared budget, but only the root reports its steps.
+        if parents.is_empty() {
+            ran = ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
+        }
         if let Some(dialog) = value.get("paused").and_then(waiting_dialog) {
             let token = paused_token(app, dialog);
             let entry = token.and_then(|token| app.paused_playbacks.paused.get_mut(&token)).ok_or("the action step dialog lost its continuation")?;
@@ -640,7 +648,12 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
         }
         let _ = actions_cmds::continue_playback_target(&mut app.session, &action, target).map_err(|error| error.to_string())?;
     } else {
+        let resets_budget = app.session.actions.playing == 0 && !app.session.actions.budget_shared;
         let _ = actions_cmds::begin_playback_target_from(&mut app.session, &action, frame.from, target).map_err(|error| error.to_string())?;
+        if resets_budget && let Some(used) = used {
+            // The first streamed slice must keep its supplied prefix as well as skipped steps.
+            app.session.actions.playback_steps = app.session.actions.playback_steps.saturating_add(used);
+        }
     }
     let mut ran = u64::from(frame.pending_call);
     let mut failed = None;
@@ -756,14 +769,12 @@ fn run_frame_steps(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, pre
                     let token = waiting_dialog(inner).and_then(|dialog| paused_token(app, dialog));
                     if let Some(entry) = token.and_then(|token| app.paused_playbacks.paused.get_mut(&token)) {
                         entry.parents.push(frame.after_call(i + 1));
-                        ran = ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
                     }
                     paused = Some(inner.clone());
                     break;
                 }
                 if value.get("yielded").and_then(Value::as_bool) == Some(true) {
                     app.actions_runtime.parents.push(frame.after_call(i + 1));
-                    ran = ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
                     yielded = true;
                     break;
                 }
@@ -1599,7 +1610,10 @@ pub(crate) fn with_step_gate_at(
     let Some(token) = fields.get(RESUME) else {
         if let Some(original) = dialog.and_then(|dialog| app.paused_playbacks.paused.iter().find_map(|(token, p)| (p.dialog == dialog).then_some(*token))) {
             abandoned(app, &serde_json::Map::from_iter([(RESUME.to_string(), json!(original))]));
-            return Err("the action step dialog lost its continuation token".into());
+            let error = "the action step dialog lost its continuation token";
+            app.ui.status = crate::i18n::fmt(tl!("Action playback failed: {error}"), &[("error", error)]);
+            app.ui.status_error = true;
+            return Err(error.into());
         }
         return run(app);
     };
@@ -1627,17 +1641,24 @@ pub(crate) fn with_step_gate_at(
             } else if dialog.is_none() {
                 abandoned(app, fields);
             }
+            app.ui.status = crate::i18n::fmt(tl!("Action playback failed: {error}"), &[("error", &error)]);
+            app.ui.status_error = true;
             return Err(error);
         }
     };
     let saved = app.session.authorize;
-    // Final step dispatch checks the captured and current policies before history or work.
+    let outer = app.actions_runtime.step_gate;
+    app.actions_runtime.step_gate = Some(outer.unwrap_or(saved));
+    // Keep the step's gate during its command, but not as the next group's live policy.
     app.session.authorize = saved.or(gate);
     let result = run(app);
-    if result.is_err() {
+    if let Err(error) = &result {
         abandoned(app, fields);
+        app.ui.status = crate::i18n::fmt(tl!("Action playback failed: {error}"), &[("error", error)]);
+        app.ui.status_error = true;
     }
     app.session.authorize = saved;
+    app.actions_runtime.step_gate = outer;
     result
 }
 
@@ -1690,7 +1711,7 @@ fn resume_scope(app: &mut PhotocraftApp, paused: &mut PausedPlayback) -> Result<
     let remaining = !paused.then.is_empty()
         || paused.frame.action.enabled_steps().any(|(index, _)| index >= paused.frame.from)
         || paused.parents.iter().any(|frame| frame.action.enabled_steps().any(|(index, _)| index >= frame.from));
-    let saved = app.session.authorize;
+    let saved = app.actions_runtime.step_gate.unwrap_or(app.session.authorize);
     let service = if app.automation_input { app.services.automation_authorize } else { None };
     let gate = if paused.kept {
         continuation_gate(saved, service)?
@@ -1736,8 +1757,8 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     app.session.authorize = gate;
     let preserve_tail = paused.record.as_ref().is_some_and(|owner| owner.is_preview());
     let source = paused.parents.last().unwrap_or(&paused.frame).action.clone();
-    let mut played =
-        run_owned(app, paused.frame, paused.parents, paused.record, paused.ran.saturating_add(u64::from(!paused.timed)), paused.used, preserve_tail);
+    let ran = paused.ran.saturating_add(u64::from(!paused.timed && paused.parents.is_empty()));
+    let mut played = run_owned(app, paused.frame, paused.parents, paused.record, ran, paused.used, preserve_tail);
     if let Ok(value) = &played
         && let Some(dialog) = value.get("paused").and_then(waiting_dialog)
         && let Some(token) = paused_token(app, dialog)
@@ -1758,7 +1779,16 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
             .map(|then| app.session.actions.list.iter().position(|a| a == then).ok_or("A group action changed during playback".to_string()))
             .collect::<Result<Vec<_>, _>>();
         let ran = value.get("ran").and_then(Value::as_u64).unwrap_or(0);
-        match rest.and_then(|rest| play_targets(app, &rest, ran)) {
+        let continued = match rest {
+            Ok(rest) => play_targets(app, &rest, ran),
+            Err(reason) => {
+                // The confirmed step succeeded; a replaced group tail stops without running it.
+                let mut stopped = value.clone();
+                stopped["stopped"] = json!({"reason":reason});
+                Ok(Some(stopped))
+            }
+        };
+        match continued {
             Ok(Some(value)) => played = Ok(value),
             Ok(None) => {}
             Err(error) => played = Err(error),
@@ -2647,3 +2677,6 @@ mod playback_tests;
 
 #[cfg(test)]
 mod drag_drop_tests;
+
+#[cfg(test)]
+mod command_route_tests;

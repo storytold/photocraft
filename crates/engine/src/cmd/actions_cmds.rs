@@ -620,7 +620,7 @@ fn conditional_target(params: &Value, branch: &str) -> Option<Value> {
 }
 
 /// Visit calls in the current namespace, leaving embedded inline Batch scopes untouched.
-fn visit_calls(steps: &mut [(String, Value)], f: &mut impl FnMut(&str, &mut Value, bool)) {
+pub(crate) fn visit_calls(steps: &mut [(String, Value)], f: &mut impl FnMut(&str, &mut Value, bool)) {
     let mut pending: Vec<_> = steps.iter_mut().rev().map(|(id, params)| (id.clone(), params)).collect();
     while let Some((id, params)) = pending.pop() {
         let scoped = id == "file.automate.batch" && params.get("calledActions").is_some_and(|v| !v.is_null());

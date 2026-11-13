@@ -24,6 +24,8 @@ pub fn preserved(set: &str, action: &Action) -> Vec<AtnItem> {
     let mut loaded = Session::new();
     assert!(loaded.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
     assert_eq!(loaded.actions.list[0].steps, action.steps);
+    assert_eq!(loaded.actions.list[0].disabled, action.disabled);
+    assert_eq!(loaded.actions.list[0].dialogs, action.dialogs);
     // Admission is tested independently with known forbidden IDs. This shared helper also
     // requires export and import to agree, without treating portable export as local storage.
     let bytes = match atn_cmds::import(&bytes) {
@@ -48,11 +50,15 @@ pub fn fallback(set: &str, action: &Action) {
     let items = preserved(set, action);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].event, atn::AtnEvent::name("photocraftCommand"));
+    assert_eq!(items[0].enabled, action.step_enabled(0));
+    assert_eq!(items[0].with_dialog, action.dialogs.contains(&0));
+    assert_eq!(items[0].dialog_options, if action.dialogs.contains(&0) { 2 } else { 0 });
     let descriptor = items[0].descriptor.as_ref().unwrap();
     let Some(D::Text(command)) = descriptor.get("command") else { panic!("missing command TEXT") };
     let Some(D::Text(params)) = descriptor.get("params") else { panic!("missing params TEXT") };
     assert_eq!(command.to_string_lossy(), action.steps[0].0);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&params.to_string_lossy()).unwrap(), action.steps[0].1);
-    let (_, skipped) = atn_cmds::export(set, &[action], &[], true).unwrap();
+    let (portable, skipped) = atn_cmds::export(set, &[action], &[], true).unwrap();
+    assert!(atn::parse_sets(&portable).unwrap().iter().flat_map(|file| &file.actions).all(|record| record.items.is_empty()));
     assert_eq!(skipped, [atn_cmds::Skipped { action: action.name.clone(), step: 0, id: action.steps[0].0.clone() }]);
 }

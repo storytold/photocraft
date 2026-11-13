@@ -11,6 +11,8 @@ pub(crate) struct Runtime {
     page: Option<editor::Page>,
     page_drawn: Option<u64>,
     pending: Option<(String, Value, Option<Gate>)>,
+    library_play: Option<Vec<usize>>,
+    pub(super) step_gate: Option<Option<Gate>>,
     task: Option<Task>,
     progress: Option<Progress>,
     pub(super) quantum: Option<usize>,
@@ -544,7 +546,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 open(app, json!({"set":set}))
             }
             Operation::Edit(index) => open(app, json!({"action":index})),
-            Operation::Play(indices) => start_library(app, &indices),
+            Operation::Play(indices) => play_library(app, &indices),
             Operation::Duplicate(params) => app.run("actions.duplicate", params),
             Operation::DeleteAction(index) => ask_delete(app, Some(index), None),
             Operation::DeleteGroup(group) => ask_delete(app, None, Some(group)),
@@ -576,6 +578,29 @@ fn start_preview(app: &mut PhotocraftApp, draft: u64, from: usize) -> Result<Val
     let frame = Frame { action, target, from, source: Source::Draft(draft), take: app.session.actions.take, admitted: false, pending_call: false };
     let gate = effective_gate(app);
     queue(app, frame, owner, Vec::new(), gate)
+}
+
+/// Dispatch a panel request by id while keeping its group tail private to this UI call.
+pub(super) fn play_library(app: &mut PhotocraftApp, indices: &[usize]) -> Result<Value, String> {
+    let Some(&first) = indices.first() else { return Ok(json!({"ran":0})) };
+    if app.actions_runtime.library_play.is_some() {
+        return Err("Another panel playback request is being dispatched".into());
+    }
+    app.actions_runtime.library_play = Some(indices.to_vec());
+    let result = app.run("actions.play", json!({"action":first}));
+    // Dispatch may reject before the Actions interceptor; no later call inherits its mode.
+    app.actions_runtime.library_play = None;
+    result
+}
+
+/// Consume only this panel call's handoff; ordinary command callers remain synchronous.
+pub(super) fn queued_library_play(app: &mut PhotocraftApp, params: &Value) -> Option<Result<Value, String>> {
+    let indices = app.actions_runtime.library_play.take()?;
+    Some(if params.get("action").and_then(Value::as_u64).and_then(|index| usize::try_from(index).ok()) != indices.first().copied() {
+        Err("The panel playback request changed during dispatch".into())
+    } else {
+        start_library(app, &indices)
+    })
 }
 
 /// Snapshot remaining group actions and acquire a frame-spanning owner for the first resolved definition.
@@ -622,13 +647,14 @@ pub(super) fn resume_tick(app: &mut PhotocraftApp, paused: PausedPlayback) -> Re
         app.actions_runtime.progress = None;
         return Err(error.to_string());
     }
+    let ran = paused.ran.saturating_add(u64::from(!paused.timed && paused.parents.is_empty()));
     app.actions_runtime.task = Some(Task {
         frame: paused.frame,
         parents: paused.parents,
         owner: paused.record,
         gate: paused.gate,
         used: paused.used,
-        ran: paused.ran.saturating_add(u64::from(!paused.timed)),
+        ran,
         then: paused.then,
         history: paused.history,
     });
@@ -699,7 +725,9 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
     task.history = app.actions_runtime.history.take();
     task.used = app.session.actions.playback_steps;
     let result = result.and_then(|value| {
-        task.ran = task.ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
+        if task.parents.is_empty() {
+            task.ran = task.ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
+        }
         if let Some(failed) = value.get("failed") {
             return Err(failed.get("error").and_then(Value::as_str).unwrap_or("Action playback failed").to_string());
         }

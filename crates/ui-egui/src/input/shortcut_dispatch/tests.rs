@@ -883,7 +883,10 @@ fn f6_while_recording_records_a_named_call_not_the_child_steps() {
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "Nested overlay");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R"}))]);
+    assert_eq!(
+        h.state().session.actions.list[1].steps,
+        [("actions.play".into(), json!({"action":"LivePrint 2R","set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]
+    );
 }
 
 /// ⇧⌘> / ⇧⌘< follow the keys' position: a Nordic or German layout reports ⇧⌘. as `:`, which is

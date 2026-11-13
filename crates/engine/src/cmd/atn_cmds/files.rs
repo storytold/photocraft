@@ -4,8 +4,8 @@ use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json}
 
 /// A set rename moves its own references; foreign scopes retain their meaning.
 fn retarget_scopes(action: &mut Action, from: &str, to: &str) {
-    for (id, params) in &mut action.steps {
-        let keys: &[&str] = match id.as_str() {
+    crate::actions_cmds::visit_calls(&mut action.steps, &mut |id, params, _| {
+        let keys: &[&str] = match id {
             "actions.play" | "file.automate.batch" | "file.automate.createDroplet" => &["set", "actionSet"],
             "actions.conditional" => &["set", "thenSet", "elseSet"],
             _ => &[],
@@ -15,6 +15,37 @@ fn retarget_scopes(action: &mut Action, from: &str, to: &str) {
                 params[*key] = json!(to);
             }
         }
+    });
+}
+
+/// Retained callers keep their old targets when replacement removes preceding rows.
+fn retain_calls(list: &mut [Action], original: &[Action], targets: &std::collections::HashSet<String>) {
+    let mut next = 0usize;
+    let indices: Vec<_> = original
+        .iter()
+        .map(|action| {
+            if targets.contains(super::logical_set_name(action.set.as_deref())) {
+                None
+            } else {
+                let index = next;
+                next += 1;
+                Some(index)
+            }
+        })
+        .collect();
+    for action in list {
+        crate::actions_cmds::visit_calls(&mut action.steps, &mut |id, params, _| {
+            if !matches!(id, "actions.play" | "file.automate.batch" | "file.automate.createDroplet") || !params.get("action").is_some_and(Value::is_number) {
+                return;
+            }
+            if let Ok(index) = crate::actions_cmds::resolve(original, params, "actions.load") {
+                match indices.get(index).copied().flatten() {
+                    Some(next) if next != index => params["action"] = json!(next),
+                    None => params["action"] = Value::Null,
+                    _ => {}
+                }
+            }
+        });
     }
 }
 
@@ -43,38 +74,25 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             set.metadata = sidecar::empty_source(raw, index);
         }
     }
-    match p.get("set") {
-        None | Some(Value::Null) => {}
+    let set_override = match p.get("set") {
+        None | Some(Value::Null) => None,
         Some(Value::String(n)) if !n.trim().is_empty() => {
             if imp.sets.len() != 1 {
                 return Err(bad(cmd, "set override requires exactly one real set"));
             }
-            let original_set = imp.set.clone();
-            let original_wire = imp.sets.first().ok_or_else(|| bad(cmd, "missing imported set"))?.wire_name.clone();
-            imp.set = super::convert::clip_name(n.trim()).trim_end().to_string();
-            if let Some(set) = imp.sets.first_mut() {
-                set.name = imp.set.clone();
-                set.wire_name = imp.set.clone();
-            }
-            for a in &mut imp.actions {
-                a.set = Some(imp.set.clone());
-                retarget_scopes(a, &original_set, &imp.set);
-                if original_wire != original_set {
-                    retarget_scopes(a, &original_wire, &imp.set);
-                }
-            }
+            Some(super::convert::clip_name(n.trim()).trim_end().to_string())
         }
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
-    }
+    };
     for action in &mut imp.actions {
-        action.automation = s.authorize.is_some();
+        action.automation |= s.authorize.is_some();
     }
     let replace = match p.get("replace") {
         None | Some(Value::Null) => true,
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`replace` must be true or false")),
     };
-    let targets: std::collections::HashSet<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
+    let targets: std::collections::HashSet<String> = imp.sets.iter().map(|set| set_override.as_ref().unwrap_or(&set.name).clone()).collect();
     let keep = |action: &&Action| !replace || !targets.contains(super::logical_set_name(action.set.as_deref()));
     let retained = s.actions.list.iter().filter(keep).count();
     if retained.checked_add(imp.actions.len()).is_none_or(|count| count > super::atn::MAX_TOTAL_ACTIONS) {
@@ -94,8 +112,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         imp.sets
             .iter()
-            .filter(|set| set.actions.is_empty() || previous_rows.contains(&set.name))
-            .map(|set| set.name.as_str())
+            .filter(|set| set.actions.is_empty() || previous_rows.contains(set_override.as_ref().unwrap_or(&set.name)))
+            .map(|set| set_override.as_ref().unwrap_or(&set.name).as_str())
             .collect::<std::collections::HashSet<_>>()
             .len()
     };
@@ -104,6 +122,24 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let names =
         super::normalize_import(&mut imp, s.actions.list.iter().filter(keep).map(|action| action.name.clone()), true).map_err(|error| bad(cmd, error))?;
+    // Resolve against the original archive before its display set is overridden, so a
+    // pre-existing foreign destination scope cannot become an imported local target.
+    if let Some(target) = set_override {
+        let original_set = imp.set.clone();
+        let original_wire = imp.sets.first().ok_or_else(|| bad(cmd, "missing imported set"))?.wire_name.clone();
+        imp.set = target;
+        if let Some(set) = imp.sets.first_mut() {
+            set.name = imp.set.clone();
+            set.wire_name = imp.set.clone();
+        }
+        for action in &mut imp.actions {
+            action.set = Some(imp.set.clone());
+            retarget_scopes(action, &original_set, &imp.set);
+            if original_wire != original_set {
+                retarget_scopes(action, &original_wire, &imp.set);
+            }
+        }
+    }
     let keys = imp.function_keys.clone();
     let steps: usize = imp.actions.iter().map(|action| action.steps.len()).sum();
     let mut added = imp.actions;
@@ -112,6 +148,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
     if replace {
         proposed.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
+        retain_calls(&mut proposed.list, &s.actions.list, &targets);
         sidecar::retire_sets(&mut proposed, &targets);
     }
     proposed.list.extend(added);

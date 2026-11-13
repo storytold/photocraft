@@ -699,7 +699,7 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
     app.run("actions.record", json!({"name":"Parent"})).unwrap();
     app.run("actions.play", json!({"action":"Child"})).unwrap();
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list[1].steps, [("actions.play".into(), json!({"action":"Child"}))]);
+    assert_eq!(app.session.actions.list[1].steps, [("actions.play".into(), json!({"action":"Child","set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]);
     assert_eq!(step_label("actions.play", &json!({"action":"Child"})), "Play Action: Child");
     app.run("view.actualPixels", json!({})).unwrap();
     let r = app.run("actions.play", json!({"action":"Parent"})).unwrap();
@@ -2135,7 +2135,7 @@ fn suffixes(app: &PhotocraftApp) -> usize {
 }
 
 fn child_call() -> Vec<(String, Value)> {
-    vec![("actions.play".to_string(), json!({"action": "Child"}))]
+    vec![("actions.play".to_string(), json!({"action": "Child", "set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]
 }
 
 /// Play Child and return the id of its step dialog.

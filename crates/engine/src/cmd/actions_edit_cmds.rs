@@ -189,7 +189,9 @@ fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     let mut set_names = crate::atn_cmds::UniqueNames::new(sets);
     let name = set_names.claim(&format!("{source} copy"));
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
-    let at = s.actions.list.iter().rposition(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).map_or(s.actions.list.len(), |i| i + 1);
+    let at = s.actions.list.iter().position(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).map_or(s.actions.list.len(), |first| {
+        first + s.actions.list[first..].iter().take_while(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).count()
+    });
     let added: Vec<_> = s
         .actions
         .list

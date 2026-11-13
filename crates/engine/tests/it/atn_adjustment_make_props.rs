@@ -108,7 +108,7 @@ fn unreadable_layer_properties_keep_the_step() {
 }
 
 #[test]
-fn bad_layer_properties_fail_without_a_layer_or_an_export() {
+fn bad_layer_properties_fail_without_a_layer_or_a_lossy_export() {
     let mut s = doc(8);
     for params in [
         json!({"name": false}),
@@ -123,6 +123,6 @@ fn bad_layer_properties_fail_without_a_layer_or_an_export() {
         assert!(s.execute("layer.newAdjustmentLayer.levels", params.clone()).is_err(), "{params}");
         assert_eq!(s.active().unwrap().doc.layers.len(), layers, "{params} must not add a layer");
         let action = Action::new("Make", vec![("layer.newAdjustmentLayer.levels".into(), params.clone())]);
-        assert!(atn_cmds::export("Props", &[&action], &[], false).is_err(), "{params} must not save as a default layer");
+        super::atn_export::fallback("Props", &action);
     }
 }

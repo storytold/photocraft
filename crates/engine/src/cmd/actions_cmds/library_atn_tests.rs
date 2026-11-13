@@ -717,6 +717,180 @@ fn empty_library_source_can_accept_its_metadata_bearing_export_after_reopen() {
 }
 
 #[test]
+fn review_definition_admission_counts_expanded_native_cohorts_before_duplication() {
+    let mut state = library::decode(&close_archive()).unwrap();
+    let source = state.list[0].clone();
+    let copies = atn::MAX_TOTAL_ITEMS / source.steps.len() / 2 + 1;
+    state.list[0].steps = std::iter::repeat_n(&source.steps, copies).flatten().cloned().collect();
+    state.list[0].library_steps = std::iter::repeat_n(&source.library_steps, copies).flatten().cloned().collect();
+    assert!(state.list[0].steps.len() <= atn::MAX_TOTAL_ITEMS);
+    library::check_definition(&state, &Default::default()).unwrap();
+    let mut proposed = library::definition_copy(&state);
+    let mut duplicate = proposed.list[0].clone();
+    duplicate.name = "Copy".into();
+    proposed.list.push(duplicate);
+    assert!(proposed.list.iter().map(|action| action.steps.len()).sum::<usize>() > atn::MAX_TOTAL_ITEMS);
+    assert!(library::encode(&proposed, &[]).is_ok(), "cohorts still fit the separate encoded event budget");
+    assert!(library::check_definition(&proposed, &Default::default()).unwrap_err().contains("native steps"));
+    for params in [json!({"action":0}), json!({"set":"S"})] {
+        let mut session = crate::Session::new();
+        session.actions = state.clone();
+        let before = encode(&session.actions);
+        let revision = session.actions.rev;
+        let preferences = session.prefs().clone();
+        assert!(session.execute("actions.duplicate", params).unwrap_err().to_string().contains("native steps"));
+        assert_eq!(session.actions.rev, revision);
+        assert_eq!(session.prefs(), &preferences);
+        assert_eq!(encode(&session.actions), before, "refused duplication publishes no definition or metadata edit");
+    }
+}
+
+#[test]
+fn review_import_normalizes_inline_calls_before_set_override_and_keeps_foreign_scopes() {
+    let embedded = json!({"steps":[["actions.play",{"action":"Child","set":"S"}]],"calledActions":[{"name":"Child","steps":[]}]});
+    let caller = Action::new(
+        "Caller",
+        vec![
+            (
+                "file.automate.batch".into(),
+                json!({"steps":[["actions.play",{"action":"Child","set":"S"}],{"command":"actions.conditional","params":{"then":"Child","set":"S"}}]}),
+            ),
+            ("file.automate.batch".into(), json!({"action":[["actions.play",{"action":"Child","set":"S"}]]})),
+            ("file.automate.batch".into(), json!({"action":"Child","set":"T"})),
+            ("file.automate.batch".into(), embedded.clone()),
+        ],
+    );
+    let bytes = native_archive(&[("S", &[Action::new("Child", vec![]), caller])]);
+    let mut session = crate::Session::new();
+    session.actions.list.push(Action { set: Some("T".into()), ..Action::new("Child", vec![]) });
+    session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"set":"T","replace":false})).unwrap();
+    let calls = &session.actions.list[2].steps;
+    assert_eq!(calls[0].1["steps"][0][1], json!({"action":"Child 2","set":"T"}));
+    assert_eq!(calls[0].1["steps"][1]["params"], json!({"then":"Child 2","set":"T"}));
+    assert_eq!(calls[1].1["action"][0][1], json!({"action":"Child 2","set":"T"}));
+    assert_eq!(calls[2].1, json!({"action":"Child","set":"T"}), "a foreign destination reference keeps the retained Child");
+    assert_eq!(calls[3].1, embedded, "an embedded Batch does not import its caller's renames or scope override");
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(restored.list[2].steps, session.actions.list[2].steps);
+    let invalid = Action::new("Rejected", vec![("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":"Missing","set":"S"}]]}))]);
+    let bytes = native_archive(&[("S", &[Action::new("Child", vec![]), invalid])]);
+    let before = encode(&session.actions);
+    let revision = session.actions.rev;
+    let preferences = session.prefs().clone();
+    assert!(session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"set":"T","replace":false})).is_err());
+    assert_eq!(encode(&session.actions), before, "a nested normalization error rejects the complete import");
+    assert_eq!(session.actions.rev, revision);
+    assert_eq!(session.prefs(), &preferences);
+}
+
+#[test]
+fn review_local_load_preserves_an_imported_automation_gate() {
+    fn deny_file(id: &str, _: &Value) -> super::Result<()> {
+        if id.starts_with("file.") { Err(crate::EngineError::Other("review automation gate".into())) } else { Ok(()) }
+    }
+    for imported_gate in [false, true] {
+        for authorized_load in [false, true] {
+            let action = Action { automation: imported_gate, ..Action::new("Guarded", vec![("file.close".into(), json!({}))]) };
+            let bytes = encode(&ActionState { list: vec![action], ..Default::default() });
+            let mut session = crate::Session::new();
+            session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+            session.automation_gate = Some(deny_file);
+            session.authorize = authorized_load.then_some(deny_file);
+            session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+            session.authorize = None;
+            let kept = imported_gate || authorized_load;
+            assert_eq!(session.actions.list[0].automation, kept);
+            assert_eq!(super::kept_gate(&session, &session.actions.list[0]).is_some(), kept);
+            if kept {
+                let document = session.active().unwrap().doc.id;
+                let result = session.execute("actions.play", json!({"action":0})).unwrap();
+                assert!(result["failed"]["error"].as_str().unwrap().contains("review automation gate"), "{result}");
+                assert_eq!(session.active().unwrap().doc.id, document, "the action cannot close the user's document without its retained gate");
+                assert!(session.authorize.is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn review_set_replacement_rebases_retained_numeric_calls_and_invalidates_removed_targets() {
+    let embedded = json!({"steps":[["actions.play",{"action":1}]],"calledActions":[{"name":"Embedded","steps":[]}]});
+    let caller = Action {
+        set: Some("T".into()),
+        ..Action::new(
+            "Caller",
+            vec![
+                ("actions.play".into(), json!({"action":1.0})),
+                ("actions.play".into(), json!({"action":0})),
+                ("file.automate.batch".into(), json!({"action":1,"calledActions":[{"name":"Embedded","steps":[]}]})),
+                ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":1}],["actions.play",{"action":0}]]})),
+                ("file.automate.batch".into(), embedded.clone()),
+                ("file.automate.createDroplet".into(), json!({"action":1})),
+                ("file.automate.createDroplet".into(), json!({"action":0})),
+            ],
+        )
+    };
+    let original =
+        vec![Action { set: Some("S".into()), ..Action::new("Old", vec![]) }, Action { set: Some("T".into()), ..Action::new("Child", vec![]) }, caller];
+    let bytes = native_archive(&[("S", &[Action::new("New", vec![("actions.play".into(), json!({"action":0}))])])]);
+    for replace in [false, true] {
+        let mut session = crate::Session::new();
+        session.actions.list = original.clone();
+        session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes),"replace":replace})).unwrap();
+        let caller = &session.actions.list[if replace { 1 } else { 2 }];
+        let calls = &caller.steps;
+        let child = if replace { 0 } else { 1 };
+        assert_eq!(super::playback_index(&session.actions.list, &calls[0].1).unwrap(), child);
+        if replace {
+            assert!(calls[1].1["action"].is_null());
+            assert!(super::playback_index(&session.actions.list, &calls[1].1).is_err(), "removed Old must not become Child");
+            assert!(calls[3].1["steps"][1][1]["action"].is_null());
+        } else {
+            assert_eq!(calls[1].1["action"], 0);
+            assert_eq!(calls[3].1["steps"][1][1]["action"], 0);
+        }
+        assert_eq!(calls[2].1["action"], child, "named Batch resolves its source in the caller's list");
+        assert_eq!(calls[3].1["steps"][0][1]["action"], child);
+        assert_eq!(calls[4].1, embedded, "embedded inline Batch keeps its own indices");
+        assert_eq!(calls[5].1["action"], child, "numeric Droplet selection follows the retained Child");
+        assert_eq!(crate::automate_cmds::named_action_steps(&session, &calls[5].1, "file.automate.createDroplet").unwrap(), original[1].steps);
+        if replace {
+            assert!(calls[6].1["action"].is_null());
+            assert!(
+                crate::automate_cmds::named_action_steps(&session, &calls[6].1, "file.automate.createDroplet").is_err(),
+                "a removed Droplet target must not become Child"
+            );
+        } else {
+            assert_eq!(calls[6].1["action"], 0);
+            assert_eq!(crate::automate_cmds::named_action_steps(&session, &calls[6].1, "file.automate.createDroplet").unwrap(), original[0].steps);
+        }
+        let added = session.actions.list.last().unwrap();
+        assert_eq!(added.steps[0].1["action"], if replace { 2 } else { 3 }, "imported calls use the retained prefix");
+        assert_eq!(library::decode(&encode(&session.actions)).unwrap().list, session.actions.list);
+    }
+}
+
+#[test]
+fn review_interleaved_set_duplication_keeps_main_insertion_order_and_numeric_targets() {
+    let first = Action::new("A", vec![("actions.play".into(), json!({"action":2}))]);
+    let other = Action::new("Other", vec![]);
+    let second = Action::new("B", vec![]);
+    let caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":2}))]);
+    let bytes = ordered_archive(&[("S", &[first]), ("T", &[other]), ("S", &[second]), ("U", &[caller])]);
+    let mut session = crate::Session::new();
+    session.actions = library::decode(&bytes).unwrap();
+    session.execute("actions.duplicate", json!({"set":"S"})).unwrap();
+    let restored = library::decode(&encode(&session.actions)).unwrap();
+    assert_eq!(restored.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["A", "A copy", "B copy", "Other", "B", "Caller"]);
+    for index in [0, 1, 5] {
+        assert_eq!(restored.list[index].steps[0].1["action"], 4, "original and copied calls still reach original B");
+    }
+    assert_eq!(restored.list[1].set.as_deref(), Some("S copy"));
+    assert_eq!(restored.list[2].set.as_deref(), Some("S copy"));
+    assert_eq!(restored.sets.iter().filter(|set| set.as_str() == "S").count(), 2, "both original physical rows survive");
+}
+
+#[test]
 fn unencodable_legacy_library_remains_available_and_never_replaces_legacy_bytes() {
     let payload = "x".repeat(MAX_ACTIONS_BYTES as usize / 2 + 1024);
     let bytes = serde_json::to_vec(&json!({"version":1,"actions":[{"name":"Large legacy","steps":[["future.command",{"text":payload}]]}]})).unwrap();

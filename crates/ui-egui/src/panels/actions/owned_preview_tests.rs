@@ -148,7 +148,7 @@ fn a_paused_named_library_call_captures_one_call_in_the_draft() {
     }
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     let stopped = app.run("actions.editor.stop", json!({"draft":id})).unwrap();
-    assert_eq!(stopped["action"]["steps"], json!([["actions.play",{"action":"Child"}]]));
+    assert_eq!(stopped["action"]["steps"], json!([["actions.play",{"action":"Child","set":photocraft_engine::atn_cmds::UNGROUPED_SET}]]));
     assert!(has_layer(&app, "Suffix"));
     assert_eq!(app.session.actions.list.len(), 1);
 }
@@ -410,7 +410,11 @@ fn a_recorder_started_during_a_library_dialog_survives_its_continuation() {
         app.run("actions.stop", json!({})).unwrap();
         let recorded = &app.session.actions.list.iter().find(|action| action.name == "Later").unwrap().steps;
         let manual = ("layer.new.layer".into(), json!({"name":"After"}));
-        let expected = if exit == "cancel first" { vec![manual] } else { vec![("actions.play".into(), json!({"action":"Child"})), manual] };
+        let expected = if exit == "cancel first" {
+            vec![manual]
+        } else {
+            vec![("actions.play".into(), json!({"action":"Child","set":photocraft_engine::atn_cmds::UNGROUPED_SET})), manual]
+        };
         assert_eq!(recorded, &expected, "{exit}");
         assert_eq!(has_layer(&app, "Suffix"), exit == "complete");
     }
@@ -430,5 +434,8 @@ fn a_late_recorder_survives_a_library_dialog_with_no_tail() {
     assert!(app.session.actions.recording_active());
     assert!(app.session.actions.held_playback.is_none());
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list[1].steps, vec![("actions.play".into(), json!({"action":"Only dialog"}))]);
+    assert_eq!(
+        app.session.actions.list[1].steps,
+        vec![("actions.play".into(), json!({"action":"Only dialog","set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]
+    );
 }

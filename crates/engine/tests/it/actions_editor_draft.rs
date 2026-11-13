@@ -74,7 +74,7 @@ fn recorded_self_calls_use_definition_identity_before_any_playback_effect() {
     s.execute("actions.play", json!({"action":0})).unwrap();
     editor(&mut s, "stop", draft, json!({})).unwrap();
     editor(&mut s, "save", draft, json!({})).unwrap();
-    assert_eq!(s.actions.list[1].steps.last().unwrap(), &("actions.play".into(), json!({"action":"Original"})));
+    assert_eq!(s.actions.list[1].steps.last().unwrap(), &("actions.play".into(), json!({"action":0,"set":photocraft_engine::atn_cmds::UNGROUPED_SET})));
 }
 
 /// An encoder refusal retains the dirty capture and both in-memory and stored definitions.
@@ -158,7 +158,7 @@ fn edits_and_recording_stay_draft_until_save_or_discard() {
     assert_eq!(shown["action"]["steps"].as_array().unwrap().len(), 3);
     assert!(shown["action"]["steps"][1][1].get("_actionLayer").is_some());
     assert!(shown["action"]["steps"][1][1].get("layer").is_none());
-    assert_eq!(shown["action"]["steps"][2], json!(["actions.play",{"action":"Caller"}]));
+    assert_eq!(shown["action"]["steps"][2], json!(["actions.play",{"action":"Caller","set":photocraft_engine::atn_cmds::UNGROUPED_SET}]));
     editor(&mut s, "stop", draft, json!({})).unwrap();
     assert_eq!(s.actions.list, list);
     assert_eq!(s.actions.rev, rev);

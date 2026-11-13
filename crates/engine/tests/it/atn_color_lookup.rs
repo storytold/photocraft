@@ -191,7 +191,7 @@ fn embedded_three_dl_retains_its_nonlinear_shaper_through_action_playback() {
 
 /// Unsupported recording fields and native edits must not silently become partial lookup steps.
 #[test]
-fn unknown_lookup_forms_stay_whole_and_changed_native_steps_refuse_export() {
+fn unknown_lookup_forms_stay_whole_and_changed_native_steps_use_fallback() {
     let d = descriptor("LUTFormatCUBE", CUBE);
     let imported = atn_cmds::import(&encoded(d.clone())).unwrap();
     let mut edited = imported.actions[0].clone();
@@ -201,7 +201,7 @@ fn unknown_lookup_forms_stay_whole_and_changed_native_steps_refuse_export() {
     for (key, value) in [("target", json!("mask")), ("lutFormat", json!("look")), ("interpolation", json!("tetrahedral"))] {
         let mut a = imported.actions[0].clone();
         a.steps[0].1[key] = value;
-        assert!(atn_cmds::export("Lookup", &[&a], &[], false).is_err());
+        super::atn_export::fallback("Lookup", &a);
     }
     for (key, value) in [
         ("profile", D::RawData(vec![1, 2, 3])),
