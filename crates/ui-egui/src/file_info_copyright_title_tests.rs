@@ -80,3 +80,24 @@ fn a_file_opened_with_the_mark_already_set_shows_the_prefix() {
         assert_eq!(title(&app), want, "{xmp}");
     }
 }
+
+#[test]
+fn changing_the_status_of_an_opened_document_clears_every_attribute_form() {
+    for attr in ["\n   xmpRights:Marked='True'", "\txmpRights:Marked = \"True\"", " xmpRights:Marked=\"True\""] {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/"{attr}/></rdf:RDF></x:xmpmeta>"#
+        );
+        for steps in [&["unknown"][..], &["publicDomain", "unknown"]] {
+            let mut app = app();
+            std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(xmp.clone().into());
+            assert!(title(&app).starts_with("\u{a9} "), "{attr:?}");
+            for &s in steps {
+                status(&mut app, s);
+            }
+            assert!(title(&app).starts_with("oracle @ "), "{attr:?} then {steps:?}: {}", title(&app));
+            let packet = app.session.documents()[0].doc.metadata.xmp.as_deref().unwrap_or_default().to_string();
+            assert!(!packet.contains("xmpRights:Marked"), "{attr:?} then {steps:?} leaves {packet}");
+            assert!(packet.contains("rdf:about=\"\""), "the rest of the description stays: {packet}");
+        }
+    }
+}

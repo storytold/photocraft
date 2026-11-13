@@ -101,21 +101,22 @@ fn find_attr<'a>(xmp: &'a str, prop: &str) -> Option<(usize, usize, &'a str)> {
 
 /// The packet's `xmpRights:Marked` value, as an element or an attribute.
 fn rights_marked(xmp: &str) -> Option<&str> {
-    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| marked_attr(xmp))
+    find_element(xmp, "xmpRights:Marked").map(|(_, _, v)| v.trim()).or_else(|| marked_attr(xmp).map(|(_, _, v)| v))
 }
 
 /// Attribute form `xmpRights:Marked="…"` with either quote, any XML whitespace before the name
-/// and around the `=`, as XMP writers lay attributes out on their own lines.
-fn marked_attr(xmp: &str) -> Option<&str> {
+/// and around the `=`, as XMP writers lay attributes out on their own lines. Returns (start, end,
+/// value) with the whitespace before the name in the span, as [`find_attr`] does, so a rewrite
+/// removes every form it reads.
+fn marked_attr(xmp: &str) -> Option<(usize, usize, &str)> {
     const NAME: &str = "xmpRights:Marked";
     xmp.match_indices(NAME).find_map(|(i, _)| {
-        if !xmp[..i].ends_with(|c: char| c.is_ascii_whitespace()) {
-            return None;
-        }
+        let start = i.checked_sub(1).filter(|&s| xmp.as_bytes().get(s).is_some_and(u8::is_ascii_whitespace))?;
         let rest = xmp[i + NAME.len()..].trim_start().strip_prefix('=')?.trim_start();
         let quote = rest.chars().next().filter(|&c| c == '"' || c == '\'')?;
-        let body = &rest[quote.len_utf8()..];
-        body.find(quote).map(|end| &body[..end])
+        let v0 = xmp.len() - rest.len() + 1;
+        let v1 = xmp[v0..].find(quote)? + v0;
+        Some((start, v1 + 1, &xmp[v0..v1]))
     })
 }
 
@@ -296,6 +297,10 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
             x.replace_range(a..b, "");
         }
         while let Some((a, b, _)) = find_attr(&x, prop) {
+            x.replace_range(a..b, "");
+        }
+        // Marked is also read in single quotes or after a tab or newline (#13821).
+        while let Some((a, b, _)) = (prop == "xmpRights:Marked").then(|| marked_attr(&x)).flatten() {
             x.replace_range(a..b, "");
         }
     }
