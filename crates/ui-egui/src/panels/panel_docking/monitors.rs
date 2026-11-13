@@ -51,7 +51,7 @@ const REREAD: f64 = 1.0;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn refresh(app: &mut crate::PhotocraftApp, ctx: &egui::Context, frame: &eframe::Frame) {
     let Some(window) = frame.winit_window() else { return };
-    let key = egui::Id::new("photocraft-dock-monitors-read");
+    let key = egui::Id::unique("photocraft-dock-monitors-read");
     let (now, zoom) = (ctx.input(|i| i.time), ctx.zoom_factor());
     let fresh = |(time, read_zoom): (f64, f32)| read_zoom == zoom && (time..time + REREAD).contains(&now);
     if ctx.data(|d| d.get_temp::<(f64, f32)>(key)).is_some_and(fresh) {
@@ -77,20 +77,13 @@ mod tests {
     #[test]
     fn monitors_are_in_the_points_of_a_window_on_them() {
         // A 150% monitor left of a 100% primary, and a 200% one above it: negative origins.
-        let displays = [
-            display("primary", [0, 0], [1920, 1080], 1.0),
-            display("left", [-3840, 300], [3840, 2160], 1.5),
-            display("above", [0, -2880], [3840, 2880], 2.0),
-        ];
+        let displays =
+            [display("primary", [0, 0], [1920, 1080], 1.0), display("left", [-3840, 300], [3840, 2160], 1.5), display("above", [0, -2880], [3840, 2880], 2.0)];
         let monitors = dock_monitors(displays, 1.0);
         let rects: Vec<_> = monitors.iter().map(|m| (m.name.as_deref().unwrap(), m.rect, m.scale)).collect();
         assert_eq!(
             rects,
-            [
-                ("primary", [0.0, 0.0, 1920.0, 1080.0], 1.0),
-                ("left", [-2560.0, 200.0, 2560.0, 1440.0], 1.5),
-                ("above", [0.0, -1440.0, 1920.0, 1440.0], 2.0),
-            ]
+            [("primary", [0.0, 0.0, 1920.0, 1080.0], 1.0), ("left", [-2560.0, 200.0, 2560.0, 1440.0], 1.5), ("above", [0.0, -1440.0, 1920.0, 1440.0], 2.0),]
         );
         // A window at (-3000, 600) px on the left monitor reports (-2000, 400) pt, inside it.
         let left = egui::Rect::from_min_size(egui::pos2(-2560.0, 200.0), egui::vec2(2560.0, 1440.0));
