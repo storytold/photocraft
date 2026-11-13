@@ -1,13 +1,13 @@
 //! [`Document`] → PSD/PSB.
 
-use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Document, Layer, LayerContent, LayerMask, SmartContentsId};
-use photocraft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
-use photocraft_psd::layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask as PsdMask, MaskData, MaskParameters};
-use photocraft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
-use photocraft_psd::{
+use craft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
+use craft_psd::layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask as PsdMask, MaskData, MaskParameters};
+use craft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
+use craft_psd::{
     BlendMode as PsdBlend, ColorMode as PsdMode, Compression, Header, ImageData, LayerRecord, PsdFile, Rect as PsdRect, SectionType, TaggedBlock, Version,
 };
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{Document, Layer, LayerContent, LayerMask, SmartContentsId};
 use photocraft_raster::{Interrupt, Surface};
 
 use crate::adjust_map;
@@ -424,28 +424,21 @@ impl Ex<'_> {
     /// baked layer is kept for the document's `Txt2`.
     /// One warning per fitted layer: how it was saved, or why it could not be baked.
     fn bake_dynamic_text(&mut self, l: &Layer, t: &photocraft_doc::TextLayer) -> Option<(photocraft_doc::TextLayer, Option<[f32; 4]>)> {
-        use photocraft_doc::text::{Orientation, TextShape};
         let mut eng = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // A fitted layer whose lines were never solved (or no longer match its text): solve a
-        // copy, so the file keeps the fitted look; the document is left alone. Vertical and
-        // right-to-left type can't be fitted and aren't solved.
+        // The export solves such a layer up front (`with_solved_dynamic_text`), so one still
+        // unsolved here couldn't be solved.
         let solved;
-        let t = if t.fit.is_some()
-            && !t.text.is_empty()
-            && matches!(t.shape, TextShape::Box { .. } | TextShape::Area { .. })
-            && !photocraft_text::fit::is_fitted_lines(t)
-        {
-            let rtl = photocraft_text::layout::has_rtl_paragraph(t);
-            let mut copy = t.clone();
-            if t.orientation != Orientation::Vertical && !rtl {
-                photocraft_text::fit::refit(&mut eng, &mut copy, self.dpi);
+        let t = if needs_solving(t) {
+            match solved_copy(&mut eng, t, self.dpi) {
+                Some(copy) => {
+                    solved = copy;
+                    &solved
+                }
+                None => {
+                    self.warnings.push(format!("layer \"{}\": Dynamic Text could not be solved; saved with its base sizes", l.name));
+                    return None;
+                }
             }
-            if !photocraft_text::fit::is_fitted_lines(&copy) {
-                self.warnings.push(format!("layer \"{}\": Dynamic Text could not be solved; saved with its base sizes", l.name));
-                return None;
-            }
-            solved = copy;
-            &solved
         } else {
             t
         };
@@ -687,7 +680,7 @@ impl Ex<'_> {
     fn layer_xmp_block(&mut self, l: &Layer, raw: &mut Vec<([u8; 4], Vec<u8>)>) {
         let Some(xmp) = l.xmp.as_deref() else { return };
         let pos = raw.iter().position(|(k, _)| k == b"shmd");
-        match photocraft_psd::metadata::put_layer_xmp(pos.map(|i| raw[i].1.as_slice()), xmp) {
+        match craft_psd::metadata::put_layer_xmp(pos.map(|i| raw[i].1.as_slice()), xmp) {
             Ok(data) => match pos {
                 Some(i) => raw[i].1 = data,
                 None => raw.push((*b"shmd", data)),
@@ -1170,8 +1163,27 @@ impl Ex<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests;
+/// Whether the Dynamic Text layer `t` has lines to solve before it is saved: a fitted box or area
+/// whose lines were never solved, or no longer match its text (a file can hold it so).
+pub(super) fn needs_solving(t: &photocraft_doc::TextLayer) -> bool {
+    use photocraft_doc::text::TextShape;
+    t.fit.is_some() && !t.text.is_empty() && matches!(t.shape, TextShape::Box { .. } | TextShape::Area { .. }) && !photocraft_text::fit::is_fitted_lines(t)
+}
+
+/// A copy of `t` (see [`needs_solving`]) with its lines solved, so the file keeps the fitted look;
+/// `None` when they can't be: vertical and right-to-left type can't be fitted and aren't solved.
+pub(super) fn solved_copy(eng: &mut photocraft_text::TextEngine, t: &photocraft_doc::TextLayer, dpi: f32) -> Option<photocraft_doc::TextLayer> {
+    use photocraft_doc::text::Orientation;
+    if t.orientation == Orientation::Vertical || photocraft_text::layout::has_rtl_paragraph(t) {
+        return None;
+    }
+    let mut copy = t.clone();
+    photocraft_text::fit::refit(eng, &mut copy, dpi);
+    photocraft_text::fit::is_fitted_lines(&copy).then_some(copy)
+}
 
 #[cfg(test)]
 pub(crate) use smart::EMBED_HASHED_SOURCE_BYTES;
+
+#[cfg(test)]
+mod tests;
