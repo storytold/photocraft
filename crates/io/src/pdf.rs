@@ -31,129 +31,8 @@ fn print_pdf_pages(
     Ok(craft_pdf::write_raster::write_pages(pages, vectors, selection_font, xmp))
 }
 
-/// `s` as XML character data.
-fn xml_text(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            c => o.push(c),
-        }
-    }
-    o
-}
-
-/// The RDF namespace every XMP packet's `rdf:RDF` element is in.
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-
-/// Where a description joins an XMP packet's RDF element, found as XML rather than by its
-/// spelling, so the prefix the packet binds to RDF, whitespace in its end tag and markup in
-/// comments make no difference: the byte offset of the element's end tag (`closed` false), or of
-/// the `/>` of a self-closing element (`closed` true) together with its qualified name, so the
-/// caller can expand it. None when the packet does not parse or has no RDF element.
-fn rdf_insertion(xmp: &str) -> Option<(usize, Option<&str>)> {
-    // roxmltree does not take a byte order mark ahead of the prolog; offsets below are into `xmp`.
-    let bom = xmp.strip_prefix('\u{feff}').map_or(0, |_| '\u{feff}'.len_utf8());
-    let body = xmp.get(bom..)?;
-    let doc = crate::xml::parse(body, roxmltree::ParsingOptions::default()).ok()?;
-    let rdf = doc.descendants().find(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "RDF")?;
-    let range = rdf.range();
-    let text = body.get(range.clone())?;
-    if let Some(open) = text.strip_suffix("/>") {
-        // `<r:RDF …/>`: the qualified name follows the `<`, up to whitespace or the `/`.
-        let name = open.get(1..)?;
-        let end = name.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(name.len());
-        return Some((bom + range.end - 2, Some(name.get(..end)?)));
-    }
-    // The end tag is the last thing in the element's own range.
-    Some((bom + range.start + text.rfind("</")?, None))
-}
-
-/// The XMP namespace of the spot-plate description.
-pub const SPOT_PLATES_NS: &str = "http://ns.getartcraft.com/photocraft/spot-plates/1.0/";
-
-/// The XMP packet of a spot-plate PDF: the document's own packet (`doc_xmp`, if any) with one
-/// `rdf:Description` added under [`SPOT_PLATES_NS`] that lists the plates in painting order, so a
-/// converter can rebuild each spot channel with its real ink colour, which the Separation
-/// colour space's CMYK alternate cannot carry:
-///
-/// ```xml
-/// <rdf:Description rdf:about="" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-///                  xmlns:pcsp="http://ns.getartcraft.com/photocraft/spot-plates/1.0/">
-///  <pcsp:plates>
-///   <rdf:Seq>
-///    <rdf:li rdf:parseType="Resource">
-///     <pcsp:index>0</pcsp:index>                 <!-- 0-based, the order the plates are painted -->
-///     <pcsp:name>Underbase White</pcsp:name>     <!-- the Separation colorant name, as the channel is named -->
-///     <pcsp:labL>100.00</pcsp:labL>              <!-- ink colour, CIE L*a*b*, D50 -->
-///     <pcsp:labA>0.00</pcsp:labA>
-///     <pcsp:labB>0.00</pcsp:labB>
-///     <pcsp:srgb>#FFFFFF</pcsp:srgb>             <!-- the same colour as encoded sRGB, for convenience -->
-///     <pcsp:solidity>100</pcsp:solidity>         <!-- 0–100, Photoshop's Spot Channel Options › Solidity -->
-///    </rdf:li>
-///   </rdf:Seq>
-///  </pcsp:plates>
-/// </rdf:Description>
-/// ```
-///
-/// An alpha-type channel of a Multichannel document lists as black with solidity 0. The plates
-/// are the document's, the same on every page of an artboard export.
-fn plates_xmp(doc_xmp: Option<&str>, plates: &[SpotPlate]) -> String {
-    // The description binds `rdf` itself: the packet it joins may bind another prefix to RDF.
-    let mut d = format!("  <rdf:Description rdf:about=\"\" xmlns:rdf=\"{RDF_NS}\" xmlns:pcsp=\"{SPOT_PLATES_NS}\">\n   <pcsp:plates>\n    <rdf:Seq>\n");
-    // Two decimals, never "-0.00".
-    let two = |v: f32| {
-        let v = (v * 100.0).round() / 100.0;
-        if v == 0.0 { 0.0 } else { v }
-    };
-    for (i, p) in plates.iter().enumerate() {
-        let hex = p.srgb.map(|v| format!("{:02X}", (v.clamp(0.0, 1.0) * 255.0).round() as u8)).concat();
-        d.push_str(&format!(
-            "     <rdf:li rdf:parseType=\"Resource\">\n      <pcsp:index>{i}</pcsp:index>\n      <pcsp:name>{}</pcsp:name>\n      <pcsp:labL>{:.2}</pcsp:labL>\n      <pcsp:labA>{:.2}</pcsp:labA>\n      <pcsp:labB>{:.2}</pcsp:labB>\n      <pcsp:srgb>#{hex}</pcsp:srgb>\n      <pcsp:solidity>{}</pcsp:solidity>\n     </rdf:li>\n",
-            xml_text(&p.name),
-            two(p.lab[0]),
-            two(p.lab[1]),
-            two(p.lab[2]),
-            (p.solidity * 100.0).round() as u32
-        ));
-    }
-    d.push_str("    </rdf:Seq>\n   </pcsp:plates>\n  </rdf:Description>\n");
-    // Into the document's packet when it has one, inside its RDF element; else a packet of its
-    // own. A packet that does not parse or has no RDF element has nowhere for the description to
-    // go and is kept as it is rather than replaced; so is one whose insertion offset falls off a
-    // char boundary, which the parser never yields but a document-supplied packet must not panic.
-    if let Some(xmp) = doc_xmp {
-        let Some((at, self_closing)) = rdf_insertion(xmp) else {
-            return xmp.to_owned();
-        };
-        // A self-closing element's tail skips its `/>`.
-        let tail_at = if self_closing.is_some() { at + 2 } else { at };
-        let (Some(head), Some(tail)) = (xmp.get(..at), xmp.get(tail_at..)) else {
-            return xmp.to_owned();
-        };
-        let mut out = String::with_capacity(xmp.len() + d.len() + 16);
-        out.push_str(head);
-        match self_closing {
-            // `<r:RDF …/>` becomes `<r:RDF …>` + the description + `</r:RDF>`.
-            Some(name) => {
-                out.push_str(">\n");
-                out.push_str(&d);
-                out.push_str(" </");
-                out.push_str(name);
-                out.push('>');
-            }
-            None => out.push_str(&d),
-        }
-        out.push_str(tail);
-        return out;
-    }
-    format!(
-        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"{RDF_NS}\">\n{d} </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
-    )
-}
+/// The namespace of the spot-plate description written by the shared PDF metadata encoder.
+pub const SPOT_PLATES_NS: &str = craft_pdf::write_raster::SPOT_PLATES_NAMESPACE;
 
 /// The channels of `doc` that leave as plates, in channel order (the first prints first,
 /// underneath): every channel of a Multichannel document, the spot channels of any other.
@@ -170,7 +49,7 @@ fn plate_channels(doc: &Document) -> impl Iterator<Item = &photocraft_doc::Alpha
 /// its alpha channels as masks and exports only its spot channels. The alternate colour is the
 /// ink colour separated through the CMYK profile in use (`Color::in_mode`); it only previews the
 /// plate, as Photoshop's does. Solidity is a preview attribute too: it is not part of the plate
-/// image or its tint transform, and only the XMP description ([`plates_xmp`]) carries it.
+/// image or its tint transform, and only the shared XMP description writer carries it.
 fn plates_of(doc: &Document, rect: photocraft_geom::Rect) -> Vec<SpotPlate> {
     let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     plate_channels(doc)
@@ -291,7 +170,8 @@ pub fn export(doc: &Document, spot_plates: bool, ctl: &photocraft_raster::Interr
 }
 
 /// [`export`] with the XMP packet to embed (`doc_xmp`: the document's, or `None` when the save
-/// embeds no metadata). With spot plates the packet gains their description ([`plates_xmp`]);
+/// embeds no metadata). With spot plates the packet gains their description through the shared
+/// PDF writer;
 /// without plates it is written as it is, and nothing when there is none.
 pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -440,7 +320,7 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
     } else if doc.channels.iter().any(|ch| ch.spot.is_some()) {
         warnings.push("spot channels were not written: spot plates were left out".into());
     }
-    let xmp = if plates.is_empty() { doc_xmp.map(str::to_owned) } else { Some(plates_xmp(doc_xmp, plates)) };
+    let xmp = craft_pdf::write_raster::xmp_with_spot_plates(doc_xmp, plates);
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
