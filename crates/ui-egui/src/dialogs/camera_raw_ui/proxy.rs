@@ -155,7 +155,7 @@ impl ProxyJob {
         };
         let unmasked = unmasked.map(|(px, w, h, frame)| Unmasked { px, w, h, frame, params: p.clone(), masks_frame });
         let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
-        if self.opaque && !p.geometry_neutral() {
+        if self.opaque && p.moves_pixels() {
             over_white(&mut px);
         }
         if let Some(mask) = &self.selection {

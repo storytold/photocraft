@@ -1722,6 +1722,21 @@ fn geometry_preview_mixes_the_selection_by_alpha() {
     assert!(corner.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{corner:?} != {want:?}");
 }
 
+/// What Distortion uncovers shows white on the Background too, as the filter makes it there.
+#[test]
+fn distortion_preview_keeps_the_background_opaque() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.lens_distortion = 100.0;
+    d.render(&ctx);
+    let edge = d.processed[d.ph / 2 * d.pw];
+    assert!(edge[3] > 0.99 && edge[..3].iter().all(|v| *v > 0.99), "{edge:?}");
+    assert!(d.processed[d.ph / 2 * d.pw + d.pw / 2][0] < 0.01);
+}
+
 /// Reset to Open / Default to a different curve drops the curve editor's selected point; a reset
 /// that leaves the curves alone keeps it.
 #[test]
