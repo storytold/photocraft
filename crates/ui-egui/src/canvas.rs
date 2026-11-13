@@ -1958,14 +1958,15 @@ fn pencil_outline_cursor(painter: &egui::Painter, xf: &ViewXform, p: Pos2, size:
 
 /// A pen tool's cursor at screen point `p` (document point `doc`): the crosshair for precise Other
 /// Cursors (#4639), the black arrow for Add Anchor Point unless a click would split a segment
-/// (#12729; ⌘ is Direct Selection's arrow, ⌥ keeps the pen), else the tool's own pen icon.
+/// (#12729; ⌘ is Direct Selection's arrow, ⌥ the arrow with "+" everywhere, #12709), else the
+/// tool's own pen icon.
 fn pen_tool_cursor(app: &PhotocraftApp, ui: &egui::Ui, tool: Tool, doc: [f64; 2], p: Pos2) -> egui::CursorIcon {
     if precise_other_cursor(app) {
         return egui::CursorIcon::Crosshair;
     }
     if tool == Tool::AddAnchorPoint {
         let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
-        if !mods.alt && (mods.command || !crate::anchor_tools::adds_anchor_at(app, tool, doc)) {
+        if mods.alt || mods.command || !crate::anchor_tools::adds_anchor_at(app, tool, doc) {
             return crate::tool_cursor::arrow(ui.ctx(), p);
         }
     }
@@ -2109,7 +2110,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             crate::tool_cursor::continue_path(painter, p)
         }
         // Add Anchor Point: the pen with "+" only over a segment a click would split, else the
-        // black arrow (#12729); ⌘ is Direct Selection's arrow. ⌥ and Precise stay as they were.
+        // black arrow (#12729); ⌘ is Direct Selection's arrow, ⌥ the arrow with "+" (#12709).
         // The pen tools: their own icon with its nib on the point, or the crosshair for
         // precise Other Cursors (#4639); Add Anchor Point the black arrow off a segment (#12729).
         Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {

@@ -6,7 +6,7 @@
 //! Knots are addressed as `[subpath, knot]`. Every edit validates its indices and returns an
 //! error message instead of panicking.
 
-use photocraft_doc::{Knot, Path, Subpath};
+use photocraft_doc::{Knot, Path, PathOp, Subpath};
 use photocraft_geom::Point;
 
 /// One of a knot's two direction handles.
@@ -120,6 +120,33 @@ pub fn move_anchors(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) -> Res
         *k = Knot { anchor: add(k.anchor, d), in_ctrl: add(k.in_ctrl, d), out_ctrl: add(k.out_ctrl, d), smooth: k.smooth };
     }
     Ok(())
+}
+
+/// Add Anchor Point's ⌥-drag on a segment, as in Photoshop: the subpaths holding `anchors` are
+/// copied to the end of the path, in order, and the copies move by `d`; the originals stay. A
+/// copied joined subpath takes its component's operation, so the copy stands on its own.
+/// Returns the copies' anchors.
+pub fn duplicate_subpaths(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) -> Result<Vec<[usize; 2]>, String> {
+    let mut subs = Vec::with_capacity(anchors.len());
+    for &[s, k] in anchors {
+        path.subpaths.get(s).and_then(|sp| sp.knots.get(k)).ok_or_else(|| format!("no knot {k} in subpath {s}"))?;
+        subs.push(s);
+    }
+    subs.sort_unstable();
+    subs.dedup();
+    let mut copies = Vec::new();
+    for s in subs {
+        let Some(mut sp) = path.subpaths.get(s).cloned() else { continue };
+        if sp.op == PathOp::Join {
+            let head = path.subpaths.get(..s).and_then(|before| before.iter().rev().find(|h| h.op != PathOp::Join));
+            sp.op = head.map_or(PathOp::Combine, |h| h.op);
+        }
+        let at = path.subpaths.len();
+        copies.extend((0..sp.knots.len()).map(|k| [at, k]));
+        path.subpaths.push(sp);
+    }
+    move_anchors(path, &copies, d)?;
+    Ok(copies)
 }
 
 /// The Curvature Pen's anchor drag: moves the anchors like [`move_anchors`], then recomputes the
@@ -762,6 +789,23 @@ mod tests {
         assert_eq!(anchors_in(&p, [110.0, -5.0, 40.0, 5.0]), vec![[0, 1]]);
         assert_eq!(subpath_anchors(&p, 0), vec![[0, 0], [0, 1], [0, 2]]);
         assert!(subpath_anchors(&p, 4).is_empty());
+    }
+
+    #[test]
+    fn duplicated_subpaths_go_to_the_end_and_a_joined_one_stands_alone() {
+        let mut p = tri();
+        let mut joined = p.subpaths[0].clone();
+        joined.op = PathOp::Join;
+        p.subpaths[0].op = PathOp::Subtract;
+        p.subpaths.push(joined);
+        let before = p.clone();
+        let copies = duplicate_subpaths(&mut p, &[[1, 0], [1, 2]], [5.0, -5.0]).unwrap();
+        assert_eq!(copies, vec![[2, 0], [2, 1], [2, 2]]);
+        assert_eq!(p.subpaths[..2], before.subpaths[..], "the originals stay");
+        assert_eq!(p.subpaths[2].op, PathOp::Subtract, "the copy takes its component's operation");
+        assert_eq!(p.subpaths[2].knots[0].anchor, add(before.subpaths[1].knots[0].anchor, [5.0, -5.0]));
+        assert!(duplicate_subpaths(&mut p, &[[9, 0]], [1.0, 1.0]).is_err());
+        assert_eq!(p.subpaths.len(), 3, "a bad anchor copies nothing");
     }
 }
 

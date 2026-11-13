@@ -117,7 +117,15 @@ fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
         .collect::<Result<_>>()?;
     let d = offset(CMD, p)?;
     let label = step_name(CMD, p, "Drag Anchor Points", "Drag Path")?;
-    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
+    let curvature = p.get("curvature").and_then(Value::as_bool).unwrap_or(false);
+    let duplicate = p.get("duplicate").map(|v| v.as_bool().ok_or_else(|| bad(CMD, "`duplicate` must be true or false"))).transpose()?.unwrap_or(false);
+    if duplicate {
+        if curvature {
+            return Err(bad(CMD, "`duplicate` and `curvature` can't be combined"));
+        }
+        return edit_path(s, CMD, p, label, |path| edit::duplicate_subpaths(path, &anchors, d).map(|_| ()));
+    }
+    if curvature {
         return edit_path(s, CMD, p, label, |path| edit::move_anchors_curvature(path, &anchors, d));
     }
     edit_path(s, CMD, p, label, |path| edit::move_anchors(path, &anchors, d))
@@ -284,7 +292,7 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"stepName":"Drag Path"? (History step name; the Convert Point tool sends it when it drags a whole path; default "Drag Anchor Points"; any other value is refused)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (Add Anchor Point's ⌥-drag: the subpaths holding the anchors are copied to the end of the path and the copies move; the originals stay; not with curvature),"stepName":"Drag Path"? (History step name; the Convert Point tool sends it when it drags a whole path, Add Anchor Point when it duplicates one; default "Drag Anchor Points"; any other value is refused)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Direction Point",
@@ -766,6 +774,9 @@ mod tests {
             ("path.moveAnchors", json!({"anchors": [[0]], "move": [1, 1]})),
             ("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1e300, 1]})),
             ("path.moveAnchors", json!({"anchors": [[0, 0]]})),
+            ("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 1], "duplicate": "yes"})),
+            ("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 1], "duplicate": true, "curvature": true})),
+            ("path.moveAnchors", json!({"anchors": [[1, 0]], "move": [1, 1], "duplicate": true})),
             ("path.moveHandle", json!({"subpath": 0, "knot": 0, "handle": "up", "to": [1, 1]})),
             ("path.moveHandle", json!({"subpath": 0, "knot": 0, "handle": "in"})),
             ("path.moveHandle", json!({"subpath": -1, "knot": 0, "handle": "in", "to": [1, 1]})),

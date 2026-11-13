@@ -279,6 +279,9 @@ pub enum Edit {
     Path(Vec<[usize; 2]>),
     /// Pen + ⌥ on an anchor: a click makes a corner, a drag pulls out smooth handles.
     Convert([usize; 2]),
+    /// Add Anchor Point + ⌥ on a segment: a drag copies the subpath holding these anchors and moves
+    /// the copy (**Drag Path**); a click only selects the subpath.
+    Duplicate(Vec<[usize; 2]>),
 }
 
 impl Edit {
@@ -300,6 +303,7 @@ impl Edit {
             Edit::Segment([s, k], t) => ("path.bendSegment", json!({"subpath": s, "knot": k, "t": t, "move": d})),
             Edit::Path(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "stepName": "Drag Path"})),
             Edit::Convert([s, k]) => ("path.convertPoint", json!({"subpath": s, "knot": k, "out": end})),
+            Edit::Duplicate(a) => ("path.moveAnchors", json!({"anchors": a, "move": d, "duplicate": true, "stepName": "Drag Path"})),
         }
     }
 
@@ -313,6 +317,7 @@ impl Edit {
             Edit::Handle(k, h, from, independent) => edit::move_handle(&mut p, *k, *h, Point::new(from.x + d[0], from.y + d[1]), *independent),
             Edit::Segment(k, t) => edit::bend_segment(&mut p, *k, *t, d),
             Edit::Convert(k) => edit::convert_point(&mut p, *k, Some(Point::new(end[0], end[1]))),
+            Edit::Duplicate(a) => edit::duplicate_subpaths(&mut p, a, d).map(|_| ()),
         }
         .ok()?;
         Some(p)
@@ -870,9 +875,17 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     }
     // sync_views checks ownership while the command runs: keep this selection off the live UI
     // until its own command is done, then bind it to the revision that made.
-    let selection = std::mem::take(&mut app.ui.direct_selection);
+    let mut selection = std::mem::take(&mut app.ui.direct_selection);
     match app.run(id, params) {
-        Ok(_) => keep_after_command(app, selection),
+        Ok(_) => {
+            // A duplicated subpath leaves its copy selected, as in the reference.
+            if let Edit::Duplicate(a) = edit
+                && let Ok(copies) = edit::duplicate_subpaths(&mut base.clone(), a, [0.0, 0.0])
+            {
+                selection.anchors = copies;
+            }
+            keep_after_command(app, selection);
+        }
         Err(e) => {
             if selection.owner.as_ref().is_some_and(|owner| owner.valid(app)) {
                 app.ui.direct_selection = selection;
