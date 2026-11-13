@@ -668,6 +668,9 @@ impl Ex<'_> {
         let src = match self.smart_source(sm, template.as_ref()) {
             Ok(s) => s,
             Err(e) => {
+                if self.ctl.check().is_err() {
+                    return;
+                }
                 raw.retain(|(k, _)| !matches!(k, b"SoLd" | b"PlLd" | b"SoLE"));
                 self.warnings.push(format!("layer \"{}\": smart object written as pixels ({e})", l.name));
                 return;
@@ -740,7 +743,11 @@ impl Ex<'_> {
         upsert(raw, &key, sold, None);
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
-            let item = match (sm.stack_mode, self.source_composite(&src.uuid, sm.historical_xcf_sample_order)) {
+            let composite = self.source_composite(&src.uuid, sm.historical_xcf_sample_order);
+            if self.ctl.check().is_err() {
+                return;
+            }
+            let item = match (sm.stack_mode, composite) {
                 (None, Some((img, img_bounds))) => {
                     let unfiltered = match &sm.perspective {
                         Some(p) => {
@@ -828,6 +835,8 @@ impl Ex<'_> {
     /// one (a `.pcraft` source becomes a PSB of the nested document; image files are embedded as
     /// they are; a linked file is read and embedded).
     fn smart_source(&mut self, sm: &photocraft_doc::SmartObject, template: Option<&crate::smart_map::Placed>) -> Result<Source, String> {
+        // Cancellation must bypass missing/unsupported-source fallbacks and their source copies.
+        self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         use photocraft_doc::SmartSource;
         let preview = self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?)));
         let mut source = match &sm.source {
@@ -838,8 +847,9 @@ impl Ex<'_> {
                 let geometry = stored.map(|size| (size, f64::from(self.dpi))).or_else(|| {
                     let meta = photocraft_doc::Metadata { psd_global_blocks: self.smart.globals.clone(), ..Default::default() };
                     let f = crate::linked::find_linked_file(&meta, path)?;
-                    crate::smart_xcf_order::geometry(&f.file_name, &f.bytes, sm.historical_xcf_sample_order).ok()
+                    crate::smart_xcf_order::geometry(&f.file_name, &f.bytes, sm.historical_xcf_sample_order, &self.ctl).ok()
                 });
+                self.ctl.check().map_err(|_| "export cancelled".to_string())?;
                 let (size, dpi) = geometry.unwrap_or((size_from_layer(sm), f64::from(self.dpi)));
                 let original = self.smart.linked_contents.entry(path.clone()).or_insert(sm.contents_id);
                 // An absent Idnt is not a shared-source identity; import treats each as fresh.
@@ -905,6 +915,8 @@ impl Ex<'_> {
         uuid: &str,
         order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
     ) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
+        // A cancelled decode is not an unavailable source: neither reuse nor cache its fallback.
+        self.ctl.check().ok()?;
         let key = (uuid.to_string(), order);
         if let Some(c) = self.smart.composites.get(&key) {
             return c.clone();
@@ -919,13 +931,15 @@ impl Ex<'_> {
                     };
                     crate::linked::find_linked_file(&meta, uuid)
                 });
-                file.and_then(|f| crate::smart_xcf_order::decode(&f.file_name, &f.bytes, order).ok())
+                file.and_then(|f| crate::smart_xcf_order::decode(&f.file_name, &f.bytes, order, &self.ctl).ok())
             }
         };
+        self.ctl.check().ok()?;
         let c = doc.map(|d| {
             let mut s = Surface::new(self.fmt);
             let fmt = self.fmt;
             let _ = photocraft_compose::render_bands(&d, d.bounds(), 0, |band| -> Result<(), ()> {
+                self.ctl.check().map_err(|_| ())?;
                 let mut vals = Vec::with_capacity(band.px.len() * fmt.channels());
                 let mut v = [0.0f32; 5];
                 for p in &band.px {
@@ -938,6 +952,7 @@ impl Ex<'_> {
             s.prune();
             (std::sync::Arc::new(s), d.bounds())
         });
+        self.ctl.check().ok()?;
         self.smart.composites.insert(key, c.clone());
         c
     }
@@ -969,10 +984,13 @@ impl Ex<'_> {
         order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
     ) -> Result<Source, String> {
         let key = (contents_id, hash, linked, order);
+        // Do not turn cancellation into a cached conversion failure or a reused successful result.
+        self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         if let Some(r) = self.smart.converted.get(&key) {
             return r.clone();
         }
         let r = self.convert_source(contents_id, file_name, bytes, linked, order);
+        self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         self.smart.converted.insert(key, r.clone());
         r
     }
@@ -985,6 +1003,7 @@ impl Ex<'_> {
         linked: bool,
         order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
     ) -> Result<Source, String> {
+        self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         let (name, data, size, dpi, nested) = if photocraft_format::is_pcraft(bytes) {
             if self.smart.depth >= MAX_NESTING {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
@@ -1004,12 +1023,15 @@ impl Ex<'_> {
         } else {
             // Embedded formats we can't decode (vector PDF/AI…) are kept; their size comes from the
             // layer. A linked file we can't decode is not embedded.
-            let decoded = order.map(|_| crate::smart_xcf_order::decode(file_name, bytes, order));
+            let decoded = order.map(|_| crate::smart_xcf_order::decode(file_name, bytes, order, &self.ctl));
+            // Embedded unknown formats are copied below; a cancelled decode must never take that fallback.
+            self.ctl.check().map_err(|_| "export cancelled".to_string())?;
             let geometry = match &decoded {
                 Some(Ok(doc)) => Ok(((f64::from(doc.size.width), f64::from(doc.size.height)), f64::from(doc.resolution_dpi))),
                 Some(Err(error)) => Err(error.to_string()),
-                None => crate::linked::source_geometry(file_name, bytes, &photocraft_raster::Interrupt::NONE),
+                None => crate::linked::source_geometry(file_name, bytes, &self.ctl),
             };
+            self.ctl.check().map_err(|_| "export cancelled".to_string())?;
             let (size, dpi) = match geometry {
                 Ok(geometry) => geometry,
                 Err(e) if linked => return Err(format!("the linked file {file_name} is not an image PhotoCraft can open: {e}")),
@@ -1017,7 +1039,9 @@ impl Ex<'_> {
             };
             (file_name.to_string(), bytes.to_vec(), size, dpi, decoded.and_then(Result::ok))
         };
+        self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         let uuid = contents_uuid(contents_id, &data);
+        self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         if let Some(d) = nested {
             self.smart.docs.insert((uuid.clone(), order), d);
         }

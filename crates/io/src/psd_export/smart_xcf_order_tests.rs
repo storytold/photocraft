@@ -3,6 +3,8 @@ use photocraft_doc::{HistoricalXcfSampleOrder as Order, SmartObject, SmartSource
 use photocraft_geom::{Affine, Rect, Size};
 use std::sync::Arc;
 
+mod cancellation_review_tests;
+
 /// Original one-pixel v7 RGB16 wire data with a non-symmetric multibyte sample.
 fn xcf(little: bool) -> Vec<u8> {
     let mut bytes = b"gimp xcf v007\0".to_vec();
@@ -70,7 +72,7 @@ fn embedded_and_linked_historical_sources_keep_order_bytes_and_geometry_through_
                 let SmartSource::Linked { path: uuid } = &object.source else { panic!("PSD linked table") };
                 let (name, retained) = crate::linked::embedded_payload(&imported.metadata, uuid).unwrap();
                 assert_eq!(retained, bytes.as_slice());
-                let decoded = crate::smart_xcf_order::decode(&name, retained, object.historical_xcf_sample_order).unwrap();
+                let decoded = crate::smart_xcf_order::decode(&name, retained, object.historical_xcf_sample_order, &Interrupt::NONE).unwrap();
                 assert_eq!(
                     decoded.layers[0].surface().unwrap().read_region(decoded.bounds()),
                     [0x1234u16, 0x5678, 0x9abc, 0xffff].map(|sample| f32::from(sample) / 65535.)
@@ -156,8 +158,12 @@ fn private_order_metadata_cannot_turn_an_empty_raster_into_an_unknown_adjustment
 }
 
 fn exporter(doc: &Document) -> Ex<'static> {
+    exporter_with_interrupt(doc, Interrupt::NONE)
+}
+
+fn exporter_with_interrupt<'a>(doc: &Document, ctl: Interrupt<'a>) -> Ex<'a> {
     Ex {
-        ctl: Interrupt::NONE,
+        ctl,
         fmt: doc.pixel_format(),
         dpi: doc.resolution_dpi,
         document: None,

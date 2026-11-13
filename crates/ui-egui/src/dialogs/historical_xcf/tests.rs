@@ -1,6 +1,5 @@
 use super::*;
-#[path = "../../../../engine/src/historical_xcf_open/fixture.rs"]
-mod fixture;
+use crate::historical_xcf_fixture as fixture;
 
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(

@@ -379,15 +379,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             }))
         }
         "layer.smartObjects.replaceContents" => {
-            let st = app.session.active()?;
-            let (doc, layer) = (st.doc.id, st.active_layer?);
-            Some(app.pick_file_bytes(move |app, name, bytes| {
-                app.with_document(doc, |app| {
-                    let r = photocraft_engine::smart_cmds::replace_contents_bytes(&mut app.session, layer, &name, bytes).map_err(|e| e.to_string());
-                    app.sync_views();
-                    r
-                })
-            }))
+            let target = match crate::dialogs::historical_replace::target(app) {
+                Ok(target) => target,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(app.pick_file_bytes(move |app, name, bytes| crate::dialogs::historical_replace::pick(app, target, name, bytes)))
         }
         "layer.smartObjects.exportContents" => Some(export_contents(app)),
         "layer.smartObjects.relinkToFile" => {
