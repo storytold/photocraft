@@ -752,3 +752,21 @@ fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
         assert!(d <= TOL, "temperature {temperature}: off by {d}");
     }
 }
+
+/// Each luminance noise reduction setting makes its own plan; a drag through a hundred of them
+/// keeps at most 64 cached, and every develop still matches the CPU.
+#[test]
+fn a_slider_drag_keeps_the_plan_cache_bounded() {
+    let Some(mut g) = gpu() else { return };
+    for (i, amount) in (1..=100).enumerate() {
+        let p = CameraRaw { noise_luminance: amount as f32, noise_luminance_detail: (i % 7) as f32 * 10.0, ..Default::default() };
+        if i % 33 == 0 {
+            compare_at(&mut g, &p, Depth::Eight, (64, 48));
+        } else {
+            let stages = per_pixel(&p, 64, 48, false, None).unwrap();
+            g.dev.develop(&g.device, &g.queue, None, &image(64, 48, Depth::Eight), None, [64, 48], &stages).unwrap();
+        }
+        assert!(g.dev.cached_plans() <= 64, "{} plans after {} settings", g.dev.cached_plans(), i + 1);
+    }
+    assert!(g.dev.cached_plans() > 0);
+}
