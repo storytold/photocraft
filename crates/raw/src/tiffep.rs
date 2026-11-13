@@ -46,7 +46,8 @@ pub(crate) fn cfa(t: &Tiff, raw: &Ifd, ifds: &[Ifd]) -> Option<Cfa> {
     let dim = t.tag_uints(raw, tag::CFA_REPEAT_PATTERN_DIM);
     let pat = t.tag_uints(raw, tag::CFA_PATTERN);
     let (rows, cols, colors) = match (dim.as_slice(), pat) {
-        ([r, c], p) if p.len() == (*r as usize) * (*c as usize) && !p.is_empty() => (*r as usize, *c as usize, p),
+        // The product can overflow a 32-bit usize (wasm32).
+        ([r, c], p) if (*r as usize).checked_mul(*c as usize) == Some(p.len()) && !p.is_empty() => (*r as usize, *c as usize, p),
         _ => {
             // EXIF CFAPattern: two 16-bit counts (columns, rows) then the colours.
             let e = ifds.iter().find_map(|i| i.get(tag::EXIF_CFA_PATTERN).copied())?;
@@ -308,5 +309,29 @@ mod padding_tests {
         assert_eq!(padded_width(&[0; 10], w, h, 12), 300);
         assert_eq!(padded_width(&padded(100, 4, 20, 256), 100, 4, 12), 100);
         assert_eq!(padded_width(&[], 0, 0, 12), 0);
+    }
+}
+
+#[cfg(test)]
+mod cfa_tests {
+    use super::*;
+    use crate::testgen::{TiffBuilder, Val};
+
+    /// The CFA of a one-IFD TIFF with these repeat dimensions and a 2×2 pattern.
+    fn cfa_with(dim: Vec<u32>) -> Option<Cfa> {
+        let mut b = TiffBuilder::default();
+        b.chain = vec![b.ifd(vec![(tag::CFA_REPEAT_PATTERN_DIM, Val::Long(dim)), (tag::CFA_PATTERN, Val::Byte(vec![0, 1, 1, 2]))])];
+        let bytes = b.build();
+        let t = Tiff::new(&bytes)?;
+        let ifds = t.all_ifds();
+        cfa(&t, ifds.first()?, &ifds)
+    }
+
+    #[test]
+    fn repeat_dimensions_whose_product_overflows_are_refused() {
+        assert_eq!(cfa_with(vec![2, 2]).map(|c| (c.width, c.height, c.colors)), Some((2, 2, vec![0, 1, 1, 2])));
+        // The product overflows a 32-bit usize (wasm32).
+        assert_eq!(cfa_with(vec![u32::MAX, u32::MAX]), None);
+        assert_eq!(cfa_with(vec![65_536, 65_536]), None);
     }
 }

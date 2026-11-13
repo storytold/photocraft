@@ -466,6 +466,49 @@ mod shapes {
         assert!(d.warnings.iter().any(|w| w.contains("curve geometry budget exhausted")), "{:?}", d.warnings);
     }
 
+    /// A closed 10×10 square curve whose second corner has radius 2 when `rounded`, its corner
+    /// data (`CnrD`) followed by `padding` unused positional fields.
+    fn square(id: u32, rounded: bool, padding: usize) -> F {
+        let record = |x: f64, y: f64| [x.to_le_bytes(), y.to_le_bytes()].concat().into_iter().chain([0, 0]).collect::<Vec<u8>>();
+        let records = vec![record(0.0, 0.0), record(10.0, 0.0), record(10.0, 10.0), record(0.0, 10.0), record(0.0, 0.0)];
+        let mut fields = vec![(tag(b"Data"), F::Pos(vec![F::U8(0), F::U32(1), F::Bool(true), F::Records(18, records)]))];
+        if rounded {
+            // Positional `[u8, i32[] record indices, f64[] radii, ...]`, written raw so the
+            // padding costs two bytes a field.
+            let mut corners = vec![0x30];
+            corners.extend(tag(b"CnrD").0.to_le_bytes());
+            corners.extend([0x01, 0, 0x80 | 0x07]);
+            corners.extend(1u32.to_le_bytes());
+            corners.extend(1i32.to_le_bytes());
+            corners.push(0x80 | 0x0a);
+            corners.extend(1u32.to_le_bytes());
+            corners.extend(2.0f64.to_le_bytes());
+            for _ in 0..padding {
+                corners.extend([0x01, 0]);
+            }
+            corners.push(0);
+            fields.push((tag(b"CnrD"), F::Raw(corners)));
+        }
+        F::Def(id, vec![tag(b"PCrv")], vec![(tag(b"Crvs"), F::Obj(tag(b"PCvD"), fields))])
+    }
+
+    #[test]
+    fn corner_data_of_a_shared_curve_is_not_copied_for_every_occurrence() {
+        // Only the index and radius lists of the corner data are read; copying all of its fields
+        // (here a million) for each of 50k occurrences of the curve took minutes.
+        let plain = read(vec![square(5, false, 0)], 5);
+        let rounded = read(vec![square(5, true, 0)], 5);
+        assert_ne!(path(&rounded), path(&plain), "the corner is rounded");
+        let group = F::Def(6, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..50_000).map(|_| F::Ref(5)).collect()))]);
+        let d = read(vec![square(5, true, 1 << 20), group], 6);
+        let copies = &d.spreads[0].nodes[0].children;
+        assert_eq!(copies.len(), 50_000);
+        for copy in copies {
+            let Kind::Shape { path: p, .. } = &copy.kind else { panic!("expected a shape, got {:?}", copy.kind) };
+            assert_eq!(p, path(&rounded));
+        }
+    }
+
     fn path(document: &Document) -> &Path {
         match &document.spreads[0].nodes[0].kind {
             Kind::Shape { path, .. } => path,
@@ -549,6 +592,90 @@ mod shapes {
         let mut texts = Vec::new();
         collect(&d.spreads[0].nodes, &mut texts);
         assert!(texts.iter().any(|t| t == "ok"), "{texts:?}");
+    }
+
+    /// An array field of shared-object slots, written raw: links to `links` (defined earlier in
+    /// the stream), then `nulls` null slots at one byte each.
+    fn links_then_nulls(field: &[u8; 4], links: &[u32], nulls: usize) -> F {
+        let mut raw = vec![0x80 | 0x31];
+        raw.extend(tag(field).0.to_le_bytes());
+        raw.extend(u32::try_from(links.len() + nulls).unwrap().to_le_bytes());
+        for id in links {
+            raw.push(2);
+            raw.extend(id.to_le_bytes());
+        }
+        raw.resize(raw.len() + nulls, 0);
+        F::Raw(raw)
+    }
+
+    fn artistic_frame() -> (Tag, F) {
+        (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))]))
+    }
+
+    fn story(blocks: Vec<Vec<(Tag, F)>>) -> (Tag, F) {
+        (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), blocks))]))
+    }
+
+    /// Text nodes of `nodes` and their descendants.
+    fn texts(nodes: &[crate::model::Node]) -> Vec<&crate::model::Text> {
+        let mut out = Vec::new();
+        for n in nodes {
+            if let Kind::Text(t) = &n.kind {
+                out.push(t);
+            }
+            out.extend(texts(&n.children));
+        }
+        out
+    }
+
+    #[test]
+    fn shared_run_attributes_with_a_long_object_list_are_not_copied_for_every_run() {
+        // Run attributes shared by 100k runs (10 a story, the story placed 10k times) whose object
+        // list is a fill, a stroke and a million null slots. Only the first two slots are used;
+        // copying the whole list for every run took minutes.
+        let rgba: Vec<u8> = [1.0f32, 0.5, 0.25, 1.0].iter().flat_map(|c| c.to_le_bytes()).collect();
+        let colour = F::Def(300, vec![tag(b"RGBA")], vec![(tag(b"_col"), F::Struct(rgba))]);
+        let fill = F::Def(301, vec![tag(b"FilS")], vec![(tag(b"Colr"), F::Ref(300))]);
+        let stroke = F::Def(302, vec![tag(b"FilS")], vec![(tag(b"Colr"), F::Ref(300))]);
+        let attributes = F::Def(303, vec![tag(b"TxAt")], vec![(tag(b"Objs"), links_then_nulls(b"Objs", &[301, 302], 1 << 20))]);
+        let runs = (1..=10).map(|i| vec![(tag(b"Indx"), F::I32(i)), (tag(b"Item"), F::Ref(303))]).collect();
+        let block = vec![
+            (tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("a".repeat(10)))])),
+            (tag(b"GAtt"), F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), runs))])),
+        ];
+        let text = F::Def(100, vec![tag(b"TxtA")], vec![artistic_frame(), story(vec![block])]);
+        let group = F::Def(101, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..10_000).map(|_| F::Ref(100)).collect()))]);
+        let d = read(vec![colour, fill, stroke, attributes, text, group], 101);
+        let runs: Vec<_> = texts(&d.spreads[0].nodes).into_iter().flat_map(|t| &t.runs).collect();
+        assert_eq!(runs.len(), 100_000);
+        let solid = crate::paint::Paint::Solid(crate::paint::Color::Rgb { r: 1.0, g: 0.5, b: 0.25, a: 1.0 });
+        assert!(runs.iter().all(|r| r.text == "a" && r.fill == solid), "{:?}", runs.first());
+        assert!(d.warnings.iter().any(|w| w.contains("outlined (stroked) text")), "{:?}", d.warnings);
+        assert!(!d.warnings.iter().any(|w| w.contains("document text budget")), "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn a_shared_text_frame_with_a_long_column_list_is_not_rescanned_for_every_occurrence() {
+        // A frame text with no story blocks (nothing charged to the text budget) whose column list
+        // is a million null slots, placed 100k times: counting the slots once is enough.
+        let frame = F::Obj(tag(b"FrTx"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0])), (tag(b"ColW"), links_then_nulls(b"ColW", &[], 1 << 20))]);
+        let text = F::Def(100, vec![tag(b"TxtF")], vec![(tag(b"TxtH"), frame), story(Vec::new())]);
+        let group = F::Def(101, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..100_000).map(|_| F::Ref(100)).collect()))]);
+        let d = read(vec![text, group], 101);
+        assert_eq!(texts(&d.spreads[0].nodes).len(), 100_000);
+        assert!(d.warnings.iter().any(|w| w.contains("several columns")), "{:?}", d.warnings);
+    }
+
+    #[test]
+    fn glyph_slots_of_shared_segments_are_charged_before_they_are_walked() {
+        // A block of 100k references to one segment of a million null glyph slots: 10^11 slots,
+        // far past the text budget. The block fails its charge as before, without walking them.
+        let segment = F::Def(200, vec![tag(b"Segm")], vec![(tag(b"Glys"), links_then_nulls(b"Glys", &[], 1 << 20))]);
+        let mut refs = vec![segment];
+        refs.extend((1..100_000).map(|_| F::Ref(200)));
+        let block = vec![(tag(b"Glyp"), F::Obj(tag(b"Glyp"), vec![(tag(b"Mixd"), F::Shared(refs))]))];
+        let d = read(vec![F::Def(100, vec![tag(b"TxtA")], vec![artistic_frame(), story(vec![block])])], 100);
+        assert!(d.warnings.iter().any(|w| w.contains("text beyond the document text budget (truncated)")), "{:?}", d.warnings);
     }
 
     #[test]
