@@ -89,7 +89,6 @@ pub mod tiff_layers;
 pub mod vector_map;
 pub mod vector_preview;
 mod xcf;
-pub mod xml;
 
 pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};

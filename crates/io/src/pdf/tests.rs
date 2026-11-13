@@ -406,7 +406,7 @@ fn the_plates_are_described_in_xmp_with_their_ink_colour_and_solidity() {
     assert!(pos("/Separation /Black#20#28Ink") < pos("/Separation /Underbase#20White"));
     // One packet, well-formed enough for an XML parser.
     assert_eq!(xmp.matches("<?xpacket begin").count(), 1);
-    assert!(crate::xml::parse(&xmp[xmp.find("<x:xmpmeta").unwrap()..xmp.rfind("</x:xmpmeta>").unwrap() + 12], Default::default()).is_ok(), "{xmp}");
+    assert!(craft_xml::parse(&xmp.as_bytes()[xmp.find("<x:xmpmeta").unwrap()..xmp.rfind("</x:xmpmeta>").unwrap() + 12]).is_ok(), "{xmp}");
 }
 
 #[test]
@@ -442,7 +442,7 @@ fn the_plate_description_joins_the_rdf_element_however_the_packet_spells_it() {
     d.channels.push(spot("Varnish", photocraft_color::Color::rgb(0.9, 0.9, 0.6), &[1.0; 8]));
     // The packet must parse as namespaced XML with the plates a description inside its RDF element.
     let plates_in_rdf = |xmp: &str| {
-        let tree = crate::xml::parse(xmp.trim_start_matches('\u{feff}'), roxmltree::ParsingOptions::default()).unwrap_or_else(|e| panic!("{e}: {xmp}"));
+        let tree = roxmltree::Document::parse(xmp.trim_start_matches('\u{feff}')).unwrap_or_else(|e| panic!("{e}: {xmp}"));
         let plates = tree
             .descendants()
             .find(|n| n.tag_name().namespace() == Some(crate::pdf::SPOT_PLATES_NS) && n.tag_name().name() == "plates")

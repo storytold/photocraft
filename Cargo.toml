@@ -44,6 +44,7 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe
 # HEIC/HEIF: the shared decoder (replaces crates/heif; craft-libs#784).
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe0" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe0", features = ["raster", "write-raster"] }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe0" }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe0" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe0" }
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "80a8ecfe0" }

@@ -45,6 +45,7 @@ craft-xcf = { workspace = true }
 craft-pdn = { workspace = true }
 craft-svg = { workspace = true }
 craft-tiff = { workspace = true }
+craft-xml = { workspace = true }
 thiserror = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
@@ -52,8 +53,6 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # svg.rs inflates `.svgz` itself (with a size cap) so the XML can be checked before it is parsed;
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
-# ora.rs reads OpenRaster's stack.xml (already in the tree through usvg).
-roxmltree = "0.21"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }
@@ -65,6 +64,8 @@ kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
 lopdf = { version = "0.38", default-features = false }
+# PDF XMP serialization assertions parse output XML in tests.
+roxmltree = "0.21"
 miniz_oxide = "0.9"
 crc32fast = "1.5"
 photocraft-affinity = { workspace = true, features = ["synth"] }

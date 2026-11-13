@@ -270,11 +270,11 @@ fn number(s: &str) -> Option<f32> {
 }
 
 /// `"0, 0"` items of an `rdf:Seq` → curve points.
-fn curve(node: roxmltree::Node<'_, '_>) -> Option<Vec<[f32; 2]>> {
-    let seq = node.children().find(|c| c.is_element() && c.tag_name().namespace() == Some(RDF_NS) && c.tag_name().name() == "Seq")?;
+fn curve(node: &craft_xml::El) -> Option<Vec<[f32; 2]>> {
+    let seq = node.child("rdf:Seq")?;
     let mut points = Vec::new();
-    for li in seq.children().filter(|c| c.is_element() && c.tag_name().name() == "li") {
-        let text = li.text().unwrap_or("");
+    for li in seq.children("rdf:li") {
+        let text = li.text();
         let (x, y) = text.split_once(',')?;
         points.push([number(x)?, number(y)?]);
     }
@@ -336,21 +336,26 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
         return Err("the settings file is too large".into());
     }
     let text = std::str::from_utf8(bytes).map_err(|_| "not a Camera Raw settings file (not UTF-8 text)".to_string())?;
-    // Some writers put a byte order mark or an `<?xpacket?>` wrapper first; roxmltree takes both.
+    // Adobe writers may add a UTF-8 BOM and an xpacket processing-instruction wrapper.
     let text = text.trim_start_matches('\u{feff}');
-    let doc = crate::xml::parse(text, roxmltree::ParsingOptions::default()).map_err(|e| format!("not a Camera Raw settings file ({e})"))?;
+    let namespaces = [("rdf", RDF_NS), ("crs", CRS_NS), ("x", META_NS)];
+    let canonical = craft_xml::Canonical::new(&namespaces);
+    let options = craft_xml::Options { doctype: craft_xml::Doctype::RejectInternalSubset, ..craft_xml::Options::canonical(&canonical) };
+    let limits = craft_xml::Limits { max_input: MAX_XMP_BYTES, max_depth: crate::svg::MAX_XML_DEPTH, ..craft_xml::Limits::default() };
+    let options = options.with_limits(limits).strict();
+    let doc = options.parse(text.as_bytes()).map_err(|e| format!("not a Camera Raw settings file ({e})"))?;
     let mut next = params.clone();
     let mut report = LoadReport::default();
     let mut found = false;
     let mut crop_fields = CropFields::default();
-    for desc in doc.descendants().filter(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "Description") {
-        for a in desc.attributes().filter(|a| a.namespace() == Some(CRS_NS)) {
+    for desc in doc.find_all("rdf:Description") {
+        for (attribute, value) in desc.attrs.iter().filter(|(name, _)| name.starts_with("crs:")) {
             found = true;
-            apply(&mut next, &mut report, &mut crop_fields, a.name(), a.value());
+            apply(&mut next, &mut report, &mut crop_fields, attribute.trim_start_matches("crs:"), value);
         }
-        for c in desc.children().filter(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS)) {
+        for c in desc.elements().filter(|c| c.name.starts_with("crs:")) {
             found = true;
-            let name = c.tag_name().name();
+            let name = c.name.trim_start_matches("crs:");
             if let Some((_, field)) = CURVES.iter().find(|(n, _)| *n == name) {
                 match curve(c) {
                     Some(points) => {
@@ -359,13 +364,13 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
                     }
                     None => report.ignored.push(name.to_string()),
                 }
-            } else if c.children().any(|g| g.is_element()) {
+            } else if c.elements().next().is_some() {
                 // Structured settings (masks, looks, lens profiles…) have no counterpart.
                 if !METADATA.contains(&name) {
                     report.ignored.push(name.to_string());
                 }
             } else {
-                apply(&mut next, &mut report, &mut crop_fields, name, c.text().unwrap_or(""));
+                apply(&mut next, &mut report, &mut crop_fields, name, &c.text());
             }
         }
     }
@@ -398,11 +403,12 @@ pub fn is_photocraft_xmp(bytes: &[u8]) -> bool {
         return false;
     }
     let Ok(text) = std::str::from_utf8(bytes) else { return false };
-    let Ok(doc) = roxmltree::Document::parse(text.trim_start_matches('\u{feff}')) else { return false };
-    doc.descendants()
-        .find(|n| n.is_element() && n.tag_name().namespace() == Some(META_NS) && n.tag_name().name() == "xmpmeta")
-        .and_then(|n| n.attribute((META_NS, "xmptk")))
-        == Some(TOOLKIT)
+    let namespaces = [("x", META_NS), ("rdf", RDF_NS), ("crs", CRS_NS)];
+    let canonical = craft_xml::Canonical::new(&namespaces);
+    let options = craft_xml::Options { doctype: craft_xml::Doctype::RejectInternalSubset, ..craft_xml::Options::canonical(&canonical) };
+    let limits = craft_xml::Limits { max_input: MAX_XMP_BYTES, max_depth: crate::svg::MAX_XML_DEPTH, ..craft_xml::Limits::default() };
+    let Ok(doc) = options.with_limits(limits).strict().parse(text.trim_start_matches('\u{feff}').as_bytes()) else { return false };
+    std::iter::once(&doc).chain(doc.descendants()).find(|n| n.is("x:xmpmeta")).and_then(|n| n.attr("x:xmptk")) == Some(TOOLKIT)
 }
 
 /// Write `params` as a Camera Raw settings file Photoshop's Load Settings… reads.

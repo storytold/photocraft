@@ -5603,6 +5603,7 @@ dependencies = [
  "craft-svg",
  "craft-tiff",
  "craft-xcf",
+ "craft-xml",
  "crc32fast",
  "flate2",
  "kurbo 0.13.1",
