@@ -41,22 +41,21 @@ fn scene(w: usize, h: usize) -> Vec<[f32; 4]> {
 }
 
 /// Two 300x300 tiles cut at x 0 and 200 from one 500x300 image, written as PNG files; returns
-/// their paths.
-fn source_files(name: &str) -> Vec<String> {
+/// their paths and the directory guard that removes them when dropped.
+fn source_files() -> (tempfile::TempDir, Vec<String>) {
     let (sw, h) = (500usize, 300usize);
     let sc = scene(sw, h);
-    let dir = std::env::temp_dir().join(format!("photocraft-photomerge-name-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    [("a.png", 0usize), ("b.png", 200)]
+    let dir = tempfile::tempdir().unwrap();
+    let paths = [("a.png", 0usize), ("b.png", 200)]
         .into_iter()
         .map(|(file, x0)| {
             let png = photocraft_io::export(&tile(file, &sc, sw, x0, 300, h), file, &Default::default()).unwrap().bytes;
-            let path = dir.join(file);
+            let path = dir.path().join(file);
             std::fs::write(&path, &png).unwrap();
             path.to_string_lossy().into_owned()
         })
-        .collect()
+        .collect();
+    (dir, paths)
 }
 
 /// Runs Photomerge on `paths` and returns the result's name.
@@ -72,7 +71,7 @@ fn blank(name: &str) -> Document {
 
 #[test]
 fn panorama_is_untitled_panorama_1_whatever_else_is_open() {
-    let paths = source_files("first");
+    let (_dir, paths) = source_files();
     for open in [0, 1, 3] {
         let mut s = Session::new();
         for k in 0..open {
@@ -84,7 +83,7 @@ fn panorama_is_untitled_panorama_1_whatever_else_is_open() {
 
 #[test]
 fn a_second_panorama_gets_another_number() {
-    let paths = source_files("second");
+    let (_dir, paths) = source_files();
     let mut s = Session::new();
     assert_eq!(merge(&mut s, &paths), "Untitled_Panorama-1");
     // The first panorama is still open, so the next one takes the next free number.
