@@ -210,3 +210,22 @@ fn ok_runs_the_command_with_the_same_params() {
         assert_eq!(sheet.layers.len(), 1, "Flatten All Layers is on");
     });
 }
+
+/// #13685: a fresh dialog opens with the reference application's defaults.
+#[test]
+fn a_fresh_dialog_shows_the_reference_defaults() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let h = harness();
+        let value = |name: &str| h.get_by_role_and_label(Role::ComboBox, name).value().unwrap_or_default();
+        let on = |name: &str| h.get_by_role_and_label(Role::CheckBox, name).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+        let near = |name: &str, want: f64| (shown(&h, name) - want).abs() < 0.005;
+        assert_eq!(value("Units"), "cm");
+        assert!(near("Width", 20.32) && near("Height", 25.4), "20.32 x 25.4 cm, got {} x {}", shown(&h, "Width"), shown(&h, "Height"));
+        assert!(near("Resolution", 118.11), "118.11 pixels/cm, got {}", shown(&h, "Resolution"));
+        assert_eq!(value("Resolution Unit"), "pixels/cm");
+        assert!(on("Flatten All Layers"), "Flatten All Layers is on");
+        assert_eq!([value("Mode"), value("Bit Depth"), value("Place")], ["RGB Color", "8-bit", "across first"]);
+        assert!(near("Columns", 5.0) && near("Rows", 6.0) && near("Font size", 12.0));
+        assert_eq!([on("Rotate For Best Fit"), on("Use Auto-Spacing"), on("Use Filename as Caption")], [false, true, true]);
+    });
+}
