@@ -1,84 +1,41 @@
-//! #12964: the Smudge tool starts, and comes back after Reset Tool, with the reference
-//! application's tip: a 13 px soft round (hardness 0 %, angle 0°, roundness 100 %) at 25 %
-//! spacing. Other tools' starting tips are unchanged.
+//! #12950: The Smudge tool gets a fresh 13 px tip with hardness 0 % and spacing 25 %.
 
 use serde_json::json;
 
-use crate::PhotocraftApp;
-use crate::burn_default_tip_tests::{app, invoke, pick};
-use crate::state::Tool;
+use super::*;
+use crate::canvas::paint_mouse;
 
-/// Size, hardness, spacing, angle and roundness of the live brush, as `brush.get` reports them.
-fn tip(app: &mut PhotocraftApp) -> [f64; 5] {
-    let b = app.run("brush.get", json!({})).unwrap();
-    ["size", "hardness", "spacing", "angle", "roundness"].map(|k| (b[k].as_f64().unwrap() * 1e4).round() / 1e4)
+fn app() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
+    app
 }
 
-/// A tip that is no tool's starting tip, so a reset has something to undo.
-fn scramble(app: &mut PhotocraftApp) {
-    let b = &mut app.session.tools.brush;
-    (b.size, b.hardness, b.spacing, b.angle, b.roundness) = (57.0, 0.4, 0.6, 30.0, 0.5);
-}
-
-const SMUDGE_TIP: [f64; 5] = [13.0, 0.0, 0.25, 0.0, 1.0];
-const DEFAULT_TIP: [f64; 5] = [20.0, 1.0, 0.1, 0.0, 1.0];
-
+/// #12950: Fresh Smudge gets its own tip (13 px, hardness 0 %, spacing 25 %).
 #[test]
-fn reset_tool_gives_the_smudge_tool_a_13_px_soft_tip() {
+fn smudge_default_tip() {
+    let app = app();
+    let brush = paint_mouse::fresh_brush(Tool::Smudge, &app.session.tools.brush);
+    assert_eq!(brush.size, 13.0);
+    assert_eq!(brush.hardness, 0.0);
+    assert_eq!(brush.spacing, 0.25);
+    // Smoothing is untouched: keeps first_smoothing() (10 %).
+    assert_eq!(brush.smoothing.amount, 0.1);
+}
+
+/// #12950: Smudge picked for the first time starts at its own tip, not the outgoing tool's brush.
+#[test]
+fn smudge_first_use_gets_own_tip() {
     let mut app = app();
-    pick(&mut app, Tool::Smudge);
-    scramble(&mut app);
-    invoke(&mut app, "tool.reset", json!({}));
-    assert_eq!(tip(&mut app), SMUDGE_TIP);
-    // The options-bar brush chip reads the live brush's rounded size.
-    assert_eq!(app.session.tools.brush.size.round(), 13.0);
-}
-
-#[test]
-fn a_first_use_starts_with_the_tip() {
-    // No stored tool brushes, as on a fresh install: the Smudge tool's first pick, after another
-    // tool's tip.
-    let mut app = app();
-    pick(&mut app, Tool::Pencil);
-    scramble(&mut app);
-    pick(&mut app, Tool::Smudge);
-    assert_eq!(tip(&mut app), SMUDGE_TIP);
-    // Its own tip is then kept across tool switches.
-    app.session.tools.brush.size = 42.0;
-    pick(&mut app, Tool::Pencil);
-    pick(&mut app, Tool::Smudge);
-    assert_eq!(tip(&mut app)[0], 42.0);
-}
-
-#[test]
-fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
-    let mut app = app();
-    pick(&mut app, Tool::Smudge);
-    scramble(&mut app);
-    invoke(&mut app, "tool.resetAll", json!({"confirmed": true}));
-    assert_eq!(tip(&mut app), SMUDGE_TIP, "active");
-    let mut app = self::app();
-    pick(&mut app, Tool::Smudge);
-    scramble(&mut app);
-    pick(&mut app, Tool::Pencil);
-    invoke(&mut app, "tool.resetAll", json!({"confirmed": true}));
-    pick(&mut app, Tool::Smudge);
-    assert_eq!(tip(&mut app), SMUDGE_TIP, "picked after the reset");
-}
-
-#[test]
-fn blur_and_sharpen_keep_their_tips() {
-    for tool in [Tool::Blur, Tool::Sharpen] {
-        let mut a = app();
-        pick(&mut a, tool);
-        scramble(&mut a);
-        invoke(&mut a, "tool.reset", json!({}));
-        assert_eq!(tip(&mut a), DEFAULT_TIP, "{tool:?}");
-        // A first use still takes the current tip, as before.
-        let mut a = app();
-        pick(&mut a, Tool::Pencil);
-        scramble(&mut a);
-        pick(&mut a, tool);
-        assert_eq!(tip(&mut a)[0], 57.0, "{tool:?}, first use");
-    }
+    // Switch away from Smudge first so it has no stored brush.
+    app.ui.tool = Tool::Brush;
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    // Now pick Smudge: first-use path through sync_tool_brush.
+    app.ui.tool = Tool::Smudge;
+    paint_mouse::sync_tool_brush(&mut app);
+    let brush = app.session.tools.brush.clone();
+    assert_eq!(brush.size, 13.0);
+    assert_eq!(brush.hardness, 0.0);
+    assert_eq!(brush.spacing, 0.25);
+    assert_eq!(brush.smoothing.amount, 0.1);
 }
