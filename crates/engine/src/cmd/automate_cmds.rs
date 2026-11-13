@@ -628,12 +628,26 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             };
             let label = stem(path);
-            s.edit("Contact Sheet", |doc, active| {
+            let id = s.edit("Contact Sheet", |doc, active| {
                 let l = Layer::new(label.clone(), LayerContent::Raster(surf));
                 *active = Some(l.id);
+                let id = l.id;
                 doc.layers.push(l);
-                Ok(())
+                Ok(id)
             })?;
+            if !flatten {
+                // The reference masks each image to its cell with a lasso around it (#13701). The cell
+                // stops above the caption band; the inset thumbnail always lies inside it.
+                let (cx0, cy0) = ((f64::from(c) * cell_w).round(), (f64::from(r) * cell_h).round());
+                let (cx1, cy1) = ((f64::from(c + 1) * cell_w).round(), (y0 + box_h).round());
+                if cx0 >= f64::from(pw) || cy0 >= f64::from(ph) {
+                    // A cell past the page edge (many 1 px cells) would leave no selection to reveal.
+                    s.execute("layer.layerMask.hideAll", json!({"layer": id.0}))?;
+                } else {
+                    s.execute("select.lasso", json!({"points": [[cx0, cy0], [cx1, cy0], [cx1, cy1], [cx0, cy1]], "antiAlias": false}))?;
+                    s.execute("layer.layerMask.revealSelection", json!({"layer": id.0}))?;
+                }
+            }
             placed += 1;
             if caption {
                 let size_pt = font_pt;
