@@ -157,7 +157,9 @@ fn layer_mask_views_and_damage_on_the_downsampled_grid() {
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
-    s.execute("paint.gradient", json!({"from": [0, 0], "to": [37, 0], "colors": ["#000000", "#ffffff"], "target": "mask"})).unwrap();
+    // Pixels are sampled half a pixel up and left of their centre (#12018): a drag ending on 36
+    // keeps the last column (sampled at 35.5) near white.
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [36, 0], "colors": ["#000000", "#ffffff"], "target": "mask"})).unwrap();
     s.execute("view.layerMask", json!({"mode": "gray"})).unwrap();
     let st = s.active().unwrap();
     let b = st.doc.bounds();
