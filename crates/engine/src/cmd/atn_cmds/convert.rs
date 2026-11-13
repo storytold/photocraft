@@ -244,9 +244,11 @@ fn convert_action(
         };
         let (new_steps, enabled) = match mapped {
             Mapped::Steps(mut s) => {
-                super::steps_gallery::remember_event(item, &mut s);
-                super::steps_stack::remember_item(item, &mut s);
-                super::steps_video::remember(item, &mut s);
+                if !is_native {
+                    super::steps_gallery::remember_event(item, &mut s);
+                    super::steps_stack::remember_item(item, &mut s);
+                    super::steps_video::remember(item, &mut s);
+                }
                 (s, item.enabled)
             }
             Mapped::Unsupported { harmless } => {
