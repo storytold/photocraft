@@ -1088,6 +1088,52 @@ fn review_conditional_import_keeps_each_resolved_literal_set_scope() {
 }
 
 #[test]
+fn review_same_row_scoped_duplicate_targets_refuse_without_rejecting_occurrences() {
+    let children = vec![
+        Action::new("Child", vec![("file.new".into(), json!({"width":5,"height":1}))]),
+        Action::new("Child", vec![("file.new".into(), json!({"width":7,"height":1}))]),
+    ];
+    for (id, params) in [
+        ("actions.play", json!({"action":"Child","set":"S"})),
+        ("actions.conditional", json!({"if":"always","then":"Child","thenSet":"S"})),
+        ("actions.conditional", json!({"if":"never","else":"Child","set":"S"})),
+        ("file.automate.batch", json!({"action":"Child","set":"S"})),
+        ("file.automate.createDroplet", json!({"action":"Child","set":"S"})),
+    ] {
+        let mut actions = children.clone();
+        actions.push(Action::new("Caller", vec![(id.into(), params)]));
+        let bytes = native_archive(&[("S", &actions)]);
+        let mut imported = atn_cmds::import(&bytes).unwrap();
+        let error = atn_cmds::normalize_import(&mut imported, [], false).unwrap_err();
+        assert_eq!(error, "ambiguous action call target `Child` in set `S`", "{id}");
+        let mut session = crate::Session::new();
+        session.actions.list.push(Action::new("Kept", vec![]));
+        let before = session.actions.clone();
+        let saved = encode(&session.actions);
+        let error = session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap_err();
+        assert!(error.to_string().contains("ambiguous action call target `Child` in set `S`"), "{id}: {error}");
+        assert_eq!(session.actions, before, "{id}: ambiguity publishes no partial library");
+        assert_eq!(encode(&session.actions), saved, "{id}: durable bytes remain unchanged");
+    }
+    // A duplicate definition alone is valid; only an ambiguous scoped named reference refuses.
+    let bytes = native_archive(&[("S", &children)]);
+    let mut session = crate::Session::new();
+    session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+    assert_eq!(session.actions.list.iter().map(|action| action.name.as_str()).collect::<Vec<_>>(), ["Child", "Child 2"]);
+    for (count, params, width) in [(1, json!({"action":"Child","set":"S"}), 5), (2, json!({"action":1,"set":"S"}), 7), (2, json!({"action":"Child"}), 5)] {
+        let mut actions = children[..count].to_vec();
+        actions.push(Action::new("Caller", vec![("actions.play".into(), params.clone())]));
+        let bytes = native_archive(&[("S", &actions)]);
+        let mut session = crate::Session::new();
+        session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+        assert_eq!(session.actions.list[count].steps[0].1, params);
+        let played = session.execute("actions.play", json!({"action":"Caller","set":"S"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(session.active().unwrap().doc.size.width, width);
+    }
+}
+
+#[test]
 fn review_interleaved_scoped_calls_load_across_rows_but_duplicate_targets_refuse() {
     let child = Action::new("Child", vec![("file.new".into(), json!({"width":7,"height":1}))]);
     let caller = Action { set: Some("C".into()), ..Action::new("Caller", vec![("actions.play".into(), json!({"action":"Child","set":"A"}))]) };

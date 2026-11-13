@@ -70,13 +70,13 @@ pub fn normalize_import(
     }
     let mut taken = UniqueNames::new(reserved);
     let mut names = Vec::with_capacity(imp.actions.len());
-    let mut renamed: Vec<std::collections::HashMap<String, String>> = vec![Default::default(); imp.sets.len()];
+    let mut renamed: Vec<std::collections::HashMap<String, Vec<String>>> = vec![Default::default(); imp.sets.len()];
     let mut global: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     let mut added = Vec::with_capacity(imp.actions.len());
     for (index, mut a) in std::mem::take(&mut imp.actions).into_iter().enumerate() {
         let name = taken.claim(&a.name);
         let group = set_for.get(index).and_then(|set| renamed.get_mut(*set)).ok_or_else(|| "invalid imported action position".to_string())?;
-        group.entry(a.name.clone()).or_insert_with(|| name.clone());
+        group.entry(a.name.clone()).or_default().push(name.clone());
         global
             .entry(a.name.clone())
             .and_modify(|entry| {
@@ -110,7 +110,7 @@ pub fn normalize_import(
                     let scope = params.get(&branch_scope).and_then(Value::as_str).or(shared_scope.as_deref());
                     let to = if let Some(scope) = scope {
                         scoped_call_target(&imp.sets, &renamed, scope, target, allow_external_calls)?.map(|(to, set)| (to.clone(), Some(set.clone())))
-                    } else if let Some(to) = local.get(target) {
+                    } else if let Some(to) = local.get(target).and_then(|targets| targets.first()) {
                         Some((to.clone(), None))
                     } else {
                         match global.get(target) {
@@ -158,7 +158,7 @@ pub fn normalize_import(
 /// Resolve wire names before logical aliases; repeated rows require one unique named target.
 fn scoped_call_target<'a>(
     sets: &'a [ImportedSet],
-    renamed: &'a [std::collections::HashMap<String, String>],
+    renamed: &'a [std::collections::HashMap<String, Vec<String>>],
     scope: &str,
     target: &str,
     allow_external_calls: bool,
@@ -169,9 +169,11 @@ fn scoped_call_target<'a>(
     if matching.peek().is_none() {
         return if allow_external_calls { Ok(None) } else { Err(format!("action call references missing set `{scope}`")) };
     }
-    // Interleaved durable rows can share one logical/wire name. Resolve the named
-    // target across those rows, while genuinely duplicate targets remain ambiguous.
-    let mut targets = matching.filter_map(|(index, set)| renamed.get(index)?.get(target).map(|target| (target, &set.name)));
+    // Count every original target, including duplicates inside one physical row.
+    // Unscoped legacy calls keep first-name resolution; a named scope must be unique.
+    let mut targets = matching
+        .filter_map(|(index, set)| renamed.get(index)?.get(target).map(|targets| (targets, &set.name)))
+        .flat_map(|(targets, set)| targets.iter().map(move |target| (target, set)));
     let found = targets.next().ok_or_else(|| format!("action call target `{target}` is missing from set `{scope}`"))?;
     if targets.next().is_some() {
         return Err(format!("ambiguous action call target `{target}` in set `{scope}`"));
