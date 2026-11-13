@@ -3500,6 +3500,10 @@ mod pen_gesture_owner_tests;
 #[path = "pen_path_visual_tests.rs"]
 mod pen_path_visual_tests;
 
+#[cfg(test)]
+#[path = "path_selection_cursor_tests.rs"]
+mod path_selection_cursor_tests;
+
 /// Between Polygonal Lasso clicks, reveal more of the image near or beyond the viewport edge.
 /// Only the view moves: fixed vertices stay in document coordinates, including while button-up.
 fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rect: Rect, view: &mut View, ppp: f32) {
