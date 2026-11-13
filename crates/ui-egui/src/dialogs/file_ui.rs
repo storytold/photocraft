@@ -143,7 +143,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
                 }
                 names.extend(d.doc.paths.iter().map(|p| p.name.clone()));
             }
-            form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": "all"}), json!({"paths": names}))
+            // Opens on the Paths panel's selected row, as the reference application does (#13777).
+            // A shape layer's path ("layer") is not an entry yet, and a row the document no longer
+            // has falls back to All Paths.
+            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or("all").to_string();
+            form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}))
         }
         _ => return None,
     }))
