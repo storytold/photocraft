@@ -1171,6 +1171,8 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 }
 
 #[cfg(test)]
+mod srgb_default_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(all(test, unix))]
