@@ -1079,7 +1079,7 @@ fn style_params_resolve_fonts_without_waiting_for_the_shared_engine() {
     std::thread::spawn(move || {
         let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut s = CharStyle::default();
-        let any = apply_char_props_with(&mut s, &props, FontLookup::Held(&mut *engine));
+        let any = apply_char_props_with(&mut s, &props, FontLookup::Held(&mut engine));
         let _ = tx.send((any, s));
     });
     let (any, s) = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("Held locked the font engine again");
