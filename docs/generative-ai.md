@@ -68,7 +68,7 @@ is what tests do so they never touch a person's real settings.
    side by side; if some fail and others succeed, the successes are kept.
 4. With the group (or one of its variations) active, Properties › Variations shows a thumbnail
    per variation: click one to show it alone (`layer.generative.selectVariation`, one undo step).
-   Generate More sends the same picture, mask and prompt again and adds three more
+   Generate More sends the same picture, mask, prompt and any reference pictures again and adds three more
    (`layer.generative.more`), also one undo step.
 
 Fills don't wait for each other, and nothing waits for them. Press Generate and the selection is
@@ -110,9 +110,9 @@ variation (three requests by default; a metered service bills each one):
   ComfyUI's image loader).
 - **The prompt**, or for an empty prompt a fixed instruction to continue the surrounding picture
   through the masked area.
-- **Reference pictures**, only when the fill was given some (`references` on
-  `edit.generativeFill`, up to 4 PNG, JPEG or WebP pictures of at most 10 MB, 8192 px a side and
-  40 million pixels): each is decoded, scaled to at most 2048 px on the long side and sent as a
+- **Reference pictures**, only when the fill was given some. There is no picker in the app yet:
+  they come only from `references` on `edit.generativeFill` (up to 4 PNG, JPEG or WebP pictures
+  of at most 10 MB, 8192 px a side and 40 million pixels). Each is decoded, scaled to at most 2048 px on the long side and sent as a
   new sRGB PNG of its pixels alone, so no location, camera or other metadata leaves the computer.
   An embedded colour profile is not applied yet: the pixels are read as sRGB, so a wide-gamut
   picture can reach the model a little duller than it looks in a colour-managed viewer. The
@@ -214,7 +214,7 @@ cancelled fill shows nothing.
 
 | Id | Does |
 |---|---|
-| `edit.generativeFill` | `{prompt?, variations: 1..4 = 3, area?}` fills the selection (or one of its separate areas) |
+| `edit.generativeFill` | `{prompt?, variations: 1..4 = 3, area?, references?}` fills the selection (or one of its separate areas) |
 | `layer.generative.selectVariation` | `{index, layer?}` shows one variation of a generative layer |
 | `layer.generative.more` | `{count: 1..4 = 3, layer?}` more variations of a generative layer |
 | `layer.generative.agree` | `{fill, term}` the person agreed to send a fill waiting for consent |
@@ -232,9 +232,8 @@ cancelled fill shows nothing.
   socket. The desktop app implements them in `apps/photocraft/src/genai.rs` with
   `AiClient::standard(AppId::new("photocraft"))`, the catalogue's `generative-fill` role
   (`craft_ai_features::builtin()`), `ConnectionManager` and `ToolDesk`. The craft-ai crates are
-  pinned to one revision in the workspace `Cargo.toml` and used only by the desktop app. Until
-  storytold/craft-ai-integrations takes FLUX.1 Fill, Gemini fill and `Plan::provider`, that
-  revision is on texjer's fork; it moves back to a storytold revision when they merge.
+  pinned to one storytold/craft-ai-integrations revision in the workspace `Cargo.toml` and used
+  only by the desktop app.
 - **Jobs.** A fill's work runs on the engine's job system without locking the document
   (`jobs::run_on`): prepare the picture and mask, plan, check consent, take a turn, start one job
   per variation, poll them together, cancel them if the engine job is cancelled, then place the

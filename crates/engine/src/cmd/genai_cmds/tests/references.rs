@@ -70,12 +70,14 @@ fn bad_references_are_refused_with_the_reason() {
 
 #[test]
 fn an_oversized_reference_is_refused_before_and_after_decoding() {
-    // Too long as text: refused without decoding it.
-    let long = "A".repeat((MAX_REFERENCE_BYTES / 3 + 2) * 4);
+    // Too long as text: refused without decoding it. The text is not valid base64, so only the
+    // length check can be what refuses it.
+    let long = "!".repeat((MAX_REFERENCE_BYTES / 3 + 2) * 4);
     let msg = refused(param(&json!({"references": [{"data": long}]}), FILL));
     assert!(msg.contains("larger than 10 MB"), "{msg}");
     // Exactly the limit is fine, one byte over is not.
-    let at = vec![7u8; MAX_REFERENCE_BYTES];
+    let mut at = picture(1, 1, [7, 7, 7], Format::Png);
+    at.resize(MAX_REFERENCE_BYTES, 0);
     assert_eq!(param(&json!({"references": [entry(&at)]}), FILL).unwrap()[0].len(), MAX_REFERENCE_BYTES);
     let over = vec![7u8; MAX_REFERENCE_BYTES + 1];
     assert!(refused(param(&json!({"references": [entry(&over)]}), FILL)).contains("larger than 10 MB"));
@@ -185,12 +187,44 @@ fn the_journal_keeps_how_many_references_not_the_pictures() {
 }
 
 #[test]
-fn a_reference_that_cannot_be_read_fails_the_fill_and_sends_nothing() {
+fn a_reference_that_is_not_a_picture_starts_no_fill() {
     let (mut s, f) = selected(fake([0, 0, 255]));
-    let e = s.execute(FILL, json!({"variations": 1, "references": [{"data": b64_encode(b"not a picture")}]})).unwrap_err();
-    assert!(e.to_string().contains("reference picture 1"), "{e}");
+    let gif = b"GIF89a     ;";
+    for (bytes, n) in [(&b"not a picture"[..], 1), (&gif[..], 2)] {
+        let mut refs = vec![entry(&picture(2, 2, [1, 2, 3], Format::Png))];
+        refs.truncate(n - 1);
+        refs.push(entry(bytes));
+        let msg = refused(s.execute(FILL, json!({"variations": 1, "references": refs})));
+        assert!(msg.contains(&format!("reference picture {n} is not a PNG, JPEG or WebP")), "{msg}");
+    }
+    assert!(s.generative_fills().is_empty(), "no fill was left waiting to be retried");
     assert_eq!(f.plans.load(Ordering::SeqCst), 0, "nothing was planned");
     assert!(f.sent.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_recorded_fill_that_had_references_is_refused_not_run_without_them() {
+    let (mut s, f) = selected(fake([0, 0, 255]));
+    let msg = refused(s.execute(FILL, json!({"prompt": "a boat", "variations": 1, "referenceCount": 2})));
+    assert!(msg.contains("used 2 reference picture") && msg.contains("run Generative Fill again"), "{msg}");
+    assert!(s.generative_fills().is_empty());
+    assert_eq!(f.plans.load(Ordering::SeqCst), 0);
+    // A recorded fill that had none still runs.
+    s.execute(FILL, json!({"prompt": "a boat", "variations": 1, "referenceCount": 0})).unwrap();
+    assert_eq!(f.sent.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_recorded_fill_with_references_is_refused_when_its_action_plays() {
+    let (mut s, f) = selected(fake([0, 0, 255]));
+    let a = picture(8, 8, [255, 0, 0], Format::Png);
+    s.execute(FILL, json!({"prompt": "a boat", "variations": 1, "references": [entry(&a)]})).unwrap();
+    // The step as an action records it: the fill's journal entry.
+    let step = s.journal.iter().rev().find(|(id, _)| id == FILL).cloned().expect("the fill is journaled");
+    s.actions.list.push(crate::cmd::actions_cmds::Action::new("Fill", vec![step]));
+    let played = s.execute("actions.play", json!({"action": "Fill"})).unwrap();
+    assert!(played.get("failed").is_some(), "the fill step fails: {played}");
+    assert_eq!(f.sent.lock().unwrap().len(), 1, "only the recorded fill was sent");
 }
 
 #[test]
@@ -200,4 +234,20 @@ fn a_bad_references_param_starts_no_fill() {
     assert!(msg.contains("must be a list"), "{msg}");
     assert!(s.generative_fills().is_empty(), "no fill was started");
     assert_eq!(f.plans.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn save_fill_diagnostics_writes_each_reference_as_sent() {
+    let (mut s, f) = selected(fake([0, 0, 255]));
+    let (a, b) = (picture(8, 8, [255, 0, 0], Format::Png), picture(5, 9, [0, 255, 0], Format::Jpeg));
+    s.execute(FILL, json!({"prompt": "a boat", "variations": 1, "references": [entry(&a), entry(&b)]})).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let saved = s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy()})).unwrap();
+    let out = std::path::PathBuf::from(saved["folder"].as_str().unwrap());
+    let sent = f.sent.lock().unwrap()[0].references.clone();
+    assert_eq!(sent.len(), 2);
+    for (k, png) in sent.iter().enumerate() {
+        assert_eq!(&std::fs::read(out.join(format!("reference-{}.png", k + 1))).unwrap(), png, "reference {} exactly as sent", k + 1);
+    }
+    assert!(!out.join("reference-3.png").exists());
 }

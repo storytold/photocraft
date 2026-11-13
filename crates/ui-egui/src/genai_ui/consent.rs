@@ -82,8 +82,9 @@ fn size(bytes: u64) -> String {
     if b >= K * K { format!("{:.1} MB", b / (K * K)) } else { format!("{:.0} KB", (b / K).ceil().max(1.0)) }
 }
 
-/// What a disclosed item is, in words, with its size in each fill that waits (in order).
-pub(super) fn item_text(input: &str, sizes: &[u64]) -> String {
+/// What a disclosed item is, in words, with its size in each fill that waits (in order). A fill
+/// that does not send it shows a dash in its place, so each size stays lined up with its fill.
+pub(super) fn item_text(input: &str, sizes: &[Option<u64>]) -> String {
     let what = match input {
         "source" => tl!("The picture around the selection"),
         "mask" => tl!("The selection's shape"),
@@ -94,7 +95,7 @@ pub(super) fn item_text(input: &str, sizes: &[u64]) -> String {
     if sizes.is_empty() {
         return what.to_owned();
     }
-    format!("{what} · {}", sizes.iter().map(|b| size(*b)).collect::<Vec<_>>().join(", "))
+    format!("{what} · {}", sizes.iter().map(|b| b.map_or_else(|| "–".to_owned(), size)).collect::<Vec<_>>().join(", "))
 }
 
 /// A consent term as the prompt offers it.
@@ -119,9 +120,9 @@ pub fn body(_app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Val
     ui.add_space(6.0);
     for item in f.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
         let input = item.get("input").and_then(Value::as_str).unwrap_or("");
-        let sizes: Vec<u64> = match item.get("sizes").and_then(Value::as_array) {
-            Some(each) => each.iter().filter_map(Value::as_u64).collect(),
-            None => item.get("bytes").and_then(Value::as_u64).into_iter().collect(),
+        let sizes: Vec<Option<u64>> = match item.get("sizes").and_then(Value::as_array) {
+            Some(each) => each.iter().map(Value::as_u64).collect(),
+            None => item.get("bytes").and_then(Value::as_u64).map(Some).into_iter().collect(),
         };
         ui.add(egui::Label::new(format!("•  {}", item_text(input, &sizes))).wrap());
     }

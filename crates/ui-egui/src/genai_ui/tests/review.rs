@@ -99,7 +99,8 @@ fn one_consent_prompt_shows_each_waiting_fills_sizes() {
         .map(|id| app.session.generative_fill_disclosure(id.as_u64().unwrap()).unwrap().items[0].bytes.unwrap())
         .collect();
     assert_eq!(sizes, each, "each fill's own size, in order");
-    assert!(super::super::consent::item_text("source", &sizes).contains(", "));
+    let shown: Vec<Option<u64>> = sizes.iter().copied().map(Some).collect();
+    assert!(super::super::consent::item_text("source", &shown).contains(", "));
 }
 
 #[test]
@@ -140,5 +141,7 @@ fn one_consent_prompt_lists_every_reference_any_waiting_fill_sends() {
     assert_eq!(inputs, ["source", "mask", "prompt", "reference", "reference"]);
     assert_eq!(items[3]["sizes"], json!([null, 1000]), "only the fill that sends it has a size");
     assert_eq!(items[0]["sizes"], json!([100, 100]));
-    assert_eq!(super::super::consent::item_text("reference", &[1000]), "A reference picture · 1 KB");
+    assert_eq!(super::super::consent::item_text("reference", &[Some(1000)]), "A reference picture · 1 KB");
+    // A fill that sends no reference keeps its place, so the size stays with the fill that sends it.
+    assert_eq!(super::super::consent::item_text("reference", &[None, Some(1000)]), "A reference picture · –, 1 KB");
 }

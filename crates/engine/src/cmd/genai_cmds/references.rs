@@ -3,7 +3,7 @@
 //! picture and the selection's shape stay the request's own inputs and are never listed here.
 //!
 //! Each one arrives as encoded image data (`{"data": base64}` in `edit.generativeFill`). The
-//! command checks the count and size at once, so a bad call fails before anything is planned.
+//! command checks the count, size and format at once, so a bad call fails before anything is planned.
 //! The fill's job then decodes each picture, scales it to the request's longest side and sends it
 //! as a new sRGB PNG. Re-encoding keeps only the pixels, so a photo's location and camera details
 //! never leave the computer, and every route gets the one format they all read.
@@ -12,6 +12,7 @@
 //! route that cannot take them refuses the plan with its reason, before consent. Nothing is
 //! dropped quietly.
 
+use photocraft_codecs::Format;
 use photocraft_geom::Rect;
 use serde_json::Value;
 
@@ -25,9 +26,19 @@ pub const MAX_REFERENCES: usize = 4;
 pub const MAX_REFERENCE_BYTES: usize = 10 * 1024 * 1024;
 
 /// The `references` param: encoded pictures in the order given. Missing or `null` is none.
+///
+/// A recorded fill keeps only `referenceCount` (see [`journaled`]). Playing it back would fill
+/// without the pictures and say nothing, so a fill that had references and has none now is
+/// refused with the reason instead.
 pub(super) fn param(p: &Value, cmd: &str) -> Result<Vec<Vec<u8>>> {
     let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let recorded = p.get("referenceCount").and_then(Value::as_u64).unwrap_or(0);
     let list = match p.get("references") {
+        None | Some(Value::Null) if recorded > 0 => {
+            return Err(bad(format!(
+                "this recorded Generative Fill used {recorded} reference picture(s), which an action does not keep; run Generative Fill again from the app"
+            )));
+        }
         None | Some(Value::Null) => return Ok(Vec::new()),
         Some(Value::Array(list)) => list,
         Some(_) => return Err(bad("`references` must be a list of {\"data\": base64}".into())),
@@ -50,6 +61,14 @@ pub(super) fn param(p: &Value, cmd: &str) -> Result<Vec<Vec<u8>>> {
             }
             if bytes.len() > MAX_REFERENCE_BYTES {
                 return Err(bad(too_big(n)));
+            }
+            // The format is known from the first bytes, so a picture of the wrong kind is refused
+            // here rather than failing the fill's job later.
+            // shortcut: the 8192-a-side and 40-million-pixel limits are still met only when the
+            // job decodes the picture, because the codecs crate has no header-only size read for
+            // PNG or JPEG; check them here once `probe_size` covers those formats.
+            if !matches!(photocraft_codecs::detect(&bytes), Some(Format::Png | Format::Jpeg | Format::WebP)) {
+                return Err(bad(format!("reference picture {n} is not a PNG, JPEG or WebP picture")));
             }
             Ok(bytes)
         })
