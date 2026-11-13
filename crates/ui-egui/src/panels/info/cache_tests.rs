@@ -141,7 +141,7 @@ fn sampler_cache_follows_reopened_instances() {
     app.run("view.colorSamplers.add", json!({"x": 2, "y": 0})).unwrap();
     assert_eq!(app.session.active().unwrap().revision, revision, "the old cached revision");
     let readouts = sampler_readouts(&mut app);
-    assert_eq!(readouts[0]["position"], json!([2.0, 0.0]));
+    assert_eq!(readouts[0]["position"], json!([2.5, 0.5]), "the centre of pixel 2,0 (#11725)");
     assert_eq!(readouts[0]["rgb"], json!([0, 0, 0]));
     assert_eq!(readouts[0]["opacity"], 100);
     assert_eq!(readouts[0]["channels"][0]["percent"], 100);
