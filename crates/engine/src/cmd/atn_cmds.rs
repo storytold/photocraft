@@ -45,6 +45,7 @@ mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
 mod steps_droplet;
+mod steps_frame_section;
 mod steps_gallery;
 mod steps_gradient;
 mod steps_image;
@@ -204,6 +205,9 @@ mod selection_tests;
 
 #[cfg(test)]
 mod render_tests;
+
+#[cfg(test)]
+mod frame_section_tests;
 
 #[cfg(test)]
 mod recorded_tools_tests;
