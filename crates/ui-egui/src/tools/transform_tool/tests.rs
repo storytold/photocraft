@@ -635,6 +635,26 @@ fn closing_with_a_pending_transform_saves_the_transformed_pixels() {
 }
 
 #[test]
+fn direct_save_commands_refuse_to_write_with_an_open_transform() {
+    let ctx = egui::Context::default();
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    let mut app = app_with_square(64, square);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("copy.psd");
+    begin(&mut app, &ctx).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+    for id in ["file.save", "file.saveAs", "file.saveACopy"] {
+        assert_eq!(app.run(id, json!({"path": path})).unwrap_err(), "Commit or cancel the transform first");
+        assert!(!path.exists());
+        assert!(app.ui.transform.is_some());
+    }
+    commit(&mut app);
+    app.run("file.saveACopy", json!({"path": path})).unwrap();
+    assert!(path.exists());
+}
+
+#[test]
 fn save_waits_for_content_aware_scale_and_keeps_the_box_on_refusal() {
     let ctx = egui::Context::default();
     let square = photocraft_geom::Rect::new(8, 8, 24, 24);
@@ -3798,6 +3818,10 @@ fn closing_with_a_cleared_text_warp_prompts_and_saves_the_removal() {
 
     begin_warp(&mut app, &ctx).unwrap();
     assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Flag);
+    assert!(!app.has_unsaved_work(), "opening the existing Flag does not change it");
+    // A preset at zero bend has identity geometry but still stores its Warp Text settings.
+    app.ui.transform.as_mut().unwrap().warp.as_mut().unwrap().bend = 0.0;
+    assert!(app.has_unsaved_work(), "changing the saved Flag's bend to zero is an unsaved edit");
     reset_warp(&mut app);
     assert!(app.has_unsaved_work(), "clearing the saved warp is an unsaved edit");
     crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
@@ -4227,6 +4251,33 @@ fn warp_mode_previews_a_stored_smart_warp_from_the_unwarped_source() {
     for (x, y) in [(0, 0), (23, 0), (0, 23), (23, 23), (12, 12)] {
         assert_eq!(img.pixels[y * 24 + x].a(), 255, "texel {x},{y}");
     }
+}
+
+#[test]
+fn stored_smart_object_warp_stays_clean_until_edited_or_reset() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "arc", "bend": 40.0, "rect": [8, 8, 32, 32]})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    state.saved_revision = state.revision;
+    let revision = state.revision;
+    let layer = state.active_layer.unwrap();
+
+    begin_warp(&mut app, &ctx).unwrap();
+    assert!(!app.has_unsaved_work());
+    commit(&mut app);
+    assert_eq!(app.session.active().unwrap().revision, revision, "applying an untouched warp is a no-op");
+
+    begin_warp(&mut app, &ctx).unwrap();
+    leave_warp(&mut app);
+    enter_warp(&mut app, &ctx);
+    assert!(!app.has_unsaved_work());
+    reset_warp(&mut app);
+    assert!(app.has_unsaved_work(), "resetting the stored warp is an edit");
+    commit(&mut app);
+    let doc = &app.session.active().unwrap().doc;
+    assert!(matches!(&doc.layer(layer).unwrap().content, LayerContent::Smart(sm) if sm.warp.is_none()));
 }
 
 /// Leaving Warp mode, and Undo back into Free Transform, show the render with the stored warp

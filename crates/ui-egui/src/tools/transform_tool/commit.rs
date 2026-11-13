@@ -1,8 +1,8 @@
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
+use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
 use super::options_bar::{rotate_about_pivot, scale_about_pivot};
 use super::{
-    Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
-    WarpStyle, corners, json,
+    Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession, Warp,
+    corners, json,
 };
 
 /// Undo and Redo while the commit runs in the background (Free Transform, or Warp).
@@ -19,7 +19,7 @@ pub fn commit(app: &mut PhotocraftApp) {
         cancel(app);
         return;
     }
-    let type_layer = warps_type(app);
+    let warp_changed = app.ui.transform.as_ref().and_then(|t| t.warp.as_ref().map(|w| warp_changes(app, t, w))).unwrap_or(false);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
     if crate::frame_tool::frame_transform(&t) {
@@ -70,10 +70,17 @@ pub fn commit(app: &mut PhotocraftApp) {
     let r = if let Some(options) = &t.content_aware {
         crate::cas_transform::commit(app, &t, options)
     } else if let Some(w) = &t.warp {
-        // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
-        if w.is_identity() && !type_layer {
+        if !warp_changed {
             return;
         }
+        // An identity grid over a previously warped Smart Object clears its source-space warp.
+        let cleared;
+        let w = if w.is_identity() && preview.as_ref().is_some_and(|pv| pv.other_texels.is_some()) {
+            cleared = Warp::none(w.bounds);
+            &cleared
+        } else {
+            w
+        };
         app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
     } else {
         if t.quad == corners(t.rect) {
@@ -135,25 +142,29 @@ fn transform_document(app: &PhotocraftApp) -> Option<DocId> {
     app.transform_preview.as_ref().map(|pv| pv.doc.id)
 }
 
+fn warp_changes(app: &PhotocraftApp, t: &TransformSession, warp: &Warp) -> bool {
+    if !t.selection && t.target.is_none() && t.path.is_none() {
+        if let Some(other) = app.transform_preview.as_ref().and_then(|pv| pv.other_texels.as_ref()) {
+            return warp != &other.stored_warp;
+        }
+        if let Some(LayerContent::Text(text)) = app
+            .session
+            .active()
+            .filter(|st| transform_document(app) == Some(st.doc.id))
+            .and_then(|st| st.doc.layer(LayerId(t.layer)))
+            .map(|layer| &layer.content)
+        {
+            return photocraft_engine::warp_cmds::type_warp("edit.transform.warp", warp).map_or_else(|_| !warp.is_identity(), |next| next != text.warp);
+        }
+    }
+    !warp.is_identity()
+}
+
 /// An edit still visible on the canvas also counts as unsaved work.
 pub(crate) fn unsaved_transform(app: &PhotocraftApp) -> Option<DocId> {
     let t = app.ui.transform.as_ref()?;
     let document = transform_document(app)?;
-    (committing(app).is_some()
-        || t.quad != corners(t.rect)
-        || t.warp.as_ref().is_some_and(|w| {
-            // None has identity geometry, but on warped text it removes the stored warp.
-            !w.is_identity()
-                || (w.style == WarpStyle::None
-                    && warps_type(app)
-                    && app
-                        .session
-                        .active()
-                        .filter(|st| st.doc.id == document)
-                        .and_then(|st| st.doc.layer(LayerId(t.layer)))
-                        .is_some_and(|layer| matches!(&layer.content, LayerContent::Text(text) if text.warp.is_some())))
-        }))
-    .then_some(document)
+    (committing(app).is_some() || t.quad != corners(t.rect) || t.warp.as_ref().is_some_and(|w| warp_changes(app, t, w))).then_some(document)
 }
 
 /// Apply a transform before reading the document for a save. The caller resumes after the
@@ -486,6 +497,10 @@ fn box_command(id: &str) -> bool {
 
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
     let warping = app.ui.transform.as_ref()?.warp.is_some();
+    // Interactive saves commit in the menu or close prompt before reaching direct dispatch.
+    if saves_document(id) && transform_document(app).is_none_or(|doc| app.active_doc_id().ok() == Some(doc)) {
+        return Some(Err(tl!("Commit or cancel the transform first").into()));
+    }
     if committing(app).is_some() {
         return box_command(id).then(|| Err(if warping { STILL_WARPING } else { STILL_APPLYING }.into()));
     }

@@ -296,6 +296,8 @@ struct OtherTexels {
     texture: crate::transform_tex::PreviewTextures,
     rect: [f64; 4],
     quad: [[f64; 2]; 4],
+    /// The stored Smart Object warp in document space, before any edits to the preview.
+    stored_warp: Warp,
 }
 
 /// Swaps the session's texels and box with the other mode's (`t` holds the box the texels
