@@ -124,9 +124,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
         let (x0, y0) = if mods.alt { (start[0] - w, start[1] - h) } else { (start[0], start[1]) };
         let (w, h) = if mods.alt { (w * 2.0, h * 2.0) } else { (w, h) };
         let rect = [x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs()];
-        // Align Edges (#13370) is the Triangle tool's option, and only in Shape mode, where its
-        // checkbox is enabled. The other shape tools, and a greyed checkbox, still snap.
-        let keep_fraction = tool == Tool::Triangle && o.shape_mode == "shape" && !o.align_edges;
+        // Align Edges is the Triangle (#13370) and Custom Shape (#13470) tools' option, and only in
+        // Shape mode, where its checkbox is enabled. The other shape tools, and a greyed checkbox,
+        // still snap.
+        let keep_fraction = matches!(tool, Tool::Triangle | Tool::CustomShape) && o.shape_mode == "shape" && !o.align_edges;
         let rect = if keep_fraction { rect } else { rect.map(f64::round) };
         if rect[2] < 1.0 || rect[3] < 1.0 {
             return None;
