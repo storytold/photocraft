@@ -214,3 +214,7 @@ fn pending_fields(app: &PhotocraftApp, key: &str, fields: &DialogFields) -> Opti
 #[cfg(test)]
 #[path = "../conditional_mode_change_controls_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../conditional_mode_change_alerts_tests.rs"]
+mod alerts_tests;
