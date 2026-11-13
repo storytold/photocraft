@@ -40,12 +40,13 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
         fontless_text: false,
         strict: false,
         error: None,
+        resolver: Arc::new(craft_svg::tree::ImageResolver::new(tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS))),
     }));
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
-    assert!(bounded_data_image("image/svg+xml", Arc::new(b"<not-svg/>".to_vec()), &opt, &budget, 0, MAX_XML_DEPTH, false).is_none());
+    let invalid = image_svg(&embedded_image("image/svg+xml", b"<not-svg/>"));
+    parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();
     assert!(budget.lock().unwrap().error.is_none(), "ordinary invalid images are still omitted");
     let svg = image_svg("<text>x</text>");
-    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 1, MAX_XML_DEPTH, panic_fonts, false).unwrap_err();
+    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 1, panic_fonts, false).unwrap_err();
     assert!(error.to_string().contains("bounded SVG worker failed"));
     assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
 }
@@ -330,8 +331,7 @@ fn transformed_text_lands_where_resvg_draws_it() {
         let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60">{c}</svg>"#);
         let parsed = parse_with(svg.as_bytes(), inter).unwrap();
         assert!(!parsed.fontless_text, "{c}");
-        let mut reference = tiny_skia::Pixmap::new(120, 60).unwrap();
-        resvg::render(&parsed.tree, tiny_skia::Transform::default(), &mut reference.as_mut());
+        let reference = draw::render(&parsed.tree, usvg::Transform::default(), 120, 60, 0, MAX_PEAK_PIXEL_BYTES).unwrap();
         let r = import_parsed("t", parsed, MAX_GROUP_DEPTH, None, false).unwrap();
         let [layer] = r.document.layers.as_slice() else { panic!("one text layer, got {}: {c}", r.document.layers.len()) };
         assert!(matches!(layer.content, LayerContent::Group(_)), "text stays outline shapes: {c}");
@@ -383,8 +383,7 @@ fn a_single_path_clip_becomes_the_groups_vector_mask() {
     // Pixel for pixel what resvg draws, but for anti-aliasing along the edges.
     let ours = photocraft_compose::flatten(&r.document).to_rgba8().pixels;
     let tree = parse(svg).unwrap().tree;
-    let mut pm = tiny_skia::Pixmap::new(64, 64).unwrap();
-    resvg::render(&tree, tiny_skia::Transform::default(), &mut pm.as_mut());
+    let pm = draw::render(&tree, usvg::Transform::default(), 64, 64, 0, MAX_PEAK_PIXEL_BYTES).unwrap();
     let theirs: Vec<u8> = pm
         .pixels()
         .iter()
