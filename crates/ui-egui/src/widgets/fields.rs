@@ -12,11 +12,12 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
-/// A [`value_field`] for a whole number: no decimals, and the arrow keys and a scrub (of the field
-/// or of its caption) move it a whole step at a time, whatever its range. A small range such as
-/// 1–10 would otherwise scrub in hundredths, which a whole-number setting rounds away (#11765).
+/// A [`value_field`] for a whole number: no decimals, and the arrows, the wheel and a scrub (of
+/// the field or of its caption) move it a whole step at a time, whatever its range. A small range
+/// such as 1–10 would otherwise step or scrub in hundredths, which a whole-number setting rounds
+/// away (#11765), and Ctrl/Cmd would step a tenth it rounds straight back out (#13055).
 pub fn value_field_whole(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
-    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), step_from_decimals: true, ..Default::default() }, None).0
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), step_from_decimals: true, whole: true, ..Default::default() }, None).0
 }
 
 /// A [`value_field_named`] for whole numbers that says when a typed value was past `range`
@@ -72,7 +73,8 @@ fn value_field_alerting_in(
     // with while focused never shows in the scroll delta. A step past the ends is no typing.
     let stepped = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
     // The field's own range is wide, so the typed value reaches here unclamped.
-    let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
+    // Whole steps: the tenth a decimal step gives is rounded straight back out here (#13055).
+    let r = value_field_in(ui, &mut typed, -1.0e9..=1.0e9, suffix, width, 0.0, FieldOpts { whole, ..Default::default() }, Some(name)).0;
     let out_id = r.id.with("out-of-range");
     if r.gained_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
@@ -159,6 +161,9 @@ pub(super) struct FieldOpts {
     pub(super) blank_when_zero: bool,
     /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
     pub(super) keep_zeros: bool,
+    /// A field whose value is rounded to a whole number (#13055): the arrows, the wheel and a
+    /// scrub step 1, not the tenth a tenth-sized step would round away.
+    pub(super) whole: bool,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -251,11 +256,13 @@ fn value_field_box(
     let field = Rect::from_min_max(pos2(rect.left() + 4.0, cy - slot_h / 2.0), pos2(rect.right() - 4.0 - suffix_w - trailing, cy + slot_h / 2.0));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = field_fine(&range, decimals, step_from_decimals);
-    let unit = field_step(&range, decimals, step_from_decimals);
+    // A whole field steps whole whatever its range: a 1..10 range would otherwise pick a
+    // hundredth that its rounding throws away (#13055).
+    let unit = if opts.whole { 1.0 } else { field_step(&range, decimals, step_from_decimals) };
     let (lo, hi) = (*range.start(), *range.end());
     // The field's id is only known once it's drawn: last frame's, saved under `slot` below.
     let focused = ui.data(|d| d.get_temp::<egui::Id>(slot.id)).filter(|id| ui.memory(|m| m.has_focus(*id)));
-    let (step, grid) = arrow_step(ui, slot.id, unit);
+    let (step, grid) = arrow_step(ui, slot.id, unit, opts.whole);
     // The wheel steps it as the arrow keys do (#5473), focused or under the pointer.
     let notches = crate::field_wheel::notches(ui, slot.id, focused.is_some(), rect);
     if notches != 0.0
@@ -555,7 +562,15 @@ fn number_edit(
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
     let before = *value;
-    let speed = if fine { 0.01 } else { 0.5 };
+    // A whole field scrubs whole numbers, and its accessibility increment (egui's DragValue
+    // steps by this speed) then moves it too (#13055).
+    let speed = if opts.whole {
+        1.0
+    } else if fine {
+        0.01
+    } else {
+        0.5
+    };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
     let wrapped_drag = wrapping && ui.input(|i| i.pointer.primary_down());
     // A zoom field edits a copy: what egui reports as typed is applied below, when nothing vetoes
@@ -656,16 +671,19 @@ fn zoom_number(text: &str, units: crate::numeric_expression::Units) -> Option<f6
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
 /// Returns the amount to add, and what to round the value to first.
-fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
+fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32, whole: bool) -> (f32, f32) {
     use egui::{Key, Modifiers};
     // The field's id is only known once it's drawn, so `value_field` saves it under `slot` for the next frame.
     let Some(id) = ui.data(|d| d.get_temp::<egui::Id>(slot)).filter(|id| ui.memory(|m| m.has_focus(*id))) else {
         return (0.0, step);
     };
+    // A tenth is the fine step only where the field has a decimal to show it in: a whole field
+    // would round it away and the shortcut would do nothing (#13055).
+    let fine = if whole { step } else { (step / 10.0).max(0.01) };
     let (n, grid) = ui.input_mut(|i| {
         let (mut n, mut grid) = (0.0, step);
         // egui ignores an extra shift when matching, so shift is checked before the plain arrows to get its larger step.
-        for (mods, k) in [(Modifiers::COMMAND, (step / 10.0).max(0.01)), (Modifiers::SHIFT, 10.0 * step), (Modifiers::NONE, step)] {
+        for (mods, k) in [(Modifiers::COMMAND, fine), (Modifiers::SHIFT, 10.0 * step), (Modifiers::NONE, step)] {
             let presses = i.count_and_consume_key(mods, Key::ArrowUp) as f32 - i.count_and_consume_key(mods, Key::ArrowDown) as f32;
             if presses != 0.0 && mods == Modifiers::COMMAND {
                 grid = k;
