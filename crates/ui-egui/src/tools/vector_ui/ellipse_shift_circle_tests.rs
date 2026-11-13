@@ -1,6 +1,6 @@
 //! #13222: ⇧ while dragging with the Ellipse tool makes a circle from the shorter side of the
-//! drag, as in Photoshop, not the longer one; ⇧⌥ centres that circle on the press. The drag
-//! preview (`shape_bounds`) shows the same box as the layer the drag makes.
+//! drag, as in the reference application, not the longer one; ⇧⌥ centres that circle on the
+//! press. The drag preview (`shape_bounds`) shows the same box as the layer the drag makes.
 
 use egui::Modifiers;
 use photocraft_doc::{LayerContent, LiveShape};
