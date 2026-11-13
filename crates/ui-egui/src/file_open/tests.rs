@@ -1211,9 +1211,11 @@ fn switching_documents_after_a_canvas_drop_keeps_the_place_in_its_document() {
     app.place_next_dropped(&ctx);
     assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(crate::state::MadeLayer::Place));
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
+    // Through the engine: the shell's New Layer would apply the open box first (#5667).
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
     assert!(app.session.undo());
+    assert!(app.ui.transform.is_some(), "the place's box is still open when the tab changes");
     let st = app.session.active().unwrap();
     let (other, history, redo, revision) = (st.doc.clone(), st.history.entries(), st.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), st.revision);
     crate::transform_tool::end_if_left(&mut app);

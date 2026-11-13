@@ -1361,8 +1361,9 @@ fn ending_a_copy_after_switching_documents_preserves_the_active_document() {
             // Cloning a document deliberately shares layer IDs, but gets a fresh document ID.
             let other = app.session.active().unwrap().doc.as_ref().clone();
             app.session.add_document(other, None);
-            app.run("layer.new.layer", json!({})).unwrap();
-            app.run("layer.new.layer", json!({})).unwrap();
+            // Through the engine: the shell's New Layer would apply the open box first (#5667).
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.session.execute("layer.new.layer", json!({})).unwrap();
             assert!(app.session.undo());
             let st = app.session.active().unwrap();
             let (doc, history, redo, revision, layer) =
@@ -1370,6 +1371,7 @@ fn ending_a_copy_after_switching_documents_preserves_the_active_document() {
             if reorder {
                 app.session.move_document(0, 1);
             }
+            assert!(app.ui.transform.is_some(), "the box is still open when it is ended");
             finish(&mut app);
             assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
             let st = app.session.active().unwrap();
