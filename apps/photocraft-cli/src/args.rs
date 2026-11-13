@@ -313,6 +313,10 @@ pub(crate) struct ServeArgs {
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
+    /// `edit.colorSettings` params applied before the first request, e.g.
+    /// {"workingCmyk":"/path/swop.icc"}; clients cannot change them
+    #[arg(long, value_name = "JSON")]
+    pub(crate) color_settings: Option<String>,
 }
 
 /// Why a value was refused: clap prints it after the flag and its value (exit 2).

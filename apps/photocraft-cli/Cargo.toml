@@ -57,6 +57,8 @@ clap_complete = { workspace = true }
 clap_mangen = { workspace = true }
 # The PSD write recipe runner (tests/it/psd_write_oracle.rs).
 xtask = { path = "../../xtask" }
+# Synthetic CMYK profiles (tests/it/cli.rs, serve --color-settings).
+photocraft-cms = { workspace = true }
 
 [build-dependencies]
 # Icon + VERSIONINFO for photocraft-cli.exe; build.rs only uses it when targeting Windows.
