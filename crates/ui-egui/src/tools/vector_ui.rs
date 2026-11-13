@@ -225,6 +225,8 @@ mod paint_tests;
 
 #[cfg(test)]
 mod triangle_box_geometry_tests;
+#[cfg(test)]
+mod triangle_properties_fields_tests;
 
 #[cfg(test)]
 mod pen_resume_tests;
@@ -252,6 +254,9 @@ mod ellipse_path_menus_tests;
 
 #[cfg(test)]
 mod triangle_align_edges_tests;
+
+#[cfg(test)]
+mod triangle_shift_equilateral_tests;
 
 pub(crate) use pen::freeform_locked_shape;
 #[cfg(test)]
