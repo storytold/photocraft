@@ -2,7 +2,7 @@
 //! pixels; off it keeps the drag's fractional coordinates. It is greyed outside Shape mode.
 
 use egui::accesskit::Toggled;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::add_anchor_options_bar_tests::harness;
 use super::shapes::shape_geometry;
