@@ -1081,6 +1081,9 @@ mod view_guides_submenu_tests;
 #[cfg(test)]
 mod lasso_click_tests;
 #[cfg(test)]
+#[path = "tools/quick_selection_reset_tests.rs"]
+mod quick_selection_reset_tests;
+#[cfg(test)]
 mod reset_tip_tests;
 #[cfg(test)]
 mod rotate_steps_tests;
