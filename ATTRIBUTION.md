@@ -10,7 +10,6 @@ next to them.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `crates/codecs/src/codecs/xpm/x11_colors.rs` | X11 `rgb.txt` color-name lookup table (normalized X.Org RGB values) | X.Org Foundation and X11 contributors | <https://cgit.freedesktop.org/xorg/app/rgb/tree/rgb.txt> | MIT (X.Org app/rgb) |
 | Embedded at build time from storytold/craft-i18n `locales/<code>/common.tsv` and `locales/<code>/photocraft.tsv` (revision in [`craft-i18n.rev`](craft-i18n.rev)) | UI translations (all languages) | craft-i18n and PhotoCraft contributors; per-language credits and provenance in [craft-i18n's ATTRIBUTION.md](https://github.com/storytold/craft-i18n/blob/main/ATTRIBUTION.md) | <https://github.com/storytold/craft-i18n> | MIT OR Apache-2.0; Copyright (c) 2026 ArtCraft Team and the craft-i18n contributors; notice in [NOTICE](NOTICE) |
 | `epaint_default_fonts::EGUI_ICONS` (build input; deflated into `OUT_DIR/egui_fonts/egui-icons.ttf.deflate`, registered by `crates/ui-egui/src/text/egui_fonts.rs`) | egui-icons, five-glyph subset of emoji-icon-font | John Slegers | [egui fork at 6d518fc](https://github.com/storytold/egui/tree/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts), [original](https://github.com/jslegers/emoji-icon-font); egui subset, unmodified here | MIT; Copyright (c) 2014 John Slegers; full upstream notice in [NOTICE](NOTICE) |
 | `assets/fonts/Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf` | Inter 4.001 (UI font) | The Inter Project Authors (Rasmus Andersson) | <https://github.com/rsms/inter> | SIL OFL 1.1, [`assets/fonts/OFL-Inter.txt`](assets/fonts/OFL-Inter.txt) |
@@ -131,7 +130,7 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `crates/psd/tests/fixtures/atn/*.atn` | Independently encoded ATN version-16 and version-12 parser fixtures | PhotoCraft contributors (version-12 files: @yoriswind) | Original synthetic test data; wire layout documented in `crates/psd/src/atn.rs`; provenance in the adjacent README | MIT OR Apache-2.0 |
+| `crates/engine/tests/fixtures/atn/v12-commands.atn` | Independently encoded ATN version-12 parser fixture (Gaussian Blur, Levels, Select All, Make Layer; 404 bytes, sha256 `451958b686da9aab45e65ae902c86333b7149d72021c21904e3aae8e39eb77cb`), copied from the PSD crate's fixtures, which now live in craft-libs' `craft-psd` | PhotoCraft contributors (@yoriswind) | Original synthetic test data | MIT OR Apache-2.0 |
 
 ## Embedded-vector editor source
 
