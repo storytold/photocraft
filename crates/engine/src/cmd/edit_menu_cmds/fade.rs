@@ -1,6 +1,6 @@
 use super::{
-    BlendMode, Document, EngineError, FadeTarget, Rect, Result, Session, Surface, Value, bad, blend_from_str, f32_or, from_rgba_into, json, str_or, surface_of,
-    surface_of_mut, to_rgba,
+    BlendMode, Document, EngineError, FadeSource, FadeTarget, Rect, Result, Session, Surface, Value, bad, blend_from_str, f32_or, from_rgba_into, json, str_or,
+    surface_of, surface_of_mut, to_rgba,
 };
 
 // ------------------------------------------------------------------ Fade
@@ -8,7 +8,7 @@ use super::{
 pub(super) fn can_fade(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     let f = s.edit_state.fade.as_ref().ok_or("nothing to fade")?;
-    if f.doc != st.doc.id || f.revision != st.revision || !st.history.can_undo() {
+    if f.doc != st.doc.id || f.revision != st.revision || before_state(st, f).is_none() {
         return Err("Fade is only available right after a filter, adjustment or painting step".into());
     }
     if surface_of(&st.doc, f.target).is_none() {
@@ -18,6 +18,12 @@ pub(super) fn can_fade(s: &Session) -> std::result::Result<(), String> {
         });
     }
     Ok(())
+}
+
+/// The state before the faded step, which Fade blends back towards, while the history holds it.
+pub(super) fn before_state(st: &crate::DocState, f: &FadeSource) -> Option<std::sync::Arc<Document>> {
+    let i = st.history.row_of(f.before?)?;
+    if i < st.history.past_len() { st.history.state(i) } else { None }
 }
 
 /// Blend `after` back towards `before` over `area`: `before + opacity × (B(before, after) − before)`
@@ -84,7 +90,7 @@ fn fade_job(s: &Session, p: &Value) -> Result<FadeJob> {
     let opacity = f32_or(p, "opacity", 100.0).clamp(0.0, 100.0) / 100.0;
     let mode = blend_from_str(str_or(p, "mode", "normal")).ok_or_else(|| bad(cmd, "unknown blend mode"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let prev = st.history.past_len().checked_sub(1).and_then(|i| st.history.state(i)).ok_or_else(|| bad(cmd, "no previous state"))?;
+    let prev = before_state(st, &src).ok_or_else(|| bad(cmd, "no previous state"))?;
     let before = surface_of(&prev, src.target).cloned().ok_or_else(|| EngineError::Other("the layer or channel did not exist before this step".into()))?;
     let now = surface_of(&st.doc, src.target).ok_or_else(|| EngineError::Other("the faded layer or channel no longer exists".into()))?;
     if now.format() != before.format() {
