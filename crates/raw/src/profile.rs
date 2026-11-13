@@ -70,13 +70,15 @@ impl HsvMap {
         self.hue_divs == o.hue_divs && self.sat_divs == o.sat_divs && self.val_divs == o.val_divs && self.srgb_value == o.srgb_value
     }
 
-    /// `self · g + other · (1 − g)`, the DNG interpolation of the two illuminants' maps; `self`
-    /// when their shapes differ.
+    /// `self · g + other · (1 − g)`, the DNG interpolation of the two illuminants' maps. Maps of
+    /// different shapes can't be interpolated: the one with the larger weight is used (`other`
+    /// from an even split on).
     pub(crate) fn blend(&self, other: &HsvMap, g: f64) -> HsvMap {
+        let g = if g.is_nan() { 1.0 } else { g.clamp(0.0, 1.0) };
         if !self.same_shape(other) {
-            return self.clone();
+            return if g > 0.5 { self.clone() } else { other.clone() };
         }
-        let g = g.clamp(0.0, 1.0) as f32;
+        let g = g as f32;
         let data = self.data.iter().zip(&other.data).map(|(a, b)| [0, 1, 2].map(|k| a[k] * g + b[k] * (1.0 - g))).collect();
         HsvMap { data, ..self.clone() }
     }
@@ -433,6 +435,19 @@ mod tests {
         assert!((at(2000.0) - 1.0).abs() < 1e-6 && (at(9000.0) - 2.0).abs() < 1e-6);
         let mid = at(4000.0);
         assert!(mid > 1.0 && mid < 2.0, "{mid}");
+    }
+
+    /// Maps of different shapes can't be interpolated: the white's nearer illuminant wins,
+    /// rather than always the first.
+    #[test]
+    fn differently_shaped_maps_take_the_nearer_illuminant() {
+        let a: Vec<f64> = (0..6 * 2).flat_map(|_| [0.0, 1.0, 1.0]).collect();
+        let b: Vec<f64> = (0..4 * 2).flat_map(|_| [0.0, 2.0, 1.0]).collect();
+        let p =
+            Profile { hue_sat: vec![(2856.0, HsvMap::new(&[6, 2, 1], &a, 0).unwrap()), (6504.0, HsvMap::new(&[4, 2, 1], &b, 0).unwrap())], look_table: None };
+        let at = |t: f64| p.hue_sat_at(t).unwrap().lookup(0.0, 0.5, 0.5)[1];
+        assert!((at(2000.0) - 1.0).abs() < 1e-6 && (at(3000.0) - 1.0).abs() < 1e-6);
+        assert!((at(6000.0) - 2.0).abs() < 1e-6 && (at(9000.0) - 2.0).abs() < 1e-6);
     }
 
     #[test]
