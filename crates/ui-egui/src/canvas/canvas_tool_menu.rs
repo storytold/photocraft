@@ -683,10 +683,10 @@ fn shape_layer_row(command: &str) -> bool {
     )
 }
 
-/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`] (#13249). The Ellipse (#13232)
-/// and the other shape tools join here once measured.
+/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`]: the Line (#13249) and the
+/// Ellipse (#13232). The other shape tools join here once measured.
 pub fn shape_tool_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Line)
+    matches!(tool, Tool::Line | Tool::EllipseShape)
 }
 
 /// Does a right-click with a shape tool open its menu? Only where measured: Shape mode, over
