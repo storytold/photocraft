@@ -280,13 +280,18 @@ impl DabTool {
     }
 }
 
-/// The reference application refuses a Dodge or Sharpen stroke in Indexed Color and Bitmap
-/// documents, with its alert's words (#12686, #12953); other modes (Multichannel and Duotone were
-/// not measured) paint as before. The live stroke checks this too, so it previews nothing there.
+/// The reference application refuses a Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke in
+/// Indexed Color and Bitmap documents, with its alert's words (#12686, #12673, #13033, #12656,
+/// #12953, #12967); other modes (Multichannel and Duotone were not measured) paint as before. The
+/// live stroke checks this too, so it previews nothing there.
 fn mode_refusal(s: &Session, cmd: &str) -> Result<()> {
     let tool = match cmd {
         "paint.dodge" => "dodge tool",
+        "paint.burn" => "burn tool",
+        "paint.sponge" => "sponge tool",
+        "paint.blur" => "blur tool",
         "paint.sharpen" => "sharpen tool",
+        "paint.smudge" => "smudge tool",
         _ => return Ok(()),
     };
     let why = match s.active().map(|st| st.doc.mode) {
@@ -716,6 +721,22 @@ mod dodge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "sharpen_refuses_indexed_tests.rs"]
 mod sharpen_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "burn_refuses_indexed_tests.rs"]
+mod burn_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "sponge_refuses_indexed_tests.rs"]
+mod sponge_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "blur_refuses_indexed_tests.rs"]
+mod blur_refuses_indexed_tests;
+
+#[cfg(test)]
+#[path = "smudge_refuses_indexed_tests.rs"]
+mod smudge_refuses_indexed_tests;
 
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
