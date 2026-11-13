@@ -243,6 +243,13 @@ fn export_destinations_are_checked_and_a_folder_gets_the_document_name() {
     let err = s.execute("file.export.artboardsToFiles", json!({"dir": missing})).unwrap_err().to_string();
     assert!(err.contains("Destination does not exist"), "{err}");
     assert!(!std::path::Path::new(&missing).exists());
+    // A file where the folder should be fails the same way, for both exports.
+    let file = join(&d, "existing.txt");
+    std::fs::write(&file, b"x").unwrap();
+    let err = s.execute("file.export.artboardsToPdf", json!({"path": join(&file, "boards.pdf")})).unwrap_err().to_string();
+    assert!(err.contains("Destination is not a folder"), "{err}");
+    let err = s.execute("file.export.artboardsToFiles", json!({"dir": file})).unwrap_err().to_string();
+    assert!(err.contains("Destination is not a folder"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

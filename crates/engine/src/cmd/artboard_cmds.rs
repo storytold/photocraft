@@ -817,15 +817,19 @@ fn expand_home(path: &str) -> String {
     path.to_string()
 }
 
-/// An export's destination folder must exist: checked before any board is flattened, so a
-/// mistyped folder fails at once instead of after the whole export. Other filesystem errors are
-/// left to the write.
+/// An export's destination folder must exist and be a folder: checked before any board is
+/// flattened, so a mistyped folder (or a file in its place) fails at once instead of after the
+/// whole export. Other filesystem errors (permissions, say) are left to the write.
 #[cfg(not(target_arch = "wasm32"))]
 fn check_folder(dir: &str) -> Result<()> {
-    if !dir.is_empty() && matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
-        return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
+    if dir.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    match std::fs::metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(EngineError::Other(format!("Destination does not exist: {dir}"))),
+        Ok(m) if !m.is_dir() => Err(EngineError::Other(format!("Destination is not a folder: {dir}"))),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

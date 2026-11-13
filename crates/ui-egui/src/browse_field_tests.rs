@@ -147,3 +147,24 @@ fn artboards_to_pdf_file_is_chosen_with_browse() {
     }
     assert_eq!(field(&h, "path"), Some(json!("/tmp/exports/boards.pdf")));
 }
+
+/// Choosing the PDF with Browse… and then cancelling the export remembers no folder: the next
+/// export doesn't start where nothing was exported.
+#[test]
+fn browsing_for_the_pdf_and_cancelling_remembers_no_folder() {
+    let (mut h, _) = harness(vec![Some(FileDialogAnswer::SaveTo("/tmp/elsewhere/boards".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("layer.new.artboard", json!({"rect": [0, 0, 64, 64]})).unwrap();
+    h.state_mut().sync_views();
+    let before = (h.state().session.prefs().export.last_folder.clone(), h.state().save_dirs.clone());
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToPdf", json!({})).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert_eq!(field(&h, "path"), Some(json!("/tmp/elsewhere/boards.pdf")), "the field gets the file, as a PDF");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(h.state().ui.dialogs.is_empty(), "the export was cancelled");
+    assert_eq!((h.state().session.prefs().export.last_folder.clone(), h.state().save_dirs.clone()), before);
+}
