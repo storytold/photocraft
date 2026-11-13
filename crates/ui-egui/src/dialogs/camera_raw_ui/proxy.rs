@@ -50,9 +50,22 @@ impl UprightSource {
     }
 }
 
+/// The pixels the masks first see in a develop (before their local adjustments), so the
+/// overlay shows a mask's coverage as it applied.
+pub(crate) struct Unmasked {
+    pub(crate) px: Vec<[f32; 4]>,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    /// The part of the proxy they are: the canvas's blocks when Geometry developed only those.
+    pub(crate) frame: Option<[usize; 4]>,
+    /// The settings of that develop.
+    pub(crate) params: CameraRaw,
+}
+
 /// A developed proxy, ready to show.
 pub(super) struct ProxyFrame {
     pub(super) px: Vec<[f32; 4]>,
+    pub(super) unmasked: Option<Unmasked>,
     pub(super) histogram: RgbHistogram,
     pub(super) histogram_ms: f64,
     pub(super) image: egui::ColorImage,
@@ -96,18 +109,19 @@ impl ProxyJob {
         // With Geometry on, the filter develops (and warps about the centre of) the canvas only;
         // the layer past it stays as it is. The preview does the same on the canvas's blocks.
         let frame = self.canvas_frame.filter(|_| !p.geometry_neutral());
-        let (mut px, backend) = if let Some([x0, y0, x1, y1]) = frame {
+        // The GPU runs only without active masks (they are spatial); its result is then what the
+        // masks see, unless Vignette or Grain (after the masks) changed it.
+        let gpu = self.gpu.as_ref().filter(|_| p.masks.is_empty() || (p.vignette_amount == 0.0 && p.grain_amount <= 0.0));
+        let keep = !p.masks.is_empty();
+        let (mut px, backend, unmasked) = if let Some([x0, y0, x1, y1]) = frame {
             let (fw, fh) = (x1 - x0, y1 - y0);
             let mut sub: Vec<[f32; 4]> = (y0..y1).flat_map(|y| input.get(y * pw + x0..y * pw + x1).unwrap_or(&[]).iter().copied()).collect();
-            let backend = match self.gpu.as_ref().and_then(|g| g.develop(&sub, None, fw, fh, &p, self.float)) {
+            let (backend, kept) = match gpu.and_then(|g| g.develop(&sub, None, fw, fh, &p, self.float)) {
                 Some(out) => {
                     sub = out;
-                    "gpu"
+                    ("gpu", keep.then(|| sub.clone()))
                 }
-                None => {
-                    photocraft_algo::camera_raw::develop(&mut sub, fw, fh, &p, self.float);
-                    "cpu"
-                }
+                None => ("cpu", photocraft_algo::camera_raw::develop_keeping_unmasked(&mut sub, fw, fh, &p, self.float)),
             };
             let mut px = input.to_vec();
             for (y, row) in (y0..y1).zip(sub.chunks_exact(fw.max(1))) {
@@ -115,17 +129,21 @@ impl ProxyJob {
                     dst.copy_from_slice(row);
                 }
             }
-            (px, backend)
+            (px, backend, kept.map(|px| (px, fw, fh, frame)))
         } else {
-            match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
-                Some(out) => (out, "gpu"),
+            match gpu.and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
+                Some(out) => {
+                    let kept = keep.then(|| (out.clone(), pw, ph, None));
+                    (out, "gpu", kept)
+                }
                 None => {
                     let mut px = retoned.unwrap_or_else(|| self.proxy.to_vec());
-                    photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
-                    (px, "cpu")
+                    let kept = photocraft_algo::camera_raw::develop_keeping_unmasked(&mut px, pw, ph, &p, self.float).map(|u| (u, pw, ph, None));
+                    (px, "cpu", kept)
                 }
             }
         };
+        let unmasked = unmasked.map(|(px, w, h, frame)| Unmasked { px, w, h, frame, params: p.clone() });
         let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
         if self.opaque && !p.geometry_neutral() {
             over_white(&mut px);
@@ -149,7 +167,7 @@ impl ProxyJob {
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
+        ProxyFrame { px, unmasked, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
     }
 }
 

@@ -102,6 +102,8 @@ pub struct CameraRawDialog {
     before_display_key: Option<u64>,
     pub(crate) before_histogram: RgbHistogram,
     pub(crate) processed: Vec<[f32; 4]>,
+    /// The last develop's pixels as the masks saw them ([`proxy::Unmasked`]): the mask overlay's.
+    pub(crate) unmasked: Option<proxy::Unmasked>,
     pub(crate) lab_transform: std::sync::Arc<craft_cms::Transform>,
     pub(crate) scope_transform: std::sync::Arc<craft_cms::Transform>,
     pub(crate) scope: crate::camera_raw_scope_ui::ScopeView,
@@ -264,6 +266,7 @@ impl CameraRawDialog {
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
         self.processed = frame.px;
+        self.unmasked = frame.unmasked;
         self.scope.cache = None;
         self.render_ms = frame.ms;
         self.develop_ms = frame.develop_ms;

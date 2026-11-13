@@ -813,15 +813,32 @@ pub fn white_balance_gains(temperature: f32, tint: f32) -> [f32; 3] {
 /// result that is kept goes through [`try_develop`], which reports it.
 pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) {
     // The error only says a stage was skipped; the pixels are as complete as they can be.
-    let _ = try_develop(px, w, h, p, float);
+    let _ = develop_impl(px, w, h, p, float, false);
 }
 
 /// [`develop`], failing when a stage (Texture, Clarity) can't get the memory it needs, so an
 /// incomplete result isn't committed as the developed image. The pixels are then partly
 /// developed and should be discarded.
 pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) -> Result<(), String> {
-    if px.is_empty() || p.is_identity() || px.len() != w.saturating_mul(h) {
-        return Ok(());
+    develop_impl(px, w, h, p, float, false).0
+}
+
+/// [`develop`], also returning the pixels as the masks first see them (before
+/// [`masks::apply`]), so the dialog can show a mask's coverage exactly as it applied rather than
+/// recomputed from the result, which already holds the mask's own adjustment. `None` when `p`
+/// has no masks or the pixels don't fill `w × h`.
+pub fn develop_keeping_unmasked(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool) -> Option<Vec<[f32; 4]>> {
+    develop_impl(px, w, h, p, float, !p.masks.is_empty()).1
+}
+
+/// The develop: the first stage that ran out of memory, and the pixels before the masks when
+/// `keep_unmasked`.
+fn develop_impl(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool, keep_unmasked: bool) -> (Result<(), String>, Option<Vec<[f32; 4]>>) {
+    if px.is_empty() || px.len() != w.saturating_mul(h) {
+        return (Ok(()), None);
+    }
+    if p.is_identity() {
+        return (Ok(()), keep_unmasked.then(|| px.to_vec()));
     }
     // Upright analyses the image as it comes in, so the tone stages never change its
     // correction and a preview handed the full image's analysis matches it.
@@ -957,6 +974,7 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
         geometry::apply(px, w, h, p, float);
     }
     // 8c. Masks: local adjustments, in the coordinates of the result.
+    let unmasked = keep_unmasked.then(|| px.to_vec());
     if p.masks.iter().any(masks::Mask::is_active) {
         masks::apply(px, w, h, p, float);
     }
@@ -986,7 +1004,7 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
             }
         }
     }
-    skipped.map_or(Ok(()), Err)
+    (skipped.map_or(Ok(()), Err), unmasked)
 }
 
 /// The image's 1st, 50th and 99th percentiles and the mean of the log2 luminance, on cells of

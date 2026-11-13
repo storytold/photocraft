@@ -776,16 +776,30 @@ fn masks_frame(shown: &CameraRaw, canvas_frame: Option<[usize; 4]>, pw: usize, p
     if shown.geometry_neutral() { r } else { guide_frame(canvas_frame, pw, ph, r).0 }
 }
 
+/// Mask `m`'s coverage as [`masks::apply`] computed it in the last develop (`index` in its
+/// settings): on the pixels the masks first saw, with the masks before it applied, not on the
+/// result, which already holds this mask's adjustment. With the coverage's size.
+fn apply_time_coverage(u: &super::proxy::Unmasked, m: &Mask, index: usize, float: bool) -> (Vec<f32>, usize, usize) {
+    let earlier = u.params.masks.get(..index).unwrap_or(&[]);
+    let applied = earlier.iter().any(Mask::is_active).then(|| {
+        let mut px = u.px.clone();
+        let p = CameraRaw { masks: earlier.to_vec(), ..u.params.clone() };
+        masks::apply(&mut px, u.w, u.h, &p, float);
+        px
+    });
+    (masks::coverage_for(m, applied.as_deref().unwrap_or(&u.px), u.w, u.h, &u.params), u.w, u.h)
+}
+
 fn overlay(ctx: &egui::Context, s: &mut MaskUi, d: &CameraRawDialog, i: usize, r: ERect, painter: &egui::Painter) {
     if !s.overlay {
         return;
     }
     let Some(m) = d.params.masks.get(i) else { return };
-    let (w, h) = (d.pw, d.ph);
-    let key = mask_key(m, w, h, d.preview_revision);
+    // Until a develop has kept the pixels the masks see there is nothing to show.
+    let Some(u) = d.unmasked.as_ref() else { return };
+    let key = mask_key(m, u.w, u.h, d.preview_revision);
     if s.overlay_tex.as_ref().is_none_or(|(k, _)| *k != key) {
-        let src: &[[f32; 4]] = if d.processed.len() >= w * h { &d.processed } else { &d.proxy };
-        let cov = masks::coverage(m, src, w, h);
+        let (cov, w, h) = apply_time_coverage(u, m, i, d.float);
         let mut rgba = Vec::with_capacity(w * h * 4);
         for c in &cov {
             let c = c.clamp(0.0, 1.0);
@@ -804,7 +818,9 @@ fn overlay(ctx: &egui::Context, s: &mut MaskUi, d: &CameraRawDialog, i: usize, r
         }
     }
     if let Some((_, tex)) = &s.overlay_tex {
-        painter.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        // Over the part of the preview the coverage covers (the canvas, see `masks_frame`).
+        let at = if u.frame.is_some() { guide_frame(u.frame, d.pw, d.ph, r).0 } else { r };
+        painter.image(tex.id(), at, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 }
 
@@ -1517,6 +1533,38 @@ mod tests {
         assert_eq!(in_proxy(frame, 28, 16, [0.0, 0.5]), [0.25, 0.5]);
         assert_eq!(in_proxy(frame, 28, 16, [1.0, 1.0]), [1.0, 1.0]);
         assert_eq!(in_proxy(None, 28, 16, [0.3, 0.4]), [0.3, 0.4]);
+    }
+
+    /// The overlay shows a Luminance Range mask's coverage on the pixels it applied to: its own
+    /// Exposure, which brightens what it selects past the range, does not shrink the overlay;
+    /// an earlier mask's adjustment does count, as it did when the mask applied.
+    #[test]
+    fn the_overlay_shows_the_coverage_the_mask_applied() {
+        let (w, h) = (8, 1);
+        let grey = vec![[0.6, 0.6, 0.6, 1.0]; w * h];
+        let lum = |exposure: f32| Mask {
+            components: vec![Component { op: Op::Add, invert: false, shape: Shape::Luminance { range: [50.0, 70.0], smoothness: 0.0 } }],
+            adjust: Local { exposure, ..Local::default() },
+            ..Mask::default()
+        };
+        let p = CameraRaw { masks: vec![lum(2.0)], ..CameraRaw::default() };
+        let mut out = grey.clone();
+        let unmasked = photocraft_algo::camera_raw::develop_keeping_unmasked(&mut out, w, h, &p, false).expect("kept");
+        let u = super::super::proxy::Unmasked { px: unmasked, w, h, frame: None, params: p.clone() };
+        let (cov, ..) = apply_time_coverage(&u, &p.masks[0], 0, false);
+        assert!(cov.iter().all(|c| *c > 0.9), "selected as applied: {cov:?}");
+        assert!(masks::coverage(&p.masks[0], &out, w, h).iter().all(|c| *c < 0.1), "the result is past the range");
+        // An earlier mask that brightens everything moves the pixels out of this one's range.
+        let all =
+            Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Linear { zero: [0.0, -2.0], full: [0.0, -1.0] } }], ..lum(2.0) };
+        let p = CameraRaw { masks: vec![all, lum(0.0)], ..CameraRaw::default() };
+        let mut out = grey.clone();
+        let unmasked = photocraft_algo::camera_raw::develop_keeping_unmasked(&mut out, w, h, &p, false).expect("kept");
+        let u = super::super::proxy::Unmasked { px: unmasked, w, h, frame: None, params: p.clone() };
+        let (first, ..) = apply_time_coverage(&u, &p.masks[0], 0, false);
+        assert!(first.iter().all(|c| *c > 0.9), "the linear gradient covers all: {first:?}");
+        let (second, ..) = apply_time_coverage(&u, &p.masks[1], 1, false);
+        assert!(second.iter().all(|c| *c < 0.1), "after the first mask brightened it: {second:?}");
     }
 
     /// Guides are relative to the canvas when the layer extends past it (Geometry warps the
