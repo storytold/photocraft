@@ -1,4 +1,23 @@
 use super::*;
+
+const MODES: [BlendMode; 14] = [
+    BlendMode::Normal,
+    BlendMode::Multiply,
+    BlendMode::LinearDodge,
+    BlendMode::PaintNetColorBurn,
+    BlendMode::PaintNetColorDodge,
+    BlendMode::Reflect,
+    BlendMode::Glow,
+    BlendMode::Overlay,
+    BlendMode::Difference,
+    BlendMode::Negation,
+    BlendMode::Lighten,
+    BlendMode::Darken,
+    BlendMode::Screen,
+    BlendMode::Xor,
+];
+const OLD_MODES: [&str; 14] =
+    ["Normal", "Multiply", "Additive", "ColorBurn", "ColorDodge", "Reflect", "Glow", "Overlay", "Difference", "Negation", "Lighten", "Darken", "Screen", "Xor"];
 use std::io::Write;
 
 enum Field {

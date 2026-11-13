@@ -170,15 +170,15 @@ fn archive_layout_follows_the_specification() {
     assert_eq!(out.bytes.get(30..38), Some(&b"mimetype"[..]));
     assert_eq!(out.bytes.get(38..54), Some(MIMETYPE));
     assert!(is_ora(&out.bytes));
-    let zip = ZipReader::new(&out.bytes).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
     for entry in ["stack.xml", "mergedimage.png", "Thumbnails/thumbnail.png"] {
-        assert!(zip.find(entry).is_some(), "{entry}");
+        assert!(archive.entry(entry, 1 << 20).unwrap().is_some(), "{entry}");
     }
-    let thumb = codecs::decode(&zip.read_by_name("Thumbnails/thumbnail.png", 1 << 20).unwrap()).unwrap();
+    let thumb = codecs::decode(&archive.entry("Thumbnails/thumbnail.png", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(thumb.dimensions().0 <= 256 && thumb.dimensions().1 <= 256);
-    let merged = codecs::decode(&zip.read_by_name("mergedimage.png", 1 << 20).unwrap()).unwrap();
+    let merged = codecs::decode(&archive.entry("mergedimage.png", 1 << 20).unwrap().unwrap()).unwrap();
     assert_eq!(merged.dimensions(), (70, 50));
-    let xml = String::from_utf8(zip.read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    let xml = String::from_utf8(archive.entry("stack.xml", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("name=\"Pass &lt;&amp;&gt; &quot;through&quot;\""), "{xml}");
     assert!(xml.contains("isolation=\"auto\""), "{xml}");
     assert!(xml.contains("composite-op=\"krita:linear light\""), "{xml}");
@@ -370,7 +370,8 @@ fn soft_light_exports_as_svg_soft_light() {
     soft.blend = BlendMode::SoftLight;
     d.layers.push(soft);
     let out = export(&d).unwrap();
-    let xml = String::from_utf8(ZipReader::new(&out.bytes).unwrap().read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    let mut archive = craft_ora::Archive::open(&out.bytes).unwrap();
+    let xml = String::from_utf8(archive.entry("stack.xml", 1 << 20).unwrap().unwrap()).unwrap();
     assert!(xml.contains("name=\"Soft\"") && xml.contains("composite-op=\"svg:soft-light\""), "{xml}");
     assert!(!xml.contains("soft_light"), "{xml}");
     let (back, exported, imported) = round_trip(&d);

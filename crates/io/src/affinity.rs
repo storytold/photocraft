@@ -701,6 +701,7 @@ mod tests {
                 kind: Kind::Image(af::Image { width, height, pixels, transform: af::Affine::IDENTITY }),
                 mask: None,
                 pixel_mask: None,
+                effects: Vec::new(),
                 children: Vec::new(),
             })
             .collect();
@@ -709,6 +710,8 @@ mod tests {
             spreads: vec![af::Spread { bounds: af::Rect { x0: 0.0, y0: 0.0, x1: 64.0, y1: 64.0 }, pages: Vec::new(), transparent: true, nodes }],
             saved_by: None,
             warnings: Vec::new(),
+            masters: Vec::new(),
+            cmyk_profile: None,
         }
     }
 
