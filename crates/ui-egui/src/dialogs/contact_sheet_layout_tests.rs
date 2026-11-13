@@ -208,3 +208,18 @@ fn ok_runs_the_command_with_the_same_params() {
         assert_eq!(sheet.layers.len(), 1, "Flatten All Layers is on");
     });
 }
+
+/// #13685: a fresh dialog opens with the reference application's defaults.
+#[test]
+fn a_fresh_dialog_shows_the_reference_defaults() {
+    let (h, id) = opened();
+    let near = |key: &str, want: f64| (num(&h, id, key) - want).abs() < 0.005;
+    assert_eq!(field(&h, id, "units"), json!("cm"));
+    assert!(near("width", 20.32) && near("height", 25.4), "20.32 x 25.4 cm, got {} x {}", num(&h, id, "width"), num(&h, id, "height"));
+    assert!(near("resolution", 300.0), "300 pixels/inch, got {}", num(&h, id, "resolution"));
+    assert_eq!(field(&h, id, "resolution.unit"), json!("cm"), "shown in pixels/cm");
+    assert_eq!(field(&h, id, "flatten"), json!(true), "Flatten All Layers is on");
+    assert_eq!([field(&h, id, "mode"), field(&h, id, "depth"), field(&h, id, "place")], [json!("rgb"), json!("8"), json!("across")]);
+    assert!(near("columns", 5.0) && near("rows", 6.0) && near("fontSize", 12.0));
+    assert_eq!([field(&h, id, "rotateForBestFit"), field(&h, id, "autoSpacing"), field(&h, id, "caption")], [json!(false), json!(true), json!(true)]);
+}
