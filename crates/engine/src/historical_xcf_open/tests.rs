@@ -147,45 +147,6 @@ fn file_open_as_forwards_both_explicit_orders_and_keeps_source_read_only() {
 }
 
 #[test]
-#[cfg(not(target_arch = "wasm32"))]
-fn historical_snapshot_refuses_a_replaced_source_and_cancelled_read() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("source.xcf");
-    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
-    let handle = std::fs::File::open(&path).unwrap();
-    let identity = photocraft_io::FileIdentity::of_handle(&handle).unwrap();
-    std::fs::write(&path, b"replacement").unwrap();
-    let error = snapshot(path.to_str().unwrap(), &identity, &photocraft_raster::Interrupt::NONE).unwrap_err();
-    assert!(matches!(error, EngineError::SourceChanged { .. }));
-    let cancelled = || true;
-    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
-    assert!(matches!(snapshot(path.to_str().unwrap(), &identity, &ctl), Err(EngineError::Cancelled)));
-}
-
-#[test]
-#[cfg(not(target_arch = "wasm32"))]
-fn historical_snapshot_observes_cancellation_between_read_chunks() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("source.xcf");
-    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
-    let handle = std::fs::File::open(&path).unwrap();
-    let identity = photocraft_io::FileIdentity::of_handle(&handle).unwrap();
-    let cancelled = AtomicBool::new(false);
-    let saw_progress = AtomicBool::new(false);
-    let cancel = || cancelled.load(Ordering::Relaxed);
-    let progress = |fraction: f32| {
-        if fraction > 0.0 {
-            saw_progress.store(true, Ordering::Relaxed);
-            cancelled.store(true, Ordering::Relaxed);
-        }
-    };
-    let ctl = photocraft_raster::Interrupt::new(&cancel, &progress);
-    assert!(matches!(snapshot(path.to_str().unwrap(), &identity, &ctl), Err(EngineError::Cancelled)));
-    assert!(saw_progress.load(Ordering::Relaxed), "cancellation occurs after a read, not at the initial checkpoint");
-}
-
-#[test]
 fn refused_historical_start_retains_exact_source_and_choice_identity_for_retry() {
     let mut session = Session::new();
     session.execute("file.new", json!({"width":2,"height":2})).unwrap();

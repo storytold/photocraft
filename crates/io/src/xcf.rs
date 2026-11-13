@@ -25,6 +25,8 @@ mod samples;
 mod wire;
 // Parsed fields stay inert until native mapping slices land.
 #[cfg(test)]
+mod coverage_review_tests;
+#[cfg(test)]
 mod decoder_review_tests;
 #[allow(dead_code)]
 mod effects;
@@ -135,21 +137,13 @@ struct Image<'a> {
     native_color_error: Option<String>,
 }
 
-/// Bounded source mask facts retained for reporting; this cache contains no pixels.
-struct CoverageMaskRecord<'a> {
+/// Bounded header/configuration facts; auxiliary hierarchy pixels are never decoded.
+struct CoverageMaskHeader<'a> {
     name: String,
     properties: Vec<Prop<'a>>,
     width: u32,
     height: u32,
     children: Vec<usize>,
-}
-#[derive(Default)]
-struct CoverageTranslation<'a> {
-    applied: HashMap<usize, std::result::Result<String, effects::MappingFailure>>,
-    masks: HashMap<usize, CoverageMaskRecord<'a>>,
-    active_effects: std::collections::HashSet<usize>,
-    active_masks: std::collections::HashSet<usize>,
-    visited: usize,
 }
 
 struct PendingLayerEffects {
@@ -166,6 +160,7 @@ struct Pixels {
     channels: usize,
     data: Vec<f32>,
     underflow: bool,
+    coverage_clamped: bool,
 }
 
 impl<'a> Image<'a> {
@@ -204,6 +199,7 @@ impl<'a> Image<'a> {
         }
         let mut data = vec![0.0f32; count];
         let mut underflow = false;
+        let mut coverage_clamped = false;
         let stride = w as usize * channels;
         for (i, &at) in tiles.iter().enumerate() {
             if i % 64 == 0 {
@@ -259,7 +255,7 @@ impl<'a> Image<'a> {
                             let start = ch.checked_mul(self.precision.bytes).ok_or_else(|| invalid("sample byte offset overflows"))?;
                             let end = start.checked_add(self.precision.bytes).ok_or_else(|| invalid("sample byte range overflows"))?;
                             let sample = pixel.get(start..end).ok_or_else(|| invalid("pixel sample is cut short"))?;
-                            let (value, rounded_zero) = self.precision.sample(sample, is_coverage).map_err(|error| {
+                            let (value, rounded_zero, clamped) = self.precision.sample_with_conversion(sample, is_coverage).map_err(|error| {
                                 invalid(format!(
                                     "{} plane {ch}, pixel ({}, {}): {error}",
                                     if is_coverage { "coverage" } else { "color" },
@@ -269,12 +265,13 @@ impl<'a> Image<'a> {
                             })?;
                             *destination = value;
                             underflow |= rounded_zero;
+                            coverage_clamped |= clamped;
                         }
                     }
                 }
             }
         }
-        Ok(Pixels { width: w, height: h, channels, data, underflow })
+        Ok(Pixels { width: w, height: h, channels, data, underflow, coverage_clamped })
     }
 
     /// A channel structure (a layer mask, the selection or an extra channel) as one-channel
@@ -302,175 +299,30 @@ impl<'a> Image<'a> {
         Ok((name, props, px, effect_pointers))
     }
 
-    /// Source operations are mapped to existing native Gray operations at import.
-    /// Auxiliary mask stacks are converted first; source references never become
-    /// native runtime instructions and recursive source cycles are not followed.
-    fn translate_coverage_effects(&mut self, owner: usize, pointers: &[usize], surface: &mut Surface, bounds: Rect, ctl: &Interrupt<'_>) -> Result<()> {
-        let offset = self.outcomes.entry(owner)?.source.record_offset.and_then(|v| usize::try_from(v).ok());
-        let state = self.convert_coverage_effects(pointers, surface, bounds, offset, ctl)?;
-        self.report_converted_coverage(owner, pointers, &state, true, ctl)
+    /// Follow only bounded mask framing and child-effect references. The hierarchy
+    /// pointer is read as inert data and is never followed or materialized.
+    fn coverage_mask_header(&mut self, offset: usize, ctl: &Interrupt<'_>) -> Result<CoverageMaskHeader<'a>> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let mut c = self.c.at(offset);
+        let (width, height) = (c.u32()?, c.u32()?);
+        validate_canvas(width, height)?;
+        let name = c.string()?;
+        let properties = props(&mut c)?;
+        let _hierarchy = c.ptr()?;
+        let children = if self.version >= 26 { effects::read_pointers(&mut c, &mut self.meta_budget, ctl)? } else { Vec::new() };
+        let bytes = name
+            .len()
+            .saturating_add(std::mem::size_of::<CoverageMaskHeader<'_>>())
+            .saturating_add(properties.len().saturating_mul(std::mem::size_of::<Prop<'_>>()));
+        self.meta_budget = self.meta_budget.checked_sub(bytes).ok_or_else(|| invalid("auxiliary mask metadata exceeds its allowance"))?;
+        Ok(CoverageMaskHeader { name, properties, width, height, children })
     }
 
-    /// Convert into a temporary native surface without claiming it was installed.
-    /// Layer-effect owners publish this bounded state only after their stage commits.
-    fn convert_coverage_effects(
-        &mut self,
-        pointers: &[usize],
-        surface: &mut Surface,
-        bounds: Rect,
-        source_offset: Option<usize>,
-        ctl: &Interrupt<'_>,
-    ) -> Result<CoverageTranslation<'a>> {
-        let mut state = CoverageTranslation::default();
-        if let Some(offset) = source_offset {
-            state.active_masks.insert(offset);
-        }
-        self.apply_coverage_stack(pointers, surface, bounds, 0, &mut state, ctl)?;
-        Ok(state)
-    }
-
-    /// Publishes coverage conversion outcomes only after their native result is committed or explicitly
-    /// discarded.
-    fn report_converted_coverage(
-        &mut self,
-        owner: usize,
-        pointers: &[usize],
-        state: &CoverageTranslation<'a>,
-        committed: bool,
-        ctl: &Interrupt<'_>,
-    ) -> Result<()> {
-        self.report_coverage_effects_with(owner, pointers, &state.applied, &state.masks, committed, ctl)
-    }
-
-    /// Applies stored coverage stages in order, preserving usable pixels and reporting optional stages that
-    /// cannot be mapped.
-    fn apply_coverage_stack(
-        &mut self,
-        pointers: &[usize],
-        _surface: &mut Surface,
-        _bounds: Rect,
-        depth: usize,
-        state: &mut CoverageTranslation<'a>,
-        ctl: &Interrupt<'_>,
-    ) -> Result<()> {
-        if depth > MAX_DEPTH {
-            return Err(invalid("native coverage source nesting exceeds its limit"));
-        }
-        for &pointer in pointers.iter().rev() {
-            ctl.check().map_err(|_| IoError::Cancelled)?;
-            state.visited = state.visited.checked_add(1).ok_or_else(|| invalid("coverage traversal count overflows"))?;
-            if state.visited > MAX_LAYERS {
-                return Err(invalid("coverage traversal exceeds 8,192 source effects"));
-            }
-            if !state.active_effects.insert(pointer) {
-                state.applied.insert(
-                    pointer,
-                    Err(effects::MappingFailure {
-                        reason: ConversionReason::InvalidOptionalData,
-                        message: "Cyclic source coverage operation was not followed".into(),
-                    }),
-                );
-                continue;
-            }
-            let effect = match effects::decode(&self.c, pointer, self.version, &mut self.meta_budget, ctl) {
-                Ok(effect) => effect,
-                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                Err(_) => {
-                    state.active_effects.remove(&pointer);
-                    continue;
-                }
-            };
-            if !effect.visible || effect.opacity == 0. {
-                state.active_effects.remove(&pointer);
-                continue;
-            }
-            let auxiliary = if effect.mask_offset == 0 {
-                Ok(Ok(None))
-            } else {
-                self.coverage_auxiliary(effect.mask_offset, depth + 1, state, ctl).map(|value| value.map(Some))
-            };
-            let failure = match auxiliary {
-                Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                Err(error) => effects::MappingFailure {
-                    reason: ConversionReason::InvalidOptionalData,
-                    message: format!("Source auxiliary coverage could not be converted; operation remains inactive: {error}"),
-                },
-                Ok(Err(failure)) => failure,
-                Ok(Ok(mask)) => {
-                    if let Some((_mask, own_pixel_charge)) = mask {
-                        // No adapter installs this temporary mask. Its cached source
-                        // configuration stays charged; only its discarded pixels return.
-                        self.budget = self.budget.saturating_add(own_pixel_charge);
-                    }
-                    effects::MappingFailure::from("Native coverage conversion is not implemented; original coverage and source records are preserved")
-                }
-            };
-            state.applied.insert(pointer, Err(failure));
-            state.active_effects.remove(&pointer);
-        }
-        Ok(())
-    }
-
-    /// Resolves bounded auxiliary coverage references while detecting cycles and caching only their
-    /// configuration for reporting. The caller owns the returned pixels until installation or discard.
-    fn coverage_auxiliary(
-        &mut self,
-        offset: usize,
-        depth: usize,
-        state: &mut CoverageTranslation<'a>,
-        ctl: &Interrupt<'_>,
-    ) -> Result<std::result::Result<(LayerMask, usize), effects::MappingFailure>> {
-        if depth > MAX_DEPTH || !state.active_masks.insert(offset) {
-            return Err(invalid("cyclic or excessively nested source auxiliary coverage"));
-        }
-        let mut own_pixel_charge = 0usize;
-        let result = (|| -> Result<std::result::Result<LayerMask, effects::MappingFailure>> {
-            let pixel_budget = self.budget;
-            let decoded = self.channel(offset, ctl);
-            own_pixel_charge = pixel_budget.saturating_sub(self.budget);
-            let (name, properties, pixels, children) = decoded?;
-            // Independently saved source effect masks use image-global pixels.
-            // A nonstandard layer-style placement has no established source meaning.
-            if properties.iter().any(|property| property.kind == 15 && property.data.iter().any(|byte| *byte != 0)) {
-                return Ok(Err("Source effect-mask channel has an unestablished placement property; pixels were not silently repositioned".into()));
-            }
-            let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, self.precision.depth(), false));
-            let pixel_budget = self.budget;
-            let written = write_pixels(&mut surface, &pixels, 0, 0, &mut self.budget);
-            own_pixel_charge = own_pixel_charge.saturating_add(pixel_budget.saturating_sub(self.budget));
-            written?;
-            let bounds = Rect::new(0, 0, pixels.width as i32, pixels.height as i32);
-            self.apply_coverage_stack(&children, &mut surface, bounds, depth, state, ctl)?;
-            self.meta_budget = self
-                .meta_budget
-                .checked_sub(std::mem::size_of::<CoverageMaskRecord<'a>>() + 4 * std::mem::size_of::<usize>())
-                .ok_or_else(|| invalid("native auxiliary coverage metadata exceeds its allowance"))?;
-            state.masks.insert(offset, CoverageMaskRecord { name, properties, width: pixels.width, height: pixels.height, children });
-            Ok(Ok(LayerMask { surface, ..LayerMask::reveal_all() }))
-        })();
-        if !matches!(&result, Ok(Ok(_)) | Err(IoError::Cancelled)) {
-            // Until this mask is returned and its configuration cached, its samples
-            // and tiles are temporary. Refund only their measured, disjoint debits:
-            // children may already have retained masks whose charges must survive.
-            // The sum cannot exceed this call's incoming allowance.
-            self.budget = self.budget.saturating_add(own_pixel_charge);
-        }
-        state.active_masks.remove(&offset);
-        result.map(|mask| mask.map(|mask| (mask, own_pixel_charge)))
-    }
-
-    /// Decodes and inventories nested coverage effects with owner identity, limits and deferred application
-    /// outcomes.
-    fn report_coverage_effects_with(
-        &mut self,
-        owner: usize,
-        pointers: &[usize],
-        applied: &HashMap<usize, std::result::Result<String, effects::MappingFailure>>,
-        decoded_masks: &HashMap<usize, CoverageMaskRecord<'a>>,
-        committed: bool,
-        ctl: &Interrupt<'_>,
-    ) -> Result<()> {
-        if pointers.is_empty() {
+    /// Current P2 has no coverage adapters: inventory source configuration once,
+    /// leaving the supported native owner's pixels untouched.
+    fn inventory_coverage_effects(&mut self, owner: usize, pointers: &[usize], ctl: &Interrupt<'_>) -> Result<()> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        if pointers.is_empty() || !self.outcomes.recording() {
             return Ok(());
         }
         let owner_entry = self.outcomes.entry(owner)?.clone();
@@ -486,8 +338,11 @@ impl<'a> Image<'a> {
         }
         let mut ordinal = 0u32;
         while let Some((pointer, depth, source_owner)) = work.pop() {
-            let current_owner = self.outcomes.entry(source_owner)?.clone();
             ctl.check().map_err(|_| IoError::Cancelled)?;
+            if !self.outcomes.recording() {
+                return Ok(());
+            }
+            let current_owner = self.outcomes.entry(source_owner)?.clone();
             if effects_seen.len() >= MAX_LAYERS {
                 return Err(invalid("coverage effects exceed 8,192 records"));
             }
@@ -546,30 +401,13 @@ impl<'a> Image<'a> {
             }
             let reason =
                 if effect.errors.is_empty() && invalid_arguments.is_empty() { ConversionReason::MissingMapping } else { ConversionReason::InvalidOptionalData };
-            let owner_committed = committed && (depth == 0 || current_owner.disposition == ConversionDisposition::NativeApproximation);
-            let translated = owner_committed && applied.get(&pointer).is_some_and(|result| result.is_ok());
-            let reason = if applied.get(&pointer).is_some_and(|value| value.is_ok()) {
-                ConversionReason::NativePolicy
-            } else {
-                applied.get(&pointer).and_then(|result| result.as_ref().err()).map(|failure| failure.reason).unwrap_or(reason)
-            };
-            let native_description = if translated {
-                format!(
-                    "Native Gray operations applied once to editable coverage samples under PhotoCraft depth, blending and opacity rules. Source parameter editability is lost; original configuration remains inert in the report. Later stages use the native result. {}",
-                    applied.get(&pointer).and_then(|value| value.as_ref().ok()).map(String::as_str).unwrap_or("")
-                )
-            } else if !owner_committed && applied.get(&pointer).is_some_and(|value| value.is_ok()) {
-                "Native auxiliary coverage was not installed because its owning source operation was not committed; temporary conversion results were discarded and the original configuration remains inert".into()
-            } else if let Some(Err(message)) = applied.get(&pointer) {
-                format!("Native coverage preserved; {}. Source configuration remains inert; later stages may receive different coverage.", message.message)
-            } else {
-                "Native coverage samples remain editable. Stored stage remains inactive; translation into native coverage operations is unfinished, not intrinsically impossible.".into()
-            };
+            let native_description =
+                "Native coverage is unchanged; conversion is not implemented. Source effect configuration remains inert and is not executed".into();
             let outcome = self.outcomes.push(ConversionEntry {
                 feature_code: "xcf.coverage_effect".into(),
                 source,
                 targets: current_owner.targets.clone(),
-                disposition: if translated { ConversionDisposition::NativeApproximation } else { ConversionDisposition::RetainedUnapplied },
+                disposition: ConversionDisposition::RetainedUnapplied,
                 reason,
                 source_description: format!(
                     "{} version {}; visible {}, opacity {}; {} ordered arguments ({} config bytes, {} string bytes); inert icon {}; {} {}",
@@ -587,53 +425,49 @@ impl<'a> Image<'a> {
                 native_description,
                 attachments: Vec::new(),
             })?;
+            if !self.outcomes.recording() {
+                return Ok(());
+            }
             self.outcomes.property_with_reason(outcome, 45, effect.record_offset, effect.raw, reason)?;
             for property in effect.unknown_properties {
                 self.outcomes.property(outcome, property.kind, property.offset, property.bytes)?;
             }
             if effect.mask_offset != 0 && masks_seen.insert(effect.mask_offset) {
                 let start = effect.mask_offset;
-                let fallback;
-                let record = if let Some(record) = decoded_masks.get(&start) {
-                    record
-                } else {
-                    // Reporting retains configuration only; successful and failed
-                    // fallback decodes must release their temporary pixel charge.
-                    let pixel_budget = self.budget;
-                    fallback = match self.channel(start, ctl) {
-                        Ok((name, properties, pixels, children)) => {
-                            self.budget = pixel_budget;
-                            CoverageMaskRecord { name, properties, width: pixels.width, height: pixels.height, children }
-                        }
-                        Err(IoError::Cancelled) => return Err(IoError::Cancelled),
-                        Err(error) => {
-                            self.budget = pixel_budget;
-                            self.outcomes.push(ConversionEntry {
-                                feature_code: "xcf.coverage_effect_mask".into(),
-                                source: conversion::source("coverage_effect_mask", ordinal as usize, start, "", &current_owner.source.item_path, None),
-                                targets: current_owner.targets.clone(),
-                                disposition: ConversionDisposition::SkippedNonessential,
-                                reason: ConversionReason::InvalidOptionalData,
-                                source_description: format!("Optional effect-mask coverage could not be decoded: {error}"),
-                                native_description: "Native owner coverage is preserved; unreadable auxiliary mask pixels are not retained and the source stage remains inactive"
-                                    .into(),
-                                attachments: Vec::new(),
-                            })?;
-                            continue;
-                        }
-                    };
-                    &fallback
+                let effect_source = self.outcomes.entry(outcome)?.source.clone();
+                let record = match self.coverage_mask_header(start, ctl) {
+                    Ok(record) => record,
+                    Err(IoError::Cancelled) => return Err(IoError::Cancelled),
+                    Err(error) => {
+                        self.outcomes.push(ConversionEntry {
+                            feature_code: "xcf.coverage_effect_mask".into(),
+                            source: conversion::source("coverage_effect_mask", effect_source.ordinal as usize, start, "", &effect_source.item_path, None),
+                            targets: current_owner.targets.clone(),
+                            disposition: ConversionDisposition::SkippedNonessential,
+                            reason: ConversionReason::InvalidOptionalData,
+                            source_description: format!("Optional effect-mask header could not be decoded: {error}"),
+                            native_description:
+                                "Native owner coverage is preserved; auxiliary mask pixels are not retained and the source stage remains inactive".into(),
+                            attachments: Vec::new(),
+                        })?;
+                        continue;
+                    }
                 };
-                // Cached facts and inert properties cannot recover discarded coverage pixels.
-                // Only a mask installed with its translated owner can avoid a loss disclosure.
-                let mask_applied = translated && decoded_masks.contains_key(&start);
                 let mask_outcome = self.outcomes.push(ConversionEntry {
                     feature_code: "xcf.coverage_effect_mask".into(),
-                    source: conversion::source("coverage_effect_mask", ordinal as usize, start, &record.name, &owner_entry.source.item_path, None),
-                    targets: current_owner.targets.clone(), disposition: if mask_applied { ConversionDisposition::NativeApproximation } else { ConversionDisposition::SkippedNonessential }, reason: if mask_applied { ConversionReason::NativePolicy } else { ConversionReason::NativeLimitation },
+                    source: conversion::source("coverage_effect_mask", effect_source.ordinal as usize, start, &record.name, &effect_source.item_path, None),
+                    targets: current_owner.targets.clone(),
+                    disposition: ConversionDisposition::SkippedNonessential,
+                    reason: ConversionReason::NativeLimitation,
                     source_description: format!("Source effect-mask coverage {}x{}; {} nested effects", record.width, record.height, record.children.len()),
-                    native_description: if mask_applied { "Source image-global auxiliary pixels and supported nested operations became ordinary native layer-mask coverage; source operation parameters remain historical" } else if !owner_committed { "Source auxiliary mask pixels are not retained because the owning source operation was not committed; only mask identity and configuration remain inert" } else { "Source auxiliary mask pixels are not retained; only mask identity and configuration remain inert with the unapplied coverage stage" }.into(), attachments: Vec::new(),
+                    native_description:
+                        "Source auxiliary mask pixels are not retained; only mask identity and configuration remain inert with the unapplied coverage stage"
+                            .into(),
+                    attachments: Vec::new(),
                 })?;
+                if !self.outcomes.recording() {
+                    return Ok(());
+                }
                 for property in &record.properties {
                     self.outcomes.property(mask_outcome, property.kind, property.offset, property.data)?;
                 }
@@ -644,13 +478,28 @@ impl<'a> Image<'a> {
                 work.extend(record.children.iter().rev().map(|pointer| (*pointer, depth + 1, mask_outcome)));
             }
         }
-        self.warnings.layer(&owner_entry.source.name, "has stored coverage effects; native coverage conversion may lose parameter editability or leave unsupported stages inactive; see the conversion report");
+        self.warnings.layer(
+            &owner_entry.source.name,
+            "has stored coverage effects retained as inactive configuration; auxiliary mask pixels are not retained; see the conversion report",
+        );
         Ok(())
     }
 
-    /// Records source samples lost below native precision without misclassifying their owner as fully
-    /// preserved.
+    /// Records per-owner numerical loss from coverage normalization or native precision narrowing.
     fn precision_underflow(&mut self, owner: usize, pixels: &Pixels) -> Result<()> {
+        if pixels.coverage_clamped {
+            self.outcomes.notice(
+                owner,
+                "xcf.coverage_clamped",
+                ConversionReason::NumericalConversion,
+                (
+                    "Finite stored coverage outside 0 to 1".into(),
+                    "Coverage clamped to the native 0 to 1 domain; signed HDR color samples remain unchanged".into(),
+                ),
+                Some("has finite coverage samples clamped to the native 0 to 1 range"),
+                &mut self.warnings,
+            )?;
+        }
         if pixels.underflow {
             self.outcomes.notice(
                 owner,
@@ -1078,6 +927,9 @@ pub(crate) fn import_with_sample_order(
     import_native_effects(&mut document, &mut image, ctl)?;
     add_document_warnings(&mut image, &document, precision, linear_compositing);
     let initial_view = (image.initial_view != Default::default()).then_some(image.initial_view);
+    if !image.outcomes.recording() {
+        image.warnings.note("conversion details exceeded report limits; usable native content was imported, but the conversion report is incomplete");
+    }
     document.metadata.import_conversion = Some(Arc::new(image.outcomes.finish()?));
     ctl.progress(1.0);
     Ok(ImportResult { initial_view, document, warnings: image.warnings.finish(), source_read_only: true, preview_only: false })

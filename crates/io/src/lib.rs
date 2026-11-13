@@ -200,7 +200,8 @@ impl From<RenderError> for IoError {
 #[derive(Debug, Clone)]
 pub struct ImportResult {
     /// Optional native view hints. Hosts carry them through open prompts, then validate
-    /// and apply them against the admitted document once. A rejected hint rolls admission back.
+    /// and apply them atomically against the admitted document once. An invalid optional hint
+    /// is discarded with a warning; the imported document keeps its default view and usable pixels.
     /// Unavailable view affordances must be reported rather than silently discarded.
     pub initial_view: Option<NativeInitialView>,
     /// The imported document.
@@ -293,9 +294,9 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
-    use photocraft_doc::import_conversion::{ConversionDisposition, ImportConversion};
+    use photocraft_doc::import_conversion::ImportConversion;
     match doc.metadata.import_conversion.as_deref() {
-        Some(ImportConversion::Report(report)) if report.entries.iter().any(|entry| entry.disposition != ConversionDisposition::NativeEquivalent) => {
+        Some(ImportConversion::Report(_)) if import_report_needs_notice(doc) => {
             out.push("a historical import conversion report records approximations or unapplied source data; view Import Conversion Report for details".into());
         }
         Some(ImportConversion::Opaque { .. }) => {
@@ -324,6 +325,24 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
         }
     }
     out
+}
+
+/// Retained parser properties are inert history, not evidence that native content was lost.
+/// Keep notices for actual approximations/unapplied content, missing property bytes and future reports.
+fn import_report_needs_notice(doc: &Document) -> bool {
+    use photocraft_doc::import_conversion::{ConversionDisposition as D, ConversionReason as R, ImportConversion};
+    match doc.metadata.import_conversion.as_deref() {
+        Some(ImportConversion::Report(report)) => report.entries.iter().any(|entry| {
+            entry.disposition != D::NativeEquivalent
+                && !(entry.disposition == D::RetainedUnapplied
+                    && entry.feature_code.starts_with("xcf.source_property.")
+                    && matches!(entry.reason, R::MissingMapping | R::NativePolicy)
+                    && !entry.attachments.is_empty()
+                    && entry.attachments.iter().all(|index| report.attachments.get(*index as usize).is_some()))
+        }),
+        Some(ImportConversion::Opaque { .. }) => true,
+        None => false,
+    }
 }
 
 /// Result of [`export`].
@@ -931,6 +950,8 @@ pub fn import_file_for_open_verified(
 /// Verified interactive import that can return the already-read encoded source with a historical-order question.
 /// Only the bounded fixed header is inflated before asking; a later explicit-order import validates the full stream.
 /// The output is published only after rechecking the same opened handle's identity and cancellation.
+/// A returned [`IoError::HistoricalXcfSampleOrderRequired`] always supplies the exact encoded
+/// source in `historical_source_out`; hosts must keep that allocation rather than reread the path.
 #[cfg(any(unix, windows))]
 pub fn import_file_for_open_verified_with_historical_source(
     name: &str,
@@ -1301,7 +1322,7 @@ fn checked_stages(
         }
         return Err(e);
     }
-    if doc.metadata.import_conversion.is_some() && extension(name_or_ext) != photocraft_format::EXTENSION {
+    if import_report_needs_notice(doc) && extension(name_or_ext) != photocraft_format::EXTENSION {
         r.warnings.push("the import conversion report and retained source configuration are not exported in this format; save as .pcraft to keep them".into());
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -1830,3 +1851,6 @@ mod tests {
 
 #[cfg(all(test, any(unix, windows)))]
 mod historical_source_tests;
+
+#[cfg(test)]
+mod import_report_warning_tests;

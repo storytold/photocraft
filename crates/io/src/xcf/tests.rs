@@ -760,10 +760,11 @@ fn unsigned_32_samples_choose_native_float_and_preserve_normalization_boundaries
     }
 }
 
-/// Reject out-of-domain source coverage before narrowing can disguise it on layers, masks or channels.
+/// Clamp finite source coverage before narrowing, and still reject nonfinite samples for every owner.
 #[test]
-fn coverage_is_validated_before_float_narrowing_for_every_owner() {
-    for value in [-1e-50, 1.0 + 2.0f64.powi(-24)] {
+fn coverage_clamps_before_float_narrowing_and_nonfinite_samples_fail_for_every_owner() {
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
+    for value in [-1e-50, 1.0 + 2.0f64.powi(-24), f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         for owner in ["alpha", "mask", "channel", "selection"] {
             let mut image = float_pixel_image(750, [0.25, 0.5, 0.75, 1.0]);
             match owner {
@@ -772,19 +773,48 @@ fn coverage_is_validated_before_float_narrowing_for_every_owner() {
                 "channel" | "selection" => image.channels.push(("Coverage", value.to_be_bytes().to_vec(), owner == "selection")),
                 _ => panic!("test owner"),
             }
-            let Err(error) = open(&image.write()) else { panic!("invalid coverage must fail") };
-            let error = error.to_string();
-            assert!(error.contains("coverage") && error.contains("plane"), "{owner}: {error}");
-            assert!(
-                error.contains(if owner == "alpha" {
-                    "Float source"
-                } else if owner == "mask" {
-                    "mask"
-                } else {
-                    "Coverage"
-                }),
-                "{error}"
+            let imported = open(&image.write());
+            if !value.is_finite() {
+                let error = imported.unwrap_err().to_string();
+                assert!(error.contains("coverage") && error.contains("plane"), "{owner}: {error}");
+                assert!(
+                    error.contains(match owner {
+                        "alpha" => "Float source",
+                        "mask" => "mask",
+                        _ => "Coverage",
+                    }),
+                    "{error}"
+                );
+                continue;
+            }
+            let document = imported.unwrap().document;
+            let expected = value.clamp(0.0, 1.0) as f32;
+            let coverage = |document: &photocraft_doc::Document| match owner {
+                "alpha" => document.layers[0].surface().unwrap().pixel(0, 0)[3],
+                "mask" => document.layers[0].mask.as_ref().unwrap().surface.pixel(0, 0)[0],
+                "channel" => document.channels[0].surface.pixel(0, 0)[0],
+                "selection" => document.selection.as_ref().unwrap().pixel(0, 0)[0],
+                _ => panic!("test owner"),
+            };
+            assert_eq!(coverage(&document).to_bits(), expected.to_bits(), "{owner}");
+            assert_eq!(&pixel(&document.layers[0], 0, 0)[..3], &[0.25, 0.5, 0.75]);
+            let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("report") };
+            let notices: Vec<_> = report.entries.iter().filter(|entry| entry.feature_code == "xcf.coverage_clamped").collect();
+            assert_eq!(notices.len(), 1, "{owner}");
+            assert_eq!(notices[0].reason, ConversionReason::NumericalConversion);
+            assert_eq!(
+                notices[0].source.kind,
+                match owner {
+                    "alpha" => "layer",
+                    "mask" => "layer_mask",
+                    _ => owner,
+                }
             );
+            assert!(!report.entries.iter().any(|entry| entry.feature_code == "xcf.precision_underflow"));
+            let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+            assert_eq!(coverage(&reopened).to_bits(), expected.to_bits());
+            assert_eq!(reopened.metadata.import_conversion, document.metadata.import_conversion);
         }
     }
 }
@@ -1428,7 +1458,7 @@ fn blank_layers_are_not_charged_for_pruned_tiles() {
     let mut budget = MAX_PIXEL_BYTES;
     for _ in 0..4 {
         let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
-        let px = Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000], underflow: false };
+        let px = Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000], underflow: false, coverage_clamped: false };
         write_pixels(&mut surface, &px, 0, 0, &mut budget).unwrap();
     }
     assert_eq!(budget, MAX_PIXEL_BYTES);

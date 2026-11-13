@@ -206,9 +206,10 @@ impl Headless {
             }
             None => save_path,
         };
-        let index = self.install_imported_document(o.document, path, o.source_read_only, o.initial_view)?;
+        let (index, view_warning) = self.install_imported_document(o.document, path, o.source_read_only, o.initial_view)?;
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;
+        warnings.extend(view_warning);
         warnings.extend(photocraft_engine::type_extra_cmds::missing_font_warnings(&d.doc));
         Ok(json!({
             "index": index,
@@ -220,18 +221,18 @@ impl Headless {
         }))
     }
 
-    /// Admit the source and apply its view through the shared rollback boundary.
+    /// Admit the source and report optional view failures through ordinary import warnings.
     fn install_imported_document(
         &mut self,
         document: photocraft_doc::Document,
         path: Option<String>,
         source_read_only: bool,
         initial_view: Option<photocraft_io::NativeInitialView>,
-    ) -> Result<usize, AutomationError> {
-        let (index, ()) = self.session.admit_import_with_initial_view(source_read_only, initial_view, |session| {
+    ) -> Result<(usize, Option<String>), AutomationError> {
+        let (index, (), warning) = self.session.admit_import_with_initial_view(source_read_only, initial_view, |session| {
             (session.add_document(document, path.filter(|_| !source_read_only)), ())
         })?;
-        Ok(index)
+        Ok((index, warning))
     }
 
     /// Place a file into a document as a Smart Object layer: the capability-scoped counterpart
@@ -782,7 +783,7 @@ mod import_initial_view_tests {
     }
 
     #[test]
-    fn invalid_view_application_rolls_back_admission_and_restores_active_identity() {
+    fn invalid_optional_view_keeps_headless_admission_with_warning_and_default_view() {
         for existing in [0, 3] {
             let mut headless = Headless::trusted_local();
             for n in 0..existing {
@@ -818,11 +819,16 @@ mod import_initial_view_tests {
             }
             let view = NativeInitialView { target: NativeImportTarget::AlphaChannel(usize::MAX), ..Default::default() };
             assert!(view.validate(&doc).is_err());
-            let error = headless.install_imported_document(doc, Some("source.xcf".into()), true, Some(view)).unwrap_err();
-            assert!(error.to_string().contains("target alpha channel is absent"));
-            assert_eq!(headless.session.documents().len(), existing);
-            assert_eq!(headless.session.active().map(|state| state.doc.id), active);
-            assert_eq!(headless.session.active_index(), if existing == 0 { None } else { Some(0) });
+            let (index, warning) = headless.install_imported_document(doc, Some("source.xcf".into()), true, Some(view)).unwrap();
+            assert!(warning.unwrap().contains("target alpha channel is absent"));
+            assert_eq!(headless.session.documents().len(), existing + 1);
+            assert_eq!(headless.session.active_index(), Some(index));
+            let admitted = headless.session.active().unwrap();
+            assert!(admitted.source_read_only);
+            assert!(admitted.path.is_none());
+            assert!(admitted.color_samplers.is_empty());
+            assert_eq!(admitted.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
+            assert_eq!(admitted.history.past_len(), 0);
             for (state, before) in headless.session.documents().iter().zip(before) {
                 assert!(Arc::ptr_eq(&state.doc, &before.0));
                 assert_eq!(

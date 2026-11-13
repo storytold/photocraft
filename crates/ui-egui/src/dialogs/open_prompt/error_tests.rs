@@ -29,7 +29,7 @@ fn held(doc: Document, name: &str, question: Option<Value>) -> Held {
 }
 
 #[test]
-fn background_open_action_invalidates_saved_path_reports_source_and_continues_queue() {
+fn background_open_action_invalidates_saved_path_keeps_pixels_warns_and_continues_queue() {
     let mut session = photocraft_engine::Session::new();
     session.add_document(document("control"), Some("/accepted/control.pcraft".into()));
     let mut app = PhotocraftApp::new(session, crate::Services::default());
@@ -50,6 +50,8 @@ fn background_open_action_invalidates_saved_path_reports_source_and_continues_qu
     let profile_prompt = app.ui.dialogs.iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
 
     let mut imported = document("embedded original name");
+    imported.layers[0].surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 2, 2), &[0.2, 0.4, 0.6, 1.]);
+    let pixel = imported.layers[0].surface().unwrap().pixel(0, 0);
     imported.paths.extend(["Retained path", "Selected saved path"].map(|name| photocraft_doc::vector::NamedPath { name: name.into(), ..Default::default() }));
     let selected_layer = imported.layers[0].id;
     let view = photocraft_io::NativeInitialView {
@@ -108,18 +110,28 @@ fn background_open_action_invalidates_saved_path_reports_source_and_continues_qu
     arrive(&mut app, held(later, "later.pcraft", None));
     crate::dialogs::confirm(&mut app, profile_prompt).unwrap();
 
-    assert_eq!(app.session.documents().len(), 3, "only the control, earlier and later documents remain admitted");
-    assert!(!app.session.documents().iter().any(|state| state.doc.id == imported_id));
-    assert_eq!(app.session.active().unwrap().doc.id, later_id, "validation failure does not stop later queued opens");
+    assert_eq!(app.session.documents().len(), 4, "the optional view failure must retain the imported pixels and every queued document");
+    let imported = app.session.documents().iter().find(|state| state.doc.id == imported_id).unwrap();
+    assert_eq!(imported.doc.layers[0].surface().unwrap().pixel(0, 0), pixel);
+    assert!(imported.initial_path_selection.is_none());
+    assert!(imported.source_read_only);
+    assert!(imported.path.is_none());
+    assert_eq!(imported.history.past_len(), 0);
+    assert_eq!(app.session.active().unwrap().doc.id, later_id, "the view warning does not stop later queued opens");
     assert!(app.held_opens.is_empty());
     assert!(app.prompt_order.is_empty());
     let state = app.session.documents().iter().find(|state| state.doc.id == control.id).unwrap();
-    assert!(Arc::ptr_eq(&control, &state.doc), "failed admission cannot change an accepted document");
+    assert!(Arc::ptr_eq(&control, &state.doc), "an optional view failure cannot change an accepted document");
     assert_eq!((state.path.clone(), state.revision, state.saved_revision, state.history.past_len()), identity);
-    assert!(!app.ui.recent_files.iter().any(|path| path == source_path), "a failed open must not claim its source path");
-    let errors = app.ui.notices.iter().filter(|notice| notice.error).collect::<Vec<_>>();
-    assert_eq!(errors.len(), 1);
-    assert!(errors[0].title.contains("Couldn't open renamed-source.xcf"), "{}", errors[0].title);
-    assert!(errors[0].title.contains("selected path is absent"), "{}", errors[0].title);
-    assert!(!errors[0].title.contains("embedded original name"), "report the source filename rather than its embedded document name");
+    assert!(app.ui.recent_files.iter().any(|path| path == source_path), "the pixels opened successfully from this source");
+    assert!(app.ui.notices.iter().all(|notice| !notice.error));
+    let warnings: Vec<_> =
+        app.ui.notices.iter().filter(|notice| notice.lines.iter().any(|line| line.contains("Native initial view was not applied"))).collect();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].title.contains("Opened renamed-source.xcf"), "{}", warnings[0].title);
+    assert!(warnings[0].lines.iter().any(|line| line.contains("selected path is absent")));
+    assert!(!warnings[0].title.contains("embedded original name"), "report the source filename rather than its embedded document name");
+    let notices = app.ui.notices.clone();
+    app.sync_views();
+    assert_eq!(app.ui.notices, notices, "the rejected requeued hint is consumed once");
 }

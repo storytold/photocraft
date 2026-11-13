@@ -328,10 +328,9 @@ fn invalid_later_offcanvas_color_cannot_succeed_as_a_partially_imported_document
 }
 
 #[test]
-/// Checks invalid coverage values are rejected before precision conversion, including clipped storage
-/// regions.
-fn coverage_outside_storage_domain_is_rejected_before_narrowing_even_when_offcanvas() {
-    for value in [-2f64.powi(-150), 1. + 2f64.powi(-24)] {
+/// Checks finite coverage clamps before narrowing even outside the canvas, while nonfinite storage still fails.
+fn coverage_clamps_before_narrowing_even_when_offcanvas_and_nonfinite_storage_fails() {
+    for value in [-2f64.powi(-150), 1. + 2f64.powi(-24), f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         for owner in ["alpha", "mask", "channel", "selection"] {
             let mut source = Image::new(0, 750, 8);
             let mut raster = drawable("Coverage owner", 1, 1, 1, doubles([2., -1., 0.5, 1.]));
@@ -343,8 +342,40 @@ fn coverage_outside_storage_domain_is_rejected_before_narrowing_even_when_offcan
                 _ => panic!("test owner"),
             };
             source.layers.push(raster);
-            let error = import("invalid-stored-coverage.xcf", &source.bytes()).unwrap_err().to_string();
-            assert!(error.contains("coverage") && error.contains("plane"), "{owner}: {error}");
+            let imported = import("stored-coverage.xcf", &source.bytes());
+            if !value.is_finite() {
+                let error = imported.unwrap_err().to_string();
+                assert!(error.contains("coverage") && error.contains("plane"), "{owner}: {error}");
+                continue;
+            }
+            let imported = imported.unwrap();
+            let document = &imported.document;
+            let expected = value.clamp(0.0, 1.0) as f32;
+            let coverage = |document: &Document| match owner {
+                "alpha" => layer(document, "Coverage owner").surface().unwrap().pixel(-5, 3)[3],
+                "mask" => layer(document, "Coverage owner").mask.as_ref().unwrap().surface.pixel(-5, 3)[0],
+                "channel" => document.channels[0].surface.pixel(0, 0)[0],
+                "selection" => document.selection.as_ref().unwrap().pixel(0, 0)[0],
+                _ => panic!("test owner"),
+            };
+            assert_eq!(coverage(document).to_bits(), expected.to_bits(), "{owner}");
+            assert_eq!(&samples(layer(document, "Coverage owner"), Rect::new(-5, 3, -4, 4))[..3], &[2., -1., 0.5]);
+            let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("report") };
+            let notices: Vec<_> = report.entries.iter().filter(|entry| entry.feature_code == "xcf.coverage_clamped").collect();
+            assert_eq!(notices.len(), 1, "{owner}");
+            assert_eq!(notices[0].reason, photocraft_doc::import_conversion::ConversionReason::NumericalConversion);
+            assert_eq!(
+                notices[0].source.kind,
+                match owner {
+                    "alpha" => "layer",
+                    "mask" => "layer_mask",
+                    _ => owner,
+                }
+            );
+            assert_eq!(imported.warnings.iter().filter(|warning| warning.contains("clamped")).count(), 1);
+            let reopened = reopen(document);
+            assert_eq!(coverage(&reopened).to_bits(), expected.to_bits());
+            assert_native_equal(document, &reopened);
         }
     }
 }

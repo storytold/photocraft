@@ -74,24 +74,9 @@ fn fp(h: &Harness<'_, PhotocraftApp>) -> CursorFp {
     }
 }
 
-/// These root-viewport fixtures use scale 1. Compare the routed cursor with the standalone
-/// pipette, whose artwork and hotspot have separate pixel tests in `tool_cursor::tests`.
-pub(crate) fn pipette_bitmap() -> egui::CustomCursorImage {
-    let ctx = egui::Context::default();
-    let mut output = ctx.run_ui(Default::default(), |ui| {
-        ui.ctx().set_cursor_icon(crate::canvas::tool_cursor::pipette(ui.ctx(), egui::Pos2::ZERO));
-    });
-    output.textures_delta.clear();
-    output.platform_output.cursor_image.take().expect("the native pipette has a bitmap")
-}
-
-fn assert_pipette(cursor: &CursorFp) {
-    assert_eq!(cursor.icon, CursorIcon::Crosshair, "native pipette keeps a visible backend fallback");
-    let image = cursor.image.as_ref().expect("the pipette supplies its own native bitmap");
-    let expected = pipette_bitmap();
-    assert_eq!(image.size, expected.size);
-    assert_eq!(image.hotspot, expected.hotspot);
-    assert_eq!(image.rgba, expected.rgba, "the pipette, not the selected tool's cursor");
+/// The eyedropper's pipette: the OS bitmap where one uploads, else drawn (#12523).
+fn pipette_shown(h: &Harness<'_, PhotocraftApp>) -> bool {
+    crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
 }
 
 fn painting(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
@@ -224,13 +209,12 @@ fn caps_lock_gives_the_curves_eyedroppers_the_precise_crosshair() {
     h.run_steps(3);
     other(&mut h, "standard");
     let standard = fp(&h);
-    assert_pipette(&standard);
+    assert!(pipette_shown(&h), "the pipette, not the Move tool's arrow over it");
     other(&mut h, "precise");
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
-    // Both native cursors retain the fallback icon; their bitmaps must still differ.
-    assert_ne!(standard.image, precise.image, "Standard pipette differs from the precise crosshair bitmap");
-    assert_ne!(standard, precise, "Standard: the pipette");
+    // CodeRabbit on #10406: the pipette is shown (drawn, or the OS bitmap), not only the icon hidden.
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -252,12 +236,12 @@ fn caps_lock_gives_the_properties_eyedroppers_the_precise_crosshair() {
     h.run_steps(3);
     other(&mut h, "standard");
     let standard = fp(&h);
-    assert_pipette(&standard);
+    assert!(pipette_shown(&h), "the pipette, not the Move tool's arrow over it");
     other(&mut h, "precise");
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
-    // Both native cursors retain the fallback icon; their bitmaps must still differ.
-    assert_ne!(standard.image, precise.image, "Standard pipette differs from the precise crosshair bitmap");
+    // CodeRabbit on #10406: the pipette is shown (drawn, or the OS bitmap), not only the icon hidden.
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -277,13 +261,12 @@ fn caps_lock_gives_the_color_pickers_eyedropper_the_precise_crosshair() {
     h.run_steps(3);
     other(&mut h, "standard");
     let standard = fp(&h);
-    assert_pipette(&standard);
+    assert!(pipette_shown(&h), "the pipette, not the Move tool's arrow over it");
     other(&mut h, "precise");
     let precise = fp(&h);
     assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
-    // Both native cursors retain the fallback icon; their bitmaps must still differ.
-    assert_ne!(standard.image, precise.image, "Standard pipette differs from the precise crosshair bitmap");
-    assert_ne!(standard, precise);
+    // CodeRabbit on #10406: the pipette is shown (drawn, or the OS bitmap), not only the icon hidden.
+    assert_ne!(standard, precise, "Standard shows a cursor of its own where Precise shows the crosshair");
     other(&mut h, "standard");
     caps(&mut h, true);
     assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
@@ -303,7 +286,7 @@ fn a_lent_hand_shows_its_cursor_over_an_eyedropper_when_it_is_also_selected() {
     assert!(crate::color_picker_ui::top(h.state()).is_some(), "the Color Picker owns the image");
     other(&mut h, "standard");
     let pipette = fp(&h);
-    assert_pipette(&pipette);
+    assert!(pipette_shown(&h), "the eyedropper's pipette");
     let p = h.state().last_canvas_rect.center();
     let middle = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
     h.event(middle(true));
@@ -313,5 +296,4 @@ fn a_lent_hand_shows_its_cursor_over_an_eyedropper_when_it_is_also_selected() {
     h.run_steps(2);
     assert_ne!(lent, pipette, "the Hand's cursor, not the pipette");
     assert!(lent.icon == CursorIcon::Grab || lent.image.is_some(), "the open hand: {:?}", lent.icon);
-    assert_eq!(fp(&h), pipette, "releasing the lent Hand restores the eyedropper bitmap");
 }

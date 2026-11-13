@@ -86,3 +86,27 @@ fn interactive_wrapped_path_asks_before_corrupt_tail_is_inflated() {
     assert!(session.documents().is_empty());
     assert!(session.cancel_historical_xcf_open(id));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn verified_path_question_retains_exact_source_and_explicit_order_needs_no_capture() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.xcf.gz");
+    let bytes = wrapped(false);
+    std::fs::write(&path, bytes.as_slice()).unwrap();
+    for order in [None, Some(photocraft_io::HistoricalXcfSampleOrder::BigEndian)] {
+        let options = photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() };
+        let mut identity = None;
+        let mut retained = None;
+        let result =
+            import_path("source.xcf.gz", path.to_str().unwrap(), &options, None, &photocraft_raster::Interrupt::NONE, &mut identity, Some(&mut retained));
+        assert_eq!(identity, Some(photocraft_io::FileIdentity::of_path(&path).unwrap()));
+        if order.is_none() {
+            assert!(matches!(result, Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(_))));
+            assert_eq!(retained.unwrap().as_slice(), bytes.as_slice(), "the question must carry the exact verified encoded source");
+        } else {
+            assert!(result.is_ok());
+            assert!(retained.is_none(), "ordinary explicit-order imports do not retain another encoded buffer");
+        }
+    }
+}

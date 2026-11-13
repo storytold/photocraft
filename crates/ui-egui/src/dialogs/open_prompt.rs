@@ -360,7 +360,8 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, initial_view, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
+    let Held { mut doc, read_only, initial_view, damage_pending: _, name, path, mut warnings, bytes, slot, order, question, policy_applied, smart_object } =
+        held;
     if (question.is_some() || policy_applied)
         && let Some(action) = action
         && let Err(e) = app.session.color.resolve_open(&mut doc, action)
@@ -368,7 +369,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         app.open_failed(&name, &e.to_string());
         return Err(e.to_string());
     }
-    let (index, ()) = app
+    let (index, (), view_warning) = app
         .session
         .admit_import_with_initial_view(read_only, initial_view, |session| {
             let index = if question.is_some() || policy_applied {
@@ -385,6 +386,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
             (index, ())
         })
         .map_err(|error| error.to_string())?;
+    warnings.extend(view_warning);
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;
     let slot = crate::jobs_ui::tab_slot(app, slot, order);

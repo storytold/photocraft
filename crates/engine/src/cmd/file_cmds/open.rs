@@ -209,7 +209,7 @@ pub fn open_bytes_as_with_import_options(
         None => name.to_string(),
     };
     let raw = super::raw_open::prepare(s, &decode_name, path.as_deref(), bytes)?;
-    let (r, raw_settings) = if let Some((imported, settings)) = raw {
+    let (mut r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
         let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| crate::error::io_open_error(&decode_name, e))?;
@@ -235,7 +235,11 @@ pub fn open_bytes_as_with_import_options(
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(doc, path.filter(|_| !r.source_read_only)))?;
+    let (i, color, view_warning) =
+        s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(doc, path.filter(|_| !r.source_read_only)))?;
+    if let Some(warning) = view_warning {
+        r.warnings.push(warning);
+    }
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
     }

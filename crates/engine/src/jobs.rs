@@ -1352,15 +1352,11 @@ impl Session {
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) if confirm_damage => {
-                                let bytes = match historical_source {
-                                    Some(bytes) => bytes,
-                                    None => {
-                                        // Defensive compatibility for importers that cannot return encoded bytes.
-                                        // This late fallback must never move progress behind decoding's completed range.
-                                        let identity = opened.ok_or_else(|| EngineError::Other("missing historical source identity".into()))?;
-                                        ctx.stage(0.95, 0.97, "Holding historical source", |ctl| historical_xcf_open::snapshot(&p, &identity, ctl))?
-                                    }
-                                };
+                                // Interactive verified IO publishes the same encoded allocation
+                                // only after checking handle identity and cancellation. Reopening
+                                // the locator here would violate that source-retention contract.
+                                let bytes = historical_source
+                                    .ok_or_else(|| EngineError::Other("verified historical import did not retain its encoded source".into()))?;
                                 WorkResult::Historical(bytes, question)
                             }
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
@@ -1439,7 +1435,13 @@ impl Session {
                     // The shell may synchronize another completed job before handling this
                     // open, consuming the pending path. Keep its exact index for queued opens.
                     let initial_path_selection = r.initial_view.as_ref().and_then(|view| view.selected_path);
-                    let (index, color) = s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(r.document, None))?;
+                    let (index, color, view_warning) =
+                        s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(r.document, None))?;
+                    let has_initial_view = has_initial_view && view_warning.is_none();
+                    let initial_path_selection = if view_warning.is_none() { initial_path_selection } else { None };
+                    if let Some(warning) = view_warning {
+                        r.warnings.push(warning);
+                    }
                     let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
                     Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color,
                         "hasInitialView": has_initial_view, "initialPathSelection": initial_path_selection}))

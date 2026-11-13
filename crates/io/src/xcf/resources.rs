@@ -264,14 +264,14 @@ mod tests {
         assert!(result.document.layers[0].surface().unwrap().content_bounds().is_empty());
     }
 
-    /// Reject invalid floating alpha and insufficient Gray-to-RGB allowance before publishing expanded native pixels.
+    /// Reject nonfinite floating alpha and insufficient Gray-to-RGB allowance before publishing expanded native pixels.
     #[test]
     fn floating_coverage_validation_and_gray_expansion_obey_native_allocation_budget() {
-        let pixels = Pixels { width: 1, height: 1, channels: 2, data: vec![0.5, 1.0], underflow: false };
+        let pixels = Pixels { width: 1, height: 1, channels: 2, data: vec![0.5, 1.0], underflow: false, coverage_clamped: false };
         assert!(gray_to_rgb(pixels, &mut 7, &Interrupt::NONE).is_err());
         let mut image = TestImage::rgb8(1, 1);
         image.precision = 650;
-        let mut floating = TestLayer::rgba("Invalid floating coverage", 1, 1, [0.5f32, 1.25].into_iter().flat_map(f32::to_be_bytes).collect());
+        let mut floating = TestLayer::rgba("Invalid floating coverage", 1, 1, [0.5f32, f32::NAN].into_iter().flat_map(f32::to_be_bytes).collect());
         floating.kind = 3;
         floating.props.push((5, 97u64.to_be_bytes().to_vec()));
         image.layers.push(floating);
@@ -279,7 +279,7 @@ mod tests {
             .err()
             .unwrap()
             .to_string();
-        assert!(error.contains("coverage") && error.contains("outside the range"), "{error}");
+        assert!(error.contains("coverage") && error.contains("not finite"), "{error}");
     }
     /// Reject truncated buffers, invalid channel counts and overflowing dimensions before consuming workspace.
     #[test]
@@ -294,7 +294,7 @@ mod tests {
             (1, 1, 3, vec![0.; 3]),
         ] {
             let mut budget = usize::MAX;
-            let result = gray_to_rgb(Pixels { width, height, channels, data, underflow: false }, &mut budget, &Interrupt::NONE);
+            let result = gray_to_rgb(Pixels { width, height, channels, data, underflow: false, coverage_clamped: false }, &mut budget, &Interrupt::NONE);
             assert!(result.is_err());
             assert_eq!(budget, usize::MAX);
         }
@@ -308,7 +308,7 @@ mod tests {
             let cancelled = || checks.fetch_add(1, Ordering::Relaxed) >= limit;
             let mut budget = 100_000;
             let result = gray_to_rgb(
-                Pixels { width: 4097, height: 1, channels: 2, data: vec![0.5; 4097 * 2], underflow: false },
+                Pixels { width: 4097, height: 1, channels: 2, data: vec![0.5; 4097 * 2], underflow: false, coverage_clamped: false },
                 &mut budget,
                 &Interrupt::cancel_only(&cancelled),
             );
@@ -323,14 +323,25 @@ mod tests {
         for alpha in [false, true] {
             let mut budget = 24;
             let data = if alpha { vec![-0.25, 0.375, 3.5, 0.75] } else { vec![-0.25, 3.5] };
-            let expanded =
-                gray_to_rgb(Pixels { width: 2, height: 1, channels: if alpha { 2 } else { 1 }, data, underflow: true }, &mut budget, &Interrupt::NONE).unwrap();
+            let expanded = gray_to_rgb(
+                Pixels { width: 2, height: 1, channels: if alpha { 2 } else { 1 }, data, underflow: true, coverage_clamped: false },
+                &mut budget,
+                &Interrupt::NONE,
+            )
+            .unwrap();
             assert_eq!((expanded.width, expanded.height, expanded.channels, expanded.underflow), (2, 1, if alpha { 4 } else { 3 }, true));
             assert_eq!(expanded.data, if alpha { vec![-0.25, -0.25, -0.25, 0.375, 3.5, 3.5, 3.5, 0.75] } else { vec![-0.25, -0.25, -0.25, 3.5, 3.5, 3.5] });
             assert_eq!(budget, 8);
         }
         let mut budget = 15;
-        assert!(gray_to_rgb(Pixels { width: 2, height: 1, channels: 1, data: vec![0.5; 2], underflow: false }, &mut budget, &Interrupt::NONE).is_err());
+        assert!(
+            gray_to_rgb(
+                Pixels { width: 2, height: 1, channels: 1, data: vec![0.5; 2], underflow: false, coverage_clamped: false },
+                &mut budget,
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
         assert_eq!(budget, 15);
     }
 }

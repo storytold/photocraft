@@ -184,14 +184,16 @@ impl PhotocraftApp {
     fn import_automation_document(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let opts = photocraft_engine::file_cmds::fresh_import_options(*options);
-        let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = import(name, bytes, &opts)?;
+        let photocraft_io::ImportResult { document: mut doc, mut warnings, source_read_only, initial_view, .. } = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // The caller records the path it read from.
         // The source signature remains authoritative for preview-only Affinity files.
         let read_only = source_read_only || photocraft_io::affinity::is_affinity(bytes);
-        self.session
+        let (_, (), view_warning) = self
+            .session
             .admit_import_with_initial_view(read_only, initial_view, |session| (session.add_document(doc, None), ()))
             .map_err(|error| error.to_string())?;
+        warnings.extend(view_warning);
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
         self.ui.status_error = false;

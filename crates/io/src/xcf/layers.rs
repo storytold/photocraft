@@ -79,7 +79,7 @@ impl<'a> Image<'a> {
                 attachments: Vec::new(),
             })?;
             self.precision_underflow(channel_outcome, &px)?;
-            self.translate_coverage_effects(channel_outcome, &coverage_effects, &mut surface, Rect::new(0, 0, px.width as i32, px.height as i32), ctl)?;
+            self.inventory_coverage_effects(channel_outcome, &coverage_effects, ctl)?;
             let mut channel = AlphaChannel::new(name, surface);
             let handled = metadata::channel_overlay(&mut channel, &cprops);
             for property in &cprops {
@@ -637,7 +637,7 @@ impl<'a> Image<'a> {
                     data.extend_from_slice(p);
                     data.push(1.0);
                 }
-                px = Pixels { width: px.width, height: px.height, channels: n + 1, data, underflow: px.underflow };
+                px = Pixels { width: px.width, height: px.height, channels: n + 1, data, underflow: px.underflow, coverage_clamped: px.coverage_clamped };
             }
             if gray_floating {
                 px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
@@ -705,13 +705,7 @@ impl<'a> Image<'a> {
                 attachments: Vec::new(),
             })?;
             self.precision_underflow(mask_outcome, &px)?;
-            self.translate_coverage_effects(
-                mask_outcome,
-                &coverage_effects,
-                &mut surface,
-                Rect::new(x, y, x.saturating_add(px.width as i32), y.saturating_add(px.height as i32)),
-                ctl,
-            )?;
+            self.inventory_coverage_effects(mask_outcome, &coverage_effects, ctl)?;
             layer.mask = Some(LayerMask { surface, enabled: apply_mask, linked: true, density: 1.0, feather: 0.0 });
             for property in &mprops {
                 let reason = match property.kind {

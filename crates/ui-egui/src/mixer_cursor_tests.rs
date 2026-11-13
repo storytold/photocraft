@@ -54,7 +54,7 @@ fn hover(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
     h.run_steps(2);
 }
 
-/// The pipette uses its native bitmap, distinct from the Mixer Brush target and no-entry sign.
+/// The Eyedropper's pipette: the OS bitmap where one uploads, else drawn (#12523).
 fn pipette_shown(h: &Harness<'static, PhotocraftApp>) -> bool {
     crate::tool_cursor::pipette_shown(&h.ctx, &h.output().platform_output)
 }

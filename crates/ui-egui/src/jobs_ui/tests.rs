@@ -1441,29 +1441,92 @@ fn completed_background_open_keeps_native_view_when_queued_behind_profile_prompt
 }
 
 #[test]
-fn invalid_native_view_never_changes_foreground_automation_or_held_admission() {
+fn invalid_optional_native_view_keeps_foreground_automation_and_held_pixels_with_warning() {
     for kind in 0..3 {
         let (doc, mut view) = native_view_fixture();
         view.selected_path = Some(usize::MAX);
         let mut app = identity_app();
         let control = IdentityControl::capture(&app);
-        let active = app.session.active().unwrap().doc.id;
+        let imported_id = doc.id;
+        let default_layer = doc.top_layer();
+        let paths = doc.paths.clone();
         app.ui.selected_path = Some("control selection".into());
         app.services = native_view_services(doc.clone(), view.clone());
-        let error = match kind {
-            0 => app.open_bytes("invalid.xcf", b"fixture").unwrap_err(),
-            1 => app.open_automation_bytes("invalid.xcf", b"fixture").unwrap_err(),
+        match kind {
+            0 => {
+                app.open_bytes("invalid.xcf", b"fixture").unwrap();
+            }
+            1 => {
+                app.open_automation_bytes("invalid.xcf", b"fixture").unwrap();
+            }
             _ => {
                 crate::open_prompt::arrive(&mut app, held_native_view(doc, Some(view)));
-                crate::open_prompt::answer(&mut app, Some("preserve")).unwrap_err()
+                crate::open_prompt::answer(&mut app, Some("preserve")).unwrap();
             }
-        };
-        assert!(error.contains("selected path is absent"), "{error}");
-        assert_eq!(app.session.documents().len(), 1);
-        assert_eq!(app.session.active().unwrap().doc.id, active);
-        assert_eq!(app.ui.selected_path.as_deref(), Some("control selection"));
+        }
+        assert_eq!(app.session.documents().len(), 2);
+        let state = app.session.active().unwrap();
+        assert_eq!(state.doc.id, imported_id);
+        assert_eq!(state.doc.paths, paths);
+        assert_eq!(state.active_layer, default_layer);
+        assert_eq!(state.selected_layers, default_layer.into_iter().collect::<Vec<_>>());
+        assert_eq!(state.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
+        assert!(state.channel_view.layer_mask.is_none());
+        assert!(state.color_samplers.is_empty());
+        assert!(state.initial_path_selection.is_none());
+        assert!(state.source_read_only);
+        assert!(!app.session.tools.mask_targeted);
+        assert_eq!(state.history.past_len(), 0);
+        let warnings: Vec<_> =
+            app.ui.notices.iter().flat_map(|notice| &notice.lines).filter(|line| line.contains("Native initial view was not applied")).collect();
+        assert_eq!(warnings.len(), 1, "{:?}", app.ui.notices);
+        assert!(warnings[0].contains("selected path is absent"));
+        assert!(app.ui.notices.iter().all(|notice| !notice.error));
         control.assert_untouched(&app);
+        let notices = app.ui.notices.clone();
+        app.sync_views();
+        assert_eq!(app.ui.notices, notices, "discarded hints cannot be reapplied on ordinary view synchronization");
     }
+}
+
+#[test]
+fn discarded_background_hint_is_not_reconstructed_when_queued_behind_a_profile_prompt() {
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    let (blocker, _) = native_view_fixture();
+    crate::open_prompt::arrive(&mut app, held_native_view(blocker, None));
+    let prompt = app.ui.dialogs.iter().find(|dialog| crate::open_prompt::owns(&dialog.fields)).unwrap().id;
+    let (doc, mut view) = native_view_fixture();
+    let imported_id = doc.id;
+    view.selected_path = Some(usize::MAX);
+    let (index, (), warning) = app.session.admit_import_with_initial_view(true, Some(view), |session| (session.add_document(doc, None), ())).unwrap();
+    let warning = warning.unwrap();
+    super::finish_open(
+        &mut app,
+        "discarded-view.xcf",
+        None,
+        &json!({"document":index,"docId":imported_id.0,"warnings":[warning],"hasInitialView":false,"initialPathSelection":null}),
+        None,
+        None,
+    )
+    .unwrap();
+    let pending = app.held_opens.back().unwrap();
+    assert!(pending.initial_view.is_none(), "a discarded hint must not be reconstructed from default DocState selections");
+    assert_eq!(pending.warnings.len(), 1);
+    assert_eq!(app.session.documents().len(), 1);
+    crate::dialogs::confirm(&mut app, prompt).unwrap();
+    assert_eq!(app.session.documents().len(), 3);
+    let admitted = app.session.active().unwrap();
+    assert_eq!(admitted.doc.id, imported_id);
+    assert!(admitted.source_read_only);
+    assert_eq!(admitted.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
+    assert!(admitted.color_samplers.is_empty());
+    assert!(admitted.initial_path_selection.is_none());
+    assert_eq!(app.ui.notices.iter().flat_map(|notice| &notice.lines).filter(|line| line.contains("Native initial view was not applied")).count(), 1);
+    control.assert_untouched(&app);
+    let notices = app.ui.notices.clone();
+    app.sync_views();
+    assert_eq!(app.ui.notices, notices);
 }
 
 #[test]

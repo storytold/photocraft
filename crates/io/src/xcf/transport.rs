@@ -11,6 +11,8 @@ const XZ_MEMORY_KIB: u32 = 64 * 1024;
 mod bzip;
 
 #[cfg(test)]
+mod gzip_tests;
+#[cfg(test)]
 mod review_tests;
 
 /// Checks cancellation during headers, empty members and compressed input consumption,
@@ -46,6 +48,58 @@ impl Read for Input<'_, '_> {
     }
 }
 
+/// Validate each contiguous RFC 1952 member, then accept only terminal zero
+/// padding (the GNU gzip tape/block compatibility convention). Arbitrary garbage
+/// cannot hide a corrupt or truncated next member. Padding is scanned through
+/// `Input`, keeping cancellation latency and borrowed input storage bounded.
+struct Gzip<R: BufRead> {
+    member: Option<flate2::bufread::GzDecoder<R>>,
+}
+
+impl<R: BufRead> Gzip<R> {
+    fn new(input: R) -> Self {
+        Self { member: Some(flate2::bufread::GzDecoder::new(input)) }
+    }
+}
+
+impl<R: BufRead> Read for Gzip<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            let Some(member) = &mut self.member else { return Ok(0) };
+            let count = member.read(output)?;
+            if count != 0 {
+                return Ok(count);
+            }
+            // Single-member EOF means its CRC and size trailer were checked.
+            let member = self.member.take().ok_or_else(|| io::Error::other("missing gzip member"))?;
+            let mut input = member.into_inner();
+            let next = input.fill_buf()?;
+            if next.is_empty() {
+                return Ok(0);
+            }
+            if next.first() == Some(&0) {
+                loop {
+                    let padding = input.fill_buf()?;
+                    if padding.is_empty() {
+                        return Ok(0);
+                    }
+                    if padding.iter().any(|byte| *byte != 0) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "nonzero data after gzip padding"));
+                    }
+                    let count = padding.len();
+                    input.consume(count);
+                }
+            }
+            // Let the gzip parser validate all other tails, including partial
+            // magic/header bytes, rather than mistaking them for benign padding.
+            self.member = Some(flate2::bufread::GzDecoder::new(input));
+        }
+    }
+}
+
 /// Recognizes supported compressed XCF wrappers and applies the standard inflated-size limit.
 pub(crate) fn decode(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<Vec<u8>>> {
     decode_with_limit(name, bytes, ctl, MAX_INFLATED)
@@ -77,7 +131,7 @@ fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pre
     let declared = [".xcf.gz", ".xcfgz", ".xcf.bz2", ".xcfbz2", ".xcf.xz", ".xcfxz"].iter().any(|suffix| lower.ends_with(suffix));
     let mut input = Input { remaining: bytes, ctl: *ctl };
     let mut decoder: Box<dyn Read + '_> = match compression {
-        "gzip" => Box::new(flate2::bufread::MultiGzDecoder::new(&mut input)),
+        "gzip" => Box::new(Gzip::new(&mut input)),
         "bzip2" => Box::new(bzip::Reader::new(&mut input)),
         _ => Box::new(lzma_rust2::XzReader::new_mem_limit(&mut input, true, XZ_MEMORY_KIB)),
     };
@@ -111,8 +165,8 @@ fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pre
         }
         output.extend_from_slice(chunk.get(..count).ok_or_else(|| invalid("invalid decoded output length"))?);
     }
-    // Readers verify every member's checks and attempt another header for trailing data.
-    // XZ also accepts standard stream padding. Require complete source consumption.
+    // Readers verify every member and consume only their admitted terminal padding
+    // (zero bytes for gzip, standard stream padding for XZ). No unchecked tail remains.
     drop(decoder);
     if !prefix_only && !input.remaining.is_empty() {
         return Err(invalid(format!("unconsumed data after the {compression} stream")));

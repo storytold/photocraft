@@ -80,9 +80,15 @@ impl Precision {
         matches!((self.float, self.bytes), (false, 4) | (true, 8))
     }
 
-    /// Decode before narrowing, so invalid coverage cannot round into range. The second
-    /// result records a nonzero source value rounded to native signed zero.
+    /// Test/reference entry point retaining the underflow-only tuple contract.
+    #[cfg(test)]
     pub(super) fn sample(self, b: &[u8], coverage: bool) -> Result<(f32, bool)> {
+        let (value, underflow, _) = self.sample_with_conversion(b, coverage)?;
+        Ok((value, underflow))
+    }
+
+    /// Normalize finite coverage independently of signed HDR color and record the loss.
+    pub(super) fn sample_with_conversion(self, b: &[u8], coverage: bool) -> Result<(f32, bool, bool)> {
         let source = match (self.float, self.bytes, b) {
             (false, 1, [v]) => f64::from(*v) / 255.0,
             (false, 2, [a, b]) => f64::from(u16::from_be_bytes([*a, *b])) / 65535.0,
@@ -95,9 +101,8 @@ impl Precision {
         if !source.is_finite() {
             return Err(invalid("a floating-point sample is not finite"));
         }
-        if coverage && !(0.0..=1.0).contains(&source) {
-            return Err(invalid("a coverage sample is outside the range 0 to 1"));
-        }
+        let coverage_clamped = coverage && !(0.0..=1.0).contains(&source);
+        let source = if coverage { source.clamp(0.0, 1.0) } else { source };
         if source.abs() > f64::from(f32::MAX) {
             return Err(invalid("a floating-point sample exceeds native F32 range"));
         }
@@ -105,7 +110,7 @@ impl Precision {
         if !native.is_finite() {
             return Err(invalid("a floating-point sample exceeds native F32 range"));
         }
-        Ok((native, source != 0.0 && native == 0.0))
+        Ok((native, source != 0.0 && native == 0.0, coverage_clamped))
     }
 }
 

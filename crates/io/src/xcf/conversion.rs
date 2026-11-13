@@ -4,7 +4,7 @@ use std::io::Write;
 
 use photocraft_doc::import_conversion::{
     ConversionDisposition, ConversionEntry, ConversionReason, ConversionReport, ImportConversion, MAX_CONVERSION_ATTACHMENTS, MAX_CONVERSION_BYTES,
-    MAX_CONVERSION_ENTRIES, NativeTargetRef, RetainedImportData, SourceItemRef,
+    MAX_CONVERSION_ENTRIES, MAX_CONVERSION_STRING, NativeTargetRef, RetainedImportData, SourceItemRef,
 };
 
 use super::{Result, invalid};
@@ -18,7 +18,18 @@ pub(super) struct Outcomes<'a> {
     encoded: usize,
     retained: usize,
     pending: Vec<Pending<'a>>,
+    costs: Vec<Cost>,
+    issued: usize,
+    truncated: bool,
+    summary: ConversionEntry,
 }
+
+struct Cost {
+    retained: usize,
+    encoded: usize,
+}
+
+const OMITTED_OWNER: usize = usize::MAX;
 
 struct Pending<'a> {
     entry: usize,
@@ -45,28 +56,61 @@ impl Write for Count {
 }
 
 impl<'a> Outcomes<'a> {
+    /// Optional inventory traversal stops once the durable truncation notice is guaranteed.
+    pub(super) fn recording(&self) -> bool {
+        !self.truncated
+    }
+
     /// Borrow a validated conversion owner by index, rejecting missing report references.
     pub(super) fn entry(&self, index: usize) -> Result<&ConversionEntry> {
+        if self.omitted(index) {
+            return Ok(&self.summary);
+        }
         self.report.entries.get(index).ok_or_else(|| invalid("missing XCF conversion owner"))
+    }
+
+    /// Omitted owners borrow an immutable fallback, never the durable summary's eventual index.
+    fn omitted(&self, index: usize) -> bool {
+        self.truncated && (index == OMITTED_OWNER || (index >= self.report.entries.len() && index < self.issued))
     }
     /// Initialize the versioned XCF conversion report and account for its mandatory serialized structure.
     pub(super) fn new(version: u32) -> Result<Self> {
         let report = ConversionReport { source_format: "xcf".into(), source_version: Some(version), policy_version: 1, ..Default::default() };
         let mut count = Count(0);
         serde_json::to_writer(&mut count, &report).map_err(|e| invalid(e.to_string()))?;
-        Ok(Self { retained: report.source_format.len(), report, encoded: count.0, pending: Vec::new() })
+        let summary = ConversionEntry {
+            feature_code: "xcf.report_truncated".into(),
+            source: source("image", 0, 0, "XCF conversion report", &[], None),
+            targets: Vec::new(),
+            disposition: ConversionDisposition::SkippedNonessential,
+            reason: ConversionReason::RetentionLimit,
+            source_description: "The conversion inventory exceeded a report limit: 65,536 entries, 1 MiB per string, or a separate 32 MiB allowance.".into(),
+            native_description:
+                "Usable native content was imported. Further conversion details and their optional source attachments were omitted; this report is incomplete."
+                    .into(),
+            attachments: Vec::new(),
+        };
+        Ok(Self {
+            retained: report.source_format.len(),
+            report,
+            encoded: count.0,
+            pending: Vec::new(),
+            costs: Vec::new(),
+            issued: 0,
+            truncated: false,
+            summary,
+        })
     }
 
-    /// Admit a mandatory outcome against both retained-memory and encoded-JSON limits before publishing its index.
-    pub(super) fn push(&mut self, entry: ConversionEntry) -> Result<usize> {
-        if self.report.entries.len() >= MAX_CONVERSION_ENTRIES {
-            return Err(invalid("XCF conversion report exceeds 65,536 entries"));
-        }
+    /// Charge portable validation costs and actual owned report storage conservatively.
+    fn bytes(entry: &ConversionEntry) -> usize {
         // Includes conservative native struct overhead as well as owned strings/paths.
         // Schema-v1 validation uses fixed 256/128-byte entry/target costs.
         // Admission must cover those portable costs as well as actual Rust storage.
-        let bytes = std::mem::size_of::<ConversionEntry>()
+        std::mem::size_of::<ConversionEntry>()
             .max(256)
+            // Cover geometric Vec growth as well as initialized bookkeeping records.
+            .saturating_add(std::mem::size_of::<Cost>().saturating_mul(2))
             .saturating_add(entry.feature_code.len())
             .saturating_add(entry.source.kind.len())
             .saturating_add(entry.source.name.len())
@@ -77,26 +121,75 @@ impl<'a> Outcomes<'a> {
                 entry
                     .targets
                     .iter()
-                    .map(|t| std::mem::size_of::<NativeTargetRef>().max(128) + t.label.len() + std::mem::size_of_val(t.item_path.as_slice()))
-                    .sum::<usize>(),
-            );
-        let retained = self
-            .retained
-            .checked_add(bytes)
-            .filter(|n| *n <= MAX_CONVERSION_BYTES)
-            .ok_or_else(|| invalid("XCF conversion report exceeds its separate 32 MiB allowance"))?;
+                    .map(|t| {
+                        std::mem::size_of::<NativeTargetRef>()
+                            .max(128)
+                            .saturating_add(t.label.len())
+                            .saturating_add(std::mem::size_of_val(t.item_path.as_slice()))
+                    })
+                    .fold(0usize, usize::saturating_add),
+            )
+    }
+
+    /// Treat optional report-only schema ceilings like its total allowance, without weakening input parsing.
+    fn bounded(entry: &ConversionEntry) -> bool {
+        [&entry.feature_code, &entry.source.kind, &entry.source.name, &entry.source_description, &entry.native_description]
+            .into_iter()
+            .all(|s| s.len() <= MAX_CONVERSION_STRING)
+            && entry.source.item_path.len() <= 64
+            && entry.targets.len() <= MAX_CONVERSION_ENTRIES
+            && entry.targets.iter().all(|t| t.label.len() <= MAX_CONVERSION_STRING && t.item_path.len() <= 64)
+            && entry.attachments.len() <= MAX_CONVERSION_ATTACHMENTS
+    }
+
+    /// Freeze the inventory and release only the tail needed for one durable, bounded disclosure.
+    /// No previously retained attachment exists yet; pending references to removed owners are dropped.
+    fn truncate(&mut self) -> Result<usize> {
+        self.truncated = true;
+        let bytes = Self::bytes(&self.summary);
+        let mut count = Count(1);
+        serde_json::to_writer(&mut count, &self.summary).map_err(|e| invalid(e.to_string()))?;
+        while self.report.entries.len() >= MAX_CONVERSION_ENTRIES
+            || self.retained.saturating_add(bytes) > MAX_CONVERSION_BYTES
+            || self.encoded.saturating_add(count.0) > MAX_CONVERSION_BYTES
+        {
+            let cost = self.costs.pop().ok_or_else(|| invalid("XCF conversion summary cannot fit"))?;
+            let _ = self.report.entries.pop();
+            self.retained = self.retained.saturating_sub(cost.retained);
+            self.encoded = self.encoded.saturating_sub(cost.encoded);
+        }
+        self.pending.retain(|p| p.entry < self.report.entries.len());
+        Ok(OMITTED_OWNER)
+    }
+
+    /// Optional reporting must not reject otherwise usable native content when its own allowance is full.
+    pub(super) fn push(&mut self, entry: ConversionEntry) -> Result<usize> {
+        if self.truncated {
+            return Ok(OMITTED_OWNER);
+        }
+        let bytes = Self::bytes(&entry);
+        if self.report.entries.len() >= MAX_CONVERSION_ENTRIES || !Self::bounded(&entry) || self.retained.saturating_add(bytes) > MAX_CONVERSION_BYTES {
+            return self.truncate();
+        }
         let mut count = Count(self.encoded.saturating_add(1)); // One comma, conservative for first entry.
-        serde_json::to_writer(&mut count, &entry).map_err(|e| invalid(format!("XCF conversion report metadata limit: {e}")))?;
+        if serde_json::to_writer(&mut count, &entry).is_err() {
+            return self.truncate();
+        }
         let index = self.report.entries.len();
         self.report.entries.push(entry);
+        self.issued = self.report.entries.len();
+        self.costs.push(Cost { retained: bytes, encoded: count.0 - self.encoded });
         self.encoded = count.0;
-        self.retained = retained;
+        self.retained += bytes;
         Ok(index)
     }
 
     /// Attach a native-approximation disclosure to an existing source owner and its mapped native targets.
     pub(super) fn detail(&mut self, owner: usize, feature: &str, reason: ConversionReason, source: String, native: String) -> Result<()> {
-        let entry = self.report.entries.get(owner).ok_or_else(|| invalid("missing XCF conversion owner"))?;
+        let entry = self.entry(owner)?;
+        if self.truncated {
+            return Ok(());
+        }
         let entry = ConversionEntry {
             feature_code: feature.into(),
             source: entry.source.clone(),
@@ -122,6 +215,9 @@ impl<'a> Outcomes<'a> {
         warnings: &mut crate::ora::Warnings,
     ) -> Result<()> {
         self.detail(owner, feature, reason, descriptions.0, descriptions.1)?;
+        if self.truncated {
+            return Ok(());
+        }
         if let Some(human) = human {
             let owner = self.report.entries.get(owner).ok_or_else(|| invalid("missing XCF conversion owner"))?;
             warnings.layer(&owner.source.name, human);
@@ -137,7 +233,10 @@ impl<'a> Outcomes<'a> {
 
     /// Record optional source configuration as an explicit outcome and defer copying its bytes until mandatory reporting fits.
     pub(super) fn property_with_reason(&mut self, owner: usize, property: u32, offset: usize, bytes: &'a [u8], reason: ConversionReason) -> Result<()> {
-        let owner = self.report.entries.get(owner).ok_or_else(|| invalid("missing XCF configuration owner"))?;
+        let owner = self.entry(owner)?;
+        if self.truncated {
+            return Ok(());
+        }
         let mut source = owner.source.clone();
         source.record_offset = Some(offset as u64);
         let index = self.push(ConversionEntry {
@@ -152,7 +251,7 @@ impl<'a> Outcomes<'a> {
                     .into(),
             attachments: Vec::new(),
         })?;
-        if self.pending.len() < MAX_CONVERSION_ATTACHMENTS {
+        if index != OMITTED_OWNER && self.pending.len() < MAX_CONVERSION_ATTACHMENTS {
             self.pending.push(Pending { entry: index, property, bytes, reason });
         }
         Ok(())
@@ -160,8 +259,15 @@ impl<'a> Outcomes<'a> {
 
     /// Skip already handled parasites and queue unknown records as inert data; malformed tails receive an invalid-optional-data reason.
     pub(super) fn parasites(&mut self, owner: usize, offset: usize, bytes: &'a [u8], handled: &[&str]) -> Result<()> {
+        self.entry(owner)?;
+        if self.truncated {
+            return Ok(());
+        }
         let mut cursor = super::Cursor { b: bytes, pos: 0, wide: false };
         while cursor.pos < bytes.len() {
+            if self.truncated {
+                break;
+            }
             let start = cursor.pos;
             let record = (|| {
                 let name = cursor.string()?;
@@ -191,6 +297,13 @@ impl<'a> Outcomes<'a> {
 
     /// Validate mandatory outcomes, retain only optional attachments that fit both limits, and validate the final durable report.
     pub(super) fn finish(mut self) -> Result<ImportConversion> {
+        if self.truncated {
+            self.retained = self.retained.saturating_add(Self::bytes(&self.summary));
+            let mut count = Count(self.encoded.saturating_add(1));
+            serde_json::to_writer(&mut count, &self.summary).map_err(|e| invalid(e.to_string()))?;
+            self.encoded = count.0;
+            self.report.entries.push(self.summary);
+        }
         self.report.validate().map_err(|e| invalid(e.to_string()))?;
         let mut payload_bytes = 0usize;
         for pending in self.pending {
@@ -275,8 +388,9 @@ mod tests {
         for _ in 0..5 {
             outcomes.push(entry.clone()).unwrap();
         }
-        assert!(outcomes.push(entry).unwrap_err().to_string().contains("metadata limit"));
-        outcomes.finish().unwrap();
+        outcomes.push(entry).unwrap();
+        let ImportConversion::Report(report) = outcomes.finish().unwrap() else { panic!("typed report") };
+        assert_eq!(report.entries.last().unwrap().feature_code, "xcf.report_truncated");
     }
 
     /// Verify early optional payloads cannot starve later mandatory outcomes; omitted bytes retain an explicit retention-limit disposition.
