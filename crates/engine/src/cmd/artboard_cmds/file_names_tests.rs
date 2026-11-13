@@ -123,5 +123,7 @@ fn file_stems_without_a_session() {
         ["abfiles-testRed-Board", "abfiles-testred-board-3", "abfiles-testRed-Board-2"]
     );
     assert_eq!(artboard_file_stems("", &["Red Board", "Red  Board"], false), ["Red Board", "Red  Board"]);
+    // NTFS compares names in upper case, where `σ` and final `ς` are both `Σ`.
+    assert_eq!(artboard_file_stems("", &["σ", "ς", "Σ-2"], true), ["σ", "ς-3", "Σ-2"]);
     assert!(artboard_file_stems("doc", &[], true).is_empty());
 }

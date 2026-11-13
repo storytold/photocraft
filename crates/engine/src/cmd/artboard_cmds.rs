@@ -686,10 +686,11 @@ const HYPHENATED_FORMATS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tga", "tif",
 /// `<prefix><artboard name>` with no separator or index between them, [`sanitize`]d as a whole,
 /// and with each space turned into `-` when `hyphenate`.
 ///
-/// A name equal to an earlier one, ignoring letter case (or equal once sanitized), gets the first
-/// `-2`, `-3`… that no other board's own name and no earlier suffix takes, so every board still
-/// gets a file of its own on case-insensitive file systems (#6613) while the first board of a
-/// name, and every board whose name is unique, keeps the plain name.
+/// A name equal to an earlier one, ignoring letter case as NTFS does (compared in upper case, so
+/// `σ` and `ς` meet) or equal once sanitized, gets the first `-2`, `-3`… that no other board's own
+/// name and no earlier suffix takes. Every board still gets a file of its own on case-insensitive
+/// file systems (#6613), and the first board of a name, like every board whose name is unique,
+/// keeps the plain name.
 fn artboard_file_stems(prefix: &str, names: &[&str], hyphenate: bool) -> Vec<String> {
     let plain: Vec<String> = names
         .iter()
@@ -698,18 +699,18 @@ fn artboard_file_stems(prefix: &str, names: &[&str], hyphenate: bool) -> Vec<Str
             if hyphenate { stem.replace(' ', "-") } else { stem }
         })
         .collect();
-    let mut taken: HashSet<String> = plain.iter().map(|stem| stem.to_lowercase()).collect();
+    let mut taken: HashSet<String> = plain.iter().map(|stem| stem.to_uppercase()).collect();
     let mut seen = HashSet::new();
     plain
         .into_iter()
         .map(|stem| {
-            if seen.insert(stem.to_lowercase()) {
+            if seen.insert(stem.to_uppercase()) {
                 return stem;
             }
             let mut n = 2u64;
             loop {
                 let candidate = format!("{stem}-{n}");
-                if taken.insert(candidate.to_lowercase()) {
+                if taken.insert(candidate.to_uppercase()) {
                     break candidate;
                 }
                 n += 1;
@@ -873,7 +874,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" except in PSD, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),
