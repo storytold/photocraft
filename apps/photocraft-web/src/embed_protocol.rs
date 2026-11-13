@@ -175,15 +175,78 @@ pub fn expects_document(name: &str) -> bool {
     !PRESET_EXTS.contains(&extension(name).as_str())
 }
 
-/// The document an open of `name` settles on: the first document new since the import started
-/// (`before`) whose name is `name`, *exactly*. Nothing else — there is no fallback to any
-/// other new document, so a document of a different name is never this open's (two opens
-/// cannot answer with each other's, whatever timing lands them in one pass), and an open whose
-/// document never comes — its dialog cancelled, or a `.psdt` the app opens as "Untitled-N" —
-/// waits out its deadline and rejects. `None` while nothing of the name has appeared: the
-/// import is still running, or is held behind a dialog in the app.
-pub fn landed_doc(before: &[u64], name: &str, docs: &[(u64, String)]) -> Option<(u64, String)> {
-    docs.iter().find(|(id, n)| !before.contains(id) && n == name).map(|(id, n)| (*id, n.clone()))
+/// The document an open settles on: the first document new since the import started
+/// (`before`). A named open (`asked`) takes only a document of that very name, *exactly* —
+/// there is no fallback to any other new document, so a document of a different name is never
+/// a named open's (two opens cannot answer with each other's, whatever timing lands them in
+/// one pass), and one whose document never comes — its dialog cancelled, or a `.psdt` the app
+/// opens as "Untitled-N" — waits out its deadline and rejects. An open that asked for no name
+/// (`asked` `None`) takes its import's own admitted document under whatever name the session
+/// gave it: a `.pcraft` keeps the name its manifest persisted (#3312), so the "document" a
+/// name-less import runs under is a file-name hint, never a name the open could claim — the
+/// claim is the new `DocId`, the open answers with the document's own name, and the imported
+/// document is never renamed to the hint. `None` while nothing of the sort has appeared:
+/// the import is still running, or is held behind a dialog in the app.
+pub fn landed_doc(before: &[u64], asked: Option<&str>, docs: &[(u64, String)]) -> Option<(u64, String)> {
+    docs.iter().find(|(id, n)| !before.contains(id) && asked.is_none_or(|a| n == a)).map(|(id, n)| (*id, n.clone()))
+}
+
+// ---------- the bridge's window policy ----------
+//
+// The embed pass reads the window tree and the `MessageEvent` fields on the JS side; what it
+// does with them is decided here, on plain data, so it is testable natively.
+
+/// Where a bridge reply goes, as the embed pass reads the window tree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ReplyTarget {
+    /// No parent window at all.
+    Detached,
+    /// The app's own window: `window.parent()` returns the window itself at top level.
+    OwnWindow,
+    /// A parent window other than the app's own — the documented iframe.
+    Parent,
+}
+
+/// Whether a reply may be posted to `target`: only a distinct parent. A post to the app's
+/// own window is refused *before* anything is posted: the browser detaches a transferred
+/// buffer while it serializes the message and only then drops the message on the
+/// `targetOrigin` check (`postMessage` itself returns normally), so a self-post would read
+/// as delivered — posted, buffer gone — while its bytes reached no page, and a save settled
+/// on it would clear the unsaved state of a document nobody has, hiding the unsaved-work
+/// prompt.
+pub fn posts_to(target: ReplyTarget) -> bool {
+    matches!(target, ReplyTarget::Parent)
+}
+
+/// Whether a bridge save counts as delivered — the moment its document may be marked clean:
+/// the reply was posted (to a distinct parent, [`posts_to`], and the browser took the call)
+/// and the transfer finished — `buffer_len == 0`, the browser owns the buffer now, so the
+/// view on the app's side reads detached. A post refused, a self-post, or a buffer still in
+/// the app's hands keeps the document dirty.
+pub fn delivered(posted: bool, buffer_len: u32) -> bool {
+    posted && buffer_len == 0
+}
+
+/// Who a bridge message came from, as the listener reads the event.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MessageSource {
+    /// The app's framing parent — a distinct window (at top level there is none).
+    Parent,
+    /// Some other window: a sibling iframe the embedder hosts at the `?embed=` origin posts
+    /// with a matching origin, and so does any other window that origin holds.
+    Other,
+    /// No source readable — or no parent the app could be framed by at all.
+    None,
+}
+
+/// Whether the bridge takes a posted message: its origin must be the `?embed=` origin the
+/// bridge was installed with, **and** its source must be the framing parent — a distinct
+/// window. The origin alone can't say who sent the message, and a request from any window
+/// but the parent could never be answered (replies go only to the parent) yet would still
+/// run — its `open` or `save` executed by the app on a stranger's behalf. At top level
+/// (`MessageSource::None`) the app has no embedder, and nothing is taken.
+pub fn takes_call(origin_is_embed: bool, source: MessageSource) -> bool {
+    origin_is_embed && source == MessageSource::Parent
 }
 
 // ---------- the open settle policy (a pure state machine) ----------
@@ -328,7 +391,9 @@ fn origin(s: &str) -> Option<String> {
 #[derive(Debug, PartialEq)]
 pub enum Call {
     /// Open the document in the message's `data` under `name`: bytes (an ArrayBuffer, a typed
-    /// array, a Blob). No `name`: the open is "document".
+    /// array, a Blob). No `name`: the import runs under the "document" hint and the open
+    /// settles as the document it admits, whatever the app named it (a `.pcraft` keeps its
+    /// own).
     Open {
         name: Option<String>,
     },
@@ -502,19 +567,19 @@ mod tests {
     #[test]
     fn an_open_lands_only_as_a_document_of_its_exact_name() {
         let docs = [(1, "Old.psd".to_string()), (2, "Poster.psd".to_string()), (3, "later.psd".to_string())];
-        assert_eq!(landed_doc(&[1], "Poster.psd", &docs), Some((2, "Poster.psd".to_string())), "the new one with the asked-for name");
-        assert_eq!(landed_doc(&[1], "no such name", &docs), None, "no fallback: a document of another name is never this open's");
-        assert_eq!(landed_doc(&[1, 2, 3], "Poster.psd", &docs), None, "nothing new yet");
-        assert_eq!(landed_doc(&[], "Poster.psd", &[]), None, "no documents at all");
+        assert_eq!(landed_doc(&[1], Some("Poster.psd"), &docs), Some((2, "Poster.psd".to_string())), "the new one with the asked-for name");
+        assert_eq!(landed_doc(&[1], Some("no such name"), &docs), None, "no fallback: a document of another name is never this open's");
+        assert_eq!(landed_doc(&[1, 2, 3], Some("Poster.psd"), &docs), None, "nothing new yet");
+        assert_eq!(landed_doc(&[], Some("Poster.psd"), &[]), None, "no documents at all");
         let named_late = [(1, "Old.psd".to_string()), (4, "other.psd".to_string()), (2, "Poster.psd".to_string())];
         assert_eq!(
-            landed_doc(&[1], "Poster.psd", &named_late),
+            landed_doc(&[1], Some("Poster.psd"), &named_late),
             Some((2, "Poster.psd".to_string())),
             "the named one wins over an earlier new one it doesn't name"
         );
         // The document of that name that was already there doesn't answer: only what is new
         // since this import started can.
-        assert_eq!(landed_doc(&[1], "Poster.psd", &[(1, "Poster.psd".to_string())]), None, "the old same-named document isn't this open's");
+        assert_eq!(landed_doc(&[1], Some("Poster.psd"), &[(1, "Poster.psd".to_string())]), None, "the old same-named document isn't this open's");
     }
 
     #[test]
@@ -523,9 +588,13 @@ mod tests {
         // refused OPEN_BUSY), so B's `before` holds everything A saw plus A's document — and
         // the duplicate the app opens under the same name for B answers B, never A's again.
         let first = [(1, "Old.psd".to_string()), (2, "a.psd".to_string())];
-        assert_eq!(landed_doc(&[1], "a.psd", &first), Some((2, "a.psd".to_string())));
+        assert_eq!(landed_doc(&[1], Some("a.psd"), &first), Some((2, "a.psd".to_string())));
         let second = [(1, "Old.psd".to_string()), (2, "a.psd".to_string()), (4, "a.psd".to_string())];
-        assert_eq!(landed_doc(&[1, 2], "a.psd", &second), Some((4, "a.psd".to_string())), "the new duplicate, not the first open's document a second time");
+        assert_eq!(
+            landed_doc(&[1, 2], Some("a.psd"), &second),
+            Some((4, "a.psd".to_string())),
+            "the new duplicate, not the first open's document a second time"
+        );
     }
 
     #[test]
@@ -535,8 +604,90 @@ mod tests {
         // appears — nothing lands it as A's; A rejects (at its deadline, or at once through
         // the prompt read) and "b.psd" stays in the session, nobody's answer. A `.psdt`,
         // which the app opens as "Untitled-N", is the same shape: never claimed.
-        assert_eq!(landed_doc(&[], "a.psd", &[(9, "b.psd".to_string())]), None);
-        assert_eq!(landed_doc(&[1], "card.psdt", &[(1, "Old.psd".to_string()), (2, "Untitled-1".to_string())]), None);
+        assert_eq!(landed_doc(&[], Some("a.psd"), &[(9, "b.psd".to_string())]), None);
+        assert_eq!(landed_doc(&[1], Some("card.psdt"), &[(1, "Old.psd".to_string()), (2, "Untitled-1".to_string())]), None);
+    }
+
+    #[test]
+    fn an_open_without_a_name_settles_as_the_document_the_import_admitted() {
+        // R3-4: `open` without a name runs its import under the "document" file-name hint,
+        // but a `.pcraft` lands under the name its manifest persisted — an exact-"document"
+        // claim could never see it, and the open rejected at its 30 s deadline with its
+        // document sitting open in the session. The name-less claim is the import's own
+        // admitted document: the first `DocId` new since the import started, under whatever
+        // name the session gave it — answered back under that name, never renamed to the
+        // hint.
+        let docs = [(1, "Old.psd".to_string()), (2, "Poster.pcraft".to_string())];
+        assert_eq!(landed_doc(&[1], None, &docs), Some((2, "Poster.pcraft".to_string())), "the admitted document, under its own name");
+        assert_eq!(landed_doc(&[1, 2], None, &docs), None, "nothing new since the import: still waiting");
+        assert_eq!(landed_doc(&[], None, &[]), None, "no documents at all");
+        assert_eq!(
+            landed_doc(&[], None, &[(5, "Untitled-1".to_string())]),
+            Some((5, "Untitled-1".to_string())),
+            "a template the app renames is a name-less open's too: it asked for no name"
+        );
+        // A named open still demands its exact name — and the name-less hint is not a name
+        // anyone asked for, so it claims nothing by itself.
+        assert_eq!(landed_doc(&[1], Some("document"), &docs), None, "the persisted name is not the hint the import ran under");
+    }
+
+    /// R3-4's walkthrough, end to end on the pure policy: a default save (no format asked)
+    /// writes `Poster.pcraft`; `open` without a name imports it under the "document" hint,
+    /// and the session adopts the name the manifest persisted — so the claim must settle on
+    /// that document by id, under the save's own name, where the old exact-"document" match
+    /// never could.
+    #[test]
+    fn a_default_save_reopened_without_a_name_settles_by_its_own_name() {
+        use photocraft_doc::{ColorMode, Document, Layer, LayerContent, SampleType, Size};
+        use photocraft_io::{ExportOptions, export};
+        use photocraft_raster::Surface;
+
+        let mut doc = Document::new("Poster.psd", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let mut surface = Surface::new(doc.pixel_format());
+        surface.fill_rect(doc.bounds(), &[1.0, 0.5, 0.25, 1.0]);
+        doc.layers.push(Layer::new("Background", LayerContent::Raster(surface)));
+        let name = export_name(&doc.name, photocraft_format::EXTENSION).expect("a name");
+        let saved = export(&doc, &name, &ExportOptions::default()).expect("the default .pcraft save");
+        let reopened = photocraft_format::load_from_bytes(&saved.bytes).expect("the save loads back");
+        assert_eq!(reopened.name, "Poster.pcraft", "the document the app admits for the reopened save");
+        // The session held one document (id 1) when the reopen's import started; the admitted
+        // one (id 7) answers under its own name.
+        let session = [(7, reopened.name.clone())];
+        assert_eq!(landed_doc(&[1], None, &session), Some((7, "Poster.pcraft".to_string())), "the name-less reopen settles, by id");
+        assert_eq!(landed_doc(&[1], Some("document"), &session), None, "the exact-hint claim the old policy made could only time out on it");
+    }
+
+    #[test]
+    fn a_reply_posted_to_the_apps_own_window_is_never_delivered() {
+        // R3-1: at top level `window.parent()` is the app's own window. A post there has the
+        // browser detach the transferred buffer while it serializes the message and drop the
+        // message on the origin check right after — `postMessage` itself returns normally —
+        // so a reply "posted" to it reads as delivered (posted, buffer gone) while its bytes
+        // reached no page, and the in-place save settled on it would clear a document's
+        // unsaved state, hiding the unsaved-work prompt. The post is refused before it is
+        // made, and delivery is what it always meant: a post that went out to a distinct
+        // parent, whose buffer left.
+        assert!(!posts_to(ReplyTarget::OwnWindow), "top level: never post to the app's own window");
+        assert!(!posts_to(ReplyTarget::Detached), "no parent to post to at all");
+        assert!(posts_to(ReplyTarget::Parent), "the documented iframe: a distinct parent");
+        assert!(delivered(true, 0), "posted to a distinct parent, transfer taken");
+        assert!(!delivered(false, 0), "a post refused — top level, no bridge — is not delivery");
+        assert!(!delivered(true, 4_096), "a buffer still in the app's hands is not delivery");
+        assert!(!delivered(false, 4_096), "nothing posted, nothing transferred");
+    }
+
+    #[test]
+    fn the_bridge_takes_calls_only_from_the_framing_parent() {
+        // R3-3: the origin check alone lets any window at the `?embed=` origin drive the app —
+        // a sibling iframe of the embedder's page among them. A request from any window but
+        // the parent could never be answered (replies go to the parent only), but it would
+        // still run — its `open`/`save` executed by the app. The source must be the framing
+        // parent, and at top level, where there is none, nothing is taken at all.
+        assert!(takes_call(true, MessageSource::Parent), "the embedder: the right window at the right origin");
+        assert!(!takes_call(true, MessageSource::Other), "a sibling at the right origin is still not the embedder");
+        assert!(!takes_call(true, MessageSource::None), "not framed: no embedder to serve");
+        assert!(!takes_call(false, MessageSource::Parent), "the right window at the wrong origin is refused too");
+        assert!(!takes_call(false, MessageSource::Other));
     }
 
     /// [`OpenPass`] for an ordinary document open, nothing unusual found yet.
@@ -613,7 +764,7 @@ mod tests {
         // counter-example, same name, different contents).
         let before = [1, 4];
         let docs = [(1, "Old.psd".to_string()), (4, "a.psd".to_string()), (5, "a.psd".to_string())];
-        assert_eq!(landed_doc(&before, "a.psd", &docs), Some((5, "a.psd".to_string())), "B's own new document, never A's late one");
+        assert_eq!(landed_doc(&before, Some("a.psd"), &docs), Some((5, "a.psd".to_string())), "B's own new document, never A's late one");
     }
 
     #[test]
@@ -700,7 +851,11 @@ mod tests {
             "no format: the app's own .pcraft, the layered default"
         );
         assert_eq!(call(json!({"photocraft": 2, "method": "open", "name": "x.psd"})), Some((json!(2), Ok(Call::Open { name: Some("x.psd".into()) }))));
-        assert_eq!(call(json!({"photocraft": 2, "method": "open"})), Some((json!(2), Ok(Call::Open { name: None }))), "no name: the open is \"document\"");
+        assert_eq!(
+            call(json!({"photocraft": 2, "method": "open"})),
+            Some((json!(2), Ok(Call::Open { name: None }))),
+            "no name: the import's hint is \"document\", the claim the admitted document"
+        );
         assert_eq!(
             call(json!({"photocraft": 3, "method": "request", "request": "ui.inspect"})),
             Some((json!(3), Err(()))),

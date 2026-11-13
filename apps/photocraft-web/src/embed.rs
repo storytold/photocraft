@@ -12,9 +12,12 @@
 //! window.addEventListener("photocraft-dirty", e => e.detail)   // true / false as it changes
 //! ```
 //!
-//! An open settles only once a document of the very name it asked for has entered the session
-//! — new since its import started, matched by exact name and nothing else — reported back as
-//! `doc` and by `info()`, so a save asked after it can't take an older document. One open is in
+//! An open settles only once its document has entered the session — new since its import
+//! started, matched by exact name and nothing else when a name was asked, and by the import's
+//! own admitted document when none was (a `.pcraft` keeps the name its manifest persisted, so
+//! a name-less open runs under the "document" file-name hint but claims the document, never
+//! the hint) — reported back as `doc` and by `info()`, so a save asked after it can't take an
+//! older document. One open is in
 //! flight at a time, and its window is taken as the open's first step — before a byte of the
 //! data is read: a second while the first is unsettled (its
 //! bytes being read, its import running, or waiting for its document behind a
@@ -33,18 +36,25 @@
 //! and once it held this file and holds nothing now (no prompt, nothing queued, no job of the
 //! name still opening), with no document of the name arrived, the file was disposed of. A
 //! rejected request claims nothing, and whatever document shows up later stays in the session
-//! untouched. A document of another name is never taken — a `.psdt`, which the app opens as
-//! "Untitled-N", rejects at its deadline, its document staying in the session. A failed import
-//! rejects at once, as an argument that can't be read as bytes rejects with
+//! untouched. A document of another name is never taken by an open that asked for a name — a
+//! `.psdt`, which the app opens as "Untitled-N", rejects at its deadline, its document
+//! staying in the session — while an open that asked for none takes its import's document
+//! under whatever name the app gave it, "Untitled-N" included: it claimed no name. A failed
+//! import rejects at once, as an argument that can't be read as bytes rejects with
 //! `protocol::OPEN_READ`, and a real byte shape over `protocol::MAX_OPEN_BYTES` with
 //! `protocol::OPEN_TOO_BIG` — gated on its true length before any view of it is made.
 //!
 //! A save
 //! marks the document clean only after its bytes have reached the caller — the promise resolved
 //! here, or the reply's transfer finished over the bridge — so an export, a reply or a transfer
-//! that fails leaves the document dirty.
+//! that fails leaves the document dirty, and so does a reply with no distinct parent to
+//! reach: at top level (`?embed=` in the app's own URL, `window.parent()` the window itself)
+//! the post is refused rather than made, because the browser would detach the transferred
+//! buffer and then drop the message on its origin check — delivered to no one.
 //!
-//! Over `postMessage` (only from the `?embed=` origin, replies only to it): send
+//! Over `postMessage` (only from the `?embed=` origin **and** only from the framing parent
+//! window — a sibling iframe at that origin is refused, and at top level nothing is taken at
+//! all; replies only to that parent): send
 //! `{photocraft: id, method: "open" | "save" | "isDirty" | "info", …}` (`open`: `data` an
 //! ArrayBuffer — the bytes ride the message's structured clone and are never read through the
 //! JSON face — and `name`; `save`:
@@ -59,7 +69,9 @@
 //! `{photocraft: "dirty", dirty}` when that changes. `request` stays with the app's own page:
 //! the embedding page names itself in `?embed=`, so that origin check keeps strangers from
 //! reading or replying to the app's messages but can't tell a trusted embedder from any other
-//! site (`frame-ancestors` on the app's host does that).
+//! site (`frame-ancestors` on the app's host does that) — and the source check keeps any
+//! other window at that origin, a sibling frame of the embedder's page among them, from
+//! driving the app it could never hear back from.
 //!
 //! A save the page takes counts as a save: a PSD, PSB or `.pcraft` leaves the document clean, as
 //! File › Save does.
@@ -93,6 +105,15 @@ struct PendingBytes {
 /// gives up). One at a time — a second, taken while this one is unsettled, is refused at the
 /// queue with `protocol::OPEN_BUSY`.
 struct PendingOpen {
+    /// The name the open asked for; `None` when it asked for none, and the claim is then the
+    /// import's own admitted document — the first document new since the import started,
+    /// under whatever name the session gave it — never a name
+    /// ([`protocol::landed_doc`]).
+    asked: Option<String>,
+    /// The file-name hint the import runs under: the asked name, or "document" when none was
+    /// asked. A hint for the formats that take a name from their file — never a rename: a
+    /// `.pcraft` keeps the name its manifest persisted, which is exactly why a name-less
+    /// open cannot claim by name.
     name: String,
     bytes: Vec<u8>,
     /// The open's byte source while its bytes are still being read ([`PendingBytes`]): a byte
@@ -101,8 +122,9 @@ struct PendingOpen {
     /// deadline can end it (the read has no timer of its own).
     source: Option<Rc<RefCell<PendingBytes>>>,
     /// The document ids in the session when this import started: only a document new since
-    /// then can answer this request — by exact name ([`protocol::landed_doc`]), never an
-    /// older one that happens to carry the same name.
+    /// then can answer this request — a named one by its exact name, a name-less one by
+    /// being the import's admitted document ([`protocol::landed_doc`]) — never an older one
+    /// that happens to carry the same name.
     before: Vec<u64>,
     /// The import warnings, once it ran.
     warnings: Vec<String>,
@@ -130,9 +152,10 @@ struct PendingOpen {
 impl PendingOpen {
     /// An entry whose bytes are already in hand (their gates passed where they were read):
     /// from its first pass it is exactly an import-and-wait.
-    fn with_bytes(name: String, bytes: Vec<u8>, settle: Settle) -> Self {
+    fn with_bytes(asked: Option<String>, name: String, bytes: Vec<u8>, settle: Settle) -> Self {
         Self {
             deadline: js_sys::Date::now() + protocol::OPEN_TIMEOUT_MS,
+            asked,
             name,
             bytes,
             source: None,
@@ -148,8 +171,8 @@ impl PendingOpen {
 
     /// An entry whose bytes are still on their way: the task writes them (or the refusal)
     /// into `source`, and until it does nothing of the entry runs.
-    fn with_source(name: String, source: Rc<RefCell<PendingBytes>>, settle: Settle) -> Self {
-        Self { source: Some(source), ..Self::with_bytes(name, Vec::new(), settle) }
+    fn with_source(asked: Option<String>, name: String, source: Rc<RefCell<PendingBytes>>, settle: Settle) -> Self {
+        Self { source: Some(source), ..Self::with_bytes(asked, name, Vec::new(), settle) }
     }
 }
 
@@ -292,8 +315,8 @@ pub fn process(app: &mut PhotocraftApp) {
 ///    the one cancel that API refuses — the damaged-file confirmation, whose answer is
 ///    crate-private — leaves the entry holding the window as an observer until the app is
 ///    done with the file;
-/// 5. a document new since its import started and named exactly as it asked — the claim, by
-///    name and nothing else (`protocol::landed_doc`);
+/// 5. a document new since its import started — the claim ([`protocol::landed_doc`]): named
+///    exactly as asked when a name was, or the import's own admitted document when none was;
 /// 6. the app was seen holding its file behind an open prompt and now holds nothing — a prompt
 ///    gone *and* no job of the name still opening — with no document of the name arrived: the
 ///    file was disposed of in the app (its dialog cancelled), and the wait ends at once rather
@@ -370,7 +393,7 @@ fn settle_opens(app: &mut PhotocraftApp) {
         let step = protocol::open_step(&protocol::OpenPass {
             failed: p.failed.clone(),
             reading: p.source.is_some(),
-            landed: protocol::landed_doc(&p.before, &p.name, &docs),
+            landed: protocol::landed_doc(&p.before, p.asked.as_deref(), &docs),
             app_holds,
             held: p.held,
             timed_out: now >= p.deadline,
@@ -444,9 +467,10 @@ fn settle_saves(app: &mut PhotocraftApp) {
                 let posted = post(&reply, Some(("result", js.buffer())));
                 // Delivery over the bridge is the *transfer* finishing, not the post call
                 // returning: the moment the browser takes the buffer, the view on our side is
-                // detached (length 0). A post refused, or a buffer still in our hands, leaves
+                // detached (length 0). A post refused — no bridge, or the app's own window at
+                // top level ([`protocol::posts_to`]) — or a buffer still in our hands, leaves
                 // the document dirty.
-                let delivered = posted && js.length() == 0;
+                let delivered = protocol::delivered(posted, js.length());
                 if delivered && in_place {
                     mark_saved(app, doc, revision);
                 }
@@ -731,9 +755,15 @@ fn open(data: JsValue, name: Option<String>) -> js_sys::Promise {
             settle_err(&settle, protocol::OPEN_BUSY);
             return;
         }
-        let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document".into());
+        let asked = name.filter(|n| !n.trim().is_empty());
+        // The import's file-name hint: what was asked, or "document" when nothing was. A
+        // hint for the formats that take a name from their file — never the claim: a
+        // `.pcraft` lands under the name its manifest persisted whatever the hint says, so a
+        // name-less open claims the document the import admits, not a name
+        // ([`protocol::landed_doc`]).
+        let hint = asked.clone().unwrap_or_else(|| "document".into());
         let source = Rc::new(RefCell::new(PendingBytes::default()));
-        OPENS.with(|o| o.borrow_mut().push(PendingOpen::with_source(name, source.clone(), settle)));
+        OPENS.with(|o| o.borrow_mut().push(PendingOpen::with_source(asked, hint, source.clone(), settle)));
         // The byte-acquisition task — a read of `data` — writes its one answer into the shared
         // cell; the frame pass takes it in. It never touches the promise's settle: an answer
         // that arrives after the entry's deadline settled it is read by no one (the entry is
@@ -773,12 +803,29 @@ fn api_object() -> JsValue {
     obj.into()
 }
 
-/// Posts `msg` to the embedding page (only with an `?embed=` origin, and only to that origin),
-/// transferring `buffer` along with it as `msg[key]`. Whether the browser took it: a save whose
-/// reply can't be posted has not reached the caller, and leaves the document dirty.
+/// Posts `msg` to the embedding page (only with an `?embed=` origin, and only to a **distinct**
+/// parent window at that origin — at top level `window.parent()` is the app's own window, and
+/// [`protocol::posts_to`] refuses the post below before anything is sent), transferring
+/// `buffer` along with it as `msg[key]`. Whether the browser took it: a save whose reply can't
+/// be posted has not reached the caller, and leaves the document dirty.
 fn post(msg: &Value, buffer: Option<(&str, js_sys::ArrayBuffer)>) -> bool {
     let Some(origin) = ORIGIN.with(|o| o.borrow().clone()) else { return false };
-    let Some(parent) = web_sys::window().and_then(|w| w.parent().ok().flatten()) else { return false };
+    let Some(window) = web_sys::window() else { return false };
+    let parent = window.parent().ok().flatten();
+    // Where the reply would go: at top level `parent` is this window, and a post to it would
+    // have the browser detach the transferred buffer while it serialized the message and drop
+    // the message on the origin check right after — `postMessage` returns normally, so the
+    // reply would read as delivered with its bytes in no page's hands, clearing a document's
+    // unsaved state. Refused before the post: the buffer stays whole and the save stays dirty.
+    let target = match parent.as_ref() {
+        None => protocol::ReplyTarget::Detached,
+        Some(p) if JsValue::from(p.clone()) == JsValue::from(window.clone()) => protocol::ReplyTarget::OwnWindow,
+        Some(_) => protocol::ReplyTarget::Parent,
+    };
+    if !protocol::posts_to(target) {
+        return false;
+    }
+    let Some(parent) = parent else { return false };
     let value = to_js(msg);
     let transfer = js_sys::Array::new();
     if let Some((key, buf)) = buffer {
@@ -824,15 +871,34 @@ fn without_binary(msg: &JsValue) -> JsValue {
     out.into()
 }
 
-/// The `postMessage` bridge: calls from `origin` only, replies to the parent window at that origin
-/// only (the documented setup is an iframe; the reply never goes to another window or origin).
-/// A message is weighed before anything decodes it (below), and at most
+/// The `postMessage` bridge: calls from `origin` and from the framing parent only — a
+/// **distinct** window ([`protocol::takes_call`]); at top level, where `window.parent()` is
+/// the app's own window, there is none and nothing is taken. Replies go to that parent at
+/// that origin only (the documented setup is an iframe; the reply never goes to another
+/// window or origin). A message is weighed before anything decodes it (below), and at most
 /// `protocol::MAX_PENDING_CALLS` calls wait at once — the next is answered `protocol::BUSY`, so
 /// a page can't pile work onto the app.
 fn listen(window: &web_sys::Window, origin: &str) {
     let origin = origin.to_string();
+    // The framing parent, when it is a window other than this one (`window.parent()` is the
+    // window itself at top level): the one window the bridge serves. Any other window at the
+    // `?embed=` origin — a sibling iframe of the embedder's page among them — passes the
+    // origin check alone, and its call would run in the app although it could never be
+    // answered (replies go to the parent only): the source must be the parent.
+    let parent = window.parent().ok().flatten().filter(|p| JsValue::from(p.clone()) != JsValue::from(window.clone()));
     let cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-        if e.origin() != origin {
+        let source = match (e.source(), parent.as_ref()) {
+            (None, _) => protocol::MessageSource::None,
+            (Some(_), None) => protocol::MessageSource::Other,
+            (Some(s), Some(p)) => {
+                if JsValue::from(s) == JsValue::from(p.clone()) {
+                    protocol::MessageSource::Parent
+                } else {
+                    protocol::MessageSource::Other
+                }
+            }
+        };
+        if !protocol::takes_call(e.origin() == origin, source) {
             return;
         }
         let data = e.data();

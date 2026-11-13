@@ -232,7 +232,11 @@ window.addEventListener("photocraft-dirty", e => e.detail)   // true / false as 
 
 `open` settles only once its document has entered the session — never before, so a `save` asked
 after it gets the new document, not an older one — and its `doc.id` can be checked against
-`info().doc.id`. Only one open runs at a time, and its turn is taken as the open's first step —
+`info().doc.id`. A `name` is a claim: the open settles only on a document of that very name.
+Without one, the import runs under the name `document` but settles as the document it admits,
+under whatever name the app gave it — a `.pcraft` keeps the name it was saved with — so
+reopening a default save needs no name to match. Only one open runs at a time, and its turn is
+taken as the open's first step —
 before a byte of the data is read — so a second `open` while one is in
 flight (reading, importing, or waiting behind a dialog) is answered `busy` at once. An import
 still decoding, or one held behind a dialog the app shows over it (an embedded profile
@@ -250,7 +254,8 @@ it dirty. The `.warnings` on the saved bytes are the same export warnings the ap
 
 **Cross-origin iframe:** add the embedding page's origin to the app's URL,
 `…/photocraft/?embed=https://admin.example.com`. The app then takes the same calls over
-`postMessage` from that origin only, and posts only to it:
+`postMessage` from that origin and from the framing page's window only — a sibling iframe at
+the same origin is refused — and posts only to that window:
 
 ```js
 frame.contentWindow.postMessage({photocraft: 1, method: "open", name: "a.psd", data: buffer}, appOrigin, [buffer]);
