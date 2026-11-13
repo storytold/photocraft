@@ -84,7 +84,7 @@ fn ok_runs_the_sheet_with_both_settings() {
     for (i, rel) in ["top.png", "sub/inner.png"].into_iter().enumerate() {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 8 + i, "height": 6})).unwrap();
-        s.execute("file.saveAs", json!({"path": dir.join(rel).to_string_lossy()})).unwrap();
+        s.execute("file.saveACopy", json!({"path": dir.join(rel).to_string_lossy()})).unwrap();
     }
     let sheets = |group: bool| {
         let mut h = dialog();
