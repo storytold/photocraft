@@ -46,14 +46,20 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
     Ok([index(cmd, p, "subpath")?, index(cmd, p, "knot")?])
 }
 
-/// The History step name: `default`, or `named` when `stepName` asks for it (the Convert Point
-/// tool names its steps as the reference does, #12736). Any other value is refused.
-fn step_name(cmd: &str, p: &Value, default: &'static str, named: &'static str) -> Result<&'static str> {
+/// The History step name: `default`, or one of `named` when `stepName` asks for it (the Convert
+/// Point tool names its steps as the reference does, #12736; Direct Selection names a one-anchor
+/// drag, #13205). Any other value is refused.
+fn step_name(cmd: &str, p: &Value, default: &'static str, named: &[&'static str]) -> Result<&'static str> {
     match p.get("stepName") {
         None | Some(Value::Null) => Ok(default),
-        Some(Value::String(n)) if n == named => Ok(named),
-        Some(_) => Err(bad(cmd, format!("`stepName` must be \"{named}\""))),
+        Some(Value::String(n)) => named.iter().copied().find(|m| *m == n.as_str()).ok_or_else(|| bad(cmd, step_names_error(named))),
+        Some(_) => Err(bad(cmd, step_names_error(named))),
     }
+}
+
+fn step_names_error(named: &[&str]) -> String {
+    let names: Vec<String> = named.iter().map(|n| format!("\"{n}\"")).collect();
+    format!("`stepName` must be {}", names.join(" or "))
 }
 
 /// Applies `f` to the targeted path in one undoable step labelled `label`.
@@ -116,7 +122,7 @@ fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect::<Result<_>>()?;
     let d = offset(CMD, p)?;
-    let label = step_name(CMD, p, "Drag Anchor Points", "Drag Path")?;
+    let label = step_name(CMD, p, "Drag Anchor Points", &["Drag Path", "Drag Anchor Point"])?;
     if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
         return edit_path(s, CMD, p, label, |path| edit::move_anchors_curvature(path, &anchors, d));
     }
@@ -129,7 +135,7 @@ fn move_handle(s: &mut Session, p: &Value) -> Result<Value> {
     let h = p.get("handle").and_then(Value::as_str).and_then(Handle::parse).ok_or_else(|| bad(CMD, "`handle` must be \"in\" or \"out\""))?;
     let to = point(CMD, p, "to")?.ok_or_else(|| bad(CMD, "missing `to`"))?;
     let independent = p.get("independent").and_then(Value::as_bool).unwrap_or(false);
-    let label = step_name(CMD, p, "Drag Direction Point", "Corner Drag")?;
+    let label = step_name(CMD, p, "Drag Control Point", &["Corner Drag"])?;
     edit_path(s, CMD, p, label, |path| edit::move_handle(path, k, h, to, independent))
 }
 
@@ -147,7 +153,7 @@ fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
 fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.convertPoint";
     let k = knot(CMD, p)?;
-    let label = step_name(CMD, p, "Convert Point", "Change Anchor Point")?;
+    let label = step_name(CMD, p, "Convert Point", &["Change Anchor Point"])?;
     if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
         return edit_path(s, CMD, p, label, |path| edit::toggle_curvature_point(path, k));
     }
@@ -284,11 +290,11 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"stepName":"Drag Path"? (History step name; the Convert Point tool sends it when it drags a whole path; default "Drag Anchor Points"; any other value is refused)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"stepName":"Drag Path"|"Drag Anchor Point"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor; default "Drag Anchor Points"; any other value is refused)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
-            "Drag Direction Point",
-            r#""subpath":i,"knot":j,"handle":"in|out","to":[x,y],"independent":bool=false (a smooth point turns its other handle to stay collinear; independent = ⌥ / Convert Point, makes a corner),"stepName":"Corner Drag"? (History step name; the Convert Point tool sends it; default "Drag Direction Point"; any other value is refused)"#.into(),
+            "Drag Control Point",
+            r#""subpath":i,"knot":j,"handle":"in|out","to":[x,y],"independent":bool=false (a smooth point turns its other handle to stay collinear; independent = ⌥ / Convert Point, makes a corner),"stepName":"Corner Drag"? (History step name; the Convert Point tool sends it; default "Drag Control Point"; any other value is refused)"#.into(),
             move_handle,
         ),
         spec(
@@ -797,3 +803,7 @@ mod tests {
 #[cfg(test)]
 #[path = "path_delete_last_anchor_tests.rs"]
 mod path_delete_last_anchor_tests;
+
+#[cfg(test)]
+#[path = "direct_select_history_names_tests.rs"]
+mod direct_select_history_names_tests;
