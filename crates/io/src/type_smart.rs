@@ -56,6 +56,13 @@ fn convert(doc: &Document, layers: &mut [Layer], warnings: &mut Vec<String>, dep
     }
 }
 
+/// Renders one type layer from its model (no document-wide cache budget: a single layer the user
+/// converts), still bounded by the import's per-layer pixel limit.
+fn render_one(eng: &mut photocraft_text::TextEngine, t: &mut TextLayer, dpi: f32, fmt: photocraft_color::PixelFormat) {
+    let mut unlimited = u64::MAX;
+    crate::text_import::render_bounded(eng, t, dpi, fmt, &mut unlimited);
+}
+
 /// The Smart Object standing in for `t`: its source is the type without the distortions, on a
 /// canvas cropped to it; the distortions become the placement's warp and perspective.
 fn smart_of(doc: &Document, t: &TextLayer, name: &str) -> Result<SmartObject, String> {
@@ -64,14 +71,14 @@ fn smart_of(doc: &Document, t: &TextLayer, name: &str) -> Result<SmartObject, St
     plain.distortions.clear();
     plain.psd_raw = None;
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-    crate::text_import::render_bounded(&mut eng, &mut plain, doc.resolution_dpi, fmt);
+    render_one(&mut eng, &mut plain, doc.resolution_dpi, fmt);
     let b = plain.cache.as_ref().map(|c| c.content_bounds()).filter(|b| !b.is_empty()).ok_or("the type is empty")?;
     let (w, h) = (b.width(), b.height());
     // The source: the type moved to the cropped canvas' origin.
     let origin = Affine::translate(f64::from(b.x0), f64::from(b.y0));
     let mut inner_text = plain.clone();
     inner_text.transform = Affine::translate(-f64::from(b.x0), -f64::from(b.y0)).mul(&t.transform);
-    crate::text_import::render_bounded(&mut eng, &mut inner_text, doc.resolution_dpi, fmt);
+    render_one(&mut eng, &mut inner_text, doc.resolution_dpi, fmt);
     drop(eng);
     let mut inner = Document::new(name, photocraft_geom::Size::new(w, h), doc.mode, doc.depth);
     inner.resolution_dpi = doc.resolution_dpi;
@@ -138,7 +145,7 @@ mod tests {
         let fmt = doc.pixel_format();
         let mut t = TextLayer { text: "Hello".into(), size_pt: 40.0, transform: Affine::translate(20.0, 80.0), ..Default::default() };
         let mut eng = photocraft_text::shared().lock().unwrap();
-        crate::text_import::render_bounded(&mut eng, &mut t, 72.0, fmt);
+        render_one(&mut eng, &mut t, 72.0, fmt);
         drop(eng);
         let mut plain = t.clone();
         plain.text = "Plain".into();
@@ -181,7 +188,7 @@ mod tests {
             ..Default::default()
         };
         let mut eng = photocraft_text::shared().lock().unwrap();
-        crate::text_import::render_bounded(&mut eng, &mut t, 72.0, fmt);
+        render_one(&mut eng, &mut t, 72.0, fmt);
         drop(eng);
         let b = t.cache.as_ref().unwrap().content_bounds();
         let r = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
@@ -214,7 +221,7 @@ mod tests {
             let fmt = doc.pixel_format();
             let mut t = TextLayer { text: "Hello".into(), size_pt: 40.0, transform: Affine::translate(20.0, 80.0), ..Default::default() };
             let mut eng = photocraft_text::shared().lock().unwrap();
-            crate::text_import::render_bounded(&mut eng, &mut t, 72.0, fmt);
+            render_one(&mut eng, &mut t, 72.0, fmt);
             drop(eng);
             let b = t.cache.as_ref().unwrap().content_bounds();
             let r = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
