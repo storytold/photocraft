@@ -3521,7 +3521,7 @@ fn shape_layer_gradients_match_fill_layers() {
         if unsorted {
             stops.reverse();
         }
-        Fill::Gradient { stops, angle: 30.0, scale: 1.7, style, reverse: false, opacity_stops, midpoints, offset, dither, align }
+        Fill::Gradient { stops, angle: 30.0, scale: 1.7, style, reverse: false, opacity_stops, midpoints, offset, dither, align, interpolation: None }
     };
     let styles = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];
     // (name, midpoints, opacity stops, centre offset, dither, unsorted stops) per case.

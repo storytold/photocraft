@@ -53,12 +53,15 @@ pub(super) fn overlay(gradient: &mut Gradient, interpolation: &mut Option<Gradie
         return;
     }
     let previous = interpolation.clone();
-    let source = interpolation.get_or_insert_with(|| GradientInterpolation {
-        method: requested.unwrap_or("classic").to_ascii_lowercase(),
-        smoothness: 100.0,
-        // Without a source record, intermediate stops may be baked samples (PSD import or
-        // older method commands). Keep the legacy rebuild-from-ends behaviour on first choice.
-        stops: vec![(0.0, gradient.stops.first().map_or(Color::BLACK, |s| s.1)), (1.0, gradient.stops.last().map_or(Color::WHITE, |s| s.1))],
+    let source = interpolation.get_or_insert_with(|| {
+        GradientInterpolation::new(
+            requested.unwrap_or("classic").to_ascii_lowercase(),
+            100.0,
+            // Without a source record, intermediate stops may be baked samples (older PSD
+            // imports or method commands). Keep the legacy rebuild-from-ends behaviour on first
+            // choice.
+            vec![(0.0, gradient.stops.first().map_or(Color::BLACK, |s| s.1)), (1.0, gradient.stops.last().map_or(Color::WHITE, |s| s.1))],
+        )
     });
     if let Some(method) = requested {
         source.method = method.to_ascii_lowercase();
@@ -67,21 +70,38 @@ pub(super) fn overlay(gradient: &mut Gradient, interpolation: &mut Option<Gradie
         source.smoothness = smoothness.clamp(0.0, 100.0);
     }
     if let Ok(Some(stops)) = super::stops_param(params, "layer.layerStyle.gradientOverlay") {
+        // Midpoints belong to the segments: a different number of stops starts them halfway.
+        if stops.len() != source.stops.len() {
+            source.midpoints.clear();
+        }
         source.stops = stops;
+    }
+    // A gradient read from a PSD keeps Photoshop's own opacity stops (#13557): an edit replaces
+    // them and is baked with the colours. Without a record the opacity stops are used as given.
+    let own_opacity = !source.opacity_stops.is_empty();
+    if own_opacity && let Ok(Some(opacity)) = super::opacity_stops_param(params, "layer.layerStyle.gradientOverlay") {
+        if opacity.len() != source.opacity_stops.len() {
+            source.opacity_midpoints.clear();
+        }
+        source.opacity_stops = opacity;
     }
     edit_endpoint(source.stops.first_mut(), params, "from");
     edit_endpoint(source.stops.last_mut(), params, "to");
-    if previous.as_ref() != Some(source)
-        && let Some(method) = photocraft_io::GradientMethod::from_name(&source.method)
-    {
+    if previous.as_ref() != Some(source) && photocraft_io::gradient_bake::interpolation_method(source).is_some() {
         // Missing midpoint entries mean 50 %, including for multi-stop source gradients.
-        gradient.stops = photocraft_io::bake_gradient(source.stops.clone(), &[], source.smoothness / 100.0, method);
+        gradient.stops = photocraft_io::gradient_bake::bake_interpolation(source);
+        if let Some(opacity) = photocraft_io::gradient_bake::bake_interpolation_opacity(source) {
+            gradient.opacity_stops = opacity;
+        }
     }
     // Geometry edits must not replace just the ends of the baked curve.
     let mut geometry = params.clone();
     if let Some(object) = geometry.as_object_mut() {
         for key in ["method", "smoothness", "from", "to", "stops"] {
             object.remove(key);
+        }
+        if own_opacity {
+            object.remove("opacityStops");
         }
     }
     overlay_gradient(gradient, &geometry);
@@ -119,7 +139,7 @@ mod tests {
                     common: FxCommon::new(BlendMode::Normal, 1.0),
                     gradient: expected,
                     dither: true,
-                    interpolation: Some(GradientInterpolation { method: "linear".into(), smoothness: 100.0, stops: source_ends }),
+                    interpolation: Some(GradientInterpolation::new("linear", 100.0, source_ends)),
                 }
             );
         }
@@ -160,7 +180,7 @@ mod tests {
             ..Gradient::default()
         };
         let original = gradient.clone();
-        let mut source = Some(GradientInterpolation { method: "classic".into(), smoothness: 100.0, stops: original.stops.clone() });
+        let mut source = Some(GradientInterpolation::new("classic", 100.0, original.stops.clone()));
         gradient.stops = bake_gradient(original.stops.clone(), &[0.5, 0.5], 1.0, GradientMethod::Classic);
         for method in ["classic", "smooth", "perceptual", "linear", "classic"] {
             overlay(&mut gradient, &mut source, &json!({"method": method}));
@@ -275,5 +295,53 @@ mod integration_stop_tests {
         assert_eq!(stops.len(), 3);
         assert_eq!(gradient.stops, photocraft_io::bake_gradient(stops, &[], 1.0, photocraft_io::GradientMethod::Smooth));
         assert_eq!(gradient.opacity_stops, vec![(0.0, 0.2), (1.0, 0.8)]);
+    }
+}
+
+#[cfg(test)]
+mod photoshop_source_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// An overlay as PSD import leaves a Photoshop gradient (#13557): three stops with a midpoint
+    /// off the middle and its own opacity fade, rendered baked.
+    fn imported() -> (Gradient, Option<GradientInterpolation>) {
+        let mut src = GradientInterpolation::new(
+            "perceptual",
+            100.0,
+            vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (0.5, Color::rgb(0.0, 1.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
+        );
+        src.midpoints = vec![0.3, 0.5];
+        src.opacity_stops = vec![(0.0, 1.0), (1.0, 0.2)];
+        src.opacity_midpoints = vec![0.4];
+        let gradient = Gradient {
+            stops: photocraft_io::gradient_bake::bake_interpolation(&src),
+            opacity_stops: photocraft_io::gradient_bake::bake_interpolation_opacity(&src).unwrap(),
+            ..Gradient::default()
+        };
+        (gradient, Some(src))
+    }
+
+    #[test]
+    fn edits_bake_photoshops_midpoints_and_opacity_stops() {
+        let (mut gradient, mut source) = imported();
+        // Geometry alone leaves the bake as it is.
+        let before = gradient.stops.clone();
+        overlay(&mut gradient, &mut source, &json!({"angle": 30}));
+        assert_eq!(gradient.stops, before);
+        // A colour edit keeps the midpoints in the bake.
+        overlay(&mut gradient, &mut source, &json!({"stops": [[0, "#ff0000"], [0.5, "#ffff00"], [1, "#0000ff"]]}));
+        let src = source.clone().unwrap();
+        assert_eq!(src.midpoints, vec![0.3, 0.5]);
+        assert_eq!(gradient.stops, photocraft_io::gradient_bake::bake_interpolation(&src));
+        // A different number of stops starts every segment halfway.
+        overlay(&mut gradient, &mut source, &json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]}));
+        assert!(source.as_ref().unwrap().midpoints.is_empty());
+        // Photoshop's opacity stops are edited and baked, not used as linear stops.
+        overlay(&mut gradient, &mut source, &json!({"opacityStops": [[0, 100], [0.5, 50], [1, 0]]}));
+        let src = source.unwrap();
+        assert_eq!(src.opacity_stops, vec![(0.0, 1.0), (0.5, 0.5), (1.0, 0.0)]);
+        assert!(src.opacity_midpoints.is_empty());
+        assert_eq!(Some(gradient.opacity_stops), photocraft_io::gradient_bake::bake_interpolation_opacity(&src));
     }
 }

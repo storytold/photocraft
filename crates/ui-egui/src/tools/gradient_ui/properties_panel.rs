@@ -32,9 +32,27 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     if props_layout::section(ui, "gradient-fill-stops", "Gradient")
         && let Some(fill) = current_fill(app, layer.id)
     {
+        let note = interpolation_note(&fill);
         stops_editor_for(app, ui, Sink::Layer(layer.id), fill);
+        if let Some(line) = note {
+            ui.label(egui::RichText::new(line).color(Tokens::get(ui.ctx()).text_faint));
+        }
     }
     options(app, ui, layer);
+}
+
+/// The rest of Photoshop's gradient a fill keeps (#13557), as the Gradient Map editor notes it:
+/// "Smoothness 100% · Perceptual". `None` for a fill without one.
+fn interpolation_note(fill: &Fill) -> Option<String> {
+    let Fill::Gradient { interpolation: Some(src), .. } = fill else { return None };
+    let method = match src.method.as_str() {
+        "perceptual" => tl!("Perceptual"),
+        "linear" => tl!("Linear"),
+        "smooth" => tl!("Smooth"),
+        _ => tl!("Classic"),
+    };
+    let smooth = if src.smoothness.is_finite() { src.smoothness.clamp(0.0, 100.0) } else { 0.0 };
+    Some(crate::i18n::fmt(tl!("Smoothness {s}% · {method}"), &[("s", &format!("{smooth:.0}")), ("method", method)]))
 }
 
 fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
@@ -138,7 +156,8 @@ fn style_button(ui: &mut egui::Ui, style: GradientStyle, selected: bool, name: &
 }
 
 pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink) {
-    let Some(Fill::Gradient { mut stops, mut opacity_stops, midpoints, .. }) = sink.fill(app) else { return };
+    // Photoshop's own stops when the fill keeps them (#13557).
+    let Some(Fill::Gradient { mut stops, mut opacity_stops, midpoints, .. }) = sink.fill(app).map(|f| cmds::source_view(&f)) else { return };
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     if opacity_stops.is_empty() {
         opacity_stops = vec![(0.0, 1.0), (1.0, 1.0)];
@@ -192,7 +211,7 @@ pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink
     let kind = if matches!(selected, Marker::Opacity(_)) { "opacity" } else { "color" };
     if let Some(value) = numeric_row(ui, &format!("{kind}-location-{index}"), "Location", location * 100.0, 0.0..=100.0, "%") {
         let p = sink.params(json!({"action": "move", "kind": kind, "index": index, "location": value / 100.0}));
-        let selection = sink.fill(app).and_then(|f| selection_after_edit(&f, &p, Some(selected)));
+        let selection = sink.fill(app).and_then(|f| selection_after_edit(&cmds::source_view(&f), &p, Some(selected)));
         if app.run(sink.cmd(), p).is_ok() {
             if let Some(marker) = selection {
                 ui.data_mut(|d| d.insert_temp(key, marker));
@@ -439,5 +458,55 @@ mod tests {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(fill(h.state()), before);
+    }
+
+    /// The app with its gradient fill as PSD import leaves a Photoshop gradient with
+    /// Smoothness 100: three stops kept, rendered as their 97 baked stops (#13557).
+    fn photoshop_app() -> PhotocraftApp {
+        use photocraft_color::Color;
+        use photocraft_doc::effects::GradientInterpolation;
+        let mut app = app();
+        let src = GradientInterpolation::new(
+            "classic",
+            100.0,
+            vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (0.5, Color::rgb(0.0, 1.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
+        );
+        let mut f = Fill::gradient(photocraft_io::gradient_bake::bake_interpolation(&src), 0.0, 1.0, GradientStyle::Linear, false);
+        if let Fill::Gradient { interpolation, .. } = &mut f {
+            *interpolation = Some(Box::new(src));
+        }
+        let st = app.session.active_mut().unwrap();
+        let id = st.active_layer.unwrap();
+        std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().content = photocraft_doc::LayerContent::Fill(f);
+        app
+    }
+
+    /// #13557: the Properties gradient editor shows and edits Photoshop's three stops, not the
+    /// 97 baked ones, and notes the Smoothness and method; a drag moves the kept stop and the
+    /// fill is baked again.
+    #[test]
+    fn properties_edit_photoshops_stops_of_a_kept_gradient() {
+        let mut h = Harness::builder().with_size(vec2(280.0, 800.0)).build_ui_state(panel, photoshop_app());
+        PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+        assert!(h.query_by_label("Smoothness 100% · Classic").is_some(), "the method and Smoothness are noted");
+        let Fill::Gradient { stops: baked, .. } = fill(h.state()) else { panic!() };
+        assert!(baked.len() > 90);
+        // The middle marker is Photoshop's green stop (with 97 markers it would be baked stop 48).
+        let rect = h.get_by_label("Gradient stops").rect();
+        let from = pos2(rect.left() + 8.0 + (rect.width() - 16.0) * 0.5, rect.top() + 50.0);
+        let to = pos2(rect.left() + 8.0 + (rect.width() - 16.0) * 0.7, from.y);
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerMoved(to));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        let Fill::Gradient { stops, interpolation: Some(src), .. } = fill(h.state()) else { panic!("the gradient is kept") };
+        assert_eq!(src.stops.len(), 3, "{:?}", src.stops);
+        assert!((src.stops[1].0 - 0.7).abs() < 1e-3, "{:?}", src.stops);
+        assert_eq!(stops, photocraft_io::gradient_bake::bake_interpolation(&src), "baked again");
     }
 }

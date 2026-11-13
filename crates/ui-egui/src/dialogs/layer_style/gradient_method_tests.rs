@@ -114,3 +114,34 @@ fn baked_overlay_is_unchanged_until_method_selection_then_edits_the_whole_curve(
     confirm(&mut app, &reopened).unwrap();
     assert_eq!(effect(&app), &edited);
 }
+
+/// #13557: an overlay read from a PSD keeps Photoshop's gradient; the Layer Style page shows its
+/// three stops and own opacity stops (not the baked ones) with its method and Smoothness.
+#[test]
+fn imported_overlay_shows_photoshops_stops() {
+    use photocraft_color::Color;
+    use photocraft_doc::effects::GradientInterpolation;
+    let mut src = GradientInterpolation::new(
+        "perceptual",
+        100.0,
+        vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (0.5, Color::rgb(0.0, 1.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
+    );
+    src.midpoints = vec![0.3, 0.5];
+    src.opacity_stops = vec![(0.0, 1.0), (1.0, 0.25)];
+    let gradient = photocraft_doc::Gradient {
+        stops: photocraft_io::gradient_bake::bake_interpolation(&src),
+        opacity_stops: photocraft_io::gradient_bake::bake_interpolation_opacity(&src).unwrap(),
+        ..Default::default()
+    };
+    assert!(gradient.stops.len() > 90 && gradient.opacity_stops.len() > 2);
+    let fx = Effect::GradientOverlay {
+        common: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        gradient,
+        dither: false,
+        interpolation: Some(src),
+    };
+    let v = values_of(&fx, 120.0);
+    assert_eq!(v[gradient_field::KEY].as_array().map(Vec::len), Some(3), "{v}");
+    assert_eq!(v[gradient_field::OPACITY_KEY], json!([[0.0, 100.0], [1.0, 25.0]]));
+    assert_eq!((v["method"].as_str(), v["smoothness"].as_f64()), (Some("perceptual"), Some(100.0)));
+}

@@ -165,6 +165,7 @@ fn gradient_stop_alpha_round_trips_once() {
         offset: (0.0, 0.0),
         dither: false,
         align: true,
+        interpolation: None,
     };
     let (k, d) = super::fill_to_desc(&fill);
     let Fill::Gradient { stops, opacity_stops, .. } = super::fill_from_desc(&k, &d).unwrap() else { panic!("grad") };
@@ -317,6 +318,7 @@ fn fills_roundtrip() {
             offset: (0.125, -0.375),
             dither: true,
             align: false,
+            interpolation: None,
         },
         Fill::Pattern { name: "Bubbles".into(), scale: 0.5, id: "abc".into(), angle: 30.0, link: false, phase: (3.0, -2.0) },
     ] {
@@ -331,5 +333,156 @@ fn fills_roundtrip() {
             }
             _ => assert_eq!(back, f),
         }
+    }
+}
+
+/// A Photoshop gradient fill (`GdFl`) descriptor: colour stops `(location 0..4096, rgb 0..1,
+/// midpoint % of the segment it ends)`, opacity stops `(location, %, midpoint %)`, Smoothness
+/// `intr` (0..4096) and the method code (`gradientsInterpolationMethod`, as Photoshop 27.11
+/// writes it).
+fn photoshop_gdfl(colours: &[(i32, [f64; 3], i32)], opacity: &[(i32, f64, i32)], intr: f64, method: &str) -> Descriptor {
+    let clrs = colours
+        .iter()
+        .map(|(loc, c, mid)| {
+            let rgb = Descriptor::new("RGBC")
+                .with("Rd  ", Value::Double(c[0] * 255.0))
+                .with("Grn ", Value::Double(c[1] * 255.0))
+                .with("Bl  ", Value::Double(c[2] * 255.0));
+            Value::Descriptor(
+                Descriptor::new("Clrt")
+                    .with("Clr ", Value::Descriptor(rgb))
+                    .with("Type", Value::Enumerated { type_id: Id::new("Clry"), value: Id::new("UsrS") })
+                    .with("Lctn", Value::Integer(*loc))
+                    .with("Mdpn", Value::Integer(*mid)),
+            )
+        })
+        .collect();
+    let trns = opacity
+        .iter()
+        .map(|(loc, op, mid)| {
+            Value::Descriptor(
+                Descriptor::new("TrnS")
+                    .with("Opct", Value::UnitFloat { unit: *b"#Prc", value: *op })
+                    .with("Lctn", Value::Integer(*loc))
+                    .with("Mdpn", Value::Integer(*mid)),
+            )
+        })
+        .collect();
+    let grad = Descriptor::new("Grdn")
+        .with("Nm  ", Value::Text(UnicodeString::new_nul("Custom")))
+        .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("CstS") })
+        .with("Intr", Value::Double(intr))
+        .with("Clrs", Value::List(clrs))
+        .with("Trns", Value::List(trns));
+    Descriptor::new("null")
+        .with("Angl", Value::UnitFloat { unit: *b"#Ang", value: 90.0 })
+        .with("Type", Value::Enumerated { type_id: Id::new("GrdT"), value: Id::new("Lnr ") })
+        .with("Grad", Value::Descriptor(grad))
+        .with("gradientsInterpolationMethod", Value::Enumerated { type_id: Id::new("gradientInterpolationMethodType"), value: Id::new(method) })
+}
+
+/// Red → green (midpoint 30 %) → blue (midpoint 50 %), opaque.
+const THREE: [(i32, [f64; 3], i32); 3] = [(0, [1.0, 0.0, 0.0], 50), (2048, [0.0, 1.0, 0.0], 30), (4096, [0.0, 0.0, 1.0], 50)];
+const OPAQUE: [(i32, f64, i32); 2] = [(0, 100.0, 50), (4096, 100.0, 50)];
+
+/// Write then read a fill.
+fn rewritten(f: &Fill) -> Fill {
+    let (k, data) = write_fill(f);
+    parse_fill(&k, &data).unwrap()
+}
+
+/// #13557: a gradient fill with Smoothness 100 (Photoshop's default) keeps Photoshop's three
+/// stops, their midpoint, the Smoothness and the method next to the dense stops it renders, and
+/// a save writes them back, so reading it again gives the same fill.
+#[test]
+fn gradient_fill_keeps_photoshops_stops_midpoints_and_smoothness() {
+    use photocraft_compose::gradient_fill::Ramp;
+    let f = fill_from_desc(b"GdFl", &photoshop_gdfl(&THREE, &OPAQUE, 4096.0, "Gcls")).unwrap();
+    let Fill::Gradient { stops, midpoints, interpolation: Some(src), .. } = &f else { panic!("{f:?}") };
+    assert!(stops.len() > 90, "rendered from the baked stops: {}", stops.len());
+    assert!(midpoints.is_empty(), "the bake folds the midpoints in");
+    assert_eq!(src.stops.len(), 3, "Photoshop's three stops are kept");
+    assert_eq!((src.method.as_str(), src.smoothness), ("classic", 100.0));
+    assert!((src.midpoints[0] - 0.3).abs() < 1e-6 && (src.midpoints[1] - 0.5).abs() < 1e-6, "{:?}", src.midpoints);
+    assert_eq!(*stops, crate::gradient_bake::bake_interpolation(src), "the baked stops are the kept gradient baked");
+    // The PSD writer writes Photoshop's gradient, not the 97 baked stops.
+    let (_, data) = write_fill(&f);
+    let d = parse_prefix_versioned(&data).unwrap();
+    let Some(Value::List(clrs)) = get_desc(&d, "Grad").and_then(|g| g.get("Clrs")) else { panic!("Clrs") };
+    assert_eq!(clrs.len(), 3);
+    assert_eq!(num(get_desc(&d, "Grad").and_then(|g| g.get("Intr"))), Some(4096.0));
+    assert_eq!(enum_of(&d, "gradientsInterpolationMethod"), Some(&b"Gcls"[..]));
+    let back = rewritten(&f);
+    assert_eq!(back, f, "read → write → read keeps the fill");
+    // It renders as it did.
+    let (a, b) = (Ramp::new(&f).unwrap(), Ramp::new(&back).unwrap());
+    for k in 0..=20 {
+        assert_eq!(a.sample(k as f32 / 20.0), b.sample(k as f32 / 20.0));
+    }
+}
+
+/// #13557: Smoothness 0 with a method other than Classic (Perceptual here) is kept too; plain
+/// Smoothness 0 Classic needs no baking and stays three stops with their midpoints.
+#[test]
+fn gradient_fill_source_by_method_and_smoothness() {
+    let perceptual = fill_from_desc(b"GdFl", &photoshop_gdfl(&THREE, &OPAQUE, 0.0, "Perc")).unwrap();
+    let Fill::Gradient { stops, interpolation: Some(src), .. } = &perceptual else { panic!("{perceptual:?}") };
+    assert!(stops.len() > 3);
+    assert_eq!((src.stops.len(), src.method.as_str(), src.smoothness), (3, "perceptual", 0.0));
+    let back = rewritten(&perceptual);
+    assert_eq!(back, perceptual);
+    let classic = fill_from_desc(b"GdFl", &photoshop_gdfl(&THREE, &OPAQUE, 0.0, "Gcls")).unwrap();
+    let Fill::Gradient { stops, midpoints, interpolation: None, .. } = &classic else { panic!("{classic:?}") };
+    assert_eq!(stops.len(), 3, "a plain gradient keeps its stops as they are");
+    assert_eq!(midpoints.len(), 2);
+    assert_eq!(rewritten(&classic), classic);
+}
+
+/// #13557: Photoshop's own opacity stops (with their midpoint) are kept and written back with
+/// the colours, so a Perceptual fade isn't baked a second time on the next read.
+#[test]
+fn gradient_fill_keeps_photoshops_opacity_stops() {
+    let fade = [(0, 100.0, 50), (4096, 20.0, 35)];
+    let f = fill_from_desc(b"GdFl", &photoshop_gdfl(&THREE, &fade, 4096.0, "Perc")).unwrap();
+    let Fill::Gradient { opacity_stops, interpolation: Some(src), .. } = &f else { panic!("{f:?}") };
+    assert!(opacity_stops.len() > 2, "the opacity renders baked");
+    assert_eq!(src.opacity_stops, vec![(0.0, 1.0), (1.0, 0.2)]);
+    assert!((src.opacity_midpoints[0] - 0.35).abs() < 1e-6);
+    assert_eq!(rewritten(&f), f);
+}
+
+/// #13557: a record left behind by an edit that replaced the stops (not through it) is not
+/// written: the save holds the stops the fill renders.
+#[test]
+fn gradient_fill_writes_its_stops_when_the_record_is_stale() {
+    let mut f = fill_from_desc(b"GdFl", &photoshop_gdfl(&THREE, &OPAQUE, 4096.0, "Gcls")).unwrap();
+    let Fill::Gradient { stops, .. } = &mut f else { panic!() };
+    *stops = vec![(0.0, Color::WHITE), (1.0, Color::BLACK)];
+    let back = rewritten(&f);
+    let Fill::Gradient { stops, interpolation: None, .. } = &back else { panic!("{back:?}") };
+    assert_eq!(stops, &vec![(0.0, Color::WHITE), (1.0, Color::BLACK)]);
+}
+
+/// #13557: hostile kept gradients (NaN and out-of-range values, too few stops, an unknown
+/// method) neither panic nor get written.
+#[test]
+fn hostile_gradient_fill_records_are_safe() {
+    use photocraft_doc::effects::GradientInterpolation;
+    let mut src = GradientInterpolation::new("perceptual", f32::NAN, vec![(f32::NAN, Color::WHITE), (7.0, Color::BLACK), (-3.0, Color::WHITE)]);
+    src.midpoints = vec![f32::INFINITY, -5.0, 9.0, 0.5];
+    src.opacity_stops = vec![(f32::NAN, 2.0)];
+    src.opacity_midpoints = vec![f32::NAN];
+    let baked = crate::gradient_bake::bake_interpolation(&src);
+    assert!(baked.iter().all(|(t, c)| t.is_finite() && c.c.iter().all(|v| v.is_finite())));
+    let _ = crate::gradient_bake::bake_interpolation_opacity(&src);
+    let mut f = Fill::gradient(baked, 0.0, 1.0, GradientStyle::Linear, false);
+    if let Fill::Gradient { interpolation, .. } = &mut f {
+        *interpolation = Some(Box::new(src.clone()));
+    }
+    let _ = rewritten(&f);
+    for broken in
+        [GradientInterpolation::new("wavy", 50.0, vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]), GradientInterpolation::new("classic", 50.0, vec![])]
+    {
+        assert!(!crate::gradient_bake::interpolation_matches(&broken, &[], &[]), "{broken:?}");
     }
 }

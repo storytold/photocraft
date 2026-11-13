@@ -88,7 +88,8 @@ fn gradient_stroke_round_trips_every_gradient_field() {
         "opacityStops": [[1.0, 0.25], [0.0, 1.0]], "midpoints": [0.25], "offset": [0.125, -0.25], "dither": true, "align": false,
     }});
     let r = s.execute("shape.edit", json!({"layer": id, "stroke": {"color": gradient}})).unwrap();
-    let Some(Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align }) = shape(&s, id).stroke.map(|st| st.paint)
+    let Some(Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, interpolation: _ }) =
+        shape(&s, id).stroke.map(|st| st.paint)
     else {
         panic!("a gradient stroke")
     };

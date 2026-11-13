@@ -25,11 +25,13 @@ pub(crate) fn rgba_of(c: &photocraft_doc::Color) -> [f32; 4] {
 /// hand it a pattern (they don't offer one).
 pub(crate) fn paint_param(f: &photocraft_doc::Fill) -> Value {
     match f {
-        photocraft_doc::Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => json!({"gradient": {
-            "stops": stops.iter().map(|(t, c)| json!([t, c])).collect::<Vec<_>>(),
-            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse,
-            "opacityStops": opacity_stops, "midpoints": midpoints, "offset": [offset.0, offset.1], "dither": dither, "align": align,
-        }}),
+        photocraft_doc::Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, interpolation: _ } => {
+            json!({"gradient": {
+                "stops": stops.iter().map(|(t, c)| json!([t, c])).collect::<Vec<_>>(),
+                "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse,
+                "opacityStops": opacity_stops, "midpoints": midpoints, "offset": [offset.0, offset.1], "dither": dither, "align": align,
+            }})
+        }
         other => json!(color_of(other)),
     }
 }

@@ -1016,7 +1016,8 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
                     {
                         o.remove("stops");
                     }
-                    if opacity_stops_param(&params, CMD).ok().flatten().as_ref() == Some(&gradient.opacity_stops)
+                    let opacity = interpolation.as_ref().filter(|s| !s.opacity_stops.is_empty()).map_or(&gradient.opacity_stops, |s| &s.opacity_stops);
+                    if opacity_stops_param(&params, CMD).ok().flatten().as_ref() == Some(opacity)
                         && let Some(o) = params.as_object_mut()
                     {
                         o.remove("opacityStops");
