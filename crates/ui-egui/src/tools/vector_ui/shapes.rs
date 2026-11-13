@@ -129,6 +129,14 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             Tool::Rectangle if o.corner_radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4]}),
             Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
             Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
+            // Shift: the equilateral triangle in the circle of the constrained square, as before the
+            // plain drag filled its box (#13350), sent as its tight box. Which side sizes the square
+            // is #13351's.
+            Tool::Triangle if mods.shift => {
+                let r = rect[2] / 2.0;
+                let half_base = r * 3f64.sqrt() / 2.0;
+                json!({"kind": "triangle", "rect": [rect[0] + r - half_base, rect[1], 2.0 * half_base, 1.5 * r]})
+            }
             Tool::Triangle => json!({"kind": "triangle", "rect": rect}),
             // PhotoCraft's star defaults; the Star Tool's own options are not measured yet (#11377).
             Tool::Star => json!({"kind": "star", "rect": rect, "sides": 5, "starRatio": 0.5}),
