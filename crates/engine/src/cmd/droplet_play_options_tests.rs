@@ -120,13 +120,18 @@ fn without_include_all_subfolders_a_folder_gives_its_own_images() {
     }
 }
 
-/// A rerun with Include All Subfolders doesn't take the results in the default output folder
-/// (`<folder>/droplet-output`) as inputs.
+/// With Include All Subfolders and no output folder chosen, the results go to the default output
+/// folder and a rerun doesn't take them as inputs: `<folder>/droplet-output` for a dropped folder
+/// (also when all its images are in subfolders), else the first dropped file's
+/// `droplet-output`, inside the dropped folder here.
 #[test]
 fn the_subfolder_walk_leaves_out_the_droplet_output() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().to_string_lossy().into_owned();
     let input = test_folder(&root);
+    let nested = join(&root, "nested");
+    std::fs::create_dir_all(join(&nested, "inner")).unwrap();
+    image(&join(&nested, "inner/x.png"), 3, 3);
     let dp = Session::new()
         .execute(
             "file.automate.createDroplet",
@@ -136,12 +141,20 @@ fn the_subfolder_walk_leaves_out_the_droplet_output() {
         .as_str()
         .unwrap()
         .to_string();
-    let default_out = join(&input, "droplet-output");
-    let expected: Vec<String> = ["a.png", "b.jpg", "c.psd", "a.png", "d.png"].iter().map(|n| join(&default_out, n)).collect();
-    for pass in ["first", "rerun"] {
-        let r = run(&dp, json!([input]));
-        assert_eq!(r["errors"], json!([]), "{pass}: {r}");
-        assert_eq!(r["files"], json!(expected), "{pass}");
+    let first_file = join(&input, "sub/a.png");
+    let cases = [
+        (json!([input]), join(&input, "droplet-output"), vec!["a.png", "b.jpg", "c.psd", "a.png", "d.png"]),
+        (json!([nested]), join(&nested, "droplet-output"), vec!["x.png"]),
+        (json!([first_file, input]), join(&input, "sub/droplet-output"), vec!["a.png", "a.png", "b.jpg", "c.psd", "a.png", "d.png"]),
+    ];
+    for (dropped, out, files) in cases {
+        let expected: Vec<String> = files.iter().map(|n| join(&out, n)).collect();
+        for pass in ["first", "rerun"] {
+            let r = run(&dp, dropped.clone());
+            assert_eq!(r["errors"], json!([]), "{dropped} {pass}: {r}");
+            assert_eq!(r["output"], json!(out), "{dropped} {pass}");
+            assert_eq!(r["files"], json!(expected), "{dropped} {pass}");
+        }
     }
 }
 

@@ -462,7 +462,12 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(on)) => *on,
         Some(_) => return Err(bad(cmd, format!("{path}: \"includeSubfolders\" must be true or false"))),
     };
-    let chosen_output = p.get("output").or_else(|| opts.get("output")).and_then(Value::as_str).map(str::to_string);
+    let mut output = p.get("output").or_else(|| opts.get("output")).and_then(Value::as_str).map(str::to_string);
+    // Without a chosen output the results go next to the first input.
+    let default_output = |first: &str| {
+        let first = std::path::Path::new(first);
+        join(&first.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), "droplet-output")
+    };
     let mut inputs: Vec<String> = Vec::new();
     let raw: Vec<String> = match p.get("input").or_else(|| p.get("files")) {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
@@ -471,7 +476,15 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     };
     for i in raw {
         if std::path::Path::new(&i).is_dir() {
-            inputs.extend(folder_images(&i, include_subfolders, chosen_output.as_deref(), cmd)?)
+            // The subfolder walk leaves out the output folder, so a rerun doesn't take its results
+            // as inputs: the chosen one, else the first input's default, else this folder's own
+            // `droplet-output`, which then becomes the output.
+            let skip = output.clone().or_else(|| inputs.first().map(|first| default_output(first))).unwrap_or_else(|| join(&i, "droplet-output"));
+            let found = folder_images(&i, include_subfolders, &skip, cmd)?;
+            if include_subfolders && output.is_none() && !found.is_empty() {
+                output = Some(skip);
+            }
+            inputs.extend(found)
         } else {
             inputs.push(i)
         }
@@ -479,10 +492,7 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     if inputs.is_empty() {
         return Err(bad(cmd, "no input images"));
     }
-    let output = chosen_output.unwrap_or_else(|| {
-        let first = std::path::Path::new(&inputs[0]);
-        join(&first.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), "droplet-output")
-    });
+    let output = output.unwrap_or_else(|| default_output(&inputs[0]));
     let mut bp = json!({"steps": steps, "input": inputs, "output": output, "format": opts.get("format").cloned().unwrap_or(json!("same"))});
     if let Some(name) = v.get("action").and_then(|action| action.get("name")).or_else(|| v.get("name")) {
         bp["action"] = name.clone();
@@ -503,16 +513,14 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The images a dropped folder contributes: its own, sorted by name, or with Include All
-/// Subfolders also every subfolder's, depth first as Batch walks them. Results land flat in the
-/// output folder, so a later image replaces an earlier one of the same name. The walk leaves out
-/// the output folder (`output`, else the default `<folder>/droplet-output`), so a rerun doesn't
-/// process its own results.
-fn folder_images(dir: &str, include_subfolders: bool, output: Option<&str>, cmd: &str) -> Result<Vec<String>> {
+/// Subfolders also every subfolder's, depth first as Batch walks them, leaving out the folder
+/// `skip` (the output). Results land flat in the output folder, so a later image replaces an
+/// earlier one of the same name.
+fn folder_images(dir: &str, include_subfolders: bool, skip: &str, cmd: &str) -> Result<Vec<String>> {
     if !include_subfolders {
         return list_images(dir);
     }
-    let skip = output.map_or_else(|| join(dir, "droplet-output"), str::to_string);
-    Ok(crate::file_cmds::list_images_tree(dir, &skip, cmd)?.into_iter().map(|input| input.path).collect())
+    Ok(crate::file_cmds::list_images_tree(dir, skip, cmd)?.into_iter().map(|input| input.path).collect())
 }
 
 // ---------- Statistics ----------
