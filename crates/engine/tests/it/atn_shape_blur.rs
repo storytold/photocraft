@@ -4,7 +4,7 @@ use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use serde_json::json;
 
-#[path = "../../../psd/tests/common/csh_fixture.rs"]
+#[path = "../common/csh_fixture.rs"]
 mod csh_fixture;
 
 const SHAPE_ID: &str = "original-fixture-square";
