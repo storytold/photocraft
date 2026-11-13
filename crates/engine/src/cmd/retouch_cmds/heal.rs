@@ -53,12 +53,21 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed) {
         return Err(EngineError::Other(INDEXED_REFUSAL.into()));
     }
+    // Shared Clone Source mapping defaults to the Clone Stamp's Aligned setting. Apply
+    // Healing's default to both resolution and successful-anchor bookkeeping. The UI
+    // supplies a bool, so its ordinary stroke path does not copy the parameter object.
+    let defaulted = p.as_object().filter(|fields| fields.get("aligned").and_then(Value::as_bool).is_none()).map(|fields| {
+        let mut fields = fields.clone();
+        fields.insert("aligned".into(), Value::Bool(false));
+        Value::Object(fields)
+    });
+    let p = defaulted.as_ref().unwrap_or(p);
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
     let which = sample_layers(p, CMD)?;
     let source = super::clone_sampling::resolve(s, p, CMD)?;
     let mode = blend_param(p, CMD)?;
-    let aligned = flag(p, "aligned", true);
+    let aligned = flag(p, "aligned", false);
     let map = clone_mapping(s, p, &stroke, CMD)?;
     let off = map.offset();
     let dmg = run_stroke(s, "Healing Brush", id, p, |pre, surf, sel, lock| {
