@@ -487,7 +487,7 @@ fn admit_pat(bytes: &[u8], limits: PatternFileLimits) -> Result<(), String> {
     let (mut block, mut charges, mut at) = (Vec::new(), Vec::new(), 10usize);
     for _ in 0..count {
         let Some((end, record)) = pat_record_end(bytes, at).and_then(|end| Some((end, bytes.get(at..end)?))) else { break };
-        let Ok(len) = u32::try_from(record.len()) else { break };
+        let Ok(len) = u32::try_from(record.len()) else { return Err("a pattern record is too large to read".into()) };
         block.clear();
         block.try_reserve(record.len().saturating_add(4)).map_err(|error| error.to_string())?;
         block.extend_from_slice(&len.to_be_bytes());
