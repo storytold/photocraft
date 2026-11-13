@@ -105,3 +105,14 @@ fn legacy_colours_keep_their_own_alpha() {
         assert!((got - want).abs() <= 1.0, "x={x}: alpha {got:.1}, want {want}");
     }
 }
+
+// paint_gradient scans the stops for every pixel: Smooth's colour and opacity bakes share their
+// 97 positions and must not be cut into four per interval (385 stops).
+#[test]
+fn smooth_transparency_keeps_one_stop_per_sampled_position() {
+    use photocraft_color::Color;
+    let black = Color::rgb(0.0, 0.0, 0.0);
+    let stops = super::paint_cmds::smooth_split_stops((vec![(0.0, black), (1.0, black)], vec![(0.0, 1.0), (1.0, 0.0)]));
+    assert_eq!(stops.len(), 97);
+    assert!((stops[0].1[3] - 1.0).abs() < 1e-6 && stops[96].1[3].abs() < 1e-6);
+}

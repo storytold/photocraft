@@ -168,18 +168,7 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
             // were not measured in the Gradient tool and keep the merged stops.
             let split = if m == photocraft_io::GradientMethod::Smooth && smoothness >= 1.0 { split_stops(s, p, fg)? } else { None };
             match split {
-                Some((cs, os)) => {
-                    let mids = vec![0.5; cs.len().saturating_sub(1)];
-                    let colours: Vec<(f32, [f32; 4])> = photocraft_io::bake_gradient(cs, &mids, smoothness, m)
-                        .into_iter()
-                        .map(|(t, c)| {
-                            let rgb = c.to_rgb();
-                            (t, [rgb[0], rgb[1], rgb[2], 1.0])
-                        })
-                        .collect();
-                    let omids = vec![0.5; os.len().saturating_sub(1)];
-                    gradients::apply_opacity(colours, &photocraft_io::bake_gradient_smooth_opacity(os, &omids))
-                }
+                Some(split) => smooth_split_stops(split),
                 None => {
                     let colors = stops.iter().map(|(t, c)| (*t, photocraft_color::Color::rgba(c[0], c[1], c[2], c[3]))).collect();
                     let mids = vec![0.5; stops.len() - 1];
@@ -208,6 +197,34 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// Smooth's colour and opacity stops baked apart, then joined. Both bakes sample the same
+/// positions, so the alpha is multiplied in at each one: [`gradients::apply_opacity`] would cut
+/// every interval into four (385 stops instead of 97), and `paint_gradient` scans the stops for
+/// every pixel. Positions that differ still go through `apply_opacity`.
+pub(crate) fn smooth_split_stops((cs, os): gradients::FillStops) -> gradients::Stops {
+    let mids = vec![0.5; cs.len().saturating_sub(1)];
+    let colours: gradients::Stops = photocraft_io::bake_gradient(cs, &mids, 1.0, photocraft_io::GradientMethod::Smooth)
+        .into_iter()
+        .map(|(t, c)| {
+            let rgb = c.to_rgb();
+            (t, [rgb[0], rgb[1], rgb[2], 1.0])
+        })
+        .collect();
+    let omids = vec![0.5; os.len().saturating_sub(1)];
+    let opacity = photocraft_io::bake_gradient_smooth_opacity(os, &omids);
+    if colours.len() != opacity.len() || colours.iter().zip(&opacity).any(|(c, o)| (c.0 - o.0).abs() > 1e-6) {
+        return gradients::apply_opacity(colours, &opacity);
+    }
+    colours
+        .into_iter()
+        .zip(opacity)
+        .map(|((t, mut c), (_, a))| {
+            c[3] = if a.is_finite() { a.clamp(0.0, 1.0) } else { 1.0 };
+            (t, c)
+        })
+        .collect()
 }
 
 /// The Gradient tool's colour stops (opaque) and opacity stops kept apart, for Smooth's own
