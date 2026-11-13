@@ -1,6 +1,16 @@
 use super::tool::Tool;
 use super::{Deserialize, Serialize};
 
+/// Object Selection › gear › Object Finder Mode (#12857).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObjectFinderMode {
+    /// Auto Refresh: the finder re-analyses the document after every edit.
+    #[default]
+    Auto,
+    /// Manual Refresh: the finder re-analyses only when Refresh is clicked.
+    Manual,
+}
+
 /// Options-bar state for tools (Photoshop keeps these per tool).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -13,6 +23,10 @@ pub struct ToolOptions {
     pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
+    /// Object Selection › gear › Object Subtract; stored only, today's subtract behaviour is unchanged (#12857).
+    pub object_subtract: bool,
+    /// Object Selection › gear › Object Finder Mode: when the finder re-analyses (#12857).
+    pub object_finder_mode: ObjectFinderMode,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
     pub remove_new_layer: bool,
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
@@ -464,6 +478,8 @@ impl Default for ToolOptions {
             anti_alias: true,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
+            object_subtract: true,
+            object_finder_mode: ObjectFinderMode::Auto,
             remove_new_layer: false,
             remove_after_each_stroke: true,
             feather: 0.0,

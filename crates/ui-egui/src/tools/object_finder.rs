@@ -10,6 +10,12 @@
 //! so an edit drops it. The preview itself is keyed by document revision, sampled layer and
 //! Sample All Layers, and clears when the pointer leaves the canvas, the tool changes, a button
 //! goes down or the option is off. Quality of the object found is out of scope here (#2788).
+//!
+//! The options bar has a Refresh button and a gear menu (#12857): Object Finder on/off, Object
+//! Subtract (stored only) and Object Finder Mode. Auto Refresh re-analyses after every edit, as
+//! above. Manual Refresh keeps the analysed pixels (`Finder::basis`) across the pointer leaving,
+//! a tool switch and selection-only changes, and after a pixel edit highlights nothing until
+//! Refresh is clicked ([`refresh`]).
 
 use std::sync::Arc;
 
@@ -20,7 +26,7 @@ use photocraft_engine::smartselect_cmds::{empty_sampled_area, find_object, sampl
 
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
-use crate::state::Tool;
+use crate::state::{ObjectFinderMode, Tool, ToolOptions};
 
 /// Seconds the pointer must rest before an object is looked up.
 pub const DEBOUNCE: f64 = 0.12;
@@ -48,6 +54,8 @@ pub(crate) struct Finder {
     misses: Vec<[i32; 2]>,
     shown: Option<Arc<Region>>,
     texture: Option<(usize, egui::TextureHandle)>,
+    /// The document whose pixels were last analysed (Manual Refresh compares against it).
+    basis: Arc<Document>,
 }
 
 /// What [`update`] decided.
@@ -81,7 +89,7 @@ fn active(app: &PhotocraftApp, pressed: bool) -> bool {
 pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: bool, now: f64) -> Update {
     let at = at.filter(|p| p[0].is_finite() && p[1].is_finite());
     let (Some(at), true) = (at, active(app, pressed)) else {
-        app.object_finder = None;
+        idle(app);
         return Update::default();
     };
     let Some(st) = app.session.active() else { return Update::default() };
@@ -90,10 +98,35 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
     let (doc, revision, layer) = (st.doc.id, st.revision, st.active_layer);
     let px = [at[0].floor() as i32, at[1].floor() as i32];
     let fresh = app.object_finder.as_ref().is_some_and(|f| f.doc == doc && f.revision == revision && f.target == target && f.all_layers == all_layers);
-    if !fresh {
-        app.object_finder = Some(Finder { doc, revision, target, all_layers, at: px, since: now, job: None, misses: Vec::new(), shown: None, texture: None });
-    }
     let doc_arc = Arc::clone(&st.doc);
+    if !fresh {
+        let manual = app.ui.tool_options.object_finder_mode == ObjectFinderMode::Manual;
+        match app.object_finder.as_mut() {
+            // Manual Refresh: a selection-only change keeps the analysis, a pixel edit makes it stale.
+            Some(f) if manual && f.doc == doc => {
+                if f.target == target && f.all_layers == all_layers && photocraft_engine::layer_multi_cmds::same_pixels(&f.basis, &doc_arc) {
+                    f.revision = revision;
+                } else {
+                    return Update::default();
+                }
+            }
+            _ => {
+                app.object_finder = Some(Finder {
+                    doc,
+                    revision,
+                    target,
+                    all_layers,
+                    at: px,
+                    since: now,
+                    job: None,
+                    misses: Vec::new(),
+                    shown: None,
+                    texture: None,
+                    basis: Arc::clone(&doc_arc),
+                });
+            }
+        }
+    }
     // The click reports an empty sampled layer; the hover says so too instead of showing nothing.
     let here = photocraft_geom::Rect::from_xywh(px[0], px[1], 1, 1);
     if doc_arc.bounds().contains(px[0], px[1]) && empty_sampled_area(&doc_arc, layer, all_layers, here).is_some() {
@@ -156,9 +189,42 @@ fn spawn(doc: Arc<Document>, layer: Option<LayerId>, all_layers: bool, px: [i32;
     Job { at: px, doc, rx }
 }
 
+/// Drops the preview. Auto Refresh forgets the finder; Manual Refresh keeps the analysed
+/// pixels so the pointer leaving or a tool switch doesn't lose them.
+fn idle(app: &mut PhotocraftApp) {
+    if app.ui.tool_options.object_finder_mode == ObjectFinderMode::Manual
+        && let Some(f) = app.object_finder.as_mut()
+    {
+        f.shown = None;
+        f.job = None;
+        f.texture = None;
+        f.misses.clear();
+    } else {
+        app.object_finder = None;
+    }
+}
+
 /// Clears the preview (a tool switch or an edit made elsewhere is caught by [`update`] too).
 pub(crate) fn clear(app: &mut PhotocraftApp) {
+    idle(app);
+}
+
+/// The options bar's Refresh button: the next [`update`] analyses the current pixels.
+pub(crate) fn refresh(app: &mut PhotocraftApp) {
     app.object_finder = None;
+}
+
+/// The options bar's gear button and its menu (#12857).
+pub(crate) fn gear(o: &mut ToolOptions, ui: &mut egui::Ui) {
+    let r = crate::icons::button(ui, "settings", 24.0, false, tl!("Set additional options"));
+    egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));
+        crate::widgets::checkbox(ui, &mut o.object_subtract, tl!("Object Subtract"));
+        ui.separator();
+        ui.label(tl!("Object Finder Mode"));
+        ui.radio_value(&mut o.object_finder_mode, ObjectFinderMode::Auto, tl!("Auto Refresh"));
+        ui.radio_value(&mut o.object_finder_mode, ObjectFinderMode::Manual, tl!("Manual Refresh"));
+    });
 }
 
 /// The overlay colour: the theme accent, translucent (Photoshop tints the object it finds).
