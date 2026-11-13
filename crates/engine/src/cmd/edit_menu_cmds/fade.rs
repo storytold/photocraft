@@ -21,16 +21,31 @@ pub(super) fn can_fade(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Blend `after` back towards `before` over `area`: `before + opacity × (B(before, after) − before)`
-/// with blend mode `mode` (premultiplied, so alpha changes fade too).
+/// with blend mode `mode` (premultiplied, so alpha changes fade too). Dissolve instead takes, per
+/// pixel, `after` or `before` whole, with `opacity` as the odds of `after`.
 pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: BlendMode, opacity: f32) -> Result<()> {
     let fmt = after.format();
     let n = fmt.channels();
-    if area.is_empty() || n == 0 {
+    let k = opacity.clamp(0.0, 1.0);
+    // Dissolve at 100 % keeps every pixel of the step's result.
+    if area.is_empty() || n == 0 || (mode == BlendMode::Dissolve && k >= 1.0) {
         return Ok(());
     }
     let b = crate::allocation::read_region(before, area, "fading pixels")?;
     let mut a = crate::allocation::read_region(after, area, "fading pixels")?;
-    let k = opacity.clamp(0.0, 1.0);
+    if mode == BlendMode::Dissolve {
+        // Dissolve: each pixel is the step's result or the pixel before it, alpha included, never
+        // a mix; the opacity is the odds of the result. The noise follows the pixel's position,
+        // so the pick is the same across tiles and between the preview and OK (#13809).
+        let at = (area.y0..area.y1).flat_map(|y| (area.x0..area.x1).map(move |x| (x, y)));
+        for ((pa, pb), (x, y)) in a.chunks_exact_mut(n).zip(b.chunks_exact(n)).zip(at) {
+            if photocraft_color::dither_noise(x, y) >= k {
+                pa.copy_from_slice(pb);
+            }
+        }
+        after.try_write_region(area, &a)?;
+        return Ok(());
+    }
     let lerp_premul = |pb: &[f32], pa: &[f32], out: &mut [f32], alpha: bool| {
         let m = out.len();
         if !alpha {
@@ -135,3 +150,7 @@ pub fn fade_preview(s: &Session, p: &Value) -> Result<FadePreview> {
     let doc = Document::clone(&s.active().ok_or(EngineError::NoDocument)?.doc);
     Ok(FadePreview { doc, job })
 }
+
+#[cfg(test)]
+#[path = "fade_dissolve_tests.rs"]
+mod dissolve_tests;
