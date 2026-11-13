@@ -38,12 +38,6 @@ fn invalid(message: impl Into<String>) -> IoError {
     IoError::Ora(message.into())
 }
 
-/// The payload of a ZIP's first entry when it is a stored file named `mimetype`, which is how
-/// OpenRaster and Krita mark their archives (so the type is readable without unzipping).
-pub(crate) fn zip_mimetype(bytes: &[u8]) -> Option<&[u8]> {
-    craft_ora::zip_mimetype(bytes)
-}
-
 /// `true` for an OpenRaster archive (by its `mimetype` entry).
 pub(crate) fn is_ora(bytes: &[u8]) -> bool {
     craft_ora::is_ora(bytes)

@@ -468,13 +468,13 @@ fn truncated_and_corrupted_files_never_panic() {
 
 #[test]
 fn zip_mimetype_reads_only_a_leading_stored_entry() {
-    assert_eq!(zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
-    assert_eq!(zip_mimetype(b"PK\x03\x04"), None);
-    assert_eq!(zip_mimetype(&[]), None);
+    assert_eq!(craft_ora::zip_mimetype(&archive("<image/>", &[])), Some(MIMETYPE));
+    assert_eq!(craft_ora::zip_mimetype(b"PK\x03\x04"), None);
+    assert_eq!(craft_ora::zip_mimetype(&[]), None);
     let mut z = ZipWriter::new();
     z.add("stack.xml", b"x").unwrap();
     z.add("mimetype", MIMETYPE).unwrap();
-    assert_eq!(zip_mimetype(&z.finish().unwrap()), None);
+    assert_eq!(craft_ora::zip_mimetype(&z.finish().unwrap()), None);
 }
 
 #[test]
