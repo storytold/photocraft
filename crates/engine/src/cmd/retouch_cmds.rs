@@ -29,7 +29,9 @@ mod art_history;
 mod content_aware_move;
 mod patch;
 mod pattern_stamp;
-pub use pattern_stamp::live_impressionist as live_pattern_impressionist;
+pub use pattern_stamp::{
+    INDEXED_REFUSAL as PATTERN_STAMP_INDEXED_REFUSAL, live_impressionist as live_pattern_impressionist, press_refusal as pattern_stamp_press_refusal,
+};
 mod periodic;
 mod remove;
 pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
