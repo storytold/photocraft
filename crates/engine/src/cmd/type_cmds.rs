@@ -626,8 +626,12 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     t.text.replace_range(a..b, &new);
     // Dynamic Text's solved lines are byte offsets into the text they were solved for. After an
     // edit an old offset can still land on a char boundary and force a break mid-word, so drop
-    // them: the layer lays out with its natural breaks until the solver runs again.
-    if let Some(fit) = t.fit.as_mut() {
+    // them: the layer lays out with its natural breaks until the solver runs again. A replacement
+    // that changes nothing (`type.edit` with the same text: an empty span) keeps them, as the
+    // refresh after it only renders and would not solve them again.
+    if !(a == b && new.is_empty())
+        && let Some(fit) = t.fit.as_mut()
+    {
         fit.lines.clear();
     }
     if t.text.ends_with(['\r', '\n'])

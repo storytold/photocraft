@@ -64,16 +64,8 @@ pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
                 "add"
             }
         }
-        // Object Selection: ⌥ subtracts, ⇧ adds (see `retouch_ui::finish_object_selection`).
-        Tool::ObjectSelection => {
-            if m.alt {
-                "subtract"
-            } else if m.shift {
-                "add"
-            } else {
-                "replace"
-            }
-        }
+        // Every other selection tool, Object Selection included: ⇧⌥ intersects, ⇧ adds, ⌥
+        // subtracts, otherwise the options-bar mode (`retouch_ui::finish_object_selection`).
         _ => {
             if m.shift && m.alt {
                 "intersect"
@@ -290,8 +282,12 @@ mod tests {
         // Smart selection tools.
         assert_eq!(badge(&app, Tool::QuickSelection, none), Some(Badge::Add));
         assert_eq!(badge(&app, Tool::QuickSelection, alt), Some(Badge::Subtract));
+        // Object Selection follows the options bar like the other selection tools (#12853).
+        assert_eq!(badge(&app, Tool::ObjectSelection, none), Some(Badge::Intersect));
+        app.ui.selection_mode = 0;
         assert_eq!(badge(&app, Tool::ObjectSelection, none), None);
         assert_eq!(badge(&app, Tool::ObjectSelection, shift), Some(Badge::Add));
+        assert_eq!(badge(&app, Tool::ObjectSelection, both), Some(Badge::Intersect));
         // Other tools never show one.
         for t in [Tool::Brush, Tool::Move, Tool::Zoom, Tool::Crop] {
             assert_eq!(badge(&app, t, shift), None);
