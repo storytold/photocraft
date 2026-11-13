@@ -117,8 +117,9 @@ fn switching_units_converts_width_and_height() {
         let (mut h, id) = opened();
         let size = |h: &H| (num(h, id, "width"), num(h, id, "height"));
         let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
-        assert!(close(size(&h), (8.0, 10.0)));
-        for (unit, want) in [("cm", (20.32, 25.4)), ("pixels", (2400.0, 3000.0)), ("inches", (8.0, 10.0)), ("pixels", (2400.0, 3000.0)), ("cm", (20.32, 25.4))]
+        assert!(close(size(&h), (20.32, 25.4)));
+        for (unit, want) in
+            [("inches", (8.0, 10.0)), ("pixels", (2400.0, 3000.0)), ("cm", (20.32, 25.4)), ("pixels", (2400.0, 3000.0)), ("inches", (8.0, 10.0))]
         {
             pick_unit(&mut h, id, unit);
             assert_eq!(field(&h, id, "units"), json!(unit));
@@ -149,8 +150,8 @@ fn pick_unit(h: &mut H, id: DialogId, unit: &str) {
     set(h, id, "units", json!(unit));
 }
 
-/// OK sends the params the form sent before the layout: the resolution in pixels/inch whatever unit it is shown in,
-/// and `placeAcrossFirst` and `depth` as before.
+/// OK sends the form's params: the size in `units`, the resolution in pixels/inch whatever unit it is shown in. The
+/// defaults make the same 2400 x 3000 px sheet at 300 ppi as before #13685.
 #[test]
 fn ok_runs_the_command_with_the_same_params() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
@@ -162,9 +163,9 @@ fn ok_runs_the_command_with_the_same_params() {
         let before = params(&h);
         for (key, want) in [
             ("input", json!(".")),
-            ("units", json!("inches")),
-            ("width", json!(8.0)),
-            ("height", json!(10.0)),
+            ("units", json!("cm")),
+            ("width", json!(20.32)),
+            ("height", json!(25.4)),
             ("resolution", json!(300.0)),
             ("mode", json!("rgb")),
             ("depth", json!(8)),
@@ -175,14 +176,14 @@ fn ok_runs_the_command_with_the_same_params() {
             ("rotateForBestFit", json!(false)),
             ("caption", json!(true)),
             ("fontSize", json!(12.0)),
-            ("flatten", json!(false)),
+            ("flatten", json!(true)),
             ("includeSubfolders", json!(true)),
             ("groupByFolder", json!(false)),
         ] {
             assert_eq!(before.get(key), Some(&want), "{key}: {before}");
         }
         assert!(before.get("resolution.unit").is_none() && before.get("place").is_none(), "only the command's keys: {before}");
-        set(&mut h, id, "resolution.unit", json!("cm"));
+        set(&mut h, id, "resolution.unit", json!("in"));
         assert_eq!(params(&h), before, "the resolution unit is view state");
         set(&mut h, id, "depth", json!("16"));
         set(&mut h, id, "place", json!("down"));
@@ -204,5 +205,6 @@ fn ok_runs_the_command_with_the_same_params() {
         assert_eq!(app.session.documents().len(), 1, "one sheet");
         let sheet = &app.session.active().unwrap().doc;
         assert_eq!((sheet.size.width, sheet.size.height, sheet.resolution_dpi), (2400, 3000, 300.0));
+        assert_eq!(sheet.layers.len(), 1, "Flatten All Layers is on");
     });
 }
