@@ -119,7 +119,7 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 || crate::shape_dialog::click_inside_active_rectangle(app, t, d.start)
                 || crate::shape_dialog::open(app, t, d.start).is_some()) => {}
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
-        Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
+        Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, crate::vector_ui::path_selection_end(&d, [end[0], end[1]])),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
         Tool::RectMarquee | Tool::EllipseMarquee => {
