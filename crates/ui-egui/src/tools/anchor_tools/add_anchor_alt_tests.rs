@@ -180,3 +180,39 @@ fn letting_go_of_alt_before_the_drag_starts_still_duplicates_the_subpath() {
     assert_eq!((p.subpaths[3].knots[0].anchor, p.subpaths[3].knots[1].anchor), (Point::new(400.0, 500.0), Point::new(700.0, 500.0)));
     assert_eq!((steps(&app), undo_label(&app)), (n + 1, Some("Drag Path")));
 }
+
+#[test]
+fn letting_go_of_alt_before_the_click_ends_still_selects_the_subpath() {
+    // Through the real canvas: a click is replayed on release, so the keys held at the press
+    // decide, as for Object Selection (CodeRabbit on #13977).
+    use egui::{Pos2, Rect, vec2};
+    let ctx = egui::Context::default();
+    let mut app = path_one();
+    app.run("view.actualPixels", json!({})).unwrap();
+    app.sync_views();
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [400.0, 300.0];
+    view.fit_pending = false;
+    view.fill_pending = false;
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+        let input = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
+        });
+        out.textures_delta.clear();
+    };
+    let press = |pos: Pos2, pressed: bool, modifiers: Modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    let (alt, none) = (Modifiers::ALT, Modifiers::NONE);
+    let (before, n) = (path(&app), steps(&app));
+    // A's top edge, (200,300) in the document.
+    let at = Pos2::new(200.0, 300.0);
+    frame(&mut app, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at)]);
+    frame(&mut app, vec![press(at, true, alt)]);
+    frame(&mut app, vec![egui::Event::ModifiersChanged(none)]);
+    frame(&mut app, vec![press(at, false, none)]);
+    frame(&mut app, vec![]);
+    assert_eq!((path(&app), steps(&app)), (before, n), "no anchor added, no History step");
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 0], [0, 1], [0, 2], [0, 3]], "A's four anchors");
+}

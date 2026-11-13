@@ -1573,7 +1573,8 @@ fn handle_canvas_tool_clicks(
         } else {
             let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
             let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
-            let click_mods = if tool == Tool::ObjectSelection && click_button == PointerButton::Primary {
+            // Add Anchor Point's ⌥-click selects the subpath even if ⌥ is let go first (#12709).
+            let click_mods = if matches!(tool, Tool::ObjectSelection | Tool::AddAnchorPoint) && click_button == PointerButton::Primary {
                 ctx.data(|d| d.get_temp(tool_press)).unwrap_or(click_mods)
             } else {
                 click_mods
