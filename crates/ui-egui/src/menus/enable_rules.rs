@@ -27,6 +27,8 @@ fn background_blocks(id: &str, has_selection: bool) -> bool {
         "layer.createClippingMask"
             | "layer.releaseClippingMask"
             | "layer.mergeDown"
+            // The Background can't go into a group (#12866, measured on the canvas menu).
+            | "layer.new.groupFromLayers"
             | "layer.lockLayers"
             | "layer.maskAllObjects"
             | "edit.puppetWarp"
@@ -104,6 +106,11 @@ fn selection_targets(id: &str) -> Option<Targets> {
 /// runs on all of them is greyed only when none of them can take it (the active layer alone must
 /// not decide). Everything else, and a single selected layer, is judged by the active layer.
 pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Option<&Layer>, id: &str) -> bool {
+    // The reference application refuses Group from Layers whenever the Background is among the
+    // selected layers, not only when it is the active one.
+    if id == "layer.new.groupFromLayers" && selected.iter().filter_map(|l| doc.layer(*l)).any(|l| crate::doc_props_ui::is_background(doc, l)) {
+        return true;
+    }
     let Some(rule) = selection_targets(id).filter(|_| selected.len() > 1) else { return disabled_for(doc, active, id) };
     let layers = selected.iter().filter_map(|l| doc.layer(*l));
     let can = |l: &Layer| !disabled_for(doc, Some(l), id) && (!matches!(rule, Targets::WithoutMask) || l.mask.is_none());
@@ -186,7 +193,7 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
         return true;
     }
     // Only these commands depend on the selection; skip walking the layers for the rest.
-    if selection_targets(id).is_some() {
+    if selection_targets(id).is_some() || id == "layer.new.groupFromLayers" {
         return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
     }
     disabled_for(&st.doc, active, id)
