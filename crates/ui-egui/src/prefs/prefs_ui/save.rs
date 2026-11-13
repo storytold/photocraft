@@ -126,6 +126,14 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
             {
                 fields.insert("toolColors".into(), crate::tool_memory::default_colors());
             }
+            // Legacy toolColors objects had no cmykRoles. Use the default slots
+            // as the merge base so another window's new associations survive.
+            if ours.get("toolColors").and_then(|c| c.get("cmykRoles")).is_some_and(Value::is_array)
+                && let Some(colors) = base.get_mut("toolColors").and_then(Value::as_object_mut)
+                && !colors.contains_key("cmykRoles")
+            {
+                colors.insert("cmykRoles".into(), crate::tool_memory::default_colors()["cmykRoles"].clone());
+            }
             merge_changes(&base, ours, &mut theirs);
             serde_json::to_string_pretty(&theirs)
         }
@@ -156,6 +164,38 @@ fn without_stale_migration(base: &Value, theirs: &Value) -> Value {
 /// Three-way merge of preference trees: whatever `ours` changed since `base` goes over `theirs`
 /// (what storage holds now) and the rest of `theirs` is kept. Objects merge key by key; any
 /// other value, arrays included, is replaced whole.
+/// Merge the four CMYK role associations independently. Each role's RGB/ink
+/// pair is atomic; changing or clearing one role must not replace the others.
+fn merge_cmyk_role_slots(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
+    let (Some(old), Some(new), Some(stored)) = (base.as_array(), ours.as_array(), theirs.as_array_mut()) else {
+        return false;
+    };
+
+    if old.len() != 2 || new.len() != 2 || stored.len() != 2 {
+        return false;
+    }
+    if !(0..2).all(|pair| {
+        old[pair].as_array().is_some_and(|v| v.len() == 2)
+            && new[pair].as_array().is_some_and(|v| v.len() == 2)
+            && stored[pair].as_array().is_some_and(|v| v.len() == 2)
+    }) {
+        return false;
+    }
+
+    for pair in 0..2 {
+        let Some(old_pair) = old[pair].as_array() else { return false };
+        let Some(new_pair) = new[pair].as_array() else { return false };
+        let Some(stored_pair) = stored[pair].as_array_mut() else { return false };
+
+        for role in 0..2 {
+            if new_pair[role] != old_pair[role] {
+                stored_pair[role] = new_pair[role].clone();
+            }
+        }
+    }
+    true
+}
+
 pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
     if ours == base {
         return;
@@ -164,6 +204,11 @@ pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
         (Value::Object(b), Value::Object(o), Value::Object(t)) => {
             for (k, ov) in o {
                 match (b.get(k), t.get_mut(k)) {
+                    (Some(bv), Some(tv)) if k == "cmykRoles" => {
+                        if !merge_cmyk_role_slots(bv, ov, tv) {
+                            merge_changes(bv, ov, tv);
+                        }
+                    }
                     (Some(bv), Some(tv)) => merge_changes(bv, ov, tv),
                     // Removed there, unchanged here: it stays removed.
                     (Some(bv), None) if bv == ov => {}

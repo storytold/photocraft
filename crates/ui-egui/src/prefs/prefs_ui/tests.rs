@@ -2292,6 +2292,106 @@ fn tool_colors_first_saves_keep_other_instances_separate_edits() {
 }
 
 #[test]
+fn tool_cmyk_roles_merge_independent_window_edits() {
+    let store = Arc::new(Mutex::new(None));
+    let mut initial = app_on(&store, Arc::default());
+
+    initial
+        .run(
+            "tools.setColors",
+            json!({
+                "foreground": [0.2, 0.4, 0.6],
+                "foregroundCmyk": [1.0, 0.0, 0.0, 0.0]
+            }),
+        )
+        .unwrap();
+    crate::tool_memory::save_on_exit(&mut initial).unwrap();
+
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+
+    let bg_inks = [0.0, 1.0, 0.0, 0.0];
+
+    // Window A changes the background's native inks.
+    a.run(
+        "tools.setColors",
+        json!({
+            "background": [0.6, 0.4, 0.2],
+            "backgroundCmyk": bg_inks
+        }),
+    )
+    .unwrap();
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+
+    // Window B, still holding the old preferences, clears foreground inks.
+    b.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.8, 0.5, 0.1]
+        }),
+    )
+    .unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+
+    let mut restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), None);
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg_inks));
+
+    let id = crate::color_picker_ui::open(&mut restored, "background");
+    assert_eq!(restored.ui.dialog_mut(id).unwrap().fields["__cmyk"], json!(bg_inks));
+    restored.ui.close_dialog(id);
+
+    restored
+        .run(
+            "file.new",
+            json!({
+                "width": 4, "height": 4, "mode": "cmyk"
+            }),
+        )
+        .unwrap();
+    restored.run("edit.fill", json!({"contents": "background"})).unwrap();
+
+    let st = restored.session.active().unwrap();
+    let pixel = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(0, 0);
+    assert!(pixel.iter().take(4).zip(bg_inks).all(|(a, b)| (*a - b).abs() < 0.01), "background fill lost its native inks: {pixel:?}");
+}
+
+#[test]
+fn tool_cmyk_roles_merge_when_old_preferences_lack_roles() {
+    let legacy = json!({
+        "toolColors": {
+            "foreground": [0.0, 0.0, 0.0, 1.0],
+            "background": [1.0, 1.0, 1.0, 1.0]
+        }
+    });
+    let store = Arc::new(Mutex::new(Some(legacy.to_string())));
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+
+    a.run(
+        "tools.setColors",
+        json!({
+            "background": [0.25, 0.5, 0.75],
+            "backgroundCmyk": [0.0, 1.0, 0.0, 0.0]
+        }),
+    )
+    .unwrap();
+    b.run(
+        "tools.setColors",
+        json!({
+            "foreground": [0.75, 0.5, 0.25],
+            "foregroundCmyk": [1.0, 0.0, 0.0, 0.0]
+        }),
+    )
+    .unwrap();
+
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+
+    let restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some([1.0, 0.0, 0.0, 0.0]));
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some([0.0, 1.0, 0.0, 0.0]));
+}
+
+#[test]
 fn tool_colors_survive_restart_before_the_first_frame() {
     let (mut app, store) = app_with_store();
     let ctx = egui::Context::default();
