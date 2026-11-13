@@ -1228,6 +1228,248 @@ fn background_job_scenarios(b: &mut Bench, sz: &Sizes) {
     if b.wanted(full) {
         full_refresh_frame_scenario(b, full, w, h);
     }
+    distort_commit_scenarios(b, sz);
+}
+
+/// The UI thread's part of running `id` as the app does (`Session::start`): the start itself
+/// and, when it became a background job, each frame's `poll_jobs` until the job ends (the last
+/// one applies the result), polled every 4 ms as the brush import row does. Returns the longest
+/// of those steps, the time until the result was applied, and whether it ran as a job. Inline,
+/// the start is the whole command, so both times are its time. The command must change the
+/// document as one undo step, which is undone afterwards.
+fn ui_thread_step(s: &mut Session, id: &str, p: Value) -> Res<(f64, f64, bool)> {
+    use photocraft_engine::jobs::{JobOutcome, Started};
+    let steps = s.active().map(|d| d.history.past_len()).ok_or("no document")?;
+    let t0 = Instant::now();
+    let started = s.start(id, p).map_err(|e| format!("{id}: {e}"))?;
+    let mut worst = ms(t0);
+    let (result, job) = match started {
+        Started::Done(v) => (v, false),
+        Started::Job(job) => loop {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            let t = Instant::now();
+            let ended = s.poll_jobs().into_iter().find(|e| e.id == job);
+            worst = worst.max(ms(t));
+            match ended.map(|e| e.outcome) {
+                Some(JobOutcome::Done(v)) => break (v, true),
+                Some(other) => return Err(format!("{id}: the job ended with {other:?}")),
+                None if t0.elapsed().as_secs() > 120 => return Err(format!("{id}: the job did not finish in 120 s")),
+                None => {}
+            }
+        },
+    };
+    let total = ms(t0);
+    if result.get("changed").and_then(Value::as_bool) != Some(true) {
+        return Err(format!("{id} did not change the layer: {result}"));
+    }
+    if s.active().map(|d| d.history.past_len()) != Some(steps + 1) {
+        return Err(format!("{id} did not add one undo step"));
+    }
+    exec(s, "edit.undo", json!({}))?;
+    Ok((worst, total, job))
+}
+
+/// #210: committing Liquify, Puppet Warp and Perspective Warp on 24 MP, as the UI does (through
+/// `Session::start`): the UI thread's longest step, with the time until the result was applied
+/// (`total_samples_ms`) and whether the command ran as a background job (`ran_as_job`); and how
+/// long each job takes to stop when cancelled part way (until its worker exits, see
+/// [`cancel_job_scenario`]).
+fn distort_commit_scenarios(b: &mut Bench, sz: &Sizes) {
+    let (w, h) = sz.big_photo;
+    let (fw, fh) = (f64::from(w), f64::from(h));
+    let plane = json!([{
+        "src": [[fw * 0.1, fh * 0.1], [fw * 0.9, fh * 0.1], [fw * 0.9, fh * 0.9], [fw * 0.1, fh * 0.9]],
+        "dst": [[fw * 0.15, fh * 0.1], [fw * 0.85, fh * 0.1], [fw * 0.9, fh * 0.9], [fw * 0.1, fh * 0.9]],
+    }]);
+    // Hold the left of the picture and lift the right: two pins.
+    let pins = move |i: usize| {
+        let lift = fh * 0.1 + (i % 4) as f64 * 5.0;
+        json!({"pins": [{"src": [fw * 0.2, fh / 2.0], "dst": [fw * 0.2, fh / 2.0]}, {"src": [fw * 0.8, fh / 2.0], "dst": [fw * 0.8, fh / 2.0 - lift]}]})
+    };
+    // Each row's name, command and params for sample `i`.
+    type Commit = (&'static str, &'static str, Box<dyn Fn(usize) -> Value>);
+    let commits: [Commit; 3] = [
+        (
+            "Liquify commit 24 MP: longest UI-thread step",
+            "filter.liquify",
+            // One Forward Warp stroke with an 800 px brush, as the Liquify preview row draws.
+            Box::new(move |i| {
+                let x = fw * 0.45 + (i % 4) as f64 * 10.0;
+                json!({"strokes": [{"tool": "forwardWarp", "size": 800, "density": 100, "points": [[x, fh / 2.0], [x + 60.0, fh / 2.0]]}]})
+            }),
+        ),
+        ("Puppet Warp commit 24 MP: longest UI-thread step", "edit.puppetWarp", Box::new(pins)),
+        ("Perspective Warp commit 24 MP: longest UI-thread step", "edit.perspectiveWarp", {
+            let plane = plane.clone();
+            Box::new(move |_| json!({"planes": plane}))
+        }),
+    ];
+    // Each cancel row's name, command and params. Perspective and Puppet Warp take their commit
+    // rows' params. Liquify's commit row is done in a few ms, too soon to cancel part way: its
+    // cancel row warps most of the picture, with four strokes of a brush 60 % of its longer side.
+    let brush = fw.max(fh) * 0.6;
+    let strokes: Vec<Value> = (0..4u32)
+        .map(|k| {
+            let y = fh * (0.2 + 0.2 * f64::from(k));
+            json!({"tool": "forwardWarp", "size": brush, "density": 100, "points": [[fw * 0.3, y], [fw * 0.3 + 120.0, y]]})
+        })
+        .collect();
+    let cancels: [(&str, &str, Value); 3] = [
+        ("cancel Perspective Warp job on 24 MP", "edit.perspectiveWarp", json!({"planes": plane})),
+        ("cancel Liquify job on 24 MP", "filter.liquify", json!({"strokes": strokes})),
+        ("cancel Puppet Warp job on 24 MP", "edit.puppetWarp", pins(0)),
+    ];
+    if !commits.iter().any(|(name, ..)| b.wanted(name)) && !cancels.iter().any(|(name, ..)| b.wanted(name)) {
+        return;
+    }
+    let mut s = match open_photo(w, h) {
+        Ok(s) => s,
+        Err(e) => return b.errors.push((commits[0].0.into(), e)),
+    };
+    let reps = b.reps.min(8);
+    for (name, cmd, params) in &commits {
+        let mut totals = Vec::new();
+        let mut as_job = Vec::new();
+        b.time(name, &mut s, reps, true, |_, s, i| {
+            let (worst, total, job) = ui_thread_step(s, cmd, params(i))?;
+            if i > 0 {
+                totals.push(total);
+                as_job.push(job);
+            }
+            Ok(worst)
+        });
+        if let Some(r) = b.rows.iter_mut().rev().find(|r| r["name"] == *name)
+            && let Some(o) = r.as_object_mut()
+        {
+            println!("{name:<52} until applied p50 {:.2} ms, ran as a job: {}", median(&totals), as_job.iter().all(|j| *j));
+            o.insert("total_samples_ms".into(), json!(totals));
+            o.insert("ran_as_job".into(), json!(as_job.iter().all(|j| *j)));
+        }
+    }
+    for (name, cmd, params) in &cancels {
+        if !b.wanted(name) {
+            continue;
+        }
+        cancel_job_scenario(b, &mut s, reps, name, cmd, params);
+        // The share of the job a cancel can't stop: Puppet Warp's mesh solve (untimed, once).
+        if *cmd == "edit.puppetWarp" {
+            match puppet_solve_ms(&s, params) {
+                Ok(solve) => {
+                    println!("{name:<52} mesh solve {solve:.2} ms (not cancellable)");
+                    if let Some(o) = b.rows.iter_mut().rev().find(|r| r["name"] == *name).and_then(Value::as_object_mut) {
+                        o.insert("solve_ms".into(), json!(solve));
+                    }
+                }
+                Err(e) => b.errors.push((name.to_string(), e)),
+            }
+        }
+    }
+}
+
+/// Times cancelling `cmd` as a background job, `reps` times, from `cancel_job` until its worker
+/// has exited. The job's uncancelled time (`job_ms`, until applied) is measured once, untimed,
+/// and each sample cancels after a share of it, from 5 % (the first sample) to 60 % (the last),
+/// so every sample stops a job part way. A job whose result arrived before the cancel (seen by
+/// polling just before it, or refused by [`Session::cancel_working_job`] because its worker had
+/// already produced it) is no cancel sample: it is undone and started again with half the delay,
+/// and a sample that still can't cancel after four tries fails the row. The delays
+/// (`delay_samples_ms`) and the count of samples that ended cancelled (`cancelled_samples`) are
+/// recorded with the row.
+fn cancel_job_scenario(b: &mut Bench, s: &mut Session, reps: usize, name: &str, cmd: &str, params: &Value) {
+    use photocraft_engine::jobs::JobOutcome;
+    let job_ms = match ui_thread_step(s, cmd, params.clone()) {
+        Ok((_, total, true)) => total,
+        Ok(_) => return b.errors.push((name.into(), format!("{cmd} did not run as a background job"))),
+        Err(e) => return b.errors.push((name.into(), e)),
+    };
+    let mut delays = Vec::new();
+    b.time(name, s, reps, false, |_, s, i| {
+        let steps = s.active().map(|d| d.history.past_len()).ok_or("no document")?;
+        let share = 0.05 + 0.55 * i.saturating_sub(1) as f64 / (reps.max(2) - 1) as f64;
+        let mut delay = job_ms * share;
+        for _ in 0..4 {
+            let job = start_job(s, cmd, params.clone())?;
+            std::thread::sleep(std::time::Duration::from_secs_f64(delay / 1000.0));
+            // A job still counts as running until it is polled, even once its worker has sent
+            // the result: poll first, so a finished job is applied rather than "cancelled".
+            if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == job) {
+                match e.outcome {
+                    JobOutcome::Done(_) => {
+                        if s.active().map(|d| d.history.past_len()) != Some(steps) {
+                            exec(s, "edit.undo", json!({}))?;
+                        }
+                        delay /= 2.0;
+                        continue;
+                    }
+                    other => return Err(format!("{cmd}: the job ended with {other:?}")),
+                }
+            }
+            // The worker can still finish between that poll and the cancel; a plain cancel would
+            // then report Cancelled for a job that had nothing left to stop. Cancel only a worker
+            // that has not produced its result, in one atomic step, and otherwise retry.
+            let t = Instant::now();
+            match s.cancel_working_job(job) {
+                Ok(()) => {}
+                Err(photocraft_engine::jobs::CancelRefused::Finishing) => {
+                    match job_outcome(s, job)? {
+                        JobOutcome::Done(_) => {}
+                        other => return Err(format!("{cmd}: the job ended with {other:?}")),
+                    }
+                    if s.active().map(|d| d.history.past_len()) != Some(steps) {
+                        exec(s, "edit.undo", json!({}))?;
+                    }
+                    delay /= 2.0;
+                    continue;
+                }
+                Err(e) => return Err(format!("{cmd}: the job could not be cancelled ({})", e.as_str())),
+            }
+            s.join_cancelled_jobs();
+            let v = ms(t);
+            match job_outcome(s, job)? {
+                JobOutcome::Cancelled => {}
+                other => return Err(format!("{cmd}: the cancelled job ended with {other:?}")),
+            }
+            if s.active().map(|d| d.history.past_len()) != Some(steps) {
+                return Err(format!("{cmd}: a cancelled job changed the history"));
+            }
+            delays.push(delay);
+            return Ok(v);
+        }
+        Err(format!("{cmd}: the job finished before the cancel four times (last delay {delay:.1} ms of a {job_ms:.1} ms job)"))
+    });
+    if let Some(o) = b.rows.iter_mut().rev().find(|r| r["name"] == name).and_then(Value::as_object_mut) {
+        println!("{name:<52} job {job_ms:.2} ms uncancelled, {} of {reps} samples cancelled", delays.len());
+        o.insert("job_ms".into(), json!(job_ms));
+        o.insert("delay_samples_ms".into(), json!(delays));
+        o.insert("cancelled_samples".into(), json!(delays.len()));
+    }
+}
+
+/// The event job `id` ended with (polled every millisecond, for up to 120 s).
+fn job_outcome(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<photocraft_engine::jobs::JobOutcome> {
+    let t = Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            return Ok(e.outcome);
+        }
+        if t.elapsed().as_secs() > 120 {
+            return Err("job did not finish in 120 s".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// How long Puppet Warp's mesh solve takes for `params` on the active layer, as the command
+/// runs it (no selection: the layer's content bounds).
+fn puppet_solve_ms(s: &Session, params: &Value) -> Res<f64> {
+    use photocraft_algo::puppet::{ITERATIONS, PuppetWarp, deform};
+    let w: PuppetWarp = serde_json::from_value(params.clone()).map_err(|e| format!("pins: {e}"))?;
+    let d = s.active().ok_or("no document")?;
+    let id = d.active_layer.ok_or("no active layer")?;
+    let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or("the active layer has no pixels")?;
+    let t = Instant::now();
+    let _solved = deform(surf, surf.content_bounds(), &w, ITERATIONS);
+    Ok(ms(t))
 }
 
 /// #9328: the whole app (kittest harness, CPU canvas) with a 24 MP document; each sample toggles

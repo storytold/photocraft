@@ -23,7 +23,7 @@
 use std::collections::{HashMap, HashSet};
 
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_raster::{Cancelled, Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
 use crate::photo_util::{BandChol, Csr};
@@ -1106,6 +1106,13 @@ pub fn render(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: &[[f64; 
     crate::warp::warp_triangles(src, bounds, &verts, &tris, interp)
 }
 
+/// [`render`], checking `ctl` per destination tile; `None` once it is cancelled.
+fn render_with(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: &[[f64; 2]], order: &[usize], interp: Interp, ctl: &Interrupt) -> Option<Surface> {
+    let verts: Vec<([f64; 2], [f64; 2])> = deformed.iter().zip(&mesh.verts).map(|(d, s)| (*d, *s)).collect();
+    let tris: Vec<[usize; 3]> = order.iter().map(|&t| mesh.tris[t]).collect();
+    crate::warp::warp_triangles_with(src, bounds, &verts, &tris, interp, ctl)
+}
+
 /// The largest area (px) a puppet warp's result may span: 2³⁰, about 16000 tiles. A pin dragged
 /// absurdly far stretches the mesh over far more, and the renderer allocates bookkeeping for
 /// every tile of it before drawing (#1019).
@@ -1165,11 +1172,27 @@ pub fn warp_with_mesh(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: 
 /// mesh, as Photoshop moves a linked mask with its layer (#4910). The mask is `None` in the
 /// result when none was given.
 pub fn puppet_warp_with_mask(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp, mask: Option<&Surface>) -> Option<(Surface, Option<Surface>)> {
+    puppet_warp_with_mask_with(src, bounds, w, interp, mask, &Interrupt::NONE).ok().flatten()
+}
+
+/// [`puppet_warp_with_mask`], checking `ctl` before and after solving the mesh and per
+/// destination tile while rendering, with progress from the layer's render; `Err(Cancelled)`
+/// once it is cancelled (#210).
+pub fn puppet_warp_with_mask_with(
+    src: &Surface,
+    bounds: Rect,
+    w: &PuppetWarp,
+    interp: Interp,
+    mask: Option<&Surface>,
+    ctl: &Interrupt,
+) -> Result<Option<(Surface, Option<Surface>)>, Cancelled> {
+    ctl.check()?;
     let (solver, v, order) = deform(src, bounds, w, ITERATIONS);
+    ctl.check()?;
     // No triangles (an expansion that shrinks every pixel away): nothing to warp. Rendering the
     // empty mesh would drop every pixel of the layer.
     if solver.mesh.tris.is_empty() {
-        return Some((src.clone(), mask.cloned()));
+        return Ok(Some((src.clone(), mask.cloned())));
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in &v {
@@ -1177,10 +1200,17 @@ pub fn puppet_warp_with_mask(src: &Surface, bounds: Rect, w: &PuppetWarp, interp
     }
     let area = (x1 - x0 + 1.0) * (y1 - y0 + 1.0);
     if area.is_nan() || area > MAX_WARP_PIXELS {
-        return None;
+        return Ok(None);
     }
-    let out = render(src, bounds, &solver.mesh, &v, &order, interp);
-    Some((out, mask.map(|m| render_mask(m, &solver.mesh, &v, &order, interp))))
+    let out = render_with(src, bounds, &solver.mesh, &v, &order, interp, ctl).ok_or(Cancelled)?;
+    // The mask's renders only check for a cancel: progress is the layer's.
+    let cancelled = || ctl.cancelled();
+    let quiet = Interrupt::cancel_only(&cancelled);
+    let moved = match mask {
+        Some(m) => Some(render_mask_with(m, &solver.mesh, &v, &order, interp, &quiet).ok_or(Cancelled)?),
+        None => None,
+    };
+    Ok(Some((out, moved)))
 }
 
 /// Moves a one-channel layer mask with a deformed mesh: the mask under the mesh is lifted,
@@ -1188,22 +1218,31 @@ pub fn puppet_warp_with_mask(src: &Surface, bounds: Rect, w: &PuppetWarp, interp
 /// mask's default value (as [`crate::warp::warp_mesh_gray`] leaves it); outside the mesh the
 /// mask keeps its values.
 pub fn render_mask(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], order: &[usize], interp: Interp) -> Surface {
+    render_mask_with(mask, mesh, deformed, order, interp, &Interrupt::NONE).unwrap_or_else(|| mask.clone())
+}
+
+/// [`render_mask`], checking `ctl` per destination tile; `None` once it is cancelled.
+fn render_mask_with(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], order: &[usize], interp: Interp, ctl: &Interrupt) -> Option<Surface> {
     let mut out = mask.clone();
     if mesh.tris.is_empty() || deformed.len() != mesh.verts.len() || mask.format().channels() != 1 {
-        return out;
+        return Some(out);
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in &mesh.verts {
         (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
     }
     if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
-        return out;
+        return Some(out);
     }
     // The mesh's source area, a pixel wider so its edge samples stay inside.
     let lim = f64::from(1 << 20);
     let src = Rect::new(x0.max(-lim).floor() as i32 - 1, y0.max(-lim).floor() as i32 - 1, x1.min(lim).ceil() as i32 + 1, y1.min(lim).ceil() as i32 + 1);
     if src.is_empty() {
-        return out;
+        return Some(out);
+    }
+    // Reading and expanding the source area is a pass over it: don't start one once cancelled.
+    if ctl.cancelled() {
+        return None;
     }
     let default = mask.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = mask.format();
@@ -1212,7 +1251,7 @@ pub fn render_mask(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], ord
     let tris: Vec<[usize; 3]> = order.iter().filter_map(|&t| mesh.tris.get(t).copied()).collect();
     // Lift: where the undeformed mesh covers the mask, the mask takes its default value.
     let still: Vec<([f64; 2], [f64; 2])> = mesh.verts.iter().map(|s| (*s, *s)).collect();
-    let lifted = crate::warp::warp_triangles(&tmp, src, &still, &tris, Interp::Nearest);
+    let lifted = crate::warp::warp_triangles_with(&tmp, src, &still, &tris, Interp::Nearest, ctl)?;
     let b = lifted.content_bounds();
     if !b.is_empty() {
         let under = out.read_region(b);
@@ -1221,7 +1260,7 @@ pub fn render_mask(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], ord
     }
     // Lay the deformed mask over what is left.
     let moved: Vec<([f64; 2], [f64; 2])> = deformed.iter().zip(&mesh.verts).map(|(d, s)| (*d, *s)).collect();
-    let warped = crate::warp::warp_triangles(&tmp, src, &moved, &tris, interp);
+    let warped = crate::warp::warp_triangles_with(&tmp, src, &moved, &tris, interp, ctl)?;
     let b = warped.content_bounds();
     if !b.is_empty() {
         let under = out.read_region(b);
@@ -1229,7 +1268,7 @@ pub fn render_mask(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], ord
         out.write_region(b, &flat);
     }
     out.prune();
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -1511,5 +1550,65 @@ mod tests {
         // Triangles nearest the raised pin come last, all others first.
         let k = order.iter().position(|&t| near0(t)).unwrap();
         assert!(order[..k].iter().all(|&t| !near0(t)) && order[k..].iter().all(|&t| near0(t)));
+    }
+
+    /// The L blob with its bar's top pinned and its foot lifted, and a mask revealing the bar's
+    /// top (#210 tests).
+    fn lifted_foot() -> (Surface, PuppetWarp, Surface) {
+        let s = blob(SampleType::U8);
+        let w = PuppetWarp {
+            pins: vec![
+                PuppetPin { src: [28.0, 20.0], dst: [28.0, 20.0], rotate: None, depth: 0 },
+                PuppetPin { src: [60.0, 62.0], dst: [64.0, 50.0], rotate: None, depth: 0 },
+            ],
+            mode: PuppetMode::Normal,
+            density: PuppetDensity::Normal,
+            expansion: 2.0,
+        };
+        let mut mask = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &[0.0]);
+        mask.fill_rect(Rect::new(20, 10, 36, 30), &[1.0]);
+        (s, w, mask)
+    }
+
+    #[test]
+    fn puppet_warp_with_mask_with_matches_puppet_warp_with_mask_when_not_cancelled() {
+        let (s, w, mask) = lifted_foot();
+        let b = s.content_bounds();
+        let reported = std::sync::Mutex::new(0.0f32);
+        let progress = |p: f32| {
+            let mut m = reported.lock().unwrap();
+            *m = m.max(p);
+        };
+        let never = || false;
+        let got = puppet_warp_with_mask_with(&s, b, &w, Interp::Bilinear, Some(&mask), &Interrupt::new(&never, &progress))
+            .expect("not cancelled")
+            .expect("warps");
+        let want = puppet_warp_with_mask(&s, b, &w, Interp::Bilinear, Some(&mask)).expect("warps");
+        assert_ne!(want.0, s, "the pins move the foot");
+        assert_eq!(got, want);
+        assert!(*reported.lock().unwrap() > 0.9);
+    }
+
+    #[test]
+    fn puppet_warp_with_mask_stops_when_cancelled() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let (s, w, mask) = lifted_foot();
+        let b = s.content_bounds();
+        let always = || true;
+        assert_eq!(puppet_warp_with_mask_with(&s, b, &w, Interp::Bilinear, Some(&mask), &Interrupt::cancel_only(&always)), Err(Cancelled));
+        // A cancel that arrives once the mesh is solved, while the layer renders: the render's
+        // tiles check it and skip their work, so none reports progress. Without the per-tile
+        // check the render would draw every tile (reporting each) and only the final check would
+        // see the cancel.
+        let calls = AtomicUsize::new(0);
+        let later = || calls.fetch_add(1, SeqCst) >= 2;
+        let reported = AtomicUsize::new(0);
+        let progress = |_: f32| {
+            reported.fetch_add(1, SeqCst);
+        };
+        assert_eq!(puppet_warp_with_mask_with(&s, b, &w, Interp::Bilinear, Some(&mask), &Interrupt::new(&later, &progress)), Err(Cancelled));
+        // Before and after the solve, at least one tile, and the render's final check.
+        assert!(calls.load(SeqCst) >= 4, "{}", calls.load(SeqCst));
+        assert_eq!(reported.load(SeqCst), 0, "no tile was drawn");
     }
 }
