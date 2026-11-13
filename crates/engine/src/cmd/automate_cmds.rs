@@ -725,3 +725,7 @@ mod tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_subfolders_tests.rs"]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_gray_tests.rs"]
+mod contact_sheet_gray_tests;
