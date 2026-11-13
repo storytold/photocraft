@@ -37,6 +37,7 @@ photocraft-text = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-format = { path = "../format" }
+craft-pdf = { workspace = true }
 craft-docpath = { workspace = true }
 craft-ora = { workspace = true }
 craft-kra = { workspace = true }

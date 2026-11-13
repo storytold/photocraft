@@ -59,7 +59,7 @@ fn straight_horizontal(layer: &TextLayer, dpi: f32) -> bool {
 #[cfg(test)]
 fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<String> {
     let prepared = prepare(layer, mode, dpi)?;
-    let font = super::selection::SelectionFont::new(std::iter::once(layer.text.as_str()));
+    let font = super::SelectionFont::new(std::iter::once(layer.text.as_str()));
     ops(&prepared, mode, &font)
 }
 
@@ -146,7 +146,7 @@ fn layout_checks(layer: &TextLayer, mode: ColorMode, layout: &photocraft_text::T
     true
 }
 
-pub(super) fn ops(prepared: &PreparedText<'_>, mode: ColorMode, selection_font: &super::selection::SelectionFont) -> Option<String> {
+pub(super) fn ops(prepared: &PreparedText<'_>, mode: ColorMode, selection_font: &super::SelectionFont) -> Option<String> {
     let channels = channels(mode)?;
     layout_ops(prepared.layer, mode, channels, &prepared.layout, selection_font)
 }
@@ -206,7 +206,7 @@ fn layout_ops(
     mode: ColorMode,
     channels: usize,
     layout: &photocraft_text::TextLayout,
-    selection_font: &super::selection::SelectionFont,
+    selection_font: &super::SelectionFont,
 ) -> Option<String> {
     if !layout_checks(layer, mode, layout) {
         return None;
@@ -267,7 +267,7 @@ fn layout_ops(
 /// cluster, so paragraph breaks and other whitespace omitted by shaping survive
 /// in the selection; the first span also takes leading characters. Without this a multi-line
 /// layer extracts as one run of text.
-fn selection_ops(out: &mut String, layer: &TextLayer, layout: &photocraft_text::TextLayout, selection_font: &super::selection::SelectionFont) -> Option<()> {
+fn selection_ops(out: &mut String, layer: &TextLayer, layout: &photocraft_text::TextLayout, selection_font: &super::SelectionFont) -> Option<()> {
     let [a, b, c, d, _, _] = layer.transform.m;
     let mut current_line = None;
     let mut clusters: Vec<_> = layout.clusters.iter().collect();
@@ -347,7 +347,7 @@ mod tests {
                 face.font.data = restricted.clone().into();
                 face.font.index = 0;
             }
-            let font = super::super::selection::SelectionFont::new(std::iter::once(layer.text.as_str()));
+            let font = super::super::SelectionFont::new(std::iter::once(layer.text.as_str()));
             assert!(layout_ops(&layer, ColorMode::Rgb, 3, &layout, &font).is_none(), "restricted text must remain raster");
         }
         assert!(!outlines_permitted(&[], 0));
@@ -463,7 +463,7 @@ mod tests {
         let line = layout.lines.get(cluster.line).expect("a line");
         let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(cluster.x), f64::from(line.baseline)));
         assert!(origin.x.is_finite() && origin.y.is_finite(), "the fixture's origin stays finite");
-        let font = super::super::selection::SelectionFont::new(std::iter::once(layer.text.as_str()));
+        let font = super::super::SelectionFont::new(std::iter::once(layer.text.as_str()));
         assert!(layout_ops(&layer, ColorMode::Rgb, 3, &layout, &font).is_none(), "overflowing Tm coefficients must not be emitted");
         assert!(text_ops(&layer, ColorMode::Rgb, 72.0).is_none());
     }

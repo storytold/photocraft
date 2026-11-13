@@ -613,7 +613,7 @@ fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
     // Pin the fixture to the intended path: accepted by `prepare`, refused by `ops`.
     let LayerContent::Text(lower_text) = &lower.content else { panic!("the fixture is a text layer") };
     let prepared = super::text::prepare(lower_text, ColorMode::Rgb, d.resolution_dpi).expect("prepare accepts the truncated box");
-    let lower_font = super::selection::SelectionFont::new(std::iter::once(lower_text.text.as_str()));
+    let lower_font = super::SelectionFont::new(std::iter::once(lower_text.text.as_str()));
     assert!(super::text::ops(&prepared, ColorMode::Rgb, &lower_font).is_none(), "emission must refuse the unrepresented source text");
     d.layers.push(lower);
     d.layers.push(Layer::new(
