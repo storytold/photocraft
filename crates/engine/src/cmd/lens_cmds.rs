@@ -216,8 +216,15 @@ pub fn try_camera_raw_surface_on(surf: &Surface, area: Rect, p: &CameraRaw, opaq
 
 fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, strict: bool) -> std::result::Result<Surface, String> {
     // Geometry turns the image about its centre: the canvas's, not that of content past its edge.
+    // Without it every pixel of the content is developed, also what an earlier Smart Filter moved
+    // past `area` (when that would exceed what one pass can develop, `area` alone still is).
     let geometry = !p.geometry_neutral();
-    let area = if geometry { area } else { area.intersect(&surf.content_bounds().union(&area)) };
+    let area = if geometry {
+        area
+    } else {
+        let all = area.union(&surf.content_bounds());
+        if raw_pixels(all).is_some() { all } else { area }
+    };
     if area.is_empty() || p.is_identity() {
         return Ok(surf.clone());
     }
@@ -780,6 +787,19 @@ mod tests {
         s.execute(RAW, json!({"saturation": -100})).unwrap();
         let p = active_px(&s, 60, 40);
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn camera_raw_without_geometry_develops_content_past_the_given_area() {
+        // A Smart Filter replay passes the canvas ∪ placed extent; an earlier filter may have
+        // moved content past it, and that content must be developed too.
+        let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        surf.fill_rect(Rect::from_xywh(0, 0, 40, 20), &[0.25, 0.25, 0.25, 1.0]);
+        let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
+        let out = camera_raw_surface(&surf, Rect::from_xywh(0, 0, 20, 20), &cr);
+        let (inside, past) = (out.sample_channel(10, 10, 0), out.sample_channel(30, 10, 0));
+        assert!(inside > 0.3, "{inside}");
+        assert!((past - inside).abs() < 1e-3, "content past the area was not developed: {past} vs {inside}");
     }
 
     #[test]
