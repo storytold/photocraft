@@ -35,6 +35,9 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     let mut decoder = match photocraft_codecs::exr_stream::Decoder::new(source, &|| ctl.cancelled()) {
         Ok(decoder) => decoder,
         Err(_) if ctl.cancelled() => return Err(IoError::Cancelled),
+        Err(photocraft_codecs::CodecError::LimitExceeded(reason)) if reason.contains("EXR pixel count") => {
+            return Err(IoError::OutOfMemory("decoded image tiles exceed the available RAM budget; enable a scratch disk or close other documents".into()));
+        }
         Err(_) => return Ok(None),
     };
     let info = decoder.info();
