@@ -1,6 +1,5 @@
 use super::panel::chevron_icon;
 use super::scrub::take_label_scrub_name;
-use super::slider::wheel_notches_of;
 use super::{Align2, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Tokens, Ui, Vec2, pos2, type_ahead, vec2};
 
 /// A compact labelled dropdown in the studio style.
@@ -239,13 +238,11 @@ fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
 
 /// The options the wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
 /// one per notch, in order; the last is the new `current`. A notch goes to the next option
-/// `enabled` accepts, so a greyed one costs no notch. While the pointer is over it the wheel
+/// `enabled` accepts, so a greyed one costs no notch. Only a wheel gesture that started over it
+/// steps it (a panel scrolled past it keeps scrolling, #11353); while it has the gesture the wheel
 /// scrolls nothing else.
 fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)], enabled: &dyn Fn(&T) -> bool) -> Vec<T> {
-    if hovered {
-        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-    }
-    let notches = wheel_notches_of(ui, id, hovered, 1.0);
+    let notches = crate::field_wheel::hover_notches(ui, id, hovered, 1.0);
     let Some(mut index) = options.iter().position(|(v, _)| v == current) else { return Vec::new() };
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.
