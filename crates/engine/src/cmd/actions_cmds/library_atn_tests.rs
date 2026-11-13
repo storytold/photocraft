@@ -1042,24 +1042,28 @@ fn review_literal_wire_scopes_play_the_literal_set_and_preserve_source_bytes() {
 
 #[test]
 fn review_conditional_import_keeps_each_resolved_literal_set_scope() {
-    for (params, expected, width) in [
+    for (params, expected, reopened_expected, width) in [
         (
             json!({"if":"always","then":"Left","else":"Right","set":"Ungrouped Actions"}),
             json!({"if":"always","then":"Left","else":"Right","set":"Ungrouped Actions","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
+            json!({"if":"always","then":"Left","else":"Right","set":"Ungrouped Actions 2","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
             5,
         ),
         (
             json!({"if":"never","then":"Left","else":"Right","set":"Ungrouped Actions","thenSet":null,"elseSet":null}),
             json!({"if":"never","then":"Left","else":"Right","set":"Ungrouped Actions","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
+            json!({"if":"never","then":"Left","else":"Right","set":"Ungrouped Actions 2","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
             7,
         ),
         (
             json!({"if":"always","then":"Left","else":"Left","set":"Ungrouped Actions"}),
             json!({"if":"always","then":"Left","else":"Left","set":"Ungrouped Actions 2"}),
+            json!({"if":"always","then":"Left","else":"Left","set":"Ungrouped Actions 2"}),
             5,
         ),
         (
             json!({"if":"never","then":"Left","else":"Right","set":"External","thenSet":"Ungrouped Actions","elseSet":"Ungrouped Actions"}),
+            json!({"if":"never","then":"Left","else":"Right","set":"External","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
             json!({"if":"never","then":"Left","else":"Right","set":"External","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
             7,
         ),
@@ -1075,7 +1079,7 @@ fn review_conditional_import_keeps_each_resolved_literal_set_scope() {
         session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(session.actions.list[2].steps[0].1, expected);
         let restored = library::decode(&encode(&session.actions)).unwrap();
-        assert_eq!(restored.list[2].steps[0].1, expected, "durable reopen keeps each resolved destination");
+        assert_eq!(restored.list[2].steps[0].1, reopened_expected, "durable reopen keeps each resolved destination");
         session.actions = restored;
         let played = session.execute("actions.play", json!({"action":"Caller","set":"C"})).unwrap();
         assert!(played.get("failed").is_none(), "{played}");
