@@ -864,6 +864,98 @@ fn show_altered_video_switches_between_original_and_edited_frames() {
     assert_eq!(layer_px(&s, id), vec![0.0, 0.0, 1.0, 1.0], "switching back reveals the blue edit");
 }
 
+const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+const MAGENTA: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+
+/// Pixel (2, 2) of every frame of the video layer: the altered (shown) stack, or with `original`
+/// the footage stack that Restore Frame and Show Altered Video off bring back.
+fn stack_px(s: &Session, id: LayerId, original: bool) -> Vec<Vec<f32>> {
+    let v = s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap();
+    let stack = if original { v.original_frames.as_ref().unwrap() } else { &v.frames };
+    stack.iter().map(|f| f.pixel(2, 2)).collect()
+}
+
+/// An 8 × 8 image sequence in a new `name` folder, one solid PNG per colour (`f0.png`, `f1.png`,
+/// ...), loaded as a video layer. Returns the folder and the layer.
+fn footage(s: &mut Session, name: &str, colors: &[&str]) -> (String, LayerId) {
+    let dir = tmpdir(name);
+    for (i, c) in colors.iter().enumerate() {
+        write_png(&format!("{dir}/f{i}.png"), 8, 8, c);
+    }
+    let r = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": dir})).unwrap();
+    (dir, LayerId(r["layer"].as_u64().unwrap()))
+}
+
+/// Reload Frame re-reads only the frame at the playhead, as Photoshop's does: that frame shows the
+/// file's new pixels, its edit gone, while the edit on another frame survives and the other frames
+/// keep the footage they had. Undo brings the edit and the old footage back. Before, the whole
+/// footage was reloaded and the edits on every frame were lost.
+#[test]
+fn reload_frame_reloads_only_the_current_frame() {
+    let mut s = session();
+    let (dir, id) = footage(&mut s, "reload-frame", &["#ff0000", "#00ff00", "#0000ff"]);
+    s.execute("edit.fill", json!({"color": "#ffff00"})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    // The footage changes on disk.
+    for (i, c) in ["#00ffff", "#ff00ff", "#ffffff"].iter().enumerate() {
+        write_png(&format!("{dir}/f{i}.png"), 8, 8, c);
+    }
+    s.execute("layer.videoLayers.reloadFrame", json!({})).unwrap();
+
+    assert_eq!(layer_px(&s, id), MAGENTA, "the current frame shows its new footage");
+    assert_eq!(stack_px(&s, id, false), [YELLOW, MAGENTA, BLUE], "frame 0 keeps its edit, frame 2 its old footage");
+    assert_eq!(stack_px(&s, id, true), [RED, MAGENTA, BLUE], "only the current frame's footage is reloaded");
+
+    assert!(s.undo());
+    assert_eq!(layer_px(&s, id), BLACK, "undo brings the edit back");
+    // Scrubbing stores the displayed edit into its frame.
+    s.execute("timeline.setFrame", json!({"frame": 0})).unwrap();
+    assert_eq!(stack_px(&s, id, false), [YELLOW, BLACK, BLUE]);
+    assert_eq!(stack_px(&s, id, true), [RED, GREEN, BLUE]);
+}
+
+/// Footage that no longer reaches the frame at the playhead is refused, and nothing changes.
+#[test]
+fn reload_frame_refuses_footage_without_the_current_frame() {
+    let mut s = session();
+    let (dir, id) = footage(&mut s, "reload-shorter", &["#ff0000", "#00ff00"]);
+    s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    std::fs::remove_file(format!("{dir}/f1.png")).unwrap();
+    let err = s.execute("layer.videoLayers.reloadFrame", json!({})).unwrap_err().to_string();
+    assert!(err.contains("now has 1 frames, so it has no frame 2"), "{err}");
+    assert_eq!(layer_px(&s, id), BLUE);
+    assert_eq!(stack_px(&s, id, true), [RED, GREEN]);
+}
+
+/// A recorded Reload Frame step does what the menu command does: it reloads the frame at the
+/// playhead and keeps the edits on the others.
+#[test]
+fn a_recorded_reload_frame_step_reloads_only_the_current_frame() {
+    let mut s = session();
+    let (dir, id) = footage(&mut s, "reload-action", &["#ff0000", "#00ff00"]);
+    s.execute("edit.fill", json!({"color": "#ffff00"})).unwrap();
+    s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+    s.execute("actions.record", json!({"name": "Reload"})).unwrap();
+    s.execute("layer.videoLayers.reloadFrame", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = s.execute("actions.get", json!({"action": "Reload"})).unwrap()["steps"].clone();
+    assert_eq!(steps, json!([["layer.videoLayers.reloadFrame", {}]]));
+
+    for (i, c) in ["#00ffff", "#ff00ff"].iter().enumerate() {
+        write_png(&format!("{dir}/f{i}.png"), 8, 8, c);
+    }
+    let played = s.execute("actions.play", json!({"action": "Reload"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(stack_px(&s, id, false), [YELLOW, MAGENTA]);
+    assert_eq!(stack_px(&s, id, true), [RED, MAGENTA]);
+}
+
 #[test]
 fn restoring_blank_video_frames_still_produces_blank_frames() {
     let mut s = session();
