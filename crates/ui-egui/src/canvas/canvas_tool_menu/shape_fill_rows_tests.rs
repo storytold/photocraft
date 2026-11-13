@@ -22,7 +22,7 @@ const STYLE_ROWS: [&str; 4] = ["Copy Fill", "Copy Complete Stroke", "Paste Fill"
 
 /// `tool` draws a shape from `from` to `to` (document points) filled with the foreground colour
 /// `rgb`, with no stroke; its new shape layer is active. Returns that layer.
-fn draw(app: &mut PhotocraftApp, tool: Tool, rgb: [f32; 3], from: [f32; 2], to: [f32; 2]) -> LayerId {
+fn draw(app: &mut PhotocraftApp, tool: Tool, rgb: [f32; 3], from: [f64; 2], to: [f64; 2]) -> LayerId {
     app.ui.tool = tool;
     app.ui.tool_options.shape_mode = "shape".into();
     app.session.tools.foreground = [rgb[0], rgb[1], rgb[2], 1.0];
