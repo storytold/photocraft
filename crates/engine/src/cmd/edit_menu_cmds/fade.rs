@@ -1,3 +1,5 @@
+use photocraft_color::{ColorMode, SampleType};
+
 use super::{
     BlendMode, Document, EngineError, FadeSource, FadeTarget, Rect, Result, Session, Surface, Value, bad, blend_from_str, f32_or, from_rgba_into, json, str_or,
     surface_of, surface_of_mut, to_rgba,
@@ -26,9 +28,21 @@ pub(super) fn before_state(st: &crate::DocState, f: &FadeSource) -> Option<std::
     if i < st.history.past_len() { st.history.state(i) } else { None }
 }
 
+/// The modes in which Fade's opacity acts as a layer's Fill does in them, not as a mix of the
+/// 100 % result with the base: Color Burn, Color Dodge, Vivid Light, Hard Mix and Difference
+/// (#13807, measured on an 8-bit RGB layer). Linear Burn, Linear Dodge and Linear Light, the
+/// rest of [`photocraft_compose::psblend::fill_is_special`], measured the same either way and
+/// keep the mix.
+fn fades_as_fill(mode: BlendMode) -> bool {
+    matches!(mode, BlendMode::ColorBurn | BlendMode::ColorDodge | BlendMode::VividLight | BlendMode::HardMix | BlendMode::Difference)
+}
+
 /// Blend `after` back towards `before` over `area`: `before + opacity × (B(before, after) − before)`
 /// with blend mode `mode` (premultiplied, so alpha changes fade too). Dissolve instead takes, per
-/// pixel, `after` or `before` whole, with `opacity` as the odds of `after`.
+/// pixel, `after` or `before` whole, with `opacity` as the odds of `after`. Below 100 % in an
+/// 8-bit RGB surface, the [`fades_as_fill`] modes blend `after` over `before` as a layer at that
+/// Fill ([`photocraft_compose::psblend::composite_fill`]): the alpha is the mix's, and a pixel
+/// transparent before or after the step comes out as the mix leaves it.
 pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: BlendMode, opacity: f32) -> Result<()> {
     let fmt = after.format();
     let n = fmt.channels();
@@ -68,6 +82,8 @@ pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: Ble
         }
         out[m - 1] = ao;
     };
+    // 16- and 32-bit, Grayscale, Lab and CMYK weren't measured (#13807) and keep the mix.
+    let as_fill = k < 1.0 && fades_as_fill(mode) && fmt.mode == ColorMode::Rgb && fmt.sample == SampleType::U8;
     let mut tmp = crate::allocation::filled(n, 0.0f32, "fading pixels")?;
     for (pa, pb) in a.chunks_exact_mut(n).zip(b.chunks_exact(n)) {
         if mode == BlendMode::Normal || n == 1 {
@@ -76,9 +92,13 @@ pub fn fade_surface(before: &Surface, after: &mut Surface, area: Rect, mode: Ble
         } else {
             let rb = to_rgba(&fmt, pb);
             let ra = to_rgba(&fmt, pa);
-            let blended = photocraft_color::blend::composite(mode, rb, ra, 1.0);
             let mut o = [0.0f32; 4];
-            lerp_premul(&rb, &blended, &mut o, true);
+            if as_fill {
+                o = photocraft_compose::psblend::composite_fill(mode, rb, ra, 1.0, k, 1.0);
+            } else {
+                let blended = photocraft_color::blend::composite(mode, rb, ra, 1.0);
+                lerp_premul(&rb, &blended, &mut o, true);
+            }
             let mut enc = [0.0f32; 8];
             from_rgba_into(&fmt, o, &mut enc);
             pa.copy_from_slice(&enc[..n]);
@@ -160,3 +180,7 @@ pub fn fade_preview(s: &Session, p: &Value) -> Result<FadePreview> {
 #[cfg(test)]
 #[path = "fade_dissolve_tests.rs"]
 mod dissolve_tests;
+
+#[cfg(test)]
+#[path = "fade_special_modes_tests.rs"]
+mod special_modes_tests;
