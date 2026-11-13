@@ -428,7 +428,7 @@ fn copy_tree(from: &Path, to: &Path, depth: u32) -> std::io::Result<()> {
     if depth > MAX_COPY_DEPTH {
         return Err(std::io::Error::other(format!("{} is nested too deep", from.display())));
     }
-    std::fs::create_dir(to)?;
+    create_dir_like(from, to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
@@ -448,9 +448,33 @@ fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::other(format!("{} is not a plain file", from.display())));
     }
     let mut src = std::fs::File::open(from)?;
-    let mut dst = std::fs::OpenOptions::new().write(true).create_new(true).open(to)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut mode = src.metadata()?.permissions().mode() & 0o777;
+        // A file in a restricted folder was only as open as the folder: keep that when it is copied
+        // alone (each of group and other can read the copy only if the folder let them in).
+        if let Some(parent) = from.parent().filter(|p| !p.as_os_str().is_empty()) {
+            mode &= 0o700 | (std::fs::metadata(parent)?.permissions().mode() & 0o077);
+        }
+        // The new owner can always read and write its own copy (a 0044 source, say).
+        mode |= 0o600;
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    }
+    let mut dst = options.open(to)?;
     std::io::copy(&mut src, &mut dst)?;
     dst.sync_all()
+}
+
+/// Create the new folder `to` with the permissions of `from` (a private recovery folder stays
+/// private under a permissive umask), always keeping the owner able to fill it.
+fn create_dir_like(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, (std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(from)?.permissions()) & 0o777) | 0o700);
+    builder.create(to)
 }
 
 /// Resolve the data directory from the environment (`env`) and the executable's folder.
