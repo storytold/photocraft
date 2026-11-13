@@ -513,7 +513,7 @@ mod tests {
         assert_eq!((backend, shown == cpu), ("cpu", true));
     }
 
-    /// Reads a frame's display texture back (`Rgba8Unorm`: the bytes egui samples as sRGB).
+    /// Reads a frame's display texture back (`Rgba8Unorm`: the gamma-encoded bytes egui samples).
     fn display_bytes(gpu: &CameraRawGpu, frame: &GpuFrame) -> Vec<[u8; 4]> {
         let texture = &frame.display;
         let (w, h) = (texture.width(), texture.height());
@@ -657,5 +657,68 @@ mod tests {
         let mut cpu = d.proxy.to_vec();
         develop(&mut cpu, d.pw, d.ph, &CameraRaw { pixel_scale: (d.pw as f32 / d.full_w.max(1) as f32).min(1.0), ..p }, d.float);
         assert_eq!(d.processed.pixels(), &cpu[..], "the CPU develops the frame the GPU can't read back");
+    }
+
+    /// egui draws the GPU preview's texture exactly as it draws the CPU image of the same pixels:
+    /// rendered side by side at 1:1 through egui's own renderer (predictable filtering, no
+    /// dithering), every pixel matches. This checks what is on screen, not the texture's bytes.
+    #[test]
+    fn egui_draws_the_gpu_preview_as_it_draws_the_cpu_image() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let options = eframe::egui_wgpu::RendererOptions::PREDICTABLE;
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), options)) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.set_wgpu(rs.clone());
+        if app.gpu.is_none() {
+            return;
+        }
+        app.run("file.new", json!({"width": 300, "height": 200, "depth": 8})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("filter.render.clouds", json!({"seed": 5})).unwrap();
+        app.run("select.rect", json!({"x": 40, "y": 30, "width": 120, "height": 90})).unwrap();
+        app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        force_pass(&app);
+        let ctx = egui::Context::default();
+        crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+        let d = app.camera_raw.as_mut().expect("dialog");
+        let Some(gpu) = d.gpu.clone() else { return };
+        d.params = CameraRaw { exposure: 0.4, temperature: 20.0, vibrance: 40.0, shadows: 30.0, ..Default::default() };
+        d.render(&ctx);
+        let frame = d.processed.gpu_frame().expect("on the GPU").clone();
+        let id = gpu.texture_id(&frame);
+        let image = crate::camera_raw_ui::CameraRawDialog::image(d.processed.pixels(), d.pw, d.ph, &d.display);
+        let (w, h) = (d.pw, d.ph);
+        let size = egui::vec2(w as f32, h as f32);
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(2.0 * size.x, size.y))
+            .with_pixels_per_point(1.0)
+            .renderer(egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs))
+            .build_ui_state(
+                move |ui, cpu: &mut Option<egui::TextureHandle>| {
+                    let cpu = cpu.get_or_insert_with(|| ui.ctx().load_texture("cpu-preview", image.clone(), egui::TextureOptions::LINEAR));
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("preview-compare")));
+                    painter.image(id, egui::Rect::from_min_size(egui::Pos2::ZERO, size), uv, egui::Color32::WHITE);
+                    painter.image(cpu.id(), egui::Rect::from_min_size(egui::pos2(size.x, 0.0), size), uv, egui::Color32::WHITE);
+                },
+                None,
+            );
+        harness.run();
+        let shot = harness.render().expect("render");
+        let (mut differ, mut worst) = (0usize, 0u8);
+        for y in 0..h as u32 {
+            for x in 0..w as u32 {
+                let (a, b) = (shot.get_pixel(x, y).0, shot.get_pixel(x + w as u32, y).0);
+                if a != b {
+                    differ += 1;
+                    worst = worst.max(a.iter().zip(&b).map(|(p, q)| p.abs_diff(*q)).max().unwrap_or(0));
+                }
+            }
+        }
+        assert_eq!((differ, worst), (0, 0), "{differ} of {} drawn pixels differ, by up to {worst}", w * h);
     }
 }

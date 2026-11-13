@@ -54,8 +54,9 @@ pub struct CameraRawFrame {
     pub histogram: RgbHistogram,
     /// The developed pixels (straight `Rgba32Float`), for [`read_camera_raw_pixels`].
     pub pixels: wgpu::Texture,
-    /// The display texture's `Rgba8UnormSrgb` view: premultiplied sRGB bytes, as egui's own
-    /// textures hold them.
+    /// The display texture's view for egui: `Rgba8Unorm` holding premultiplied sRGB-encoded
+    /// bytes, the format and content of egui's own textures (its shader treats a sample as
+    /// gamma-encoded, so an sRGB-decoding view would draw it darker).
     pub shown: wgpu::TextureView,
     /// The display texture itself (`Rgba8Unorm`, read back by tests).
     pub display: wgpu::Texture,
@@ -68,8 +69,8 @@ struct Slot {
     generation: u64,
     pixels: wgpu::Texture,
     display: wgpu::Texture,
+    /// The display texture's view: the display pass renders into it and egui samples it.
     target: wgpu::TextureView,
-    shown: wgpu::TextureView,
 }
 
 struct Counts {
@@ -399,12 +400,11 @@ impl ViewPasses {
                 size,
                 wgpu::TextureFormat::Rgba8Unorm,
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                &[wgpu::TextureFormat::Rgba8UnormSrgb],
+                &[],
             );
             let target = display.create_view(&Default::default());
-            let shown = display.create_view(&wgpu::TextureViewDescriptor { format: Some(wgpu::TextureFormat::Rgba8UnormSrgb), ..Default::default() });
             if let Some(s) = self.slots.get_mut(index) {
-                *s = Some(Slot { size, generation: self.generation, pixels, display, target, shown });
+                *s = Some(Slot { size, generation: self.generation, pixels, display, target });
             }
         }
         if self.counts.as_ref().is_none_or(|c| c.rows != rows) {
@@ -461,7 +461,7 @@ impl ViewPasses {
             size: s.size,
             histogram: histogram.ok_or_else(|| Unsupported("short GPU histogram".into()))?,
             pixels: s.pixels.clone(),
-            shown: s.shown.clone(),
+            shown: s.target.clone(),
             display: s.display.clone(),
             read_back: None,
         })
