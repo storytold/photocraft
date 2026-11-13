@@ -151,3 +151,7 @@ fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::
 #[cfg(test)]
 #[path = "../conditional_mode_change_controls_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../conditional_mode_change_sticky_tests.rs"]
+mod sticky_tests;
