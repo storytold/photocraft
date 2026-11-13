@@ -12,6 +12,7 @@ use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 use crate::canvas::ViewXform;
 use crate::state::Tool;
 
+mod arrow;
 mod bucket;
 mod hand;
 mod pen;
@@ -30,13 +31,16 @@ const MAX_SIDE: u16 = if cfg!(any(target_os = "windows", target_os = "macos")) {
 
 /// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags;
 /// `Zoom` is the Zoom tool's magnifier, with a minus when it zooms out. `Outline` is a brush tip
-/// outline: closed rings of logical-point offsets from the hotspot.
+/// outline: closed rings of logical-point offsets from the hotspot. `Arrow` is the black arrow
+/// pointer, its tip on the hotspot.
 #[derive(Clone, Debug, PartialEq)]
 enum Shape {
+    Arrow,
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
     Hand { closed: bool },
     Zoom { out: bool },
+    Pipette,
     Outline { rings: Arc<[Vec<Vec2>]>, centre: bool },
 }
 
@@ -49,6 +53,24 @@ struct Cached {
     scale: f32,
     image: CustomCursorImage,
 }
+
+/// Root and child viewports may use different bitmap units at the same time (points vs Retina
+/// pixels on macOS). Retain a small number of densities, including failed loads, without letting
+/// arbitrary zoom values accumulate unbounded images or retry a broken SVG every frame.
+#[derive(Clone)]
+struct CachedPipette {
+    scale: f32,
+    painted: bool,
+    image: Option<CustomCursorImage>,
+    texture: Option<egui::TextureHandle>,
+}
+
+const PIPETTE_CACHE_CAPACITY: usize = 4;
+
+/// GPU textures are not subject to the OS cursor limit. Bound their density independently;
+/// beyond 8x the GPU scales the same artwork, keeping its logical size and hotspot intact.
+const PAINTED_PIPETTE_MAX_SCALE: f32 = 8.0;
+const PAINTED_PIPETTE_MAX_SIDE: u16 = 511;
 
 /// Pen variants retain at most one bitmap each; large brush bitmaps stay in the single-entry cache.
 #[derive(Clone, Default)]
@@ -143,8 +165,52 @@ pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> C
     show(painter, at, Shape::Crosshair { length, gap })
 }
 
+/// The Perspective Crop's pointer for what a press at `at` does (#11974): with no quad a small
+/// crosshair centred on the point with the tool's icon below right; inside the quad the solid
+/// black arrow; over a corner the hollow white arrowhead with its tip on the point. Both are drawn
+/// by us (the OS arrow is white on Windows and follows the theme on Linux).
+pub(crate) fn perspective_crop(painter: &Painter, zone: crate::perspective_crop_ui::Zone, at: Pos2) -> CursorIcon {
+    use crate::perspective_crop_ui::Zone;
+    match zone {
+        Zone::Idle => {
+            crate::icons::crosshair_badge(painter.ctx(), crate::icons::tool_icon(Tool::PerspectiveCrop), at);
+            crosshair(painter, at, 5.0, 0.0)
+        }
+        Zone::Inside => {
+            // Our own solid black arrow, the same on every system; the OS cursor is hidden.
+            crate::icons::cursor_arrow(painter.ctx(), at);
+            CursorIcon::None
+        }
+        Zone::Corner(_) => {
+            // The tip of the arrowhead is at (4, 4) of its 24-unit box.
+            crate::icons::cursor(painter.ctx(), "mouse-pointer-2", at, vec2(4.0, 4.0) / 24.0, 18.0);
+            CursorIcon::None
+        }
+        // A press there does nothing yet (#11801): the tool's usual crosshair.
+        Zone::Outside => standard_crosshair(painter, at),
+    }
+}
+
 pub(crate) fn standard_crosshair(painter: &Painter, at: Pos2) -> CursorIcon {
     show(painter, at, STANDARD_CROSSHAIR.clone())
+}
+
+/// The tip stays on the sampled pixel. Native root viewports upload the bitmap; web and
+/// immediate viewports draw the same geometry without an interactive overlay widget.
+pub(crate) fn pipette(ctx: &egui::Context, at: Pos2) -> CursorIcon {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-tool-pointer")));
+    show(&painter, at, Shape::Pipette)
+}
+
+/// Whether the pass whose output is `out` shows the sampling pipette: the OS bitmap and its
+/// visible-fallback crosshair where a bitmap can be uploaded, the drawn pipette elsewhere.
+#[cfg(test)]
+pub(crate) fn pipette_shown(ctx: &egui::Context, out: &egui::PlatformOutput) -> bool {
+    if !native(ctx) {
+        return out.cursor_icon == CursorIcon::None;
+    }
+    let expected = cached_pipette(ctx, native_scale(ctx), false).image;
+    out.cursor_icon == CursorIcon::Crosshair && expected.is_some() && out.cursor_image == expected
 }
 
 pub(crate) fn outline(painter: &Painter, at: Pos2, rings: Vec<Vec<Vec2>>, centre: bool) -> CursorIcon {
@@ -342,6 +408,20 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
     if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
 }
 
+/// The black arrow pointer, its tip on the pointer (`_at`): an OS cursor bitmap on every platform
+/// that takes one, the system arrow where none can be set.
+pub(crate) fn arrow(ctx: &egui::Context, _at: Pos2) -> CursorIcon {
+    arrow_with(ctx, native(ctx))
+}
+
+fn arrow_with(ctx: &egui::Context, bitmap: bool) -> CursorIcon {
+    if bitmap && let Some(image) = cached_image(ctx, &Shape::Arrow, native_scale(ctx)) {
+        ctx.set_cursor_image(Some(image));
+        return CursorIcon::None;
+    }
+    CursorIcon::Default
+}
+
 /// The bitmap [`hand`] hands Windows, for tests that check the Hand's pointer on every platform.
 #[cfg(test)]
 pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCursorImage> {
@@ -405,6 +485,7 @@ fn cached_pen_image(ctx: &egui::Context, variant: PenVariant, scale: f32) -> Opt
     Some(image)
 }
 
+/// Prefer OS-owned motion; paint only on backends without bitmap cursors or for oversized tips.
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     // Where cursor images can't be uploaded (immediate viewports, the web), paint the shape.
@@ -422,11 +503,14 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
         }
         return CursorIcon::None;
     }
-    paint(painter, at, &shape);
-    CursorIcon::None
+    if paint(painter, at, &shape) { CursorIcon::None } else { CursorIcon::Crosshair }
 }
 
+/// Large, variable brush outlines share one entry; pipettes retain each active density separately.
 fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
+    if matches!(shape, Shape::Pipette) {
+        return cached_pipette(ctx, scale, false).image;
+    }
     let id = egui::Id::unique("photocraft-tool-cursor");
     if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id))
         && cached.shape == *shape
@@ -439,9 +523,66 @@ fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<Custom
     Some(image)
 }
 
-fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
+/// Keep the bitmap and its optional GPU texture together, reusing both across viewport switches.
+/// `insert_temp` stores runtime data across frames, not just for the duration of one pass.
+fn cached_pipette(ctx: &egui::Context, scale: f32, painted: bool) -> CachedPipette {
+    let scale = if painted && scale.is_finite() && scale > 0.0 { scale.clamp(0.5, PAINTED_PIPETTE_MAX_SCALE) } else { scale };
+    let id = egui::Id::unique("photocraft-pipette-cache");
+    let mut entries = ctx.data(|d| d.get_temp::<Vec<CachedPipette>>(id)).unwrap_or_default();
+    // A rejected native bitmap must not poison a valid texture at the same density, nor may
+    // a cached GPU texture bypass the native size check when the pointer returns to the root.
+    let matches = |entry: &CachedPipette| entry.scale.to_bits() == scale.to_bits() && entry.painted == painted;
+    let mut cached = entries.iter().find(|entry| matches(entry)).cloned().unwrap_or_else(|| CachedPipette {
+        scale,
+        painted,
+        image: if painted {
+            extent(&Shape::Pipette)
+                .and_then(|extent| bitmap_dimensions(extent, scale, PAINTED_PIPETTE_MAX_SIDE))
+                .and_then(|(side, hot)| rasterize_pipette(scale, side, hot))
+        } else {
+            rasterize(&Shape::Pipette, scale)
+        },
+        texture: None,
+    });
+    if painted
+        && cached.texture.is_none()
+        && let Some(image) = &cached.image
+    {
+        let pixels = egui::ColorImage::from_rgba_unmultiplied(image.size.map(usize::from), &image.rgba);
+        cached.texture = Some(ctx.load_texture("pc-pipette-icon", pixels, egui::TextureOptions::LINEAR));
+    }
+    entries.retain(|entry| !matches(entry));
+    if entries.len() >= PIPETTE_CACHE_CAPACITY {
+        entries.remove(0);
+    }
+    entries.push(cached.clone());
+    ctx.data_mut(|d| d.insert_temp(id, entries));
+    cached
+}
+
+/// Draw the fallback in logical points; report failure so a visible system crosshair can remain.
+fn paint(painter: &Painter, at: Pos2, shape: &Shape) -> bool {
     if extent(shape).is_none() {
-        return;
+        return false;
+    }
+    if matches!(shape, Shape::Pipette) {
+        let scale = painter.ctx().pixels_per_point();
+        let cached = cached_pipette(painter.ctx(), scale, true);
+        let (Some(image), Some(texture)) = (cached.image, cached.texture) else {
+            return false;
+        };
+        // Divide by the raster density, which is capped independently of the display density.
+        let scale = cached.scale;
+        // Match the native hotspot's texel centre, not the top-left corner of its pixel cell.
+        let hot = (vec2(f32::from(image.hotspot[0]), f32::from(image.hotspot[1])) + Vec2::splat(0.5)) / scale;
+        let size = vec2(f32::from(image.size[0]), f32::from(image.size[1])) / scale;
+        painter.image(
+            texture.id(),
+            egui::Rect::from_min_size(at - hot, size),
+            egui::Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+        return true;
     }
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     for (width, color) in [(3.0, dark), (1.0, light)] {
@@ -465,9 +606,10 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
                 }
             }
             // Only ever a bitmap: without one the OS draws its own grab cursors.
-            Shape::Hand { .. } | Shape::Zoom { .. } => {}
+            Shape::Arrow | Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pipette => {}
         }
     }
+    true
 }
 
 fn paint_crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32, stroke: Stroke) {
@@ -483,6 +625,7 @@ fn cross_distance(x: f32, y: f32, length: f32, gap: f32) -> f32 {
     horizontal.min(vertical)
 }
 
+/// Logical reach from the hotspot, before rasterize adds stroke and antialiasing padding.
 fn extent(shape: &Shape) -> Option<f32> {
     Some(match shape {
         Shape::Circle { radius, centre } => {
@@ -512,8 +655,12 @@ fn extent(shape: &Shape) -> Option<f32> {
             }
             if *centre { e.max(3.0) } else { e }
         }
+        Shape::Arrow => arrow::REACH,
         Shape::Hand { .. } => hand::HALF,
         Shape::Zoom { .. } => zoom::HALF,
+        // The 24-unit SVG extends at most 22 units from (2, 22). This extra unit plus
+        // rasterize's 1.5-unit stroke padding covers the 3.75-wide halo (radius 1.875).
+        Shape::Pipette => 23.0,
     })
 }
 
@@ -527,6 +674,7 @@ fn seg_distance(x: f32, y: f32, a: Vec2, b: Vec2) -> f32 {
 /// How much of the pixel at `(dx, dy)` physical pixels from the hotspot the light fill covers and
 /// how much the dark outline around it does, each 0 to 1. A dark crease inside the hand takes
 /// from the fill, so the fill never covers it.
+/// Pipette pixels never pass here: rasterize dispatches that shape to its SVG renderer first.
 fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
     let (x, y) = (dx.abs(), dy.abs());
     match shape {
@@ -561,6 +709,11 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             let (lx, ly) = (dx / scale, dy / scale);
             silhouette(zoom::shape(lx, ly), zoom::glyph(*out, lx, ly), 0.75, scale)
         }
+        Shape::Arrow => {
+            let (lx, ly) = (dx / scale, dy / scale);
+            silhouette(arrow::shape(lx, ly), f32::MAX, 0.0, scale)
+        }
+        Shape::Pipette => (0.0, 0.0), // SVG rasterization supplies these pixels.
     }
 }
 
@@ -643,29 +796,37 @@ fn ring_spans(dy: f32, r: f32, reach: f32) -> Option<[(f32, f32); 2]> {
     Some([(-xo, -xi), (xi, xo)])
 }
 
-fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
-    if !scale.is_finite() || scale <= 0.0 {
+/// Odd bitmap dimensions keep the hotspot central; stroke and AA padding fit within the limit.
+fn bitmap_dimensions(extent: f32, scale: f32, max_side: u16) -> Option<(u16, u16)> {
+    if !scale.is_finite() || scale <= 0.0 || max_side < 3 {
         return None;
     }
-    let extent = extent(shape)?;
     // Odd dimensions put the hotspot on the centre pixel at every DPI. Include the outline
     // and its antialiasing fringe, then check before converting or allocating.
     let half = ((extent + 1.5) * scale + 1.0).ceil();
-    if !half.is_finite() || half > f32::from((MAX_SIDE - 1) / 2) {
+    if !half.is_finite() || half > f32::from((max_side - 1) / 2) {
         return None;
     }
     let hot = half as u16;
     let side = hot * 2 + 1;
+    Some((side, hot))
+}
+
+/// Produce bounded straight-RGBA cursor pixels. Pipette SVGs bypass the distance-coverage loop.
+fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
+    let (side, hot) = bitmap_dimensions(extent(shape)?, scale, MAX_SIDE)?;
     let bytes = usize::from(side).checked_mul(usize::from(side))?.checked_mul(4)?;
-    // Transparent to start; only pixels a shape can reach are evaluated below (a big tip's
-    // outline is a thin ring in a large square, #1343).
+    if matches!(shape, Shape::Pipette) {
+        return rasterize_pipette(scale, side, hot);
+    }
+    // Transparent to start; evaluate only pixels the shape can reach.
     let mut rgba = vec![0u8; bytes];
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     let n = usize::from(side);
     let hotf = f32::from(hot);
     let mut put = |col: usize, row: usize, cov: (f32, f32)| {
         if let Some(px) = row.checked_mul(n).and_then(|i| i.checked_add(col)).and_then(|i| rgba.get_mut(i * 4..i * 4 + 4)) {
-            px.copy_from_slice(&stroke_pixel(cov, dark, light));
+            px.copy_from_slice(&if matches!(shape, Shape::Arrow) { arrow::pixel(cov) } else { stroke_pixel(cov, dark, light) });
         }
     };
     if let Shape::Outline { rings, centre } = shape {
@@ -717,7 +878,42 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
             }
         }
     }
-    Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] })
+    let image = CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] };
+    if matches!(shape, Shape::Arrow) { arrow::crop(image) } else { Some(image) }
+}
+
+/// Use the toolbar's actual SVG, with its lower-left tip (2, 22) at the hotspot.
+/// Both native and painted cursors share these pixels; only the contrast halo is added.
+fn rasterize_pipette(scale: f32, side: u16, hot: u16) -> Option<CustomCursorImage> {
+    let icon = include_str!("../../../../assets/icons/pipette.svg");
+    rasterize_pipette_svg(icon, scale, side, hot).inspect_err(|error| log::error!("Could not rasterize pipette cursor: {error}")).ok()
+}
+
+/// The embedded artwork has a deliberate styling contract. Reject unexpected source changes
+/// explicitly instead of silently losing the halo; a declaration/DOCTYPE before the root is not
+/// part of the nested SVG. Loader failures reach the log, and the cached failure keeps a crosshair.
+fn rasterize_pipette_svg(icon: &str, scale: f32, side: u16, hot: u16) -> Result<CustomCursorImage, String> {
+    let start = icon.find("<svg").ok_or("missing SVG root")?;
+    let icon = icon.get(start..).ok_or("invalid SVG root boundary")?;
+    for required in ["currentColor", "stroke-width=\"2\"", "viewBox=\"0 0 24 24\""] {
+        if icon.matches(required).count() != 1 {
+            return Err(format!("pipette SVG must contain exactly one {required:?}; update the cursor styling and its pixel tests with the artwork"));
+        }
+    }
+    let dark = icon.replace("currentColor", "#000000").replace("stroke-width=\"2\"", "stroke-width=\"3.75\"");
+    let light = icon.replace("currentColor", "#ffffff").replace("stroke-width=\"2\"", "stroke-width=\"1.75\"");
+    let size = f32::from(side) / scale;
+    let x = f32::from(hot) / scale - 2.0;
+    let y = f32::from(hot) / scale - 22.0;
+    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {size} {size}\"><g transform=\"translate({x} {y})\">{dark}{light}</g></svg>");
+    let image = egui_extras::image::load_svg_bytes_with_size(
+        svg.as_bytes(),
+        egui::load::SizeHint::Size { width: u32::from(side), height: u32::from(side), maintain_aspect_ratio: false },
+        &Default::default(),
+    )
+    .map_err(|error| format!("invalid pipette SVG: {error}"))?;
+    let rgba: Vec<u8> = image.pixels.iter().flat_map(|pixel| pixel.to_srgba_unmultiplied()).collect();
+    Ok(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] })
 }
 
 #[cfg(test)]
@@ -725,3 +921,6 @@ mod tests;
 
 #[cfg(test)]
 mod count_tests;
+
+#[cfg(test)]
+mod add_anchor_cursor_tests;
