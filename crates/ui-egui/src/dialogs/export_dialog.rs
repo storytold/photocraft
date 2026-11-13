@@ -1411,7 +1411,6 @@ mod jpg_progressive_tests;
 #[cfg(all(test, unix))]
 mod batch_name_tests {
     use super::*;
-    use photocraft_doc::{ColorMode, SampleType, Size};
 
     #[test]
     fn a_planted_symlink_makes_a_batch_name_taken() {
