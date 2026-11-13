@@ -492,8 +492,11 @@ pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &C
 
 /// A click of a Shape tool: the Create Shape dialog for the clicked kind, none in Path mode.
 pub fn click(app: &mut PhotocraftApp, kind: ShapeKind, at: [f64; 2]) -> Option<craft::ui::dialog::DialogId> {
-    // A Rectangle click inside the active live rectangle leaves it alone (#13340).
-    if draws_path(&app.ui.tool_options) || crate::dialogs::shape_dialog::click_inside_active_rectangle(app, kind, at) {
+    // A Rectangle or Ellipse click inside the active live shape leaves it alone (#13340, #13231).
+    if draws_path(&app.ui.tool_options)
+        || crate::dialogs::shape_dialog::click_inside_active_rectangle(app, kind, at)
+        || crate::dialogs::shape_dialog::click_inside_active_ellipse(app, kind, at)
+    {
         return None;
     }
     crate::dialogs::shape_dialog::open(app, kind, Point::new(at[0], at[1]))
