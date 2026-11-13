@@ -1092,9 +1092,9 @@ impl Session {
     }
 
     /// Will a [`run`] made now spawn a background job (the command was started with
-    /// [`Session::start`], natively), rather than run inline?
+    /// [`Session::start`], natively, in a session that is not cooperative), rather than run inline?
     pub(crate) fn spawning(&self) -> bool {
-        self.jobs.spawn && !cfg!(target_arch = "wasm32")
+        self.jobs.threaded()
     }
 
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
@@ -2244,6 +2244,9 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod run_on_tests;
 
 #[cfg(test)]
 #[path = "../../io/tests/support/recovery_psd.rs"]
