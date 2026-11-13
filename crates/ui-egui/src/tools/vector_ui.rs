@@ -224,6 +224,9 @@ mod pen_rubber_band_tests;
 mod paint_tests;
 
 #[cfg(test)]
+mod triangle_box_geometry_tests;
+
+#[cfg(test)]
 mod pen_resume_tests;
 
 #[cfg(test)]
@@ -246,6 +249,9 @@ mod pen_mode_menu_tests;
 
 #[cfg(test)]
 mod ellipse_path_menus_tests;
+
+#[cfg(test)]
+mod triangle_align_edges_tests;
 
 pub(crate) use pen::freeform_locked_shape;
 #[cfg(test)]

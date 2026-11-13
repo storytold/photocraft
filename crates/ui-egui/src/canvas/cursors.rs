@@ -36,7 +36,8 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 
 /// Whether a brush-tip circle draws its centre mark, for Normal and Full Size Brush Tip cursors
 /// alike (both draw through this). Quick Selection never draws one. Clone Stamp and Healing Brush
-/// stay an empty circle until Option is held, the source-point cursor. Other brushes follow
+/// stay an empty circle until Option is held, the source-point cursor (the Healing Brush's ⌥ with
+/// Normal Brush Tip shows the sample target instead, #12113). Other brushes follow
 /// Preferences › Cursors › Show Crosshair in Brush Tip, as in Photoshop; the Background Eraser
 /// and the Color Replacement tool (#11934) always show their sampling hotspot, and the Remove
 /// tool its centre + (#12550).
@@ -214,8 +215,9 @@ pub(super) fn alt_pick_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, 
     }
 }
 
-/// The Mixer Brush's ⌥ cursor, the reference's sample target (#11957): a small circle with a
-/// crosshair through it, centred on the hotspot. Draws it at `p` and returns the OS cursor to set.
+/// The Mixer Brush's and the Healing Brush's ⌥ cursor, the reference's sample target (#11957,
+/// #12113): a small circle with a crosshair through it, centred on the hotspot. Draws it at `p`
+/// and returns the OS cursor to set.
 pub(crate) fn sample_target_cursor(painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
     let across = vec![vec2(-8.0, 0.0), vec2(8.0, 0.0)];
     let down = vec![vec2(0.0, -8.0), vec2(0.0, 8.0)];
@@ -242,6 +244,10 @@ pub(crate) fn mixer_target_locked(app: &PhotocraftApp) -> bool {
 #[cfg(test)]
 #[path = "../mixer_cursor_tests.rs"]
 mod mixer_cursor_tests;
+
+#[cfg(test)]
+#[path = "../healing_alt_cursor_tests.rs"]
+mod healing_alt_cursor_tests;
 
 /// The Paint Bucket artwork and target share one cached cursor image. Report rasterization
 /// failures once per distinct message, with the same concise error in the dialog and status bar.
