@@ -54,6 +54,15 @@ pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Doc
     import_at_raw_ppi(s.prefs().raw_defaults.resolution, name, bytes)
 }
 
+/// [`import_opened`], also returning the import's notes about anything approximated or dropped,
+/// for a caller that reports them per file (PDF Presentation).
+pub(crate) fn import_opened_noted(s: &Session, name: &str, bytes: &[u8]) -> Result<(Document, Vec<String>)> {
+    let r = import_result(name, bytes)?;
+    let mut doc = r.document;
+    raw_resolution(s.prefs().raw_defaults.resolution, &r.warnings, &mut doc);
+    Ok((doc, r.warnings))
+}
+
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
     import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
 }

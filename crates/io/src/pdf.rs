@@ -1,11 +1,15 @@
-//! The PDF writer (ISO 32000-1 basics): one raster page per file.
+//! The PDF writer (ISO 32000-1 basics): raster pages, one or many per file.
 //!
-//! A small, self-contained writer used by two paths: File › Save a Copy / Save As › PDF (#3401)
-//! through [`export`], and File › Print through [`print_pdf`] (called by the engine, which adds
-//! paper geometry, printer marks and labels around the image). One page holds a
-//! Flate-compressed image XObject, optional printer marks as vector operators and optional
-//! Helvetica text; an embedded ICC profile rides in an ICCBased colour space. Multi-page PDF,
-//! layer-preserving PDF and PDF import stay open (FILE-215-10).
+//! A small, self-contained writer. [`PdfWriter`] takes pages one at a time, compressing each
+//! image as it arrives and writing it into its sink (a `Vec`, or the temporary file of an atomic
+//! save), so a long document never holds more than one page's samples. [`export`] (File › Save a
+//! Copy / Save As › PDF, #3401) writes the document, or one page per artboard, through it; the
+//! engine's File › Export › Artboards to PDF and File › Automate › PDF Presentation write one
+//! page per board or file. A page holds a Flate- or JPEG-compressed image XObject, optional
+//! printer marks as vector operators and optional Helvetica text; an embedded ICC profile rides
+//! in an ICCBased colour space. [`export`] also draws simple top shape and text layers as vectors
+//! over the image (with a selection font for their text). Layer-preserving PDF and PDF import
+//! stay open (FILE-215-10).
 //!
 //! Spot channels leave as plates (FILE-215-17): one 8-bit image XObject per channel in a
 //! `/Separation` colour space named after the channel, painted over the composite with overprint
@@ -15,7 +19,7 @@
 //! RIP show the real result, and an explicit image mask makes Illustrator report "An unknown
 //! imaging construct was encountered". An artboard page carries its own region of every plate.
 
-use std::io::Write as _;
+use std::io::Write;
 
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::Document;
@@ -26,6 +30,16 @@ mod selection;
 mod shapes;
 mod text;
 
+/// How [`PrintImage::data`] is stored.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageEncoding {
+    /// Raw interleaved samples; the writer Flate-compresses them (lossless, Photoshop's ZIP).
+    #[default]
+    Flate,
+    /// An already encoded baseline JPEG, embedded as-is (DCTDecode).
+    Jpeg,
+}
+
 /// The image placed on a page: 8-bit interleaved samples, 1 (gray), 3 (RGB) or 4 (CMYK,
 /// 1 = full ink), with the profile it was authored in if any.
 pub struct PrintImage {
@@ -34,6 +48,7 @@ pub struct PrintImage {
     pub channels: usize,
     pub data: Vec<u8>,
     pub icc: Option<Vec<u8>>,
+    pub encoding: ImageEncoding,
 }
 
 /// One spot plate: a named `/Separation` colorant with 8-bit ink density over the whole image
@@ -169,126 +184,390 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
     s
 }
 
-/// An image XObject dictionary and its Flate-compressed samples, as one object body.
-fn image_object(width: u32, height: u32, colour_space: &str, data: &[u8]) -> Vec<u8> {
-    let z = deflate(data);
-    let mut body = format!(
-        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {colour_space} /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-        z.len()
-    )
-    .into_bytes();
-    body.extend_from_slice(&z);
-    body.extend_from_slice(b"\nendstream");
-    body
+/// Upper bound on pages in one file: past it a request is a runaway loop, not a document.
+pub const MAX_PAGES: usize = 10_000;
+
+/// Longest Advance Every, in seconds (an hour per page).
+pub const MAX_ADVANCE: f64 = 3600.0;
+
+/// How one page replaces the previous one in full screen (ISO 32000-1 §12.4.4.1): PDF
+/// Presentation's Transition list. A viewer that doesn't do transitions just shows the page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Transition {
+    #[default]
+    None,
+    BlindsHorizontal,
+    BlindsVertical,
+    BoxIn,
+    BoxOut,
+    Dissolve,
+    GlitterDown,
+    GlitterRight,
+    GlitterRightDown,
+    /// A different one of the others on each page (picked from the page number, so the same
+    /// list always makes the same file).
+    Random,
+    SplitHorizontalIn,
+    SplitHorizontalOut,
+    SplitVerticalIn,
+    SplitVerticalOut,
+    WipeDown,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
 }
 
-/// A one-page PDF.
-pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
-    print_pdf_pages(std::slice::from_ref(page), &[String::new()], &selection::SelectionFont::default(), None, &photocraft_raster::Interrupt::NONE)
-        .unwrap_or_default()
+impl Transition {
+    pub const ALL: [Self; 18] = [
+        Self::None,
+        Self::BlindsHorizontal,
+        Self::BlindsVertical,
+        Self::BoxIn,
+        Self::BoxOut,
+        Self::Dissolve,
+        Self::GlitterDown,
+        Self::GlitterRight,
+        Self::GlitterRightDown,
+        Self::Random,
+        Self::SplitHorizontalIn,
+        Self::SplitHorizontalOut,
+        Self::SplitVerticalIn,
+        Self::SplitVerticalOut,
+        Self::WipeDown,
+        Self::WipeLeft,
+        Self::WipeRight,
+        Self::WipeUp,
+    ];
+
+    /// The id commands use.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::BlindsHorizontal => "blindsHorizontal",
+            Self::BlindsVertical => "blindsVertical",
+            Self::BoxIn => "boxIn",
+            Self::BoxOut => "boxOut",
+            Self::Dissolve => "dissolve",
+            Self::GlitterDown => "glitterDown",
+            Self::GlitterRight => "glitterRight",
+            Self::GlitterRightDown => "glitterRightDown",
+            Self::Random => "random",
+            Self::SplitHorizontalIn => "splitHorizontalIn",
+            Self::SplitHorizontalOut => "splitHorizontalOut",
+            Self::SplitVerticalIn => "splitVerticalIn",
+            Self::SplitVerticalOut => "splitVerticalOut",
+            Self::WipeDown => "wipeDown",
+            Self::WipeLeft => "wipeLeft",
+            Self::WipeRight => "wipeRight",
+            Self::WipeUp => "wipeUp",
+        }
+    }
+
+    /// The English label, as the dialog lists it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::BlindsHorizontal => "Blinds Horizontal",
+            Self::BlindsVertical => "Blinds Vertical",
+            Self::BoxIn => "Box In",
+            Self::BoxOut => "Box Out",
+            Self::Dissolve => "Dissolve",
+            Self::GlitterDown => "Glitter Down",
+            Self::GlitterRight => "Glitter Right",
+            Self::GlitterRightDown => "Glitter Right-Down",
+            Self::Random => "Random",
+            Self::SplitHorizontalIn => "Split Horizontal In",
+            Self::SplitHorizontalOut => "Split Horizontal Out",
+            Self::SplitVerticalIn => "Split Vertical In",
+            Self::SplitVerticalOut => "Split Vertical Out",
+            Self::WipeDown => "Wipe Down",
+            Self::WipeLeft => "Wipe Left",
+            Self::WipeRight => "Wipe Right",
+            Self::WipeUp => "Wipe Up",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    /// The `/Trans` dictionary for page `page` (0-based), or none for an instant cut.
+    fn dict(self, page: usize) -> Option<String> {
+        // Style and its direction (/Dm), motion (/M) or angle (/Di), over one second.
+        let body = match self {
+            Self::None => return None,
+            Self::Random => {
+                let concrete: Vec<Self> = Self::ALL.into_iter().filter(|t| !matches!(t, Self::None | Self::Random)).collect();
+                let pick = page.wrapping_mul(7).wrapping_add(3) % concrete.len().max(1);
+                return concrete.get(pick).and_then(|t| t.dict(page));
+            }
+            Self::BlindsHorizontal => "/S /Blinds /Dm /H",
+            Self::BlindsVertical => "/S /Blinds /Dm /V",
+            Self::BoxIn => "/S /Box /M /I",
+            Self::BoxOut => "/S /Box /M /O",
+            Self::Dissolve => "/S /Dissolve",
+            Self::GlitterDown => "/S /Glitter /Di 270",
+            Self::GlitterRight => "/S /Glitter /Di 0",
+            Self::GlitterRightDown => "/S /Glitter /Di 315",
+            Self::SplitHorizontalIn => "/S /Split /Dm /H /M /I",
+            Self::SplitHorizontalOut => "/S /Split /Dm /H /M /O",
+            Self::SplitVerticalIn => "/S /Split /Dm /V /M /I",
+            Self::SplitVerticalOut => "/S /Split /Dm /V /M /O",
+            Self::WipeDown => "/S /Wipe /Di 270",
+            Self::WipeLeft => "/S /Wipe /Di 180",
+            Self::WipeRight => "/S /Wipe /Di 0",
+            Self::WipeUp => "/S /Wipe /Di 90",
+        };
+        Some(format!("<< /Type /Trans {body} /D 1 >>"))
+    }
 }
 
-/// A PDF with one page per entry; `vectors[i]` (when present) is drawn over page `i`, after its
-/// image and before its plates and marks (the top layers kept as paths and selectable text), and
-/// the selection font their text refers to is `/FSelect`. `xmp` is the packet of the catalog's
-/// `/Metadata` stream, if any.
-///
-/// Objects: 1 catalog, 2 pages, then per page its page, contents, image and one XObject per
-/// plate; then the shared font, ICC profile, overprint ExtGState and XMP metadata stream, each
-/// only when present, the selection font's three objects, and last the page-label tree.
-fn print_pdf_pages(
-    pages: &[PrintPage],
-    vectors: &[String],
-    selection_font: &selection::SelectionFont,
-    xmp: Option<&str>,
-    ctl: &photocraft_raster::Interrupt,
-) -> std::result::Result<Vec<u8>, IoError> {
-    if ctl.check().is_err() {
-        return Err(IoError::Cancelled);
-    }
-    if pages.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
-        out.extend_from_slice(body);
-        out.extend_from_slice(b"\nendobj\n");
-    };
-    let n = pages.len();
-    // A label tree is written only for a non-empty name: an all-empty tree would be `/Nums []`,
-    // and filtering the first empty name away would start the tree at page index 1, not 0.
-    let labels_on = pages.iter().any(|p| p.page_label.as_deref().is_some_and(|label| !label.is_empty()));
-    // Object numbers, handed out in the order the objects are written.
-    let mut next = 3usize;
-    let mut take = |present: bool| {
-        let o = present.then_some(next);
-        next += usize::from(present);
-        o
-    };
-    struct PageObjects {
-        page: usize,
-        contents: usize,
-        image: Option<usize>,
-        plates: Vec<usize>,
-    }
-    // Field initialisers run in this order.
-    let page_objects: Vec<PageObjects> = pages
-        .iter()
-        .map(|p| PageObjects {
-            page: take(true).unwrap_or_default(),
-            contents: take(true).unwrap_or_default(),
-            image: take(p.image.is_some()),
-            plates: p.plates.iter().filter_map(|_| take(true)).collect(),
-        })
-        .collect();
-    let font_obj = take(true).unwrap_or_default();
-    // The profile is the document's, shared by every page's image.
-    let icc = pages.iter().find_map(|p| p.image.as_ref().and_then(|i| i.icc.as_ref().map(|icc| (icc, i.channels))));
-    let icc_obj = take(icc.is_some());
-    let gs_obj = take(pages.iter().any(|p| !p.plates.is_empty()));
-    let xmp_obj = take(xmp.is_some());
-    let selection_base = next;
-    let selection_objects = selection_font.objects(selection_base);
-    let labels_obj = labels_on.then_some(selection_base + selection_objects.len());
+/// PDF Presentation's Save As Presentation: the file opens full screen, each page shown for
+/// `advance` seconds if set (otherwise until the viewer is told to move on) and entered with
+/// `transition`. `loop_after_last` goes back to the first page after the last; PDF has no key
+/// for it, so it is a one-line document script (`app.fs.loop`) that only Acrobat and Adobe
+/// Reader run — other viewers stop on the last page.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Presentation {
+    pub advance: Option<f64>,
+    pub loop_after_last: bool,
+    pub transition: Transition,
+}
 
-    let metadata = xmp_obj.map(|o| format!(" /Metadata {o} 0 R")).unwrap_or_default();
-    let page_labels = labels_obj.map(|o| format!(" /PageLabels {o} 0 R")).unwrap_or_default();
-    obj(&mut out, format!("<< /Type /Catalog /Pages 2 0 R{metadata}{page_labels} >>").as_bytes());
-    let kids = page_objects.iter().map(|p| format!("{} 0 R", p.page)).collect::<Vec<_>>().join(" ");
-    obj(&mut out, format!("<< /Type /Pages /Kids [{kids}] /Count {n} >>").as_bytes());
-    for (i, (page, objects)) in pages.iter().zip(&page_objects).enumerate() {
+/// Largest file [`PdfWriter`] writes. The cross-reference table gives every object's offset in
+/// exactly ten digits (ISO 32000-1 §7.5.4), so nothing may start at 10,000,000,000 bytes or
+/// later; this stops a little before, leaving room for what [`PdfWriter::finish`] appends.
+pub const MAX_BYTES: u64 = 9_900_000_000;
+
+/// A PDF built page by page into `W` (a `Vec<u8>`, or the temporary file of an atomic save, so a
+/// long document is never held in memory). Objects 1–3 are the catalog and the page tree (both
+/// written by [`PdfWriter::finish`], once every page is known) and the shared Helvetica; each
+/// page then adds its page, contents and image objects, its ICC profile unless the previous
+/// page's is the same, one XObject per spot plate (and, on the first page with plates, the
+/// overprint ExtGState they share), and the selection font of its live text if it has any.
+/// [`PdfWriter::finish`] adds the XMP metadata stream and the page-label tree when present.
+pub struct PdfWriter<W: Write = Vec<u8>> {
+    out: W,
+    /// Bytes written so far.
+    pos: u64,
+    /// Largest file this writer writes ([`MAX_BYTES`]).
+    limit: u64,
+    /// Byte offset of object `i + 1`.
+    offsets: Vec<u64>,
+    kids: Vec<usize>,
+    presentation: Option<Presentation>,
+    /// The last ICC profile written and its object, reused by the next page with the same one.
+    icc: Option<(Vec<u8>, usize)>,
+    /// The overprint ExtGState every plate is painted with, once a page has plates.
+    overprint: Option<usize>,
+    /// Each page's `/PageLabels` name (empty for none).
+    labels: Vec<String>,
+    /// The catalog's `/Metadata` packet.
+    xmp: Option<String>,
+}
+
+impl Default for PdfWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PdfWriter {
+    /// A writer that builds the file in memory.
+    pub fn new() -> Self {
+        #[allow(clippy::expect_used, clippy::let_and_return)]
+        let w = Self::to(Vec::new()).expect("a Vec takes the header and the font object, far below MAX_BYTES");
+        w
+    }
+
+    /// An in-memory writer whose file is a full-screen presentation (see [`PdfWriter::presentation_to`]).
+    pub fn presentation(p: Presentation) -> std::result::Result<Self, IoError> {
+        Self::presentation_to(Vec::new(), p)
+    }
+}
+
+impl<W: Write> PdfWriter<W> {
+    /// A writer that streams the file into `out` as pages arrive.
+    pub fn to(out: W) -> std::result::Result<Self, IoError> {
+        let mut w = Self {
+            out,
+            pos: 0,
+            limit: MAX_BYTES,
+            offsets: vec![0, 0],
+            kids: Vec::new(),
+            presentation: None,
+            icc: None,
+            overprint: None,
+            labels: Vec::new(),
+            xmp: None,
+        };
+        w.put(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")?;
+        // 1 and 2 (catalog, page tree) are written by `finish`.
+        w.obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")?;
+        Ok(w)
+    }
+
+    /// A streaming writer whose file is a full-screen presentation. An `advance` that isn't a
+    /// positive number of seconds up to [`MAX_ADVANCE`] is refused.
+    pub fn presentation_to(out: W, p: Presentation) -> std::result::Result<Self, IoError> {
+        if let Some(s) = p.advance
+            && !(s.is_finite() && s > 0.0 && s <= MAX_ADVANCE)
+        {
+            return Err(IoError::Unsupported(format!("Advance Every takes more than 0 and at most {MAX_ADVANCE} seconds, not {s}")));
+        }
+        let mut w = Self::to(out)?;
+        w.presentation = Some(p);
+        Ok(w)
+    }
+
+    /// Pages added so far.
+    pub fn pages(&self) -> usize {
+        self.kids.len()
+    }
+
+    /// Embed `xmp` as the catalog's `/Metadata` stream (unfiltered, as the XMP specification asks
+    /// of a packet in a PDF, so a reader can find it by scanning for the packet header).
+    pub fn set_metadata(&mut self, xmp: Option<String>) {
+        self.xmp = xmp;
+    }
+
+    /// Append `bytes`, refusing to grow the file past its limit ([`MAX_BYTES`]).
+    fn put(&mut self, bytes: &[u8]) -> std::result::Result<(), IoError> {
+        let end = self.pos.saturating_add(bytes.len() as u64);
+        if end > self.limit {
+            return Err(IoError::Unsupported(format!("the PDF would be larger than {} bytes, the most its cross-reference table can address", self.limit)));
+        }
+        self.out.write_all(bytes).map_err(|e| IoError::Unsupported(format!("writing the PDF failed: {e}")))?;
+        self.pos = end;
+        Ok(())
+    }
+
+    /// Write `body` as the next object; returns its number.
+    fn obj(&mut self, body: &[u8]) -> std::result::Result<usize, IoError> {
+        self.offsets.push(self.pos);
+        let n = self.offsets.len();
+        self.write_obj(n, body)?;
+        Ok(n)
+    }
+
+    /// Write object `n`, whose number was reserved earlier, here.
+    fn write_at(&mut self, n: usize, body: &[u8]) -> std::result::Result<(), IoError> {
+        let pos = self.pos;
+        if let Some(slot) = n.checked_sub(1).and_then(|i| self.offsets.get_mut(i)) {
+            *slot = pos;
+        }
+        self.write_obj(n, body)
+    }
+
+    fn write_obj(&mut self, n: usize, body: &[u8]) -> std::result::Result<(), IoError> {
+        self.put(format!("{n} 0 obj\n").as_bytes())?;
+        self.put(body)?;
+        self.put(b"\nendobj\n")
+    }
+
+    fn stream(&mut self, dict: &str, data: &[u8]) -> std::result::Result<usize, IoError> {
+        self.offsets.push(self.pos);
+        let n = self.offsets.len();
+        self.put(format!("{n} 0 obj\n<< {dict} /Length {} >>\nstream\n", data.len()).as_bytes())?;
+        self.put(data)?;
+        self.put(b"\nendstream\nendobj\n")?;
+        Ok(n)
+    }
+
+    /// Append `page`. Its samples are compressed and written here, so the caller can drop them
+    /// right after.
+    pub fn add_page(&mut self, page: &PrintPage) -> std::result::Result<(), IoError> {
+        self.add_page_with_vectors(page, "", None)
+    }
+
+    /// [`PdfWriter::add_page`] with vector operators drawn over the image (live shapes and text,
+    /// see [`collect_vectors`]) and the selection font their text uses.
+    fn add_page_with_vectors(
+        &mut self,
+        page: &PrintPage,
+        vectors: &str,
+        selection_font: Option<&selection::SelectionFont>,
+    ) -> std::result::Result<(), IoError> {
+        if self.kids.len() >= MAX_PAGES {
+            return Err(IoError::Unsupported(format!("a PDF holds at most {MAX_PAGES} pages")));
+        }
+        if let Some(img) = &page.image {
+            if img.width == 0 || img.height == 0 || !matches!(img.channels, 1 | 3 | 4) {
+                return Err(IoError::Unsupported("a PDF page needs a non-empty gray, RGB or CMYK image".into()));
+            }
+            let samples = (img.width as usize).saturating_mul(img.height as usize).saturating_mul(img.channels);
+            if img.encoding == ImageEncoding::Flate && img.data.len() != samples {
+                return Err(IoError::Unsupported(format!("page image has {} bytes, expected {samples}", img.data.len())));
+            }
+        } else if page.plates.is_empty() {
+            return Err(IoError::Unsupported("a PDF page needs an image or spot plates".into()));
+        }
+        for p in &page.plates {
+            let samples = (p.width as usize).saturating_mul(p.height as usize);
+            if p.width == 0 || p.height == 0 || p.data.len() != samples {
+                return Err(IoError::Unsupported(format!("spot plate {:?} has {} bytes for {}×{} samples", p.name, p.data.len(), p.width, p.height)));
+            }
+        }
         let (pw, ph) = page.paper;
         let (x, y, w, h) = page.rect;
+        // Numbers are known before writing, handed out in the order the objects are written: page,
+        // contents, image, the profile unless the last one is reused, the plates, the overprint
+        // state the first time plates appear, then the selection font's three objects.
+        let mut next = self.offsets.len() + 1;
+        let mut take = |present: bool| {
+            let o = present.then_some(next);
+            next += usize::from(present);
+            o
+        };
+        let n = take(true).unwrap_or_default();
+        let contents = take(true).unwrap_or_default();
+        let image = take(page.image.is_some());
+        let profile = page.image.as_ref().and_then(|i| i.icc.as_deref());
+        let reused_icc = match (profile, &self.icc) {
+            (Some(p), Some((last, o))) if p == last.as_slice() => Some(*o),
+            _ => None,
+        };
+        let new_icc = take(profile.is_some() && reused_icc.is_none());
+        let icc = reused_icc.or(new_icc);
+        let plates: Vec<usize> = page.plates.iter().filter_map(|_| take(true)).collect();
+        let new_gs = take(!page.plates.is_empty() && self.overprint.is_none());
+        let gs = self.overprint.or(new_gs);
+        let selection_base = next;
+        let mut show = String::new();
+        if let Some(p) = self.presentation {
+            if let Some(s) = p.advance {
+                show.push_str(&format!(" /Dur {s}"));
+            }
+            if let Some(t) = p.transition.dict(self.kids.len()) {
+                show.push_str(&format!(" /Trans {t}"));
+            }
+        }
         let mut xobjects = String::new();
-        if let Some(o) = objects.image {
+        if let Some(o) = image {
             xobjects.push_str(&format!("/Im0 {o} 0 R "));
         }
-        for (k, o) in objects.plates.iter().enumerate() {
+        for (k, o) in plates.iter().enumerate() {
             xobjects.push_str(&format!("/Sp{k} {o} 0 R "));
         }
-        let ext_gstate = match gs_obj {
+        let ext_gstate = match gs {
             Some(o) if !page.plates.is_empty() => format!("/ExtGState << /GS0 {o} 0 R >> "),
             _ => String::new(),
         };
-        obj(
-            &mut out,
+        let select = if selection_font.is_some() { format!(" /FSelect {selection_base} 0 R") } else { String::new() };
+        self.obj(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << {xobjects}>> {ext_gstate}/Font << /F1 {font_obj} 0 R /FSelect {selection_base} 0 R >> >> /Contents {} 0 R >>",
-                objects.contents
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << {xobjects}>> {ext_gstate}/Font << /F1 3 0 R{select} >> >> /Contents {contents} 0 R{show} >>"
             )
             .as_bytes(),
-        );
+        )?;
+        self.kids.push(n);
+        self.labels.push(page.page_label.clone().unwrap_or_default());
         // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
         let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\n");
-        if objects.image.is_some() {
+        if image.is_some() {
             content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
         }
-        if let Some(v) = vectors.get(i) {
-            content.push_str(v);
-        }
+        content.push_str(vectors);
         // Each plate overprints what is already on the page: with `/OP true` a Separation paints
         // its own colorant only, leaving the others (and the composite) as they are.
         for k in 0..page.plates.len() {
@@ -303,22 +582,26 @@ fn print_pdf_pages(
         if let Some(d) = page.description.as_deref().filter(|d| !d.is_empty()) {
             content.push_str(&format!("BT /F1 8 Tf 0 g {:.2} {:.2} Td {} Tj ET\n", x, y - pad - 8.0, pdf_string(d)));
         }
-        let c = deflate(content.as_bytes());
-        let mut body = format!("<< /Length {} /Filter /FlateDecode >>\nstream\n", c.len()).into_bytes();
-        body.extend_from_slice(&c);
-        body.extend_from_slice(b"\nendstream");
-        obj(&mut out, &body);
+        self.stream("/Filter /FlateDecode", &deflate(content.as_bytes()))?;
         if let Some(img) = &page.image {
             let device = match img.channels {
                 1 => "/DeviceGray",
                 4 => "/DeviceCMYK",
                 _ => "/DeviceRGB",
             };
-            let cs = match icc_obj {
-                Some(o) if img.icc.is_some() => format!("[/ICCBased {o} 0 R]"),
-                _ => device.to_string(),
+            let cs = match icc {
+                Some(o) => format!("[/ICCBased {o} 0 R]"),
+                None => device.to_string(),
             };
-            obj(&mut out, &image_object(img.width, img.height, &cs, &img.data));
+            let dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {cs} /BitsPerComponent 8", img.width, img.height);
+            match img.encoding {
+                ImageEncoding::Flate => self.stream(&format!("{dict} /Filter /FlateDecode"), &deflate(&img.data))?,
+                ImageEncoding::Jpeg => self.stream(&format!("{dict} /Filter /DCTDecode"), &img.data)?,
+            };
+            if let (Some(o), Some(profile)) = (new_icc, &img.icc) {
+                self.stream(&format!("/N {} /Alternate {device} /Filter /FlateDecode", img.channels), &deflate(profile))?;
+                self.icc = Some((profile.clone(), o));
+            }
         }
         for p in &page.plates {
             // A tint transform from the colorant's density to its alternate: 0 → paper, 1 → `cmyk`
@@ -330,58 +613,144 @@ fn print_pdf_pages(
             // or colour-key mask would let plain viewers show every plate, but Illustrator reports
             // an explicit image mask as an unknown imaging construct, and Quartz draws nothing for a
             // colour-key-masked Separation image.)
-            obj(&mut out, &image_object(p.width, p.height, &cs, &p.data));
+            let dict =
+                format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {cs} /BitsPerComponent 8 /Filter /FlateDecode", p.width, p.height);
+            self.stream(&dict, &deflate(&p.data))?;
+        }
+        if let Some(o) = new_gs {
+            self.obj(b"<< /Type /ExtGState /OP true /op true /OPM 1 >>")?;
+            self.overprint = Some(o);
+        }
+        if let Some(font) = selection_font {
+            for body in font.objects(selection_base) {
+                self.obj(&body)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The finished file: the page tree, the cross-reference table and the trailer. Returns the
+    /// sink (the bytes, for a `Vec`).
+    pub fn finish(mut self) -> std::result::Result<W, IoError> {
+        let kids: Vec<String> = self.kids.iter().map(|k| format!("{k} 0 R")).collect();
+        let tree = format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), self.kids.len());
+        self.write_at(2, tree.as_bytes())?;
+        let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
+        if let Some(p) = self.presentation {
+            catalog.push_str(" /PageMode /FullScreen");
+            if p.loop_after_last {
+                let script = self.obj(b"<< /S /JavaScript /JS (app.fs.loop = true;) >>")?;
+                let names = self.obj(format!("<< /Names [(PhotoCraft Presentation) {script} 0 R] >>").as_bytes())?;
+                catalog.push_str(&format!(" /Names << /JavaScript {names} 0 R >>"));
+            }
+        }
+        if let Some(xmp) = self.xmp.take() {
+            let n = self.stream("/Type /Metadata /Subtype /XML", xmp.as_bytes())?;
+            catalog.push_str(&format!(" /Metadata {n} 0 R"));
+        }
+        // A label tree is written only for a non-empty name: an all-empty tree would be `/Nums []`.
+        // Every page then gets an entry: a number-tree range runs until the next key, so omitting
+        // an empty name would make that page inherit the previous page's label. An empty
+        // dictionary gives the page the default (decimal) label instead.
+        if self.labels.iter().any(|l| !l.is_empty()) {
+            let nums = self
+                .labels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| if l.is_empty() { format!("{i} << >>") } else { format!("{i} << /P {} >>", pdf_unicode_string(l)) })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let o = self.obj(format!("<< /Nums [{nums}] >>").as_bytes())?;
+            catalog.push_str(&format!(" /PageLabels {o} 0 R"));
+        }
+        catalog.push_str(" >>");
+        self.write_at(1, catalog.as_bytes())?;
+        let xref = self.pos;
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", self.offsets.len() + 1);
+        for o in &self.offsets {
+            table.push_str(&format!("{o:010} 00000 n \n"));
+        }
+        table.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", self.offsets.len() + 1));
+        // The table may pass MAX_BYTES: every offset in it is already below it.
+        self.out.write_all(table.as_bytes()).map_err(|e| IoError::Unsupported(format!("writing the PDF failed: {e}")))?;
+        self.out.flush().map_err(|e| IoError::Unsupported(format!("writing the PDF failed: {e}")))?;
+        Ok(self.out)
+    }
+}
+
+/// A one-page PDF.
+pub fn print_pdf(page: &PrintPage) -> std::result::Result<Vec<u8>, IoError> {
+    let mut w = PdfWriter::new();
+    w.add_page(page)?;
+    w.finish()
+}
+
+/// What [`flat_page`] does with a mode PDF has no device space for (Lab, Indexed, Duotone,
+/// Multichannel…).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OtherModes {
+    /// Refuse, naming Image › Mode (File › Save As, where the user chose the format).
+    Refuse,
+    /// Composite to RGB and drop the profile (pages of a larger export: artboards, presentations).
+    AsRgb,
+}
+
+/// `doc` flattened over white paper as one page at its print size (pixels ÷ resolution × 72 pt).
+/// RGB, Grayscale and CMYK keep their channels and embedded profile.
+pub fn flat_page(doc: &Document, others: OtherModes) -> std::result::Result<PrintPage, IoError> {
+    flat_page_over(doc, others, 1.0)
+}
+
+/// [`flat_page`] with transparency showing `paper`, a gray level (1 = white, 0 = black): the
+/// same light in RGB and Gray, and black ink alone in CMYK (PDF Presentation's Background).
+pub fn flat_page_over(doc: &Document, others: OtherModes, paper: f32) -> std::result::Result<PrintPage, IoError> {
+    let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
+    if w == 0 || h == 0 {
+        return Err(IoError::Unsupported("PDF needs a document with non-zero width and height; nothing was written".into()));
+    }
+    let profile = || doc.icc_profile.as_ref().map(|p| p.to_vec());
+    let (mode, device, icc) = match doc.mode {
+        ColorMode::Rgb => (ColorMode::Rgb, 3, profile()),
+        ColorMode::Grayscale => (ColorMode::Grayscale, 1, profile()),
+        ColorMode::Cmyk => (ColorMode::Cmyk, 4, profile()),
+        _ if others == OtherModes::AsRgb => (ColorMode::Rgb, 3, None),
+        m => return Err(IoError::Unsupported(format!("PDF saves RGB, Grayscale and CMYK documents; {m:?} needs converting to RGB first (Image > Mode)"))),
+    };
+    let fmt = PixelFormat::new(mode, doc.pixel_format().sample, true);
+    let n = fmt.channels().max(1);
+    let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
+    let surface = photocraft_compose::flatten_to_surface(doc, fmt, None);
+    let values = surface.read_region(canvas);
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    // Straight alpha, composited here over paper: its light in RGB/Gray (1 = full light), and in
+    // CMYK no C, M or Y with the matching K (0 = no ink).
+    let paper = if paper.is_finite() { paper.clamp(0.0, 1.0) } else { 1.0 };
+    let under: Vec<f32> = if mode == ColorMode::Cmyk { vec![0.0, 0.0, 0.0, 1.0 - paper] } else { vec![paper; device] };
+    let mut data = Vec::with_capacity((w * h).saturating_mul(device));
+    for px in values.chunks(n) {
+        let a = px.last().copied().unwrap_or(1.0).clamp(0.0, 1.0);
+        for (v, u) in px.iter().zip(&under) {
+            data.push(to8(v * a + u * (1.0 - a)));
         }
     }
-    obj(&mut out, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
-    if let Some((icc, channels)) = icc {
-        let device = match channels {
-            1 => "/DeviceGray",
-            4 => "/DeviceCMYK",
-            _ => "/DeviceRGB",
-        };
-        let z = deflate(icc);
-        let mut body = format!("<< /N {channels} /Alternate {device} /Filter /FlateDecode /Length {} >>\nstream\n", z.len()).into_bytes();
-        body.extend_from_slice(&z);
-        body.extend_from_slice(b"\nendstream");
-        obj(&mut out, &body);
-    }
-    if gs_obj.is_some() {
-        obj(&mut out, b"<< /Type /ExtGState /OP true /op true /OPM 1 >>");
-    }
-    if let Some(xmp) = xmp {
-        // Unfiltered, as the XMP specification asks of a packet in a PDF, so a reader can find it
-        // by scanning for the packet header.
-        let mut body = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n", xmp.len()).into_bytes();
-        body.extend_from_slice(xmp.as_bytes());
-        body.extend_from_slice(b"\nendstream");
-        obj(&mut out, &body);
-    }
-    for body in &selection_objects {
-        obj(&mut out, body);
-    }
-    if labels_obj.is_some() {
-        // Every page gets an entry: a number-tree range runs until the next key, so omitting an
-        // empty name would make that page inherit the previous page's label. An empty
-        // dictionary gives the page the default (decimal) label instead.
-        let nums = pages
-            .iter()
-            .enumerate()
-            .map(|(i, p)| match p.page_label.as_deref().filter(|label| !label.is_empty()) {
-                Some(label) => format!("{i} << /P {} >>", pdf_unicode_string(label)),
-                None => format!("{i} << >>"),
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        obj(&mut out, format!("<< /Nums [{nums}] >>").as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
-    for o in &offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
-    Ok(out)
+    let image = PrintImage { width: doc.size.width, height: doc.size.height, channels: device, data, icc, encoding: ImageEncoding::Flate };
+    let (pw, ph) = print_size(doc);
+    Ok(PrintPage {
+        paper: (pw, ph),
+        image: Some(image),
+        rect: (0.0, 0.0, pw, ph),
+        marks: Marks::default(),
+        description: None,
+        label: None,
+        page_label: None,
+        plates: Vec::new(),
+    })
+}
+
+/// `doc`'s size in points at its resolution.
+pub fn print_size(doc: &Document) -> (f64, f64) {
+    let dpi = f64::from(doc.resolution_dpi.max(1.0));
+    (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi)
 }
 
 /// `s` as XML character data.
@@ -686,7 +1055,7 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
                 data.push(to8(v * a + paper * (1.0 - a)));
             }
         }
-        PrintImage { width: rect.width(), height: rect.height(), channels: device, data, icc: icc.clone() }
+        PrintImage { width: rect.width(), height: rect.height(), channels: device, data, icc: icc.clone(), encoding: ImageEncoding::Flate }
     };
     let page_of = |image: Option<PrintImage>, rect: photocraft_geom::Rect, page_label: Option<String>| {
         let (pw, ph) = (f64::from(rect.width()) * 72.0 / dpi, f64::from(rect.height()) * 72.0 / dpi);
@@ -797,7 +1166,17 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    Ok(ExportResult { bytes: print_pdf_pages(&pages, &vectors, &selection_font, xmp.as_deref(), ctl)?, warnings })
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let mut out = PdfWriter::new();
+    out.set_metadata(xmp);
+    for (i, page) in pages.iter().enumerate() {
+        // Whole-document pages may carry live vectors and their selection font; artboard pages
+        // are raster only.
+        let v = vectors.get(i).map(String::as_str).unwrap_or_default();
+        let font = artboards.is_empty().then_some(&selection_font);
+        out.add_page_with_vectors(page, v, font)?;
+    }
+    Ok(ExportResult { bytes: out.finish()?, warnings })
 }
 
 #[cfg(test)]

@@ -345,6 +345,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
     let mut outcome: Option<bool> = None;
     match d.kind {
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
+        _ if crate::pdf_presentation_ui::owns(fields) => crate::pdf_presentation_ui::body(app, ui, fields, d.id),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
         _ if crate::color_picker_ui::owns(fields) => {
@@ -489,7 +490,10 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && merge_channels_ui::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && merge_channels_ui::can_confirm(fields)
+            && crate::pdf_presentation_ui::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -575,6 +579,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Replace")
     } else if d.fields.contains_key("__export") {
         tl!("Export")
+    } else if crate::pdf_presentation_ui::owns(&d.fields) {
+        tl!("Save…")
     } else {
         crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
     }
@@ -918,6 +924,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::rasterize_prompt::owns,
     crate::duplicate_layer_ui::owns,
     crate::stack_dialog::owns,
+    crate::pdf_presentation_ui::owns,
     crate::tool_reset::owns,
     crate::crop_presets::owns,
     crate::variables_ui::owns,
@@ -1149,6 +1156,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 /// The rest of the command dialogs: files, colour, preferences and export, then any other command.
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::pdf_presentation_ui::owns(&d.fields) => crate::pdf_presentation_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
@@ -1336,6 +1344,7 @@ pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
 pub(crate) mod pattern_fill_ui;
+pub mod pdf_presentation_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;

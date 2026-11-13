@@ -105,7 +105,7 @@ fn topmost_solid_shape_is_exported_as_a_vector_path() {
     d.layers.push(Layer::new("Shape", LayerContent::Shape(shape)));
     let out = export(&d, true, &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
-    let content = stream_after(&out.bytes, "/Contents 4 0 R");
+    let content = stream_after(&out.bytes, "/Contents 5 0 R");
     let content = String::from_utf8(content).unwrap();
     assert!(content.contains("1 0 0 rg\n"));
     assert!(content.contains("0 0 m\n"));
@@ -131,7 +131,7 @@ fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
     d.layers.push(Layer::new("Text", LayerContent::Text(text)));
     let out = export(&d, true, &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
-    let content = stream_after(&out.bytes, "/Contents 4 0 R");
+    let content = stream_after(&out.bytes, "/Contents 5 0 R");
     let content = String::from_utf8(content).unwrap();
     assert!(content.contains("/Span << /ActualText <FEFF"));
     assert!(content.contains("0 0 1 rg"));
@@ -162,7 +162,7 @@ fn topmost_shape_and_text_layers_are_both_exported_as_vectors() {
     d.layers.push(Layer::new("Text", LayerContent::Text(text)));
     let out = export(&d, true, &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
-    let content = stream_after(&out.bytes, "/Contents 4 0 R");
+    let content = stream_after(&out.bytes, "/Contents 5 0 R");
     let content = String::from_utf8(content).unwrap();
     let red = content.find("1 0 0 rg\n").expect("the shape fill");
     let green = content.find("0 1 0 rg\n").expect("the text fill");
@@ -208,6 +208,226 @@ fn other_modes_are_refused_with_an_actionable_error() {
     let e = export(&d, true, &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("RGB") && e.contains("Mode"), "{e}");
     assert!(crate::export(&d, "x.pdf", &crate::ExportOptions::default()).is_err());
+}
+
+// ---------- Multi-page (FILE-215-10) ----------
+
+fn page_of(mode: ColorMode, w: u32, h: u32, dpi: f32) -> PrintPage {
+    let mut d = doc(mode);
+    d.size = Size { width: w, height: h };
+    let fmt = PixelFormat::new(mode, SampleType::F32, true);
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, w as i32, h as i32, &paper(mode))))];
+    d.resolution_dpi = dpi;
+    flat_page(&d, OtherModes::Refuse).unwrap()
+}
+
+#[test]
+fn pages_keep_their_order_size_and_colour_space() {
+    let mut w = PdfWriter::new();
+    w.add_page(&page_of(ColorMode::Rgb, 72, 144, 72.0)).unwrap();
+    w.add_page(&page_of(ColorMode::Cmyk, 300, 150, 300.0)).unwrap();
+    w.add_page(&page_of(ColorMode::Grayscale, 10, 10, 72.0)).unwrap();
+    assert_eq!(w.pages(), 3);
+    let pdf = w.finish().unwrap();
+    check_structure(&pdf);
+    assert!(has(&pdf, "/Kids [4 0 R 7 0 R 10 0 R] /Count 3"), "page order = add order");
+    let text = String::from_utf8_lossy(&pdf);
+    let boxes: Vec<&str> = text.match_indices("/MediaBox [").map(|(i, _)| &text[i..i + text[i..].find(']').unwrap() + 1]).collect();
+    assert_eq!(boxes, ["/MediaBox [0 0 72.00 144.00]", "/MediaBox [0 0 72.00 36.00]", "/MediaBox [0 0 10.00 10.00]"], "each page at its own resolution");
+    assert!(has(&pdf, "/ColorSpace /DeviceCMYK"), "CMYK page stays CMYK");
+    assert!(has(&pdf, "/ColorSpace /DeviceGray"));
+    assert_eq!(text.matches("/BaseFont /Helvetica").count(), 1, "one shared font");
+}
+
+#[test]
+fn each_page_carries_its_own_profile() {
+    let mut a = doc(ColorMode::Rgb);
+    a.icc_profile = Some(std::sync::Arc::new(vec![1; 8]));
+    let b = doc(ColorMode::Rgb);
+    let mut c = doc(ColorMode::Rgb);
+    c.icc_profile = Some(std::sync::Arc::new(vec![2; 8]));
+    let mut w = PdfWriter::new();
+    for d in [&a, &b, &c] {
+        w.add_page(&flat_page(d, OtherModes::Refuse).unwrap()).unwrap();
+    }
+    let pdf = w.finish().unwrap();
+    check_structure(&pdf);
+    // a: 4-7 (with ICC 7), b: 8-10, c: 11-14 (with ICC 14).
+    assert!(has(&pdf, "[/ICCBased 7 0 R]") && has(&pdf, "[/ICCBased 14 0 R]"));
+    assert!(has(&pdf, "/Kids [4 0 R 8 0 R 11 0 R]"));
+}
+
+#[test]
+fn pages_with_the_same_profile_share_one_copy() {
+    // Artboard pages of one document all carry its profile; it is written once, not per page.
+    let mut a = doc(ColorMode::Rgb);
+    a.icc_profile = Some(std::sync::Arc::new(vec![1; 8]));
+    let mut w = PdfWriter::new();
+    for _ in 0..3 {
+        w.add_page(&flat_page(&a, OtherModes::Refuse).unwrap()).unwrap();
+    }
+    let pdf = w.finish().unwrap();
+    check_structure(&pdf);
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/N 3 /Alternate").count(), 1, "one profile stream");
+    assert_eq!(text.matches("[/ICCBased 7 0 R]").count(), 3, "every page's image refers to it");
+}
+
+#[test]
+fn other_modes_become_rgb_pages_when_asked() {
+    let p = flat_page(&doc(ColorMode::Lab), OtherModes::AsRgb).unwrap();
+    assert_eq!(p.image.as_ref().unwrap().channels, 3);
+    assert!(p.image.as_ref().unwrap().icc.is_none(), "a Lab profile can't describe RGB samples");
+    assert!(flat_page(&doc(ColorMode::Lab), OtherModes::Refuse).is_err());
+}
+
+#[test]
+fn jpeg_pages_embed_the_stream_as_is() {
+    let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+    let image = PrintImage { width: 2, height: 3, channels: 3, data: jpeg.clone(), icc: None, encoding: ImageEncoding::Jpeg };
+    let page = PrintPage {
+        paper: (2.0, 3.0),
+        image: Some(image),
+        rect: (0.0, 0.0, 2.0, 3.0),
+        marks: Marks::default(),
+        description: None,
+        label: None,
+        page_label: None,
+        plates: Vec::new(),
+    };
+    let pdf = print_pdf(&page).unwrap();
+    check_structure(&pdf);
+    let want = b"/Filter /DCTDecode /Length 4 >>\nstream\n\xff\xd8\xff\xd9";
+    assert!(pdf.windows(want.len()).any(|w| w == want), "embedded unchanged");
+}
+
+#[test]
+fn pages_stream_into_the_sink_as_they_are_added() {
+    // Each page is in the sink once `add_page` returns: nothing waits for `finish`.
+    let mut sink = Vec::new();
+    let mut w = PdfWriter::to(&mut sink).unwrap();
+    w.add_page(&page_of(ColorMode::Rgb, 8, 8, 72.0)).unwrap();
+    w.add_page(&page_of(ColorMode::Grayscale, 4, 4, 72.0)).unwrap();
+    w.finish().unwrap();
+    let mut mem = PdfWriter::new();
+    mem.add_page(&page_of(ColorMode::Rgb, 8, 8, 72.0)).unwrap();
+    mem.add_page(&page_of(ColorMode::Grayscale, 4, 4, 72.0)).unwrap();
+    assert_eq!(sink, mem.finish().unwrap(), "streamed and in-memory files are the same bytes");
+    check_structure(&sink);
+}
+
+#[test]
+fn a_file_past_the_limit_is_refused_before_its_offsets_overflow() {
+    // The xref table writes offsets in ten digits: the writer stops at its limit (MAX_BYTES,
+    // below 10^10) instead of writing an eleven-digit entry. A small limit stands in for it.
+    const { assert!(MAX_BYTES < 10_000_000_000) };
+    let mut w = PdfWriter::new();
+    w.limit = 2_000;
+    w.add_page(&page_of(ColorMode::Rgb, 4, 4, 72.0)).unwrap();
+    let mut noisy = page_of(ColorMode::Rgb, 64, 64, 72.0);
+    noisy.image.as_mut().unwrap().data = (0..noisy.image.as_mut().unwrap().data.len()).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+    let e = w.add_page(&noisy).unwrap_err().to_string();
+    assert!(e.contains("larger than 2000 bytes"), "{e}");
+}
+
+#[test]
+fn bad_pages_are_refused_not_written() {
+    let mut w = PdfWriter::new();
+    let mut p = page_of(ColorMode::Rgb, 4, 2, 72.0);
+    p.image.as_mut().unwrap().data.pop();
+    assert!(w.add_page(&p).is_err(), "short sample buffer");
+    p.image.as_mut().unwrap().channels = 2;
+    assert!(w.add_page(&p).is_err(), "no 2-channel device space");
+    p.image.as_mut().unwrap().width = 0;
+    assert!(w.add_page(&p).is_err());
+    assert_eq!(w.pages(), 0);
+    let pdf = w.finish().unwrap();
+    check_structure(&pdf);
+    assert!(has(&pdf, "/Kids [] /Count 0"));
+}
+
+#[test]
+fn transparency_shows_the_chosen_background() {
+    let empty = |mode| {
+        let mut d = doc(mode);
+        d.layers.clear();
+        d
+    };
+    let black = flat_page_over(&empty(ColorMode::Rgb), OtherModes::Refuse, 0.0).unwrap();
+    assert_eq!(black.image.as_ref().unwrap().data, vec![0; 4 * 2 * 3]);
+    let gray = flat_page_over(&empty(ColorMode::Grayscale), OtherModes::Refuse, 0.5).unwrap();
+    assert_eq!(gray.image.as_ref().unwrap().data, vec![128; 4 * 2]);
+    let cmyk = flat_page_over(&empty(ColorMode::Cmyk), OtherModes::Refuse, 0.0).unwrap();
+    assert_eq!(&cmyk.image.as_ref().unwrap().data[..4], &[0, 0, 0, 255], "black paper is K ink only");
+    // Opaque pixels are untouched by the background; NaN falls back to white.
+    assert_eq!(flat_page_over(&doc(ColorMode::Rgb), OtherModes::Refuse, 0.0).unwrap().image.unwrap().data, vec![255; 4 * 2 * 3]);
+    assert_eq!(flat_page_over(&empty(ColorMode::Rgb), OtherModes::Refuse, f32::NAN).unwrap().image.unwrap().data, vec![255; 4 * 2 * 3]);
+}
+
+// ---------- Save As Presentation (#6637) ----------
+
+fn deck(p: Presentation, pages: usize) -> String {
+    let mut w = PdfWriter::presentation(p).unwrap();
+    for _ in 0..pages {
+        w.add_page(&page_of(ColorMode::Rgb, 8, 8, 72.0)).unwrap();
+    }
+    let pdf = w.finish().unwrap();
+    check_structure(&pdf);
+    String::from_utf8_lossy(&pdf).into_owned()
+}
+
+#[test]
+fn a_presentation_opens_full_screen_with_timing_and_transitions() {
+    let text = deck(Presentation { advance: Some(2.5), loop_after_last: false, transition: Transition::WipeDown }, 3);
+    assert!(text.contains("/Type /Catalog /Pages 2 0 R /PageMode /FullScreen >>"), "full screen, no script");
+    assert_eq!(text.matches("/Dur 2.5").count(), 3, "every page advances");
+    assert_eq!(text.matches("/Trans << /Type /Trans /S /Wipe /Di 270 /D 1 >>").count(), 3);
+    assert!(!text.contains("JavaScript"));
+    // Without timing or a transition, the pages carry neither.
+    let plain = deck(Presentation::default(), 2);
+    assert!(plain.contains("/PageMode /FullScreen"));
+    assert!(!plain.contains("/Dur") && !plain.contains("/Trans"));
+    // A plain multi-page document is not a presentation.
+    let mut w = PdfWriter::new();
+    w.add_page(&page_of(ColorMode::Rgb, 8, 8, 72.0)).unwrap();
+    let doc = String::from_utf8_lossy(&w.finish().unwrap()).into_owned();
+    assert!(doc.contains("<< /Type /Catalog /Pages 2 0 R >>") && !doc.contains("/PageMode"));
+}
+
+#[test]
+fn loop_after_last_page_is_a_document_script() {
+    let text = deck(Presentation { advance: None, loop_after_last: true, transition: Transition::None }, 2);
+    assert!(text.contains("/S /JavaScript /JS (app.fs.loop = true;)"));
+    assert!(text.contains("/Names << /JavaScript "), "registered in the document's name tree");
+}
+
+#[test]
+fn every_transition_writes_a_valid_style() {
+    for t in Transition::ALL {
+        assert_eq!(Transition::from_id(t.id()), Some(t));
+        let text = deck(Presentation { advance: None, loop_after_last: false, transition: t }, 4);
+        let styles: Vec<&str> = text.match_indices("/Type /Trans /S /").map(|(i, m)| text[i + m.len()..].split_whitespace().next().unwrap()).collect();
+        if t == Transition::None {
+            assert!(styles.is_empty());
+            continue;
+        }
+        assert_eq!(styles.len(), 4, "{t:?}");
+        for s in &styles {
+            assert!(["Split", "Blinds", "Box", "Wipe", "Dissolve", "Glitter"].contains(s), "{t:?}: {s}");
+        }
+        if t == Transition::Random {
+            assert!(styles.iter().any(|s| *s != styles[0]), "Random varies from page to page: {styles:?}");
+        }
+    }
+    assert_eq!(Transition::from_id("fade"), None);
+}
+
+#[test]
+fn advance_must_be_a_sensible_number_of_seconds() {
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, MAX_ADVANCE + 1.0] {
+        assert!(PdfWriter::presentation(Presentation { advance: Some(bad), ..Default::default() }).is_err(), "{bad}");
+    }
+    assert!(PdfWriter::presentation(Presentation { advance: Some(MAX_ADVANCE), ..Default::default() }).is_ok());
 }
 
 // ---- Spot plates (FILE-215-17) ----
@@ -504,7 +724,7 @@ fn unicode_text_over_a_photo_extracts_through_a_pdf_reader() {
     assert!(has(&pdf, "/Subtype /Type3"));
     assert!(has(&pdf, "/ToUnicode"));
     assert_eq!(&stream_after(&pdf, "/Subtype /Image")[..3], &[51, 102, 153]);
-    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 5 0 R")).unwrap();
     assert!(!content.contains("/ActualText <FEFF00630061006600E9"), "selection spans are clusters, not the entire layer");
 }
 
@@ -538,7 +758,7 @@ fn text_with_compositing_or_a_profile_stays_in_the_raster_backdrop() {
         }
         d.layers.push(layer);
         let pdf = export(&d, true, &Interrupt::NONE).unwrap().bytes;
-        let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+        let content = String::from_utf8(stream_after(&pdf, "/Contents 5 0 R")).unwrap();
         assert!(!content.contains("/ActualText"), "case {case} must retain the raster composite");
         assert!(stream_after(&pdf, "/Subtype /Image").iter().any(|v| *v != 255), "case {case} must retain visible text");
         if case == 4 {
@@ -578,7 +798,7 @@ fn text_outside_the_vector_prefix_does_not_consume_the_selection_font() {
         let pdf = export(&d, true, &Interrupt::NONE).unwrap().bytes;
         let parsed = lopdf::Document::load_mem(&pdf).unwrap();
         assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Hi", "case {case}: only the top text is selectable");
-        let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+        let content = String::from_utf8(stream_after(&pdf, "/Contents 5 0 R")).unwrap();
         assert!(content.contains("/ActualText <FEFF0048"), "case {case}: the top text must stay vector:\n{content}");
         assert!(content.contains("/FSelect"), "case {case}");
     }
@@ -628,7 +848,7 @@ fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
     ));
     let pdf = export(&d, true, &Interrupt::NONE).unwrap().bytes;
     check_structure(&pdf);
-    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 5 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF0048"), "the upper text stays vector:\n{content}");
     assert!(content.contains("0 1 0 rg"), "the upper text keeps its fill:\n{content}");
     assert!(content.contains("/FSelect"), "the selection font survives the refused layer");
@@ -651,7 +871,7 @@ fn multiline_text_keeps_its_paragraph_breaks_in_the_selection() {
     let pdf = export(&d, true, &Interrupt::NONE).unwrap().bytes;
     let parsed = lopdf::Document::load_mem(&pdf).unwrap();
     assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "A\nB", "the paragraph break survives selection");
-    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 5 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF0041000A"), "the first span carries the break:\n{content}");
 }
 
@@ -661,7 +881,7 @@ fn leading_newline_stays_in_the_first_selection_span() {
     let mut d = doc(ColorMode::Rgb);
     d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "\nA".into(), size_pt: 12.0, ..Default::default() })));
     let pdf = export(&d, true, &Interrupt::NONE).unwrap().bytes;
-    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 5 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF000A0041>"), "the first span retains the leading newline:\n{content}");
 }
 

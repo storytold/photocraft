@@ -50,7 +50,7 @@ pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
+pub(crate) use open::{PlaceInput, apply_place, import, import_opened_noted, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
@@ -61,7 +61,7 @@ pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
     template_name, untitled_name,
 };
-pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
+pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file, write_file_stream};
 pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;

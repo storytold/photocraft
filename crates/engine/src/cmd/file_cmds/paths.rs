@@ -50,6 +50,18 @@ pub(crate) fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// [`write_file`] for a file produced as it is written (a long PDF): `write` fills the temporary
+/// file, so the whole file is never held in memory. If `write` fails, `path` is left as it was.
+pub(crate) fn write_file_stream(path: &str, write: &mut photocraft_format::atomic::StreamWriter<'_>) -> Result<()> {
+    photocraft_format::atomic_write_stream(std::path::Path::new(path), write).map_err(|e| EngineError::Other(e.to_string()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn write_file_stream(path: &str, _write: &mut photocraft_format::atomic::StreamWriter<'_>) -> Result<()> {
+    Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
+}
+
 /// Files of a folder that look like images we can open, sorted by name.
 pub fn list_images(dir: &str) -> Result<Vec<String>> {
     list_files(dir, false)
