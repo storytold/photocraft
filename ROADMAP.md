@@ -86,7 +86,8 @@ Rows and evidence: [target-app-parity › Feature areas](docs/target-app-parity.
 
 ## Languages
 
-Measured with the `cargo xtask i18n-coverage` key universe (1,608 keys). `partial` everywhere
+Measured before the craft-i18n cutover with the former `cargo xtask i18n-coverage` key universe
+(1,608 keys); `cargo xtask i18n-report` now reports coverage. `partial` everywhere
 because engine messages are still English. Detail: [localization-parity](docs/localization-parity.md).
 
 | Language | Code | UI strings | Status |
@@ -122,6 +123,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Entry |
 |---|---|
+| 2026-11-02 | Layer Style: with Gradient Overlay selected, a drag on the image moves the gradient (its centre as a fraction of the layer's bounds, `params.offset`), as a drag moves a shadow (#10763) |
 | 2026-11-02 | Load Actions: Mac Roman step names with é ä ö ü Ä or ° read as Mac Roman instead of windows-1252 or Cyrillic (#10774): windows-1252's rare 0x80–0x9F letters and a lone Cyrillic letter in a Latin word no longer count as common text, the degree sign does, and the file's own Unicode text settles a word-initial rare letter and breaks exact ties toward windows-1252 or Mac Roman |
 | 2026-10-21 | Linux can use font-free Adwaita controls when System Title Bar is selected, while the integrated CSD title bar remains the default (as in #4439). Saved preferences are respected; startup and preference-dialog regressions cover both choices (#6266). |
 | 2026-10-22 | Print paper sizes: はがき (100 × 148 mm), 往復はがき (148 × 200), JIS B5 (182 × 257), JIS B4 (257 × 364), A6, L判 (89 × 127), 2L判 (127 × 178), KG判 (102 × 152), 六切 (203 × 254) and 四切 (254 × 305) are selectable in the Print dialog and `file.print`, matched by their customary names (`はがき`, `L判`, `JIS B5`…), and the PDF page takes their exact size. Existing papers unchanged. |
