@@ -64,7 +64,16 @@ fn target(app: &PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<(PathRef, Path
         return None;
     }
     match (tool, hit) {
-        (Tool::AddAnchorPoint, Hit::Segment(..)) | (Tool::DeleteAnchorPoint, Hit::Anchor(_)) => Some((r, path, hit)),
+        (Tool::AddAnchorPoint, Hit::Segment(..)) => {
+            // A segment is in reach within 5 points (5 screen px at display scale 1, as measured,
+            // #12732); other display scales weren't measured and keep the points unit, like every
+            // canvas tolerance. The 0.01 point covers the f32 screen-to-document mapping, so a click
+            // 5 px away always hits. Anchors keep `hit_active`'s 6 points, so none is in this reach.
+            let reach = 5.01 / f64::from(app.point_zoom().max(0.01));
+            let hit = edit::hit(&path, Point::new(p[0], p[1]), reach, &[]).filter(|h| matches!(h, Hit::Segment(..)))?;
+            Some((r, path, hit))
+        }
+        (Tool::DeleteAnchorPoint, Hit::Anchor(_)) => Some((r, path, hit)),
         _ => None,
     }
 }
@@ -410,6 +419,8 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
 mod add_anchor_lock_tests;
 #[cfg(test)]
 mod add_anchor_targeted_path_tests;
+#[cfg(test)]
+mod add_anchor_tolerance_tests;
 #[cfg(test)]
 mod delete_anchor_drag_segment_tests;
 #[cfg(test)]
