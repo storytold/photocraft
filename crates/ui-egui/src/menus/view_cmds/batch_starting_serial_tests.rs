@@ -120,6 +120,11 @@ fn letters_are_not_taken() {
 #[test]
 fn enter_after_a_value_past_the_range_shows_the_alert_and_keeps_the_dialog() {
     let mut h = batch();
+    // Should Enter run the batch anyway, it reads a folder that is not there and writes nothing.
+    let missing = std::env::temp_dir().join(format!("photocraft-batch-serial-missing-{}", std::process::id()));
+    let batch_dialog = h.state_mut().ui.dialogs.iter_mut().find(|d| d.fields.contains_key("startingSerial")).expect("the Batch dialog is open");
+    batch_dialog.fields.insert("input".into(), json!(missing.join("in").to_string_lossy()));
+    batch_dialog.fields.insert("output".into(), json!(missing.join("out").to_string_lossy()));
     type_serial(&mut h, "12345");
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
