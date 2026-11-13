@@ -85,6 +85,58 @@ mod initial_view_tests {
     use serde_json::json;
 
     #[test]
+    fn selected_layers_without_active_layer_keep_the_imported_default_view_and_warn() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":8,"height":6})).unwrap();
+        session.execute("layer.new.layer", json!({"name":"existing edit"})).unwrap();
+        let previous = session.active().unwrap().clone();
+        let previous_save = photocraft_format::save_to_bytes(&previous.doc, &Default::default()).unwrap();
+        let mut imported = Document::new("retained", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        imported.layers.extend(["first", "last"].map(|name| photocraft_doc::Layer::raster(name, photocraft_color::PixelFormat::RGBA8)));
+        let selected = imported.layers[0].id;
+        let (index, default_view, warning) = session
+            .admit_import_with_initial_view(
+                true,
+                Some(NativeInitialView { selected_layers: vec![selected], samplers: vec![[2., 3.]], ..Default::default() }),
+                |session| {
+                    let index = session.add_document(imported, None);
+                    (index, session.active().unwrap().clone())
+                },
+            )
+            .unwrap();
+        assert!(warning.unwrap().contains("selected layers require an active layer"));
+        assert_eq!(session.documents().len(), 2);
+        assert_eq!(session.active_index(), Some(index));
+        let state = session.active().unwrap();
+        assert!(Arc::ptr_eq(&state.doc, &default_view.doc));
+        assert!(state.source_read_only);
+        assert_eq!(state.active_layer, default_view.active_layer);
+        assert!(state.active_layer.is_some());
+        assert_eq!(state.selected_layers, default_view.selected_layers);
+        assert_eq!(state.layer_anchor, default_view.layer_anchor);
+        assert_eq!(state.channel_view, default_view.channel_view);
+        assert_eq!(state.color_samplers, default_view.color_samplers);
+        assert_eq!((state.revision, state.saved_revision, state.history.past_len()), (default_view.revision, default_view.saved_revision, 0));
+        assert_eq!(state.snapshots.first().unwrap().layers, default_view.snapshots.first().unwrap().layers);
+        let saved = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+        let reopened = photocraft_io::import("retained.pcraft", &saved).unwrap();
+        assert!(reopened.initial_view.is_none());
+        assert_eq!(reopened.document.layer_count(), 2);
+        let existing = &session.documents()[0];
+        assert!(Arc::ptr_eq(&existing.doc, &previous.doc));
+        assert_eq!(existing.active_layer, previous.active_layer);
+        assert_eq!(existing.selected_layers, previous.selected_layers);
+        assert_eq!(existing.layer_anchor, previous.layer_anchor);
+        assert_eq!(existing.path, previous.path);
+        assert_eq!(existing.source_read_only, previous.source_read_only);
+        assert_eq!(
+            (existing.revision, existing.saved_revision, existing.history.past_len()),
+            (previous.revision, previous.saved_revision, previous.history.past_len())
+        );
+        assert_eq!(photocraft_format::save_to_bytes(&existing.doc, &Default::default()).unwrap(), previous_save);
+    }
+
+    #[test]
     fn invalid_optional_view_keeps_admitted_document_and_existing_documents_unchanged() {
         for (existing, active) in [(0, None), (3, None), (3, Some(0)), (3, Some(1))] {
             let mut session = Session::new();
@@ -267,6 +319,8 @@ mod initial_view_tests {
         assert!(Arc::ptr_eq(&state.doc, &before.2));
         session.apply_import_initial_view(Some(NativeInitialView { target: NativeImportTarget::AlphaChannel(0), ..Default::default() })).unwrap();
         assert_eq!(session.active().unwrap().channel_view.target, crate::channel_cmds::ChannelTarget::Alpha(0));
+        assert_eq!(session.active().unwrap().active_layer, Some(layer), "an empty layer hint preserves the current layer target");
+        assert_eq!(session.active().unwrap().selected_layers, vec![layer]);
         assert!(!session.tools.mask_targeted);
     }
 
@@ -373,6 +427,7 @@ mod initial_view_tests {
         session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
         let before = session.active().unwrap().clone();
         for view in [
+            NativeInitialView { selected_layers: before.selected_layers.clone(), samplers: vec![[2., 3.]], ..Default::default() },
             NativeInitialView { samplers: vec![[f64::NAN, 0.0]], ..Default::default() },
             NativeInitialView { target: NativeImportTarget::AlphaChannel(0), ..Default::default() },
             NativeInitialView { selected_path: Some(0), ..Default::default() },
@@ -382,9 +437,13 @@ mod initial_view_tests {
             assert!(Arc::ptr_eq(&before.doc, &st.doc));
             assert_eq!(st.active_layer, before.active_layer);
             assert_eq!(st.selected_layers, before.selected_layers);
+            assert_eq!(st.layer_anchor, before.layer_anchor);
             assert_eq!(st.channel_view, before.channel_view);
             assert_eq!(st.color_samplers, before.color_samplers);
             assert_eq!(st.revision, before.revision);
+            assert_eq!(st.saved_revision, before.saved_revision);
+            assert_eq!(st.history.past_len(), before.history.past_len());
+            assert_eq!(st.snapshots.first().unwrap().layers, before.snapshots.first().unwrap().layers);
         }
     }
 

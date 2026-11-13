@@ -86,7 +86,7 @@ fn guides_resolution_and_units_follow_native_limits_and_documented_versions() {
             panic!("report")
         };
         assert!(report.entries.iter().any(|e| e.feature_code == "xcf.resolution"));
-        assert!(report.entries.iter().any(|e| e.feature_code == "xcf.unit"));
+        assert!(!report.entries.iter().any(|e| e.feature_code == "xcf.unit"), "a documented physical display unit needs no exceptional conversion detail");
     }
     for y in [0.0f32, f32::NAN, f32::INFINITY] {
         let mut image = TestImage::rgb8(2, 2);
@@ -375,7 +375,7 @@ fn legacy_exif_with_budget(record: &[u8], mut budget: usize) -> (photocraft_doc:
         .unwrap();
     let props = [Prop { offset: 28, kind: 21, data: record }];
     outcomes.parasites(owner, props[0].offset, record, &["icc-profile"]).unwrap();
-    metadata::image(&mut doc, &props, 11, &mut Default::default(), &mut outcomes, owner, &mut budget).unwrap();
+    metadata::image(&mut doc, &props, 11, &mut Default::default(), &mut outcomes, owner, &mut budget, &mut Default::default()).unwrap();
     doc.metadata.import_conversion = Some(Arc::new(outcomes.finish().unwrap()));
     (doc, budget)
 }

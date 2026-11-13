@@ -1087,7 +1087,8 @@ fn approve_high_memory_rejects_invalid_types_and_formats_structured_error() {
     // Non-boolean approveHighMemory is rejected strictly
     let reply = respond(&h, r#"{"method":"doc.open","params":{"path":"test.psd","approveHighMemory":"yes"}}"#);
     assert_eq!(reply["ok"], false);
-    assert!(reply["error"].as_str().unwrap().contains("must be a boolean"));
+    let error = reply["error"].as_str().unwrap();
+    assert!(error.contains("doc.open") && error.contains("approveHighMemory") && error.contains("boolean"), "{error}");
 
     let reply_place = respond(&h, r#"{"method":"doc.place","params":{"path":"test.psd","approveHighMemory":123}}"#);
     assert_eq!(reply_place["ok"], false);

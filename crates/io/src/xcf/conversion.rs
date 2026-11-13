@@ -204,7 +204,19 @@ impl<'a> Outcomes<'a> {
         Ok(())
     }
 
-    /// The compatible short warning and its durable detailed outcome are produced together.
+    /// Human warnings have their own grouping policy and survive optional report limits.
+    /// An omitted owner has no recoverable label; do not misname it after the summary.
+    pub(super) fn warning(&self, owner: usize, human: &str, warnings: &mut crate::ora::Warnings) -> Result<()> {
+        let entry = self.entry(owner)?;
+        if self.omitted(owner) {
+            warnings.note(&format!("An imported item {human}"));
+        } else {
+            warnings.layer(&entry.source.name, human);
+        }
+        Ok(())
+    }
+
+    /// Emit the short warning before attempting its optional durable detail.
     pub(super) fn notice(
         &mut self,
         owner: usize,
@@ -214,14 +226,10 @@ impl<'a> Outcomes<'a> {
         human: Option<&str>,
         warnings: &mut crate::ora::Warnings,
     ) -> Result<()> {
-        self.detail(owner, feature, reason, descriptions.0, descriptions.1)?;
-        if self.truncated {
-            return Ok(());
-        }
         if let Some(human) = human {
-            let owner = self.report.entries.get(owner).ok_or_else(|| invalid("missing XCF conversion owner"))?;
-            warnings.layer(&owner.source.name, human);
+            self.warning(owner, human, warnings)?;
         }
+        self.detail(owner, feature, reason, descriptions.0, descriptions.1)?;
         Ok(())
     }
 

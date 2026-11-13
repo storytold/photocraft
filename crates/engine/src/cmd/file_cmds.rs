@@ -50,8 +50,8 @@ pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
 pub use open::{
-    PLACE_EMBEDDED, fresh_import_options, historical_xcf_sample_order, open_bytes_as, open_bytes_as_with_import_options, open_bytes_as_with_options,
-    place_bytes, raw_defaults,
+    PLACE_EMBEDDED, fresh_import_options, historical_xcf_sample_order, import_options_from_params, open_bytes_as, open_bytes_as_with_import_options,
+    open_bytes_as_with_options, place_bytes, raw_defaults,
 };
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};

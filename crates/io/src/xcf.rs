@@ -28,6 +28,10 @@ mod wire;
 mod coverage_review_tests;
 #[cfg(test)]
 mod decoder_review_tests;
+#[cfg(test)]
+mod effect_budget_review_tests;
+#[cfg(test)]
+mod effect_offset_review_tests;
 #[allow(dead_code)]
 mod effects;
 #[cfg(test)]
@@ -57,6 +61,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 
+#[cfg(test)]
 use photocraft_codecs::f16;
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::import_conversion::{ConversionDisposition, ConversionEntry, ConversionReason, NativeTargetRef};
@@ -67,7 +72,9 @@ use photocraft_raster::{Interrupt, Surface};
 use crate::ora::Warnings;
 use crate::{ImportResult, IoError};
 
-use samples::{Precision, integer_samples};
+#[cfg(test)]
+use samples::integer_samples;
+use samples::{Precision, row_samples};
 #[cfg(test)]
 use wire::rle_decode;
 use wire::{Compression, Cursor, Prop, be_f32, be_i32, be_u32, decode_tile, parasites, props, props_version};
@@ -167,6 +174,9 @@ impl<'a> Image<'a> {
     /// Reads a hierarchy (`hptr`): the first level's tiles into `channels` floats per pixel,
     /// `source_channels` as stored (indexed images expand to RGB here).
     fn hierarchy(&mut self, hptr: usize, source_channels: usize, coverage: bool, ctl: &Interrupt<'_>) -> Result<Pixels> {
+        if !(1..=4).contains(&source_channels) {
+            return Err(invalid("drawable channel count is out of range"));
+        }
         let mut c = self.c.at(hptr);
         let (w, h, bpp) = (c.u32()?, c.u32()?, c.u32()? as usize);
         if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
@@ -208,27 +218,29 @@ impl<'a> Image<'a> {
             let (tx, ty) = ((i % across) as u32, (i / across) as u32);
             let (tw, th) = ((w - tx * TILE).min(TILE), (h - ty * TILE).min(TILE));
             let end = tiles.get(i + 1).copied().filter(|&n| n > at).unwrap_or(self.c.b.len());
-            let mut raw = decode_tile(&self.c, at, end, self.compression, bpp, (tw * th) as usize)?;
-            if self.sample_order == crate::HistoricalXcfSampleOrder::LittleEndian && self.precision.bytes > 1 {
-                if !raw.len().is_multiple_of(self.precision.bytes) {
-                    return Err(invalid("historical tile does not contain complete samples"));
-                }
-                for (sample, bytes) in raw.chunks_exact_mut(self.precision.bytes).enumerate() {
-                    if sample.is_multiple_of(2048) {
-                        ctl.check().map_err(|_| IoError::Cancelled)?;
-                    }
-                    bytes.reverse();
-                }
-            }
-            if !indexed && !self.precision.float && matches!(self.precision.bytes, 1 | 2) {
-                let row_samples = tw as usize * channels;
+            let raw = decode_tile(&self.c, at, end, self.compression, bpp, (tw * th) as usize)?;
+            if !indexed {
+                let samples = tw as usize * channels;
                 let row_bytes = tw as usize * bpp;
                 for py in 0..th as usize {
                     let src = py * row_bytes;
                     let dst = (ty as usize * TILE as usize + py) * stride + tx as usize * TILE as usize * channels;
-                    let input = raw.get(src..src + row_bytes).ok_or_else(|| invalid("integer tile row is cut short"))?;
-                    let output = data.get_mut(dst..dst + row_samples).ok_or_else(|| invalid("integer tile row exceeds its drawable"))?;
-                    integer_samples(input, output, self.precision.bytes)?;
+                    let input = raw.get(src..src + row_bytes).ok_or_else(|| invalid("tile row is cut short"))?;
+                    let output = data.get_mut(dst..dst + samples).ok_or_else(|| invalid("tile row exceeds its drawable"))?;
+                    let changes = row_samples(input, output, self.precision, self.sample_order, source_channels, coverage).map_err(|error| {
+                        let ch = error.sample % source_channels;
+                        let px = error.sample / source_channels;
+                        let is_coverage = coverage || (matches!(source_channels, 2 | 4) && ch + 1 == source_channels);
+                        invalid(format!(
+                            "{} plane {ch}, pixel ({}, {}): {}",
+                            if is_coverage { "coverage" } else { "color" },
+                            tx as usize * TILE as usize + px,
+                            ty as usize * TILE as usize + py,
+                            error.message,
+                        ))
+                    })?;
+                    underflow |= changes.underflow;
+                    coverage_clamped |= changes.coverage_clamped;
                 }
                 continue;
             }
@@ -248,24 +260,6 @@ impl<'a> Image<'a> {
                         if source_channels == 2 {
                             let alpha = pixel.get(1).ok_or_else(|| invalid("indexed pixel has no alpha sample"))?;
                             *output.get_mut(3).ok_or_else(|| invalid("indexed pixel has no alpha destination"))? = f32::from(*alpha) / 255.0;
-                        }
-                    } else {
-                        for (ch, destination) in output.iter_mut().enumerate() {
-                            let is_coverage = coverage || (matches!(source_channels, 2 | 4) && ch + 1 == source_channels);
-                            let start = ch.checked_mul(self.precision.bytes).ok_or_else(|| invalid("sample byte offset overflows"))?;
-                            let end = start.checked_add(self.precision.bytes).ok_or_else(|| invalid("sample byte range overflows"))?;
-                            let sample = pixel.get(start..end).ok_or_else(|| invalid("pixel sample is cut short"))?;
-                            let (value, rounded_zero, clamped) = self.precision.sample_with_conversion(sample, is_coverage).map_err(|error| {
-                                invalid(format!(
-                                    "{} plane {ch}, pixel ({}, {}): {error}",
-                                    if is_coverage { "coverage" } else { "color" },
-                                    tx as usize * TILE as usize + px,
-                                    ty as usize * TILE as usize + py,
-                                ))
-                            })?;
-                            *destination = value;
-                            underflow |= rounded_zero;
-                            coverage_clamped |= clamped;
                         }
                     }
                 }
@@ -322,7 +316,15 @@ impl<'a> Image<'a> {
     /// leaving the supported native owner's pixels untouched.
     fn inventory_coverage_effects(&mut self, owner: usize, pointers: &[usize], ctl: &Interrupt<'_>) -> Result<()> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        if pointers.is_empty() || !self.outcomes.recording() {
+        if pointers.is_empty() {
+            return Ok(());
+        }
+        self.outcomes.warning(
+            owner,
+            "has stored coverage effects retained as inactive configuration; auxiliary mask pixels are not retained; see the conversion report",
+            &mut self.warnings,
+        )?;
+        if !self.outcomes.recording() {
             return Ok(());
         }
         let owner_entry = self.outcomes.entry(owner)?.clone();
@@ -368,10 +370,13 @@ impl<'a> Image<'a> {
                 .meta_budget
                 .checked_sub(8 * std::mem::size_of::<usize>())
                 .ok_or_else(|| invalid("coverage effect traversal exceeds metadata allowance"))?;
+            let before_effect = self.meta_budget;
             let effect = match effects::decode(&self.c, pointer, self.version, &mut self.meta_budget, ctl) {
                 Ok(effect) => effect,
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(error) => {
+                    // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
+                    self.meta_budget = before_effect;
                     self.outcomes.push(ConversionEntry {
                         feature_code: "xcf.coverage_effect".into(),
                         source,
@@ -478,10 +483,6 @@ impl<'a> Image<'a> {
                 work.extend(record.children.iter().rev().map(|pointer| (*pointer, depth + 1, mask_outcome)));
             }
         }
-        self.warnings.layer(
-            &owner_entry.source.name,
-            "has stored coverage effects retained as inactive configuration; auxiliary mask pixels are not retained; see the conversion report",
-        );
         Ok(())
     }
 
@@ -808,16 +809,22 @@ pub(crate) fn import_with_sample_order(
         }
     }
     let mut path_ptrs = Vec::new();
+    let mut omitted_paths: Option<(usize, usize)> = None;
     if version >= 18 {
         loop {
             let pointer = c.ptr()?;
             if pointer == 0 {
                 break;
             }
-            if path_ptrs.len() >= MAX_CHANNELS {
-                return Err(invalid("more than 1,024 saved paths"));
+            if path_ptrs.len() == MAX_CHANNELS {
+                let omitted = omitted_paths.get_or_insert((pointer, 0));
+                omitted.1 = omitted.1.saturating_add(1);
+                if omitted.1.is_multiple_of(1024) {
+                    ctl.check().map_err(|_| IoError::Cancelled)?;
+                }
+            } else {
+                path_ptrs.push(pointer);
             }
-            path_ptrs.push(pointer);
         }
     }
 
@@ -886,7 +893,12 @@ pub(crate) fn import_with_sample_order(
         } else if !matches!(property.kind, 1 | 17) {
             let reason = match property.kind {
                 18 | 19 => ConversionReason::NativePolicy,
-                20 | 22 | 24 | 27 | 39 => ConversionReason::NativeLimitation,
+                // GIMP's nonzero item identifier and standard dialog units are
+                // editing bookkeeping, not unapplied native image content.
+                20 if property.data.len() == 4 && be_u32(property.data).is_some_and(|value| value != 0) => ConversionReason::NativePolicy,
+                20 => ConversionReason::InvalidOptionalData,
+                22 => metadata::unit_reason(property.data),
+                24 | 27 | 39 => ConversionReason::NativeLimitation,
                 _ => ConversionReason::MissingMapping,
             };
             image.outcomes.property_with_reason(image_outcome, property.kind, property.offset, property.data, reason)?;
@@ -899,7 +911,16 @@ pub(crate) fn import_with_sample_order(
     document.layers = layers;
     document.channels = channels;
     document.selection = selection;
-    metadata::image(&mut document, &image_props, version, &mut image.initial_view, &mut image.outcomes, image_outcome, &mut image.meta_budget)?;
+    metadata::image(
+        &mut document,
+        &image_props,
+        version,
+        &mut image.initial_view,
+        &mut image.outcomes,
+        image_outcome,
+        &mut image.meta_budget,
+        &mut image.warnings,
+    )?;
     document.icc_profile = Some(native_profile);
     image.outcomes.push(ConversionEntry {
         feature_code: "xcf.color_encoding".into(),
@@ -921,7 +942,7 @@ pub(crate) fn import_with_sample_order(
         native_description: "Native ICC profile preserves the source colorants and sample transfer curve; samples retain native precision and range".into(),
         attachments: Vec::new(),
     })?;
-    import_paths(&mut document, &mut image, &image_props, &path_ptrs, image_outcome, ctl)?;
+    import_paths(&mut document, &mut image, &image_props, &path_ptrs, omitted_paths, ctl)?;
     import_vectors(&mut document, &mut image, ctl)?;
     text::convert_colors(&mut document)?;
     import_native_effects(&mut document, &mut image, ctl)?;
@@ -972,10 +993,13 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             source.ordinal = ordinal as u32;
             source.record_offset = Some(pointer as u64);
             ordinal = ordinal.checked_add(1).ok_or_else(|| invalid("effect ordinal overflow"))?;
+            let before_effect = image.meta_budget;
             let effect = match effects::decode(&image.c, pointer, image.version, &mut image.meta_budget, ctl) {
                 Ok(effect) => effect,
                 Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                 Err(error) => {
+                    // Failed decoding retains no effect allocation; preserve only the caller's traversal charges.
+                    image.meta_budget = before_effect;
                     image.outcomes.push(ConversionEntry {
                         feature_code: "xcf.layer_effect".into(),
                         source,
@@ -1077,89 +1101,111 @@ fn import_paths<'a>(
     image: &mut Image<'a>,
     properties: &[Prop<'a>],
     pointers: &[usize],
-    _owner: usize,
+    omitted_standalone: Option<(usize, usize)>,
     ctl: &Interrupt<'_>,
-) -> Result<()> {
-    import_paths_with_allowance(document, image, properties, pointers, ctl, MAX_METADATA_BYTES)
-}
-
-/// Share one allowance across framed source payloads and each owned native record.
-/// Repeated pointers must pay for every retained copy, not merely their shared input bytes.
-fn import_paths_with_allowance<'a>(
-    document: &mut Document,
-    image: &mut Image<'a>,
-    properties: &[Prop<'a>],
-    pointers: &[usize],
-    ctl: &Interrupt<'_>,
-    mut remaining: usize,
 ) -> Result<()> {
     let mut records: Vec<SavedPathRecord<'a>> = Vec::new();
     let mut ordinal = 0usize;
-    for property in properties.iter().filter(|p| matches!(p.kind, 23 | 25)) {
-        ctl.check().map_err(|_| IoError::Cancelled)?;
-        remaining = remaining.checked_sub(property.data.len()).ok_or_else(|| invalid("saved paths exceed the 32 MiB geometry allowance"))?;
-        let paths = match if property.kind == 23 { paths::legacy(property.data) } else { paths::vectors(property.data) } {
-            Ok(paths) => paths,
-            Err(error) => {
-                unavailable_path(image, ordinal, property.offset, "", &error, None)?;
-                ordinal += 1;
-                continue;
+    let mut limit = None;
+    let mut incomplete_identity = false;
+    'admission: {
+        for property in properties.iter().filter(|p| matches!(p.kind, 23 | 25)) {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            // Source slices remain borrowed and have a separate inert-report allowance.
+            // Use their size to bound decoding work, but charge only retained native storage.
+            if records.len() >= MAX_CHANNELS || property.data.len() > image.meta_budget {
+                limit = Some((ordinal, property.offset, "saved-path count or remaining document metadata allowance"));
+                break 'admission;
             }
-        };
-        if paths.len() > MAX_CHANNELS.saturating_sub(records.len()) {
-            return Err(invalid("more than 1,024 saved paths"));
+            let paths = match if property.kind == 23 { paths::legacy(property.data) } else { paths::vectors(property.data) } {
+                Ok(paths) => paths,
+                Err(error) => {
+                    incomplete_identity = true;
+                    unavailable_path(image, ordinal, property.offset, "", &error, None)?;
+                    ordinal += 1;
+                    continue;
+                }
+            };
+            for path in paths {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
+                if records.len() >= MAX_CHANNELS || admit_path(&mut image.meta_budget, &path).is_err() {
+                    limit = Some((ordinal, property.offset, "saved-path count or remaining document metadata allowance"));
+                    break 'admission;
+                }
+                records.push((ordinal, property.offset, path, None));
+                ordinal += 1;
+            }
         }
-        for path in paths {
-            admit_path(&mut remaining, &path)?;
-            records.push((ordinal, property.offset, path, None));
+        for &offset in pointers {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            if records.len() >= MAX_CHANNELS || image.meta_budget == 0 {
+                limit = Some((ordinal, offset, "saved-path count or remaining document metadata allowance"));
+                break 'admission;
+            }
+            // Outer framing is optional too: a length extending past EOF cannot
+            // invalidate independently framed drawable pixels, nor justify a raw attachment.
+            let frame = (|| -> Result<_> {
+                let mut cursor = image.c.at(offset);
+                let name = cursor.string_bytes()?;
+                let length = cursor.u32()? as usize;
+                cursor.take(length)?;
+                let raw = image.c.b.get(offset..cursor.pos).ok_or_else(|| invalid("saved path range"))?;
+                Ok((name, length, raw))
+            })();
+            let (name, length, raw) = match frame {
+                Ok(frame) => frame,
+                Err(error) => {
+                    incomplete_identity = true;
+                    unavailable_path(image, ordinal, offset, "", &error, None)?;
+                    ordinal += 1;
+                    continue;
+                }
+            };
+            if length > image.meta_budget
+                || std::mem::size_of::<photocraft_doc::vector::NamedPath>().checked_add(name.len()).is_none_or(|bytes| bytes > image.meta_budget)
+            {
+                limit = Some((ordinal, offset, "remaining document metadata allowance"));
+                break 'admission;
+            }
+            let name = std::str::from_utf8(name).unwrap_or("Invalid UTF-8 path name");
+            match paths::standalone(&image.c, offset) {
+                Ok(path) => {
+                    if admit_path(&mut image.meta_budget, &path).is_err() {
+                        limit = Some((ordinal, offset, "remaining document metadata allowance"));
+                        break 'admission;
+                    }
+                    records.push((ordinal, offset, path, Some(raw)));
+                }
+                Err(error) => {
+                    incomplete_identity = true;
+                    unavailable_path(image, ordinal, offset, name, &error, Some(raw))?;
+                }
+            }
             ordinal += 1;
         }
     }
-    for &offset in pointers {
-        ctl.check().map_err(|_| IoError::Cancelled)?;
-        // Outer framing is optional too: a length extending past EOF cannot
-        // invalidate independently framed drawable pixels, nor justify a raw attachment.
-        let frame = (|| -> Result<_> {
-            let mut cursor = image.c.at(offset);
-            let name = cursor.string_bytes()?;
-            let length = cursor.u32()? as usize;
-            cursor.take(length)?;
-            let raw = image.c.b.get(offset..cursor.pos).ok_or_else(|| invalid("saved path range"))?;
-            Ok((name, length, raw))
-        })();
-        let (name, length, raw) = match frame {
-            Ok(frame) => frame,
-            Err(error) => {
-                unavailable_path(image, ordinal, offset, "", &error, None)?;
-                ordinal += 1;
-                continue;
-            }
-        };
-        remaining = remaining.checked_sub(length).ok_or_else(|| invalid("saved paths exceed the 32 MiB geometry allowance"))?;
-        let name = std::str::from_utf8(name).unwrap_or("Invalid UTF-8 path name");
-        if records.len() >= MAX_CHANNELS {
-            return Err(invalid("more than 1,024 saved paths"));
-        }
-        match paths::standalone(&image.c, offset) {
-            Ok(path) => {
-                admit_path(&mut remaining, &path)?;
-                records.push((ordinal, offset, path, Some(raw)));
-            }
-            Err(error) => unavailable_path(image, ordinal, offset, name, &error, Some(raw))?,
-        }
-        ordinal += 1;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let incomplete_identity = incomplete_identity || limit.is_some() || omitted_standalone.is_some();
+    if let Some((ordinal, offset, reason)) = limit {
+        limited_paths(image, ordinal, offset, reason)?;
     }
-    if records.len() > MAX_CHANNELS {
-        return Err(invalid("more than 1,024 saved paths"));
+    if let Some((offset, count)) = omitted_standalone {
+        limited_paths(image, ordinal, offset, &format!("standalone pointer retention limit; {count} later records omitted"))?;
+    }
+    if incomplete_identity {
+        // Undecoded records could select another path or duplicate an admitted tattoo.
+        // Keep their saved pixels rather than guessing a vector binding or initial target.
+        image.initial_view.selected_path = None;
+        image.path_tattoos.values_mut().for_each(|index| *index = None);
     }
     for (ordinal, offset, path, raw) in records {
         let index = document.paths.len();
         let name = path.named.name.clone();
-        if path.selected {
+        if path.selected && !incomplete_identity {
             image.initial_view.selected_path = Some(index);
         }
         if let Some(tattoo) = path.tattoo {
-            image.path_tattoos.entry(tattoo).and_modify(|value| *value = None).or_insert(Some(index));
+            image.path_tattoos.entry(tattoo).and_modify(|value| *value = None).or_insert((!incomplete_identity).then_some(index));
         }
         let outcome = image.outcomes.push(ConversionEntry {
             feature_code: "xcf.path".into(),
@@ -1187,14 +1233,17 @@ fn import_paths_with_allowance<'a>(
 
 type SavedPathRecord<'a> = (usize, usize, paths::DecodedPath, Option<&'a [u8]>);
 
-/// Account for owned strings, native geometry capacities and the retained record itself
+/// Account for owned strings, native geometry capacities and persistent path storage
 /// before pushing it. Wire payload lengths omit names and undercount native knot storage.
 fn admit_path(remaining: &mut usize, path: &paths::DecodedPath) -> Result<()> {
     let overflow = || invalid("saved path retained geometry size overflow");
-    let mut bytes = std::mem::size_of::<SavedPathRecord<'_>>()
+    let mut bytes = std::mem::size_of::<photocraft_doc::vector::NamedPath>()
         .checked_add(path.named.name.capacity())
         .and_then(|bytes| bytes.checked_add(path.named.psd_raw.as_ref().map_or(0, |raw| raw.capacity())))
         .ok_or_else(overflow)?;
+    if path.tattoo.is_some() {
+        bytes = bytes.checked_add(4 * std::mem::size_of::<usize>()).ok_or_else(overflow)?;
+    }
     bytes = bytes
         .checked_add(path.named.path.subpaths.capacity().checked_mul(std::mem::size_of::<photocraft_doc::vector::Subpath>()).ok_or_else(overflow)?)
         .ok_or_else(overflow)?;
@@ -1204,6 +1253,22 @@ fn admit_path(remaining: &mut usize, path: &paths::DecodedPath) -> Result<()> {
             .ok_or_else(overflow)?;
     }
     *remaining = remaining.checked_sub(bytes).ok_or_else(|| invalid("saved paths exceed the 32 MiB geometry and metadata allowance"))?;
+    Ok(())
+}
+
+/// A path admission ceiling omits optional geometry, never already decoded pixels.
+fn limited_paths(image: &mut Image<'_>, ordinal: usize, offset: usize, reason: &str) -> Result<()> {
+    image.outcomes.push(ConversionEntry {
+        feature_code: "xcf.path".into(),
+        source: conversion::source("path", ordinal, offset, "", &[], None),
+        targets: Vec::new(),
+        disposition: ConversionDisposition::SkippedNonessential,
+        reason: ConversionReason::RetentionLimit,
+        source_description: format!("Optional saved paths exceeded the {reason}"),
+        native_description: "Earlier native paths and usable saved pixels were preserved. Later saved-path geometry was not decoded or retained; separately retained source properties remain inert. Vector bindings and initial path selection were not guessed.".into(),
+        attachments: Vec::new(),
+    })?;
+    image.warnings.note("Optional saved paths exceeded an admission limit; earlier paths and usable pixels were preserved. See the conversion report");
     Ok(())
 }
 
@@ -1281,7 +1346,21 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
             .checked_mul(std::mem::size_of::<photocraft_doc::vector::Knot>())
             .and_then(|n| n.checked_add(path.path.subpaths.len().saturating_mul(std::mem::size_of::<photocraft_doc::vector::Subpath>())))
             .ok_or_else(|| invalid("vector geometry size overflow"))?;
-        image.meta_budget = image.meta_budget.checked_sub(bytes).ok_or_else(|| invalid("vector layer copies exceed the geometry metadata allowance"))?;
+        let Some(remaining) = image.meta_budget.checked_sub(bytes) else {
+            image.outcomes.notice(
+                outcome,
+                "xcf.vector_layer",
+                ConversionReason::RetentionLimit,
+                (
+                    "Editable vector geometry exceeds the remaining document metadata allowance".into(),
+                    "Stored pixels preserved as a native raster; saved path and paint configuration remain inert".into(),
+                ),
+                Some("exceeds the editable geometry allowance and opens as pixels"),
+                &mut image.warnings,
+            )?;
+            continue;
+        };
+        image.meta_budget = remaining;
         vector.shape.path = path.path.clone();
         let layer = document.layer_mut(id).ok_or_else(|| invalid("missing native vector target"))?;
         layer.content = LayerContent::Shape(vector.shape);

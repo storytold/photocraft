@@ -75,7 +75,7 @@ fn report_entry_cap_is_nonfatal_and_persists_one_immutable_notice() {
             .unwrap();
     }
     assert_eq!(outcomes.entry(omitted).unwrap(), &summary);
-    assert!(warnings.finish().is_empty());
+    assert_eq!(warnings.finish(), ["An imported item omitted"]);
     let conversion = outcomes.finish().unwrap();
     let ImportConversion::Report(report) = &conversion else { panic!("report") };
     assert_eq!(report.attachments.len(), 1, "valid prefix attachments remain coherent");
@@ -122,6 +122,126 @@ fn below_report_caps_owner_targets_and_optional_configuration_are_unchanged() {
     assert_eq!(report.entries[1].attachments, vec![0]);
     assert_eq!(report.attachments[0].bytes.as_slice(), b"original configuration");
     report.validate().unwrap();
+}
+
+#[test]
+fn human_notices_survive_the_detail_that_truncates_reporting_and_later_omitted_owners() {
+    let mut outcomes = Outcomes::new(26).unwrap();
+    let id = outcomes.push(owner("Actual owner")).unwrap();
+    let mut warnings = crate::ora::Warnings::default();
+    outcomes
+        .notice(
+            id,
+            "xcf.blend",
+            ConversionReason::NativeLimitation,
+            ("source blend".into(), "native approximation".into()),
+            Some("uses an approximate blend"),
+            &mut warnings,
+        )
+        .unwrap();
+    assert!(outcomes.recording());
+    outcomes
+        .notice(
+            id,
+            "xcf.coverage_clamped",
+            ConversionReason::NumericalConversion,
+            ("x".repeat(MAX_CONVERSION_STRING + 1), "coverage clamped".into()),
+            Some("has clamped coverage"),
+            &mut warnings,
+        )
+        .unwrap();
+    assert!(!outcomes.recording());
+    outcomes
+        .notice(
+            id,
+            "xcf.precision_underflow",
+            ConversionReason::NumericalConversion,
+            ("tiny source".into(), "native zero".into()),
+            Some("has tiny samples rounded to zero"),
+            &mut warnings,
+        )
+        .unwrap();
+    let omitted = outcomes.push(owner("Label unavailable after cap")).unwrap();
+    for (feature, human) in [("xcf.text", "has modified text pixels"), ("xcf.link", "has an unavailable linked resource")] {
+        outcomes.notice(omitted, feature, ConversionReason::NativeLimitation, ("source".into(), "native raster".into()), Some(human), &mut warnings).unwrap();
+    }
+    let warnings = warnings.finish();
+    assert_eq!(warnings.len(), 5);
+    for human in [
+        "uses an approximate blend",
+        "has clamped coverage",
+        "has tiny samples rounded to zero",
+        "has modified text pixels",
+        "has an unavailable linked resource",
+    ] {
+        assert!(warnings.iter().any(|warning| warning.contains(human)), "{human}: {warnings:?}");
+    }
+    assert_eq!(warnings.iter().filter(|warning| warning.contains("Actual owner")).count(), 3);
+    assert!(warnings.iter().all(|warning| !warning.contains("XCF conversion report") && !warning.contains("Label unavailable after cap")));
+    assert_truncated_report_persists(outcomes.finish().unwrap());
+}
+
+#[test]
+fn omitted_owner_warning_labels_do_not_accumulate_or_mutate_the_summary() {
+    let mut outcomes = Outcomes::new(26).unwrap();
+    let mut oversized = owner("Oversized source");
+    oversized.source_description = "x".repeat(MAX_CONVERSION_STRING + 1);
+    let omitted = outcomes.push(oversized).unwrap();
+    let summary = outcomes.entry(omitted).unwrap().clone();
+    let mut warnings = crate::ora::Warnings::default();
+    for index in 0..128 {
+        let id = outcomes.push(owner(&format!("Unretained source {index}"))).unwrap();
+        outcomes
+            .notice(id, "xcf.text", ConversionReason::NativeLimitation, ("source".into(), "native".into()), Some("has modified text pixels"), &mut warnings)
+            .unwrap();
+    }
+    assert!(outcomes.warning(usize::MAX - 1, "invalid owner", &mut warnings).is_err());
+    assert_eq!(warnings.finish(), ["An imported item has modified text pixels"]);
+    assert_eq!(outcomes.entry(omitted).unwrap(), &summary);
+    assert_truncated_report_persists(outcomes.finish().unwrap());
+}
+
+#[test]
+fn full_report_coverage_inventory_still_warns_without_reading_optional_source() {
+    let mut outcomes = Outcomes::new(26).unwrap();
+    let mut oversized = owner("Unretained coverage owner");
+    oversized.source_description = "x".repeat(MAX_CONVERSION_STRING + 1);
+    let omitted = outcomes.push(oversized).unwrap();
+    let mut image = crate::xcf::Image {
+        c: crate::xcf::Cursor { b: &[], pos: 0, wide: true },
+        version: 26,
+        precision: crate::xcf::Precision::GAMMA8,
+        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
+        compression: crate::xcf::Compression::None,
+        base_type: 0,
+        colormap: Vec::new(),
+        budget: 0,
+        meta_budget: 0,
+        warnings: Default::default(),
+        outcomes,
+        clipped_to_backdrop: 0,
+        initial_view: Default::default(),
+        resolution_dpi: 72.,
+        pending_effects: Vec::new(),
+        path_tattoos: Default::default(),
+        pending_vectors: Vec::new(),
+        native_color_error: None,
+    };
+    image.inventory_coverage_effects(omitted, &[], &photocraft_raster::Interrupt::NONE).unwrap();
+    assert!(std::mem::take(&mut image.warnings).finish().is_empty());
+    assert!(matches!(
+        image.inventory_coverage_effects(omitted, &[usize::MAX], &photocraft_raster::Interrupt::cancel_only(&|| true)),
+        Err(crate::IoError::Cancelled)
+    ));
+    assert!(std::mem::take(&mut image.warnings).finish().is_empty(), "cancellation still wins over warnings");
+    image.inventory_coverage_effects(omitted, &[usize::MAX], &photocraft_raster::Interrupt::NONE).unwrap();
+    assert_eq!((image.budget, image.meta_budget), (0, 0));
+    let warnings = image.warnings.finish();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("stored coverage effects"));
+    assert!(warnings[0].starts_with("An imported item "));
+    assert!(!warnings[0].contains("XCF conversion report"));
+    assert_truncated_report_persists(image.outcomes.finish().unwrap());
 }
 
 #[test]

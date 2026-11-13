@@ -7,6 +7,9 @@ use photocraft_doc::{AlphaChannel, ColorIndicates, Document};
 use super::{Prop, Result, be_f32, be_i32, be_u32, conversion, parasites};
 use crate::initial_view::{MAX_INITIAL_SAMPLERS, NativeInitialView};
 
+#[cfg(test)]
+mod resolution_review_tests;
+
 /// Decode the last matching metadata property as an unsigned word; malformed payloads yield no value.
 fn word(props: &[Prop<'_>], kind: u32) -> Option<u32> {
     props.iter().rev().find(|p| p.kind == kind).and_then(|p| be_u32(p.data))
@@ -20,7 +23,24 @@ fn resolution_pair(data: &[u8]) -> Option<(f32, f32)> {
 /// Source properties apply in order: the last valid pair wins, while invalid pairs leave the earlier DPI intact.
 /// Text decoding and document metadata must share this final resolution and validation policy.
 pub(super) fn image_resolution(props: &[Prop<'_>], fallback: f32) -> f32 {
-    props.iter().filter(|property| property.kind == 19).filter_map(|property| resolution_pair(property.data).map(|(x, _)| x)).next_back().unwrap_or(fallback)
+    effective_resolution(props).map(|(x, _)| x).unwrap_or(fallback)
+}
+
+/// Resolve the same final valid pair for native DPI and its physical-size warning.
+fn effective_resolution(props: &[Prop<'_>]) -> Option<(f32, f32)> {
+    props.iter().filter(|property| property.kind == 19).filter_map(|property| resolution_pair(property.data)).next_back()
+}
+
+/// PROP_UNIT controls source dialog display only; documented physical units do not change native DPI.
+pub(super) fn unit_reason(data: &[u8]) -> photocraft_doc::import_conversion::ConversionReason {
+    use photocraft_doc::import_conversion::ConversionReason as Reason;
+    if data.len() != 4 {
+        Reason::InvalidOptionalData
+    } else if be_u32(data).is_some_and(|unit| (1..=4).contains(&unit)) {
+        Reason::NativePolicy
+    } else {
+        Reason::NativeLimitation
+    }
 }
 
 /// Channel colours are explicitly stored as nonlinear RGB, independently of image precision.
@@ -78,9 +98,17 @@ pub(super) fn image<'a>(
     outcomes: &mut conversion::Outcomes<'a>,
     owner: usize,
     budget: &mut usize,
+    warnings: &mut crate::ora::Warnings,
 ) -> Result<()> {
     use photocraft_doc::import_conversion::ConversionReason as Reason;
     doc.resolution_dpi = image_resolution(props, doc.resolution_dpi);
+    // Only the effective pair describes the admitted document's physical size.
+    // This warning must survive optional report truncation and invalid trailing pairs.
+    if let Some((x, y)) = effective_resolution(props)
+        && let Some(warning) = crate::unequal_resolution_warning(f64::from(x), f64::from(y))
+    {
+        warnings.note(&warning);
+    }
     let mut metadata_incomplete = false;
     for p in props {
         match p.kind {
@@ -141,11 +169,12 @@ pub(super) fn image<'a>(
                     )?;
                 }
             }
+            22 if unit_reason(p.data) == Reason::NativePolicy => {}
             22 | 24 => {
                 outcomes.detail(
                     owner,
                     "xcf.unit",
-                    Reason::NativeLimitation,
+                    if p.kind == 22 { unit_reason(p.data) } else { Reason::NativeLimitation },
                     "Source image display unit or custom unit definition".into(),
                     "Native document has no per-document unit; native ruler and DPI semantics retained".into(),
                 )?;

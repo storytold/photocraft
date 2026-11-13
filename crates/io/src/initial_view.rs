@@ -44,6 +44,11 @@ impl NativeInitialView {
         if selected.len() != self.selected_layers.len() {
             return Err(invalid("duplicate selected layer"));
         }
+        // A nonempty selection needs an active edit target; accepting this hint would
+        // otherwise clear the host's active layer and selection anchor on admission.
+        if !selected.is_empty() && self.active_layer.is_none() {
+            return Err(invalid("selected layers require an active layer"));
+        }
         // Avoid the recursive document lookup for untrusted hints, including malformed native
         // data supplied by an API caller rather than a bounded format reader.
         let mut layers = HashMap::new();
@@ -98,5 +103,30 @@ impl NativeInitialView {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_layers_require_an_active_layer() {
+        let mut doc = Document::new("view", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let layer = photocraft_doc::Layer::raster("selected", photocraft_color::PixelFormat::RGBA8);
+        let id = layer.id;
+        doc.layers.push(layer);
+        let mut view = NativeInitialView { selected_layers: vec![id], ..Default::default() };
+        assert!(view.validate(&doc).unwrap_err().to_string().contains("selected layers require an active layer"));
+        view.active_layer = Some(id);
+        view.validate(&doc).unwrap();
+    }
+
+    #[test]
+    fn empty_layer_selection_does_not_require_an_active_layer() {
+        let mut doc = Document::new("empty", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        NativeInitialView::default().validate(&doc).unwrap();
+        doc.layers.push(photocraft_doc::Layer::raster("default selection", photocraft_color::PixelFormat::RGBA8));
+        NativeInitialView::default().validate(&doc).unwrap();
     }
 }

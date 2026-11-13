@@ -79,6 +79,10 @@ fn unknown_future_reports_remain_visible() {
 /// Original v26/U8 framing with one saved channel, one property and one
 /// uncompressed pixel. No shared fixture visibility or corpus data is needed.
 fn channel_property_xcf(kind: u32, payload: &[u8]) -> Vec<u8> {
+    channel_property_xcf_with_image_properties(kind, payload, &[])
+}
+
+fn channel_property_xcf_with_image_properties(kind: u32, payload: &[u8], image_properties: &[(u32, Vec<u8>)]) -> Vec<u8> {
     fn word(bytes: &mut Vec<u8>, value: u32) {
         bytes.extend(value.to_be_bytes());
     }
@@ -101,6 +105,11 @@ fn channel_property_xcf(kind: u32, payload: &[u8]) -> Vec<u8> {
     word(&mut bytes, 17); // Compression: no compression.
     word(&mut bytes, 1);
     bytes.push(0);
+    for (kind, payload) in image_properties {
+        word(&mut bytes, *kind);
+        word(&mut bytes, payload.len() as u32);
+        bytes.extend(payload);
+    }
     word(&mut bytes, 0);
     word(&mut bytes, 0); // End image properties.
     pointer(&mut bytes, 0); // No layers.
@@ -134,6 +143,63 @@ fn channel_property_xcf(kind: u32, payload: &[u8]) -> Vec<u8> {
     patch(&mut bytes, tile);
     bytes.push(128);
     bytes
+}
+
+#[test]
+fn ordinary_image_tattoo_and_units_are_quiet_but_invalid_or_unmapped_content_still_warns() {
+    // Public XCF specification: tattoo is GIMP's internal nonzero identifier;
+    // standard units select dialog display units only. Resolution stays in ppi.
+    // Exercise actual wire properties, not a report constructed by the test.
+    for unit in 1u32..=4 {
+        for (extra, channel_kind, channel_payload, warn) in [
+            (None, 6, 255u32.to_be_bytes().to_vec(), false),
+            (Some((20, vec![0])), 6, 255u32.to_be_bytes().to_vec(), true),
+            (Some((20, 0u32.to_be_bytes().to_vec())), 6, 255u32.to_be_bytes().to_vec(), true),
+            (Some((22, vec![0])), 6, 255u32.to_be_bytes().to_vec(), true),
+            (Some((22, 99u32.to_be_bytes().to_vec())), 6, 255u32.to_be_bytes().to_vec(), true),
+            (Some((19, [72f32.to_be_bytes(), 144f32.to_be_bytes()].concat())), 6, 255u32.to_be_bytes().to_vec(), true),
+            (None, 28, 1u32.to_be_bytes().to_vec(), true),
+        ] {
+            let mut props = vec![(20, 7u32.to_be_bytes().to_vec()), (22, unit.to_be_bytes().to_vec())];
+            if let Some(extra) = extra {
+                props.push(extra);
+            }
+            let source = channel_property_xcf_with_image_properties(channel_kind, &channel_payload, &props);
+            let imported = import("image-bookkeeping.xcf", &source).unwrap();
+            assert!(imported.source_read_only);
+            assert!(!imported.preview_only);
+            assert_eq!(imported.document.resolution_dpi, 72.0);
+            let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("typed report") };
+            report.validate().unwrap();
+            if warn {
+                assert!(report.entries.iter().any(|entry| matches!(entry.reason, R::InvalidOptionalData | R::NativeLimitation)));
+            } else {
+                assert!(!report.entries.iter().any(|entry| matches!(entry.reason, R::InvalidOptionalData | R::NativeLimitation)));
+            }
+            for (kind, payload) in props.iter().take(2) {
+                let entry = report.entries.iter().find(|entry| entry.feature_code == format!("xcf.source_property.{kind}")).unwrap();
+                assert_eq!(entry.reason, R::NativePolicy);
+                assert_eq!(entry.disposition, D::RetainedUnapplied);
+                assert_eq!(entry.attachments.len(), 1);
+                assert_eq!(report.attachments[entry.attachments[0] as usize].bytes.as_slice(), payload);
+            }
+            let pixels = imported.document.channels[0].surface.read_region(photocraft_geom::Rect::new(0, 0, 1, 1));
+            assert_eq!(pixels, vec![128. / 255.]);
+            assert_eq!(open_warnings(&imported.document).len(), usize::from(warn), "unit {unit}, properties {props:?}");
+            let saved = export(&imported.document, "image-bookkeeping.pcraft", &Default::default()).unwrap();
+            let reopened = import("image-bookkeeping.pcraft", &saved.bytes).unwrap();
+            assert_eq!(reopened.document.metadata.import_conversion, imported.document.metadata.import_conversion);
+            assert_eq!(reopened.document.resolution_dpi, 72.0);
+            assert_eq!(reopened.document.channels[0].surface.read_region(photocraft_geom::Rect::new(0, 0, 1, 1)), pixels);
+            assert_eq!(reopened.warnings.len(), usize::from(warn), "reopened unit {unit}, properties {props:?}");
+            let flat = export(&reopened.document, "png", &Default::default()).unwrap();
+            assert_eq!(
+                flat.warnings.iter().filter(|warning| warning.contains("import conversion report") && warning.contains("not exported")).count(),
+                usize::from(warn),
+                "exported unit {unit}, properties {props:?}"
+            );
+        }
+    }
 }
 
 #[test]

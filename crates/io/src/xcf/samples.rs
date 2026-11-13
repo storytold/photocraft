@@ -1,6 +1,11 @@
 //! Versioned sample precision and bounded native numeric conversion.
 
-use super::{Result, SampleType, f16, invalid};
+#[cfg(test)]
+use super::f16;
+use super::{Result, SampleType, invalid};
+
+mod rows;
+pub(super) use rows::row_samples;
 
 /// How samples are stored: bytes per sample, whether they are floats, and whether the values are
 /// linear light, the assigned profile's own curve, or the perceptual sRGB transfer curve.
@@ -88,6 +93,7 @@ impl Precision {
     }
 
     /// Normalize finite coverage independently of signed HDR color and record the loss.
+    #[cfg(test)]
     pub(super) fn sample_with_conversion(self, b: &[u8], coverage: bool) -> Result<(f32, bool, bool)> {
         let source = match (self.float, self.bytes, b) {
             (false, 1, [v]) => f64::from(*v) / 255.0,

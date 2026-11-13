@@ -125,7 +125,8 @@ fn unknown_standalone_path_does_not_hide_later_paths_or_pixels() {
     assert_eq!(pixel(&result.document.layers[0], 0, 0), [17.0 / 255.0, 31.0 / 255.0, 57.0 / 255.0, 1.0]);
     assert_eq!(result.document.paths.len(), 1);
     assert_eq!(result.document.paths[0].name, "Native path");
-    assert_eq!(result.initial_view.unwrap().selected_path, Some(0));
+    // An unreadable record may also carry selection state; never guess from a partial inventory.
+    assert!(result.initial_view.as_ref().is_none_or(|view| view.selected_path.is_none()));
     let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
     let paths: Vec<_> = report.entries.iter().filter(|entry| entry.feature_code == "xcf.path").collect();
     assert_eq!(paths.len(), 2);

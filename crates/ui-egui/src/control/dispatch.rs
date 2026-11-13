@@ -1579,11 +1579,7 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false, p),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved, p),
-                Some(_) => err("expected boolean for `approveHighMemory`"),
-            },
+            Some(path) => app_open(app, path, p),
             None => err("missing `path`"),
         },
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
@@ -1608,9 +1604,10 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
 
 /// The `app.open` control method: opens a path through the configured automation read
 /// capability, with optional high-memory approval.
-fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool, params: &Value) -> Outcome {
-    let order = match photocraft_engine::file_cmds::historical_xcf_sample_order(params, "app.open") {
-        Ok(order) => order,
+fn app_open(app: &mut PhotocraftApp, path: &str, params: &Value) -> Outcome {
+    let opts = match photocraft_engine::file_cmds::import_options_from_params(photocraft_engine::jobs::import_options(app.session.prefs()), params, "app.open")
+    {
+        Ok(options) => options,
         Err(error) => return err(error.to_string()),
     };
     if let Some(outcome) = open_pcraft_directory(app, path) {
@@ -1622,9 +1619,6 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool, params: &Value)
     };
     wrap(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
-        let mut opts = photocraft_engine::jobs::import_options(app.session.prefs());
-        opts.psd_high_memory_approved = approved;
-        opts.historical_xcf_sample_order = order;
         let warnings = app.open_automation_bytes_with_options(&name, &bytes, &opts)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
@@ -1660,5 +1654,48 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Outcome>
         }
         Ok(None) => None, // a regular file: the bytes path reads the zip form
         Err(e) => Some(err(e)),
+    }
+}
+
+#[cfg(test)]
+mod open_options_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn app_open_validates_shared_controls_before_reading_a_source() {
+        let reads = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&reads);
+        let services = crate::Services {
+            automation_read: Some(Box::new(move |_| {
+                counter.set(counter.get() + 1);
+                Err("read reached after valid controls".into())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        for params in [
+            json!({"approveHighMemory":"true"}),
+            json!({"approveHighMemory":1}),
+            json!({"historicalXcfSampleOrder":false}),
+            json!({"historicalXcfSampleOrder":"native"}),
+        ] {
+            let Outcome::Done(reply) = app_open(&mut app, "source.xcf", &params) else { panic!("immediate validation") };
+            assert_eq!(reply["ok"], false);
+            assert!(!reply.to_string().contains("read reached"));
+            assert_eq!(reads.get(), 0);
+        }
+        for params in [
+            json!({}),
+            json!({"approveHighMemory":null,"historicalXcfSampleOrder":null}),
+            json!({"approveHighMemory":true,"historicalXcfSampleOrder":"little-endian"}),
+            json!({"approveHighMemory":false,"historicalXcfSampleOrder":"big-endian"}),
+        ] {
+            let Outcome::Done(reply) = app_open(&mut app, "source.xcf", &params) else { panic!("immediate capability refusal") };
+            assert!(reply.to_string().contains("read reached after valid controls"));
+        }
+        assert_eq!(reads.get(), 4);
+        assert!(app.session.documents().is_empty());
     }
 }

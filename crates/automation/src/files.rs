@@ -11,13 +11,7 @@ use crate::AutomationError;
 
 /// Validate host open controls before any filesystem read or document admission.
 pub fn import_options_from_params(params: &serde_json::Value) -> Result<photocraft_io::ImportOptions, AutomationError> {
-    let approved = match params.get("approveHighMemory") {
-        None | Some(serde_json::Value::Null) => false,
-        Some(serde_json::Value::Bool(value)) => *value,
-        _ => return Err(AutomationError::BadRequest("`approveHighMemory` must be a boolean".into())),
-    };
-    let order = photocraft_engine::file_cmds::historical_xcf_sample_order(params, "doc.open")?;
-    Ok(photocraft_io::ImportOptions { psd_high_memory_approved: approved, historical_xcf_sample_order: order, ..Default::default() })
+    Ok(photocraft_engine::file_cmds::import_options_from_params(Default::default(), params, "doc.open")?)
 }
 
 /// Result of opening a file.
@@ -288,6 +282,21 @@ mod historical_order_tests {
         }
         for invalid in [json!("native"), json!("LE"), json!(1), json!(false)] {
             assert!(import_options_from_params(&json!({"historicalXcfSampleOrder":invalid})).is_err());
+        }
+    }
+
+    #[test]
+    fn headless_open_uses_default_base_and_shared_strict_approval_controls() {
+        for params in [json!({}), json!({"approveHighMemory":null,"historicalXcfSampleOrder":null})] {
+            assert_eq!(import_options_from_params(&params).unwrap(), photocraft_io::ImportOptions::default());
+        }
+        for approved in [false, true] {
+            let options = import_options_from_params(&json!({"approveHighMemory":approved})).unwrap();
+            assert_eq!(options, photocraft_io::ImportOptions { psd_high_memory_approved: approved, ..Default::default() });
+        }
+        for value in [json!(1), json!("true"), json!([]), json!({})] {
+            let error = import_options_from_params(&json!({"approveHighMemory":value})).unwrap_err();
+            assert!(error.to_string().contains("approveHighMemory"));
         }
     }
 }

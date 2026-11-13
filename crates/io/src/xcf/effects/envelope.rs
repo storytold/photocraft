@@ -28,18 +28,21 @@ pub(in crate::xcf) fn read_pointers(cursor: &mut Cursor<'_>, budget: &mut usize,
     let mut seen = std::collections::HashSet::new();
     loop {
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-        let pointer = cursor.ptr()?;
+        // Read the optional record identity without requiring it to fit this host's
+        // address space. Record decoding, not list framing, owns individual validity.
+        let raw_pointer = if cursor.wide { (u64::from(cursor.u32()?) << 32) | u64::from(cursor.u32()?) } else { u64::from(cursor.u32()?) };
+        let pointer = usize::try_from(raw_pointer).unwrap_or(usize::MAX);
         if pointer == 0 {
             return Ok(pointers);
         }
         if pointers.len() >= MAX_EFFECTS {
             return Err(invalid("more than 1,024 effects on one drawable"));
         }
-        if pointer >= cursor.b.len() {
-            return Err(invalid("stored effect pointer is outside the file"));
-        }
-        charge(budget, 4 * std::mem::size_of::<usize>())?;
-        if !seen.insert(pointer) {
+        // usize::MAX cannot point into a Rust slice; unaddressable offsets remain
+        // inert and reach the same optional-data fallback as an offset beyond EOF.
+        // Keep raw identities for duplicate detection even when both map to that sentinel.
+        charge(budget, 4 * std::mem::size_of::<usize>().max(std::mem::size_of::<u64>()))?;
+        if !seen.insert(raw_pointer) {
             return Err(invalid("repeated stored effect pointer on one drawable"));
         }
         pointers.push(pointer);
@@ -384,9 +387,9 @@ mod tests {
         assert!(decode(&Cursor { b: &bytes, pos: 0, wide: true }, 8, 26, &mut 1, &Interrupt::NONE).is_err());
     }
 
-    /// Verifies pointer order is preserved while duplicate, out-of-file and excessive references are rejected.
+    /// Preserve list order and framing while deferring invalid optional record offsets to decode.
     #[test]
-    fn bounded_pointer_lists_preserve_order_and_reject_repeated_or_outside_records() {
+    fn bounded_pointer_lists_preserve_order_and_reject_repeated_records() {
         let mut bytes = vec![0; 64];
         bytes[..24].copy_from_slice(&[16u64.to_be_bytes(), 32u64.to_be_bytes(), 0u64.to_be_bytes()].concat());
         assert_eq!(read_pointers(&mut Cursor { b: &bytes, pos: 0, wide: true }, &mut 1024, &Interrupt::NONE).unwrap(), [16, 32]);
@@ -399,6 +402,8 @@ mod tests {
         assert!(matches!(read_pointers(&mut Cursor { b: &narrow, pos: 0, wide: false }, &mut 1024, &cancelled), Err(crate::IoError::Cancelled)));
         assert!(matches!(decode(&Cursor { b: &[], pos: 0, wide: true }, 0, 26, &mut 1024, &cancelled), Err(crate::IoError::Cancelled)));
         bytes[..8].copy_from_slice(&u64::MAX.to_be_bytes());
-        assert!(read_pointers(&mut Cursor { b: &bytes, pos: 0, wide: true }, &mut 1024, &Interrupt::NONE).is_err());
+        let pointers = read_pointers(&mut Cursor { b: &bytes, pos: 0, wide: true }, &mut 1024, &Interrupt::NONE).unwrap();
+        assert_eq!(pointers[0], usize::MAX);
+        assert!(decode(&Cursor { b: &bytes, pos: 0, wide: true }, pointers[0], 26, &mut 1024, &Interrupt::NONE).is_err());
     }
 }

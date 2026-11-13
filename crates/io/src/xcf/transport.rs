@@ -102,11 +102,11 @@ impl<R: BufRead> Read for Gzip<R> {
 
 /// Recognizes supported compressed XCF wrappers and applies the standard inflated-size limit.
 pub(crate) fn decode(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<Vec<u8>>> {
-    decode_with_limit(name, bytes, ctl, MAX_INFLATED)
+    decode_inner(name, bytes, ctl, MAX_INFLATED, false)
 }
 
-/// Decodes a recognized wrapper under explicit output and decoder-memory limits, propagating cancellation and
-/// malformed streams.
+/// Inject a small inflated-byte ceiling in transport tests without allocating the normal 1 GiB limit.
+#[cfg(test)]
 fn decode_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize) -> Result<Option<Vec<u8>>> {
     decode_inner(name, bytes, ctl, limit, false)
 }
@@ -192,8 +192,8 @@ mod tests {
     fn inflated_limit_is_checked_before_appending_output() {
         let bytes = [MAGIC, &[0; 1024]].concat();
         let wrapped = gzip(&bytes);
-        assert!(decode_with_limit("limit.xcf.gz", &wrapped, &Interrupt::NONE, 128).is_err());
-        assert_eq!(decode_with_limit("limit.xcf.gz", &wrapped, &Interrupt::NONE, bytes.len()).unwrap().unwrap(), bytes);
+        assert!(decode_inner("limit.xcf.gz", &wrapped, &Interrupt::NONE, 128, false).is_err());
+        assert_eq!(decode_inner("limit.xcf.gz", &wrapped, &Interrupt::NONE, bytes.len(), false).unwrap().unwrap(), bytes);
     }
 
     #[test]
