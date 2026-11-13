@@ -669,6 +669,9 @@ pub struct PhotocraftApp {
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
+    /// Pen paths finished, which Undo back to their finish gives back to the Pen
+    /// (`vector_ui::pen_resume_on_undo`).
+    pub(crate) finished_pens: Vec<vector_ui::FinishedPen>,
     /// Crop tool gesture in progress (see `crop_ui`).
     pub(crate) crop: crop_ui::CropState,
     /// Perspective Crop tool gesture and clicked corners (see `perspective_crop_ui`).
@@ -876,6 +879,8 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod transform_commit_click_tests;
+#[cfg(test)]
+mod transform_drag_start_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;
@@ -1033,6 +1038,10 @@ mod status_bar_tests;
 mod stroke_timing_tests;
 
 #[cfg(test)]
+mod cam_reset_tool_mode_tests;
+#[cfg(test)]
+mod patch_reset_tool_tests;
+#[cfg(test)]
 mod patch_tool_history_names_tests;
 #[cfg(test)]
 mod polygon_lasso_step_snap_tests;
@@ -1096,4 +1105,12 @@ mod background_eraser_digit_keys_tests;
 #[cfg(test)]
 mod clone_stamp_reset_tip_tests;
 #[cfg(test)]
+mod smudge_default_tip_tests;
+#[cfg(test)]
 mod sponge_default_tip_tests;
+
+#[cfg(test)]
+mod red_eye_context_menu_tests;
+
+#[cfg(test)]
+mod clone_stamp_indexed_bar_tests;
