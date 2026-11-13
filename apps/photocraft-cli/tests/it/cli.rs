@@ -2274,7 +2274,7 @@ fn batch_refuses_missing_or_ambiguous_explicit_atn_scopes_before_output() {
             assert_eq!(photocraft_cli::run(args, &mut stdout, &mut stderr), 1);
             let error = match failure {
                 "missing-set" => "missing set",
-                "ambiguous-set" => "ambiguous action call set",
+                "ambiguous-set" => "ambiguous action call target `Finish` in set `A`",
                 _ => "missing from set",
             };
             assert!(String::from_utf8_lossy(&stderr).contains(error), "{call}: {}", String::from_utf8_lossy(&stderr));
