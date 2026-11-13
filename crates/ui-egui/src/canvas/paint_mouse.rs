@@ -90,6 +90,8 @@ const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 /// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
 /// measured, so they stay the default brush's.
 const REMOVE_TOOL_SIZE: f32 = 19.0;
+/// The Pattern Stamp's tip after Reset Tool (#12868): a 21 px soft round at 25 % spacing.
+const PATTERN_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
@@ -106,6 +108,10 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::CloneStamp => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
+            brush.smoothing.amount = 0.0;
+        }
+        Tool::PatternStamp => {
+            (brush.size, brush.hardness, brush.spacing) = PATTERN_STAMP_TIP;
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,

@@ -1106,4 +1106,7 @@ mod clone_stamp_reset_tip_tests;
 mod sponge_default_tip_tests;
 
 #[cfg(test)]
+mod pattern_stamp_reset_defaults_tests;
+
+#[cfg(test)]
 mod red_eye_context_menu_tests;

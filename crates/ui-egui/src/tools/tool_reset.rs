@@ -83,6 +83,16 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
     if is_selection_tool(tool) || matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
         app.ui.selection_mode = 0;
     }
+    // Pattern Stamp: after Reset Tool the pattern is the first of the first default group (#12868).
+    if tool == Tool::PatternStamp
+        && let Some(id) = photocraft_engine::presets::patterns::builtin_groups()
+            .first()
+            .and_then(|g| g.items.first())
+            .cloned()
+    {
+        app.session.presets.pattern = Some(id);
+        app.session.presets.rev += 1;
+    }
     if crate::paint_mouse::has_brush_picker(tool) {
         // The session brush is the options bar's tool's: make sure it is `tool`'s before resetting.
         crate::paint_mouse::sync_tool_brush(app);
