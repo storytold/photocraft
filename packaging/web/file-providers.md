@@ -301,8 +301,7 @@ The explicit `browser-test-provider-origin` xtask starts a temporary Rust artifa
 127.0.0.1 and an ephemeral port, then runs only the named browser fixture. A separate owned
 ephemeral listener chooses a nonzero test HTTP address, passed unchanged through the pinned
 runner's `WASM_BINDGEN_TEST_ADDRESS` setting for both server binding and browser navigation.
-Port zero must not be passed: runner 0.2.129 would navigate headless Chrome to port zero rather
-than the server's assigned port. The temporary HTTP reservation is released immediately before
+The helper supplies a nonzero port so Chrome receives the configured server address. The temporary HTTP reservation is released immediately before
 the nested Cargo spawn; if another process claims that port, the runner's bind fails without a
 retry or port scan. The ChromeDriver announcement is not an HTTP-server origin. Any HTTP-origin
 announcement must occur at most once and match the configured address. The successful real-child
@@ -331,7 +330,7 @@ failure, and its Cargo subprocess is supervised. Served artifact snapshots and p
 are preserved outside temporary storage for review. The enclosing managed unit must still finalize and prove all
 compiler/driver/Chrome descendants absent.
 
-Use the already pinned wasm-bindgen-test-runner 0.2.129, real Chrome/WebDriver configuration and
+Use wasm-bindgen-test-runner 0.2.130 to match the workspace's wasm-bindgen version, real Chrome/WebDriver configuration and
 existing Cargo target/cache. For example:
 
 ```sh

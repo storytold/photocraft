@@ -703,7 +703,7 @@ fn oversized_raster_does_not_consume_budget_for_later_layers() {
             <g id="oversized" mask="url(#big)"><rect width="5100" height="4800" fill="red"/></g>
             <g id="small" mask="url(#small-mask)"><rect width="32" height="32" fill="blue"/></g>
         </svg>"##;
-    let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 64 * 64 * 4).unwrap();
+    let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 256 * 256 * 4).unwrap();
     assert_eq!(result.document.layers.len(), 1, "the oversized group must not debit the budget");
     assert_eq!(result.document.layers[0].name, "small");
     assert!(result.warnings.iter().any(|w| w.contains("too large to rasterise")), "{:?}", result.warnings);
@@ -712,15 +712,15 @@ fn oversized_raster_does_not_consume_budget_for_later_layers() {
 
 #[test]
 fn skipped_expensive_raster_does_not_hide_a_smaller_one() {
-    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256">
             <defs>
-              <mask id="big"><rect width="256" height="256" fill="white"/></mask>
+              <mask id="big"><rect width="512" height="256" fill="white"/></mask>
               <mask id="little"><rect width="16" height="16" fill="white"/></mask>
             </defs>
-            <g id="large" mask="url(#big)"><rect width="256" height="256" fill="red"/></g>
+            <g id="large" mask="url(#big)"><rect width="512" height="256" fill="red"/></g>
             <g id="small" mask="url(#little)"><rect width="16" height="16" fill="blue"/></g>
         </svg>"##;
-    let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 32 * 32 * 4).unwrap();
+    let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 256 * 256 * 4).unwrap();
     assert_eq!(result.document.layers.len(), 1);
     assert_eq!(result.document.layers[0].name, "small");
     assert!(result.warnings.iter().any(|w| w.contains("some rasterised elements were omitted")), "{:?}", result.warnings);
