@@ -264,7 +264,13 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
             return;
         }
         if apply(app, r, hit, p) {
+            // A press that began a join drag (#12766) keeps its drag: only the selection is replaced.
+            let join = app.ui.direct_selection.drag.take().zip(app.ui.direct_selection.coalesce.take());
             select_follower(app, r, &path, [s, k]);
+            if let Some((drag, coalesce)) = join {
+                app.ui.direct_selection.drag = Some(drag);
+                app.ui.direct_selection.coalesce = Some(coalesce);
+            }
         }
         return;
     }
