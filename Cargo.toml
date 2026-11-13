@@ -69,6 +69,13 @@ craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
+# The Craft suite's shared AI layer (connections, keys, models, consent, jobs). Native only: the
+# desktop app depends on it (apps/photocraft/src/genai.rs); the engine and UI reach it through
+# `photocraft_engine::genai`. One revision for all four, never mixed with craft-libs' ai-core.
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "29297b2fbe11077201edc657bff3315e93841d22" }
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "29297b2fbe11077201edc657bff3315e93841d22" }
+craft-ai-features = { git = "https://github.com/storytold/craft-ai-integrations", rev = "29297b2fbe11077201edc657bff3315e93841d22" }
+craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "29297b2fbe11077201edc657bff3315e93841d22" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

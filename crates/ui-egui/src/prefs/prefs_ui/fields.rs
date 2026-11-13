@@ -16,7 +16,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             f.insert("__agentLink".into(), serde_json::to_value(&app.agent_link).unwrap_or(Value::Null));
             let system = system_theme(app, ui.ctx());
-            prefs_body(ui, f, system);
+            prefs_body(app, ui, f, system);
             if let Some(action) = f.remove("__agentAction").and_then(|a| a.as_str().map(str::to_string)) {
                 super::agents::agent_action(app, f, &action, id);
             }
@@ -83,6 +83,10 @@ pub(super) fn humanize(key: &str) -> String {
     // Plug-ins: Photoshop's wording (#9392).
     if key == "generatorEnabled" {
         return "Enable Generator".into();
+    }
+    // Integrations: the opt-in for the options bar's Generative Fill button (genai_ui).
+    if key == "alwaysShowGenerativeFillButton" {
+        return "Always show the Generative Fill… button in the options bar".into();
     }
     if key == "lowLatencyDrawing" {
         return "Low-Latency Drawing (vsync off, applies at next launch)".into();
@@ -195,7 +199,7 @@ pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static
 }
 
 /// Preferences: section list on the left, the section's settings on the right.
-fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
+fn prefs_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
     let t = Tokens::get(ui.ctx());
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -267,19 +271,26 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if section == "integrations"
-                    && f.get("__agentLink").and_then(|s| s.get("mcpFlag")).and_then(Value::as_bool) == Some(true)
                     && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
                 {
-                    super::agents::integration_rows(ui, obj, f);
+                    let fields_of = |ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[&str]| {
+                        let mut shown: Map<String, Value> =
+                            obj.iter().filter(|(k, _)| keys.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+                        section_fields(ui, &section, &mut shown, &order, lang, system, filter);
+                        obj.extend(shown);
+                    };
+                    if f.get("__agentLink").and_then(|s| s.get("mcpFlag")).and_then(Value::as_bool) == Some(true) {
+                        super::agents::integration_rows(ui, obj, f);
+                    } else {
+                        // Without the AI-MCP feature flag: the settings PhotoCraft had before.
+                        fields_of(ui, obj, &LEGACY_INTEGRATIONS);
+                    }
+                    // Generative AI is set up here (desktop), whichever agent rows show: the shared
+                    // AI layer's connections and model, outside the preference values (they aren't
+                    // PhotoCraft's), and the options bar's Generative Fill button.
+                    fields_of(ui, obj, &["alwaysShowGenerativeFillButton"]);
+                    crate::genai_ui::prefs_section(app, ui);
                     ui.add_space(8.0);
-                } else if section == "integrations"
-                    && let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut)
-                {
-                    // Without the AI-MCP feature flag: the settings PhotoCraft had before.
-                    let mut shown: Map<String, Value> =
-                        obj.iter().filter(|(k, _)| LEGACY_INTEGRATIONS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
-                    section_fields(ui, &section, &mut shown, &order, lang, system, filter);
-                    obj.extend(shown);
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
                     section_fields(ui, &section, obj, &order, lang, system, filter);
                     if section == "fileHandling" {
@@ -422,6 +433,8 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
         || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb"))
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
+        // The web build has no Generative AI, so no button to show.
+        || (cfg!(target_arch = "wasm32") && path == "integrations.alwaysShowGenerativeFillButton")
         || (section == "export" && !export_field_visible(obj, k))
         || (section == "tools" && (!tools_field_visible(obj, k) || k == "tabletInput"));
     (query.is_empty() || preference_matches(section, k, query))

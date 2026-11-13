@@ -100,6 +100,7 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+pub mod genai_cmds;
 #[cfg(test)]
 mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
@@ -1420,6 +1421,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::comps_cmds::specs());
     v.extend(crate::artboard_cmds::specs());
     v.extend(crate::distort_cmds::specs());
+    v.extend(crate::genai_cmds::specs());
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());
     v.extend(crate::font_library_cmds::specs());

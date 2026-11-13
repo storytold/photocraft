@@ -234,7 +234,11 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G15. AI and generative features
-- **Missing:** Generative Fill and Expand, Generative Upscale, Neural Filters, Sky Replacement,
+- **Started (2026-11-02):** Edit › Generative Fill… through the Craft suite's shared AI layer
+  (craft-ai-integrations, the catalogue's `generative-fill` tool): the person's chosen model,
+  consent before anything leaves the computer, three variations, Generate More; see
+  `docs/generative-ai.md`. OpenAI's image models, FLUX.1 Fill and Gemini do `image.inpaint` today.
+- **Missing:** Generative Expand, Generative Upscale, Neural Filters, Sky Replacement,
   Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
   exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
 - **Evidence:** Photoshop's `Required/UXP` ships the Neural Filters gallery and its `.kys` has
@@ -498,6 +502,7 @@ what an agent can't finish alone.
 | 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |
 | 2026-11-06 | minor | G12: eraser end of flipped pens on Windows (Windows Ink on) selects the Eraser (#2285); no estimate changed |
+| 2026-11-02 | minor | G15: Generative Fill started, through the Craft suite's shared AI layer (craft-ai-integrations) with consent before sending (#41); no estimate changed |
 | 2026-10-29 | minor | G17: web build memory handling (#10024): up-front memory checks for Place, Image Size, smart-object re-render and Save; a low-memory warning; a stopped message when the module traps; PSD save reserves its whole output; no estimate changed |
 | 2026-11-10 | minor | Image Processor: current-document and all-open-document sources process in-memory copies, preserving originals and history; folder input remains available; percentages and estimates unchanged |
 | 2026-11-02 | minor | G11: Batch Esc Continue/Stop, one plan and error log across interruptions, and read-only input previews without a progress bar (#4579); live tab parity remains open, AUTO-219-5 partial; readiness and estimate unchanged |

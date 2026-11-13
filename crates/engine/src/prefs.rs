@@ -1218,6 +1218,11 @@ pub struct Integrations {
     pub connect_agents: bool,
     /// What `photocraft-cli mcp` does while agents may use the app but it is closed.
     pub when_app_closed: WhenAppClosed,
+    /// Show the Generative Fill… button in the selection tools' options bar even while no model
+    /// is set up for it (it then opens the setup). Off: the button is there only once Generative
+    /// Fill can run, so an app with no AI set up has no AI in its options bar. Last, so a section
+    /// saved as a list still reads the older fields where they were.
+    pub always_show_generative_fill_button: bool,
 }
 
 impl Default for Integrations {
@@ -1229,6 +1234,7 @@ impl Default for Integrations {
             write_root: String::new(),
             connect_agents: false,
             when_app_closed: WhenAppClosed::Launch,
+            always_show_generative_fill_button: false,
         }
     }
 }

@@ -61,12 +61,12 @@ architecture and the PSD writer are the serial parts.
 
 | Component | Weight | Ours / Photoshop | % | Kind |
 |---|---:|---|---:|---|
-| Menu commands | 30% | 631 / 631 catalog items dispatch a live command (628 / 628 on 2026-10-10) | 100% | measured (`cargo xtask parity`) |
+| Menu commands | 30% | 632 / 632 catalog items dispatch a live command (631 / 631 on 2026-10-12; 628 / 628 on 2026-10-10) | 100% | measured (`cargo xtask parity`) |
 | Toolbox tools | 15% | 59 / 68 (Photoshop's 67 `.kys` tools plus Remove, Triangle, Curvature Pen; minus legacy Rounded Rectangle and Targeted Adjustment) | 87% | measured (`Tool` enum in `ui-egui/src/state.rs`, `TOOL_SECTIONS` in `panels.rs`) |
 | Panels | 10% | 30 / 35 Window-menu panels | 86% | measured (`view_cmds.rs`, panel modules) |
 | Filters and adjustments | 10% | every Filter and Image › Adjustments item live; Filter Gallery 47 looks | 100% | measured (menu catalog) |
 | File formats (usage-weighted) | 15% | 13 of 31 Photoshop formats supported in Photoshop's directions, 4 partial; the common ones (PSD/PSB, TIFF, JPEG, PNG, WebP) all present | ~80% (48% by count) | measured list, estimated weights ([file-format-parity.md](file-format-parity.md)) |
-| AI / generative | 10% | classical Select Subject/Sky, Remove tool, Content-Aware; no Generative Fill/Expand, Neural Filters, Sky Replacement, Super Zoom | ~15% | estimated |
+| AI / generative | 10% | classical Select Subject/Sky, Remove tool, Content-Aware; Generative Fill through the Craft suite's shared AI layer (#41); no Generative Expand, Neural Filters, Sky Replacement, Super Zoom | ~15% | estimated |
 | Ecosystem (plug-ins, scripting, libraries) | 10% | WebAssembly plug-ins, CLI, MCP, actions, `.atn` load/save (112 events); no .8BF, UXP/ExtendScript, Libraries | ~20% | estimated |
 | **Weighted** | 100% | | **~76%** | |
 
@@ -486,7 +486,7 @@ filled bar. This extends UI reachability and does not claim Photoshop-authored s
 | Performance | 14k+ px on the GPU at ~⅓ the memory; adjustment preview 285 ms → 4–9 ms; font-size edits 297 ms → 4.6 ms; 2026-10-07: 30 MP TIFF open (banded, parallel strip/tile decode) Deflate 345 → 32 ms, LZW 428 → 43 ms, BigTIFF and every IFD readable; 2026-10-09: 4.2 MP Indexed Color, 256 colours, full-resolution CPU preview p50 3018 → 1061 ms (Ryzen AI 7 350, three measured runs; GPU upload excluded); 2026-10-10: Liquify 3500×2200, 800 px brush, visible 1:1 crop 3.20 → 3.63 ms p50 (5 runs) while refreshing ~9× as many pixels | medium-high on rasters | Complex layout documents still laggy (#125/#128); >16384 px GPU tiling in progress (#49). Liquify now displays source-resolution detail above 100% zoom; its ≤1 ms update target is not met (3.73 ms p95 on a Windows run; GPU upload excluded). Native Indexed Color previews run on one background worker with stale-result rejection; large palettes can still take about a second to compute. Web previews remain synchronous. |
 | Stability | Never-crash lint series, crash guard, `panic_hunt` fuzzing in the gate | medium-high | No field crash data yet. |
 | Camera RAW | DNG, CR2, Sony ARW (lossless + compressed), Nikon NEF (lossless + lossy compressed), RW2, uncompressed ORF; 2026-10-09: uncompressed Fujifilm RAF, Bayer and X-Trans (edge-directed X-Trans demosaic; 26 MP X-Trans develop 306 ms on 12 cores); 2026-10-24: uncompressed Hasselblad 3FR/FFF (the X2D II 100C; 105 MP develops in about 1.7 s) | medium | CR3, compressed RAF and compressed 3FR still open (#50); Nikon "lossy after split" decoded since 2026-10-31. Non-DNG cameras have no calibration: their colour (matrix + tone curve) is fitted per file to the camera's embedded JPEG, with the neutral sRGB-primaries fallback when the fit doesn't clearly help (2026-10-08: 8 D3200 NEFs, mean ΔE vs the camera JPEG 11.6–26.0 → 1.0–7.5); measured per-model calibration still open. |
-| AI / generative | none | ~0% | Deferred by decision (#41). |
+| AI / generative | 2026-11-02: Edit › Generative Fill through the Craft suite's shared AI layer (the person's chosen model, consent before sending; `docs/generative-ai.md`) | early | OpenAI's image models, FLUX.1 Fill and Gemini do inpainting through the layer today; Generative Expand, Upscale and Neural Filters open (#41). |
 | Ecosystem | Sandboxed WebAssembly plug-ins instead of .8BF; `.atn` actions load and save (2026-10-12); no ExtendScript/UXP; no Adobe Fonts/Libraries/cloud docs | low | By design for 8BF; scripting compatibility open. |
 | Platforms | macOS (notarized), Windows, Linux (AppImage/deb/rpm/Flatpak bundle), web | medium-high | Flathub later (#173); Windows signing material pending. |
 | Localisation | 2026-10-07: 10 UI languages; menu, `tl!`, blend mode, preference and brush-section coverage enforced by tests; live switching and scoped Preferences previews | medium | Engine errors/status messages still partly English; CJK web fonts, browser-locale detection, and RTL remain open. |
@@ -601,6 +601,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-10 | minor | Image Processor: current-document and all-open-document sources process in-memory copies, preserving originals and history; folder input remains available; percentages and estimates unchanged |
+| 2026-11-02 | minor | AI / generative: Edit › Generative Fill through the Craft suite's shared AI layer, with consent before anything is sent (#41), in the dimension row too; Menu commands row at the measured 632 / 632; percentages and estimates unchanged |
 | 2026-11-02 | minor | Automation Batch: Esc Continue/Stop preserves one file plan and error log; a read-only input preview replaces the progress bar; full live tabs remain open, AUTO-219-5 partial (#4579); percentages and estimates unchanged |
 | 2026-11-02 | minor | AUTO-219-1: action recording folds Move-tool nudges, records relative document switches and scales point text placement to the playback canvas; duplicate names and paragraph box placement remain open; Automation parity estimate unchanged |
 | 2026-11-01 | minor | AUTO-219-1: action recording uses implicit or uniquely named layers and folds Type keystrokes into whole-text steps; duplicate names remain ambiguous; Automation parity estimate unchanged |
