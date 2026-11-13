@@ -537,6 +537,13 @@ mod tests {
             assert!(s.execute("path.deleteSegment", p.clone()).is_err(), "{p}");
         }
         assert_eq!(work(&s), before, "refusals change nothing");
+        // #13606: an open Intersect subpath's halves aren't measured, so it doesn't split.
+        let line = json!({"subpaths": [{"closed": true, "knots": [[10, 10], [60, 10], [60, 60], [10, 60]]},
+            {"closed": false, "knots": [[20, 80], [50, 80], [80, 80]], "op": "Intersect"}]});
+        s.execute("path.set", json!({"path": line})).unwrap();
+        let (before, steps) = (work(&s), s.active().unwrap().history.entries().len());
+        assert!(s.execute("path.deleteSegment", json!({"subpath": 1, "knot": 0})).is_err());
+        assert_eq!((work(&s), s.active().unwrap().history.entries().len()), (before, steps), "no step, no change");
     }
 
     #[test]

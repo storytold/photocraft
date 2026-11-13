@@ -106,6 +106,25 @@ fn delete_on_a_selected_segment_removes_only_that_segment() {
     }
 }
 
+/// #13606: an open subpath that intersects splits into halves the reference may fold in
+/// differently, so its segment's Delete is refused with an alert, and still never deletes the layer.
+#[test]
+fn delete_on_a_segment_of_an_intersecting_open_subpath_is_refused() {
+    let mut app = app();
+    let path = json!({"subpaths": [
+        {"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]},
+        {"closed": false, "knots": [[400, 300], [550, 300], [700, 300]], "op": "Intersect"},
+    ]});
+    app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();
+    let (before, n, count) = (path1(&app), steps(&app), layers(&app));
+    click(&mut app, [475.0, 300.0]);
+    assert_eq!((app.ui.direct_selection.segment, app.ui.direct_selection.anchors.len()), (Some([1, 0]), 0));
+    press(&mut app, egui::Key::Delete);
+    assert_eq!(layers(&app), count, "every layer is still there");
+    assert_eq!((path1(&app), steps(&app)), (before, n), "the path and History are unchanged");
+    assert!(app.ui.status_error, "the refusal is shown: {}", app.ui.status);
+}
+
 #[test]
 fn delete_on_an_open_lines_start_leaves_its_end() {
     let mut app = app();

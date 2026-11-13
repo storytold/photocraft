@@ -6,7 +6,7 @@
 //! Knots are addressed as `[subpath, knot]`. Every edit validates its indices and returns an
 //! error message instead of panicking.
 
-use photocraft_doc::{Knot, Path, Subpath};
+use photocraft_doc::{Knot, Path, PathOp, Subpath};
 use photocraft_geom::Point;
 
 /// One of a knot's two direction handles.
@@ -293,17 +293,37 @@ pub fn delete_anchor_and_segments(path: &mut Path, [s, k]: [usize; 2]) -> Result
     Ok(false)
 }
 
+/// Can open subpath `s` split in two, the second half keeping its op, without a guess at how the
+/// reference folds the halves into the shape (#13606)? Only where "one component" and "two
+/// components with the original op" agree: a [`PathOp::Join`] subpath after the first (both
+/// halves stay in its component), or a Combine subpath that is a component of its own. Not a
+/// subpath that subtracts, intersects or excludes, the first subpath with another stored op
+/// (it acts as Combine, the copy wouldn't), or one a Join subpath after it belongs with.
+fn split_keeps_components(path: &Path, s: usize) -> bool {
+    let Some(sp) = path.subpaths.get(s) else { return false };
+    let next_joins = s.checked_add(1).and_then(|n| path.subpaths.get(n)).is_some_and(|n| n.op == PathOp::Join);
+    (s > 0 && sp.op == PathOp::Join) || (sp.op == PathOp::Combine && !next_joins)
+}
+
 /// ⌫ / Delete on a segment selected with Direct Selection: removes the segment that leaves
 /// `[s, k]` and keeps every anchor. A closed subpath opens there, starting at the segment's end
-/// and ending at `k`; an open subpath splits in two. The knots keep their handles.
+/// and ending at `k`; an open subpath splits in two. The knots keep their handles. An open
+/// subpath whose halves the reference may fold in differently is refused until #13606 is
+/// measured ([`split_keeps_components`]).
 pub fn delete_segment(path: &mut Path, [s, k]: [usize; 2]) -> Result<(), String> {
     let [_, end] = segment_end(path, [s, k])?;
+    let keeps_components = split_keeps_components(path, s);
     let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
     if sp.closed {
         // `end` is `k + 1`, or 0 when the closing segment goes.
         sp.knots.rotate_left(end);
         sp.closed = false;
         return Ok(());
+    }
+    if !keeps_components {
+        return Err(
+            "deleting this segment would split a shape component that subtracts, intersects, excludes or joins other subpaths; that isn't supported yet".into(),
+        );
     }
     // Open: `end` = `k + 1` < len.
     let rest = Subpath { closed: false, knots: sp.knots.split_off(end), op: sp.op };
@@ -421,7 +441,6 @@ pub fn hit(path: &Path, p: Point, tol: f64, handles: &[([usize; 2], Handle)]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_doc::{PathOp, Subpath};
 
     fn tri() -> Path {
         Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)])])
@@ -750,6 +769,40 @@ mod tests {
         }
         let mut lone = Path::new(vec![Subpath { closed: true, knots: vec![Knot::corner(1.0, 1.0)], op: PathOp::Combine }]);
         assert!(delete_segment(&mut lone, [0, 0]).is_err(), "a closed single anchor has no segment");
+    }
+
+    #[test]
+    fn deleting_a_segment_refuses_a_split_whose_shape_components_are_unmeasured() {
+        let square = Subpath::polygon(&[(100.0, 300.0), (300.0, 300.0), (300.0, 500.0), (100.0, 500.0)]);
+        let line = |op| Subpath { op, ..Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]) };
+        // #13606: the new half would fold in on its own (Intersect, Exclude, Subtract), act with an
+        // op the first subpath didn't, or leave the Join subpath after it in another component.
+        let refused = [
+            Path::new(vec![square.clone(), line(PathOp::Subtract)]),
+            Path::new(vec![square.clone(), line(PathOp::Intersect)]),
+            Path::new(vec![square.clone(), line(PathOp::Exclude)]),
+            Path::new(vec![line(PathOp::Subtract), square.clone()]),
+            Path::new(vec![line(PathOp::Join), square.clone()]),
+            Path::new(vec![square.clone(), line(PathOp::Combine), Subpath { op: PathOp::Join, ..square.clone() }]),
+        ];
+        for (i, before) in refused.iter().enumerate() {
+            let at = before.subpaths.iter().position(|sp| !sp.closed).unwrap();
+            let mut p = before.clone();
+            assert!(delete_segment(&mut p, [at, 0]).is_err(), "case {i}");
+            assert_eq!(&p, before, "case {i}: unchanged");
+        }
+        // A closed subpath only opens, whatever its op.
+        let mut p = Path::new(vec![square.clone(), Subpath { op: PathOp::Intersect, ..square.clone() }]);
+        delete_segment(&mut p, [1, 0]).unwrap();
+        assert_eq!((p.subpaths.len(), p.subpaths[1].closed, p.subpaths[1].op), (2, false, PathOp::Intersect));
+        // A Combine subpath on its own, and a Join one, split as before. The components, by where each
+        // ends: three of their own, or the square and both halves as one.
+        for (op, ends) in [(PathOp::Combine, vec![1, 2, 3]), (PathOp::Join, vec![3])] {
+            let mut p = Path::new(vec![square.clone(), line(op)]);
+            delete_segment(&mut p, [1, 0]).unwrap();
+            assert_eq!(p.subpaths.iter().map(|sp| sp.op).collect::<Vec<_>>(), [PathOp::Combine, op, op], "{op:?}");
+            assert_eq!(p.components().iter().map(|r| r.end).collect::<Vec<_>>(), ends, "{op:?}");
+        }
     }
 
     #[test]
