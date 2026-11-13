@@ -101,3 +101,31 @@ fn changing_the_status_of_an_opened_document_clears_every_attribute_form() {
         }
     }
 }
+
+#[test]
+fn the_name_inside_other_text_is_neither_read_nor_removed() {
+    const RDF: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#;
+    const END: &str = "</rdf:RDF></x:xmpmeta>";
+    let headline = r#"photoshop:Headline="Example xmpRights:Marked='True' text""#;
+    let quoted = [
+        format!("<rdf:Description rdf:about=\"\" {headline}/>"),
+        "<rdf:Description rdf:about=\"\"><photoshop:Credit>a xmpRights:Marked=\"True\" b</photoshop:Credit></rdf:Description>".to_string(),
+        "<rdf:Description rdf:about=\"\"><!-- <x xmpRights:Marked='True'/> --></rdf:Description>".to_string(),
+        "<rdf:Description rdf:about=\"\"><![CDATA[<x xmpRights:Marked='True'/>]]></rdf:Description>".to_string(),
+    ];
+    for desc in quoted {
+        let mut app = app();
+        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(format!("{RDF}{desc}{END}").into());
+        assert!(title(&app).starts_with("oracle @ "), "text is not the mark: {desc}");
+    }
+    // Beside a real attribute: the status change removes the attribute and keeps the headline.
+    let mut app = app();
+    let xmp = format!("{RDF}<rdf:Description rdf:about=\"\" {headline}\n   xmpRights:Marked='True'/>{END}");
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(xmp.into());
+    assert!(title(&app).starts_with("\u{a9} "));
+    status(&mut app, "unknown");
+    assert!(title(&app).starts_with("oracle @ "), "{}", title(&app));
+    let packet = app.session.documents()[0].doc.metadata.xmp.as_deref().unwrap_or_default().to_string();
+    assert!(packet.contains(headline), "the headline is unchanged: {packet}");
+    assert_eq!(packet.matches("xmpRights:Marked").count(), 1, "only the headline's text is left: {packet}");
+}

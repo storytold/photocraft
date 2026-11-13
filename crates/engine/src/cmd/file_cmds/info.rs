@@ -105,19 +105,52 @@ fn rights_marked(xmp: &str) -> Option<&str> {
 }
 
 /// Attribute form `xmpRights:Marked="…"` with either quote, any XML whitespace before the name
-/// and around the `=`, as XMP writers lay attributes out on their own lines. Returns (start, end,
-/// value) with the whitespace before the name in the span, as [`find_attr`] does, so a rewrite
-/// removes every form it reads.
+/// and around the `=`, as XMP writers lay attributes out on their own lines. Only names inside a
+/// tag count, not text in another attribute's value, element text, a comment or CDATA. Returns
+/// (start, end, value) with the whitespace before the name in the span, as [`find_attr`] does, so
+/// a rewrite removes every form it reads.
 fn marked_attr(xmp: &str) -> Option<(usize, usize, &str)> {
-    const NAME: &str = "xmpRights:Marked";
-    xmp.match_indices(NAME).find_map(|(i, _)| {
-        let start = i.checked_sub(1).filter(|&s| xmp.as_bytes().get(s).is_some_and(u8::is_ascii_whitespace))?;
-        let rest = xmp[i + NAME.len()..].trim_start().strip_prefix('=')?.trim_start();
-        let quote = rest.chars().next().filter(|&c| c == '"' || c == '\'')?;
-        let v0 = xmp.len() - rest.len() + 1;
-        let v1 = xmp[v0..].find(quote)? + v0;
-        Some((start, v1 + 1, &xmp[v0..v1]))
-    })
+    // The tab title asks every frame, and packets can be megabytes: walk only when the name is there.
+    if !xmp.contains("xmpRights:Marked") {
+        return None;
+    }
+    let b = xmp.as_bytes();
+    let (mut i, mut in_tag, mut quote) = (0, false, None);
+    while let Some(&c) = b.get(i) {
+        match (in_tag, quote) {
+            (_, Some(q)) => quote = (c != q).then_some(q),
+            (false, None) if c == b'<' => {
+                let rest = &xmp[i..];
+                let skip = [("<!--", "-->"), ("<![CDATA[", "]]>")].into_iter().find(|(open, _)| rest.starts_with(open));
+                match skip {
+                    Some((_, close)) => i += rest.find(close).map_or(rest.len(), |e| e + close.len()) - 1,
+                    None => in_tag = true,
+                }
+            }
+            (false, None) => {}
+            (true, None) => match c {
+                b'>' => in_tag = false,
+                b'"' | b'\'' => quote = Some(c),
+                _ if c.is_ascii_whitespace() => {
+                    if let Some((end, v)) = marked_value(xmp, i + 1) {
+                        return Some((i, end, v));
+                    }
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `xmpRights:Marked = "value"` starting at byte `at`: (end after the closing quote, value).
+fn marked_value(xmp: &str, at: usize) -> Option<(usize, &str)> {
+    let rest = xmp.get(at..)?.strip_prefix("xmpRights:Marked")?.trim_start().strip_prefix('=')?.trim_start();
+    let quote = rest.chars().next().filter(|&c| c == '"' || c == '\'')?;
+    let v0 = xmp.len() - rest.len() + 1;
+    let v1 = xmp[v0..].find(quote)? + v0;
+    Some((v1 + 1, &xmp[v0..v1]))
 }
 
 /// Whether File Info's Copyright Status reads Copyrighted (`xmpRights:Marked` is `True`): the
@@ -296,11 +329,10 @@ pub fn write_file_info(xmp: Option<&str>, info: &Value) -> String {
         while let Some((a, b, _)) = find_element(&x, prop) {
             x.replace_range(a..b, "");
         }
-        while let Some((a, b, _)) = find_attr(&x, prop) {
-            x.replace_range(a..b, "");
-        }
-        // Marked is also read in single quotes or after a tab or newline (#13821).
-        while let Some((a, b, _)) = (prop == "xmpRights:Marked").then(|| marked_attr(&x)).flatten() {
+        // Marked is removed in every attribute form it is read in, and only from tags (#13821).
+        loop {
+            let attr = if prop == "xmpRights:Marked" { marked_attr(&x) } else { find_attr(&x, prop) };
+            let Some((a, b, _)) = attr else { break };
             x.replace_range(a..b, "");
         }
     }
