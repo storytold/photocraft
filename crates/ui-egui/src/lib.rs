@@ -879,6 +879,8 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod transform_commit_click_tests;
+#[cfg(test)]
+mod transform_drag_start_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;
