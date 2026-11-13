@@ -147,7 +147,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     // Photoshop-style arrowhead settings at the right of Line options.
     if tool == Tool::Line {
         crate::widgets::vline(ui, 22.0);
-        ui.menu_image_button(crate::icons::image("settings", 18.0, t.icon), |ui| {
+        let mut concavity_alert = false;
+        // Stays open on clicks inside, like the Pen's gear: a click into a field to type a value
+        // would otherwise close the menu before the value was entered (#13258).
+        let config = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let gear = egui::Button::image(crate::icons::image("settings", 18.0, t.icon));
+        let menu = egui::containers::menu::MenuButton::from_button(gear).config(config);
+        let (gear, _) = menu.ui(ui, |ui| {
             let o = &mut app.ui.tool_options;
             ui.set_min_width(170.0);
             ui.label(tl!("Arrowheads"));
@@ -165,15 +171,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ui.add(egui::DragValue::new(&mut o.arrow_length).range(1.0..=4096.0).suffix(" px"));
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Concavity"));
-                ui.add(egui::DragValue::new(&mut o.arrow_concavity).range(0.0..=100.0).suffix(" %"));
+                let label = tl!("Concavity");
+                ui.label(label);
+                concavity_alert = crate::widgets::value_field_whole_alerting(ui, label, &mut o.arrow_concavity, CONCAVITY_RANGE, "%", 52.0).1;
             });
-        })
-        .response
-        .on_hover_text(tl!("Arrowhead options"));
+        });
+        gear.on_hover_text(tl!("Arrowhead options"));
+        if concavity_alert {
+            crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
+        }
     }
     true
 }
+
+/// Arrowhead Concavity in percent of the head's length, as the reference takes it (#13258).
+pub(crate) const CONCAVITY_RANGE: std::ops::RangeInclusive<f32> = -50.0..=50.0;
+
+/// The reference's alert for a Concavity typed past [`CONCAVITY_RANGE`] (#13258).
+pub(crate) const CONCAVITY_RANGE_ALERT: &str = "An integer between -50% and 50% is required. Closest value inserted.";
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection… (#5703), Mask (#12904) and
 /// Shape (#10934), from the path being drawn or the active path; all greyed without one.
@@ -281,6 +296,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     };
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
+    let mut concavity_alert = false;
     // A swatch picked in a Fill/Stroke popover joins the Recently Used Colors once the edit took it.
     let mut recent: Option<[f32; 3]> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
@@ -459,8 +475,12 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     }
                 });
                 ui.horizontal(|ui| {
+                    let label = tl!("Concavity");
+                    ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
                     let mut v = *concavity as f32;
-                    if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
+                    let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut v, CONCAVITY_RANGE, "%", 64.0);
+                    concavity_alert |= out_of_range;
+                    if r.changed() {
                         edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
                     }
                 });
@@ -527,7 +547,14 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             });
         }
     }
+    if concavity_alert {
+        crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
+    }
 }
+
+#[cfg(test)]
+#[path = "line_arrow_concavity_field_tests.rs"]
+mod line_arrow_concavity_field_tests;
 
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
