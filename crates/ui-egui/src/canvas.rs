@@ -2033,6 +2033,9 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                         let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
                         pencil_outline_cursor(painter, xf, p, size, block, cur.show_crosshair_in_brush_tip)
                     }
+                    // The Healing Brush's ⌥ (source point): the reference's fixed target at any tip
+                    // size (#12113). Unmeasured cases keep the tip with its centre mark below.
+                    PaintingCursor::NormalTip if tool == Tool::Healing && (alt || app.ui.shell.sticky_alt) => cursors::sample_target_cursor(painter, p),
                     // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                     // traces its outline, turned and flipped with the view; a plain round
                     // tip keeps the circle.

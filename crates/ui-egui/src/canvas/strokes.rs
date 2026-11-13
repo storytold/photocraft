@@ -547,6 +547,14 @@ pub(super) fn live_stroke_busy(app: &PhotocraftApp) -> bool {
     app.live_stroke.as_ref().is_some_and(|l| l.paint.busy())
 }
 
+impl PhotocraftApp {
+    /// Is the live stroke still painting, or holding steps the canvas hasn't shown yet? Lets a
+    /// test read the canvas only once what it shows is the whole stroke so far (#13477).
+    pub fn live_stroke_busy(&self) -> bool {
+        live_stroke_busy(self)
+    }
+}
+
 /// The points the live retouching stroke has rendered.
 #[cfg(test)]
 pub(crate) fn live_retouch_points(app: &PhotocraftApp) -> Option<Vec<photocraft_engine::paint::StrokePoint>> {
