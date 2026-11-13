@@ -645,11 +645,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     app.frame_tool_ctx = Some(ui.ctx().clone());
     for (icon, shape, label) in [
-        ("square", "rectangle", tl!("Create a new rectangular frame")),
-        ("circle", "ellipse", tl!("Create a new elliptical frame")),
-        ("triangle", "triangle", tl!("Create a new triangular frame")),
-        ("pentagon", "polygon", tl!("Create a new polygonal frame")),
-        ("shapes", "custom", tl!("Create a new custom frame")),
+        ("square", "rectangle", tl!("Use the mouse to create a new rectangular Frame")),
+        ("circle", "ellipse", tl!("Use the mouse to create a new elliptical Frame")),
+        ("triangle", "triangle", tl!("Use the mouse to create a new triangular Frame")),
+        ("pentagon", "polygon", tl!("Use the mouse to create a new polygonal Frame")),
+        ("shapes", "custom", tl!("Use the mouse to create a new custom Frame")),
     ] {
         let current = if app.ui.frame_tool.ellipse {
             "ellipse"
@@ -664,7 +664,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
     }
     if app.ui.frame_tool.shape == "polygon" {
-        ui.label(tl!("Sides:"));
+        ui.label(tl!("#"));
         let mut n = app.ui.frame_tool.sides.clamp(3, 100) as f32;
         crate::widgets::value_field_named(ui, tl!("Sides:"), &mut n, 3.0..=100.0, "", 44.);
         app.ui.frame_tool.sides = n as u32;
@@ -762,6 +762,8 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer) {
         }
     }
 }
+#[cfg(test)]
+mod labels_tests;
 #[cfg(test)]
 mod tests;
 
