@@ -549,6 +549,27 @@ fn load_holds_a_single_set_to_the_archive_step_budget() {
     assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains(&format!("{more} more"))), "{}", r["warnings"]);
 }
 
+/// The budget refuses a file before reading the steps that would pass it: here the second
+/// action's steps are not even readable, and the error is the budget's, not the reader's.
+#[test]
+fn load_refuses_a_file_over_the_step_budget_before_reading_its_steps() {
+    let first = AtnAction {
+        name: UnicodeString::new("First"),
+        items: vec![AtnItem { event: AtnEvent::Code(*b"zzQz"), ..Default::default() }; 60_000],
+        ..Default::default()
+    };
+    let second = AtnAction { name: UnicodeString::new("Second"), ..Default::default() };
+    let mut bytes = craft_psd::atn::write(&AtnFile { name: UnicodeString::new("Big"), actions: vec![first, second], ..Default::default() }).unwrap();
+    // The file ends with the second action's step count: declare 60,000 steps of unreadable bytes.
+    let at = bytes.len() - 4;
+    bytes[at..].copy_from_slice(&60_000u32.to_be_bytes());
+    bytes.extend(std::iter::repeat_n(0xff, 60_000 * 24));
+    let read = craft_psd::atn::parse(&bytes).unwrap_err().to_string();
+    assert!(!read.contains("too many steps"), "the one-set reader fails on the steps themselves: {read}");
+    let error = super::convert::import(&bytes).unwrap_err();
+    assert!(error.contains("too many steps"), "{error}");
+}
+
 #[test]
 fn load_lists_every_unsupported_step_under_the_bound() {
     let imp = super::convert::import(&unknown_steps(1, 3)).unwrap();

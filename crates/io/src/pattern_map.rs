@@ -438,11 +438,68 @@ pub fn read_pat(bytes: &[u8]) -> Result<Vec<Pattern>, String> {
     read_pat_with(bytes, PatternFileLimits::default())
 }
 
-/// [`read_pat`] with the file's patterns held to `limits` before any becomes a surface.
+/// [`read_pat`] with the file's patterns held to `limits` before any decodes.
 pub fn read_pat_with(bytes: &[u8], limits: PatternFileLimits) -> Result<Vec<Pattern>, String> {
+    admit_pat(bytes, limits)?;
     let ps = craft_psd::patterns::parse_pat_file(bytes).map_err(|e| format!("not a readable .pat file: {e}"))?;
+    // The decoded patterns again, should the inspection above have read less than the parser.
     admit_patterns(ps.iter().map(PatternCharge::of), limits)?;
     convert_patterns(&ps)
+}
+
+/// Where the `.pat` pattern record starting at `at` ends. A `.pat` file is `8BPT`, version u16,
+/// count u32, then the records back to back without the length a `Patt` block gives each:
+/// version u32, mode u32, height and width u16, name (u32 UTF-16 units), id (u8 length), the
+/// palette of an indexed pattern, then the virtual memory array list (version u32, length u32,
+/// body). The palette rule is craft-psd's: 4 more bytes follow it unless the list starts there.
+fn pat_record_end(b: &[u8], at: usize) -> Option<usize> {
+    let u32_at = |p: usize| Some(u32::from_be_bytes(b.get(p..p.checked_add(4)?)?.try_into().ok()?));
+    let mode = u32_at(at.checked_add(4)?)?;
+    let name_units = usize::try_from(u32_at(at.checked_add(12)?)?).ok()?;
+    let mut p = at.checked_add(16)?.checked_add(name_units.checked_mul(2)?)?;
+    let id_len = usize::from(*b.get(p)?);
+    p = p.checked_add(1)?.checked_add(id_len)?;
+    if mode == 2 {
+        p = p.checked_add(768)?;
+        if b.get(p..p.checked_add(4)?).is_some_and(|v| v != [0, 0, 0, 3]) {
+            p = p.checked_add(4)?;
+        }
+    }
+    let len = usize::try_from(u32_at(p.checked_add(4)?)?).ok()?;
+    let end = p.checked_add(8)?.checked_add(len)?;
+    (end <= b.len()).then_some(end)
+}
+
+/// Admit a `.pat` file's patterns before they decode: its declared count, then each record
+/// priced by [`craft_psd::patterns::pattern_block_memory`] (given the record as a one-pattern
+/// `Patt` block, the layout that function reads) with one budget, as the parser shares one.
+/// Records past one that doesn't read are left to the parser, which refuses the file there.
+fn admit_pat(bytes: &[u8], limits: PatternFileLimits) -> Result<(), String> {
+    if bytes.get(..4) != Some(b"8BPT".as_slice()) {
+        return Ok(());
+    }
+    let Some(count) = bytes.get(6..10).and_then(|c| <[u8; 4]>::try_from(c).ok()).map(u32::from_be_bytes) else { return Ok(()) };
+    let count = usize::try_from(count).unwrap_or(usize::MAX);
+    if count > limits.patterns {
+        return Err(format!("too many patterns in one file ({count}; at most {})", limits.patterns));
+    }
+    let mut budget = PatternBudget::default();
+    let (mut block, mut charges, mut at) = (Vec::new(), Vec::new(), 10usize);
+    for _ in 0..count {
+        let Some((end, record)) = pat_record_end(bytes, at).and_then(|end| Some((end, bytes.get(at..end)?))) else { break };
+        let Ok(len) = u32::try_from(record.len()) else { break };
+        block.clear();
+        block.try_reserve(record.len().saturating_add(4)).map_err(|error| error.to_string())?;
+        block.extend_from_slice(&len.to_be_bytes());
+        block.extend_from_slice(record);
+        let priced = craft_psd::patterns::pattern_block_memory(&block, &mut budget);
+        if priced.is_empty() {
+            break;
+        }
+        charges.extend(priced.iter().map(PatternCharge::inspected));
+        at = end;
+    }
+    admit_patterns(charges.into_iter(), limits)
 }
 
 /// Writes patterns as a `.pat` file.
@@ -728,6 +785,64 @@ mod admission_tests {
         assert!(error.contains("memory"), "{error}");
         assert_eq!(read_pat_with(&pat(&four[..2]), small).unwrap().len(), 2);
         assert_eq!(read_pat(&pat(&four)).unwrap().len(), 4);
+    }
+
+    /// A `.pat` record built by hand: `mode` (2 gets a palette, and `pad` 4 bytes after it), one
+    /// 8-bit channel of `width × height` in compression `comp`, with no data.
+    fn record(mode: u32, width: u16, height: u16, comp: u8, pad: bool) -> Vec<u8> {
+        let mut r = Vec::new();
+        for v in [1u32, mode] {
+            r.extend(v.to_be_bytes());
+        }
+        r.extend(height.to_be_bytes());
+        r.extend(width.to_be_bytes());
+        r.extend(1u32.to_be_bytes());
+        r.extend(u16::from(b'P').to_be_bytes());
+        r.extend([1, b'p']);
+        if mode == 2 {
+            r.extend([7; 768]);
+            if pad {
+                r.extend([0; 4]);
+            }
+        }
+        let rect = [0i32, 0, i32::from(height), i32::from(width)];
+        let mut body: Vec<u8> = rect.iter().flat_map(|v| v.to_be_bytes()).collect();
+        body.extend(24u32.to_be_bytes());
+        body.extend([1u32, 23, 8].iter().flat_map(|v| v.to_be_bytes()));
+        body.extend(rect.iter().flat_map(|v| v.to_be_bytes()));
+        body.extend(8u16.to_be_bytes());
+        body.push(comp);
+        r.extend(3u32.to_be_bytes());
+        r.extend((body.len() as u32).to_be_bytes());
+        r.extend(body);
+        r
+    }
+
+    fn pat_file(records: &[Vec<u8>]) -> Vec<u8> {
+        let mut f = b"8BPT".to_vec();
+        f.extend(1u16.to_be_bytes());
+        f.extend((records.len() as u32).to_be_bytes());
+        records.iter().for_each(|r| f.extend(r));
+        f
+    }
+
+    /// A pattern is priced from its header before it decodes: a 30,000² channel in a compression
+    /// the decoder refuses is refused for its memory, which only the pre-decode check can say,
+    /// while a small one reaches the decoder and fails there.
+    #[test]
+    fn pattern_files_are_priced_before_they_decode() {
+        for (mode, pad) in [(1, false), (2, false), (2, true)] {
+            let error = read_pat(&pat_file(&[record(1, 2, 2, 2, false), record(mode, 30_000, 30_000, 2, pad)])).unwrap_err();
+            assert!(error.contains("memory"), "mode {mode}, pad {pad}: {error}");
+            let error = read_pat(&pat_file(&[record(mode, 2, 2, 2, pad)])).unwrap_err();
+            assert!(error.contains("not a readable .pat file") && error.contains("compression"), "mode {mode}, pad {pad}: {error}");
+        }
+        // Every record of a parser-written file is walked and priced.
+        let four: Vec<PsdPattern> = (0..4).map(|i| dot(i, 32)).collect();
+        let small = PatternFileLimits { patterns: MAX_FILE_PATTERNS, bytes: 3 << 20 };
+        assert!(admit_pat(&pat(&four), small).unwrap_err().contains("memory"));
+        assert!(admit_pat(&pat(&four[..2]), small).is_ok());
+        assert!(admit_pat(&pat(&four), PatternFileLimits { patterns: 3, bytes: MAX_FILE_PATTERN_BYTES }).unwrap_err().contains("too many patterns"));
     }
 
     #[test]

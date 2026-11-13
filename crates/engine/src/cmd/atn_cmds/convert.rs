@@ -124,8 +124,18 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 /// [`import`], reading 8-bit step names in `encoding` (a label such as `"shift_jis"` or
 /// `"gbk"`) instead of working it out. An unknown label fails.
 pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
+    // A one-set file is held to the step budget the multi-set reader gives a whole archive. That
+    // reader charges each action's step count before reading its steps, so a file over the budget
+    // is refused before they are built; the one-set reader below has no such budget. Only the
+    // budget's refusal is taken from it: anything else is left to the one-set reader, which keeps
+    // its own rules (trailing bytes are a warning there).
+    if let Err(craft_psd::PsdError::LimitExceeded(why)) = atn::parse_sets_with_encoding(bytes, encoding)
+        && why.ends_with("in actions archive")
+    {
+        return Err(format!("{why} (a file holds at most {} steps)", atn::MAX_TOTAL_ITEMS));
+    }
     let file = atn::parse_with_encoding(bytes, encoding).map_err(|e| e.to_string())?;
-    // A one-set file is held to the step budget the multi-set reader gives a whole archive.
+    // Kept should the budgeted reader ever accept what this one reads.
     let steps = file.actions.iter().fold(0usize, |sum, a| sum.saturating_add(a.items.len()));
     if steps > atn::MAX_TOTAL_ITEMS {
         return Err(format!("too many steps in one actions file ({steps}; at most {})", atn::MAX_TOTAL_ITEMS));
