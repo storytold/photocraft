@@ -250,6 +250,16 @@ pub fn settings_toggle(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Healing Brush's button beside the brush chip uses the existing Window > Clone Source action.
+pub fn clone_source_toggle(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let on = app.ui.presets_ui.clone_source;
+    if icons::button(ui, "crosshair", 24.0, on, tl!("Toggle the Clone Source panel")).clicked()
+        && let Err(e) = crate::menus::invoke(app, ui.ctx(), "window.panel.cloneSource", json!({}))
+    {
+        app.ui.status = e;
+    }
+}
+
 /// An icon button's accessible name (icon buttons have only a tooltip).
 pub(crate) fn named(resp: egui::Response, label: &str) -> egui::Response {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(label)));

@@ -975,6 +975,22 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
             opt(ui, tl!("Sample:"));
             clone_sample_dropdown(ui, &mut o.clone_sample, indexed);
+            if tool == Tool::Healing {
+                // The shell swaps in this tool's brush; both controls use the same command
+                // gesture as Brush Settings and leave the other tools' brushes alone.
+                let before = app.session.tools.brush.clone();
+                let mut brush = before.clone();
+                let angle_alert = crate::eraser_ui::angle_field(ui, &mut brush);
+                let name = tl!("Always use pressure for size");
+                let pressure = crate::icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
+                if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+                    brush.pressure_size = !brush.pressure_size;
+                }
+                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
+                if angle_alert {
+                    open_alert_once(app, crate::eraser_ui::ANGLE_RANGE_MESSAGE);
+                }
+            }
             if app.session.presets.clone.active().source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
@@ -1240,3 +1256,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "../healing_bar_angle_pressure_tests.rs"]
+mod healing_bar_angle_pressure_tests;

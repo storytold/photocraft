@@ -137,7 +137,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             || tool == Tool::QuickSelection
                         {
                             brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
-                            crate::brush_picker::settings_toggle(app, ui);
+                            if tool == Tool::Healing {
+                                crate::brush_picker::clone_source_toggle(app, ui);
+                            } else {
+                                crate::brush_picker::settings_toggle(app, ui);
+                            }
                             widgets::vline(ui, 22.0);
                         }
                         if matches!(tool, Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush | Tool::Healing | Tool::ArtHistoryBrush) {
