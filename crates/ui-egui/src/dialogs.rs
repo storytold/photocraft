@@ -104,6 +104,7 @@ pub(crate) mod params {
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
         ParamFamily {
+            check: Some(conditional_mode_change_dialog::check),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == conditional_mode_change_dialog::COMMAND, conditional_mode_change_dialog::run)
         },
