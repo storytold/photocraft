@@ -1251,12 +1251,14 @@ fn hand_pointer_over_the_canvas_under_a_dialog() {
 fn esc_ends_a_pen_path_and_keeps_it() {
     let mut h = harness();
     h.state_mut().ui.tool = crate::state::Tool::Pen;
+    h.state_mut().ui.views[0].rotation = 40.0;
     let owner = crate::vector_ui::capture_pen_owner(h.state());
     h.state_mut().ui.pen =
         Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], owner, ..Default::default() });
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.pen.is_none(), "the Pen leaves drawing state");
+    assert_eq!(h.state().ui.views[0].rotation, 40.0, "the active path owns Escape");
     let doc = &h.state().session.active().unwrap().doc;
     let path = doc.work_path.as_ref().expect("the path is kept as the work path");
     assert_eq!(path.subpaths.len(), 1);
@@ -1295,6 +1297,27 @@ fn pen_shows_the_close_path_pointer_over_the_first_anchor() {
     assert_eq!(pointer(&mut h, 50.0, 50.0), close, "back on the first anchor");
 }
 
+/// A rotated view takes the first idle Esc; the next retains normal deselection.
+#[test]
+fn escape_resets_rotation_before_idle_deselection_for_paint_tools() {
+    for tool in [crate::state::Tool::Brush, crate::state::Tool::Pencil] {
+        let mut h = harness();
+        h.state_mut().ui.tool = tool;
+        h.state_mut().ui.views[0].rotation = 40.0;
+        h.state_mut().run("select.all", json!({})).unwrap();
+        h.run_steps(1);
+        let history = h.state().session.active().unwrap().history.entries().len();
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert_eq!(h.state().ui.views[0].rotation, 0.0, "{tool:?}");
+        assert!(h.state().session.active().unwrap().doc.selection.is_some(), "first Esc keeps the selection");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), history, "view reset is not an edit");
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().session.active().unwrap().doc.selection.is_none(), "second Esc deselects normally");
+    }
+}
+
 /// Esc with no active operation deselects (#2674), like ⌘D.
 #[test]
 fn escape_deselects_when_nothing_else_needs_cancelling() {
@@ -1318,11 +1341,13 @@ fn escape_deselects_when_nothing_else_needs_cancelling() {
 fn escape_with_a_dialog_open_cancels_the_dialog_not_the_selection() {
     let mut h = harness();
     h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().ui.views[0].rotation = 40.0;
     open_dialog(&mut h);
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.dialogs.is_empty(), "Esc cancelled the dialog");
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the selection stays");
+    assert_eq!(h.state().ui.views[0].rotation, 40.0, "the dialog owns the first Esc");
 }
 
 /// The command palette owns Esc: it closes the palette and the selection stays.

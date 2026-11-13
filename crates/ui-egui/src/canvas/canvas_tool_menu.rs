@@ -518,8 +518,9 @@ pub const NO_SELECTION_MENU: &[Row] = &[
 ];
 
 /// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
-/// tool's canvas menu on a marker or off one (#11772), and the Red Eye tool's without a selection. Each row is enabled as the Layers panel
-/// menu enables it for the active layer (`menus::is_enabled`) and runs like the menu item.
+/// tool's canvas menu on a marker or off one (#11772), and the Red Eye and Object Selection
+/// (#12866) tools' without a selection. Each row is enabled as the Layers panel menu enables it
+/// for the active layer (`menus::is_enabled`) and runs like the menu item.
 pub const COUNT_MENU: &[Row] = &[
     Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
     None,
@@ -543,8 +544,9 @@ pub const COUNT_MENU: &[Row] = &[
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
-/// The selection menu as measured in the reference application with the Red Eye tool (#12577):
-/// no Distort or Perspective, and Delete and Fill Selection after the fills.
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577) and
+/// the Object Selection tool (#12866): no Distort or Perspective, and Delete and Fill Selection
+/// after the fills.
 pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
     None,
     Some(("Fill…", "edit.fill")),
@@ -851,7 +853,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         SAMPLER_MENU
     } else if menu.tool == Tool::Count {
         COUNT_MENU
-    } else if menu.tool == Tool::RedEye {
+    } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
         if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
@@ -1838,3 +1840,6 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+
+#[cfg(test)]
+mod object_selection_menu_tests;
