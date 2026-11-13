@@ -852,6 +852,8 @@ mod size_hud_tests;
 #[cfg(test)]
 mod space_move_tests;
 #[cfg(test)]
+mod labels_tests;
+#[cfg(test)]
 mod tests;
 
 /// Free Transform on the frame thumbnail edits the clipping geometry, leaving its image intact.
