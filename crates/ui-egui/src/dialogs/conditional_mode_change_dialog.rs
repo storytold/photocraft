@@ -1,6 +1,6 @@
 //! File › Automate › Conditional Mode Change… (#13676), laid out like Photoshop's dialog: a
 //! Source Mode section of eight independent checkboxes in two columns with All and None, and a
-//! Target Mode section whose Mode list holds the modes the command converts to.
+//! Target Mode section whose Mode list holds the same eight modes (#13678).
 //!
 //! The checkboxes are one custom row of the command's form: `from` is the list of ticked source
 //! ids and `to` the target id, so OK, Reset and `ui.dialog.set` work as for every form.
@@ -17,9 +17,9 @@ use serde_json::{Value, json};
 
 pub(crate) const COMMAND: &str = "file.automate.conditionalModeChange";
 
-/// Photoshop's mode order. The checkboxes fill the left column, then the right one, and the
-/// ticked ones go to `from` in this order.
-const SOURCES: [(&str, &str); 8] = [
+/// Photoshop's mode order, for the sources and the targets alike. The checkboxes fill the left
+/// column, then the right one, and the ticked ones go to `from` in this order.
+const MODES: [(&str, &str); 8] = [
     ("bitmap", "Bitmap"),
     ("grayscale", "Grayscale"),
     ("duotone", "Duotone"),
@@ -30,12 +30,9 @@ const SOURCES: [(&str, &str); 8] = [
     ("multichannel", "Multichannel"),
 ];
 
-/// The targets the command converts to, in the same order.
-const TARGETS: [(&str, &str); 4] = [("grayscale", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
-
 /// The rows of the dialog: every source ticked ("any") and RGB Color.
 pub(crate) fn rows() -> Vec<Param> {
-    let targets = TARGETS.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect();
+    let targets = MODES.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect();
     vec![
         Param::section(tl!("Source Mode")),
         Param::custom("from", Label::Empty, sources_row).opens_with(FieldValue::Text("any".into())).full_width(),
@@ -76,14 +73,14 @@ const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
 /// `Grid` the framework's checkboxes took the whole height left in the dialog, one row each.
 fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::patterns::form_dialogs::CustomContext) -> egui::Response {
     let from = from_value(fields);
-    let mut on = SOURCES.map(|(id, _)| ticked(&from, id));
+    let mut on = MODES.map(|(id, _)| ticked(&from, id));
     let before = on;
     let response = Stack::new()
         .show(ui, |ui, _| {
             Grid::new(COLUMNS).fit(GridFit::Fixed).show(ui, |ui, _| {
                 for row in 0..4 {
                     for i in [row, row + 4] {
-                        Checkbox::new(Bind::bound(&mut on[i])).label(tl!(SOURCES[i].1)).show(ui);
+                        Checkbox::new(Bind::bound(&mut on[i])).label(tl!(MODES[i].1)).show(ui);
                     }
                 }
             });
@@ -97,7 +94,7 @@ fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::
         })
         .output;
     if on != before {
-        let ticked: Vec<&str> = SOURCES.iter().zip(on).filter(|(_, on)| *on).map(|((id, _), _)| *id).collect();
+        let ticked: Vec<&str> = MODES.iter().zip(on).filter(|(_, on)| *on).map(|((id, _), _)| *id).collect();
         fields.set("from", FieldValue::Json(json!(ticked)));
     }
     response

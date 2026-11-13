@@ -130,7 +130,8 @@ fn the_mode_list_names_the_targets_in_full() {
     let to = rows.iter().find(|p| p.key == "to").expect("a Mode list");
     let craft::ui::patterns::form_dialogs::ParamKind::Choice { options, default, .. } = &to.kind else { panic!("Mode is a list") };
     let names: Vec<&str> = options.iter().map(|(_, label)| label.as_str()).collect();
-    assert_eq!(names, ["Grayscale", "RGB Color", "CMYK Color", "Lab Color"]);
+    // #13678: all eight modes, in Photoshop's order.
+    assert_eq!(names, ["Bitmap", "Grayscale", "Duotone", "Indexed Color", "RGB Color", "CMYK Color", "Lab Color", "Multichannel"]);
     assert_eq!(default.as_deref(), Some("rgb"));
     assert_eq!(to.label.as_str(), "Mode");
 }
