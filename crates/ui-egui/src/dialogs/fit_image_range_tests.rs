@@ -1,5 +1,8 @@
 use egui::{Event, Key, Modifiers, accesskit::Role};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::{Value, json};
 
 use super::{fit_image_range::Alert, show};
@@ -8,9 +11,15 @@ use crate::{PhotocraftApp, Services, state::DialogKind};
 const FIT_IMAGE: &str = "file.automate.fitImage";
 
 fn open() -> (Harness<'static, PhotocraftApp>, u64) {
+    open_with_renderer(false)
+}
+
+fn open_with_renderer(gpu: bool) -> (Harness<'static, PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+    let builder = Harness::builder().with_size(egui::vec2(1000.0, 700.0));
+    let builder = if gpu { builder.wgpu() } else { builder };
+    let mut h = builder.build_ui_state(|ui, app| show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let ctx = h.ctx.clone();
     let id = crate::menus::invoke(h.state_mut(), &ctx, FIT_IMAGE, json!({})).unwrap()["dialog"].as_u64().unwrap();
@@ -101,7 +110,9 @@ fn zero_on_submit_resizes_once_using_one_pixel() {
         }
         h.run_steps(4);
         assert_eq!(dimensions(&h), (1, 1));
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), past + 1);
+        let history = &h.state().session.active().unwrap().history;
+        assert_eq!(history.past_len(), past + 1);
+        assert_eq!(history.entries().last().map(String::as_str), Some("Image Size"));
         assert!(h.state().ui.dialogs.iter().all(|dialog| dialog.id != id));
         alert(&h, Alert::Closest);
         h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -123,12 +134,43 @@ fn invalid_submit_keeps_the_dialog_open_without_resizing() {
 #[test]
 fn programmatic_dialog_confirmation_validates_both_sides() {
     let (mut h, id) = open();
+    type_side(&mut h, "Width", "350");
+    h.key_press(Key::Tab);
+    h.run_steps(4);
     let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
     fields.insert("width".into(), json!("abc"));
     fields.insert("height".into(), json!(-1));
     assert!(super::confirm(h.state_mut(), id).is_err());
     alert(&h, Alert::Invalid);
-    assert_eq!(field(&h, id, "width"), 400);
+    assert_eq!(field(&h, id, "width"), 350);
     assert_eq!(field(&h, id, "height"), 1);
     assert_eq!(dimensions(&h), (400, 300));
+}
+
+#[test]
+fn cancel_discards_an_uncommitted_entry() {
+    let (mut h, _) = open();
+    type_side(&mut h, "Width", "abc");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(h.state().ui.dialogs.is_empty());
+    assert_eq!(dimensions(&h), (400, 300));
+}
+
+#[test]
+fn fit_image_range_gpu_snapshots() {
+    let Some(directory) = std::env::var_os("PHOTOCRAFT_FIT_IMAGE_SNAPSHOTS") else { return };
+    let directory = std::path::PathBuf::from(directory);
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, _) = open_with_renderer(true);
+    h.render().unwrap().save(directory.join("dialog.png")).unwrap();
+    for (input, expected, name) in [("-50", Alert::Closest, "range"), ("abc", Alert::Invalid, "invalid")] {
+        type_side(&mut h, "Width", input);
+        h.key_press(Key::Tab);
+        h.run_steps(4);
+        alert(&h, expected);
+        h.render().unwrap().save(directory.join(format!("{name}.png"))).unwrap();
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+    }
 }

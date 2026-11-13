@@ -632,6 +632,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut drag = egui::Vec2::ZERO;
         let mut close_clicked = false;
         let mut sizing = false;
+        let mut fit_image_alert = None;
         let area = match start {
             Some(offset) => egui::Modal::default_area(id).anchor(egui::Align2::LEFT_TOP, offset),
             None => egui::Modal::default_area(id),
@@ -724,14 +725,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::widgets::hairline(ui);
             ui.add_space(8.0);
             crate::field_tab::begin(ui.ctx());
-            let fit_image_alert = if fit_image_range::owns(&fields) {
-                fit_image_range::body(ui, &mut fields)
+            if fit_image_range::owns(&fields) {
+                fit_image_alert = fit_image_range::body(ui, &mut fields);
             } else {
-                if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
-                    outcome = Some(done);
-                }
-                None
-            };
+                outcome = dialog_body(app, ui, &d, &mut fields, id, interactive);
+            }
             crate::field_tab::end(ui.ctx(), tab);
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
@@ -756,15 +754,6 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     outcome = done.or(outcome);
                     apply_requested |= apply;
                 });
-            }
-            if interactive
-                && outcome != Some(false)
-                && let Some(alert) = fit_image_alert
-            {
-                crate::panels::options_bar::range_alert(&mut app.ui, alert.message());
-                if alert == fit_image_range::Alert::Invalid {
-                    outcome = None;
-                }
             }
             // The frame around the content (Frame::popup's margin and stroke).
             ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
@@ -805,6 +794,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         {
             outcome = Some(false);
         }
+        outcome = fit_image_range::finish(&mut app.ui, interactive, fit_image_alert, outcome);
         if let Some(dm) = app.ui.dialog_mut(d.id) {
             dm.fields = fields;
         }
@@ -1185,14 +1175,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
-    if let Some(dialog) = app.ui.dialog_mut(id).filter(|dialog| fit_image_range::owns(&dialog.fields))
-        && let Some(alert) = fit_image_range::validate(&mut dialog.fields)
-    {
-        crate::panels::options_bar::range_alert(&mut app.ui, alert.message());
-        if alert == fit_image_range::Alert::Invalid {
-            return Err(tl!(alert.message()).into());
-        }
-    }
+    fit_image_range::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
