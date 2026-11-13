@@ -1426,8 +1426,13 @@ impl Preferences {
     /// Set a value by dotted path, validating it. Unknown paths and wrong types are errors.
     pub fn set(&mut self, path: &str, value: Value) -> std::result::Result<(), String> {
         // `set_path` skips empty segments, so `.alternateShortcuts.x` would reach the typed state
-        // below the per-path validators above; refuse such paths instead.
-        if path.split('.').any(str::is_empty) {
+        // below the per-path validators above; refuse such paths instead. A folder suffix is one
+        // literal map key, including its dots, but must not be empty.
+        let invalid_path = match path.strip_prefix("collapsedActionSets.") {
+            Some(name) => name.is_empty(),
+            None => path.split('.').any(str::is_empty),
+        };
+        if invalid_path {
             return Err(format!("invalid preference path `{path}`"));
         }
         if path == "alternateShortcuts" {

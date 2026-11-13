@@ -292,19 +292,26 @@ fn preferences_reset_removes_keyed_overrides() {
 #[test]
 fn action_folder_preferences_use_literal_names_and_boolean_values() {
     let mut s = session();
-    let folders = json!({"Retouch": true, "folder.gridColor": false});
+    let folders = json!({"Retouch": true, "folder.gridColor": false, ".Retouch": true, "Retouch..v2": false, "Retouch.": true});
     // A full preference object must restore the map, including literal dotted names.
     s.execute("prefs.set", json!({"path": "", "value": {"collapsedActionSets": folders}})).unwrap();
     assert_eq!(s.execute("prefs.get", json!({"path": "collapsedActionSets"})).unwrap(), folders);
-    for collapsed in [true, false] {
-        s.execute("prefs.set", json!({"path": "collapsedActionSets.folder.gridColor", "value": collapsed})).unwrap();
-        assert_eq!(s.execute("prefs.get", json!({"path": "collapsedActionSets.folder.gridColor"})).unwrap(), collapsed);
+    for name in ["folder.gridColor", ".Retouch", "Retouch..v2", "Retouch."] {
+        let path = format!("collapsedActionSets.{name}");
+        for collapsed in [true, false] {
+            s.execute("prefs.set", json!({"path": path, "value": collapsed})).unwrap();
+            assert_eq!(s.execute("prefs.get", json!({"path": path})).unwrap(), collapsed);
+        }
     }
     let mut restored = Session::new();
     restored.load_prefs_json(&s.prefs_to_json()).unwrap();
     assert_eq!(restored.prefs(), s.prefs());
     for params in [
         json!({"path": "collapsedActionSets.folder.gridColor", "value": "false"}),
+        json!({"path": "collapsedActionSets.", "value": true}),
+        json!({"path": ".collapsedActionSets.Retouch", "value": true}),
+        json!({"path": "general..beepWhenDone", "value": true}),
+        json!({"path": ".alternateShortcuts.x", "value": []}),
         json!({"path": "collapsedActionSets", "value": {"Other": true, "Bad": 1}}),
         json!({"path": "", "value": {"collapsedActionSets": {"Other": true, "Bad": null}}}),
         json!({"values": {"collapsedActionSets.Other": true, "collapsedActionSets.Wrong": []}}),
@@ -313,9 +320,12 @@ fn action_folder_preferences_use_literal_names_and_boolean_values() {
         assert!(s.execute("prefs.set", params.clone()).is_err(), "{params}");
         assert_eq!(s.prefs_value(), before);
     }
-    for _ in 0..2 {
-        s.execute("prefs.reset", json!({"path": "collapsedActionSets.folder.gridColor"})).unwrap();
-        assert!(s.execute("prefs.get", json!({"path": "collapsedActionSets.folder.gridColor"})).is_err());
+    for name in ["folder.gridColor", ".Retouch", "Retouch..v2", "Retouch."] {
+        let path = format!("collapsedActionSets.{name}");
+        for _ in 0..2 {
+            s.execute("prefs.reset", json!({"path": path})).unwrap();
+            assert!(s.execute("prefs.get", json!({"path": path})).is_err());
+        }
     }
     assert_eq!(s.execute("prefs.get", json!({"path": "collapsedActionSets.Retouch"})).unwrap(), true);
     s.execute("prefs.set", json!({"path": "", "value": {"collapsedActionSets": {}}})).unwrap();
