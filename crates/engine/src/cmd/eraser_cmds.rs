@@ -187,9 +187,10 @@ fn background_eraser(s: &mut Session, p: &Value) -> Result<Value> {
         let surf = l.surface_mut().ok_or_else(|| bad(CMD, "not a pixel layer"))?;
         if let Some(colors) = colors {
             let effect = selected_background_effect(surf, &bs, colors, bg);
-            Ok(photocraft_paint::retouch::apply_dab_stroke(surf, &background_eraser_stroke(&stroke), selection.as_ref(), false, 0, effect))
+            photocraft_paint::retouch::apply_dab_stroke(surf, &background_eraser_stroke(&stroke), selection.as_ref(), false, 0, effect)
+                .map_err(|e| bad(CMD, e.to_string()))
         } else {
-            Ok(apply_background_eraser(surf, &stroke, &bs, selection.as_ref()))
+            apply_background_eraser(surf, &stroke, &bs, selection.as_ref()).map_err(|e| bad(CMD, e.to_string()))
         }
     })?;
     Ok(damage(s, dmg, true))
