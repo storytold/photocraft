@@ -2232,6 +2232,13 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     if primary {
         app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
+        // A focused document window can remain primary after another document becomes active.
+        if let Some(at) = app.hover_doc
+            && app.session.active().is_some_and(|st| st.doc.id == doc.id)
+            && crate::preset_panels::remember_clone_cursor(app, at)
+        {
+            ctx.request_repaint();
+        }
     }
     if primary && app.ui.extras.rulers {
         let before = app.guide_drag;
