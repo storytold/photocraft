@@ -910,8 +910,8 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
         // A Direct Selection drag (a Cmd-drag on an anchor) never reaches `app.drag`: Esc must not
-        // leave full screen or deselect pixels while its release is still to come (#13072).
-        || (app.ui.tool == Tool::DeleteAnchorPoint && app.ui.direct_selection.drag.is_some())
+        // leave full screen or deselect pixels while its release is still to come (#13072, #12728).
+        || (matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint) && app.ui.direct_selection.drag.is_some())
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
         || app.ui.layer_menu.is_some()
@@ -951,14 +951,15 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Delete Anchor Point (#12773): Esc first hides the anchors of the saved path targeted in the
-    // Paths panel, then deselects that path, so clicks edit nothing. The first Esc leaves the path
-    // targeted whether or not an anchor was selected (#13072), and clears only anchors selected on
-    // that path, never another path's. Not while its name is typed in the panel: egui has already
-    // dropped the field's focus, and the panel cancels on Esc. A Direct Selection drag keeps Esc
-    // away through `esc_taken` above, so its release still moves the anchors (#13072).
+    // Add (#12728) and Delete Anchor Point (#12773): Esc first hides the anchors of the saved path
+    // targeted in the Paths panel, then deselects that path, so clicks edit nothing. The first Esc
+    // leaves the path targeted whether or not an anchor was selected (#13072), and clears only
+    // anchors selected on that path, never another path's. Not while its name is typed in the
+    // panel: egui has already dropped the field's focus, and the panel cancels on Esc. A Direct
+    // Selection drag keeps Esc away through `esc_taken` above, so its release still moves the
+    // anchors (#13072).
     if !esc_taken
-        && app.ui.tool == Tool::DeleteAnchorPoint
+        && matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint)
         && !crate::vector_ui::path_renaming(app, ctx)
         && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
     {
