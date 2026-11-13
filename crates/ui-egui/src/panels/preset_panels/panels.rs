@@ -525,9 +525,12 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let g = named(crate::icons::button(ui, "settings", 24.0, false, tl!("Custom Shape Options")), "Custom Shape Options");
             if g.clicked() {
                 let open = ctx.data(|d| d.get_temp::<PickerMenu>(menu_id));
-                ctx.data_mut(|d| match open {
-                    Some(PickerMenu::Gear) => drop(d.remove::<PickerMenu>(menu_id)),
-                    _ => d.insert_temp(menu_id, PickerMenu::Gear),
+                ctx.data_mut(|d| {
+                    if open == Some(PickerMenu::Gear) {
+                        d.remove::<PickerMenu>(menu_id);
+                    } else {
+                        d.insert_temp(menu_id, PickerMenu::Gear);
+                    }
                 });
             }
             gear = Some(g);
