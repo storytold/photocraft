@@ -32,6 +32,17 @@ fn target(app: &PhotocraftApp) -> Option<(PathRef, Path)> {
     active_paths(app).into_iter().next()
 }
 
+/// A Path Selection press on a shape layer, off every component of the targeted saved path:
+/// the saved path is no longer the target, so the press and drag act on the shape (#13270).
+/// A press on one of the saved path's components keeps it targeted.
+pub(crate) fn untarget_saved_path_off(app: &mut PhotocraftApp, at: [f64; 2], tol: f64) {
+    if let Some((PathRef::Saved(_), path)) = target(app)
+        && component_at(&path, at, tol).is_none()
+    {
+        app.ui.selected_path = None;
+    }
+}
+
 /// The selected components: their path and the first subpath of each, in order. `None` with
 /// nothing selected, a selection on a path that is not an active one any more, or a tool other
 /// than Path Selection (the only one that shows it, so the only one that acts on it).
@@ -52,6 +63,12 @@ pub(crate) fn selected(app: &PhotocraftApp) -> Option<(PathRef, Path, Vec<usize>
     (!heads.is_empty()).then_some((r, path, heads))
 }
 
+/// Deselects every component (and anchor), leaving the path itself as it is. Shared with Direct
+/// Selection's Enter (#13208).
+pub(crate) fn deselect_components(app: &mut PhotocraftApp) {
+    app.ui.direct_selection = DirectSelection::default();
+}
+
 /// The operation every selected component has, for the menu's icon; `None` when they differ.
 pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
     let (_, path, heads) = selected(app)?;
@@ -64,7 +81,7 @@ pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
 /// for the next path. New Layer is not an operation a component can have: it only sets the tool.
 /// The first component always combines (it is what the others act on), so it keeps its operation.
 pub(crate) fn set_op(app: &mut PhotocraftApp, op: &str) -> Result<(), String> {
-    app.ui.tool_options.pen_path_op = op.into();
+    *crate::vector_ui::path_op_field(app) = op.into();
     if op == "newLayer" {
         return Ok(());
     }
@@ -272,3 +289,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "path_selection_enter_escape_tests.rs"]
+mod path_selection_enter_escape_tests;
