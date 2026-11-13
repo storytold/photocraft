@@ -5,11 +5,13 @@
 //! handle with one `edit.transform` (which keeps live shapes live), as one History step named
 //! "Transform Path". No Free Transform session opens, and there is no rotate zone. A corner
 //! scales both ways, the pointer projected onto the box diagonal as Free Transform's corner does
-//! (#11096); an edge middle scales one way. The corner radius widgets (`corner_radius`) keep
-//! priority on a press.
+//! (#11096); an edge scales one way, grabbed at its middle handle or anywhere along its line
+//! (#11473). The corner radius widgets (`corner_radius`) keep priority on a press.
+//! With the Line tool, a live line shows its own end and midpoint controls instead; its ends still
+//! scale it as the box's handles there do.
 
 use egui::{Color32, CursorIcon, Modifiers, Pos2, Stroke, vec2};
-use photocraft_doc::LayerContent;
+use photocraft_doc::{LayerContent, LiveShape};
 use photocraft_geom::Affine;
 use serde_json::json;
 
@@ -23,6 +25,18 @@ const MIN_SCALE: f64 = 0.01;
 const MAX_SCALE: f64 = 100.0;
 /// A handle is grabbed within this many screen points.
 const GRAB_PX: f64 = 7.0;
+/// Away from the handles, a side is grabbed anywhere along its line and up to this many screen
+/// points outside it (#11473). Inside the box only the line itself counts: a press just inside
+/// still selects or draws, as the tool does there. The band stays narrower than a handle: unlike
+/// Free Transform's box, which rotates everywhere outside, this box leaves the outside to the tool
+/// (select or move another shape, draw a new one, start a marquee).
+const EDGE_PX: f64 = 5.0;
+/// How far inside the box a point still counts as on its line, in screen points: rounding of the
+/// pointer through the view, not a grab area.
+const LINE_PX: f64 = 1e-3;
+/// Path Selection's pick tolerance on a press, in screen points (`tool_input`, `path_ops`): a
+/// shape's outline within it is that shape's, so a stroke-only neighbour keeps its press too.
+const PICK_PX: f64 = 6.0;
 
 /// A handle drag in progress.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +64,100 @@ pub struct Drag {
 fn shows(app: &PhotocraftApp) -> bool {
     app.ui.transform.is_none()
         && app.ui.view.shows(app.ui.view.show.target_path)
-        && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line)
+        && matches!(app.ui.tool, Tool::PathSelection | Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line)
+        // A live line shows its own controls instead (#13263); a drag from one of its ends keeps
+        // the box until the release.
+        && (app.ui.shape_box.is_some() || live_line(app).is_none())
+}
+
+/// A live line's ends and, with an arrowhead, the corners of its box aligned with the segment.
+struct LiveLine {
+    from: [f64; 2],
+    to: [f64; 2],
+    rotated: Option<[[f64; 2]; 4]>,
+}
+
+/// With the Line tool, the active layer's live line when it is the whole selection.
+fn live_line(app: &PhotocraftApp) -> Option<LiveLine> {
+    if app.ui.tool != Tool::Line {
+        return None;
+    }
+    let st = app.session.active()?;
+    let id = st.active_layer?;
+    if st.selected_layers() != [id] {
+        return None;
+    }
+    let LayerContent::Shape(sh) = &st.doc.layer(id)?.content else { return None };
+    let (from, to, arrow) = match sh.live.as_ref()? {
+        LiveShape::Line { from, to, .. } => (*from, *to, false),
+        LiveShape::ArrowLine { from, to, start, end, .. } => (*from, *to, *start || *end),
+        _ => return None,
+    };
+    let len = (to[0] - from[0]).hypot(to[1] - from[1]);
+    if !(from.iter().chain(&to).all(|v| v.is_finite()) && len > 0.0) {
+        return None;
+    }
+    let rotated = arrow.then(|| {
+        // The path's control points in the segment's frame: `u` along it, `n` across it.
+        let (u, n) = ([(to[0] - from[0]) / len, (to[1] - from[1]) / len], [(from[1] - to[1]) / len, (to[0] - from[0]) / len]);
+        let at = |a: f64, b: f64| [from[0] + u[0] * a + n[0] * b, from[1] + u[1] * a + n[1] * b];
+        let mut r = [0.0, 0.0, len, 0.0];
+        for p in sh.path.subpaths.iter().flat_map(|s| &s.knots).flat_map(|k| [k.anchor, k.in_ctrl, k.out_ctrl]) {
+            let (dx, dy) = (p.x - from[0], p.y - from[1]);
+            let (a, b) = (dx * u[0] + dy * u[1], dx * n[0] + dy * n[1]);
+            r = [r[0].min(a), r[1].min(b), r[2].max(a), r[3].max(b)];
+        }
+        [at(r[0], r[1]), at(r[2], r[1]), at(r[2], r[3]), at(r[0], r[3])]
+    });
+    Some(LiveLine { from, to, rotated })
+}
+
+/// The live line whose controls show, under the box's own view conditions.
+fn line_controls(app: &PhotocraftApp) -> Option<LiveLine> {
+    (app.ui.transform.is_none() && app.ui.view.shows(app.ui.view.show.target_path)).then(|| live_line(app)).flatten()
+}
+
+/// The box handle an end of the live line within `tol` of document point `p` stands for: the
+/// corner (on a level or upright line the side) the end points to, away from the other end. Its
+/// drag scales the line as that handle's does; the other handles and the sides are hidden, so they
+/// take no press.
+fn line_end_hit(l: &LiveLine, p: [f64; 2], tol: f64) -> Option<[i8; 2]> {
+    let sign = |d: f64| i8::from(d > 0.0) - i8::from(d < 0.0);
+    [(l.to, l.from), (l.from, l.to)]
+        .into_iter()
+        .map(|(end, other)| ([sign(end[0] - other[0]), sign(end[1] - other[1])], (end[0] - p[0]).hypot(end[1] - p[1])))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
+}
+
+/// The Line tool's controls on its live line (#13263), drawn instead of the box: a handle at each
+/// end and a round widget at the midpoint; with an arrowhead also the box aligned with the segment
+/// and its side handles. Only the end handles take a press (`line_end_hit`).
+pub fn draw_line_controls(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
+    // While an end is dragged the box draws the scaled preview instead.
+    if app.ui.shape_box.is_some() {
+        return;
+    }
+    let Some(LiveLine { from, to, rotated }) = line_controls(app) else { return };
+    let square = |at: [f64; 2]| {
+        let h = egui::Rect::from_center_size(to_scr(at), vec2(7.0, 7.0));
+        painter.rect_filled(h, 0.0, Color32::WHITE);
+        painter.rect_stroke(h, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+    };
+    if let Some(c) = rotated {
+        painter.add(egui::Shape::closed_line(c.map(to_scr).to_vec(), Stroke::new(1.0, accent)));
+        for i in 0..4 {
+            let (a, b) = (c[i], c[(i + 1) % 4]);
+            square([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]);
+        }
+    }
+    square(from);
+    square(to);
+    // As the corner radius widgets look (`corner_radius::draw`).
+    let mid = to_scr([(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0]);
+    painter.circle(mid, 5.0, Color32::WHITE, Stroke::new(1.5, accent));
+    painter.circle_filled(mid, 2.5, accent);
 }
 
 /// The selected shape layers and the box round their paths. `None` unless at least one layer is
@@ -130,14 +237,51 @@ fn zoom(app: &PhotocraftApp) -> f64 {
     f64::from(app.point_zoom().max(0.01))
 }
 
-/// The handle within grabbing distance of document point `p`, the nearest.
+/// The handle within grabbing distance of document point `p`, the nearest; else the side whose
+/// line it is on or just outside, as that side's middle handle, unless an unselected shape is
+/// there. The handles come first, so a corner keeps its press where the sides' bands meet it.
 fn hit(app: &PhotocraftApp, p: [f64; 2]) -> Option<[i8; 2]> {
+    if let Some(l) = line_controls(app) {
+        return line_end_hit(&l, p, GRAB_PX / zoom(app));
+    }
     if !shows(app) {
         return None;
     }
-    let (_, r) = selection(app)?;
-    let tol = GRAB_PX / zoom(app);
-    handles(r).into_iter().map(|(h, at)| (h, (at[0] - p[0]).hypot(at[1] - p[1]))).filter(|(_, d)| *d <= tol).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
+    let (layers, r) = selection(app)?;
+    let zoom = zoom(app);
+    let tol = GRAB_PX / zoom;
+    handles(r)
+        .into_iter()
+        .map(|(h, at)| (h, (at[0] - p[0]).hypot(at[1] - p[1])))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
+        .or_else(|| edge_hit(r, p, EDGE_PX / zoom, LINE_PX / zoom).filter(|_| !on_other_shape(app, &layers, p, PICK_PX / zoom)))
+}
+
+/// Whether the topmost shape at document point `p` is one the box doesn't hold, picked as Path
+/// Selection picks: a press on a neighbouring shape in a side's band selects or draws there, as
+/// the tool does, instead of scaling the selection.
+fn on_other_shape(app: &PhotocraftApp, layers: &[u64], p: [f64; 2], tol: f64) -> bool {
+    app.session.active().and_then(|st| crate::vector_ui::pick_shape_at(&st.doc, p, tol)).is_some_and(|id| !layers.contains(&id.0))
+}
+
+/// The side of the box `r` nearest document point `p`, within `band` outside the box or within
+/// `line` inside it: `[-1, 0]` left, `[1, 0]` right, `[0, -1]` top, `[0, 1]` bottom.
+pub(crate) fn edge_hit(r: [f64; 4], p: [f64; 2], band: f64, line: f64) -> Option<[i8; 2]> {
+    let [x0, y0, x1, y1] = r;
+    let [x, y] = p;
+    // `f64::max` drops a NaN, so `beyond` would put a NaN point on a side's span.
+    if !(x.is_finite() && y.is_finite()) {
+        return None;
+    }
+    let inside = x > x0 && x < x1 && y > y0 && y < y1;
+    let reach = if inside { line } else { band };
+    // How far `v` lies beyond the span `lo..=hi`: a side is a segment, not a whole line.
+    let beyond = |v: f64, lo: f64, hi: f64| (lo - v).max(v - hi).max(0.0);
+    let (past_x, past_y) = (beyond(x, x0, x1), beyond(y, y0, y1));
+    let sides = [([-1, 0], (x - x0).hypot(past_y)), ([1, 0], (x - x1).hypot(past_y)), ([0, -1], (y - y0).hypot(past_x)), ([0, 1], (y - y1).hypot(past_x))];
+    sides.into_iter().filter(|(_, d)| *d <= reach).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h)
 }
 
 /// The scale cursor over a handle at document point `p`, or while one is dragged, turned with the
@@ -233,7 +377,8 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     }
 }
 
-/// The box and its handles, and while a handle is dragged the scaled outlines.
+/// The box and its handles (with the Ellipse tool, its centre mark too), and while a handle is
+/// dragged the scaled outlines.
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
     if !shows(app) {
         return;
@@ -256,9 +401,23 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
     let [x0, y0, x1, y1] = shown;
     let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(to_scr);
     painter.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, accent)));
+    // Under the handles: on a small box the middle ones keep their white squares on top.
+    if app.ui.tool == Tool::EllipseShape {
+        draw_center_mark(painter, to_scr([(x0 + x1) / 2.0, (y0 + y1) / 2.0]), accent);
+    }
     for (_, at) in handles(shown) {
         let h = egui::Rect::from_center_size(to_scr(at), vec2(7.0, 7.0));
         painter.rect_filled(h, 0.0, Color32::WHITE);
         painter.rect_stroke(h, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
     }
+}
+
+/// The Ellipse tool's centre mark (#13239): a crosshair in a small circle at the box centre, a
+/// fixed size on screen as the handles are. It takes no press.
+fn draw_center_mark(painter: &egui::Painter, c: Pos2, accent: Color32) {
+    const R: f32 = 4.0;
+    let stroke = Stroke::new(1.0, accent);
+    painter.circle_stroke(c, R, stroke);
+    painter.line_segment([c - vec2(R, 0.0), c + vec2(R, 0.0)], stroke);
+    painter.line_segment([c - vec2(0.0, R), c + vec2(0.0, R)], stroke);
 }
