@@ -460,6 +460,11 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool
                 (y0, y1) = (0, h);
             }
         }
+        // Contrast and raised Whites adapt to the tones of what they develop: developing the
+        // whole image keeps those the image's, whatever the mask's extent.
+        if local.contrast != 0.0 || local.whites > 0.0 {
+            (x0, y0, x1, y1) = (0, 0, w, h);
+        }
         let bw = x1 - x0;
         let mut dev: Vec<[f32; 4]> = Vec::with_capacity(bw * (y1 - y0));
         for y in y0..y1 {

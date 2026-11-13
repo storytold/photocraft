@@ -238,6 +238,32 @@ fn low_flow_dabs_build_up() {
 }
 
 #[test]
+fn local_contrast_and_whites_follow_the_images_tones_not_the_masks_extent() {
+    // Contrast and raised Whites adapt to the tones of what is developed. A distant second
+    // component widens the mask's box over brighter pixels; those the first covers must not change.
+    let (w, h) = (256, 64);
+    let px = flat(w, h, |x, y| [0.05 + 0.85 * x as f32 / w as f32 + 0.05 * ((x * 7 + y * 13) % 5) as f32 / 5.0; 3]);
+    let near = comp(Shape::Radial { center: [0.15, 0.5], radius: [0.06, 0.15], angle: 0.0, feather: 0.0 });
+    let far = comp(Shape::Radial { center: [0.9, 0.9], radius: [0.02, 0.02], angle: 0.0, feather: 0.0 });
+    for adjust in [Local { contrast: 60.0, ..Local::default() }, Local { whites: 60.0, ..Local::default() }] {
+        let run = |components: Vec<Component>| {
+            let mut out = px.clone();
+            let p = CameraRaw { masks: vec![Mask { components, adjust: adjust.clone(), ..Mask::default() }], ..CameraRaw::default() };
+            apply(&mut out, w, h, &p, false);
+            out
+        };
+        let (one, two) = (run(vec![near.clone()]), run(vec![near.clone(), far.clone()]));
+        assert!(one.iter().zip(&px).any(|(a, b)| a != b), "{adjust:?} changed something");
+        for y in 30..34 {
+            for x in 34..42 {
+                let (a, b) = (one[y * w + x], two[y * w + x]);
+                assert!(a.iter().zip(&b).all(|(p, q)| (p - q).abs() < 1e-5), "{adjust:?} ({x}, {y}): {a:?} vs {b:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn local_detail_radii_follow_the_image_not_the_masks_extent() {
     // Texture's radii come from the long side of what is developed. A second, distant component
     // widens the mask's box; the pixels the first one covers must not change.
