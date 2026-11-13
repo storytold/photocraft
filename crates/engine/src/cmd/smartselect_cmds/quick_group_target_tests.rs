@@ -107,11 +107,15 @@ fn an_adjustment_layer_reads_the_composite() {
 }
 
 #[test]
-fn an_artboard_still_reads_the_composite() {
-    // Not measured for an artboard, so it keeps reading the composite.
-    let mut s = issue_document();
-    s.execute("layer.new.artboard", json!({"rect": [700, 500, 50, 50]})).unwrap();
-    assert_eq!(active_kind(&s), "Group");
-    click(&mut s, RED2_CLICK, false);
-    assert_selects_rect(&s, [500, 100, 600, 200], 3);
+fn an_artboard_or_a_frame_still_reads_the_composite() {
+    // Not measured for these groups, so they keep reading the composite.
+    for (cmd, params) in
+        [("layer.new.artboard", json!({"rect": [700, 500, 50, 50]})), ("layer.new.frame", json!({"x": 700, "y": 500, "width": 50, "height": 50}))]
+    {
+        let mut s = issue_document();
+        s.execute(cmd, params).unwrap();
+        assert_eq!(active_kind(&s), "Group", "{cmd}");
+        click(&mut s, RED2_CLICK, false);
+        assert_selects_rect(&s, [500, 100, 600, 200], 3);
+    }
 }
