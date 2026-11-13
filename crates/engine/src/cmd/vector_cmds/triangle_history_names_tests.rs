@@ -22,7 +22,7 @@ fn last_step(s: &Session) -> Option<&str> {
 
 /// The geometry a Shape-mode Triangle drag (or the Create Triangle dialog) sends.
 fn triangle(history_name: Option<&str>) -> Value {
-    json!({"kind": "polygon", "rect": [400, 300, 200, 100], "sides": 3, "historyName": history_name})
+    json!({"kind": "triangle", "rect": [400, 300, 200, 100], "historyName": history_name})
 }
 
 /// The closed outline a Path-mode Triangle drag adds to the Work Path.
@@ -65,10 +65,13 @@ fn rounding_a_live_triangle_is_change_rounded_triangle() {
 fn other_edits_and_other_shapes_keep_edit_shape() {
     let mut s = session();
     let tri = s.execute("shape.create", triangle(None)).unwrap()["layer"].as_u64().unwrap();
-    s.execute("shape.edit", json!({"layer": tri, "sides": 4})).unwrap();
-    assert_eq!(last_step(&s), Some("Edit Shape"), "a non-radius change on the triangle");
     s.execute("shape.edit", json!({"layer": tri, "cornerRadius": 5.0, "fill": "#ff0000"})).unwrap();
     assert_eq!(last_step(&s), Some("Edit Shape"), "radius plus another field");
+    s.execute("shape.edit", json!({"layer": tri, "sides": 4})).unwrap();
+    assert_eq!(last_step(&s), Some("Edit Shape"), "a non-radius change on the triangle");
+    let star = s.execute("shape.create", json!({"kind": "star", "rect": [10, 10, 50, 50], "sides": 3, "starRatio": 0.5})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("shape.edit", json!({"layer": star, "cornerRadius": 5.0})).unwrap();
+    assert_eq!(last_step(&s), Some("Edit Shape"), "rounding a three-point star");
     let pent = s.execute("shape.create", json!({"kind": "polygon", "rect": [10, 10, 50, 50], "sides": 5})).unwrap()["layer"].as_u64().unwrap();
     s.execute("shape.edit", json!({"layer": pent, "cornerRadius": 5.0})).unwrap();
     assert_eq!(last_step(&s), Some("Edit Shape"), "rounding a five-sided polygon");
