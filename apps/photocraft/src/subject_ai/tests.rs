@@ -196,6 +196,8 @@ fn the_real_model_downloads_and_answers() {
         eprintln!("skipped: set CRAFT_TEST_PICTURE and CRAFT_TEST_MODEL_FOLDER");
         return;
     };
+    // As the app does before its first run (`shared`).
+    one_stream();
     let w = world();
     let desk = FolderDesk::new(w.model.shared.clone());
     desk.ensure_default_at(Path::new(&folder)).unwrap();
@@ -221,7 +223,9 @@ fn the_real_model_downloads_and_answers() {
     assert_eq!(decoded.sample_type(), SampleType::U8);
     let rgb = rgb_of(&decoded);
     let image = SubjectImage { width, height, rgb };
-    for run in 1..=2 {
+    // CRAFT_TEST_RUNS repeats the run, to watch the GPU memory stay flat between runs.
+    let runs = std::env::var("CRAFT_TEST_RUNS").ok().and_then(|n| n.parse().ok()).unwrap_or(2);
+    for run in 1..=runs {
         let started = std::time::Instant::now();
         let mask = w.model.matte(&image, &|| false).unwrap();
         let subject = mask.iter().filter(|v| **v >= 128).count() as f32 / mask.len() as f32;
@@ -229,4 +233,16 @@ fn the_real_model_downloads_and_answers() {
         assert_eq!(mask.len(), (width * height) as usize);
         assert!(subject > 0.001 && subject < 0.999);
     }
+}
+
+/// Every job thread lands on the same GPU stream, so a run reuses the memory the runs before it
+/// left in the pool.
+#[test]
+fn model_jobs_share_one_gpu_stream() {
+    use cubecl_environment::stream::{StreamId, StreamPolicy, policy};
+    one_stream();
+    assert_eq!(policy(), StreamPolicy::Single);
+    let here = StreamId::current();
+    let others: Vec<StreamId> = (0..3).map(|_| std::thread::spawn(StreamId::current).join().unwrap()).collect();
+    assert!(others.iter().all(|id| *id == here), "{here:?} vs {others:?}");
 }

@@ -37,6 +37,7 @@ fn native_connection() -> String {
 /// The app's subject model, or `None` if the shared layer can't be reached: Select Subject and
 /// Remove Background then keep their built-in method.
 pub fn shared() -> Option<SharedSubjectModel> {
+    one_stream();
     match CraftSubject::standard() {
         Ok(model) => Some(Arc::new(model)),
         Err(e) => {
@@ -44,6 +45,15 @@ pub fn shared() -> Option<SharedSubjectModel> {
             None
         }
     }
+}
+
+/// Runs every model job on one GPU stream. CubeCL, under the Burn engine, gives each new thread
+/// its own stream by default, and the shared layer starts threads for every job, so each run
+/// kept the memory of the runs before it until the card was full. Only the AI engine uses
+/// CubeCL here (the compositor uses wgpu itself), so the process-wide setting touches nothing
+/// else. Goes once the engine keeps the model on a stream of its own.
+fn one_stream() {
+    cubecl_environment::stream::set_policy(cubecl_environment::stream::StreamPolicy::Single);
 }
 
 /// The tool from the shared catalogue.

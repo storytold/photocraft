@@ -53,6 +53,8 @@ craft-ai-client = { workspace = true }
 craft-ai-core = { workspace = true }
 craft-ai-features = { workspace = true }
 craft-ai-native = { workspace = true }
+# One GPU stream for every model job (subject_ai.rs `one_stream`); the version Burn already uses.
+cubecl-environment = { version = "=0.11.3", default-features = false, features = ["std"] }
 # Background release checks; HTTPS with Rust TLS, no async runtime.
 
 [target.'cfg(target_os = "macos")'.dependencies]

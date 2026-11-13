@@ -8515,6 +8515,7 @@ dependencies = [
  "craft-ai-features",
  "craft-ai-native",
  "craft-update",
+ "cubecl-environment",
  "dispatch2",
  "eframe",
  "egui",
