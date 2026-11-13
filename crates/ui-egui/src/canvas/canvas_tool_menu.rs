@@ -2066,3 +2066,6 @@ mod triangle_menu_tests;
 
 #[cfg(test)]
 mod line_menu_tests;
+
+#[cfg(test)]
+mod ellipse_menu_tests;
