@@ -12,6 +12,30 @@ fn ico_export_is_available_and_rejects_oversize_output() {
     assert_eq!((resized.size.width, resized.size.height), (150, 100));
 }
 
+/// #11330: Quick Export reports the XMP a JPEG couldn't hold, as Export As does.
+#[test]
+fn quick_export_reports_the_xmp_it_left_out() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    let big = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- {} --></x:xmpmeta>", "x".repeat(70_000));
+    let bytes = big.len();
+    app.session
+        .edit("xmp", |doc, _| {
+            doc.metadata.xmp = Some(Arc::from(big.as_str()));
+            Ok(())
+        })
+        .unwrap();
+    app.run("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("pc-quick-xmp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("quick.jpg").to_string_lossy().into_owned();
+    quick_export(&mut app, json!({"path": path})).unwrap();
+    assert_eq!(app.ui.status, format!("Exported quick.jpg: XMP ({bytes} bytes) is too large for the format; it will be dropped"));
+    assert!(app.ui.status_error);
+    assert!(app.ui.notices.last().is_some_and(|n| n.lines.iter().any(|l| l.contains("too large"))), "a notice lists it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 use super::*;
 
 fn default_export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {

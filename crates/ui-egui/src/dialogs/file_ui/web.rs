@@ -631,7 +631,7 @@ pub(super) fn web_params(f: &Map<String, Value>, has_slices: bool) -> Result<Val
 }
 
 /// Runs Save for Web with `p`, which says where to write.
-fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
+pub(super) fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     #[cfg(target_arch = "wasm32")]
     let result = download_for_web(app, p);
     #[cfg(not(target_arch = "wasm32"))]
@@ -644,6 +644,10 @@ fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     app.ui.status =
         crate::i18n::trn(crate::i18n::current(), r["files"].as_array().map_or(0, Vec::len) as u64, "Saved for Web: {n} file", "Saved for Web: {n} files");
     app.ui.status_error = false;
+    // Metadata a JPEG couldn't hold is said so, as Export As says it (#11330).
+    let what = app.ui.status.clone();
+    let warnings: Vec<String> = r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
+    crate::notices::io_warnings(app, &what, &warnings);
     Ok(r)
 }
 
