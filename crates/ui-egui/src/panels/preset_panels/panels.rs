@@ -414,7 +414,7 @@ enum PickerAct {
 
 /// A button's accessible name, so tests and screen readers find it by its text.
 fn named(resp: egui::Response, label: &str) -> egui::Response {
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     resp
 }
 
@@ -514,7 +514,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     crate::icons::paint(ui, Rect::from_center_size(pos2(r.right() - 8.0, r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_dim);
     let resp = named(resp.on_hover_text(&cur), "Custom Shape Picker");
-    let menu_id = egui::Id::new("shape-picker-menu");
+    let menu_id = egui::Id::unique("shape-picker-menu");
     let cur_exists = groups.iter().any(|g| g.items.iter().any(|s| s.name == cur));
     let mut acts: Vec<PickerAct> = Vec::new();
     let shown = egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
@@ -526,7 +526,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if g.clicked() {
                 let open = ctx.data(|d| d.get_temp::<PickerMenu>(menu_id));
                 ctx.data_mut(|d| match open {
-                    Some(PickerMenu::Gear) => d.remove::<PickerMenu>(menu_id),
+                    Some(PickerMenu::Gear) => drop(d.remove::<PickerMenu>(menu_id)),
                     _ => d.insert_temp(menu_id, PickerMenu::Gear),
                 });
             }
