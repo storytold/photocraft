@@ -2117,7 +2117,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         }
         // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
         Tool::Move if crate::move_mods::copying(app, alt) => egui::CursorIcon::Copy,
-        Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
+        Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask | Tool::Ruler
             if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
         {
             egui::CursorIcon::Crosshair
@@ -2147,6 +2147,11 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             }
             egui::CursorIcon::None
         }
+        // The Ruler tool: its own arrow with a ruler below right of the tip, and that arrow with a
+        // protractor over the end point an ⌥-drag takes for the protractor arm (#12037). ⌘ is not
+        // here: it makes the Ruler the temporary Move tool (`hold_keys::cmd_moves`), so this match
+        // runs with `Tool::Move` and shows its pointer, on the ruler and off it.
+        Tool::Ruler => crate::tool_cursor::ruler(app, painter, p, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))),
         _ => egui::CursorIcon::Crosshair,
     };
     let icon = visible_crosshair(icon, painter, p, cfg!(not(target_arch = "wasm32")));
