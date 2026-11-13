@@ -40,7 +40,8 @@ fn tree(name: &str, extras: bool) -> Cleanup {
 /// Runs Contact Sheet II on `input` with `extra` params (2 × 2 cells, no captions) and returns
 /// each sheet's document name and the names of its image layers, in placing order.
 fn sheets(input: Value, extra: Value) -> Result<Vec<(String, Vec<String>)>> {
-    let mut p = json!({"input": input, "units": "pixels", "width": 200, "height": 200, "resolution": 72, "columns": 2, "rows": 2, "caption": false});
+    let mut p =
+        json!({"input": input, "units": "pixels", "width": 200, "height": 200, "resolution": 72, "columns": 2, "rows": 2, "caption": false, "flatten": false});
     p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
     let mut s = Session::new();
     let r = s.execute("file.automate.contactSheetII", p)?;

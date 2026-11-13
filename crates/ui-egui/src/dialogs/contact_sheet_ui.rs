@@ -23,7 +23,8 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
     list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect()
 }
 
-/// The rows of the dialog, opening on the folder `dir`.
+/// The rows of the dialog, opening on the folder `dir` with the reference defaults (#13685): 8 x 10 in at 300 ppi,
+/// shown in cm and pixels/cm, flattened.
 pub(crate) fn rows(dir: String) -> Vec<Param> {
     let resolution = vec![
         NumberUnit::new("in", UnitKind::PixelsPerInch, tl!("pixels/inch"), 1.0),
@@ -39,12 +40,12 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
             .enabled_when("includeSubfolders", true)
             .tooltip(tl!("Images in subfolders will start on a new Contact Sheet")),
         Param::section(tl!("Document")),
-        Param::new("units", tl!("Units"), ParamKind::choice(opts(&UNITS), Some("inches".into()))),
+        Param::new("units", tl!("Units"), ParamKind::choice(opts(&UNITS), Some("cm".into()))),
         Param::custom(UNITS_SHOWN, Label::Empty, follow_units).companions(["width", "height"]).full_width(),
-        Param::new("width", tl!("Width"), ParamKind::number(Some(0.0), Some(300_000.0), 8.0, 0.5, 2)),
-        Param::new("height", tl!("Height"), ParamKind::number(Some(0.0), Some(300_000.0), 10.0, 0.5, 2)),
-        Param::number_with_units("resolution", tl!("Resolution"), 300.0, 1.0, 2, resolution).bounds(Some(1.0), Some(10_000.0)),
-        Param::new("flatten", tl!("Flatten All Layers"), ParamKind::bool(false)),
+        Param::new("width", tl!("Width"), ParamKind::number(Some(0.0), Some(300_000.0), 20.32, 0.5, 2)),
+        Param::new("height", tl!("Height"), ParamKind::number(Some(0.0), Some(300_000.0), 25.4, 0.5, 2)),
+        Param::number_with_units("resolution", tl!("Resolution"), 300.0, 1.0, 2, resolution).bounds(Some(1.0), Some(10_000.0)).default_unit("cm"),
+        Param::new("flatten", tl!("Flatten All Layers"), ParamKind::bool(true)),
         Param::new("mode", tl!("Mode"), ParamKind::choice(opts(&MODES), Some("rgb".into()))),
         Param::new("depth", tl!("Bit Depth"), ParamKind::choice(opts(&DEPTHS), Some("8".into()))),
         Param::section(tl!("Thumbnails")),
@@ -67,11 +68,11 @@ const UNITS_SHOWN: &str = "unitsShown";
 /// the sheet keeps its size: 8 x 10 in is 20.32 x 25.4 cm, and 2400 x 3000 px at 300 ppi. The row shows nothing;
 /// Units stays a plain list, so the dialog remembers it with the size.
 fn follow_units(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomContext) -> egui::Response {
-    let units = fields.text("units").unwrap_or("inches").to_owned();
+    let units = fields.text("units").unwrap_or("cm").to_owned();
     if let Some(shown) = fields.text(UNITS_SHOWN).filter(|shown| *shown != units).map(str::to_owned) {
         let ppi = fields.number("resolution").unwrap_or(300.0);
         let (from, to) = (unit_of(&shown), unit_of(&units));
-        for (key, default) in [("width", 8.0), ("height", 10.0)] {
+        for (key, default) in [("width", 20.32), ("height", 25.4)] {
             let v = to.from_px(from.to_px(fields.number(key).unwrap_or(default), ppi, 0.0, 72.0), ppi, 0.0, 72.0);
             // Kept unrounded (the field shows two decimals): a small pixel size at a high resolution would round to
             // 0 in, which the command reads as no size. Pixels are whole.
