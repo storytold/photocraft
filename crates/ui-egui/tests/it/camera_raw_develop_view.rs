@@ -211,6 +211,11 @@ fn the_develop_view_edits_masks_spots_and_red_eyes() {
     snapshot(&mut h, "edit-sections");
     local(&mut h, json!({"sections": ["color", "mixer"]}));
     snapshot(&mut h, "edit-color");
+    let ctx = h.ctx.clone();
+    let grade = json!({"grading": {"shadows": {"hue": 220.0, "sat": 35.0}, "highlights": {"hue": 40.0, "sat": 25.0}}});
+    camera_raw_ui::menu(h.state_mut(), &ctx, "filter.cameraRaw", &json!({"ui": {"develop": grade}})).unwrap().unwrap();
+    local(&mut h, json!({"sections": ["color", "grading"]}));
+    snapshot(&mut h, "edit-grading");
 
     masking(&mut h);
     heal(&mut h);

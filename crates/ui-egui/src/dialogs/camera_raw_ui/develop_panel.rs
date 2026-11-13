@@ -438,6 +438,110 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, state: &mut crate
     (rect, changed)
 }
 
+/// The controls the colour wheels set (hue and saturation of the three tonal ranges).
+const WHEEL_IDS: [&str; 6] =
+    ["grading.shadows.hue", "grading.shadows.sat", "grading.midtones.hue", "grading.midtones.sat", "grading.highlights.hue", "grading.highlights.sat"];
+
+/// An HSV colour (hue in degrees, saturation and value 0..1) as sRGB.
+fn hsv(h: f32, s: f32, v: f32) -> egui::Color32 {
+    let h = h.rem_euclid(360.0) / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let u = |x: f32| ((x + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+    egui::Color32::from_rgb(u(r), u(g), u(b))
+}
+
+/// A grading wheel's picture (LightCraft's): a hue disc fully saturated at the rim, grey at the
+/// centre, built from rings so saturation ramps evenly.
+fn wheel_mesh(c: egui::Pos2, rad: f32) -> egui::epaint::Mesh {
+    const SEGMENTS: u32 = 72;
+    const RINGS: u32 = 12;
+    let colour = |hue: f32, t: f32| hsv(hue, t, 0.6 + 0.4 * t);
+    let mut mesh = egui::epaint::Mesh::default();
+    let vertex = |pos, color| egui::epaint::Vertex { pos, uv: egui::Pos2::ZERO, color };
+    mesh.vertices.push(vertex(c, colour(0.0, 0.0)));
+    let row = SEGMENTS + 1;
+    for k in 1..=RINGS {
+        let t = k as f32 / RINGS as f32;
+        for i in 0..=SEGMENTS {
+            let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            mesh.vertices.push(vertex(c + vec2(a.cos(), -a.sin()) * rad * t, colour(a.to_degrees(), t)));
+        }
+    }
+    for i in 0..SEGMENTS {
+        mesh.indices.extend([0, 1 + i, 2 + i]);
+    }
+    for k in 1..RINGS {
+        let inner = 1 + (k - 1) * row;
+        let outer = inner + row;
+        for i in 0..SEGMENTS {
+            mesh.indices.extend([inner + i, outer + i, outer + i + 1, inner + i, outer + i + 1, inner + i + 1]);
+        }
+    }
+    mesh
+}
+
+/// The hue (degrees) and saturation (0..100) at offset `v` from a wheel's centre of radius `rad`.
+fn wheel_pick(v: egui::Vec2, rad: f32) -> (f64, f64) {
+    let v = if v.x.is_finite() && v.y.is_finite() { v } else { egui::Vec2::ZERO };
+    let hue = ((-v.y).atan2(v.x).to_degrees() + 360.0) % 360.0;
+    (f64::from(hue).round(), f64::from(v.length() / rad.max(1.0) * 100.0).min(100.0).round())
+}
+
+/// LightCraft's 3-way colour grading: the midtones wheel on top, shadows and highlights below. A
+/// drag (or click) sets the range's hue and saturation; a double-click resets them.
+fn grading_wheels(ui: &mut egui::Ui, st: &mut DevelopPanel, s: &mut DevelopSettings) {
+    let t = Lc::get(ui.ctx());
+    let w = ui.available_width();
+    let rad = 40.0;
+    let (area, _) = ui.allocate_exact_size(vec2(w, 276.0), Sense::hover());
+    let wheels = [
+        ("shadows", "Shadows", pos2(area.left() + w * 0.28, area.top() + 196.0)),
+        ("midtones", "Midtones", pos2(area.center().x, area.top() + 70.0)),
+        ("highlights", "Highlights", pos2(area.left() + w * 0.72, area.top() + 196.0)),
+    ];
+    for (key, label, c) in wheels {
+        let g = &mut s.grading;
+        let wheel = match key {
+            "shadows" => &mut g.shadows,
+            "midtones" => &mut g.midtones,
+            _ => &mut g.highlights,
+        };
+        let r = Rect::from_center_size(c, vec2(rad * 2.0, rad * 2.0));
+        let resp = ui.interact(r, ui.make_persistent_id(("lc-wheel", key)), Sense::click_and_drag());
+        let name = tr(label);
+        resp.widget_info(|| egui::WidgetInfo::slider(true, wheel.hue, name));
+        ui.painter().add(wheel_mesh(c, rad));
+        ui.painter().circle_stroke(c, rad, Stroke::new(1.0, egui::Color32::from_gray(40)));
+        if resp.double_clicked() {
+            (wheel.hue, wheel.sat) = (0.0, 0.0);
+        } else if (resp.dragged() || resp.clicked())
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            (wheel.hue, wheel.sat) = wheel_pick(q - c, rad);
+        }
+        let a = (wheel.hue as f32).to_radians();
+        let dot = c + vec2(a.cos(), -a.sin()) * rad * (wheel.sat as f32 / 100.0);
+        ui.painter().circle_filled(c, 2.0, egui::Color32::WHITE);
+        ui.painter().circle_filled(dot, 5.0, egui::Color32::WHITE);
+        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, egui::Color32::BLACK));
+        ui.painter().text(pos2(c.x, c.y + rad + 12.0), egui::Align2::CENTER_CENTER, name, t.font(12.0), t.text_label);
+        let shown = format!("{:.0}° {:.0}", wheel.hue, wheel.sat);
+        ui.painter().text(pos2(c.x, c.y - rad - 10.0), egui::Align2::CENTER_CENTER, shown, t.font(11.0), t.text_dim);
+    }
+    // the wheels are these controls
+    st.drawn.extend(WHEEL_IDS);
+}
+
 /// Upright's modes (Off … Guided) and Guided's guides.
 fn upright(ui: &mut egui::Ui, s: &mut DevelopSettings, tools: &mut Tools<'_>) {
     w::sub_title(ui, tr("Upright"));
@@ -541,7 +645,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&Deve
                 });
                 if all.contains(&Section::Grading) {
                     flyout(ui, st, "grading", tr("Color Grading"), Icon::GradeAll, |ui, st| {
-                        rows(ui, st, s, Section::Grading, basis, tools.alt, |_| true);
+                        grading_wheels(ui, st, s);
+                        rows(ui, st, s, Section::Grading, basis, tools.alt, |c| !WHEEL_IDS.contains(&c.id));
                     });
                 }
             }),
@@ -675,5 +780,10 @@ mod tests {
         assert!(w::track_stops(Track::Temp).is_some() && w::track_stops(Track::Plain).is_none());
         assert!(sections().contains(&Section::Light) && !sections().contains(&Section::PointColor), "indexed-only sections have no rows");
         assert_eq!(eye_id(Section::Light), Some("light"));
+        // a wheel's right edge is hue 0 at full saturation, its top 90°, its centre neutral
+        assert_eq!(wheel_pick(vec2(40.0, 0.0), 40.0), (0.0, 100.0));
+        assert_eq!(wheel_pick(vec2(0.0, -20.0), 40.0), (90.0, 50.0));
+        assert_eq!(wheel_pick(vec2(f32::NAN, 1.0), 40.0), (0.0, 0.0));
+        assert!(WHEEL_IDS.iter().all(|id| controls::find(id).is_some()), "the wheels' controls are the registry's");
     }
 }
