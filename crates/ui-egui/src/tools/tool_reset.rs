@@ -276,7 +276,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_length,
             arrow_concavity,
         ),
-        Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+        // The Triangle tool's own radius (#13355) resets with that tool only, not with its siblings.
+        Tool::Triangle => {
             reset!(
                 shape_mode,
                 shape_path_op,
@@ -287,6 +288,20 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 shape_stroke_gradient,
                 corner_radius,
                 triangle_corner_radius,
+                polygon_sides,
+                line_weight
+            )
+        }
+        Tool::Rectangle | Tool::EllipseShape | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+            reset!(
+                shape_mode,
+                shape_path_op,
+                shape_fill,
+                stroke_width,
+                shape_stroke,
+                shape_fill_gradient,
+                shape_stroke_gradient,
+                corner_radius,
                 polygon_sides,
                 line_weight
             )

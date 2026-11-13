@@ -102,6 +102,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         }
     }
     let mut radius_alert = false;
+    let mut invalid_alert = false;
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -115,18 +116,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                 o.corner_radius = r;
             }
         }
-        Tool::Triangle => {
-            crate::widgets::vline(ui, 22.0);
-            let label = tl!("Radius:");
-            lbl(ui, label);
-            // The tool's own radius for the next triangle (#13355); the active shape is not touched.
-            let mut r = o.triangle_corner_radius;
-            let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
-            radius_alert = out_of_range;
-            if resp.changed() {
-                o.triangle_corner_radius = r;
-            }
-        }
+        Tool::Triangle => (radius_alert, invalid_alert) = triangle_radius(ui, o, &lbl),
         Tool::Polygon => {
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Sides:"));
@@ -208,7 +198,32 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let Some(rgb) = recent {
         crate::paint_picker::remember(app, rgb);
     }
-    radius_range_alert(app, radius_alert);
+    radius_alerts(app, radius_alert, invalid_alert);
+}
+
+/// The Triangle tool's Radius: its own radius for the next triangle (#13355); the active shape is
+/// not touched. Returns whether the range alert and the invalid-entry alert are owed.
+fn triangle_radius(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions, lbl: &dyn Fn(&mut egui::Ui, &str)) -> (bool, bool) {
+    crate::widgets::vline(ui, 22.0);
+    let label = tl!("Radius:");
+    lbl(ui, label);
+    let mut r = o.triangle_corner_radius;
+    let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
+    let invalid = invalid_entry_left(ui, &resp);
+    if resp.changed() {
+        o.triangle_corner_radius = r;
+    }
+    (out_of_range, invalid)
+}
+
+/// Shows the Radius alerts the options bar owes this pass.
+fn radius_alerts(app: &mut PhotocraftApp, range: bool, invalid: bool) {
+    if range {
+        alert_once(app, tl!(RADIUS_RANGE_ALERT));
+    }
+    if invalid {
+        alert_once(app, tl!(RADIUS_INVALID_ALERT));
+    }
 }
 
 /// The Rectangle and Triangle tools' corner radius in px, as the reference takes it (#13336).
@@ -217,12 +232,34 @@ pub(crate) const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
 /// The reference's alert for a Rectangle or Triangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
 pub(crate) const RADIUS_RANGE_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
 
-/// Shows [`RADIUS_RANGE_ALERT`] as a modal with OK when `owed`, once even if more than one pass asks.
-fn radius_range_alert(app: &mut PhotocraftApp, owed: bool) {
-    if !owed {
-        return;
+/// The reference's alert for text that is not a number, left in the Triangle tool's Radius
+/// (#13355). The field keeps its previous value.
+pub(crate) const RADIUS_INVALID_ALERT: &str =
+    "Invalid numeric entry. A number between 0.000 pixel and 150000.000 Pixels is required. Restored last valid value.";
+
+/// True on the pass `resp`'s field is left with text that is not a number in it (`abc`). A
+/// number typed after it, before the field is left, takes that back.
+fn invalid_entry_left(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    let no_number = resp.id.with("no-number-typed");
+    if resp.has_focus() {
+        match crate::widgets::typed_text_parses(ui.ctx(), resp.id) {
+            Some(false) => ui.ctx().data_mut(|d| {
+                d.insert_temp(no_number, true);
+            }),
+            Some(true) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(no_number);
+            }),
+            None => {}
+        }
+        return false;
     }
-    let message = tl!(RADIUS_RANGE_ALERT).to_owned();
+    let owed = ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number)).unwrap_or(false);
+    owed && resp.lost_focus()
+}
+
+/// Shows `message` as a modal with OK, once even if more than one pass asks.
+fn alert_once(app: &mut PhotocraftApp, message: &str) {
+    let message = message.to_owned();
     let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
     if !shown {
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());

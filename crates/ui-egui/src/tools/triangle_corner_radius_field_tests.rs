@@ -9,7 +9,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{LayerContent, LiveShape};
 use serde_json::json;
 
-use super::RADIUS_RANGE_ALERT;
+use super::{RADIUS_INVALID_ALERT, RADIUS_RANGE_ALERT};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{DialogKind, Tool};
@@ -65,6 +65,14 @@ fn live(app: &PhotocraftApp) -> LiveShape {
     sh.live.clone().unwrap()
 }
 
+/// The anchors of the active shape layer's outline.
+fn knots(app: &PhotocraftApp) -> usize {
+    let st = app.session.active().unwrap();
+    let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    let LayerContent::Shape(sh) = &l.content else { panic!("not a shape layer") };
+    sh.path.subpaths[0].knots.len()
+}
+
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     let mods = egui::Modifiers::NONE;
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
@@ -95,12 +103,26 @@ fn a_radius_past_the_range_takes_the_closest_value_and_alerts_once() {
     }
 }
 
+/// OK on the alert, as `ui.dialog.confirm` presses it (this harness draws only the bar).
+fn ok(h: &mut Harness<'static, PhotocraftApp>) {
+    let id = h.state().ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).map(|d| d.id).expect("an alert");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(3);
+}
+
 #[test]
-fn text_that_is_not_a_number_keeps_the_previous_radius() {
+fn text_that_is_not_a_number_keeps_the_previous_radius_and_alerts() {
     let mut h = bar();
     type_radius(&mut h, "12");
+    assert!(alerts(&h).is_empty(), "12 is in range");
     type_radius(&mut h, "abc");
-    assert_eq!(radius(&h), 12.0);
+    assert_eq!(radius(&h), 12.0, "the last valid value stays");
+    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()], "one invalid-entry alert");
+    ok(&mut h);
+    // A number typed after it is taken without an alert.
+    type_radius(&mut h, "7");
+    assert_eq!(radius(&h), 7.0);
+    assert!(alerts(&h).is_empty(), "7 is a number in range");
 }
 
 #[test]
@@ -127,6 +149,7 @@ fn the_next_triangle_dragged_takes_the_radius() {
         LiveShape::Polygon { sides, corner_radius, .. } => assert_eq!((sides, corner_radius), (3, 20.0)),
         other => panic!("not a polygon: {other:?}"),
     }
+    assert_eq!(knots(&app), 6, "two anchors per rounded corner");
 }
 
 #[test]
@@ -138,6 +161,7 @@ fn a_zero_radius_draws_a_sharp_triangle() {
         LiveShape::Polygon { sides, corner_radius, .. } => assert_eq!((sides, corner_radius), (3, 0.0)),
         other => panic!("not a polygon: {other:?}"),
     }
+    assert_eq!(knots(&app), 3, "one anchor per sharp corner");
 }
 
 #[test]
@@ -145,6 +169,15 @@ fn reset_tool_restores_a_zero_radius() {
     let mut o = crate::state::ToolOptions { triangle_corner_radius: 33.0, ..Default::default() };
     crate::tools::tool_reset::reset_options(&mut o, Tool::Triangle);
     assert_eq!(o.triangle_corner_radius, 0.0);
+}
+
+#[test]
+fn resetting_another_shape_tool_keeps_the_triangle_radius() {
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Polygon, Tool::Star, Tool::CustomShape] {
+        let mut o = crate::state::ToolOptions { triangle_corner_radius: 33.0, ..Default::default() };
+        crate::tools::tool_reset::reset_options(&mut o, tool);
+        assert_eq!(o.triangle_corner_radius, 33.0, "{tool:?}");
+    }
 }
 
 #[test]
