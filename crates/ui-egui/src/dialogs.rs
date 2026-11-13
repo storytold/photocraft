@@ -18,12 +18,22 @@ pub(crate) fn is_folder_field(key: &str) -> bool {
     matches!(key, "dir" | "input" | "output")
 }
 
+/// A text field that names a file to write, picked with the Save dialog: Artboards to PDF's `path`.
+pub(crate) fn is_save_field(fields: &serde_json::Map<String, Value>, key: &str) -> bool {
+    key == "path" && fields.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToPdf")
+}
+
 /// Browse… beside a path field of dialog `id`: a folder picker for folder fields
 /// ([`is_folder_field`]), a `.wasm` picker for Install Plug-in…'s `path`. The answer fills the field.
 fn browse_field(app: &mut PhotocraftApp, id: u64, fields: &serde_json::Map<String, Value>, key: &str) {
     let key = key.to_string();
     let r = if is_folder_field(&key) {
         app.ask_folder(move |app, path| fill_field(app, id, &key, path))
+    } else if is_save_field(fields, &key) {
+        // The Save dialog starts in the last export's folder, with the field's file name.
+        let current = fields.get(&key).and_then(Value::as_str).unwrap_or_default();
+        let name = std::path::Path::new(current).file_name().map_or_else(|| "Artboards.pdf".to_string(), |n| n.to_string_lossy().into_owned());
+        app.pick_export(&name, move |app, path| fill_field(app, id, &key, path))
     } else if fields.get("__command").and_then(Value::as_str) == Some("plugin.install") {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
         let request = crate::file_dialog::FileDialogRequest::Open { multiple: false, initial_dir, extensions: Some(vec!["wasm".into()]) };

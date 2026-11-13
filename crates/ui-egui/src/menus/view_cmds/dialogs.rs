@@ -226,7 +226,9 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                                 ui.horizontal(|ui| {
                                     ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
                                     // A folder field gets the system folder picker (#7942, #9357).
-                                    if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                                    if (crate::dialogs::is_folder_field(&k) || crate::dialogs::is_save_field(f, &k))
+                                        && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked()
+                                    {
                                         browse = Some(k.clone());
                                     }
                                 });
@@ -500,7 +502,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
+            // Where the last export went, as the Save dialog starts (#10192): a document opened
+            // through the desktop portal sits in a temporary folder that takes no new files.
+            let last = app.session.prefs().export.last_folder.clone();
+            let folder = if !last.is_empty() && std::path::Path::new(&last).is_dir() { last } else { dir.clone() };
+            dialog(app, json!({"path": format!("{folder}/{stem}.pdf"), "quality": 10}), json!({}))
         }
         "file.export.dataSetsAsFiles" => {
             #[cfg(target_arch = "wasm32")]

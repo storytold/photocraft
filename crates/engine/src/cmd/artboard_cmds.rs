@@ -681,7 +681,8 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
 /// thread got the window closed by the compositor.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
+    let dir = expand_home(str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?);
+    check_folder(&dir)?;
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -767,8 +768,8 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
 /// [`artboards_to_files`]; nothing is written until every page is ready.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
-    let path = str_param(p, "path", cmd)?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let path = pdf_destination(str_param(p, "path", cmd)?, &d.doc.name)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
     let p = p.clone();
@@ -795,6 +796,52 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         },
         |_, v| Ok(v),
     )
+}
+
+/// A path typed into an export dialog with a leading `~` (`~/boards.pdf`): the home folder.
+/// Nothing else expands it, so the PDF went to a folder named `~` under the working directory,
+/// or failed once every page was made.
+#[cfg(not(target_arch = "wasm32"))]
+fn expand_home(path: &str) -> String {
+    let rest = path.strip_prefix('~').filter(|r| r.is_empty() || r.starts_with('/') || (cfg!(windows) && r.starts_with('\\')));
+    if let Some(rest) = rest
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return format!("{}{rest}", home.to_string_lossy());
+    }
+    path.to_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn expand_home(path: &str) -> String {
+    path.to_string()
+}
+
+/// An export's destination folder must exist: checked before any board is flattened, so a
+/// mistyped folder fails at once instead of after the whole export. Other filesystem errors are
+/// left to the write.
+#[cfg(not(target_arch = "wasm32"))]
+fn check_folder(dir: &str) -> Result<()> {
+    if !dir.is_empty() && matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
+        return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn check_folder(_: &str) -> Result<()> {
+    Ok(())
+}
+
+/// Where Artboards to PDF writes `path`: `~` expanded, and `<document name>.pdf` inside it when it
+/// names a folder (`~/`). Its folder must exist ([`check_folder`]).
+fn pdf_destination(path: &str, doc_name: &str) -> Result<String> {
+    let path = expand_home(path);
+    let folder = path.ends_with(['/', '\\']) || (cfg!(not(target_arch = "wasm32")) && std::path::Path::new(&path).is_dir());
+    let path = if folder { join(&path, &format!("{}.pdf", stem(doc_name))) } else { path };
+    let parent = std::path::Path::new(&path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    check_folder(&parent)?;
+    Ok(path)
 }
 
 /// One board's PDF page: (width px, height px, dpi, JPEG bytes) for [`raster_pdf`].

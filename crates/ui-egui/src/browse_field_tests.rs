@@ -126,3 +126,24 @@ fn image_processor_source_picker_hides_folder_fields_for_open_documents() {
     assert_eq!(field(&h, "source"), Some(json!("open")));
     assert_eq!(h.query_all_by_label("Browse…").count(), 1);
 }
+
+/// Artboards to PDF's file is chosen with Browse…, in the Save dialog: a document opened through
+/// the desktop portal suggested its temporary folder, and a typed `~/` wrote nothing.
+#[test]
+fn artboards_to_pdf_file_is_chosen_with_browse() {
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::SaveTo("/tmp/exports/boards.pdf".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("layer.new.artboard", json!({"rect": [0, 0, 64, 64]})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.artboardsToPdf", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(field(&h, "path").is_some(), "the dialog has a Path field");
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    match asked.borrow().as_slice() {
+        [FileDialogRequest::Save { suggested }] => assert!(suggested.ends_with(".pdf"), "{suggested}"),
+        other => panic!("unexpected requests {other:?}"),
+    }
+    assert_eq!(field(&h, "path"), Some(json!("/tmp/exports/boards.pdf")));
+}

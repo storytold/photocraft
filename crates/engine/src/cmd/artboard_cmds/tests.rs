@@ -222,6 +222,41 @@ fn exports_run_as_background_jobs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A PDF path naming a folder (`~/` typed in the dialog) gets the document's name; a folder that
+/// doesn't exist fails before any page is made, and the Files export checks its folder too.
+#[test]
+fn export_destinations_are_checked_and_a_folder_gets_the_document_name() {
+    let mut s = session(8);
+    add_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    s.execute("layer.new.artboardFromLayers", json!({"name": "Red Board"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("photocraft-artboards-dest-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_string_lossy().into_owned();
+    let r = s.execute("file.export.artboardsToPdf", json!({"path": format!("{d}/")})).unwrap();
+    let written = r["path"].as_str().unwrap().to_string();
+    assert_eq!(written, join(&d, &format!("{}.pdf", stem(&doc(&s).name))));
+    assert!(std::fs::read(&written).unwrap().starts_with(b"%PDF-1.4"));
+    let missing = join(&d, "missing");
+    let err = s.execute("file.export.artboardsToPdf", json!({"path": join(&missing, "boards.pdf")})).unwrap_err().to_string();
+    assert!(err.contains("Destination does not exist"), "{err}");
+    let err = s.execute("file.export.artboardsToFiles", json!({"dir": missing})).unwrap_err().to_string();
+    assert!(err.contains("Destination does not exist"), "{err}");
+    assert!(!std::path::Path::new(&missing).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A leading `~` is the home folder; a `~` anywhere else is part of the name.
+#[cfg(unix)]
+#[test]
+fn a_leading_tilde_is_the_home_folder() {
+    let Some(home) = std::env::var_os("HOME").map(|h| h.to_string_lossy().into_owned()) else { return };
+    assert_eq!(expand_home("~/boards.pdf"), format!("{home}/boards.pdf"));
+    assert_eq!(expand_home("~"), home);
+    assert_eq!(expand_home("~boards.pdf"), "~boards.pdf");
+    assert_eq!(expand_home("/tmp/~/boards.pdf"), "/tmp/~/boards.pdf");
+}
+
 #[test]
 fn raster_pdf_xref_offsets_point_at_objects() {
     let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])]);
@@ -369,13 +404,17 @@ fn export_rejects_a_board_too_far_from_the_origin() {
     let mut s = session(8);
     s.execute("layer.new.artboard", json!({"x": i32::MIN, "width": 50, "height": 50, "name": "Far"})).unwrap();
     let dir = std::env::temp_dir().join(format!("photocraft-artboards-931-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    // The folder exists (a missing one fails before the boards are even looked at).
+    std::fs::create_dir_all(&dir).unwrap();
     let d = dir.to_string_lossy().into_owned();
     // Moving the board to the origin needs dx = 2^31, one past i32::MAX: an error, not a panic.
     let err = s.execute("file.export.artboardsToFiles", json!({"dir": d})).unwrap_err().to_string();
     assert!(err.contains(&i32::MIN.to_string()), "{err}");
     let pdf = join(&d, "boards.pdf");
     assert!(s.execute("file.export.artboardsToPdf", json!({"path": pdf})).is_err());
-    assert!(!dir.exists(), "nothing was written");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing was written");
+    let _ = std::fs::remove_dir_all(&dir);
     // One pixel in from the edge is representable and still exports.
     let one = artboard_document(doc(&s), doc(&s).artboards()[0].0);
     assert!(one.is_err());
