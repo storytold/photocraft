@@ -1,7 +1,8 @@
 //! #13687: Contact Sheet II's Include Subfolders and Group Images by Folder checkboxes.
 use crate::PhotocraftApp;
 use egui::accesskit::Toggled;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 const INCLUDE: &str = "Include Subfolders";

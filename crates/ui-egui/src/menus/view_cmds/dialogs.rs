@@ -195,7 +195,8 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label("");
                     let mut b = *b;
                     // A checkbox named in `__enabledBy` is greyed while the checkbox it names is off.
-                    let on = f.get("__enabledBy").and_then(|m| m.get(&k)).and_then(Value::as_str).is_none_or(|by| f.get(by).and_then(Value::as_bool) != Some(false));
+                    let on =
+                        f.get("__enabledBy").and_then(|m| m.get(&k)).and_then(Value::as_str).is_none_or(|by| f.get(by).and_then(Value::as_bool) != Some(false));
                     let response = ui.add_enabled(on, egui::Checkbox::new(&mut b, label(&k)));
                     if let Some(tip) = f.get("__tooltips").and_then(|m| m.get(&k)).and_then(Value::as_str) {
                         response.on_hover_text(tip).on_disabled_hover_text(tip);

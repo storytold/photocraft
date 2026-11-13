@@ -95,10 +95,7 @@ fn group_by_folder_starts_a_sheet_for_each_folder_with_images() {
     // Measured with a 2 × 2 grid: the top folder fills ContactSheet-001, `sub/` and
     // `sub/deeper/` get one sheet each, and the empty `sub/empty/` none.
     let grouped = sheets(json!(dir), json!({"groupByFolder": true})).unwrap();
-    assert_eq!(
-        grouped,
-        expect(&[("ContactSheet-001", &MEASURED[..4]), ("ContactSheet-002", &["e_yellow"]), ("ContactSheet-003", &["f_cyan"])])
-    );
+    assert_eq!(grouped, expect(&[("ContactSheet-001", &MEASURED[..4]), ("ContactSheet-002", &["e_yellow"]), ("ContactSheet-003", &["f_cyan"])]));
     // Off by default: the same images fill the sheets one after another.
     assert_eq!(sheets(json!(dir), json!({"groupByFolder": false})).unwrap(), sheets(json!(dir), json!({})).unwrap());
     // A folder with more images than a sheet holds continues on further sheets before the next
