@@ -135,8 +135,10 @@ fn two_views_at_different_zooms_keep_their_own_sampling() {
     let b = ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap().texture;
     assert_ne!(a, b, "the second view has its own texture");
     assert_eq!(take_uploads_of(&ctx, [a, b]), [vec![(None, [64, 48], TextureOptions::LINEAR)], vec![(None, [64, 48], CRISP)]]);
-    // Shown together frame after frame, neither texture is uploaded again.
+    // Shown together frame after frame, neither texture is uploaded again, and the second view
+    // keeps its texture by asking for it each pass.
     for _ in 0..3 {
+        next_pass(&ctx);
         assert_eq!(ensure_texture_in_view(&mut app, &ctx, 0, None, near).unwrap().texture, a);
         assert_eq!(ensure_texture_in_view(&mut app, &ctx, 0, None, far).unwrap().texture, b);
         assert_eq!(take_uploads_of(&ctx, [a, b]), [vec![], vec![]], "no upload while nothing changed");
