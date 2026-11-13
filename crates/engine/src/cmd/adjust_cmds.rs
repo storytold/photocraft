@@ -335,20 +335,25 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
+/// active one by default), when the command edits its pixels and that layer is a smart object.
+/// `None` for a mask or channel target, or a layer that is not a smart object.
+pub(crate) fn smart_pixel_target(s: &Session, p: &Value) -> Result<Option<photocraft_doc::LayerId>> {
+    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some() {
+        return Ok(None);
+    }
+    let Ok(id) = crate::commands::layer_param(s, p) else { return Ok(None) };
+    let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
+    Ok(smart.then_some(id))
+}
+
 /// Image › Adjustments on a smart object record `image.adjustments.<kind>` as a smart filter
 /// (Photoshop): the adjustment re-runs from the source whenever the object re-renders, through
 /// [`adjust_as_filter`]. `Ok(true)` when it was recorded (one history step, the selection becomes
 /// the filter mask); `Ok(false)` when the command should edit pixels instead (a mask or channel
 /// target, or the active layer is not a smart object).
 pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p: &Value) -> Result<bool> {
-    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some() {
-        return Ok(false);
-    }
-    let Ok(id) = crate::commands::layer_param(s, p) else { return Ok(false) };
-    let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
-    if !smart {
-        return Ok(false);
-    }
+    let Some(id) = smart_pixel_target(s, p)? else { return Ok(false) };
     // A pixel or full lock refuses the smart filter, as for `filter.*` on a smart object.
     crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     // The recorded params are the command's own, minus the engine's private `__kind` key.
@@ -376,7 +381,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
 /// object): the adjustment applied to a copy of `surf`. `None` for kinds or params it can't run.
-pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Result<Option<Surface>> {
+pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface, histogram_mask: Option<&photocraft_doc::LayerMask>) -> Result<Option<Surface>> {
     // A Color Lookup filter re-reads its LUT `file`, a path stored in the document: followed only
     // as `doc_path` allows, else the filter can't run (like a missing file).
     let resolved;
@@ -391,7 +396,24 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Result<
         None => p,
     };
     let mut out = surf.clone();
-    if kind == "shadowsHighlights" {
+    if kind == "replaceColor" {
+        let Ok((c, fuzz, h, sat, l)) = replace_color_params("image.adjustments.replaceColor", p, [0.0, 0.0, 0.0, 1.0]) else { return Ok(None) };
+        process_surface(&mut out, None, &mut |px, _| {
+            tone::replace_color(px, [c[0], c[1], c[2]], fuzz, h, sat, l);
+        })?;
+    } else if kind == "desaturate" {
+        let mode = surf.format().mode;
+        if crate::pixels::adjust_surface(&mut out, &crate::commands::desaturate_adjustment(), None, mode).is_err() {
+            return Ok(None);
+        }
+    } else if kind == "equalize" {
+        process_surface(&mut out, None, &mut |px, area| {
+            let width = area.width() as usize;
+            let cover =
+                (0..px.len()).map(|i| histogram_mask.map_or(1.0, |m| m.value(area.x0 + (i % width) as i32, area.y0 + (i / width) as i32))).collect::<Vec<_>>();
+            crate::extra_cmds::equalize_pixels(px, &cover);
+        })?;
+    } else if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);
         process_surface(&mut out, None, &mut |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh))?;
     } else {
@@ -429,15 +451,56 @@ fn shadows_highlights_params(p: &Value) -> ShadowsHighlights {
     }
 }
 
-/// Recorded Lab bounds use native profile matching; ordinary RGB samples keep their existing path.
+fn replace_color_params(cmd: &str, p: &Value, default_color: [f32; 4]) -> Result<([f32; 4], f32, f32, f32, f32)> {
+    match given(p, "color") {
+        None => {}
+        Some(Value::String(s)) if crate::commands::parse_hex(s).is_some() => {}
+        Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(Value::is_number) => {}
+        Some(_) => return Err(bad(cmd, "`color` must be a hex colour or an array of 3 or 4 finite numbers")),
+    }
+    let c = crate::commands::color_param(cmd, p, "color", default_color)?;
+    let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
+    let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
+    Ok((c, fuzz, h, sat, l))
+}
+
 fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "image.adjustments.replaceColor";
+    let localized_requested = p.get("localized").and_then(Value::as_bool).unwrap_or(false);
+    // Only the smart object's own pixels are restricted: a mask, alpha channel or Quick Mask over
+    // it edits as for any layer.
+    let on_smart = smart_pixel_target(s, p)?.is_some();
+    // Recorded Lab bounds use native profile matching and edit pixels in place; ordinary RGB
+    // samples keep their existing path. A smart object has no pixels to edit that way.
+    if on_smart && (p.get("labMinimum").is_some() || p.get("labMaximum").is_some()) {
+        return Err(bad(CMD, "Lab bounds require a pixel layer, not a smart object"));
+    }
     if let Some(result) = replace_color_range::apply(s, p)? {
         return Ok(result);
     }
-    const CMD: &str = "image.adjustments.replaceColor";
-    let c = crate::commands::color_param(CMD, p, "color", s.tools.foreground)?;
-    let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
-    let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
+    if localized_requested && on_smart {
+        return Err(bad(CMD, "Localized Color Clusters are not available as a smart filter yet"));
+    }
+    // Several samples (Add/Subtract from Sample) edit pixels through Color Range's matcher; the
+    // smart filter replays one colour only, so recording it would silently drop the extra samples.
+    if on_smart {
+        let multi = p.get("points").and_then(Value::as_array).is_some_and(|a| a.len() > 1);
+        let subtracted = p.get("subtractPoints").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+        if multi || subtracted {
+            return Err(bad(CMD, "Add/Subtract from Sample are not available as a smart filter yet"));
+        }
+    }
+    let (c, fuzz, h, sat, l) = replace_color_params(CMD, p, s.tools.foreground)?;
+    if !localized_requested {
+        // Resolve and validate before recording, including the null foreground fallback.
+        let mut q = Value::Object(p.as_object().cloned().unwrap_or_default());
+        if let Value::Object(m) = &mut q {
+            m.insert("color".into(), json!(c));
+        }
+        if adjust_as_smart_filter(s, "replaceColor", "Replace Color", &q)? {
+            return Ok(Value::Null);
+        }
+    }
     // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
     // (a percentage of the canvas's longer side) of where it was picked.
     let points = sample_points(p).map_err(|m| bad(CMD, m))?;
@@ -622,7 +685,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Replace Color…",
             ["Image", "Adjustments"],
             r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?,"subtractPoints":[[x,y],…]?,"order":["+"|"-",…]?,"labMinimum":[L,a,b]?,"labMaximum":[L,a,b]?} (Lab bounds: a finite ordered D50 box, mutually exclusive with color/points/subtractPoints/order/localized/range; composite pixel-layer target only. Otherwise color ("#rrggbb") defaults to the foreground; localized points use range % of the longer side; several "points" (Add to Sample) or any "subtractPoints" (Subtract from Sample) match as select.colorRange does for the same samples, "order" the click order.)"##,
-            has_pixels,
+            has_adjustable,
             replace_color
         ),
         spec!(

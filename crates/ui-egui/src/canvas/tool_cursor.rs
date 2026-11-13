@@ -12,6 +12,7 @@ use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 use crate::canvas::ViewXform;
 use crate::state::Tool;
 
+mod arrow;
 mod bucket;
 mod hand;
 mod pen;
@@ -30,9 +31,11 @@ const MAX_SIDE: u16 = if cfg!(any(target_os = "windows", target_os = "macos")) {
 
 /// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags;
 /// `Zoom` is the Zoom tool's magnifier, with a minus when it zooms out. `Outline` is a brush tip
-/// outline: closed rings of logical-point offsets from the hotspot.
+/// outline: closed rings of logical-point offsets from the hotspot. `Arrow` is the black arrow
+/// pointer, its tip on the hotspot.
 #[derive(Clone, Debug, PartialEq)]
 enum Shape {
+    Arrow,
     Circle { radius: f32, centre: bool },
     Crosshair { length: f32, gap: f32 },
     Hand { closed: bool },
@@ -405,6 +408,20 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
     if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
 }
 
+/// The black arrow pointer, its tip on the pointer (`_at`): an OS cursor bitmap on every platform
+/// that takes one, the system arrow where none can be set.
+pub(crate) fn arrow(ctx: &egui::Context, _at: Pos2) -> CursorIcon {
+    arrow_with(ctx, native(ctx))
+}
+
+fn arrow_with(ctx: &egui::Context, bitmap: bool) -> CursorIcon {
+    if bitmap && let Some(image) = cached_image(ctx, &Shape::Arrow, native_scale(ctx)) {
+        ctx.set_cursor_image(Some(image));
+        return CursorIcon::None;
+    }
+    CursorIcon::Default
+}
+
 /// The bitmap [`hand`] hands Windows, for tests that check the Hand's pointer on every platform.
 #[cfg(test)]
 pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCursorImage> {
@@ -589,7 +606,7 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) -> bool {
                 }
             }
             // Only ever a bitmap: without one the OS draws its own grab cursors.
-            Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pipette => {}
+            Shape::Arrow | Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pipette => {}
         }
     }
     true
@@ -638,6 +655,7 @@ fn extent(shape: &Shape) -> Option<f32> {
             }
             if *centre { e.max(3.0) } else { e }
         }
+        Shape::Arrow => arrow::REACH,
         Shape::Hand { .. } => hand::HALF,
         Shape::Zoom { .. } => zoom::HALF,
         // The 24-unit SVG extends at most 22 units from (2, 22). This extra unit plus
@@ -690,6 +708,10 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
         Shape::Zoom { out } => {
             let (lx, ly) = (dx / scale, dy / scale);
             silhouette(zoom::shape(lx, ly), zoom::glyph(*out, lx, ly), 0.75, scale)
+        }
+        Shape::Arrow => {
+            let (lx, ly) = (dx / scale, dy / scale);
+            silhouette(arrow::shape(lx, ly), f32::MAX, 0.0, scale)
         }
         Shape::Pipette => (0.0, 0.0), // SVG rasterization supplies these pixels.
     }
@@ -804,7 +826,7 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     let hotf = f32::from(hot);
     let mut put = |col: usize, row: usize, cov: (f32, f32)| {
         if let Some(px) = row.checked_mul(n).and_then(|i| i.checked_add(col)).and_then(|i| rgba.get_mut(i * 4..i * 4 + 4)) {
-            px.copy_from_slice(&stroke_pixel(cov, dark, light));
+            px.copy_from_slice(&if matches!(shape, Shape::Arrow) { arrow::pixel(cov) } else { stroke_pixel(cov, dark, light) });
         }
     };
     if let Shape::Outline { rings, centre } = shape {
@@ -856,7 +878,8 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
             }
         }
     }
-    Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] })
+    let image = CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] };
+    if matches!(shape, Shape::Arrow) { arrow::crop(image) } else { Some(image) }
 }
 
 /// Use the toolbar's actual SVG, with its lower-left tip (2, 22) at the hotspot.
@@ -898,3 +921,6 @@ mod tests;
 
 #[cfg(test)]
 mod count_tests;
+
+#[cfg(test)]
+mod add_anchor_cursor_tests;
