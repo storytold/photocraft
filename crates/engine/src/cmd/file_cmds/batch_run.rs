@@ -427,16 +427,22 @@ impl BatchPolicy {
 
 /// Photoshop-compatible Batch log encoding, shared by the desktop command and CLI.
 pub fn encode_batch_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
-    let mut body = String::from("Batch Start\r\n\r\n");
+    let mut body = String::from("Start Batch\r\n\r\n");
     for (input, reason) in errors {
+        let input = native_separators(input);
         body.push_str(&format!("File: \"{input}\"\r\nError: {reason}\r\n\r\n"));
     }
-    body.push_str("Batch End\r\n");
-    let mut bytes = vec![0xff, 0xfe];
+    body.push_str("End Batch\r\n");
+    let mut bytes = vec![0xfe, 0xff];
     for word in body.encode_utf16() {
-        bytes.extend_from_slice(&word.to_le_bytes());
+        bytes.extend_from_slice(&word.to_be_bytes());
     }
     bytes
+}
+
+/// Paths in the log use the platform's separators: backslashes on Windows, also for a folder given with `/`.
+fn native_separators(path: &str) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
 }
 
 fn write_error_log(path: &str, errors: &[Value]) -> Result<()> {

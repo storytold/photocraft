@@ -437,6 +437,10 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+#[path = "file_cmds/batch_log_format_tests.rs"]
+mod batch_log_format_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
 mod place_job_tests;
 
