@@ -566,10 +566,14 @@ fn number_edit(
     // Whether the text was edited during this focus: only an untouched field keeps its unrounded
     // value on leaving (#13432); a typed edit always applies, even one that shows the same text.
     let edited_id = id.with("edited");
-    if !ui.memory(|m| m.has_focus(id)) {
-        ui.data_mut(|d| d.remove_temp::<bool>(edited_id));
-    } else if ui.input(|i| i.events.iter().any(edits_text)) {
-        ui.data_mut(|d| d.insert_temp(edited_id, true));
+    if ui.memory(|m| m.has_focus(id)) {
+        // A new focus session starts unedited; after leaving, the marker waits for the lost_focus check below.
+        if !ui.memory(|m| m.had_focus_last_frame(id)) {
+            ui.data_mut(|d| d.remove_temp::<bool>(edited_id));
+        }
+        if ui.input(|i| i.events.iter().any(edits_text)) {
+            ui.data_mut(|d| d.insert_temp(edited_id, true));
+        }
     }
     let before = *value;
     let speed = if fine { 0.01 } else { 0.5 };

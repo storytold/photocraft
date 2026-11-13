@@ -2353,6 +2353,31 @@ fn an_arithmetic_edit_that_shows_the_same_text_still_applies() {
     }
 }
 
+/// #13540 review: in a dialog Tab moves focus before the number field sees it lose focus, so the
+/// typed-edit marker must survive that; the sum still applies.
+#[test]
+fn an_arithmetic_edit_that_shows_the_same_text_still_applies_on_tab() {
+    for line in [false, true] {
+        let mut h = slider_focus_row(Host::Dialog, line, 12.34);
+        let r = h.get_by_role(egui::accesskit::Role::SpinButton).rect();
+        click_here(&mut h, r.center());
+        h.run();
+        h.run();
+        assert!(number_has_focus(&h), "line: {line}");
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run();
+        h.event(egui::Event::Text("12+0.31".into()));
+        h.run();
+        h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+        for _ in 0..3 {
+            h.run();
+        }
+        let (value, changes) = *h.state();
+        assert!((value - 12.31).abs() < 1e-4, "the typed sum applies on Tab, got {value}, line: {line}");
+        assert!(changes > 0, "and is reported as a change, line: {line}");
+    }
+}
+
 /// #13432: in a docked or floating panel the slider click leaves nothing focused, so tool
 /// shortcuts, Space-to-pan and the hold keys keep working.
 #[test]
