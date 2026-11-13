@@ -41,6 +41,7 @@ fn invalid(message: impl Into<String>) -> IoError {
 }
 
 /// `true` for an OpenRaster archive (by its `mimetype` entry).
+#[cfg(test)]
 pub(crate) fn is_ora(bytes: &[u8]) -> bool {
     craft_ora::is_ora(bytes)
 }

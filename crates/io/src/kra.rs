@@ -34,6 +34,7 @@ fn map_error(error: craft_kra::Error) -> IoError {
 }
 
 /// `true` for a Krita archive (by its `mimetype` entry).
+#[cfg(test)]
 pub(crate) fn is_kra(bytes: &[u8]) -> bool {
     craft_kra::is_kra(bytes)
 }

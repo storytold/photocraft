@@ -3821,7 +3821,7 @@ fn folder_listing_takes_every_format_photocraft_opens() {
     for name in codecs.into_iter().chain(raws) {
         assert!(super::openable_name(name), "{name}");
     }
-    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
+    for f in photocraft_formats::Format::ALL.into_iter().filter(|f| f.capabilities().read == photocraft_formats::Availability::Available) {
         for ext in f.extensions() {
             assert!(super::openable_name(&format!("a.{ext}")), "{f:?} .{ext}");
         }

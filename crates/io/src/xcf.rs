@@ -38,11 +38,6 @@ fn map_error(error: craft_xcf::Error) -> IoError {
     }
 }
 
-/// `true` for an XCF file (by its signature).
-pub(crate) fn is_xcf(bytes: &[u8]) -> bool {
-    craft_xcf::is_xcf(bytes)
-}
-
 /// `true` for a gzip stream named `.xcf.gz` / `.xcfgz`.
 pub(crate) fn is_gzipped_xcf(name: &str, bytes: &[u8]) -> bool {
     craft_xcf::is_gzipped_xcf(name, bytes)
