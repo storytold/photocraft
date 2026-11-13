@@ -183,7 +183,7 @@ fn ok_runs_the_command_with_the_same_params() {
         let before = crate::filter_dialog::params_of(fields(&h));
         assert_eq!(
             before,
-            json!({"input": ".", "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false, "includeSubfolders": true, "groupByFolder": false})
+            json!({"input": "", "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false, "includeSubfolders": true, "groupByFolder": false})
         );
         pick(&mut h, "Resolution Unit", "pixels/cm");
         assert_eq!(crate::filter_dialog::params_of(fields(&h)), before, "the unit is view state");

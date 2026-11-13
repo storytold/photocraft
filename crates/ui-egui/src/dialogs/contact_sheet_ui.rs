@@ -9,7 +9,13 @@
 use photocraft_engine::prefs::Unit;
 use serde_json::{Map, Value, json};
 
+use crate::PhotocraftApp;
+use crate::state::DialogKind;
+
 pub(crate) const COMMAND: &str = "file.automate.contactSheetII";
+
+/// The reference application's alert for OK while no image folder is chosen (#13692).
+pub(crate) const NO_FOLDER_ALERT: &str = "Select an Image Folder";
 
 /// The resolution unit field: `cm` shows `resolution` per centimetre, anything else per inch.
 const RES_UNIT: &str = "__resUnit";
@@ -25,6 +31,29 @@ const PLACES: [(bool, &str); 2] = [(true, "across first"), (false, "down first")
 /// Whether `f` is the Contact Sheet II form.
 pub(crate) fn owns(f: &Map<String, Value>) -> bool {
     f.get("__command").and_then(Value::as_str) == Some(COMMAND)
+}
+
+/// Checked before the dialog closes (`dialogs::confirm_preflight`): OK without a folder shows
+/// [`NO_FOLDER_ALERT`] over the dialog, which stays open with its values. A folder that holds no
+/// images or is gone still reaches the command and gets its error.
+pub(crate) fn preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    let Some(f) = app.ui.dialogs.iter().find(|d| d.id == id).map(|d| &d.fields).filter(|f| owns(f)) else { return Ok(()) };
+    // The source as the command reads it.
+    let chosen = match f.get("input").or_else(|| f.get("files")) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(dir)) => !dir.is_empty(),
+        Some(_) => true,
+    };
+    if chosen {
+        return Ok(());
+    }
+    let message = tl!(NO_FOLDER_ALERT).to_owned();
+    // Repeated confirms (automation) keep one alert.
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(Value::as_str) == Some(message.as_str()));
+    if !shown {
+        app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
+    Err(message)
 }
 
 /// The dialog body: one block per group.
@@ -44,7 +73,7 @@ fn source_images(ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32) {
     heading(ui, tl!("Source Images"));
     row(ui, w, tl!("Input:"), |ui| {
         let mut input = text(f, "input", "");
-        if ui.add(egui::TextEdit::singleline(&mut input).desired_width(220.0)).accessible_name(tl!("Input")).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut input).hint_text(tl!("[Select Image Folder]")).desired_width(220.0)).accessible_name(tl!("Input")).changed() {
             f.insert("input".into(), json!(input));
         }
         if crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
