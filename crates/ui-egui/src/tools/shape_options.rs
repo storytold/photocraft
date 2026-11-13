@@ -4,6 +4,7 @@ use photocraft_doc::LayerContent;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+use crate::layer_props_ui::{LenUnit, transform_params};
 use crate::shape_gradient_ui::GradientChoices;
 use crate::shape_paint_ui::{PaintChange, paint_param, swatch};
 use crate::state::Tool;
@@ -41,6 +42,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         // The caption scrubs and names the control drawn right after it.
         crate::widgets::scrub_option_label(ui, &label);
     };
+    let size = if tool == Tool::PathSelection { size_box(app) } else { None };
     let o = &mut app.ui.tool_options;
     // Path mode edits only the next outline: an active shape layer is not the target.
     let target = if paint { selected_shape(&app.session) } else { None };
@@ -64,6 +66,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let gesture = paint_gesture(ui, gesture_key);
     let key = |k: &str| target.as_ref().map(|s| format!("shape-options-{:?}-{}-{k}:{}:{gesture}", s.doc, s.layer.0, gesture_key.value()));
     let mut edit: Option<Value> = None;
+    let mut resize: Option<Value> = None;
     let (mut fill_color, mut stroke_color) = (None, None);
     if paint {
         lbl(ui, tl!("Fill:"));
@@ -136,6 +139,10 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             crate::preset_panels::shape_picker(app, ui);
         }
         _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
+            if tool == Tool::PathSelection && target.as_ref().is_some_and(|s| s.live.is_some()) {
+                crate::widgets::vline(ui, 22.0);
+                resize = size_fields(ui, &lbl, size.as_ref());
+            }
             if let Some(photocraft_doc::LiveShape::Rect { radii, .. }) = target.as_ref().and_then(|s| s.live.as_ref()) {
                 crate::widgets::vline(ui, 22.0);
                 lbl(ui, tl!("Radius:"));
@@ -182,9 +189,10 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             (_, PaintChange::OpenPicker) => continue,
         });
     }
-    if let (Some(mut p), Some(s)) = (edit, &target) {
+    let run = edit.map(|p| ("shape.edit", p)).or(resize.map(|p| ("edit.transform", p)));
+    if let (Some((id, mut p)), Some(s)) = (run, &target) {
         p["layer"] = json!(s.layer.0);
-        if let Err(e) = app.run("shape.edit", p) {
+        if let Err(e) = app.run(id, p) {
             app.ui.status = e;
             app.ui.status_error = true;
             recent = None;
@@ -201,6 +209,66 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     range_alert(app, radius_alert, RADIUS_RANGE_ALERT);
     range_alert(app, sides_alert, SIDES_RANGE_ALERT);
+}
+
+/// The box Path Selection's W and H show and scale: the active live shape's, as the Properties
+/// panel's W / H take it (its unit, and the smallest change that counts as an edit).
+pub(crate) struct SizeBox {
+    layer: u64,
+    bb: [f64; 4],
+    unit: LenUnit,
+    doc: [f64; 2],
+    tol: [f32; 2],
+}
+
+fn size_box(app: &PhotocraftApp) -> Option<SizeBox> {
+    let st = app.session.active()?;
+    let layer = st.doc.layer(st.active_layer?)?;
+    // The path's geometry without the stroke, as Properties' W / H take a shape's.
+    let bb = match &layer.content {
+        LayerContent::Shape(sh) if sh.live.is_some() && !sh.path.inverted => sh.path.control_bounds().filter(|c| c.2 > c.0 && c.3 > c.1)?,
+        _ => return None,
+    };
+    let bb = [bb.0, bb.1, bb.2, bb.3];
+    let unit = LenUnit::of(app);
+    let doc = [f64::from(st.doc.size.width), f64::from(st.doc.size.height)];
+    let tol = doc.map(|extent| crate::layer_props_ui::edit_tolerance(layer, unit, extent));
+    Some(SizeBox { layer: layer.id.0, bb, unit, doc, tol })
+}
+
+/// Path Selection's W, link and H (#13277): `size`'s box, a typed size returned as the
+/// `edit.transform` the Properties panel's W / H run (scaled about the top-left corner). Without a
+/// box they are empty and greyed, and take nothing.
+pub(crate) fn size_fields(ui: &mut egui::Ui, lbl: &dyn Fn(&mut egui::Ui, &str), size: Option<&SizeBox>) -> Option<Value> {
+    let link_key = egui::Id::unique("path-selection-size-link");
+    let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
+    let field = |ui: &mut egui::Ui, label: &str, axis: usize| -> Option<f32> {
+        lbl(ui, label);
+        let Some(s) = size else {
+            crate::widgets::value_field_prec_blank(ui, &mut 0.0, 0.0..=0.0, "", 62.0, 0);
+            return None;
+        };
+        // Properties' field: applied once entered (Enter, Tab, focus lost, scrub or wheel ended),
+        // not at each key; percent of the document's side, a typed `50%` of the shape's.
+        let side = s.bb[axis + 2] - s.bb[axis];
+        let id = (["path-selection-w", "path-selection-h"][axis], s.layer);
+        crate::layer_props_ui::committed_field(ui, id, label, side as f32, 62.0, (s.unit, s.doc[axis], side), s.tol[axis])
+    };
+    let (w, h) = ui
+        .add_enabled_ui(size.is_some(), |ui| {
+            let w = field(ui, "W:", 0);
+            if crate::icons::button(ui, if linked { "link" } else { "unlink" }, 20.0, linked, tl!("Link width and height")).clicked() {
+                ui.data_mut(|d| d.insert_temp(link_key, !linked));
+            }
+            (w, field(ui, "H:", 1))
+        })
+        .inner;
+    let s = size?;
+    match (w, h) {
+        (Some(w), _) => transform_params(s.layer, s.bb, Some(w), None, linked, s.tol[0]),
+        (None, Some(h)) => transform_params(s.layer, s.bb, None, Some(h), linked, s.tol[1]),
+        (None, None) => None,
+    }
 }
 
 /// The Rectangle tool's corner radius in px, as the reference takes it (#13336).

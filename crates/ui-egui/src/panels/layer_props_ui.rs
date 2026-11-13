@@ -42,7 +42,7 @@ pub fn transform_params(layer: u64, b: [f64; 4], w: Option<f32>, h: Option<f32>,
 /// so anything past the field's own rounding (half its last shown decimal) is an edit: 400.25 px
 /// typed as 400 applies, while focusing and leaving the field (which re-reads its rounded text)
 /// doesn't.
-fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
+pub(crate) fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
     match &layer.content {
         LayerContent::Shape(sh) if !sh.path.inverted => ((u.px(0.05, extent) - u.px(0.0, extent)).abs() as f32 + 1e-3).min(0.5),
         _ => 0.5,
@@ -58,9 +58,14 @@ fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
 // The explicit accessible name accompanies the existing numeric-field parameters.
 #[expect(clippy::too_many_arguments)]
 fn field(ui: &mut egui::Ui, id: (&str, u64), label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64, f64), tol: f32) -> Option<f32> {
+    stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
+    committed_field(ui, id, name, current, width, len, tol)
+}
+
+/// [`field`] without its label, for a caller that draws its own (Path Selection's W / H, #13277).
+pub(crate) fn committed_field(ui: &mut egui::Ui, id: (&str, u64), name: &str, current: f32, width: f32, len: (LenUnit, f64, f64), tol: f32) -> Option<f32> {
     let (u, extent, typed_pct) = len;
     let (id, layer) = id;
-    stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
     // A wheeled value waiting for its gesture to end is its layer's, held while it is drawn.
     // It is dropped rather than applied when another layer was made active in the meantime, when
