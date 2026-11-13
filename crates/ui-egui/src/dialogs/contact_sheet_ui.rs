@@ -260,3 +260,7 @@ fn flag(f: &Map<String, Value>, key: &str, d: bool) -> bool {
 #[cfg(test)]
 #[path = "contact_sheet_layout_tests.rs"]
 mod contact_sheet_layout_tests;
+
+#[cfg(test)]
+#[path = "contact_sheet_ok_validation_tests.rs"]
+mod contact_sheet_ok_validation_tests;

@@ -7,12 +7,16 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+pub(super) type H = egui_kittest::Harness<'static, PhotocraftApp>;
 
 /// The whole app's dialogs with Contact Sheet II open from the menu, without a document (the
 /// command needs none).
-fn harness() -> H {
-    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+pub(super) fn harness() -> H {
+    harness_with(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()))
+}
+
+/// [`harness`] for `app`.
+pub(super) fn harness_with(app: PhotocraftApp) -> H {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let ctx = h.ctx.clone();
@@ -21,7 +25,7 @@ fn harness() -> H {
     h
 }
 
-fn fields(h: &H) -> &Map<String, Value> {
+pub(super) fn fields(h: &H) -> &Map<String, Value> {
     &h.state().ui.dialogs.last().expect("the dialog is open").fields
 }
 
@@ -31,7 +35,7 @@ fn shown(h: &H, name: &str) -> f64 {
 }
 
 /// Types `text` into the value field `name`.
-fn type_into(h: &mut H, name: &str, text: &str) {
+pub(super) fn type_into(h: &mut H, name: &str, text: &str) {
     let value = shown(h, name);
     crate::file_ui::tests::type_into_field(h, value, text);
 }
@@ -41,11 +45,22 @@ fn num(h: &H, key: &str) -> f64 {
 }
 
 /// Opens the dropdown `name` and picks `entry`.
-fn pick(h: &mut H, name: &str, entry: &str) {
+pub(super) fn pick(h: &mut H, name: &str, entry: &str) {
     h.get_by_role_and_label(Role::ComboBox, name).click();
     h.run_steps(3);
     h.get_all_by_label(entry).rfind(|n| n.accesskit_node().role() != Role::ComboBox).unwrap_or_else(|| panic!("no entry {entry} in {name}")).click();
     h.run_steps(3);
+}
+
+/// A new folder in the temp folder holding one 40 x 20 PNG, `a.png`.
+pub(super) fn image_folder(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("pc-contact-sheet-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut image = photocraft_engine::Session::new();
+    image.execute("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+    let png = photocraft_io::export(&image.active().unwrap().doc, "a.png", &Default::default()).unwrap().bytes;
+    std::fs::write(dir.join("a.png"), png).unwrap();
+    dir
 }
 
 /// The dropdown `name` lists `expected` when opened; a second click closes it.
@@ -188,12 +203,7 @@ fn ok_runs_the_command_with_the_same_params() {
         pick(&mut h, "Resolution Unit", "pixels/cm");
         assert_eq!(crate::filter_dialog::params_of(fields(&h)), before, "the unit is view state");
 
-        let dir = std::env::temp_dir().join(format!("pc-contact-sheet-layout-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut image = photocraft_engine::Session::new();
-        image.execute("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
-        let png = photocraft_io::export(&image.active().unwrap().doc, "a.png", &Default::default()).unwrap().bytes;
-        std::fs::write(dir.join("a.png"), png).unwrap();
+        let dir = image_folder("layout");
         h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("input".into(), json!(dir.to_string_lossy()));
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);
