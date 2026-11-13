@@ -407,6 +407,10 @@ fn tree_limits(depth: usize, raster_pixels: u64) -> craft_svg::tree::Limits {
         // PhotoCraft's stack guard counts open tags; the shared SVG preflight counts every
         // element, including a self-closing leaf. Allow that leaf at the same guarded depth.
         depth: depth.saturating_add(1),
+        // The shared default is intentionally conservative for general consumers. PhotoCraft
+        // already guards XML nesting and reference expansion against its 512-level parser
+        // budget, so pass that same explicit limit through instead of inheriting 256.
+        tree_depth: depth.saturating_add(1),
         embedded_bytes: usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX),
         embedded_depth: MAX_EMBEDDED_SVG_DEPTH,
         embedded_raster_pixels: raster_pixels.min(MAX_RASTER_PIXELS),
