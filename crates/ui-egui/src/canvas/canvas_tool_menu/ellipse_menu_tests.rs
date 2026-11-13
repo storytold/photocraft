@@ -72,8 +72,7 @@ fn on_a_pixel_layer_the_menu_lists_the_reference_rows() {
     let mut h = harness(pixel_layer());
     let entries = entries_at(&mut h, [16.0, 16.0]);
     assert_eq!(shown(&entries), menu(PIXEL_MENU));
-    // The measured greyed rows, and two the reference keeps live that need a shape layer here:
-    // Copy Fill and Paste Fill refuse a pixel layer, so their rows grey out as in the Line's menu.
+    // The measured greyed rows: Copy Fill and Paste Fill stay live here (#13706).
     assert_eq!(
         greyed(&entries),
         [
@@ -88,9 +87,7 @@ fn on_a_pixel_layer_the_menu_lists_the_reference_rows() {
             "Subtract Front Shape",
             "Unite Shapes at Overlap",
             "Subtract Shapes at Overlap",
-            "Copy Fill",
             "Copy Complete Stroke",
-            "Paste Fill",
             "Paste Complete Stroke",
         ]
     );

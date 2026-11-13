@@ -84,7 +84,7 @@ fn over_a_pixel_layer_the_menu_lists_the_reference_rows() {
         list(
             "Define Custom Shape… · Make Selection… · Fill Path… · Stroke Path… · Rasterize Layer · Rasterize Layer Style · \
              Rasterize Vector Mask · Unite Shapes · Subtract Front Shape · Unite Shapes at Overlap · Subtract Shapes at Overlap · \
-             Copy Fill · Copy Complete Stroke · Paste Fill · Paste Complete Stroke"
+             Copy Complete Stroke · Paste Complete Stroke"
         )
     );
 }
@@ -182,7 +182,7 @@ fn greyed_rows_run_nothing() {
     let mut app = pixel_layer();
     assert!(open(&mut app, &Context::default(), Tool::Line, [10.0, 10.0]));
     let before = app.session.journal.len();
-    for command in ["path.toSelection", "layer.rasterize.layer", "path.style.pasteFill", "path.transform"] {
+    for command in ["path.toSelection", "layer.rasterize.layer", "path.style.pasteStroke", "path.transform"] {
         choose(&mut app, &Context::default(), command);
         assert!(open(&mut app, &Context::default(), Tool::Line, [10.0, 10.0]));
     }
