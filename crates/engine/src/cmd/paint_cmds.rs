@@ -93,6 +93,7 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     // A foreground picked as CMYK fills a CMYK document with the picked inks (#4196).
     let inks = s.tools.picked_cmyk([c[0], c[1], c[2]]).filter(|_| c[3] >= 1.0 && pattern.is_none());
     let layer = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|st| st.active_layer) };
+    let mode = mode.for_target(crate::channel_cmds::is_color_target(p));
     // A click off the canvas, or on a pixel the selection leaves out, fills nothing and adds no
     // history state (#12535). A partly selected pixel still fills, clipped to the selection.
     let fills_nothing =
@@ -182,7 +183,8 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = doc.selection.clone();
         let area = sel.as_ref().map(|m| m.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()).intersect(&doc.bounds());
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
-        paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, blend, dither, sel.as_ref(), lock);
+        let mode = FillMode::Blend(blend).for_target(crate::channel_cmds::is_color_target(p));
+        paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, mode, dither, sel.as_ref(), lock);
         Ok(())
     })?;
     Ok(Value::Null)

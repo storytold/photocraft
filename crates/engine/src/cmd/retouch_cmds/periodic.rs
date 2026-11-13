@@ -25,7 +25,8 @@ pub(super) fn project(rect: Rect, tile: Rect) -> Vec<Rect> {
 
 /// A composite tool's stroke wrapped around the document: `paint` gives the pixels for a
 /// rectangle in the stroke's own coordinates, from the target as it was before the stroke, and
-/// they go on through the stroke's coverage wherever it repeats on the document.
+/// they go on through the stroke's coverage wherever it repeats on the document. `color`: the
+/// target is a layer's colour pixels ([`photocraft_paint::retouch::apply_coverage`]).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stroke(
     pre: &Document,
@@ -34,6 +35,7 @@ pub(super) fn stroke(
     selection: Option<&Surface>,
     lock: bool,
     mode: BlendMode,
+    color: bool,
     cmd: &str,
     mut paint: impl FnMut(&Surface, Rect) -> Result<Region>,
 ) -> Result<Rect> {
@@ -42,7 +44,7 @@ pub(super) fn stroke(
     renderer.finish();
     let before = target.clone();
     let bounds = renderer.bounds();
-    Composite { target, before: &before, tile: pre.bounds(), opacity: stroke.brush.opacity, selection, lock, mode, cmd }.draw(
+    Composite { target, before: &before, tile: pre.bounds(), opacity: stroke.brush.opacity, selection, lock, mode, color, cmd }.draw(
         bounds,
         &stroke.brush,
         &stroke.points,
@@ -61,6 +63,8 @@ pub(super) struct Composite<'a> {
     pub selection: Option<&'a Surface>,
     pub lock: bool,
     pub mode: BlendMode,
+    /// A layer's colour pixels ([`photocraft_paint::retouch::apply_coverage`]'s `color`).
+    pub color: bool,
     /// The command an over-budget stroke's error names.
     pub cmd: &'a str,
 }
@@ -127,7 +131,7 @@ impl Composite<'_> {
                         }
                     }
                     self.target.write_region(dst, &self.before.read_region(dst));
-                    apply_coverage(self.target, dst, &stroke.coverage, self.opacity, self.selection, self.lock, &stroke.paint, self.mode);
+                    apply_coverage(self.target, dst, &stroke.coverage, self.opacity, self.selection, self.lock, &stroke.paint, self.mode, self.color);
                     damage = damage.union(&dst);
                     x = x1;
                 }

@@ -213,12 +213,14 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(l.bounds);
         }
         if flag(p, "wrap", false) {
-            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, |before, r| clone_sample(pre, id, before, &from, which, r, &map, true, CMD));
+            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, crate::channel_cmds::is_color_target(p), CMD, |before, r| {
+                clone_sample(pre, id, before, &from, which, r, &map, true, CMD)
+            });
         }
         let (bounds, cov) = coverage(CMD, &stroke)?;
         // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
         let paint = clone_sample(pre, id, surf, &from, which, bounds, &map, flag(p, "wrap", false), CMD)?;
-        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode, crate::channel_cmds::is_color_target(p)))
     })?;
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
     if from_live {
@@ -455,6 +457,7 @@ impl LiveRetouch {
             selection: self.sel.as_ref(),
             lock: self.lock,
             mode: self.mode,
+            color: crate::channel_cmds::is_color_target(&self.params),
             cmd: live_cmd,
         }
         .draw(dirty, &self.brush, &self.points, paint)
@@ -476,6 +479,7 @@ impl LiveRetouch {
         let behind = matches!(self.paint, LivePaint::Pattern { behind: true, .. });
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
-        Ok(pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind).union(&r))
+        let color = crate::channel_cmds::is_color_target(&self.params);
+        Ok(pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind, color).union(&r))
     }
 }

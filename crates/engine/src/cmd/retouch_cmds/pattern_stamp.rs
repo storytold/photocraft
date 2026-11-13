@@ -83,10 +83,12 @@ impl Setup {
     }
 
     /// One Impressionist dab's edit of a working copy in `fmt`.
-    fn impressionist_effect(&self, fmt: PixelFormat) -> super::DabEffect {
+    /// `color`: the target is a layer's colour pixels, so a float document keeps light above white.
+    fn impressionist_effect(&self, fmt: PixelFormat, color: bool) -> super::DabEffect {
         let (tile, phase, scale, angle, seed, mode) = (self.tile.clone(), self.phase, self.scale, self.angle, self.seed, self.mode);
         let (tw, th) = (self.pat.width as f32 * scale, self.pat.height as f32 * scale);
-        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode))
+        let float = color && fmt.sample == photocraft_color::SampleType::F32;
+        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode, float))
     }
 }
 
@@ -113,7 +115,8 @@ fn under_native(a: usize, dst: &mut [f32], src: &[f32], k: f32) {
 /// [`apply_coverage`], or with `behind` the same weights (`cov × opacity × selection`) laid
 /// beneath the pixels of `target`: shared by the commit and the live preview. Behind paints
 /// nothing where there is no transparency to paint into: a target without alpha (the Background,
-/// a mask, a channel) or with transparency locked.
+/// a mask, a channel) or with transparency locked. `color` is [`apply_coverage`]'s: a layer's
+/// colour pixels, where 32-bit float keeps values above 1.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lay_coverage(
     target: &mut Surface,
@@ -125,9 +128,10 @@ pub(super) fn lay_coverage(
     paint: &Region,
     mode: BlendMode,
     behind: bool,
+    color: bool,
 ) -> Rect {
     if !behind {
-        return apply_coverage(target, rect, cov, opacity, sel, lock, paint, mode);
+        return apply_coverage(target, rect, cov, opacity, sel, lock, paint, mode, color);
     }
     let fmt = target.format();
     let (Some(a), false, false) = (alpha_index(&fmt), lock, rect.is_empty()) else { return Rect::EMPTY };
@@ -162,10 +166,10 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = pre.selection.as_ref();
         if st.impressionist {
             // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
-            let effect = st.impressionist_effect(surf.format());
+            let effect = st.impressionist_effect(surf.format(), crate::channel_cmds::is_color_target(p));
             apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect).map_err(|e| bad(CMD, e.to_string()))
         } else {
-            paint_aligned(surf, &st, sel, lock, CMD)
+            paint_aligned(surf, &st, sel, lock, crate::channel_cmds::is_color_target(p), CMD)
         }
     })?;
     s.hint_damage(dmg);
@@ -189,7 +193,8 @@ pub fn live_impressionist(s: &Session, p: &Value) -> Result<super::LiveDab> {
     }
     let (stroke, id) = (st.stroke.clone(), st.id);
     let doc = (*s.active().ok_or(crate::EngineError::NoDocument)?.doc).clone();
-    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
+    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format(), crate::channel_cmds::is_color_target(p)))?
+        .with_tail_preview()
 }
 
 /// The pattern under destination `rect` in `fmt` (native channels): what an aligned stroke paints
@@ -268,13 +273,13 @@ fn rgba_to_region(fmt: &PixelFormat, rect: Rect, rgba: &[[f32; 4]]) -> Region {
     paint
 }
 
-fn paint_aligned(surf: &mut Surface, st: &Setup, sel: Option<&Surface>, lock: bool, cmd: &str) -> Result<Rect> {
+fn paint_aligned(surf: &mut Surface, st: &Setup, sel: Option<&Surface>, lock: bool, color: bool, cmd: &str) -> Result<Rect> {
     let (bounds, cov) = super::coverage(cmd, &st.stroke)?;
     if bounds.is_empty() {
         return Ok(Rect::EMPTY);
     }
     let paint = paint_region(&st.tile, &st.placement(), &surf.format(), bounds);
-    Ok(lay_coverage(surf, bounds, &cov, st.stroke.brush.opacity, sel, lock, &paint, st.mode, st.behind))
+    Ok(lay_coverage(surf, bounds, &cov, st.stroke.brush.opacity, sel, lock, &paint, st.mode, st.behind, color))
 }
 
 fn footprint_cov(fp: &Footprint, x: i32, y: i32) -> f32 {
@@ -301,6 +306,7 @@ fn stamp_dab(
     tw: f32,
     th: f32,
     mode: BlendMode,
+    float: bool,
 ) {
     let r = fp.rect.intersect(&work.rect);
     if r.is_empty() {
@@ -331,7 +337,7 @@ fn stamp_dab(
                 }
             } else {
                 let d = to_rgba(fmt, dst);
-                let o = photocraft_color::blend::composite(mode, d, *px, k);
+                let o = photocraft_color::blend::composite_as(float, false, mode, d, *px, k);
                 from_rgba_into(fmt, o, &mut enc);
                 if let Some(src) = enc.get(..n) {
                     dst.copy_from_slice(src);
