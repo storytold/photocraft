@@ -1474,6 +1474,56 @@ fn clone_overlay_app(size: f32) -> PhotocraftApp {
     app
 }
 
+/// A focused canvas can remain primary after another document becomes active.
+#[test]
+fn clone_cursor_from_an_inactive_document_cannot_replace_the_active_offset_reference() {
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let ctx = egui::Context::default();
+    let frame = |app: &mut PhotocraftApp, idx: usize, primary: bool, at: Option<[f64; 2]>| {
+        let view = View { zoom: 2.0, center: [32.0, 32.0], doc_size: [64, 64], fit_pending: false, fill_pending: false, ..Default::default() };
+        let event =
+            at.map_or(egui::Event::PointerGone, |at| egui::Event::PointerMoved(rect.center() + vec2((at[0] as f32 - 32.0) * 2.0, (at[1] as f32 - 32.0) * 2.0)));
+        let input = egui::RawInput { screen_rect: Some(rect), events: vec![event], ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            canvas_view(app, ui, idx, rect, view.clone(), primary);
+        });
+        output.textures_delta.clear();
+    };
+    for tool in [Tool::CloneStamp, Tool::Healing] {
+        for aligned in [false, true] {
+            let mut app = clone_overlay_app(12.0);
+            app.background_jobs = false;
+            app.ui.extras.rulers = false;
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            app.ui.tool = tool;
+            app.ui.tool_options.clone_aligned = aligned;
+            let document = app.session.active().unwrap().doc.id;
+            let slots = app.session.presets.clone.clone();
+            let revision = app.session.active().unwrap().revision;
+            // Warm up hover detection, then establish the active document's own reference.
+            for _ in 0..2 {
+                frame(&mut app, 1, true, Some([40.0, 30.0]));
+            }
+            assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [40.0, 30.0])));
+            assert_eq!(crate::preset_panels::clone_offset_readout(&app), Some([-24.0, -14.0]));
+            // A different, still-focused window draws as primary without activating its document.
+            frame(&mut app, 0, true, Some([12.0, 24.0]));
+            assert_eq!(app.session.active_index(), Some(1));
+            assert!(app.hover_doc.is_some(), "the inactive canvas really received hover input");
+            assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [40.0, 30.0])), "{tool:?}/{aligned}: retain the active document's reference");
+            assert_eq!(crate::preset_panels::clone_offset_readout(&app), Some([-24.0, -14.0]));
+            assert_eq!(crate::preset_panels::clone_offset_edit(&app, [-20.0, -10.0]).unwrap()["anchor"], json!([40.0, 30.0]));
+            frame(&mut app, 1, true, Some([44.0, 34.0]));
+            assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [44.0, 34.0])), "the active canvas still updates normally");
+            frame(&mut app, 0, false, Some([8.0, 12.0]));
+            frame(&mut app, 1, true, None);
+            assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [44.0, 34.0])), "secondary views and leaving the canvas retain the reference");
+            assert_eq!(app.session.presets.clone, slots, "hover does not establish a source anchor");
+            assert_eq!(app.session.active().unwrap().revision, revision, "hover does not paint");
+        }
+    }
+}
+
 /// One frame of the overlay at (32, 32): its shapes and texture uploads.
 fn clone_overlay_frame(ctx: &egui::Context, app: &mut PhotocraftApp, xf: &ViewXform) -> egui::FullOutput {
     ctx.run_ui(Default::default(), |ui| {
