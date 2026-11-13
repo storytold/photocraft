@@ -9,12 +9,12 @@ use serde_json::json;
 
 use super::{owns, size_range_alert};
 
-const SIZE_RANGE_ALERT: &str = "A value between 1.00 Pixels and 300000.00 Pixels is required. Closest value inserted.";
+pub(super) const SIZE_RANGE_ALERT: &str = "A value between 1.00 Pixels and 300000.00 Pixels is required. Closest value inserted.";
 use crate::PhotocraftApp;
 use crate::state::{DialogKind, Tool};
 
 /// A document and the dialog of `tool`, opened by a click at (10, 20) once the fonts are installed.
-fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
@@ -25,7 +25,7 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// Types `text` into the field named `name`, keeping the keyboard in that field.
-fn type_draft(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
+pub(super) fn type_draft(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(name)).expect("the field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -34,24 +34,24 @@ fn type_draft(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
 }
 
 /// Types `text` into the field named `name`, then Tabs out of it.
-fn type_into(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
+pub(super) fn type_into(h: &mut Harness<'static, PhotocraftApp>, name: &str, text: &str) {
     type_draft(h, name, text);
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
 }
 
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+pub(super) fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
     h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(str::to_owned)).collect()
 }
 
 /// OK on the alert, as `ui.dialog.confirm` presses it.
-fn ok(h: &mut Harness<'static, PhotocraftApp>) {
+pub(super) fn ok(h: &mut Harness<'static, PhotocraftApp>) {
     let id = h.state().ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).map(|d| d.id).expect("an alert");
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
     h.run_steps(3);
 }
 
-fn size(h: &Harness<'static, PhotocraftApp>, key: &str) -> f64 {
+pub(super) fn size(h: &Harness<'static, PhotocraftApp>, key: &str) -> f64 {
     h.state().ui.dialogs.iter().find(|d| owns(&d.fields)).expect("the dialog").fields[key].as_f64().expect("a number")
 }
 
@@ -86,7 +86,7 @@ fn a_size_past_the_range_takes_the_closest_end_and_alerts_once() {
 
 #[test]
 fn the_other_shapes_keep_clamping_silently() {
-    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Polygon] {
+    for tool in [Tool::Rectangle, Tool::EllipseShape] {
         let mut h = harness(tool);
         type_into(&mut h, "Width:", "400000");
         assert_eq!(size(&h, "width"), 300_000.0, "{tool:?}");
