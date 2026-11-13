@@ -910,6 +910,17 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || ctx.any_popup_open()
         || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some())
         || crate::panels::toolbar::more_flyout_open(ctx);
+    // Active operations and popups have already had priority. Reset a rotated view before
+    // idle Escape actions such as leaving full screen or deselecting; Rotate View handles its
+    // own Escape later, where it also clears an in-progress rotation drag.
+    if !esc_taken
+        && let Some(view) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i))
+        && view.rotation != 0.0
+        && pressed(Key::Escape)
+    {
+        view.rotation = 0.0;
+        return;
+    }
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {
