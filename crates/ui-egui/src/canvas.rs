@@ -159,6 +159,8 @@ pub struct CanvasCache {
     /// The CPU path's sharper textures of the part in view, over a reduced `texture` (#7568),
     /// by `InView::key` (two windows of a document can show different parts).
     pub detail: Vec<(u64, DetailTexture)>,
+    /// The sampling `texture` was last uploaded with: the renderer takes it from each upload.
+    pub options: TextureOptions,
 }
 
 /// [`CanvasCache::detail`]: the part of the document `DetailPlan` chose, uploaded at its factor.
@@ -172,6 +174,8 @@ pub struct DetailTexture {
     preview_key: u64,
     /// Pixels were composited for it this call (for the perf span).
     rendered: bool,
+    /// The sampling it was last uploaded with.
+    options: TextureOptions,
 }
 
 /// The CPU canvas textures to draw: the whole document, and over it the sharper part in view.
@@ -3144,6 +3148,9 @@ mod perspective_crop_cursor_tests;
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]
 mod pixel_alignment_tests;
+#[cfg(test)]
+#[path = "canvas/sampling_tests.rs"]
+mod sampling_tests;
 #[cfg(test)]
 mod lasso_preview_tests {
     use super::*;

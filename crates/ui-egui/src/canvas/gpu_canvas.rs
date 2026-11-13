@@ -60,6 +60,7 @@ pub use budget::{
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
 use callback::CanvasCallback;
+pub use callback::{Sampling, sampling};
 #[cfg(test)]
 use callback::{filter_mode, map_doc_px, tile_screen_aabb};
 use doc_textures::init_buffer;

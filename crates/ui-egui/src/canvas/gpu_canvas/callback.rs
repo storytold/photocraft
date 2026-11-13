@@ -9,14 +9,37 @@ pub(super) struct CanvasCallback {
     pub(super) params: ViewParams,
 }
 
+/// How the document canvas samples a document drawn at some device pixels per document pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sampling {
+    /// Zoomed out: through the mip chain.
+    Trilinear,
+    /// Between 1× and 2× at a scale that is not a whole number: nearest sampling would draw some
+    /// rows and columns twice (one in twelve at 108.3 %) and step every diagonal edge.
+    Bilinear,
+    /// At whole-number scales and from 2×: each document pixel a crisp square.
+    Sharp,
+}
+
+/// The document canvas's [`Sampling`] at `scale` device pixels per document pixel. The CPU
+/// canvas samples the same way (`canvas_texture_options`), so a flipped view, always drawn there,
+/// looks like the unflipped one (#13505).
+pub fn sampling(scale: f32) -> Sampling {
+    if scale < 0.999 {
+        Sampling::Trilinear
+    } else if (scale - scale.round()).abs() < 1e-3 || scale >= 2.0 {
+        Sampling::Sharp
+    } else {
+        Sampling::Bilinear
+    }
+}
+
 /// Sampling mode: 0 trilinear, 1 bilinear, 2 anti-aliased nearest.
 pub(super) fn filter_mode(scale: f32) -> (f32, f32) {
-    if scale < 0.999 {
-        (0.0, (-scale.log2()).max(0.0))
-    } else if (scale - scale.round()).abs() < 1e-3 || scale >= 2.0 {
-        (2.0, 0.0)
-    } else {
-        (1.0, 0.0)
+    match sampling(scale) {
+        Sampling::Trilinear => (0.0, (-scale.log2()).max(0.0)),
+        Sampling::Bilinear => (1.0, 0.0),
+        Sampling::Sharp => (2.0, 0.0),
     }
 }
 
