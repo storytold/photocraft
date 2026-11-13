@@ -8,6 +8,9 @@ use super::{
 };
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "image_processor_formats_tests.rs"]
+mod image_processor_formats_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "image_processor_tests.rs"]
 mod image_processor_tests;
 
@@ -93,7 +96,7 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
 /// edits without modifying the original documents. Invalid parameters and missing documents
 /// return an error; processing failures and output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "file.scripts.imageProcessor";
+    let cmd = IMAGE_PROCESSOR;
     let source = match p.get("source") {
         None | Some(Value::Null) => "folder",
         Some(Value::String(source)) if matches!(source.as_str(), "folder" | "current" | "open") => source.as_str(),

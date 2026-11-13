@@ -561,11 +561,13 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({
                 "source": if doc.is_some() { "current" } else { "folder" },
                 "input": dir, "includeSubfolders": false, "output": format!("{dir}/processed"),
-                "format": "jpg", "quality": 8, "width": 0, "height": 0, "convertToSrgb": true,
+                "jpeg": {"enabled": true, "quality": 5, "convertToSrgb": false, "resize": false, "width": 1, "height": 1},
+                "psd": {"enabled": false, "maximizeCompatibility": true, "resize": false, "width": 1, "height": 1},
+                "tiff": {"enabled": false, "lzw": false, "resize": false, "width": 1, "height": 1},
                 "__labels": {"current": tl!("Current document"), "open": tl!("All open documents"), "folder": tl!("Folder"), "includeSubfolders": tl!("Include All Subfolders")},
-                "__order": ["source", "input", "includeSubfolders", "output", "format", "quality", "width", "height", "convertToSrgb"]
+                "__order": ["source", "input", "includeSubfolders", "output"]
             }),
-            json!({"source": ["current", "open", "folder"], "format": ["jpg", "png", "psd", "tiff", "webp"]}),
+            json!({"source": ["current", "open", "folder"]}),
         ),
         "file.automate.batch" => {
             let Some(action) = crate::actions::selected_action(app) else {

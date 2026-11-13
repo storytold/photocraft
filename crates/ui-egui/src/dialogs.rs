@@ -563,7 +563,9 @@ fn button_row(
 
 /// The default button's label: what OK means for this dialog.
 fn ok_label(d: &Dialog) -> &'static str {
-    if d.kind == DialogKind::NewDocument {
+    if image_processor_ui::owns(&d.fields) {
+        tl!("Run")
+    } else if d.kind == DialogKind::NewDocument {
         tl!("Create")
     } else if crate::open_prompt::owns_memory(&d.fields) {
         tl!("Open anyway")
@@ -632,6 +634,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut drag = egui::Vec2::ZERO;
         let mut close_clicked = false;
         let mut sizing = false;
+        let mut processor_alert = None;
         let area = match start {
             Some(offset) => egui::Modal::default_area(id).anchor(egui::Align2::LEFT_TOP, offset),
             None => egui::Modal::default_area(id),
@@ -724,7 +727,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::widgets::hairline(ui);
             ui.add_space(8.0);
             crate::field_tab::begin(ui.ctx());
-            if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
+            if image_processor_ui::owns(&fields) {
+                processor_alert = image_processor_ui::body(ui, &mut fields);
+            } else if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
                 outcome = Some(done);
             }
             crate::field_tab::end(ui.ctx(), tab);
@@ -791,6 +796,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         {
             outcome = Some(false);
         }
+        outcome = image_processor_ui::finish(&mut app.ui, interactive, processor_alert, outcome);
         if let Some(dm) = app.ui.dialog_mut(d.id) {
             dm.fields = fields;
         }
@@ -1171,6 +1177,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
+    image_processor_ui::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -1322,6 +1329,7 @@ pub mod gallery_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
+mod image_processor_ui;
 pub mod jpeg_options_ui;
 #[cfg(test)]
 mod label_column_tests;
