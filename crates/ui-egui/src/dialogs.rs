@@ -286,7 +286,10 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// The delete confirmations: a layer from the Layers panel's trash, a note (#11788), or all notes
 /// (#11791).
 fn delete_prompt(fields: &Fields) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::analysis_ui::owns_clear_notes(fields)
+    crate::delete_layer_prompt::owns(fields)
+        || crate::analysis_ui::owns_delete_note(fields)
+        || crate::analysis_ui::owns_clear_notes(fields)
+        || live_shape_prompt::owns(fields)
 }
 
 fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
@@ -294,6 +297,8 @@ fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
         crate::analysis_ui::clear_notes_body(ui);
     } else if crate::analysis_ui::owns_delete_note(fields) {
         crate::analysis_ui::delete_note_body(ui, fields);
+    } else if live_shape_prompt::owns(fields) {
+        live_shape_prompt::body(ui, fields);
     } else {
         crate::delete_layer_prompt::body(ui, fields);
     }
@@ -350,7 +355,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             }
         }
         _ if crate::color_range_ui::owns(fields) => crate::color_range_ui::body(app, ui, fields),
-        _ if crate::prefs_ui::owns(fields) => crate::prefs_ui::body(app, ui, fields),
+        _ if crate::prefs_ui::owns(fields) => crate::prefs_ui::body(app, ui, fields, d.id),
         _ if fields.contains_key("__export") => crate::export_dialog::body(app, ui, fields),
         // Image Size and Canvas Size open on Width, selected (#2329).
         _ if fields.contains_key("__sizing") => first_field_focused(ui, id, |ui| crate::sizing::body(ui, fields)),
@@ -493,7 +498,7 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
-        } else if crate::analysis_ui::owns_delete_note(fields) {
+        } else if crate::analysis_ui::owns_delete_note(fields) || live_shape_prompt::owns(fields) {
             tl!("No")
         } else {
             tl!("Cancel")
@@ -542,12 +547,14 @@ fn button_row(
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
+        // Enter is the default button, except where a popup takes it or Export As waits for a click.
+        let enter_confirms = can_ok && !popup_blocks_enter && crate::export_dialog::enter_confirms(fields);
         match clicked {
             Some(ButtonRole::Cancel) if reset => crate::dialog_alt_reset::apply(app, ui.ctx(), fields),
             Some(ButtonRole::Cancel) => outcome = Some(false),
             Some(ButtonRole::Apply) => apply_requested = true,
             Some(_) => outcome = Some(true),
-            None if interactive && can_ok && !popup_blocks_enter && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+            None if interactive && enter_confirms && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
             None => {}
         }
     }
@@ -564,7 +571,7 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
-    } else if crate::analysis_ui::owns_delete_note(&d.fields) {
+    } else if crate::analysis_ui::owns_delete_note(&d.fields) || live_shape_prompt::owns(&d.fields) {
         tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
@@ -625,6 +632,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut drag = egui::Vec2::ZERO;
         let mut close_clicked = false;
         let mut sizing = false;
+        let mut fit_image_alert = None;
         let area = match start {
             Some(offset) => egui::Modal::default_area(id).anchor(egui::Align2::LEFT_TOP, offset),
             None => egui::Modal::default_area(id),
@@ -717,8 +725,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::widgets::hairline(ui);
             ui.add_space(8.0);
             crate::field_tab::begin(ui.ctx());
-            if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
-                outcome = Some(done);
+            if fit_image_range::owns(&fields) {
+                fit_image_alert = fit_image_range::body(ui, &mut fields);
+            } else {
+                outcome = dialog_body(app, ui, &d, &mut fields, id, interactive);
             }
             crate::field_tab::end(ui.ctx(), tab);
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
@@ -784,6 +794,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         {
             outcome = Some(false);
         }
+        outcome = fit_image_range::finish(&mut app.ui, interactive, fit_image_alert, outcome);
         if let Some(dm) = app.ui.dialog_mut(d.id) {
             dm.fields = fields;
         }
@@ -899,6 +910,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::delete_layer_prompt::owns,
     crate::analysis_ui::owns_delete_note,
     crate::analysis_ui::owns_clear_notes,
+    live_shape_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
@@ -1146,6 +1158,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
+        _ if live_shape_prompt::owns(&d.fields) => live_shape_prompt::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1162,6 +1175,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
+    fit_image_range::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -1303,12 +1317,16 @@ pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod equalize_ui;
 pub mod export_dialog;
+pub(crate) mod fade_modes;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
+mod fit_image_range;
+#[cfg(test)]
+mod fit_image_range_tests;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
@@ -1319,6 +1337,7 @@ mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
 pub mod liquify_ui;
+pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
 pub mod merge_channels_ui;
 pub mod new_doc_ui;
@@ -1327,6 +1346,8 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+#[cfg(test)]
+mod paths_export_default_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
