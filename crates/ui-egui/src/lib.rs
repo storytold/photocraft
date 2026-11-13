@@ -1103,6 +1103,9 @@ mod background_eraser_digit_keys_tests;
 #[cfg(test)]
 mod clone_stamp_reset_tip_tests;
 #[cfg(test)]
+#[path = "tools/quick_selection_reset_tests.rs"]
+mod quick_selection_reset_tests;
+#[cfg(test)]
 mod smudge_default_tip_tests;
 #[cfg(test)]
 mod sponge_default_tip_tests;

@@ -49,8 +49,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         }
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
-            // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
-            let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
+            // The Remove tool starts at its measured 19 px; Quick Selection starts at 30 px size
+            // but keeps its current hardness, spacing and angle (#12929); the rest is the current brush.
+            let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else if tool == Tool::QuickSelection { QUICK_SELECTION_SIZE } else { current.size };
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, size, ..current }
         }
     };
@@ -92,13 +93,17 @@ const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 const REMOVE_TOOL_SIZE: f32 = 19.0;
 /// The Smudge tool's tip after Reset Tool (#12964): a 13 px soft round at 25 % spacing.
 const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Quick Selection tool's size after Reset Tool (#12929): 30 px. Hardness, spacing and angle
+/// are kept from the current brush (#12929).
+const QUICK_SELECTION_SIZE: f32 = 30.0;
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
-/// tool's [`SMUDGE_TOOL_TIP`]; the other tools keep the default tip.
+/// tool's [`SMUDGE_TOOL_TIP`], Quick Selection's size [`QUICK_SELECTION_SIZE`] (hardness, spacing
+/// and angle are kept); the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -112,6 +117,12 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
+        Tool::QuickSelection => {
+            brush.size = QUICK_SELECTION_SIZE;
+            brush.hardness = current.hardness;
+            brush.spacing = current.spacing;
+            brush.angle = current.angle;
+        }
         _ => {}
     }
     session_fields(current, &brush)
