@@ -724,6 +724,8 @@ fn a_canvas_menu_takes_escape_before_the_pending_mask_gradient() {
         sampler_at: None,
         color: None,
         inside_selection: false,
+        type_shape: None,
+        point: None,
     });
     let escape = |app: &mut PhotocraftApp| {
         let ctx = egui::Context::default();
