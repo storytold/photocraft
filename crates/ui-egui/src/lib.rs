@@ -879,6 +879,8 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod transform_commit_click_tests;
+#[cfg(test)]
+mod transform_drag_start_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;
@@ -1109,3 +1111,6 @@ mod sponge_default_tip_tests;
 
 #[cfg(test)]
 mod red_eye_context_menu_tests;
+
+#[cfg(test)]
+mod clone_stamp_indexed_bar_tests;
