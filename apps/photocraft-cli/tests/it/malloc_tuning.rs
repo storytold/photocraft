@@ -2,7 +2,7 @@
 //! and a value the user set.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use photocraft_engine::malloc_tuning::{TRIM_THRESHOLD, TRIM_THRESHOLD_VAR};
 
