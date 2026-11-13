@@ -77,8 +77,8 @@ fn source_mode_has_eight_checkboxes_in_two_columns_with_all_and_none_under_them(
         "All, None under the checkboxes: {all:?} {none:?}"
     );
     assert!(h.get_by_role(Role::ComboBox).rect().top() > all.bottom(), "the Mode: list is below the Source Mode group");
-    // Today's default ("any") ticks every source, and none is greyed for an RGB document.
-    assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l)));
+    // The first open ticks RGB Color only (#13680), and none is greyed for an RGB document.
+    assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l) == (l == "RGB Color")));
     assert!(LEFT.into_iter().chain(RIGHT).all(|l| !h.get_by_role_and_label(Role::CheckBox, l).accesskit_node().is_disabled()));
     for raw in ["Any", "Rgb", "From", "To"] {
         assert!(h.query_by_label(raw).is_none(), "no raw {raw} control");
@@ -120,7 +120,7 @@ fn the_mode_list_names_the_targets_in_full_and_escape_closes_only_the_list() {
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "Escape on the open list keeps the dialog");
-    assert_eq!(field(&h, id, "to"), json!("rgb"));
+    assert_eq!(field(&h, id, "to"), json!("grayscale"));
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert!(h.state().ui.dialogs.is_empty(), "a second Escape cancels");

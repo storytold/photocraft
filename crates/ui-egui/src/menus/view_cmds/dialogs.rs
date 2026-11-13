@@ -487,7 +487,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let (w, h, _) = doc?;
             dialog(app, json!({"width": w, "height": h, "dontEnlarge": false, "__compact": true}), json!({}))
         }
-        "file.automate.conditionalModeChange" => dialog(app, crate::dialogs::conditional_mode_change_dialog::fields(), json!({})),
+        "file.automate.conditionalModeChange" => {
+            let fields = crate::dialogs::conditional_mode_change_dialog::fields(app);
+            dialog(app, fields, json!({}))
+        }
         "view.newGuideLayout" => Some(Ok(json!({"dialog": crate::guide_layout_ui::open(app)}))),
         "type.warpText" => Some(Ok(json!({"dialog": crate::dialogs::open_command_dialog(app, id, label)}))),
         "file.export.layersToFiles" => {

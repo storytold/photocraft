@@ -25,9 +25,41 @@ const SOURCES: [(&str, &str); 8] = [
 /// The targets the command converts to, in the same order.
 const TARGETS: [(&str, &str); 4] = [("grayscale", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
 
-/// The fields the dialog opens with: every source ticked ("any") and RGB Color.
-pub(crate) fn fields() -> Value {
-    json!({"from": "any", "to": "rgb"})
+/// The fields the dialog opens with: the sources and target of the last run that converted a
+/// document (#13680), else Photoshop's first open, RGB Color to Grayscale. Neither follows the
+/// document's mode.
+pub(crate) fn fields(app: &crate::PhotocraftApp) -> Value {
+    let saved = app.session.prefs().dialogs.get(COMMAND).and_then(Value::as_object);
+    saved.and_then(|s| settings(s.get("from"), s.get("to"))).unwrap_or_else(|| json!({"from": ["rgb"], "to": "grayscale"}))
+}
+
+/// OK ran the command: keep its sources and target for the next open, but only when it converted
+/// the document. Cancel never reaches here, and a run that converted nothing keeps the settings
+/// from before, as in Photoshop.
+pub(crate) fn remember(app: &mut crate::PhotocraftApp, params: &Value, result: &Value) {
+    if result.get("changed").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    if let Some(saved) = settings(params.get("from"), params.get("to")) {
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), saved));
+    }
+}
+
+/// `from` and `to` as stored settings: the known source ids in list order (`"any"` meaning every
+/// one) and a known mode id. Anything else (a hand-edited preferences file, a value set over the
+/// control channel) is `None`, so the defaults are used instead of it.
+fn settings(from: Option<&Value>, to: Option<&Value>) -> Option<Value> {
+    let to = norm(to?.as_str()?);
+    if !SOURCES.iter().any(|(id, _)| *id == to) {
+        return None;
+    }
+    let given: Vec<String> = match from? {
+        Value::String(v) => vec![norm(v)],
+        Value::Array(a) => a.iter().map(|v| v.as_str().map(norm)).collect::<Option<_>>()?,
+        _ => return None,
+    };
+    let from: Vec<&str> = SOURCES.iter().map(|(id, _)| *id).filter(|id| given.iter().any(|v| v == "any" || v == id)).collect();
+    (!from.is_empty()).then(|| json!({"from": from, "to": to}))
 }
 
 /// Is this form the Conditional Mode Change dialog?
