@@ -224,14 +224,16 @@ fn unticked_writes_every_board() {
 fn without_an_active_artboard_the_checkbox_is_greyed_and_every_board_is_written() {
     let (mut h, b) = harness();
     let dir = tmp();
-    // A layer inside a board (not measured: today's export of every board) and no layer at all.
-    for active in [Some(b.red_layer), None] {
-        match active {
-            Some(layer) => select(&mut h, &[layer]),
-            None => {
-                h.state_mut().session.active_mut().unwrap().active_layer = None;
-                h.state_mut().sync_views();
-            }
+    // A layer inside a board active (not measured: today's export of every board), alone and
+    // with Blue Board also selected, and no layer at all.
+    for active in [vec![b.red_layer], vec![b.blue, b.red_layer], vec![]] {
+        if active.is_empty() {
+            h.state_mut().session.active_mut().unwrap().active_layer = None;
+            h.state_mut().sync_views();
+        } else {
+            select(&mut h, &active);
+            let st = h.state().session.active().unwrap();
+            assert_eq!((st.active_layer, st.selected_layers().len()), (Some(LayerId(b.red_layer)), active.len()), "{active:?}");
         }
         let dialog = open(&mut h, &dir.path().to_string_lossy());
         assert_eq!(checkbox(&h), (false, false), "{active:?}: greyed and unticked");
