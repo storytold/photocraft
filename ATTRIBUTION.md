@@ -85,6 +85,7 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 | `docs/images/preset-invalid-choice-before.png` | Gradient preset import before validation, with the collision dialog closed | @yoriswind | Offscreen PhotoCraft capture with the synthetic `Fire.grd` gradient fixture | MIT OR Apache-2.0 |
 | `docs/images/preset-invalid-choice-after.png` | Gradient preset import after validation, with the collision dialog still open | @yoriswind | Offscreen PhotoCraft capture with the synthetic `Fire.grd` gradient fixture | MIT OR Apache-2.0 |
 | `docs/images/cpu-pixel-alignment/*.png` | CPU canvas pixel alignment, before and after #8321 | PhotoCraft contributors | Original synthetic noise rendered with the offscreen `snapshot` example; see the adjacent README | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/images/clone-source/*.png` | Clone source opacity/flow, cross-document and source-edge previews, and offset readouts | PhotoCraft contributors | Original synthetic red shapes rendered offscreen with the `snapshot` example; adjacent capture scripts and README | MIT OR Apache-2.0 |
 | `docs/images/multi-channel-editing/{curves,curves-choices,levels,drawing,mask-view-before,mask-view-after}.png` | Selected colour channel editing (synthetic gradient) | @hidoba | Original synthetic gradient rendered with the offscreen `snapshot` example; adjacent JSON scripts | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
 | `docs/images/multi-channel-editing/great-wave.jpg`, `rgb.png`, `cmyk.png`, `lab.png`, `gallery-channel-preview-{before,after}.png` | *The Great Wave off Kanagawa*, c. 1830–1832, and PhotoCraft channel-selection captures | Katsushika Hokusai (artwork); PhotoCraft contributors (UI) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Tsunami_by_hokusai_19th_century.jpg), Metropolitan Museum reproduction; adjacent JSON capture scripts | Public domain artwork (PD-Art), adjacent `LICENSE-PUBLIC-DOMAIN.txt`; UI/scripts MIT OR Apache-2.0 |
 
@@ -130,7 +131,7 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `crates/psd/tests/fixtures/atn/*.atn` | Independently encoded ATN version-16 and version-12 parser fixtures | PhotoCraft contributors (version-12 files: @yoriswind) | Original synthetic test data; wire layout documented in `crates/psd/src/atn.rs`; provenance in the adjacent README | MIT OR Apache-2.0 |
+| `crates/engine/tests/fixtures/atn/v12-commands.atn` | Independently encoded ATN version-12 parser fixture (Gaussian Blur, Levels, Select All, Make Layer; 404 bytes, sha256 `451958b686da9aab45e65ae902c86333b7149d72021c21904e3aae8e39eb77cb`), copied from the PSD crate's fixtures, which now live in craft-libs' `craft-psd` | PhotoCraft contributors (@yoriswind) | Original synthetic test data | MIT OR Apache-2.0 |
 
 ## Embedded-vector editor source
 
