@@ -1370,8 +1370,9 @@ fn distort_commit_scenarios(b: &mut Bench, sz: &Sizes) {
 /// has exited. The job's uncancelled time (`job_ms`, until applied) is measured once, untimed,
 /// and each sample cancels after a share of it, from 5 % (the first sample) to 60 % (the last),
 /// so every sample stops a job part way. A job whose result arrived before the cancel (seen by
-/// polling just before it) is no cancel sample: it is undone and started again with half the
-/// delay, and a sample that still can't cancel after four tries fails the row. The delays
+/// polling just before it, or refused by [`Session::cancel_working_job`] because its worker had
+/// already produced it) is no cancel sample: it is undone and started again with half the delay,
+/// and a sample that still can't cancel after four tries fails the row. The delays
 /// (`delay_samples_ms`) and the count of samples that ended cancelled (`cancelled_samples`) are
 /// recorded with the row.
 fn cancel_job_scenario(b: &mut Bench, s: &mut Session, reps: usize, name: &str, cmd: &str, params: &Value) {
@@ -1403,9 +1404,24 @@ fn cancel_job_scenario(b: &mut Bench, s: &mut Session, reps: usize, name: &str, 
                     other => return Err(format!("{cmd}: the job ended with {other:?}")),
                 }
             }
+            // The worker can still finish between that poll and the cancel; a plain cancel would
+            // then report Cancelled for a job that had nothing left to stop. Cancel only a worker
+            // that has not produced its result, in one atomic step, and otherwise retry.
             let t = Instant::now();
-            if !s.cancel_job(job) {
-                return Err(format!("{cmd}: the job could not be cancelled"));
+            match s.cancel_working_job(job) {
+                Ok(()) => {}
+                Err(photocraft_engine::jobs::CancelRefused::Finishing) => {
+                    match job_outcome(s, job)? {
+                        JobOutcome::Done(_) => {}
+                        other => return Err(format!("{cmd}: the job ended with {other:?}")),
+                    }
+                    if s.active().map(|d| d.history.past_len()) != Some(steps) {
+                        exec(s, "edit.undo", json!({}))?;
+                    }
+                    delay /= 2.0;
+                    continue;
+                }
+                Err(e) => return Err(format!("{cmd}: the job could not be cancelled ({})", e.as_str())),
             }
             s.join_cancelled_jobs();
             let v = ms(t);

@@ -890,6 +890,39 @@ fn a_finished_batch_worker_rejects_late_cancellation() {
     assert_eq!(result["cancelled"], false);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cancel_working_job_refuses_a_worker_that_already_finished() {
+    let mut s = Session::new();
+    let id = job(s.start_job("test.quick", json!({}), "Quick", false, |_| Ok(json!(1)), |_, result| Ok(result)).unwrap());
+    let started = Instant::now();
+    while !s.jobs.running.iter().any(|running| running.id == id && running.handle.as_ref().is_some_and(|handle| handle.is_finished())) {
+        assert!(started.elapsed() < Duration::from_secs(10), "worker did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(s.cancel_working_job(id), Err(CancelRefused::Finishing), "its result is already sent");
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)), "the result is applied, not lost");
+    // A worker still at work is cancelled as by `try_cancel_job`.
+    let id = job(s
+        .start_job(
+            "test.slow",
+            json!({}),
+            "Slow",
+            false,
+            |ctx| {
+                while !ctx.cancelled() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                ctx.check()
+            },
+            |_, ()| Ok(json!(null)),
+        )
+        .unwrap());
+    assert_eq!(s.cancel_working_job(id), Ok(()));
+    s.join_cancelled_jobs();
+    assert!(s.job(id).is_none());
+}
+
 /// A flat scanline EXR opened from a path goes through the band decoder in the open job and
 /// arrives as the same 32-bit document the whole-file decoder makes; cancelling adds nothing.
 #[cfg(any(unix, windows))]

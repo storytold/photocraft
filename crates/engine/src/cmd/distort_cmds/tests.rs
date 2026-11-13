@@ -614,3 +614,18 @@ fn liquify_that_displaces_nothing_leaves_no_history_step() {
         assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "threaded {threaded}: the document was not replaced");
     }
 }
+
+#[test]
+fn liquify_selection_blend_stops_when_cancelled() {
+    let old = active_surface(&session(8));
+    let mut new = old.clone();
+    new.fill_rect(Rect::new(10, 10, 60, 40), &[1.0, 0.0, 0.0, 1.0]);
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    sel.fill_rect(Rect::new(0, 0, 35, 60), &[1.0]);
+    let yes = || true;
+    let cancelled = Interrupt::cancel_only(&yes);
+    assert!(matches!(mix_by_selection(&old, &new, &sel, &cancelled), Err(EngineError::Cancelled)));
+    let mixed = mix_by_selection(&old, &new, &sel, &Interrupt::NONE).unwrap();
+    assert_eq!(mixed.read_region(Rect::new(10, 10, 35, 40)), new.read_region(Rect::new(10, 10, 35, 40)), "selected pixels take the result");
+    assert_eq!(mixed.read_region(Rect::new(35, 10, 60, 40)), old.read_region(Rect::new(35, 10, 60, 40)), "unselected pixels stay");
+}

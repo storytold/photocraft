@@ -159,13 +159,17 @@ fn interp(p: &Value) -> Interp {
 
 // ---------- pixel operations ----------
 
+/// Rows [`mix_by_selection`] blends between cancel checks.
+const MIX_BAND_ROWS: usize = 64;
+
 /// Mixes `new` over `old` by the selection's coverage (premultiplied when there is alpha).
 ///
 /// Where the selection covers nothing the result is `old`, so only the part of the content
 /// bounds the selection reaches is blended into a copy of `old`: a small selection over distant
 /// sparse content no longer expands the empty space between them. Refused, before any dense
-/// buffer, when that part would still pass the working budget.
-fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Result<Surface> {
+/// buffer, when that part would still pass the working budget. Checks `ctl` once per band of
+/// [`MIX_BAND_ROWS`] rows; `Err(Cancelled)` once it is cancelled (#210).
+fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface, ctl: &Interrupt) -> Result<Surface> {
     let content = old.content_bounds().union(&new.content_bounds());
     // Outside its tiles the selection's coverage is its default: an empty default lets the
     // blend keep to the selection's bounds.
@@ -181,20 +185,28 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Result<Surfa
     let (o, w) = (old.read_region(area), new.read_region(area));
     let mut r = vec![0.0f32; o.len()];
     let aw = area.width() as usize;
-    for (i, ((op, np), rp)) in o.chunks_exact(n).zip(w.chunks_exact(n)).zip(r.chunks_exact_mut(n)).enumerate() {
-        let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0).clamp(0.0, 1.0);
-        if !fmt.alpha {
-            for c in 0..n {
-                rp[c] = op[c] + (np[c] - op[c]) * k;
-            }
-            continue;
+    let band = aw * n * MIX_BAND_ROWS;
+    for (j, ((ob, nb), rb)) in o.chunks(band).zip(w.chunks(band)).zip(r.chunks_mut(band)).enumerate() {
+        if ctl.cancelled() {
+            return Err(EngineError::Cancelled);
         }
-        let a = n - 1;
-        let oa = op[a] + (np[a] - op[a]) * k;
-        rp[a] = oa;
-        for c in 0..a {
-            let pm = op[c] * op[a] + (np[c] * np[a] - op[c] * op[a]) * k;
-            rp[c] = if oa > 0.0 { (pm / oa).clamp(0.0, 1.0) } else { 0.0 };
+        let first = j * aw * MIX_BAND_ROWS;
+        for (i, ((op, np), rp)) in ob.chunks_exact(n).zip(nb.chunks_exact(n)).zip(rb.chunks_exact_mut(n)).enumerate() {
+            let i = first + i;
+            let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0).clamp(0.0, 1.0);
+            if !fmt.alpha {
+                for c in 0..n {
+                    rp[c] = op[c] + (np[c] - op[c]) * k;
+                }
+                continue;
+            }
+            let a = n - 1;
+            let oa = op[a] + (np[a] - op[a]) * k;
+            rp[a] = oa;
+            for c in 0..a {
+                let pm = op[c] * op[a] + (np[c] * np[a] - op[c] * op[a]) * k;
+                rp[c] = if oa > 0.0 { (pm / oa).clamp(0.0, 1.0) } else { 0.0 };
+            }
         }
     }
     out.write_region(area, &r);
@@ -405,7 +417,7 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let out = apply_liquify_with(surf, &field, ctl).ok_or(EngineError::Cancelled)?;
             Ok(Some(match sel {
-                Some(sel) => mix_by_selection(surf, &out, sel)?,
+                Some(sel) => mix_by_selection(surf, &out, sel, ctl)?,
                 None => out,
             }))
         }),

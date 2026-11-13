@@ -1240,6 +1240,10 @@ fn render_mask_with(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], or
     if src.is_empty() {
         return Some(out);
     }
+    // Reading and expanding the source area is a pass over it: don't start one once cancelled.
+    if ctl.cancelled() {
+        return None;
+    }
     let default = mask.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = mask.format();
     let mut tmp = Surface::new(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));

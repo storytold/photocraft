@@ -372,7 +372,8 @@ pub enum CancelRefused {
     /// and will report its real outcome when it ends.
     Committing,
     /// A Batch already asked to stop, or past its last input: it ends on its own and reports
-    /// the outputs it wrote.
+    /// the outputs it wrote; or, for [`Session::cancel_working_job`], a worker that has already
+    /// produced its result (applied at the next poll).
     Finishing,
 }
 
@@ -1579,6 +1580,18 @@ impl Session {
 
     /// [`Self::cancel_job`], saying why a job was not cancelled.
     pub fn try_cancel_job(&mut self, id: JobId) -> std::result::Result<(), CancelRefused> {
+        self.cancel_job_unless(id, false)
+    }
+
+    /// [`Self::try_cancel_job`], also refusing (`Finishing`) a job whose worker has already
+    /// produced its result but not been polled yet, in the same atomic step as the cancel.
+    /// Cancel-latency benchmarks use it so every sample stops a worker mid-work.
+    pub fn cancel_working_job(&mut self, id: JobId) -> std::result::Result<(), CancelRefused> {
+        self.cancel_job_unless(id, true)
+    }
+
+    /// Cancel job `id`; with `finished`, not once its worker has produced its result.
+    fn cancel_job_unless(&mut self, id: JobId, finished: bool) -> std::result::Result<(), CancelRefused> {
         let Some(i) = self.jobs.running.iter().position(|r| r.id == id) else { return Err(CancelRefused::NotRunning) };
         // Earlier batch outputs are already on disk. Let the worker stop after its current
         // input and return the completed and skipped lists.
@@ -1592,7 +1605,11 @@ impl Session {
         }
         // Past its commit (a save replacing its file) the job runs to the end and reports its
         // real outcome; calling it cancelled would be false.
-        if !self.jobs.running[i].ctx.try_cancel() {
+        let ctx = &self.jobs.running[i].ctx;
+        if finished && !ctx.committed() && !ctx.cancel_if_running() {
+            return Err(CancelRefused::Finishing);
+        }
+        if !ctx.try_cancel() {
             return Err(CancelRefused::Committing);
         }
         let job = self.jobs.running.remove(i);
