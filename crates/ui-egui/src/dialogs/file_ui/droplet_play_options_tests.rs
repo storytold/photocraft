@@ -4,13 +4,17 @@
 
 use egui::accesskit::{Role, Toggled};
 use egui::vec2;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
 /// The Play checkboxes, top to bottom.
-const PLAY: [&str; 4] = ["Override Action \"Open\" Commands", "Include All Subfolders", "Suppress File Open Options Dialogs", "Suppress Color Profile Warnings"];
+const PLAY: [&str; 4] =
+    ["Override Action \"Open\" Commands", "Include All Subfolders", "Suppress File Open Options Dialogs", "Suppress Color Profile Warnings"];
 
 /// The app with an action "Invert" in set "Tools" selected, and the Create Droplet dialog open on
 /// it. Returns the dialog's id.

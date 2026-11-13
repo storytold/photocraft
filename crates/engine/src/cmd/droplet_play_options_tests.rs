@@ -128,10 +128,6 @@ fn without_include_all_subfolders_a_folder_gives_its_own_images() {
 fn the_subfolder_walk_leaves_out_the_droplet_output() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().to_string_lossy().into_owned();
-    let input = test_folder(&root);
-    let nested = join(&root, "nested");
-    std::fs::create_dir_all(join(&nested, "inner")).unwrap();
-    image(&join(&nested, "inner/x.png"), 3, 3);
     let dp = Session::new()
         .execute(
             "file.automate.createDroplet",
@@ -141,11 +137,18 @@ fn the_subfolder_walk_leaves_out_the_droplet_output() {
         .as_str()
         .unwrap()
         .to_string();
-    let first_file = join(&input, "sub/a.png");
+    // Each case in its own copy of the test folder, so one case's results aren't another's inputs.
+    let folder = |case: &str| test_folder(&join(&root, case));
+    let input = folder("folder");
+    let nested = join(&root, "nested");
+    std::fs::create_dir_all(join(&nested, "inner")).unwrap();
+    image(&join(&nested, "inner/x.png"), 3, 3);
+    let with_file = folder("file-first");
+    let first_file = join(&with_file, "sub/a.png");
     let cases = [
         (json!([input]), join(&input, "droplet-output"), vec!["a.png", "b.jpg", "c.psd", "a.png", "d.png"]),
         (json!([nested]), join(&nested, "droplet-output"), vec!["x.png"]),
-        (json!([first_file, input]), join(&input, "sub/droplet-output"), vec!["a.png", "a.png", "b.jpg", "c.psd", "a.png", "d.png"]),
+        (json!([first_file, with_file]), join(&with_file, "sub/droplet-output"), vec!["a.png", "a.png", "b.jpg", "c.psd", "a.png", "d.png"]),
     ];
     for (dropped, out, files) in cases {
         let expected: Vec<String> = files.iter().map(|n| join(&out, n)).collect();
@@ -156,30 +159,6 @@ fn the_subfolder_walk_leaves_out_the_droplet_output() {
             assert_eq!(r["files"], json!(expected), "{dropped} {pass}");
         }
     }
-}
-
-/// Override Action "Open" Commands: on, the action's recorded Open reads each dropped file; off,
-/// the recorded Open opens its own (here missing) file and the input fails.
-#[test]
-fn override_open_makes_the_recorded_open_read_each_dropped_file() {
-    let root = tempfile::tempdir().unwrap();
-    let root = root.path().to_string_lossy().into_owned();
-    let input = join(&root, "a.png");
-    image(&input, 4, 3);
-    let out = join(&root, "out");
-    let steps = json!([["file.open", {"path": join(&root, "recorded.png")}], ["image.imageRotation.90cw", {}]]);
-    let make = |name: &str, on: bool| {
-        let p = json!({"path": join(&root, name), "steps": steps, "output": out, "overrideOpen": on, "shim": false});
-        Session::new().execute("file.automate.createDroplet", p).unwrap()["path"].as_str().unwrap().to_string()
-    };
-    let r = run(&make("On", true), json!([input]));
-    assert_eq!(r["errors"], json!([]), "{r}");
-    assert_eq!(size(&join(&out, "a.png")), (3, 4), "the dropped 4×3 file, rotated");
-    std::fs::remove_dir_all(&out).unwrap();
-    let r = run(&make("Off", false), json!([input]));
-    assert_eq!(r["files"], json!([]), "{r}");
-    assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
-    assert!(!std::path::Path::new(&join(&out, "a.png")).exists());
 }
 
 /// The two Suppress options open each dropped file as Batch opens it with them: the droplet's

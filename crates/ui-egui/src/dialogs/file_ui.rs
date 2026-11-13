@@ -257,10 +257,10 @@ fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str,
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 #[path = "file_ui/droplet_play_options_tests.rs"]
 mod droplet_play_options_tests;
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod web_playback_tests {

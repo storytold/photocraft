@@ -719,8 +719,8 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
-#[path = "automate_cmds/tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "droplet_play_options_tests.rs"]
 mod droplet_play_options_tests;
+#[cfg(test)]
+#[path = "automate_cmds/tests.rs"]
+mod tests;
