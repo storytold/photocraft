@@ -1,4 +1,4 @@
-use super::curves::{ToneChannel, bar_color, channel_picker, gradient_bar, hist_color, tone_channels};
+use super::curves::{ToneChannel, bar_color, editor_channel_picker, editor_channels, gradient_bar, hist_color};
 use super::{Color32, Edit, EditorCx, Sense, Stroke, StrokeKind, Tokens, Value, json, label, pos2, round, space_of, tone, vec2, widgets};
 
 // ---------------------------------------------------------------------------------------------
@@ -6,7 +6,7 @@ use super::{Color32, Edit, EditorCx, Sense, Stroke, StrokeKind, Tokens, Value, j
 
 type Lv = [f32; 5]; // in_black, gamma, in_white, out_black, out_white (0–255, gamma as is)
 
-fn read_levels(v: &Value, key: &str) -> Lv {
+pub(super) fn read_levels(v: &Value, key: &str) -> Lv {
     let o = if key.is_empty() { Some(v) } else { v.get(key) };
     let g = |k: &str, d: f32| o.and_then(|o| o.get(k)).and_then(Value::as_f64).map_or(d, |x| x as f32);
     [g("inBlack", 0.0), g("gamma", 1.0), g("inWhite", 255.0), g("outBlack", 0.0), g("outWhite", 255.0)]
@@ -60,23 +60,34 @@ pub(super) fn nearest(xs: &[f32], x: f32) -> Option<u8> {
     xs.iter().enumerate().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map(|(i, _)| i as u8)
 }
 
+fn levels_drag_id(mem: egui::Id) -> egui::Id {
+    mem.with("levels-drag")
+}
+
+/// The Levels Input slider handle being dragged in the editor rooted at `mem` (0 black, 1 gamma,
+/// 2 white), as of its last frame.
+pub(crate) fn levels_drag(ctx: &egui::Context, mem: egui::Id) -> Option<u8> {
+    ctx.data(|d| d.get_temp::<Option<u8>>(levels_drag_id(mem))).flatten()
+}
+
+/// Edit the selected Levels record using its own channel label, histogram and Auto endpoints.
 pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
-    let chans = tone_channels(space_of(v), cx.gray);
+    let channels = editor_channels(cx, space_of(v));
     let mut ch = 0;
     let mut auto = false;
     ui.horizontal(|ui| {
-        ch = channel_picker(ui, cx.mem.with("levels-ch"), chans, tl!("Channel:"));
+        ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
         });
     });
-    let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
+    let (chan, _, hist_i) = channels.get(ch).cloned().unwrap_or((ToneChannel { key: "", label: "" }, String::new(), 0));
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;
     if auto && let Some(h) = &cx.hist {
-        let (lo, hi) = auto_levels(&h[ch]);
+        let (lo, hi) = auto_levels(&h[hist_i]);
         l[0] = lo;
         l[2] = hi;
         l[1] = 1.0;
@@ -90,7 +101,7 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let p = ui.painter_at(hr.expand(1.0));
     p.rect_filled(hr, 0.0, t.field);
     if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, hr, &h[ch], hist_color(&chan, &t));
+        tone::draw_histogram(&p, hr, &h[hist_i], hist_color(&chan, &t));
     }
     p.rect_stroke(hr, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     // Input sliders: black, gamma, white.
@@ -98,7 +109,9 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let track = sr.shrink2(vec2(6.0, 0.0));
     let xpos = |val: f32| track.left() + val / 255.0 * track.width();
     let xval = |x: f32| ((x - track.left()) / track.width() * 255.0).clamp(0.0, 255.0);
-    let drag_id = cx.mem.with("levels-drag");
+    // Where 0 and 255 sit (tests press the handles there).
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("levels-slider"), track));
+    let drag_id = levels_drag_id(cx.mem);
     let mut which: Option<u8> = ui.data(|d| d.get_temp(drag_id)).flatten();
     let ctx = ui.ctx().clone();
     let pressed = |r: &egui::Response| r.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_pressed());

@@ -18,11 +18,15 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 use crate::theme::Tokens;
 
+mod clone_offsets;
 mod panels;
 
+pub use clone_offsets::{clone_mapping_at, clone_sample_point};
+pub(crate) use clone_offsets::{clone_offset_edit, clone_offset_readout, remember_clone_cursor};
+
 pub use panels::{
-    clone_sample_point, clone_source_panel, finish_custom_shape, gradients_panel, patterns_panel, select_tool_preset, shape_picker, shapes_panel, styles_panel,
-    tool_presets_panel, windows,
+    clone_source_panel, finish_custom_shape, gradients_panel, patterns_panel, select_tool_preset, shape_picker, shapes_panel, styles_panel, tool_presets_panel,
+    windows,
 };
 #[cfg(test)]
 use panels::{new_tool_preset_params, tool_id};
@@ -36,6 +40,9 @@ pub struct PresetUi {
     pub shapes: bool,
     pub tool_presets: bool,
     pub clone_source: bool,
+    /// Last clone preview position in its destination document; never restored into another session.
+    #[serde(skip)]
+    pub clone_cursor: Option<(photocraft_doc::DocId, [f64; 2])>,
     /// Thumbnail size per panel (px; the minimum shows a list).
     pub sizes: BTreeMap<String, f32>,
     /// Folders whose open state differs from the default (only the first folder starts open).
@@ -599,7 +606,7 @@ pub(crate) fn browser(
             ev.push(Ev::Drop(key, pos));
         }
     }
-    // Footer: thumbnail size | New Group, New, Delete.
+    // Footer: thumbnail size | New Group, New, Delete (same glyphs and size as the Layers footer).
     let footer_top = ui.min_rect().bottom();
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -612,15 +619,15 @@ pub(crate) fn browser(
             st.sizes.insert(panel.to_string(), s);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
+            if crate::icons::button(ui, crate::icons::FOOTER_DELETE, crate::icons::FOOTER_SIZE, false, tl!("Delete")).clicked()
                 && let Some(k) = selected.clone()
             {
                 ev.push(Ev::Delete(k));
             }
-            if crate::icons::button(ui, "plus", 24.0, false, new_tip).clicked() {
+            if crate::icons::button(ui, crate::icons::FOOTER_NEW, crate::icons::FOOTER_SIZE, false, new_tip).clicked() {
                 ev.push(Ev::New);
             }
-            if crate::icons::button(ui, "folder-plus", 24.0, false, tl!("Create new group")).clicked() {
+            if crate::icons::button(ui, crate::icons::FOOTER_NEW_GROUP, crate::icons::FOOTER_SIZE, false, tl!("Create new group")).clicked() {
                 ev.push(Ev::NewGroup);
             }
         });
