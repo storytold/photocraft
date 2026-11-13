@@ -51,10 +51,19 @@ impl Lasso {
     }
 }
 
-/// The Lasso's smoothing: the options bar's Smoothing %, always finishing the outline at the
-/// pointer (the selection has to close where the button came up).
+/// The Lasso's smoothing: the options bar's Smoothing % and its two Smoothing Options (Pulled
+/// String Mode and Adjust for Zoom), always finishing the outline at the pointer (the selection
+/// has to close where the button came up).
 fn smoothing_config(app: &PhotocraftApp) -> Smoothing {
-    Smoothing { amount: (app.ui.tool_options.lasso_smoothing / 100.0).clamp(0.0, 1.0), catch_up_on_end: true, ..Default::default() }
+    let o = &app.ui.tool_options;
+    Smoothing {
+        amount: (o.lasso_smoothing / 100.0).clamp(0.0, 1.0),
+        pulled_string: o.lasso_pulled_string,
+        adjust_for_zoom: o.lasso_adjust_for_zoom,
+        // The selection has to close where the button came up, in every mode.
+        catch_up_on_end: true,
+        ..Default::default()
+    }
 }
 
 /// Feed a freehand pointer sample through the drag's smoothing filter, appending what it emits.

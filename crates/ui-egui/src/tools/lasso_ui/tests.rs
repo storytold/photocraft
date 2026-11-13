@@ -639,3 +639,97 @@ fn the_smoothing_field_is_on_the_lassos_bar_only() {
     assert_eq!(fields(&bar(Tool::Lasso)), 2, "Feather and Smoothing");
     assert_eq!(fields(&bar(Tool::PolygonLasso)), 1, "Feather only");
 }
+
+/// Pulled String Mode: the outline moves only once the pointer pulls a string of
+/// `Smoothing % x 100 px` taut, and the release still finishes exactly at the pointer.
+#[test]
+fn pulled_string_mode_moves_the_outline_only_when_the_string_is_taut() {
+    let mut app = app();
+    app.ui.tool_options.lasso_smoothing = 50.0;
+    app.ui.tool_options.lasso_pulled_string = true;
+    // In document pixels unless Adjust for Zoom divides the string.
+    app.ui.tool_options.lasso_adjust_for_zoom = false;
+    event(&mut app, "down", 50.0, 50.0, Modifiers::NONE);
+    event(&mut app, "move", 60.0, 50.0, Modifiers::NONE);
+    assert_eq!(app.drag.as_ref().unwrap().points.len(), 1, "10 px is inside the 50 px string: the outline has not moved");
+    event(&mut app, "move", 200.0, 50.0, Modifiers::NONE);
+    let pts = app.drag.as_ref().unwrap().points.clone();
+    assert_eq!(pts.len(), 2, "150 px pulls the string taut");
+    assert!((pts[1][0] - 150.0).abs() < 1e-6 && (pts[1][1] - 50.0).abs() < 1e-6, "it lands 50 px behind the pointer: {pts:?}");
+    event(&mut app, "up", 200.0, 50.0, Modifiers::ALT);
+    let pts = app.drag.as_ref().unwrap().points.clone();
+    assert!(active(&app), "the Alt-held release keeps the outline open");
+    assert_eq!(*pts.last().unwrap(), [200.0, 50.0, 1.0], "Catch-up on Stroke End: it finishes at the pointer");
+}
+
+/// Adjust for Zoom: the string keeps its size on screen, so at 2x zoom it is half as long in
+/// document pixels. Off, the zoom changes nothing.
+#[test]
+fn adjust_for_zoom_keeps_the_string_the_same_length_on_screen() {
+    let pulled = |adjust: bool, zoom: f32| {
+        let mut app = app();
+        app.ui.views[0].zoom = zoom;
+        app.ui.tool_options.lasso_smoothing = 50.0;
+        app.ui.tool_options.lasso_pulled_string = true;
+        app.ui.tool_options.lasso_adjust_for_zoom = adjust;
+        event(&mut app, "down", 50.0, 50.0, Modifiers::NONE);
+        event(&mut app, "move", 200.0, 50.0, Modifiers::NONE);
+        app.drag.as_ref().unwrap().points[1][0]
+    };
+    // 50 % of 100 px is 50 document px at 100 %.
+    assert!((pulled(false, 1.0) - 150.0).abs() < 1e-6);
+    // Halved at 2x, so the string is still 50 points on screen.
+    assert!((pulled(true, 2.0) - 175.0).abs() < 1e-6, "the string is 25 document px at 2x");
+    assert!((pulled(false, 2.0) - 150.0).abs() < 1e-6, "without Adjust for Zoom the zoom does not change it");
+}
+
+/// The gear beside the Lasso's Smoothing opens the brush's Smoothing Options with the two that
+/// apply to an outline, greyed at 0 % as the brush's are (#11939), and the Polygonal Lasso has
+/// no gear at all.
+#[test]
+fn the_smoothing_gear_offers_the_two_modes_and_greys_them_at_zero() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let bar = |smoothing: f32, tool: Tool, open: bool| {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+        app.ui.tool = tool;
+        app.ui.tool_options.lasso_smoothing = smoothing;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        if open {
+            h.get_by_label("Set additional smoothing options").click();
+            h.run_steps(3);
+        }
+        h
+    };
+    // The Polygonal Lasso has no freehand outline to stabilise, so no gear.
+    let poly = bar(50.0, Tool::PolygonLasso, false);
+    assert!(poly.query_by_label("Set additional smoothing options").is_none(), "no gear on the Polygonal Lasso");
+    // At 0 % the two are greyed and keep their values.
+    let zero = bar(0.0, Tool::Lasso, true);
+    for label in ["Pulled String Mode", "Adjust for Zoom"] {
+        let n = zero.query_all_by_role(Role::CheckBox).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap();
+        assert!(n.accesskit_node().is_disabled(), "{label} greyed at 0 %");
+    }
+    // Above 0 % they work, and Pulled String Mode is off by default.
+    let mut on = bar(50.0, Tool::Lasso, true);
+    for label in ["Pulled String Mode", "Adjust for Zoom"] {
+        let n = on.query_all_by_role(Role::CheckBox).find(|n| n.accesskit_node().label().as_deref() == Some(label)).unwrap();
+        assert!(!n.accesskit_node().is_disabled(), "{label} enabled above 0 %");
+    }
+    assert!(!on.state().ui.tool_options.lasso_pulled_string, "Pulled String Mode starts off, as for the brush");
+    assert!(on.state().ui.tool_options.lasso_adjust_for_zoom, "Adjust for Zoom starts on, as for the brush");
+    on.query_all_by_role(Role::CheckBox).find(|n| n.accesskit_node().label().as_deref() == Some("Pulled String Mode")).expect("the checkbox").click();
+    on.run_steps(2);
+    assert!(on.state().ui.tool_options.lasso_pulled_string, "the checkbox toggles the option");
+}
