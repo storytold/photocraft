@@ -68,7 +68,7 @@ fn alt_inside_the_box_shows_the_reference_pointer() {
     assert_eq!(cursor(&app, &xf, p, egui::Modifiers::ALT), Some(CursorIcon::None), "the canvas draws the reference-point pointer there");
     assert!(shows_reference_pointer(&app, p, egui::Modifiers::ALT), "and says so to the canvas");
     assert!(!shows_reference_pointer(&app, p, egui::Modifiers::NONE));
-    assert_eq!(cursor(&app, &xf, p, egui::Modifiers::NONE), Some(CursorIcon::Move), "without Alt a press moves the content");
+    assert_eq!(cursor(&app, &xf, p, egui::Modifiers::NONE), Some(CursorIcon::Default), "without Alt the plain pointer stays");
 }
 
 /// Alt outside the box, both in the rotation zone just beyond a corner and further away: the same
@@ -82,12 +82,12 @@ fn alt_outside_the_box_shows_the_reference_pointer() {
     assert_eq!(box_hit(&app, t, zone, tol), Hit::Outside, "just beyond the corner, where a drag rotates");
     assert_eq!(box_hit(&app, t, far, tol), Hit::Outside, "and further out");
     assert!(crate::transform_tool::rotate_cursor_dir(&app, zone).is_some(), "the zone is the rotate one");
-    assert!(crate::transform_tool::rotate_cursor_dir(&app, far).is_none(), "far out it is not");
+    assert!(crate::transform_tool::rotate_cursor_dir(&app, far).is_some(), "the rotate hover follows the nearest edge or corner everywhere outside");
     for p in [zone, far] {
         assert_eq!(cursor(&app, &xf, p, egui::Modifiers::ALT), Some(CursorIcon::None), "{p:?}: the canvas draws the reference-point pointer there");
         assert!(shows_reference_pointer(&app, p, egui::Modifiers::ALT), "{p:?}");
     }
-    assert_eq!(cursor(&app, &xf, far, egui::Modifiers::NONE), Some(CursorIcon::Alias), "without Alt nothing changes");
+    assert_eq!(cursor(&app, &xf, far, egui::Modifiers::NONE), Some(CursorIcon::None), "without Alt the canvas draws its rotate pointer there");
 }
 
 /// The shown reference point is a handle of its own: a press there drags the point, so hovering it
@@ -141,14 +141,14 @@ fn a_drag_in_progress_keeps_its_pointer() {
     pointer(&mut app, ToolEvent::Move { x: pivot[0] + 6.0, y: pivot[1], pressure: 1.0 }, egui::Modifiers::ALT);
     assert_eq!(cursor(&app, &xf, pivot, egui::Modifiers::ALT), Some(CursorIcon::Crosshair), "the drag keeps its pointer");
 
-    // A move drag started without Alt, Alt pressed during it: still the move pointer.
+    // A move drag started without Alt, Alt pressed during it: the press's pointer stays.
     let mut app = transforming(false);
     let (xf, q) = (view(&app), quad(&app));
     let tol = handle_tolerance(&app);
     let p = [q[0][0] + 2.0 * tol, q[0][1] + 5.0 * tol];
     pointer(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
     pointer(&mut app, ToolEvent::Move { x: p[0] + 6.0, y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
-    assert_eq!(cursor(&app, &xf, p, egui::Modifiers::ALT), Some(CursorIcon::Move), "Alt mid-drag does not take the pointer");
+    assert_eq!(cursor(&app, &xf, p, egui::Modifiers::ALT), Some(CursorIcon::Default), "Alt mid-drag does not take the pointer");
 }
 
 /// Content-Aware Scale keeps today's pointers (#11683): its box only scales and moves, and its
