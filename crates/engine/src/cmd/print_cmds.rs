@@ -1705,9 +1705,9 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
-#[path = "print_cmds/paths_export_path_blocks_tests.rs"]
-mod paths_export_path_blocks_tests;
-
-#[cfg(test)]
 #[path = "print_cmds/paths_export_document_bounds_tests.rs"]
 mod paths_export_document_bounds_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_path_blocks_tests.rs"]
+mod paths_export_path_blocks_tests;
