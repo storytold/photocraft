@@ -112,7 +112,7 @@ fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, St
     f.insert("tgaBits".into(), json!("auto"));
     f.insert("sizing".into(), json!("scale"));
     f.insert("lockAspect".into(), json!(true));
-    f.insert("profile".into(), json!("document"));
+    f.insert("profile".into(), json!("srgb"));
     f.insert("embedProfile".into(), json!(true));
     f.insert("width".into(), json!(src_w));
     f.insert("height".into(), json!(src_h));
@@ -149,6 +149,13 @@ fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
         }
         f.insert("sizing".into(), json!("scale"));
     }
+}
+
+/// Whether Enter answers the dialog with `f` as its fields the way its default button does. Export
+/// As starts only from a click on Export, as in Photoshop: Enter, with no text field taking it,
+/// leaves the dialog open (#13740). Every other dialog keeps Enter = OK.
+pub(crate) fn enter_confirms(f: &Map<String, Value>) -> bool {
+    !f.contains_key("__export")
 }
 
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
@@ -209,7 +216,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     let docs: Vec<_> =
         layers.into_iter().map(|id| photocraft_engine::layer_menu_cmds::layer_document(&st.doc, id).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
     let suggested = format!("{}.png", export_name(&st.doc.name));
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_export(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
             return Err("Quick Export as PNG writes .png files".into());
         }
@@ -257,7 +264,9 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
             let candidate = {
                 let mut candidate = candidate;
                 let mut suffix = 1u64;
-                while candidate.exists() {
+                // A name any entry occupies is taken, a symlink (even a dangling one) included: the writer
+                // follows links, so one planted here would redirect the export.
+                while candidate.symlink_metadata().is_ok() {
                     candidate = parent.join(format!("{stem}-{}-{name}-{suffix}.{ext}", i + 1));
                     suffix = suffix.saturating_add(1);
                 }
@@ -944,17 +953,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     f.insert("metadata".into(), json!(m));
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Color Profile")).color(t.text_dim));
-                let mut profile = s(f, "profile");
-                if profile != "srgb" {
-                    profile = "document".into();
-                }
-                let opts: Vec<(String, &str)> = vec![("document".into(), tl!("Document Profile")), ("srgb".into(), tl!("Convert to sRGB"))];
-                if crate::widgets::dropdown(ui, "export-profile", tl!("Color Profile"), &mut profile, &opts, 130.0) {
-                    f.insert("profile".into(), json!(profile));
-                }
-            });
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Color Space")).font(crate::theme::semibold(12.0)).color(t.text));
+            let mut srgb = s(f, "profile") == "srgb";
+            if crate::widgets::checkbox(ui, &mut srgb, tl!("Convert to sRGB")).changed() {
+                f.insert("profile".into(), json!(if srgb { "srgb" } else { "document" }));
+            }
             let mut embed = f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true);
             crate::widgets::checkbox(ui, &mut embed, tl!("Embed Color Profile"));
             f.insert("embedProfile".into(), json!(embed));
@@ -1050,14 +1054,16 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
     let f = f.clone();
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_export(&suggested, move |app, path| {
         let r = write_export(app, &doc, &f, &path, &source_profile)?;
         // An action being recorded keeps a whole-document export with its destination and
         // settings (#7207). A layer's export isn't recorded: its layer is this document's.
         if !f.contains_key("__layer") {
             let mut step = settings_of(&f);
             step.insert("path".into(), json!(path));
-            app.session.journal.push((COMMAND.into(), Value::Object(step)));
+            let step = Value::Object(step);
+            photocraft_engine::actions_cmds::note_automation_step(&mut app.session, COMMAND, &step);
+            app.session.journal.push((COMMAND.into(), step));
         }
         Ok(r)
     })
@@ -1112,7 +1118,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
     let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
     let suggested = format!("{}.{}", export_name(stem), s_fmt(f));
     let (f, settings) = (f.clone(), settings(f));
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_export(&suggested, move |app, path| {
         let mut exported = Vec::new();
         for (doc, path) in docs.iter().zip(batch_paths(&path, &docs)) {
             let out = export_document(doc, &f, None, &source_profile)?;
@@ -1151,7 +1157,7 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         let st = app.session.active().ok_or("no document")?;
         let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
         let (suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
-        return app.pick_save(&suggested, move |app, path| {
+        return app.pick_export(&suggested, move |app, path| {
             app.refocus(doc)?;
             quick_export(app, json!({"path": path}))
         });
@@ -1172,4 +1178,29 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 }
 
 #[cfg(test)]
+mod srgb_default_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod enter_key_tests;
+
+#[cfg(all(test, unix))]
+mod batch_name_tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, SampleType, Size};
+
+    #[test]
+    fn a_planted_symlink_makes_a_batch_name_taken() {
+        let dir = std::env::temp_dir().join(format!("pc-batch-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Dangling: `exists()` follows it and reports the name free; the writer would follow it too.
+        let planted = dir.join("x-2-a.png");
+        let _ = std::fs::remove_file(&planted);
+        std::os::unix::fs::symlink(dir.join("victim"), &planted).unwrap();
+        let doc = Document::new("a", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        let paths = batch_paths(dir.join("x.png").to_str().unwrap(), &[doc.clone(), doc]);
+        assert_ne!(paths[1], planted.to_str().unwrap());
+        std::fs::remove_file(&planted).unwrap();
+    }
+}
