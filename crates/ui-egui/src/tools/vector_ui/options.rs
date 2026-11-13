@@ -67,8 +67,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
-        let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0);
+        // Photoshop's Pen lists Shape, Path and a greyed Pixels (#12906); the other pens keep theirs.
+        let opts = if tool == Tool::Pen {
+            vec![("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path")), ("pixels".to_string(), tl!("Pixels"))]
+        } else {
+            vec![("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))]
+        };
+        crate::widgets::dropdown_enabled(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0, |m| m != "pixels");
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
             crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
@@ -132,10 +137,23 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     // geometry, the Line's arrowheads included, stays.
     let paint = !(is_shape_tool(tool) && draws_path(&app.ui.tool_options));
     crate::shape_options::options_bar(app, ui, tool, paint);
+    if is_shape_tool(tool) {
+        // Path operations, alignment and arrangement, in Shape and Path mode (#13235).
+        crate::widgets::vline(ui, 22.0);
+        super::pen::path_operations_menu(app, ui);
+        super::pen::path_alignment_menu(app, ui);
+        super::pen::path_arrangement_menu(app, ui);
+    }
     // Photoshop-style arrowhead settings at the right of Line options.
     if tool == Tool::Line {
         crate::widgets::vline(ui, 22.0);
-        ui.menu_image_button(crate::icons::image("settings", 18.0, t.icon), |ui| {
+        let mut concavity_alert = false;
+        // Stays open on clicks inside, like the Pen's gear: a click into a field to type a value
+        // would otherwise close the menu before the value was entered (#13258).
+        let config = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let gear = egui::Button::image(crate::icons::image("settings", 18.0, t.icon));
+        let menu = egui::containers::menu::MenuButton::from_button(gear).config(config);
+        let (gear, _) = menu.ui(ui, |ui| {
             let o = &mut app.ui.tool_options;
             ui.set_min_width(170.0);
             ui.label(tl!("Arrowheads"));
@@ -153,15 +171,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ui.add(egui::DragValue::new(&mut o.arrow_length).range(1.0..=4096.0).suffix(" px"));
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Concavity"));
-                ui.add(egui::DragValue::new(&mut o.arrow_concavity).range(0.0..=100.0).suffix(" %"));
+                let label = tl!("Concavity");
+                ui.label(label);
+                concavity_alert = crate::widgets::value_field_whole_alerting(ui, label, &mut o.arrow_concavity, CONCAVITY_RANGE, "%", 52.0).1;
             });
-        })
-        .response
-        .on_hover_text(tl!("Arrowhead options"));
+        });
+        gear.on_hover_text(tl!("Arrowhead options"));
+        if concavity_alert {
+            crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
+        }
     }
     true
 }
+
+/// Arrowhead Concavity in percent of the head's length, as the reference takes it (#13258).
+pub(crate) const CONCAVITY_RANGE: std::ops::RangeInclusive<f32> = -50.0..=50.0;
+
+/// The reference's alert for a Concavity typed past [`CONCAVITY_RANGE`] (#13258).
+pub(crate) const CONCAVITY_RANGE_ALERT: &str = "An integer between -50% and 50% is required. Closest value inserted.";
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection… (#5703), Mask (#12904) and
 /// Shape (#10934), from the path being drawn or the active path; all greyed without one.
@@ -269,6 +296,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     };
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
+    let mut concavity_alert = false;
     // A swatch picked in a Fill/Stroke popover joins the Recently Used Colors once the edit took it.
     let mut recent: Option<[f32; 3]> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
@@ -362,7 +390,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         match live {
             photocraft_doc::vector::LiveShape::Rect { rect, .. }
             | photocraft_doc::vector::LiveShape::Ellipse { rect }
-            | photocraft_doc::vector::LiveShape::Polygon { rect, .. } => {
+            | photocraft_doc::vector::LiveShape::Polygon { rect, .. }
+            | photocraft_doc::vector::LiveShape::Triangle { rect, .. } => {
                 ui.horizontal(|ui| {
                     let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
                     let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
@@ -397,7 +426,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 }
             }
             photocraft_doc::vector::LiveShape::Polygon { sides, star_ratio, corner_radius, .. } => {
-                // One radius rounds every vertex of a triangle, polygon or star, as in Photoshop.
+                // One radius rounds every vertex of a triangle or polygon, or a star's outer points, as in Photoshop.
                 ui.horizontal(|ui| {
                     let mut r = *corner_radius as f32;
                     if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {
@@ -412,6 +441,16 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     let mut sr = (*star_ratio * 100.0) as f32;
                     if num(ui, tl!("Star ratio"), &mut sr, 1.0..=100.0, "%") {
                         edit = Some(json!({"starRatio": sr as f64 / 100.0, "coalesce": key("star")}));
+                    }
+                })
+                .inner
+            }
+            photocraft_doc::vector::LiveShape::Triangle { corner_radius, .. } => {
+                // One radius rounds all three corners of a triangle; it has no sides or star ratio.
+                ui.horizontal(|ui| {
+                    let mut r = *corner_radius as f32;
+                    if num(ui, tl!("Corner radius"), &mut r, 0.0..=100000.0, "px") {
+                        edit = Some(json!({"cornerRadius": r, "coalesce": key("corner-radius")}));
                     }
                 })
                 .inner
@@ -447,8 +486,12 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     }
                 });
                 ui.horizontal(|ui| {
+                    let label = tl!("Concavity");
+                    ui.label(egui::RichText::new(label).color(t.text_dim).size(12.0));
                     let mut v = *concavity as f32;
-                    if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
+                    let (r, out_of_range) = crate::widgets::value_field_whole_alerting(ui, label, &mut v, CONCAVITY_RANGE, "%", 64.0);
+                    concavity_alert |= out_of_range;
+                    if r.changed() {
                         edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
                     }
                 });
@@ -515,7 +558,14 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             });
         }
     }
+    if concavity_alert {
+        crate::panels::options_bar::range_alert(&mut app.ui, CONCAVITY_RANGE_ALERT);
+    }
 }
+
+#[cfg(test)]
+#[path = "line_arrow_concavity_field_tests.rs"]
+mod line_arrow_concavity_field_tests;
 
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
