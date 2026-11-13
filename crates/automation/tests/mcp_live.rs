@@ -295,6 +295,45 @@ async fn headless_uses_the_app_folders_and_stays_headless() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Agents allowed, app closed, headless: a root flag given to `mcp` replaces the app's folder for
+/// its own direction only; the other direction still falls back to the app's folder.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_root_flags_override_each_direction_on_their_own() {
+    let dir = settings_dir("headless-override");
+    let (app_read, app_write, given) = (dir.join("app-read"), dir.join("app-write"), dir.join("given"));
+    for d in [&app_read, &app_write, &given] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "headless", "readRoot": app_read.to_string_lossy(), "writeRoot": app_write.to_string_lossy()}));
+    // Only the write root is given: saves go there, reads still come from the app's read folder.
+    let mut c = live(&dir, None);
+    c.write_root = Some(given.clone());
+    let client = connect(PhotocraftMcp::live(c)).await;
+    let r = call(&client, "doc_new", json!({"width": 8, "height": 8})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    let r = call(&client, "doc_save", json!({"path": "out.pcraft"})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    assert!(given.join("out.pcraft").exists(), "saved into the given write root");
+    assert!(!app_write.join("out.pcraft").exists(), "not into the app's write folder");
+    std::fs::copy(given.join("out.pcraft"), app_read.join("in.pcraft")).unwrap();
+    let r = call(&client, "doc_open", json!({"path": app_read.join("in.pcraft").to_string_lossy()})).await;
+    assert_eq!(r.is_error, Some(false), "the app's read folder still applies: {}", text(&r));
+    client.cancel().await.unwrap();
+    // Only a read root is given: it replaces the app's read folder; saves still go to the app's write folder.
+    let mut c = live(&dir, None);
+    c.read_roots = vec![given.clone()];
+    let client = connect(PhotocraftMcp::live(c)).await;
+    let r = call(&client, "doc_open", json!({"path": app_read.join("in.pcraft").to_string_lossy()})).await;
+    assert_eq!(r.is_error, Some(true), "the app's read folder is replaced by the given one");
+    let r = call(&client, "doc_open", json!({"path": given.join("out.pcraft").to_string_lossy()})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    let r = call(&client, "doc_save", json!({"path": "again.pcraft"})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    assert!(app_write.join("again.pcraft").exists(), "saved into the app's write folder");
+    client.cancel().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Agents not allowed: `mcp` serves a session without a window as it always did, with only the
 /// folders given to the command (the app's own folders are for agents the person let in), never
 /// starts the app, and prepares the session as the command asked (`--gpu`).

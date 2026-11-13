@@ -41,8 +41,10 @@ restarts or moves to another port.
 - **Agents allowed, PhotoCraft open:** tools work in the window.
 - **Agents allowed, PhotoCraft closed:** When PhotoCraft Is Closed decides (`--when-closed
   <launch|headless|error>` overrides it): start the app and wait for it, serve a headless
-  session with the folders chosen in the app (or the `--automation-read-root` /
-  `--automation-write-root` given to `mcp`), or say to open it. The app is started only on a tool
+  session, or say to open it. The headless session takes `--automation-read-root` and
+  `--automation-write-root` when given to `mcp`, each on its own: a given read root replaces the
+  app's read folder, a given write root its write folder, and the app's folder is used for any
+  direction without a flag. The app is started only on a tool
   call, never when the MCP client starts.
 - **Agents not allowed:** a headless session with only the roots given to `mcp`, exactly as
   before; the app is never started and its folders aren't used.
