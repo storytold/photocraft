@@ -873,8 +873,9 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
             // A background job: the session waits for it, so a failure or a cancel can give it back.
             if r.get("pending").and_then(Value::as_bool) == Some(true)
                 && let Some(job) = r.get("job").and_then(Value::as_u64)
+                && let Some(s) = session
             {
-                app.distort.vanishing_committing = session.map(|s| (photocraft_engine::jobs::JobId(job), s));
+                app.distort.vanishing_committing.push((photocraft_engine::jobs::JobId(job), s));
             }
             Ok(json!({"committed": true, "result": r}))
         }
@@ -887,14 +888,13 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
 }
 
 /// A job ended (see [`crate::jobs_ui`]): when it was a Vanishing Point commit that failed or was
-/// cancelled, the mode comes back with its planes, source and strokes, as after an inline error,
-/// so the user can fix the cause and retry. Only when the mode is closed, the document is still
-/// the active one and the layer still exists. Its status and errors are reported like any job's.
+/// cancelled, the mode comes back with that commit's planes, source and strokes, as after an
+/// inline error, so the user can fix the cause and retry. Only when the mode is closed, the
+/// document is still the active one and the layer still exists. The commit's entry goes either
+/// way; other commits' entries stay. Its status and errors are reported like any job's.
 pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) {
-    if app.distort.vanishing_committing.as_ref().is_none_or(|(job, _)| *job != e.id) {
-        return;
-    }
-    let Some((_, session)) = app.distort.vanishing_committing.take() else { return };
+    let Some(i) = app.distort.vanishing_committing.iter().position(|(job, _)| *job == e.id) else { return };
+    let (_, session) = app.distort.vanishing_committing.remove(i);
     if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
         return;
     }

@@ -308,8 +308,8 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
             for (plane, src, rect, at, width) in &pastes {
                 paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
+                ctx.check()?;
             }
-            ctx.check()?;
             // A new layer samples the visible image (merged with what's been pasted) and takes only
             // the pixels the strokes change; otherwise the strokes paint the layer itself.
             let mut work = base.map(|mut w| {
