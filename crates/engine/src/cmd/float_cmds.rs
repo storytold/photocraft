@@ -41,17 +41,15 @@ pub struct CutParts {
     outline: Option<Surface>,
     /// The pieces are the layer's mask (`"target":"mask"`), not its pixels.
     mask: bool,
+    /// The piece was created with `copy: true`: the source layer still holds the original pixels.
+    pub copied: bool,
 }
 
 impl CutParts {
     /// Selected pixels in source-document coordinates, including soft coverage.
+    #[allow(dead_code)]
     pub(crate) fn selected_pixels(&self) -> &Surface {
         &self.piece
-    }
-
-    /// Whether the floating piece contains a layer mask rather than layer pixels.
-    pub(crate) fn is_mask(&self) -> bool {
-        self.mask
     }
 
     /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
@@ -105,12 +103,34 @@ impl CutParts {
         }
         let piece_bounds = piece.content_bounds();
         let outline = outline.filter(|o| !o.content_bounds().is_empty());
-        Ok(Self { layer, rest, piece, piece_bounds, outline, mask })
+        Ok(Self { layer, rest, piece, piece_bounds, outline, mask, copied: copy })
     }
 
     /// The selection the moved pixels take, where they were cut (`None`: the selection stays).
     pub fn outline(&self) -> Option<&Surface> {
         self.outline.as_ref()
+    }
+
+    /// Whether this floating piece is a layer mask (`"target":"mask"`).
+    pub fn is_mask(&self) -> bool {
+        self.mask
+    }
+
+    /// The floating pixel or mask piece and its bounds.
+    pub fn piece(&self) -> (&Surface, photocraft_geom::Rect) {
+        (&self.piece, self.piece_bounds)
+    }
+
+    /// Replace the layer's pixels (or mask) with the cut-out remainder.
+    pub fn place_rest(&self, doc: &mut Document) -> Result<()> {
+        let l = doc.layer_mut(self.layer).ok_or(EngineError::NoLayer(self.layer))?;
+        let surf = if self.mask {
+            l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("the layer has no mask".into()))?
+        } else {
+            l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?
+        };
+        *surf = self.rest.clone();
+        Ok(())
     }
 
     /// `doc` with the piece moved by whole pixels (dx, dy) over the cut-out layer.

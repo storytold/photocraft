@@ -27,6 +27,11 @@ struct Transfer {
     /// What the ghost by the pointer says.
     label: String,
     selection_only: bool,
+    /// The layer's mask is the content that travels (`"target": "mask"`), not its pixels.
+    mask: bool,
+    /// The viewport the transfer was armed in: only that viewport completes it, so a document
+    /// window's `finish` cannot clear a transfer the main window is still dragging.
+    viewport: egui::ViewportId,
 }
 
 fn key() -> egui::Id {
@@ -52,7 +57,10 @@ fn begin(app: &PhotocraftApp, ctx: &egui::Context, id: LayerId, grab: Option<[f6
     // Several selected layers move whole; the engine's selected-pixel copy intentionally accepts
     // exactly one raster layer.
     let selection_only = grab.is_some() && layers.len() == 1 && st.doc.selection.is_some();
-    let t = Transfer { source: st.doc.id, layers: layers.iter().map(|l| l.0).collect(), grab, label, selection_only };
+    // A mask target travels as the mask, not as the layer's pixels: the mask's own selection
+    // is what the pointer grabbed.
+    let mask = selection_only && st.floating.as_ref().is_some_and(|f| f.parts.is_mask()) || selection_only && app.layer_mask_targeted();
+    let t = Transfer { source: st.doc.id, layers: layers.iter().map(|l| l.0).collect(), grab, label, selection_only, mask, viewport: ctx.viewport_id() };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true
 }
@@ -64,10 +72,29 @@ pub fn begin_from_panel(app: &PhotocraftApp, ctx: &egui::Context, layer: LayerId
 
 /// A Move-tool drag of whole layers (not a selection or a floating piece) under way.
 fn move_drag(app: &PhotocraftApp) -> Option<[f64; 2]> {
-    let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move && d.sel_move != Some(false))?;
+    if let Some(d) = app.drag.as_ref().filter(|d| d.tool == Tool::Move && d.sel_move != Some(false)) {
+        let st = app.session.active()?;
+        let plain =
+            app.ui.transform.is_none() && app.guide_drag.is_none() && ((st.doc.selection.is_none() && st.floating.is_none()) || d.sel_move == Some(true));
+        return plain.then_some(d.start);
+    }
+    // A press that found nothing movable starts a marquee; when that marquee grabbed a layer
+    // (a locked layer or the Background), the marquee can still become a transfer of it.
+    // Likewise, a blocked Move press (Auto-Select off) recorded its start point for transfer.
     let st = app.session.active()?;
-    let plain = app.ui.transform.is_none() && app.guide_drag.is_none() && ((st.doc.selection.is_none() && st.floating.is_none()) || d.sel_move == Some(true));
-    plain.then_some(d.start)
+    if app.move_blocked
+        && let Some(start) = app.move_blocked_start
+        && app.ui.transform.is_none()
+        && app.guide_drag.is_none()
+        && st.floating.is_none()
+        && (app.move_blocked_layer.is_some() || (st.doc.selection.is_some() && st.active_layer.is_some()))
+    {
+        return Some(start);
+    }
+    if st.doc.selection.is_some() || st.floating.is_some() {
+        return None;
+    }
+    app.layer_box.as_ref().filter(|b| b.grabbed_layer.is_some()).map(|b| b.start)
 }
 
 /// The pointer, while layers are dragged (or a Move drag could become a transfer): tabs only
@@ -85,9 +112,32 @@ pub fn pointer_if_armed(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui
 fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) -> bool {
     if get(ctx).is_none() {
         let Some(grab) = move_drag(app) else { return false };
-        let Some(active) = app.session.active().and_then(|st| st.active_layer) else { return false };
+        // A marquee that grabbed a layer transfers it even when no layer is active.
+        let active = app.session.active().and_then(|st| st.active_layer);
         if app.session.active_index() == Some(index) {
             return false;
+        }
+        // A marquee that grabbed a layer or a blocked Move press has no drag object and no
+        // floating piece to take back: the grabbed or hit layer is what transfers.
+        if app.drag.is_none() {
+            if app.move_viewport.is_some_and(|v| v != ctx.viewport_id()) {
+                return false;
+            }
+            let grabbed = if let Some(b) = app.layer_box.as_ref() {
+                let Some(g) = b.grabbed_layer else { return false };
+                app.layer_box = None;
+                app.move_viewport = None;
+                g
+            } else if app.move_blocked {
+                let Some(hit) = app.move_blocked_layer.or_else(|| active.filter(|_| app.session.active().is_some_and(|st| st.doc.selection.is_some()))) else {
+                    return false;
+                };
+                app.clear_move_blocked();
+                hit
+            } else {
+                return false;
+            };
+            return begin(app, ctx, grabbed, Some(grab));
         }
         let Some(previous) = app.drag.as_ref().map(|d| d.transfer_floating_before.clone()) else { return false };
         // An Option-drag of an existing float first drops it and floats a copy. Take that
@@ -115,7 +165,7 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
         if let Some(st) = app.session.active_mut() {
             st.floating = previous.map(|f| photocraft_engine::float_cmds::Floating { revision: st.revision, ..f });
         }
-        let active = app.session.active().and_then(|st| st.active_layer).unwrap_or(active);
+        let Some(active) = app.session.active().and_then(|st| st.active_layer).or(active) else { return false };
         if !begin(app, ctx, active, Some(grab)) {
             return false;
         }
@@ -123,6 +173,8 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
     true
 }
 
+/// Handles a layer transfer dragged over document tab `index`, switching the active document
+/// and completing the drop when the primary button is released.
 pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
     if !arm_move_transfer(app, ctx, index) {
         return;
@@ -133,7 +185,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         // The Layers panel now lists the other document: its rows don't take the drag.
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::unique("layer-drag")));
     }
-    if ctx.input(|i| i.pointer.any_released()) {
+    if ctx.input(|i| i.pointer.primary_released()) {
         drop(app, ctx, index, None);
     }
 }
@@ -141,8 +193,29 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
 /// Every frame after the document area: a release over another document's canvas drops the
 /// layers there; while the button is held a ghost follows the pointer.
 pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // The primary button ends the gesture: a secondary release during a drag leaves it held.
+    let (primary_released, primary_down) = ctx.input(|i| (i.pointer.primary_released(), i.pointer.primary_down()));
+    // A blocked Move press is cleaned up by the window that owns it, so another window's
+    // pointer state cannot clear the source window's gesture.
+    if (!primary_down || primary_released) && get(ctx).is_none() && app.move_viewport.is_none_or(|v| v == ctx.viewport_id()) {
+        let show_lock = app.move_blocked && app.move_blocked_moved;
+        app.clear_move_blocked();
+        if show_lock {
+            crate::move_lock::prompt(app);
+        }
+        if let Some(b) = app.layer_box.as_ref()
+            && b.grabbed_layer.is_some()
+        {
+            app.layer_box = None;
+        }
+    }
     let Some(t) = get(ctx) else { return };
-    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
+    // Only the viewport that armed the transfer completes it: a document window's pointer state
+    // must not clear a transfer the main window is still dragging.
+    if t.viewport != ctx.viewport_id() {
+        return;
+    }
+    let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_released(), i.pointer.primary_down()));
     let target = pos.and_then(|p| target_at(app, p));
     if !released {
         if !down {
@@ -163,6 +236,18 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
     clear(ctx);
 }
 
+/// Is a cross-document transfer currently armed? The tool events have no context of their
+/// own, so the frame's stored context answers it.
+pub fn is_transfer_in_progress(app: &PhotocraftApp) -> bool {
+    app.frame_tool_ctx.as_ref().is_some_and(|ctx| get(ctx).is_some())
+}
+
+/// Whether a transfer is armed in `ctx` (any viewport).
+#[cfg(test)]
+pub fn is_transfer_armed(ctx: &egui::Context) -> bool {
+    get(ctx).is_some()
+}
+
 /// Run before canvases process release: a tiled destination must take over the
 /// drag before the source can commit it as an ordinary move.
 pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -172,7 +257,7 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Do not consume a source drag merely because it passes over another tile. On release this
     // runs before canvas input, so a destination can take ownership without the source committing;
     // returning to the source still releases as the original move.
-    if !ctx.input(|i| i.pointer.any_released()) {
+    if !ctx.input(|i| i.pointer.primary_released()) {
         return;
     }
     let Some(pos) = pointer_if_armed(app, ctx) else { return };
@@ -231,7 +316,15 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     let Some(to) = docs.get(dest).filter(|_| dest != src) else { return };
     let same_size = to.doc.size == docs[src].doc.size;
     let mut p = json!({"document": dest, "source": src, "layers": t.layers});
-    p["selectionOnly"] = json!(t.selection_only);
+    if t.selection_only {
+        p["selection"] = json!(true);
+        p["cut"] = json!(false);
+        if t.mask {
+            p["target"] = json!("mask");
+        }
+    } else {
+        p["selectionOnly"] = json!(false);
+    }
     match at.filter(|_| !ctx.input(|i| i.modifiers.shift)) {
         Some(at) => match t.grab {
             Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
