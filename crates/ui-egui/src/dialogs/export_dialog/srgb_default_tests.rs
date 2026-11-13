@@ -1,6 +1,9 @@
 use super::*;
 use egui::accesskit::{Role, Toggled};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_cms::Builtin;
 use photocraft_doc::{Color, SampleType, Size};
 use std::{cell::RefCell, path::Path, rc::Rc};
