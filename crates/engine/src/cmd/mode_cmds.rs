@@ -63,6 +63,12 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
 }
 
 pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
+    rotate_arbitrary_with(s, p, true)
+}
+
+/// [`rotate_arbitrary`]; `keep_counts` leaves the count points where they were (Image Rotation,
+/// #11762). The Crop tool's straighten turn moves them with the image, as before.
+pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
     let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
@@ -132,7 +138,11 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
             // What Free Transform leaves alone: unlinked vector masks, gradient angles, artboards…
             crate::canvas_geom::transform_layer_geometry(l, &a, false, dpi);
         }
-        crate::canvas_geom::transform_doc_marks(doc, &a);
+        if keep_counts {
+            crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::transform_doc_marks(doc, &a));
+        } else {
+            crate::canvas_geom::transform_doc_marks(doc, &a);
+        }
         for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
             ch.surface = crate::transform_cmds::warp_gray(&ch.surface, &h, interp)?;
         }
