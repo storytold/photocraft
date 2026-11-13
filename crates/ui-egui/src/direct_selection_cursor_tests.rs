@@ -81,3 +81,26 @@ fn the_arrow_follows_precise_and_the_path_modifier_only() {
     assert_eq!(direct_selection_arrow(true, false), None, "Precise: the crosshair");
     assert_eq!(direct_selection_arrow(true, true), None, "Precise wins over the modifier");
 }
+
+/// How many of the hollow arrow's white body pieces a frame paints at full opacity, with the
+/// arrow drawn this frame or not.
+fn white_pieces(ctx: &egui::Context, draw: bool) -> usize {
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        if draw {
+            crate::icons::cursor_hollow_arrow(ui.ctx(), egui::pos2(100.0, 100.0));
+        }
+    });
+    out.textures_delta.clear();
+    out.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Path(path) if path.fill == egui::Color32::WHITE)).count()
+}
+
+/// The arrow stands in for the hidden OS pointer, so it has to show at full strength on the first
+/// frame it is drawn and on the first frame back after the pointer left the canvas. An `Area` spent
+/// its first frame on an invisible sizing pass and faded in again on re-entry.
+#[test]
+fn the_hollow_arrow_shows_fully_on_its_first_frame_and_on_reentry() {
+    let ctx = egui::Context::default();
+    assert_eq!(white_pieces(&ctx, true), 4, "first frame: all four white body pieces, not a sizing pass");
+    assert_eq!(white_pieces(&ctx, false), 0, "pointer off the canvas: no arrow");
+    assert_eq!(white_pieces(&ctx, true), 4, "back on the canvas: full white at once, no fade-in");
+}
