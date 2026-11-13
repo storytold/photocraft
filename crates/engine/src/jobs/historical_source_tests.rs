@@ -15,35 +15,58 @@ fn wrapped(corrupt_tail: bool) -> Arc<Vec<u8>> {
     Arc::new(bytes)
 }
 
+fn complete_open(session: &mut Session, started: Result<Started>) -> Result<Value> {
+    match started? {
+        Started::Done(value) => Ok(value),
+        Started::Job(job) => session.wait_job(job),
+    }
+}
+
 #[test]
 fn interactive_wrapped_bytes_ask_before_full_inflate_then_resume_validates_stream() {
-    for corrupt in [false, true] {
-        let bytes = wrapped(corrupt);
-        let mut session = Session::new();
-        session.color.settings.ask_on_missing = false;
-        session.color.settings.ask_on_mismatch = false;
-        let Started::Done(question) = session.start_open_for_user_with_background("wrapped.xcf.gz", OpenSource::Bytes(bytes.clone()), false).unwrap() else {
-            panic!("inline question")
-        };
-        let id = question["heldHistoricalXcfOpen"].as_u64().unwrap();
-        assert!(session.holds_historical_xcf_open(id));
-        assert_eq!(Arc::strong_count(&bytes), 2, "hold the original encoded buffer without copying");
-        assert!(session.documents().is_empty());
-        let result = session.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false);
-        if corrupt {
-            assert!(result.is_err(), "the retained stream is fully validated only after the choice");
+    for cooperative in [false, true] {
+        for corrupt in [false, true] {
+            let bytes = wrapped(corrupt);
+            let mut session = Session::new();
+            session.set_cooperative_jobs(cooperative);
+            session.color.settings.ask_on_missing = false;
+            session.color.settings.ask_on_mismatch = false;
+            let asynchronous = !cooperative && !cfg!(target_arch = "wasm32");
+            let started = session.start_open_for_user_with_background("wrapped.xcf.gz", OpenSource::Bytes(bytes.clone()), false).unwrap();
+            assert_eq!(matches!(&started, Started::Job(_)), asynchronous, "native compressed probing must use the worker even when background was false");
+            let question = complete_open(&mut session, Ok(started)).unwrap();
+            let id = question["heldHistoricalXcfOpen"].as_u64().unwrap();
             assert!(session.holds_historical_xcf_open(id));
-            assert!(session.cancel_historical_xcf_open(id));
-        } else {
-            result.unwrap();
-            assert!(!session.holds_historical_xcf_open(id));
-            let doc = &session.active().unwrap().doc;
-            assert_eq!(
-                doc.layers[0].surface().unwrap().read_region(doc.bounds()),
-                vec![0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]
-            );
+            assert_eq!(Arc::strong_count(&bytes), 2, "hold the original encoded buffer without copying");
+            assert!(session.documents().is_empty());
+            let resumed = session.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false);
+            if asynchronous {
+                assert!(matches!(&resumed, Ok(Started::Job(_))), "the accepted continuation owns its worker lifecycle: {resumed:?}");
+                assert!(!session.holds_historical_xcf_open(id));
+                assert!(session.documents().is_empty(), "a worker cannot admit a tab before its result is collected");
+            }
+            let result = complete_open(&mut session, resumed);
+            if corrupt {
+                assert!(result.is_err(), "the retained stream is fully validated only after the choice");
+                assert!(session.documents().is_empty());
+                if asynchronous {
+                    assert!(!session.holds_historical_xcf_open(id), "accepted jobs consume their source even when decoding fails");
+                    assert!(!session.cancel_historical_xcf_open(id));
+                } else {
+                    assert!(session.holds_historical_xcf_open(id), "inline startup refusal leaves its exact source retryable");
+                    assert!(session.cancel_historical_xcf_open(id));
+                }
+            } else {
+                result.unwrap();
+                assert!(!session.holds_historical_xcf_open(id));
+                let doc = &session.active().unwrap().doc;
+                assert_eq!(
+                    doc.layers[0].surface().unwrap().read_region(doc.bounds()),
+                    vec![0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]
+                );
+            }
+            assert_eq!(Arc::strong_count(&bytes), 1);
         }
-        assert_eq!(Arc::strong_count(&bytes), 1);
     }
 }
 
@@ -63,7 +86,12 @@ fn interactive_wrapped_path_retains_verified_bytes_and_resume_never_reopens_path
     let id = question["heldHistoricalXcfOpen"].as_u64().unwrap();
     // A later authorized change to the locator cannot replace the exact already-read source.
     std::fs::write(&path, b"replacement is not an XCF").unwrap();
-    session.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).unwrap();
+    let resumed = session.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).unwrap();
+    assert!(matches!(&resumed, Started::Job(_)), "retained compressed bytes resume on a native worker");
+    assert!(!session.holds_historical_xcf_open(id));
+    assert!(session.documents().is_empty());
+    complete_open(&mut session, Ok(resumed)).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"replacement is not an XCF", "resuming the exact retained source must not touch its changed locator");
     let doc = &session.active().unwrap().doc;
     assert_eq!(doc.layers[0].surface().unwrap().read_region(doc.bounds()), vec![0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]);
     assert!(!session.holds_historical_xcf_open(id));
@@ -82,9 +110,12 @@ fn interactive_wrapped_path_asks_before_corrupt_tail_is_inflated() {
         panic!("inline question")
     };
     let id = question["heldHistoricalXcfOpen"].as_u64().unwrap();
-    assert!(session.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).is_err());
+    let resumed = session.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::BigEndian, false).unwrap();
+    assert!(matches!(&resumed, Started::Job(_)), "CRC validation belongs to the accepted native worker");
+    assert!(!session.holds_historical_xcf_open(id));
+    assert!(complete_open(&mut session, Ok(resumed)).is_err(), "the corrupt retained CRC must fail after the explicit choice");
     assert!(session.documents().is_empty());
-    assert!(session.cancel_historical_xcf_open(id));
+    assert!(!session.cancel_historical_xcf_open(id), "the failed accepted job has already released its encoded source");
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -937,7 +937,24 @@ pub(crate) fn import_with_sample_order(
         &mut image.warnings,
     )?;
     document.icc_profile = Some(native_profile);
-    image.outcomes.push(ConversionEntry {
+    image.outcomes.push(color_encoding_outcome(assigned_profile, precision, fallback_reason))?;
+    import_paths(&mut document, &mut image, &image_props, &path_ptrs, omitted_paths, ctl)?;
+    import_vectors(&mut document, &mut image, ctl)?;
+    text::convert_colors(&mut document)?;
+    import_native_effects(&mut document, &mut image, ctl)?;
+    add_document_warnings(&mut image, &document, precision, linear_compositing);
+    let initial_view = (image.initial_view != Default::default()).then_some(image.initial_view);
+    if !image.outcomes.recording() {
+        image.warnings.note("conversion details exceeded report limits; usable native content was imported, but the conversion report is incomplete");
+    }
+    document.metadata.import_conversion = Some(Arc::new(image.outcomes.finish()?));
+    ctl.progress(1.0);
+    Ok(ImportResult { initial_view, document, warnings: image.warnings.finish(), source_read_only: true, preview_only: false })
+}
+
+/// Describe the effective color interpretation without claiming unusable assigned colorants.
+fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback_reason: Option<String>) -> ConversionEntry {
+    ConversionEntry {
         feature_code: "xcf.color_encoding".into(),
         source: conversion::source("image", 0, 0, "", &[], None),
         targets: vec![NativeTargetRef { label: "Document color profile".into(), ..Default::default() }],
@@ -961,19 +978,7 @@ pub(crate) fn import_with_sample_order(
             None => "Native ICC profile preserves the source colorants and sample transfer curve; samples retain native precision and range".into(),
         },
         attachments: Vec::new(),
-    })?;
-    import_paths(&mut document, &mut image, &image_props, &path_ptrs, omitted_paths, ctl)?;
-    import_vectors(&mut document, &mut image, ctl)?;
-    text::convert_colors(&mut document)?;
-    import_native_effects(&mut document, &mut image, ctl)?;
-    add_document_warnings(&mut image, &document, precision, linear_compositing);
-    let initial_view = (image.initial_view != Default::default()).then_some(image.initial_view);
-    if !image.outcomes.recording() {
-        image.warnings.note("conversion details exceeded report limits; usable native content was imported, but the conversion report is incomplete");
     }
-    document.metadata.import_conversion = Some(Arc::new(image.outcomes.finish()?));
-    ctl.progress(1.0);
-    Ok(ImportResult { initial_view, document, warnings: image.warnings.finish(), source_read_only: true, preview_only: false })
 }
 
 /// Report native compositing differences without changing imported content or its durable conversion report.

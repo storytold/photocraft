@@ -1,8 +1,8 @@
 use super::*;
 
-#[path = "../../historical_xcf_open/fixture.rs"]
-mod fixture;
+use crate::jobs::historical_xcf_fixture as fixture;
 
+#[allow(clippy::unwrap_used)]
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":1,"height":1,"depth":16})).unwrap();
@@ -28,7 +28,6 @@ fn historical_sample_order_reaches_both_place_commands_and_open_as_smart_object(
             match &smart.source {
                 SmartSource::Embedded { bytes: retained, .. } => assert_eq!(retained.as_slice(), bytes),
                 SmartSource::Linked { path: retained } => assert_eq!(std::path::Path::new(retained), path),
-                other => panic!("unexpected source {other:?}"),
             }
             assert_eq!(std::fs::read(&path).unwrap(), bytes, "source is never rewritten");
             if command == "file.openAsSmartObject" {

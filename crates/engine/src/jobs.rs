@@ -2307,7 +2307,7 @@ mod psd_open_confirmation_tests {
 
 #[cfg(test)]
 #[path = "historical_xcf_open/fixture.rs"]
-mod historical_xcf_fixture;
+pub(crate) mod historical_xcf_fixture;
 
 #[cfg(test)]
 #[path = "jobs/historical_source_tests.rs"]
