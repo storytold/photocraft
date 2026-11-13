@@ -16,6 +16,16 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 }
 
 impl Session {
+    /// Install the app's subject model (see [`crate::subject_model`]).
+    pub fn set_subject_model(&mut self, model: Option<crate::subject_model::SharedSubjectModel>) {
+        self.subject_model = model;
+    }
+
+    /// The app's subject model, if it installed one.
+    pub fn subject_model(&self) -> Option<crate::subject_model::SharedSubjectModel> {
+        self.subject_model.clone()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

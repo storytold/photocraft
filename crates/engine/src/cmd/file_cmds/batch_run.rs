@@ -243,6 +243,8 @@ fn process_outputs<'a>(
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
     let raw_ppi = s.prefs().raw_defaults.resolution;
     let action_prefs = s.prefs().actions.clone();
+    // Select Subject and Remove Background use the app's model in a scratch session too.
+    let subject_model = s.subject_model();
     let authorize = s.authorize;
     let mut files = Vec::new();
     let mut errors = Vec::new();
@@ -251,6 +253,7 @@ fn process_outputs<'a>(
         // Nested commands answer to the initiating session's authorization hook.
         scratch.authorize = authorize;
         scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
+        scratch.set_subject_model(subject_model.clone());
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
@@ -908,6 +911,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         save.preserve_alpha = true;
     }
     let authorize = s.authorize;
+    // Select Subject and Remove Background use the app's model in a scratch session too.
+    let subject_model = s.subject_model();
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
@@ -1038,6 +1043,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
+                scratch.set_subject_model(subject_model.clone());
                 scratch.actions = actions.clone();
                 scratch.actions.playback_steps = carried.get();
                 scratch.actions.script_steps = script_steps.get();

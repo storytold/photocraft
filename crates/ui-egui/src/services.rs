@@ -543,6 +543,8 @@ pub type LastUpdateFn = fn() -> Option<Result<String, String>>;
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// The model behind Select Subject and Remove Background; `None` keeps their built-in method.
+    pub subject_model: Option<photocraft_engine::subject_model::SharedSubjectModel>,
     /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
     pub open_external_svg: Option<OpenExternalSvgFn>,
     /// User-initiated desktop/browser pixel sampling.

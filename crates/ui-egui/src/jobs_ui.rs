@@ -176,6 +176,8 @@ pub struct JobsUi {
     pub focus: Option<JobId>,
     /// The job the latest [`run`] started (the control channel waits on it).
     pub(crate) last_started: Option<JobId>,
+    /// The command waiting for the subject model's download.
+    pub(crate) subject_model_pending: Option<crate::subject_model_prompt::Pending>,
     /// The file being placed in the background, if any. One at a time: files dropped meanwhile
     /// wait in the app's drop queue.
     pub place: Option<PlaceJob>,
@@ -609,6 +611,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     });
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
+    if crate::subject_model_prompt::on_job_event(app, &e) {
+        return;
+    }
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }
