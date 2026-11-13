@@ -115,6 +115,18 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                 o.corner_radius = r;
             }
         }
+        Tool::Triangle => {
+            crate::widgets::vline(ui, 22.0);
+            let label = tl!("Radius:");
+            lbl(ui, label);
+            // The tool's own radius for the next triangle (#13355); the active shape is not touched.
+            let mut r = o.triangle_corner_radius;
+            let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
+            radius_alert = out_of_range;
+            if resp.changed() {
+                o.triangle_corner_radius = r;
+            }
+        }
         Tool::Polygon => {
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Sides:"));
@@ -199,10 +211,10 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     radius_range_alert(app, radius_alert);
 }
 
-/// The Rectangle tool's corner radius in px, as the reference takes it (#13336).
+/// The Rectangle and Triangle tools' corner radius in px, as the reference takes it (#13336).
 pub(crate) const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
 
-/// The reference's alert for a Rectangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
+/// The reference's alert for a Rectangle or Triangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
 pub(crate) const RADIUS_RANGE_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
 
 /// Shows [`RADIUS_RANGE_ALERT`] as a modal with OK when `owed`, once even if more than one pass asks.
@@ -247,3 +259,7 @@ pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: Pain
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "triangle_corner_radius_field_tests.rs"]
+mod triangle_corner_radius_field_tests;

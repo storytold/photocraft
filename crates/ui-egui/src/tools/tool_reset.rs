@@ -286,6 +286,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 shape_fill_gradient,
                 shape_stroke_gradient,
                 corner_radius,
+                triangle_corner_radius,
                 polygon_sides,
                 line_weight
             )

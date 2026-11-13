@@ -122,6 +122,8 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
+    /// The Triangle tool's corner radius for the next triangle (#13355).
+    pub triangle_corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
     /// Line arrowheads.
@@ -519,6 +521,7 @@ impl Default for ToolOptions {
             shape_fill_gradient: None,
             shape_stroke_gradient: None,
             corner_radius: 0.0,
+            triangle_corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 1.0,
             arrow_start: false,
