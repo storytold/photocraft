@@ -110,7 +110,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             lbl(ui, label);
             // The tool's own radius for the next rectangle (#13338); the active shape is not touched.
             let mut r = o.corner_radius;
-            let (resp, out_of_range, invalid) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
+            let (resp, out_of_range, invalid) = crate::widgets::value_field_alerting_checked(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
             radius_alert = out_of_range;
             radius_invalid = invalid;
             if resp.changed() {

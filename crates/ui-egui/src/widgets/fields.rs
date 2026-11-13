@@ -38,10 +38,18 @@ pub fn value_field_whole_alerting(
 }
 
 /// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
-/// typed value past `range` becomes the closest end, unrounded. The third flag is true once the
-/// field is left after text that is no number was typed (`abc`, #13619): the value stays as it
-/// was, and the caller shows the reference's invalid-entry alert. A field left empty is not that.
-pub fn value_field_alerting(
+/// typed value past `range` becomes the closest end, unrounded.
+pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
+    let (r, out_of_range, _) = value_field_alerting_checked(ui, name, value, range, suffix, width);
+    (r, out_of_range)
+}
+
+/// [`value_field_alerting`] that also says when the field was left after text that is no number
+/// was typed (`abc`, #13619): the value stays as it was, and the caller shows the reference's
+/// invalid-entry alert. A field left empty is not that. Returns the field, whether a typed value
+/// was out of range, and whether no number was typed. A field that wants the invalid-entry alert
+/// calls this one, the Rectangle tool's Radius first.
+pub fn value_field_alerting_checked(
     ui: &mut Ui,
     name: &str,
     value: &mut f32,
