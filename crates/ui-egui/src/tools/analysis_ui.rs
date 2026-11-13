@@ -799,14 +799,14 @@ fn open_alert_once(app: &mut PhotocraftApp, message: &str) {
 }
 
 /// The Count tool's size fields take digits only, as the reference's do (#11768): a `.` or `,`
-/// typed or pasted into the field whose id was saved under `slot` last frame is dropped, so "2.6"
-/// reads as 26.
+/// typed, pasted or committed by an IME into the field whose id was saved under `slot` last frame
+/// is dropped, so "2.6" reads as 26. An IME commit left empty stays: it ends the composition.
 fn drop_decimal_points(ui: &mut egui::Ui, slot: egui::Id) {
     let focused = ui.data(|d| d.get_temp::<egui::Id>(slot)).is_some_and(|id| ui.memory(|m| m.has_focus(id)));
     if focused {
         ui.input_mut(|i| {
             for e in &mut i.events {
-                if let egui::Event::Text(t) | egui::Event::Paste(t) = e {
+                if let egui::Event::Text(t) | egui::Event::Paste(t) | egui::Event::Ime(egui::ImeEvent::Commit(t)) = e {
                     t.retain(|c| c != '.' && c != ',');
                 }
             }

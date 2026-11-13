@@ -95,6 +95,23 @@ fn the_size_fields_take_digits_only() {
 }
 
 #[test]
+fn an_ime_commit_takes_digits_only_too() {
+    let mut h = app_harness();
+    h.query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some(MARKER))
+        .expect("the Marker Size field")
+        .click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("2.6".into())));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(sizes(&h).0, 10, "a committed 2.6 reads as 26, which ends as 10, not 3");
+    assert_eq!(alerts(&h), vec![MARKER_SIZE_RANGE_ALERT.to_owned()]);
+}
+
+#[test]
 fn in_range_sizes_are_set_without_an_alert() {
     let mut h = app_harness();
     type_into(&mut h, MARKER, "7");
