@@ -476,9 +476,11 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     };
     for i in raw {
         if std::path::Path::new(&i).is_dir() {
-            // The subfolder walk leaves out the output folder, so a rerun doesn't take its results
-            // as inputs: the chosen one, else the first input's default, else this folder's own
-            // `droplet-output`, which then becomes the output.
+            // The subfolder walk doesn't go into the output folder below a dropped one, so a rerun
+            // doesn't take its results as inputs: the chosen one, else the first input's default,
+            // else this folder's own `droplet-output`, which then becomes the output. A dropped
+            // folder is taken as given, as without the walk (and as Batch takes an input folder
+            // that is also its output).
             let skip = output.clone().or_else(|| inputs.first().map(|first| default_output(first))).unwrap_or_else(|| join(&i, "droplet-output"));
             let found = folder_images(&i, include_subfolders, &skip, cmd)?;
             if include_subfolders && output.is_none() && !found.is_empty() {
@@ -513,9 +515,9 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The images a dropped folder contributes: its own, sorted by name, or with Include All
-/// Subfolders also every subfolder's, depth first as Batch walks them, leaving out the folder
-/// `skip` (the output). Results land flat in the output folder, so a later image replaces an
-/// earlier one of the same name.
+/// Subfolders also every subfolder's, depth first as Batch walks them, without going into the
+/// subfolder `skip` (the output). Results land flat in the output folder, so a later image
+/// replaces an earlier one of the same name.
 fn folder_images(dir: &str, include_subfolders: bool, skip: &str, cmd: &str) -> Result<Vec<String>> {
     if !include_subfolders {
         return list_images(dir);
