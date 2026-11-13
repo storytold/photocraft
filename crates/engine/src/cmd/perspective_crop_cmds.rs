@@ -217,7 +217,13 @@ fn map_samplers(points: &[[f64; 2]], h: &Homography, (w, ht): (u32, u32)) -> Vec
         .collect()
 }
 
+/// Rectify a canvas only when stored animation and slice coordinates can remain consistent.
 fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    crate::cmd::check_sprite_canvas_resampling(doc)?;
+    if doc.sprite.as_ref().is_some_and(|sprite| sprite.has_slices()) {
+        return Err(bad("this sprite has retained slice coordinates; detach a copy before perspective cropping"));
+    }
     let q = corners(p)?;
     let center = s.active().map_or([0.0; 2], |d| [f64::from(d.doc.size.width) / 2.0, f64::from(d.doc.size.height) / 2.0]);
     let (w, h) = out_size(p, &q, center)?;

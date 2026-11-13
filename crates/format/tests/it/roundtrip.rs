@@ -793,10 +793,11 @@ fn bundles_without_the_full_composite_still_open() {
     let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), full_composite: Some(full), ..Default::default() };
     let bytes = save_to_bytes(&doc, &opts).unwrap();
     assert!(read_full_composite(&bytes).unwrap().is_some());
-    assert_eq!(read_manifest(&bytes).unwrap().format_version, 1);
+    assert_eq!(read_manifest(&bytes).unwrap().format_version, FORMAT_VERSION);
     // Rewrite the bundle as an older writer left it: no member in the manifest, no entry.
     let r = zip::ZipReader::new(&bytes).unwrap();
     let mut manifest: serde_json::Value = serde_json::from_slice(&r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
+    assert_eq!(manifest["format_version"], 1, "static documents retain the version-one disk format");
     assert!(manifest.as_object_mut().unwrap().remove("full_composite").is_some());
     let mut z = zip::ZipWriter::new();
     z.add("manifest.json", &serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();

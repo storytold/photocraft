@@ -338,13 +338,18 @@ impl PhotocraftApp {
         }
     }
 
-    /// Reconciles canvas view state with open documents in the session.
-    pub fn sync_views(&mut self) {
-        crate::type_path_placement::cancel_stale(self);
+    pub(crate) fn sync_document_state(&mut self) {
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        if match (&self.path_document, &document) {
+            (Some((old_id, _, old_source)), Some((id, _, source))) => old_id == id && old_source.ptr_eq(source),
+            (None, None) => true,
+            _ => false,
+        } {
+            return;
+        }
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
         // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
@@ -363,7 +368,19 @@ impl PhotocraftApp {
         if !same_document {
             self.ui.selected_path = None;
         }
+        let tags = self.session.active().and_then(|d| d.doc.sprite.as_ref()).map_or(&[][..], |s| s.tags.as_slice());
+        if !same_document || tags != self.timeline_tags {
+            self.ui.timeline.sprite_tag = None;
+            self.ui.timeline.playing = false;
+            self.timeline_tags = tags.to_vec();
+        }
         self.path_document = document;
+    }
+
+    /// Reconciles canvas view state with open documents in the session.
+    pub fn sync_views(&mut self) {
+        crate::type_path_placement::cancel_stale(self);
+        self.sync_document_state();
         // A shape box handle drag belongs to its document, revision and tool.
         crate::shape_bounds_box::cancel_stale(self);
         vector_ui::cancel_stale_pen(self);

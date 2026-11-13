@@ -765,3 +765,52 @@ fn image_hrefs_to_local_files_are_never_read() {
         LayerContent::Raster(_)
     ));
 }
+
+/// A depth-limited embedded image can be omitted, but ordinary and bounded imports report it.
+#[test]
+fn omitted_embedded_svg_depth_is_reported_without_losing_valid_siblings() {
+    let depth = svg::MAX_XML_DEPTH / 2;
+    let inner = base64_data_url("image/svg+xml", nested(depth).as_bytes());
+    let images = format!("<image width=\"8\" height=\"8\" href=\"{inner}\"/>").repeat(2);
+    let xml = format!(
+        "<svg {NS} width=\"16\" height=\"8\">{}{}{}<rect x=\"8\" width=\"8\" height=\"8\" fill=\"blue\"/></svg>",
+        "<g>".repeat(depth),
+        images,
+        "</g>".repeat(depth)
+    );
+    for result in [import("depth.svg", xml.as_bytes()).unwrap(), svg::import_svg_bounded("depth", xml.as_bytes(), 128).unwrap()] {
+        assert!(px(&result.document, 4, 4)[3] < 0.01);
+        assert!(close(px(&result.document, 12, 4), [0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(result.warnings.iter().filter(|w| w.contains("omitted")).count(), 1, "{:?}", result.warnings);
+    }
+    let legal = format!("<svg {NS} width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" href=\"{inner}\"/></svg>");
+    let result = import("legal.svg", legal.as_bytes()).unwrap();
+    assert!(px(&result.document, 4, 4)[3] > 0.99);
+    assert!(!result.warnings.iter().any(|w| w.contains("omitted")));
+}
+
+/// Corrupt compressed and malformed markup images warn once per cause, without hiding valid art.
+#[test]
+fn embedded_svg_decode_and_parse_omissions_are_both_reported() {
+    let bad_gzip = base64_data_url("image/svg+xml", &[0x1f, 0x8b, 1, 2, 3]);
+    let bad_xml = base64_data_url("image/svg+xml", b"<svg>");
+    let images = [&bad_gzip, &bad_xml, &bad_gzip].iter().map(|url| format!("<image width=\"8\" height=\"8\" href=\"{url}\"/>")).collect::<String>();
+    let xml = format!("<svg {NS} width=\"8\" height=\"8\">{images}<rect width=\"8\" height=\"8\" fill=\"blue\"/></svg>");
+    let result = import("omitted.svg", xml.as_bytes()).unwrap();
+    assert!(close(px(&result.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("inflated")).count(), 1, "{:?}", result.warnings);
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("parsed")).count(), 1, "{:?}", result.warnings);
+}
+
+/// Bounded non-strict imports report separate omission causes while deduplicating repeated ones.
+#[test]
+fn bounded_svg_reports_each_distinct_image_omission() {
+    let bmp = base64_data_url("image/bmp", b"BM");
+    let malformed_svg = base64_data_url("image/svg+xml", b"<svg>");
+    let images = [&bmp, &malformed_svg, &bmp].iter().map(|url| format!("<image width=\"8\" height=\"8\" href=\"{url}\"/>")).collect::<String>();
+    let xml = format!("<svg {NS} width=\"8\" height=\"8\">{images}<rect width=\"8\" height=\"8\" fill=\"blue\"/></svg>");
+    let result = svg::import_svg_bounded("omitted", xml.as_bytes(), 64).unwrap();
+    assert!(close(px(&result.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("omitted")).count(), 2, "{:?}", result.warnings);
+    assert!(svg::import_svg_preview_with_work("strict", xml.as_bytes(), 64).is_err());
+}

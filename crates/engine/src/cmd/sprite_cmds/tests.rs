@@ -1,0 +1,675 @@
+use super::*;
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{
+    Document, Layer, LayerContent,
+    sprite::{SpriteCel, SpriteFrame, SpriteLayer},
+};
+use photocraft_geom::{Rect, Size};
+use photocraft_raster::Surface;
+
+fn add_to_session(doc: Document) -> Session {
+    let mut s = Session::new();
+    s.add_document(doc, None);
+    s
+}
+
+fn session() -> Session {
+    let mut doc = Document::new("Animation", Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(PixelFormat::RGBA8);
+    surface.write_interleaved(Rect::from_xywh(0, 0, 1, 1), &[255, 0, 0, 255]);
+    let layer = Layer::new("Ink", LayerContent::Raster(surface.clone()));
+    let id = layer.id;
+    doc.layers.push(layer);
+    let first =
+        Arc::new(SpriteCel { rect: Rect::from_xywh(0, 0, 1, 1), pixels: surface, indices: None, opacity: 255, z_index: 0, linked_frame: None, precise: None });
+    let second = Arc::new(SpriteCel { linked_frame: Some(0), ..first.as_ref().clone() });
+    doc.sprite = Some(Sprite {
+        frames: vec![
+            Arc::new(SpriteFrame { duration_ms: 17, palette: Arc::new(vec![]), cels: [(id, first)].into(), metadata: vec![] }),
+            Arc::new(SpriteFrame { duration_ms: 83, palette: Arc::new(vec![]), cels: [(id, second)].into(), metadata: vec![] }),
+        ],
+        current: 0,
+        layers: vec![SpriteLayer { id, flags: 3, opacity: 255, uuid: None }],
+        indexed: false,
+        transparent_index: 0,
+        pixel_aspect: [1, 1],
+        grid: [0; 4],
+        tags: vec![],
+        profile: None,
+    });
+    doc.timeline = Some(photocraft_doc::Timeline::new(2, 10.0));
+    add_to_session(doc)
+}
+
+/// A single-frame control distinguishes metadata guards from the animated-canvas refusal.
+fn single_frame_session() -> Session {
+    let mut doc = (*session().active().unwrap().doc).clone();
+    doc.sprite.as_mut().unwrap().frames.truncate(1);
+    if let Some(timeline) = &mut doc.timeline {
+        timeline.duration = 1;
+        timeline.work_end = 1;
+    }
+    add_to_session(doc)
+}
+
+fn in_group(mut doc: Document, all: bool, position: bool) -> Document {
+    let children = std::mem::take(&mut doc.layers);
+    let mut group = Layer::group("Parent", children);
+    group.locks.all = all;
+    group.locks.position = position;
+    doc.sprite.as_mut().unwrap().layers.insert(0, SpriteLayer { id: group.id, flags: 3, opacity: 255, uuid: None });
+    doc.layers.push(group);
+    doc
+}
+
+fn assert_refused_unchanged(s: &mut Session, command: &str, params: Value) {
+    let state = s.active().unwrap();
+    let before = state.doc.clone();
+    let (history, revision, active) = (state.history.past_len(), state.revision, state.active_layer);
+    assert!(s.execute(command, params).is_err(), "{command}");
+    let state = s.active().unwrap();
+    assert_eq!(state.doc, before, "{command}: document");
+    assert_eq!(state.history.past_len(), history, "{command}: history");
+    assert_eq!(state.revision, revision, "{command}: revision");
+    assert_eq!(state.active_layer, active, "{command}: target");
+}
+
+/// Sprite-only controls must disable cleanly on ordinary documents and unsupported sample types.
+#[test]
+fn sprite_commands_are_disabled_without_a_sprite_or_with_unsupported_samples() {
+    let mut empty = Session::new();
+    let mut ordinary = add_to_session(Document::new("Ordinary", Size::new(2, 1), ColorMode::Rgb, SampleType::U8));
+    for spec in specs() {
+        for s in [&mut empty, &mut ordinary] {
+            assert!(s.disabled_reason(spec.id).is_some(), "{}", spec.id);
+            assert!(s.execute(spec.id, json!({})).is_err(), "{}", spec.id);
+        }
+    }
+    assert_eq!(ordinary.active().unwrap().history.past_len(), 0);
+    for depth in [SampleType::U16, SampleType::F32] {
+        let mut s = session();
+        Arc::make_mut(&mut s.active_mut().unwrap().doc).depth = depth;
+        for spec in specs() {
+            assert!(s.disabled_reason(spec.id).unwrap().contains("8-bit"), "{}", spec.id);
+            assert_refused_unchanged(&mut s, spec.id, json!({}));
+        }
+    }
+}
+
+/// Each mutating sprite command records one reversible transaction with exact document restoration.
+#[test]
+fn every_sprite_edit_adds_one_history_step_and_roundtrips_undo_redo() {
+    for command in [
+        "sprite.setDuration",
+        "sprite.setPaletteEntry",
+        "sprite.setCel",
+        "sprite.unlinkCel",
+        "sprite.setTags",
+        "sprite.duplicateFrame",
+        "sprite.deleteFrame",
+        "sprite.detach",
+        "sprite.rasterizeTilemap",
+    ] {
+        let mut s = if command == "sprite.rasterizeTilemap" {
+            add_to_session(photocraft_io::import("tiles.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite")).unwrap().document)
+        } else {
+            session()
+        };
+        if command == "sprite.unlinkCel" {
+            s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+        }
+        let id = s.active().unwrap().doc.layers[0].id.0;
+        let params = match command {
+            "sprite.setDuration" => json!({"durationMs":47}),
+            "sprite.setPaletteEntry" => json!({"index":0,"rgba":[12,34,56,255],"name":"Original"}),
+            "sprite.setCel" => json!({"layer":id,"x":-2,"opacity":127,"zIndex":-1}),
+            "sprite.unlinkCel" | "sprite.rasterizeTilemap" => json!({"layer":id}),
+            "sprite.setTags" => json!({"tags":[{"name":"Walk","from":0,"to":1,"direction":2,"repeat":2,"color":[1,2,3]}]}),
+            _ => json!({}),
+        };
+        let before = s.active().unwrap().doc.clone();
+        let n = s.active().unwrap().history.past_len();
+        s.execute(command, params).unwrap();
+        let after = s.active().unwrap().doc.clone();
+        assert_ne!(before, after, "{command}");
+        assert_eq!(s.active().unwrap().history.past_len(), n + 1, "{command}");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before, "{command}: undo");
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, after, "{command}: redo");
+    }
+}
+
+/// Delay gestures have independent undo boundaries; information and playback queries are history-free.
+#[test]
+fn frame_delay_gestures_coalesce_separately_and_queries_add_no_history() {
+    let mut s = session();
+    for (gesture, values) in [("first", [47, 63, 80]), ("second", [90, 100, 110])] {
+        for ms in values {
+            s.execute("sprite.setDuration", json!({"durationMs":ms,"coalesce":gesture})).unwrap();
+        }
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), 2);
+    s.execute("sprite.info", json!({})).unwrap();
+    s.execute("sprite.playback", json!({"elapsedMs":12})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), 2);
+    for (command, ms) in [("edit.undo", 80), ("edit.undo", 17), ("edit.redo", 80), ("edit.redo", 110)] {
+        s.execute(command, json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frame_duration_ms(), ms);
+    }
+}
+
+/// Cel edits respect target/parent locks, and refused edits preserve the history and selection.
+#[test]
+fn cel_edits_respect_target_and_inherited_locks_without_mutating_history() {
+    for inherited in [false, true] {
+        let original = session().active().unwrap().doc.as_ref().clone();
+        let id = original.layers[0].id;
+        let mut locked = original.clone();
+        if inherited {
+            locked = in_group(locked, true, false);
+        } else {
+            locked.layers[0].locks.all = true;
+        }
+        let mut s = add_to_session(locked);
+        for command in ["sprite.setCel", "sprite.unlinkCel"] {
+            assert!(s.disabled_reason_with(command, &json!({"layer":id.0})).is_some());
+            assert_refused_unchanged(&mut s, command, json!({"layer":id.0,"x":2,"opacity":127}));
+        }
+        let mut position = original;
+        if inherited {
+            position = in_group(position, false, true);
+        } else {
+            position.layers[0].locks.position = true;
+        }
+        let mut s = add_to_session(position);
+        for field in ["x", "y", "zIndex"] {
+            let mut params = json!({"layer":id.0});
+            params[field] = json!(2);
+            assert_refused_unchanged(&mut s, "sprite.setCel", params);
+        }
+        // Position locks do not prevent opacity edits. The explicit child target works
+        // even when the group's row, rather than that child, is active.
+        s.execute("sprite.setCel", json!({"layer":id.0,"opacity":127})).unwrap();
+        assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[0].cels[&id].opacity, 127);
+    }
+}
+
+#[test]
+fn rasterization_is_disabled_in_locked_groups_but_explicitly_unlocks_its_own_cache() {
+    let doc = photocraft_io::import("tiles.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite")).unwrap().document;
+    let id = doc.layers[0].id;
+    let mut s = add_to_session(in_group(doc, true, false));
+    assert!(s.disabled_reason_with("sprite.rasterizeTilemap", &json!({"layer":id.0})).is_some());
+    assert_refused_unchanged(&mut s, "sprite.rasterizeTilemap", json!({"layer":id.0}));
+    s.edit("Unlock Group", |doc, _| {
+        doc.layers[0].locks.all = false;
+        Ok(())
+    })
+    .unwrap();
+    s.execute("sprite.rasterizeTilemap", json!({"layer":id.0})).unwrap();
+    assert!(!s.active().unwrap().doc.layer(id).unwrap().locks.all);
+}
+
+#[test]
+fn sprite_edits_and_frame_navigation_keep_cels_and_undo() {
+    let mut s = session();
+    assert_eq!(s.execute("sprite.info", json!({})).unwrap()["durationsMs"], json!([17, 83]));
+    s.execute("sprite.setDuration", json!({"durationMs":47})).unwrap();
+    let n = s.active().unwrap().history.past_len();
+    s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), n, "navigation is not a history step");
+    let id = s.active().unwrap().doc.layers[0].id.0;
+    s.execute("sprite.setCel", json!({"layer":id,"x":-2,"y":1,"opacity":127,"zIndex":-3})).unwrap();
+    let frame = &s.active().unwrap().doc.sprite.as_ref().unwrap().frames[1];
+    assert_eq!(frame.cels[&LayerId(id)].rect, Rect::from_xywh(-2, 1, 1, 1));
+    s.execute("sprite.unlinkCel", json!({"layer":id})).unwrap();
+    assert!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[1].cels[&LayerId(id)].linked_frame.is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[1].cels[&LayerId(id)].linked_frame, Some(0));
+    s.execute("sprite.duplicateFrame", json!({})).unwrap();
+    assert_eq!(s.execute("sprite.info", json!({})).unwrap()["frames"], 3);
+    s.execute("sprite.setTags", json!({"tags":[{"name":"Walk","from":0,"to":2,"direction":2,"repeat":3,"color":[1,2,3]}]})).unwrap();
+    assert_eq!(s.execute("sprite.info", json!({})).unwrap()["tags"][0]["repeat"], 3);
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    assert_eq!(s.execute("sprite.info", json!({})).unwrap()["frames"], 2);
+    s.execute("sprite.detach", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.sprite.is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.sprite.is_some());
+}
+
+/// Adversarial sprite parameters must return errors without altering document or undo state.
+#[test]
+fn malformed_sprite_commands_never_modify_the_document() {
+    let mut s = session();
+    let before = s.active().unwrap().doc.clone();
+    for (cmd, p) in [
+        ("sprite.setDuration", json!({"durationMs":65536})),
+        ("sprite.setDuration", json!({"durationMs":17,"frame":u64::MAX})),
+        ("sprite.setPaletteEntry", json!({"index":u64::MAX,"rgba":[0,0,0,0]})),
+        ("sprite.setPaletteEntry", json!({"index":0,"rgba":[0,-1,0,0]})),
+        ("sprite.setCel", json!({"layer":0,"x":u64::MAX})),
+        ("sprite.setTags", json!({"tags":[{"name":"Bad","from":3,"to":0,"direction":9,"repeat":1,"color":[1,2,3]}]})),
+    ] {
+        assert!(s.execute(cmd, p).is_err(), "{cmd}");
+        assert_eq!(s.active().unwrap().doc.as_ref(), before.as_ref());
+    }
+}
+
+#[test]
+fn reference_layers_cannot_be_unlocked_into_a_discarded_display_cache_edit() {
+    let mut s = session();
+    s.edit("Reference", |doc, _| {
+        doc.sprite.as_mut().unwrap().layers[0].flags |= 64;
+        doc.layers[0].locks.all = true;
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(
+        s.edit("Unlock", |doc, _| {
+            doc.layers[0].locks.all = false;
+            Ok(())
+        })
+        .is_err()
+    );
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+#[test]
+fn tilemap_pixels_require_explicit_rasterization_while_other_edits_preserve_tile_records() {
+    let doc = photocraft_io::import("tiles.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite")).unwrap().document;
+    let id = doc.layers[0].id;
+    let mut s = Session::new();
+    s.add_document(doc, None);
+    let before = s.active().unwrap().doc.clone();
+    let change = |doc: &mut Document, _: &mut Option<LayerId>| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(0, 0, &[0.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    };
+    assert!(s.edit("Paint", change).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    s.execute("sprite.duplicateFrame", json!({})).unwrap();
+    assert!(photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).is_ok());
+    s.execute("timeline.setFrame", json!({"frame":0})).unwrap();
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    assert!(photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).is_ok());
+    s.execute("sprite.rasterizeTilemap", json!({"layer":id.0})).unwrap();
+    s.edit("Paint", change).unwrap();
+    assert!(s.active().unwrap().doc.sprite.as_ref().unwrap().tilemap_descriptor(id).is_none());
+    let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+    assert!(photocraft_io::import("pixels.aseprite", &out.bytes).unwrap().document.sprite.as_ref().unwrap().tilemap_descriptor(id).is_none());
+}
+
+#[test]
+fn shrinking_an_indexed_palette_cannot_leave_locked_reference_cels_out_of_range() {
+    let mut doc = photocraft_io::import("animation.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/animation.aseprite")).unwrap().document;
+    doc.sprite.as_mut().unwrap().layers[0].flags |= 64;
+    doc.layers[0].locks.all = true;
+    let mut s = add_to_session(doc);
+    assert_refused_unchanged(&mut s, "image.mode.colorTable", json!({"colors": ["#000000", "#ff0000"], "transparent": 0}));
+    let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+    photocraft_io::import("reference.aseprite", &out.bytes).unwrap();
+}
+
+/// Every right-angle turn/flip must refuse stale retained slice coordinates before editing pixels.
+#[test]
+fn turns_refuse_retained_slice_coordinates_before_pixels_or_history_change() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut s = single_frame_session();
+    s.edit("Slice", |doc, _| {
+        Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+            kind: 0x2022,
+            target: MetadataTarget::Frame,
+            bytes: Arc::new(vec![]),
+        });
+        Ok(())
+    })
+    .unwrap();
+    for command in ["image.imageRotation.flipCanvasHorizontal", "image.imageRotation.flipCanvasVertical", "image.imageRotation.180", "image.imageRotation.90cw"]
+    {
+        assert_refused_unchanged(&mut s, command, json!({}));
+    }
+    let mut ordinary = single_frame_session();
+    ordinary.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap();
+    assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
+    ordinary.execute("edit.undo", json!({})).unwrap();
+}
+
+/// A same-size crop must not bypass the retained-slice origin guard.
+#[test]
+fn crops_with_retained_slices_cannot_move_the_canvas_origin_even_at_the_same_size() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut s = single_frame_session();
+    s.edit("Slice", |doc, _| {
+        Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+            kind: 0x2022,
+            target: MetadataTarget::Frame,
+            bytes: Arc::new(vec![]),
+        });
+        Ok(())
+    })
+    .unwrap();
+    for (x, y) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        assert_refused_unchanged(&mut s, "image.crop", json!({"x":x,"y":y,"width":2,"height":1}));
+    }
+    assert_refused_unchanged(&mut s, "image.crop", json!({"x":0,"y":0,"width":2,"height":1,"angle":180}));
+    let mut ordinary = single_frame_session();
+    ordinary.execute("image.crop", json!({"x":1,"y":0,"width":2,"height":1})).unwrap();
+    assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
+    ordinary.execute("edit.undo", json!({})).unwrap();
+}
+
+/// Resampling a crop invalidates retained slices even when the final dimensions are unchanged.
+#[test]
+fn slice_coordinates_prevent_crop_resampling_even_when_final_canvas_size_is_unchanged() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut s = single_frame_session();
+    s.edit("Slice", |doc, _| {
+        Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+            kind: 0x2022,
+            target: MetadataTarget::Frame,
+            bytes: Arc::new(vec![]),
+        });
+        Ok(())
+    })
+    .unwrap();
+    for params in
+        [json!({"x":0,"y":0,"width":1,"height":1,"targetWidth":2,"targetHeight":1}), json!({"x":0,"y":0,"width":2,"height":2,"targetWidth":2,"targetHeight":1})]
+    {
+        assert_refused_unchanged(&mut s, "image.crop", params);
+    }
+    s.execute("image.crop", json!({"x":0,"y":0,"width":2,"height":1,"targetWidth":2,"targetHeight":1})).unwrap();
+    let mut ordinary = single_frame_session();
+    let before = ordinary.active().unwrap().doc.clone();
+    ordinary.execute("image.crop", json!({"x":0,"y":0,"width":1,"height":1,"targetWidth":2,"targetHeight":1})).unwrap();
+    assert_eq!(ordinary.active().unwrap().doc.size, before.size);
+    assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
+    ordinary.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(ordinary.active().unwrap().doc, before);
+}
+
+/// Arbitrary rotation protects slice coordinates while preserving a true full-turn no-op.
+#[test]
+fn arbitrary_canvas_rotation_refuses_slices_for_same_size_turns_and_allows_a_noop() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    doc.size = Size::new(2, 2);
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+        kind: 0x2022,
+        target: MetadataTarget::Frame,
+        bytes: Arc::new(vec![]),
+    });
+    let mut s = add_to_session(doc);
+    for angle in [90, 180, 270, -90, 45] {
+        assert_refused_unchanged(&mut s, "image.rotation.arbitrary", json!({"angle":angle}));
+    }
+    let state = s.active().unwrap();
+    let before = state.doc.clone();
+    let history = state.history.past_len();
+    s.execute("image.rotation.arbitrary", json!({"angle":360})).unwrap();
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    let mut ordinary = single_frame_session();
+    ordinary.execute("image.rotation.arbitrary", json!({"angle":180})).unwrap();
+    assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
+    ordinary.execute("edit.undo", json!({})).unwrap();
+}
+
+/// Removing Background status must survive native/Aseprite round trips without restoring the lock.
+#[test]
+fn rgb_and_gray_layer_from_background_stays_unlocked_after_aseprite_export() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        let doc = Document::with_background("Background", Size::new(2, 1), mode, SampleType::U8, photocraft_color::Color::WHITE);
+        let out = photocraft_io::export(&doc, "aseprite", &Default::default()).unwrap();
+        let doc = photocraft_io::import("background.aseprite", &out.bytes).unwrap().document;
+        let mut s = add_to_session(doc);
+        assert!(s.active().unwrap().doc.background().is_some());
+        s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.background().is_none());
+        let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+        let back = photocraft_io::import("unlocked.aseprite", &out.bytes).unwrap().document;
+        assert!(back.background().is_none());
+        assert!(!back.layers[0].locks.transparency);
+        assert!(!back.layers[0].locks.position);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.background().is_some());
+    }
+}
+
+/// Whole-canvas transforms refuse multi-frame data before changing pixels, geometry or history.
+#[test]
+fn animated_canvas_geometry_refuses_without_changing_any_frame() {
+    let commands = [
+        ("image.canvasSize", json!({"width":4,"height":3})),
+        ("image.imageSize", json!({"width":4,"height":2})),
+        ("image.crop", json!({"x":1,"y":0,"width":2,"height":1})),
+        ("image.crop", json!({"x":0,"y":0,"width":1,"height":1,"targetWidth":2,"targetHeight":1})),
+        ("image.crop", json!({"x":0,"y":0,"width":2,"height":1,"angle":180})),
+        ("image.perspectiveCrop", json!({"corners":[[0,0],[2,0],[1.5,1],[0,1]],"width":2,"height":1})),
+        ("image.imageRotation.flipCanvasHorizontal", json!({})),
+        ("image.imageRotation.flipCanvasVertical", json!({})),
+        ("image.imageRotation.180", json!({})),
+        ("image.imageRotation.90cw", json!({})),
+        ("image.rotation.arbitrary", json!({"angle":180})),
+        ("image.trim", json!({})),
+    ];
+    for (command, params) in commands {
+        let mut s = session();
+        let error = s.execute(command, params.clone()).unwrap_err();
+        assert!(error.to_string().contains("single-frame sprite"), "{command}: {error}");
+        assert_refused_unchanged(&mut s, command, params);
+        // Navigation still reveals the exact original frame, not a partially transformed cel.
+        let before = s.active().unwrap().doc.sprite.clone();
+        s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+        let after = s.active().unwrap().doc.sprite.as_ref().unwrap();
+        assert_eq!(after.frames, before.as_ref().unwrap().frames, "{command}");
+    }
+    let mut s = session();
+    s.execute("image.imageSize", json!({"resample":"none","resolution":144})).unwrap();
+    assert_eq!(s.active().unwrap().doc.resolution_dpi, 144.0);
+}
+
+/// Same-size perspective warps cannot invalidate slices, and off-playhead slices are protected.
+#[test]
+fn perspective_crop_and_turns_refuse_retained_slices_on_any_frame() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+        kind: Sprite::SLICE_CHUNK,
+        target: MetadataTarget::Frame,
+        bytes: Arc::new(vec![]),
+    });
+    let mut s = add_to_session(doc);
+    assert_refused_unchanged(&mut s, "image.perspectiveCrop", json!({"corners":[[0,0],[2,0],[1.5,1],[0,1]],"width":2,"height":1}));
+    let mut doc = (*session().active().unwrap().doc).clone();
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[1]).metadata.push(SpriteChunk {
+        kind: Sprite::SLICE_CHUNK,
+        target: MetadataTarget::Frame,
+        bytes: Arc::new(vec![]),
+    });
+    let mut s = add_to_session(doc);
+    let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
+    assert!(error.to_string().contains("retained slice"), "{error}");
+    assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}
+
+/// Frame-zero palette user data must never be silently reassigned to a surviving palette.
+#[test]
+fn deleting_frame_zero_refuses_palette_user_data_but_other_frames_remain_deletable() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*session().active().unwrap().doc).clone();
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+        kind: 0x2020,
+        target: MetadataTarget::Palette,
+        bytes: Arc::new(vec![0, 0, 0, 0]),
+    });
+    let mut s = add_to_session(doc);
+    assert_refused_unchanged(&mut s, "sprite.deleteFrame", json!({}));
+    s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames.len(), 1);
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[0].metadata[0].target, MetadataTarget::Palette);
+}
+
+/// Lock All on reference pixels still permits a global opacity edit through the normal command.
+#[test]
+fn locked_reference_opacity_roundtrips_through_commands_history_and_export() {
+    for present in [false, true] {
+        let mut doc = (*session().active().unwrap().doc).clone();
+        let id = doc.layers[0].id;
+        let sprite = doc.sprite.as_mut().unwrap();
+        sprite.layers[0].flags |= 64;
+        sprite.layers[0].opacity = 200;
+        Arc::make_mut(Arc::make_mut(&mut sprite.frames[1]).cels.get_mut(&id).unwrap()).linked_frame = None;
+        if present {
+            Arc::make_mut(Arc::make_mut(&mut sprite.frames[0]).cels.get_mut(&id).unwrap()).opacity = 128;
+        } else {
+            Arc::make_mut(&mut sprite.frames[0]).cels.remove(&id);
+        }
+        doc.layers[0].locks.all = true;
+        doc.restore_sprite_frame().unwrap();
+        let mut s = add_to_session(doc);
+        let before = s.active().unwrap().doc.clone();
+        s.execute("layer.setProps", json!({"layer":id.0,"opacity":0.75})).unwrap();
+        let edited = s.active().unwrap().doc.clone();
+        assert!((edited.layers[0].opacity - 0.75).abs() < 0.005);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, edited);
+        s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+        s.execute("timeline.setFrame", json!({"frame":0})).unwrap();
+        let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+        let reopened = photocraft_io::import("reference.aseprite", &out.bytes).unwrap().document;
+        assert!((reopened.layers[0].opacity - 0.75).abs() < 0.005);
+        assert!(reopened.layers[0].locks.all);
+    }
+}
+
+/// Reference projections must not report successful turns which capture would silently discard.
+#[test]
+fn reference_layers_refuse_canvas_geometry_before_state_changes() {
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    doc.sprite.as_mut().unwrap().layers[0].flags |= 64;
+    doc.layers[0].locks.all = true;
+    doc.restore_sprite_frame().unwrap();
+    let mut s = add_to_session(doc);
+    for (command, params) in [
+        ("image.imageRotation.flipCanvasHorizontal", json!({})),
+        ("image.imageRotation.180", json!({})),
+        ("image.rotation.arbitrary", json!({"angle":180})),
+        ("image.canvasSize", json!({"width":3})),
+        ("image.imageSize", json!({"width":4})),
+        ("image.crop", json!({"x":1,"y":0,"width":2,"height":1})),
+        ("image.perspectiveCrop", json!({"corners":[[0,0],[2,0],[1.5,1],[0,1]],"width":2,"height":1})),
+    ] {
+        let error = s.execute(command, params.clone()).unwrap_err();
+        assert!(error.to_string().contains("reference layers"), "{command}: {error}");
+        assert_refused_unchanged(&mut s, command, params);
+    }
+}
+
+/// Right-angle turns move index identity in every layer, including equal-colored entries.
+#[test]
+fn indexed_turns_move_duplicate_color_indices_before_palette_edits_and_export() {
+    use photocraft_doc::sprite::PaletteEntry;
+    for command in [
+        "image.imageRotation.flipCanvasHorizontal",
+        "image.imageRotation.flipCanvasVertical",
+        "image.imageRotation.180",
+        "image.imageRotation.90cw",
+        "image.imageRotation.90ccw",
+    ] {
+        let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+        doc.mode = ColorMode::Indexed;
+        let sprite = doc.sprite.as_mut().unwrap();
+        sprite.indexed = true;
+        sprite.transparent_index = 0;
+        let palette = Arc::new(vec![
+            PaletteEntry { rgba: [0, 0, 0, 0], name: "Empty".into() },
+            PaletteEntry { rgba: [255, 0, 0, 255], name: "A".into() },
+            PaletteEntry { rgba: [255, 0, 0, 255], name: "B".into() },
+        ]);
+        let frame = Arc::make_mut(&mut sprite.frames[0]);
+        frame.palette = palette.clone();
+        for cel in frame.cels.values_mut() {
+            let cel = Arc::make_mut(cel);
+            cel.rect = Rect::from_xywh(0, 0, 2, 1);
+            let mut indices = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+            indices.write_interleaved(cel.rect, &[1, 2]);
+            cel.pixels = photocraft_doc::sprite::pixels::render_indices(&indices, cel.rect, &palette, Some(0)).unwrap();
+            cel.indices = Some(indices);
+        }
+        // A second ordinary layer proves the turn is not tied to the active layer.
+        let mut second = doc.layers[0].clone();
+        second.id = photocraft_doc::LayerId::fresh();
+        let source = sprite.layers[0].id;
+        let source_cel = sprite.frames[0].cels[&source].clone();
+        sprite.layers.push(SpriteLayer { id: second.id, flags: 3, opacity: 255, uuid: None });
+        Arc::make_mut(&mut sprite.frames[0]).cels.insert(second.id, source_cel);
+        doc.layers.push(second);
+        doc.restore_sprite_frame().unwrap();
+        let mut s = add_to_session(doc);
+        let before = s.active().unwrap().doc.clone();
+        s.execute(command, json!({})).unwrap();
+        let turned = s.active().unwrap().doc.clone();
+        let expected = if command.ends_with("90ccw") || command.ends_with("Horizontal") || command.ends_with(".180") { [2, 1] } else { [1, 2] };
+        for cel in turned.sprite.as_ref().unwrap().frames[0].cels.values() {
+            assert_eq!(cel.indices.as_ref().unwrap().to_interleaved(cel.rect), expected, "{command}");
+        }
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, turned);
+        s.execute("sprite.setPaletteEntry", json!({"index":1,"rgba":[0,0,255,255]})).unwrap();
+        let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+        let back = photocraft_io::import("turned.aseprite", &out.bytes).unwrap().document;
+        for cel in back.sprite.as_ref().unwrap().frames[0].cels.values() {
+            assert_eq!(cel.indices.as_ref().unwrap().to_interleaved(cel.rect), expected, "{command}");
+            let rgba = cel.pixels.to_interleaved(cel.rect);
+            assert_eq!(rgba, expected.into_iter().flat_map(|i| if i == 1 { [0, 0, 255, 255] } else { [255, 0, 0, 255] }).collect::<Vec<_>>());
+        }
+    }
+}
+
+/// Global Frame-target legacy records are retained when the original first frame is removed.
+#[test]
+fn deleting_frame_zero_transfers_frame_metadata_with_its_identifying_bytes() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*session().active().unwrap().doc).clone();
+    let mut text = 1u32.to_le_bytes().to_vec();
+    text.extend(12u16.to_le_bytes());
+    text.extend(b"frame marker");
+    let chunk = SpriteChunk { kind: 0x2020, target: MetadataTarget::Frame, bytes: Arc::new(text) };
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(chunk.clone());
+    let mut s = add_to_session(doc);
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[0].metadata, vec![chunk]);
+}
+
+/// Retained maps cannot be turned by changing only their derived raster/index caches.
+#[test]
+fn retained_tilemaps_refuse_turns_until_explicit_rasterization() {
+    let doc = photocraft_io::import("tiles.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite")).unwrap().document;
+    let mut s = add_to_session(doc);
+    let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
+    assert!(error.to_string().contains("tilemap"), "{error}");
+    assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}
+
+/// Native cel bounds at an extreme coordinate must be refused before turn-map arithmetic.
+#[test]
+fn canvas_turn_refuses_unrepresentable_cel_coordinates_without_panicking() {
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    let id = doc.layers[0].id;
+    let cel = Arc::make_mut(Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).cels.get_mut(&id).unwrap());
+    cel.rect = Rect::from_xywh(i32::MIN, 0, 2, 1);
+    cel.pixels = Surface::new(PixelFormat::RGBA8);
+    doc.restore_sprite_frame().unwrap();
+    let mut s = add_to_session(doc);
+    let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
+    assert!(error.to_string().contains("coordinate range"), "{error}");
+    assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}

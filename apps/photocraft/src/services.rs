@@ -14,14 +14,14 @@ use std::sync::Arc;
 #[cfg(test)]
 mod recovery_tests;
 
-/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
+/// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Aseprite, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
-    "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
-    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "aseprite", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp",
+    "dib", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm",
+    "dicom", "dc3", "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl",
+    "svg", "svgz", "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -45,6 +45,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("PhotoCraft", &["pcraft"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Amiga IFF", &["iff", "lbm", "ilbm"]),
+    ("Aseprite", &["aseprite"]),
     ("BMP", &["bmp", "dib"]),
     ("DDS", &["dds"]),
     ("DICOM", &["dcm", "dicom", "dc3"]),
@@ -94,6 +95,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PSB Large Document", &["psb"]),
     ("PhotoCraft", &["pcraft"]),
     ("Amiga IFF", &["iff"]),
+    ("Aseprite", &["aseprite"]),
     ("BMP", &["bmp", "dib"]),
     ("Cineon", &["cin"]),
     // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).

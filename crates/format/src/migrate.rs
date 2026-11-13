@@ -5,9 +5,8 @@ use crate::FormatError;
 
 pub(crate) type Step = craft_pcraft_format::Step<FormatError>;
 
-/// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version. `craft_pcraft_format::read_manifest_with` runs them on load.
-pub(crate) const STEPS: &[Step] = &[];
+/// Version 2 adds optional sprite state; version 1 needs no structural migration.
+pub(crate) const STEPS: &[Step] = &[|_| Ok(())];
 
 #[cfg(test)]
 mod tests {
@@ -66,5 +65,23 @@ mod tests {
     fn current_version_is_noop() {
         let mut v = json!({"format_version": FORMAT_VERSION});
         assert_eq!(migrate(&mut v).unwrap(), FORMAT_VERSION);
+    }
+}
+
+#[cfg(test)]
+mod sprite_version_tests {
+    use super::*;
+    use crate::manifest::FORMAT_VERSION;
+    use serde_json::json;
+
+    #[test]
+    fn version_one_reader_refuses_sprite_version_and_current_reader_keeps_old_manifests() {
+        let mut sprite = json!({"format_version": 2, "document": {"sprite": {"current": 0}}});
+        assert!(matches!(craft_pcraft_format::migrate(&mut sprite, &[], 1), Err(FormatError::TooNew { found: 2, supported: 1 })));
+        assert_eq!(craft_pcraft_format::migrate(&mut sprite, STEPS, FORMAT_VERSION).unwrap(), 2);
+        let mut old = json!({"format_version": 1, "document": {"name": "Static"}});
+        assert_eq!(craft_pcraft_format::migrate(&mut old, STEPS, FORMAT_VERSION).unwrap(), 1);
+        assert_eq!(old["document"]["name"], "Static");
+        assert_eq!(old["format_version"], 2);
     }
 }

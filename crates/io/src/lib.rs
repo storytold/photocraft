@@ -15,6 +15,7 @@
 //!   layer; unsupported raw variants fall back to the embedded JPEG preview.
 //! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
 //!   layers through the PSD path and are written back the same way; see `tiff_layers`.
+//! * Aseprite RGB/grayscale/indexed cel animations open and save with editable layers, timing and metadata.
 //! * Paint.NET PDN3 documents open as editable bitmap layers (import only).
 //! * OpenRaster (`.ora`) documents open and save with their layers, groups, blend modes,
 //!   opacity and visibility; see `ora`.
@@ -38,6 +39,7 @@ pub mod abr_map;
 mod adjust_map;
 pub mod affinity;
 pub mod annotations_map;
+pub mod aseprite;
 pub mod asl_map;
 pub mod blocks;
 pub mod camera_raw_xmp;
@@ -113,6 +115,9 @@ pub use psd_import::{psd_to_document, psd_to_document_with};
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// Aseprite document decode failure.
+    #[error("Aseprite: {0}")]
+    Aseprite(String),
     /// Paint.NET document decode failure.
     #[error("PDN: {0}")]
     Pdn(String),
@@ -943,6 +948,7 @@ pub fn import_file(name: &str, path: &std::path::Path, opts: &ImportOptions, ctl
 pub(crate) enum Route {
     Pcraft,
     Psd,
+    Aseprite,
     Affinity,
     Ora,
     Kra,
@@ -967,6 +973,9 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
         return Route::Psd;
+    }
+    if aseprite::is_aseprite(bytes) || (has_extension(name, "aseprite") && photocraft_codecs::detect(bytes).is_none()) {
+        return Route::Aseprite;
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return Route::Affinity;
@@ -1023,6 +1032,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
+        Route::Aseprite => aseprite::import(name, bytes, ctl),
         Route::Affinity => affinity::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
@@ -1152,7 +1162,7 @@ fn checked_stages(
     let mut renderer = renderer;
     // `as_deref_mut` would tie the trait object's lifetime to this function's; the closure shortens it.
     #[allow(clippy::option_as_ref_deref)]
-    let r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
+    let mut r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
     if let Err(e) = photocraft_raster::spill::check_since(scratch_generation)
         .map_err(IoError::Unsupported)
         .and_then(|()| doc.scratch_health().map_err(IoError::Unsupported))
@@ -1165,6 +1175,10 @@ fn checked_stages(
             }
         }
         return Err(e);
+    }
+    if doc.sprite.is_some() && !matches!(extension(name_or_ext).as_str(), "aseprite" | "ase" | "pcraft") {
+        r.warnings
+            .push("This export contains the selected sprite frame; animation, exact palette indices and Aseprite metadata require .aseprite or .pcraft".into());
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)
@@ -1197,6 +1211,9 @@ fn export_stages_with_renderer(
     renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<EncodedExport, IoError> {
     let ext = extension(name_or_ext);
+    if matches!(ext.as_str(), "aseprite" | "ase") {
+        return aseprite::export(doc, ctl).map(EncodedExport::from);
+    }
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
     }
