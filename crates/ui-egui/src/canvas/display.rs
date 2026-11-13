@@ -210,6 +210,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
         && app.session.active_index() == Some(idx)
     {
         let fields = crate::layer_style::color_picker::preview_fields(app, d.id, &d.fields);
+        // A blend mode hovered in the dialog shows too, without becoming a pending edit (#5945).
+        let fields = crate::layer_style::blend_hover::preview_fields(app, d.id, fields);
         let key = (crate::layer_style::preview_hash(&fields) ^ st.revision.wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1 << 63;
         if app.style_preview.as_ref().map(|p| p.0) != Some(key) {
             let shown = crate::layer_style::preview_document(&st.doc, &app.session.patterns, &fields).map(std::sync::Arc::new);

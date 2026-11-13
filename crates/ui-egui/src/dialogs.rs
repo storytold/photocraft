@@ -418,7 +418,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
             about_tab_body(app, ui, chosen);
         }
         DialogKind::Command => outcome = command_body(app, ui, d, fields, id, interactive),
-        DialogKind::LayerStyle => outcome = crate::layer_style::body_with_response(app, ui, fields, interactive),
+        DialogKind::LayerStyle => outcome = crate::layer_style::body_with_response(app, ui, fields, interactive, d.id),
         DialogKind::Error => {
             ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
             dont_show_again::body(ui, fields);
