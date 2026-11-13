@@ -430,12 +430,13 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let moving = with_descendants(&doc, &ids);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
         let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target) || costly_to_redraw(&doc, bounds);
-        if too_big {
-            log::info!("move: dragging {} layer(s) as an outline (too costly to redraw live), the release redraws once", ids.len());
-        }
         // The drag's snapshot: the layers' area as they paint it, wherever it reaches. Pattern
         // Preview tiles the canvas, which one picture can't follow: those drags keep the outline.
         let snapshot = if too_big && !mask_target && !pattern { bounds.and_then(|b| start_snapshot(&doc, &moving, b)) } else { None };
+        if too_big {
+            let shown = if snapshot.is_some() { "as a snapshot of the layers" } else { "as an outline" };
+            log::info!("move: dragging {} layer(s) {shown} (too costly to redraw live), the release redraws once", ids.len());
+        }
         app.move_preview = Some(MovePreview {
             doc: doc_id,
             revision,
