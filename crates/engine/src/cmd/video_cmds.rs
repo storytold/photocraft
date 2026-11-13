@@ -238,8 +238,8 @@ fn restore_all(s: &mut Session, _p: &Value) -> Result<Value> {
     })
 }
 
-/// Show Altered Video: `show` sets the state, as a recorded Show / Hide Altered Video step does;
-/// without it the menu item toggles.
+/// Show Altered Video: `show` true or false sets the state, as a recorded Show / Hide Altered
+/// Video step does; omitted or `null`, the menu item toggles. Any other `show` is refused.
 fn show_altered(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.videoLayers.showAlteredVideo";
     let show = match p.get("show") {
@@ -785,7 +785,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Show Altered Video",
             menu: vl,
             shortcut: None,
-            params: "{\"show\":bool? (default: toggle)} → {}",
+            params: "{\"show\":bool|null? (omitted or null: toggle; other values are refused)} → {}",
             enabled: active_video,
             journal: true,
             run: |s, p| show_altered(s, p),
