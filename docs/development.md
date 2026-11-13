@@ -322,8 +322,9 @@ At startup the desktop lists recovery metadata, then decodes one document at a t
 
 `photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
-- **Headless:** `photocraft-cli mcp --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. It drives an in-process engine session with ordered read directories and one write directory.
+- **Headless:** `photocraft-cli mcp --headless --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. Use `--headless` in scripts, tests and agent sessions: without it `mcp` works in the open window while the ArtCraft Launcher's agents switch is on, and may start PhotoCraft (When PhotoCraft Is Closed defaults to starting it). It drives an in-process engine session with ordered read directories and one write directory.
 - **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots; root flags on the bridging CLI are a usage error. See `docs/control-protocol.md#mcp-bridge`.
+- **Live app, no flags:** with the `AI-MCP` flag, turn on ArtCraft Launcher › Settings › AI agents and add the MCP client there; plain `photocraft-cli mcp` then works in the open window. The app publishes its port and token file in `agent-connection.json` in the settings folder; `mcp` reads it on every call. Without a launcher, a scratch `CRAFT_MCP_DIR` with an `apps.json` naming `photocraft` (the format in storytold/craft-ai-integrations, crate `craft-ai-agents`) turns the switch on for a test. See [MCP conventions](mcp.md#connecting-the-desktop-app-no-terminal). Test it against a scratch settings folder with `PHOTOCRAFT_CONFIG_DIR`, which both the app and the CLI honour.
 
 For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
 
@@ -367,7 +368,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
+      "args": ["mcp", "--headless", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -380,7 +381,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
 ```sh
 cargo build --release -p photocraft-cli
 mkdir -p "$PWD/photocraft-work"
-claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
+claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp --headless \
   --automation-read-root "$PWD/photocraft-work" \
   --automation-write-root "$PWD/photocraft-work"
 ```
@@ -772,19 +773,19 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+`craft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
 (Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
 
 ```sh
-cargo run -p photocraft-psd --example atn_dump -- "Default Actions.atn"
-cargo run -p photocraft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
+cargo run -p craft-psd --example atn_dump -- "Default Actions.atn"
+cargo run -p craft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
 
 The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
-corpora*): `photocraft-psd`'s corpus test parses every file and rewrites it byte for byte;
+corpora*): `craft-psd`'s corpus test parses every file and rewrites it byte for byte;
 `photocraft-engine`'s loads, saves and reloads every set and caps the steps that still have no
 PhotoCraft equivalent.
 
@@ -809,7 +810,7 @@ recorded rectangle/preset are retained for saving, without resizing the target.
 
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
 encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
-its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+its README): `cargo test -p craft-psd --test it atn_contract::`.
 Recorded layer indexes and ordinals resolve against the full stack, including collapsed children
 and hidden group-end positions. Indexed moves use the stack before the move. Recorded document
 indexes are one-based opening order; a native numeric `document` parameter remains a zero-based
@@ -885,7 +886,7 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
 - These budgets apply to an import's **aggregate peak estimate**, not to one allocation: a peak
   may sum many layer, mask, merged and workspace buffers. Each individual buffer must still fit
   the target's layout limit (`isize::MAX`) and the decoder's own per-buffer allowance
-  (`photocraft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
+  (`craft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
   enforced by fallible allocation or an explicit cap where that buffer is created. A 64-bit
   native process has no measurable aggregate address-space cap, so admission relies on explicit
   approval plus those per-buffer checks; 32-bit native uses a 2 GiB project cap
@@ -1051,7 +1052,7 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 **Opt-in locally, strict when opted in, always in CI.**
 
-- The corpus tests sit behind the `corpus` cargo feature of `photocraft-psd`, `photocraft-codecs`,
+- The corpus tests sit behind the `corpus` cargo feature of `craft-psd`, `photocraft-codecs`,
   `photocraft-io` and `photocraft-engine`, so plain `cargo test` neither compiles nor needs them.
   The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` (test-corpus
   turns it on).

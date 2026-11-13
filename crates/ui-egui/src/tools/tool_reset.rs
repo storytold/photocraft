@@ -1,5 +1,6 @@
 //! Reset Tool and Reset All Tools (#2825), as in Photoshop: right-click the tool icon at the far
-//! left of the options bar. Reset Tool puts the current tool's options back to their defaults;
+//! left of the options bar. Reset Tool puts the current tool's options back to their defaults
+//! (all but the few it keeps, [`kept_by_reset_tool`]);
 //! Reset All Tools asks first ("Reset all tools to their default settings?"), then resets every
 //! tool's options.
 //!
@@ -132,16 +133,30 @@ fn is_selection_tool(tool: Tool) -> bool {
     )
 }
 
-/// Put `tool`'s fields of `o` back to their defaults.
+/// The fields of [`option_keys`] that Reset Tool leaves as they are, as the reference app does
+/// (Zoom Out, #12066; Patch Structure and Color, #12127; Content-Aware Move Mode, #12183).
+/// They stay in [`option_keys`], so a tool preset still stores them, and Reset All Tools still
+/// resets them (it starts from the defaults).
+fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
+    match tool {
+        Tool::Zoom => &["zoom_in"],
+        Tool::Patch => &["patch_structure", "patch_color"],
+        Tool::ContentAwareMove => &["cam_mode"],
+        _ => &[],
+    }
+}
+
+/// Put `tool`'s fields of `o` back to their defaults, except those Reset Tool keeps.
 pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let keys = option_keys(tool);
+    let kept = kept_by_reset_tool(tool);
     if keys.is_empty() {
         return;
     }
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
-    for k in keys {
+    for k in keys.iter().filter(|k| !kept.contains(k)) {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
         }
@@ -167,8 +182,8 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
     m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
-/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
-/// what a tool preset made with + stores (#7356).
+/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets
+/// (less [`kept_by_reset_tool`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
     macro_rules! reset {
@@ -226,7 +241,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }
-        Tool::Zoom => reset!(zoom_scrubby),
+        Tool::Zoom => reset!(zoom_scrubby, zoom_in),
         Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
@@ -246,6 +261,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
         Tool::Line => reset!(
             shape_mode,
+            shape_path_op,
             shape_fill,
             stroke_width,
             shape_stroke,
@@ -261,7 +277,19 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_concavity,
         ),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
-            reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
+            reset!(
+                shape_mode,
+                shape_path_op,
+                shape_fill,
+                stroke_width,
+                shape_stroke,
+                shape_fill_gradient,
+                shape_stroke_gradient,
+                corner_radius,
+                align_edges,
+                polygon_sides,
+                line_weight
+            )
         }
         Tool::MixerBrush => reset!(mixer_combination),
         Tool::ColorSampler
@@ -304,6 +332,17 @@ mod tests {
         }
         for k in listed {
             assert!(all.contains_key(k), "{k} is not a ToolOptions field");
+        }
+    }
+
+    /// What Reset Tool keeps is the tool's own option, by a name that exists: a renamed or
+    /// misspelt field would otherwise silently be reset again (#12127, #12183).
+    #[test]
+    fn kept_options_are_the_tools_own() {
+        for t in Tool::ALL {
+            for k in kept_by_reset_tool(t) {
+                assert!(option_keys(t).contains(k), "{k} is not an option of {t:?}");
+            }
         }
     }
 
