@@ -102,14 +102,38 @@ fn editing_the_radius_or_the_box_keeps_the_triangle() {
     assert_eq!(info(&mut s, id)["live"], before);
 }
 
+/// `Session::execute` turns a command's panic into an `Err`, so a hostile-input test has to tell
+/// that error from a graceful one.
+fn graceful(r: &crate::Result<Value>) -> bool {
+    !matches!(r, Err(e) if e.to_string().contains("internal error"))
+}
+
 #[test]
 fn hostile_radii_never_panic() {
     let mut s = session();
     let id = create(&mut s, json!({"kind": "triangle", "rect": [400, 300, 200, 100]}));
     for r in [json!(-5), json!(1e300), json!("x")] {
-        let _ = s.execute("shape.edit", json!({"layer": id, "cornerRadius": r}));
+        let result = s.execute("shape.edit", json!({"layer": id, "cornerRadius": r}));
+        assert!(graceful(&result), "{result:?}");
         let r = info(&mut s, id)["live"]["corner_radius"].as_f64().unwrap();
         assert!(r.is_finite() && r >= 0.0, "{r}");
+    }
+}
+
+#[test]
+fn hostile_boxes_never_panic() {
+    let mut s = session();
+    let layers = s.active().unwrap().doc.layer_count();
+    // Out of range, or not a box: refused, and no layer is added.
+    for rect in [json!([0, 0, 1e300, 1e300]), json!([1e300, 1e300, 10, 10]), json!([0, 0, 10]), json!([0, 0, "w", 10]), json!(null)] {
+        let result = s.execute("shape.create", json!({"kind": "triangle", "rect": rect, "cornerRadius": 20}));
+        assert!(result.is_err() && graceful(&result), "{result:?}");
+    }
+    assert_eq!(s.active().unwrap().doc.layer_count(), layers);
+    // A box with no width or no height has no corner to round.
+    for rect in [[5, 5, 0, 0], [5, 5, 0, 50], [5, 5, 50, 0]] {
+        let result = s.execute("shape.create", json!({"kind": "triangle", "rect": rect, "cornerRadius": 20}));
+        assert!(graceful(&result), "{rect:?}: {result:?}");
     }
 }
 

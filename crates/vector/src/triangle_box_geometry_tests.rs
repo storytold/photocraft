@@ -67,3 +67,23 @@ fn a_three_sided_polygon_keeps_its_inscribed_geometry() {
     let p = live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0 });
     close(&anchors(&p), &[(500.0, 300.0), (586.603, 375.0), (413.397, 375.0)], 1e-3);
 }
+
+#[test]
+fn a_box_with_no_width_or_height_has_no_corner_to_round() {
+    for rect in [[5.0, 5.0, 0.0, 0.0], [5.0, 5.0, 0.0, 50.0], [5.0, 5.0, 50.0, 0.0]] {
+        let [x, y, w, h] = rect;
+        let p = live_path(&LiveShape::Triangle { rect, corner_radius: 20.0 });
+        assert_eq!(p, triangle(x, y, w, h), "{rect:?}");
+        assert_eq!(p.subpaths[0].knots.len(), 3);
+    }
+    // A sliver: the apex is too sharp to round, and the path stays finite.
+    let p = live_path(&LiveShape::Triangle { rect: [0.0, 0.0, 1.0e-7, 1000.0], corner_radius: 20.0 });
+    assert!(p.subpaths[0].knots.iter().all(|k| [k.anchor, k.in_ctrl, k.out_ctrl].iter().all(|q| q.x.is_finite() && q.y.is_finite())));
+}
+
+#[test]
+fn a_tall_thin_box_caps_each_corner_on_its_own_edges() {
+    // The apex's tangent points stop at half of each side, the base corners' at half of the base.
+    let p = live_path(&LiveShape::Triangle { rect: [0.0, 0.0, 2.0, 1000.0], corner_radius: 20.0 });
+    close(&anchors(&p), &[(0.5, 500.0), (1.5, 500.0), (1.999, 999.0), (1.0, 1000.0), (1.0, 1000.0), (0.001, 999.0)], 1e-3);
+}

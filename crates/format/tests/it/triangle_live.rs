@@ -73,3 +73,58 @@ fn the_triangle_kind_uses_these_json_names() {
     let bare = live(json!({"kind": "triangle", "rect": [0.0, 0.0, 10.0, 10.0]}));
     assert_eq!(serde_json::to_value(bare).unwrap()["corner_radius"], json!(0.0));
 }
+
+/// `doc` saved, with `members` set on its first layer's content: what no save writes.
+fn saved_with(doc: &Document, members: &Value) -> Vec<u8> {
+    let bytes = save_to_bytes(doc, &SaveOptions::default()).unwrap();
+    let bundle = zip::ZipReader::new(&bytes).unwrap();
+    let mut out = zip::ZipWriter::new();
+    for entry in &bundle.entries {
+        let mut data = bundle.read(entry, usize::MAX).unwrap();
+        if entry.name == "manifest.json" {
+            let mut manifest: Value = serde_json::from_slice(&data).unwrap();
+            for (key, value) in members.as_object().unwrap() {
+                manifest["document"]["layers"][0]["content"][key] = value.clone();
+            }
+            data = serde_json::to_vec(&manifest).unwrap();
+        }
+        out.add(&entry.name, &data).unwrap();
+    }
+    out.finish().unwrap()
+}
+
+fn loaded_live(bytes: &[u8]) -> Option<LiveShape> {
+    match &load_from_bytes(bytes).unwrap().layers[0].content {
+        LayerContent::Shape(shape) => shape.live.clone(),
+        _ => panic!("a shape layer"),
+    }
+}
+
+/// No save writes these, but a hand-made or damaged file can hold them: the arrow field wins over
+/// the triangle field, which wins over `live`; a field holding another kind is ignored; and a
+/// value that is no live shape fails the load with an error.
+#[test]
+fn both_fields_a_wrong_kind_and_junk_never_panic() {
+    let doc = document(live(triangle_json()));
+    let arrow = json!({"kind": "arrowLine", "from": [0.0, 0.0], "to": [9.0, 0.0], "weight": 1.0, "start": false, "end": true, "width": 5.0, "length": 5.0, "concavity": 0.0});
+    let rect = json!({"kind": "rect", "rect": [1.0, 2.0, 3.0, 4.0], "radii": [0.0, 0.0, 0.0, 0.0]});
+    // Both new fields: the arrow wins. The triangle field wins over `live`.
+    assert_eq!(loaded_live(&saved_with(&doc, &json!({"arrow_live": arrow}))), Some(live(arrow.clone())));
+    assert_eq!(loaded_live(&saved_with(&doc, &json!({"live": rect}))), Some(live(triangle_json())));
+    // A field holding another kind is ignored, and `live` is read instead.
+    assert_eq!(loaded_live(&saved_with(&doc, &json!({"triangle_live": rect}))), None);
+    assert_eq!(loaded_live(&saved_with(&doc, &json!({"triangle_live": arrow, "live": rect}))), Some(live(rect.clone())));
+    assert_eq!(loaded_live(&saved_with(&doc, &json!({"arrow_live": triangle_json(), "triangle_live": null}))), None);
+    // A value that is no live shape fails the load with an error.
+    for junk in [
+        json!(7),
+        json!("x"),
+        json!({}),
+        json!({"kind": "hexagon"}),
+        json!({"kind": "triangle"}),
+        json!({"kind": "triangle", "rect": [1, 2, 3]}),
+        json!({"kind": "triangle", "rect": [0, 0, "w", 10]}),
+    ] {
+        assert!(load_from_bytes(&saved_with(&doc, &json!({"triangle_live": junk}))).is_err(), "{junk}");
+    }
+}
