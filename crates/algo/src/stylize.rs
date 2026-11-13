@@ -27,10 +27,19 @@ fn set_gray(ctx: &Ctx, px: &mut [f32], g: f32) {
 /// Solarize: inverts the highlights. CMYK samples are ink, so there the
 /// channels below 50% ink (the light ones) invert.
 pub(crate) fn solarize(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
+    solarize_threshold(src, out, ctx, 0.5)
+}
+
+/// Solarize with Threshold: inverts the channels strictly lighter than `threshold` (0..1, where
+/// 0.5 is plain Solarize). CMYK samples are ink, so there a channel is lighter when it holds less than
+/// `1 - threshold` ink. A NaN threshold is treated as 0.5.
+pub(crate) fn solarize_threshold(src: &Image, out: Rect, ctx: &Ctx, threshold: f32) -> Vec<f32> {
+    let t = if threshold.is_nan() { 0.5 } else { threshold.clamp(0.0, 1.0) };
     if subtractive(ctx) {
-        per_pixel(src, out, ctx, |v| if v < 0.5 { 1.0 - v } else { v })
+        let ink = 1.0 - t;
+        per_pixel(src, out, ctx, move |v| if v < ink { 1.0 - v } else { v })
     } else {
-        per_pixel(src, out, ctx, |v| if v > 0.5 { 1.0 - v } else { v })
+        per_pixel(src, out, ctx, move |v| if v > t { 1.0 - v } else { v })
     }
 }
 
