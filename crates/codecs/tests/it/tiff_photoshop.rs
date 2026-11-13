@@ -41,26 +41,29 @@ fn tags_round_trip_through_the_encoder() {
     }
 }
 
+/// Extra planes keep their native bytes and order beside colour and alpha samples.
 #[test]
 fn extra_samples_round_trip() {
     for (layout, sample) in [
         (ChannelLayout::Rgb, SampleType::U8),
         (ChannelLayout::Rgba, SampleType::U8),
         (ChannelLayout::Gray, SampleType::U16),
+        (ChannelLayout::Rgba, SampleType::U16),
+        (ChannelLayout::Rgb, SampleType::F32),
         (ChannelLayout::Cmyk, SampleType::F32),
     ] {
         let mut img = synth(4, 3, layout, sample, 2, 0.4);
         let n = 4 * 3;
         let b = sample.bytes();
         let data: Vec<u8> = (0..n * b).map(|i| (i * 17) as u8).collect();
-        img.meta.extra_samples = vec![ExtraSample { kind: 0, data: data.clone() }];
-        let bytes = encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
-        let back = decode(&bytes).unwrap();
-        assert_eq!(back.layout(), layout, "{layout:?} {sample:?}");
-        assert_eq!(back.data(), img.data(), "{layout:?} {sample:?}");
-        assert_eq!(back.meta.extra_samples.len(), 1, "{layout:?} {sample:?}");
-        assert_eq!(back.meta.extra_samples[0].kind, 0, "{layout:?} {sample:?}");
-        assert_eq!(back.meta.extra_samples[0].data, data, "{layout:?} {sample:?}");
+        for count in [1usize, 2] {
+            img.meta.extra_samples = (0..count).map(|k| ExtraSample { kind: 0, data: data.iter().map(|v| v.wrapping_add((k * 41) as u8)).collect() }).collect();
+            let bytes = encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
+            let back = decode(&bytes).unwrap();
+            assert_eq!(back.layout(), layout, "{layout:?} {sample:?}");
+            assert_eq!(back.data(), img.data(), "{layout:?} {sample:?}");
+            assert_eq!(back.meta.extra_samples, img.meta.extra_samples, "{layout:?} {sample:?} {count} planes");
+        }
     }
 }
 
