@@ -303,12 +303,21 @@ pub enum LiveShape {
         rect: [f64; 4],
     },
     /// Regular polygon or star inscribed in `rect`; `star_ratio` = inner/outer radius (1 = polygon).
-    /// `corner_radius` rounds every vertex (0 = sharp), each within what its edges allow; the
-    /// Triangle tool draws a 3-sided one.
+    /// `corner_radius` rounds every vertex of a polygon and the outer points of a star (0 = sharp),
+    /// each within what its edges allow.
     Polygon {
         rect: [f64; 4],
         sides: u32,
         star_ratio: f64,
+        #[serde(default)]
+        corner_radius: f64,
+    },
+    /// Isosceles triangle filling `rect`: the apex at the centre of the top edge, then the bottom
+    /// right and the bottom left corner (the Triangle tool, Create Triangle). `corner_radius`
+    /// rounds all three corners (0 = sharp), each within what its edges allow. Triangles saved
+    /// before this kind existed are 3-sided `Polygon`s and keep that geometry.
+    Triangle {
+        rect: [f64; 4],
         #[serde(default)]
         corner_radius: f64,
     },
@@ -317,6 +326,17 @@ pub enum LiveShape {
         from: [f64; 2],
         to: [f64; 2],
         weight: f64,
+    },
+    /// Editable vector arrow with parameters preserved by serde in the project document.
+    ArrowLine {
+        from: [f64; 2],
+        to: [f64; 2],
+        weight: f64,
+        start: bool,
+        end: bool,
+        width: f64,
+        length: f64,
+        concavity: f64,
     },
 }
 

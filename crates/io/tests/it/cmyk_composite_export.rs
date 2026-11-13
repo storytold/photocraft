@@ -313,7 +313,8 @@ fn rgb_only_export_uses_direct_composite_not_reseparated_cmyk() {
     let doc = document(SampleType::U16, 0.5);
     let rgb = photocraft_compose::flatten(&doc);
     let expected =
-        photocraft_codecs::Image::from_normalized(8, 8, ChannelLayout::Rgba, CodecSample::U16, &rgb.px.into_iter().flatten().collect::<Vec<_>>()).unwrap();
+        photocraft_codecs::Image::from_normalized(8, 8, ChannelLayout::Rgba, CodecSample::U16, &rgb.into_px().into_iter().flatten().collect::<Vec<_>>())
+            .unwrap();
 
     let result = export(&doc, "png", &ExportOptions::default()).unwrap();
 
@@ -356,7 +357,7 @@ fn merged_composite_of_a_tagged_cmyk_file_reads_through_its_profile() {
     }
     doc.layers.push(Layer::new("Background", LayerContent::Raster(surface)));
     let psd = export(&doc, "psd", &ExportOptions::default()).unwrap();
-    let file = photocraft_psd::PsdFile::from_bytes(&psd.bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&psd.bytes).unwrap();
     let merged = photocraft_io::merged_composite(&file).unwrap();
     // The merged image's own inks (planar, 255 = no ink), shown through the file's profile.
     let raw = file.decode_merged().unwrap();

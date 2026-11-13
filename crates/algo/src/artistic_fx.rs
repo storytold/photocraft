@@ -407,6 +407,8 @@ fn highlights(p: Px, l: f32, area: f32, intensity: f32) -> Px {
 
 /// Pixels an effect reads around an output pixel.
 pub(crate) fn effect_reach(e: &GalleryEffect) -> i32 {
+    // Stored values come from a project file unclamped; keep the arithmetic below inside i32.
+    let e = &e.clamped();
     let g = |k: &str| e.get(k);
     match e.filter {
         F::ColoredPencil => 2,
@@ -445,7 +447,7 @@ pub(crate) fn effect_reach(e: &GalleryEffect) -> i32 {
         F::Plaster => gs(0.5 + g("smoothness") * 0.8) + gs(1.5) + 2,
         F::Stamp => gs(0.3 + g("smoothness") * 0.3),
         F::TornEdges => gs(1.0),
-        F::WaterPaper => 2 * (g("fiberLength") / 6.0) as i32 + 2,
+        F::WaterPaper => 2 * (fiber_length(e) / 6.0) as i32 + 2,
         F::GlowingEdges => gs(0.3 + g("smoothness") * 0.25) + gs(g("edgeWidth") * 0.4) + 2,
         F::Craquelure => 0,
         F::Patchwork => patch_size(e).ceil() as i32 + 2,
@@ -516,6 +518,12 @@ fn plastic_sigma(e: &GalleryEffect) -> f32 {
 fn watercolor_radius(e: &GalleryEffect) -> usize {
     1 + ((15.0 - e.get("brushDetail")) / 2.5) as usize
 }
+/// Water Paper's fiber length within its parameter range (3..=50): raw gallery values bypass the
+/// setter's clamp, and the reach estimate and the blur radius must agree on one bounded value.
+fn fiber_length(e: &GalleryEffect) -> f32 {
+    e.get("fiberLength").clamp(3.0, 50.0)
+}
+
 fn basrelief_sigma(e: &GalleryEffect) -> f32 {
     0.3 + e.get("smoothness") * 0.5 + (15.0 - e.get("detail")) * 0.12
 }
@@ -528,7 +536,7 @@ fn glass_cell(e: &GalleryEffect) -> f32 {
 
 /// Total reach of a stack of effects.
 pub(crate) fn reach(effects: &[GalleryEffect]) -> i32 {
-    effects.iter().map(effect_reach).sum()
+    effects.iter().map(effect_reach).fold(0, i32::saturating_add)
 }
 
 /// Runs a stack of effects over `out` (the source covers `out` grown by [`reach`]).
@@ -540,8 +548,9 @@ pub(crate) fn run(effects: &[GalleryEffect], src: &Image, out: Rect, ctx: &Ctx) 
         return src.crop(out);
     }
     let mut win = Win { r, w, h, c: src.data.chunks_exact(n).map(|px| rgb(rgba(ctx, px))).collect() };
-    for e in effects {
-        apply(e, &mut win, ctx);
+    // The reach that sized `src` comes from the clamped values, so the pixels must use them too.
+    for e in effects.iter().map(GalleryEffect::clamped) {
+        apply(&e, &mut win, ctx);
     }
     finish(&win, src, out, ctx)
 }
@@ -562,6 +571,8 @@ pub(crate) struct Prepared {
 impl Prepared {
     /// `None` for a stack that has no Cutout (it runs tile by tile as usual).
     pub(crate) fn new(effects: &[GalleryEffect], src: &Image, ctx: &Ctx) -> Option<Prepared> {
+        // Held to the declared ranges once here (see `run`), so the traced shapes and the tiles agree.
+        let effects = &effects.iter().map(GalleryEffect::clamped).collect::<Vec<_>>();
         let last = effects.iter().rposition(|e| e.filter == F::Cutout)?;
         let r = src.rect;
         let (w, h) = (r.width() as usize, r.height() as usize);
@@ -1173,7 +1184,7 @@ fn apply_sketch(e: &GalleryEffect, win: &mut Win, ctx: &Ctx) -> bool {
             }
         }
         F::WaterPaper => {
-            let fl = g("fiberLength");
+            let fl = fiber_length(e);
             let (br, co) = (g("brightness") / 100.0, g("contrast") / 100.0);
             let r = (fl / 6.0) as usize;
             line_blur3(&mut win.c, w, h, (1, 0), r);
@@ -1356,6 +1367,17 @@ mod tests {
     }
 
     #[test]
+    fn gallery_window_budget_counts_working_temporaries() {
+        // A 6300 px square RGBA window is 159 M samples for the source read alone, 476 M with the old
+        // 3x factor, and over the 512 Mi-sample budget once the working window and temporaries count.
+        // The check runs before any window is read, so nothing that large is allocated.
+        let s = pattern(SampleType::F32);
+        let big = Rect::new(0, 0, 6300, 6300);
+        let fp = FilterParams::FilterGallery { effects: vec![GalleryEffect::new(crate::GalleryFilter::ALL[0])] };
+        assert!(crate::apply_tiled_with(&s, &fp, big, big, None, 6300, None, &photocraft_raster::Interrupt::NONE).is_none());
+    }
+
+    #[test]
     fn every_effect_changes_pixels_and_is_tile_independent() {
         let b = Rect::new(0, 0, 56, 40);
         for st in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -1385,7 +1407,9 @@ mod tests {
             let fp = FilterParams::FilterGallery { effects: vec![e.clone()] };
             apply_tiled(&s, &fp, b, b, None, tile, Some(b)).read_region(b)
         };
-        for f in [G::RoughPastels, G::AngledStrokes, G::Cutout] {
+        // Cutout has its own test below: its tone bands are of the channel mean, which this
+        // pattern keeps nearly constant.
+        for f in [G::RoughPastels, G::AngledStrokes] {
             let base = run(&GalleryEffect::new(f), 256);
             for prm in f.params() {
                 let crate::GalleryParamKind::Range { min, max, .. } = prm.kind else { continue };
@@ -1399,6 +1423,30 @@ mod tests {
                     assert!(worst < 1e-3, "{} {} = {v} differs across tilings by {worst}", f.key(), prm.key);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn cutout_responds_to_every_slider() {
+        // A radial gradient (curved band edges, tones to quantize) with a 10 px square in it.
+        let rows: Vec<Vec<f32>> = (0..96)
+            .map(|y| {
+                (0..96)
+                    .map(|x| {
+                        if (70..80).contains(&x) && (14..24).contains(&y) {
+                            return 0.05;
+                        }
+                        let d = (((x as f32 - 40.0).powi(2) + (y as f32 - 52.0).powi(2)).sqrt() / 60.0).min(1.0);
+                        1.0 - d
+                    })
+                    .collect()
+            })
+            .collect();
+        let base = cutout_on(&rows, &[]);
+        for (key, v) in
+            [("numberOfLevels", 2.0), ("numberOfLevels", 8.0), ("edgeSimplicity", 0.0), ("edgeSimplicity", 10.0), ("edgeFidelity", 1.0), ("edgeFidelity", 3.0)]
+        {
+            assert_ne!(cutout_on(&rows, &[(key, v)]), base, "cutout {key} = {v} changed nothing");
         }
     }
 
@@ -1437,31 +1485,32 @@ mod tests {
             let soft = out[y].iter().filter(|&&v| (v - lo).abs() > 0.01 && (v - hi).abs() > 0.01).count();
             assert!(soft <= 2, "row {y}: {soft} edge pixels");
         }
-        // A ramp becomes `numberOfLevels` flat steps (the palette is the image's own colours, so
-        // one may go to the wide flat margins and merge as noise).
-        let ramp: Vec<Vec<f32>> = (0..12).map(|_| (0..144).map(|x| ((x as f32 - 24.0) / 95.0).clamp(0.0, 1.0)).collect()).collect();
-        for levels in [2.0, 5.0, 8.0] {
-            let row = &cutout_on(&ramp, &[("numberOfLevels", levels)])[6];
-            let mut tones: Vec<f32> = Vec::new();
-            for win in row.windows(3) {
-                if (win[0] - win[2]).abs() < 1e-4 && tones.last().is_none_or(|t| (t - win[1]).abs() > 1e-3) {
-                    tones.push(win[1]);
-                }
-            }
-            assert!(tones.len() <= levels as usize && tones.len() + 1 >= levels as usize, "levels {levels}: tones {tones:?}");
-            assert!(tones.windows(2).all(|t| t[0] < t[1]), "levels {levels}: tones {tones:?}");
+        // A grey ramp becomes `numberOfLevels` equal-width bands, each its own mean tone, as in the
+        // reference application (0–255 over 256 px at 4 levels: steps at 64, 128 and 192, the
+        // upper bands 96, 160 and 224).
+        let ramp: Vec<Vec<f32>> = (0..64).map(|_| (0..256).map(|x| x as f32 / 255.0).collect()).collect();
+        let row = &cutout_on(&ramp, &[("numberOfLevels", 4.0), ("edgeSimplicity", 0.0), ("edgeFidelity", 3.0)])[32];
+        for (x, want) in [(100, 95.5), (160, 159.5), (230, 223.5)] {
+            assert!((row[x] * 255.0 - want).abs() < 0.6, "band at {x}: {} vs {want}", row[x] * 255.0);
         }
-        // Edge Simplicity drops specks.
-        let speck: Vec<Vec<f32>> = (0..32).map(|y| (0..32).map(|x| if (15..18).contains(&x) && (15..18).contains(&y) { 0.9 } else { 0.2 }).collect()).collect();
-        let detailed = cutout_on(&speck, &[("edgeSimplicity", 0.0)]);
-        let simple = cutout_on(&speck, &[("edgeSimplicity", 10.0)]);
-        assert!(detailed[16][16] - detailed[2][2] > 0.5, "the speck should survive at simplicity 0");
-        assert!((simple[16][16] - simple[2][2]).abs() < 1e-4, "the speck should go at simplicity 10");
+        for step in [64usize, 128, 192] {
+            assert!(row[step - 2] < row[step + 1] - 0.2, "a step at {step}: {} / {}", row[step - 2], row[step + 1]);
+        }
+        // Edge Simplicity drops small shapes by their size alone (measured in the reference
+        // application: 6 px squares stay at 0–2 and 4 px go; 12 px stay at 4 and 8 px go).
+        let square = |n: usize| -> Vec<Vec<f32>> {
+            (0..48).map(|y| (0..48).map(|x| if (20..20 + n).contains(&x) && (20..20 + n).contains(&y) { 0.9 } else { 0.2 }).collect()).collect()
+        };
+        for (n, simplicity, kept) in [(6, 0.0, true), (4, 0.0, false), (6, 2.0, true), (12, 4.0, true), (8, 4.0, false), (12, 10.0, false)] {
+            let out = cutout_on(&square(n), &[("edgeSimplicity", simplicity)]);
+            let c = 20 + n / 2;
+            assert_eq!(out[c][c] - out[2][2] > 0.5, kept, "{n} px square at simplicity {simplicity}");
+        }
     }
 
     #[test]
     fn cutout_keeps_the_tone_of_surviving_islands_at_low_fidelity() {
-        for (size, simplicity) in [(2, 0.0), (3, 2.0), (4, 0.0), (4, 2.0), (6, 2.0)] {
+        for (size, simplicity) in [(6, 0.0), (6, 2.0), (8, 0.0), (12, 4.0)] {
             let rows: Vec<Vec<f32>> =
                 (0..32).map(|y| (0..32).map(|x| if (12..12 + size).contains(&x) && (12..12 + size).contains(&y) { 0.9 } else { 0.2 }).collect()).collect();
             let reference = cutout_on(&rows, &[("edgeSimplicity", simplicity), ("edgeFidelity", 2.0)]);
@@ -1469,7 +1518,7 @@ mod tests {
             for fidelity in [1.0, 1.5, 2.0] {
                 let out = cutout_on(&rows, &[("edgeSimplicity", simplicity), ("edgeFidelity", fidelity)]);
                 assert!(
-                    size == 2 || (out[centre][centre] - reference[centre][centre]).abs() < 0.02,
+                    (out[centre][centre] - reference[centre][centre]).abs() < 0.02,
                     "{size}x{size}, simplicity {simplicity}, fidelity {fidelity}: {} vs {}",
                     out[centre][centre],
                     reference[centre][centre]

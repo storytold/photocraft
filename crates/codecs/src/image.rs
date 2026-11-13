@@ -140,10 +140,10 @@ pub struct Metadata {
     /// Free-form key/value text (PNG tEXt/iTXt, TIFF ASCII tags).
     pub text: Vec<(String, String)>,
     /// Photoshop image resources (`8BIM` resource blocks): TIFF tag 34377. Kept opaque here;
-    /// `photocraft-io` reads and writes them through `photocraft-psd`.
+    /// `photocraft-io` reads and writes them through `craft-psd`.
     pub photoshop_resources: Option<Vec<u8>>,
     /// Photoshop layer data (TIFF tag 37724 `ImageSourceData`): a layered TIFF's layers. Kept
-    /// opaque here; `photocraft-io` reads and writes it through `photocraft-psd`.
+    /// opaque here; `photocraft-io` reads and writes it through `craft-psd`.
     pub photoshop_layers: Option<Vec<u8>>,
     /// Samples per pixel beyond the colour channels and the one alpha sample. TIFF extra
     /// samples (spot colours, extra alpha channels) the pixel layout does not hold. Each entry
@@ -349,6 +349,10 @@ pub struct ExrPartInfo {
     pub view: Option<String>,
     pub width: u32,
     pub height: u32,
+    /// Absolute data-window bounds: x, y, width and height.
+    pub data_window: (i32, i32, u32, u32),
+    /// Absolute display-window bounds: x, y, width and height.
+    pub display_window: (i32, i32, u32, u32),
     /// True for `deepscanline`/`deeptile` parts; those are composited by the deep
     /// decoder ([`crate::decode_deep_exr`]), not decoded part by part.
     pub deep: bool,
@@ -369,69 +373,24 @@ impl ExrPartInfo {
     }
 }
 
-/// One selection policy for header ranking/probing and flat decoding: never synthesize
-/// RGB(A) or YA from separate layers. OpenEXR layers use the full prefix before the last
-/// dot, including nested layers; a leading or trailing dot alone does not name a layer.
+/// One selection policy for header ranking/probing and flat decoding (craft-exr's): never
+/// synthesize RGB(A) or YA from separate layers.
 pub(crate) fn exr_color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(ChannelLayout, Vec<usize>)> {
-    #[derive(Default)]
-    struct Group {
-        r: Option<usize>,
-        g: Option<usize>,
-        b: Option<usize>,
-        a: Option<usize>,
-        y: Option<usize>,
-    }
-
-    // Sorted prefixes make rank ties deterministic independently of channel order, with
-    // the empty (unprefixed) group first. Unsupported channels cannot complete a group.
-    let mut groups = std::collections::BTreeMap::<&str, Group>::new();
-    let mut count = 0usize;
-    for (index, name) in names.into_iter().enumerate() {
-        count = count.saturating_add(1);
-        let (prefix, base) = name.rsplit_once('.').filter(|(prefix, base)| !prefix.is_empty() && !base.is_empty()).unwrap_or(("", name));
-        if !matches!(base, "R" | "G" | "B" | "A" | "Y") {
-            continue;
-        }
-        let group = groups.entry(prefix).or_default();
-        let component = match base {
-            "R" => &mut group.r,
-            "G" => &mut group.g,
-            "B" => &mut group.b,
-            "A" => &mut group.a,
-            "Y" => &mut group.y,
-            _ => continue,
+    use craft_exr::channels::ColorLayout;
+    craft_exr::channels::color_channels(names).map(|(layout, indices)| {
+        let layout = match layout {
+            ColorLayout::Y => ChannelLayout::Gray,
+            ColorLayout::YA => ChannelLayout::GrayA,
+            ColorLayout::Rgb => ChannelLayout::Rgb,
+            ColorLayout::Rgba => ChannelLayout::Rgba,
         };
-        component.get_or_insert(index);
-    }
-
-    let mut best = None;
-    let mut best_rank = 0;
-    for group in groups.values() {
-        let candidate = if let (Some(r), Some(g), Some(b)) = (group.r, group.g, group.b) {
-            match group.a {
-                Some(a) => (ChannelLayout::Rgba, vec![r, g, b, a]),
-                None => (ChannelLayout::Rgb, vec![r, g, b]),
-            }
-        } else if let Some(y) = group.y {
-            match group.a {
-                Some(a) => (ChannelLayout::GrayA, vec![y, a]),
-                None => (ChannelLayout::Gray, vec![y]),
-            }
-        } else {
-            continue;
-        };
-        let rank = candidate.0.channels();
-        if rank > best_rank {
-            best = Some(candidate);
-            best_rank = rank;
-        }
-    }
-    best.or_else(|| (count == 1).then(|| (ChannelLayout::Gray, vec![0])))
+        (layout, indices)
+    })
 }
 
 /// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
 pub(crate) fn base_channel_name(name: &str) -> &str {
-    name.rsplit('.').next().unwrap_or(name)
+    craft_exr::channels::base_channel_name(name)
 }
 
 /// One Cryptomatte layer of an EXR file (Cryptomatte specification 1.2): per-pixel object or
@@ -656,31 +615,7 @@ impl Image {
         if layout == self.layout && sample == self.sample {
             return self.clone();
         }
-        let data = if sample == self.sample && !self.layout.has_alpha() && layout == self.layout.with_alpha() {
-            // Fast path (opening any opaque file): copy the samples, append an opaque alpha.
-            let bps = sample.bytes();
-            let src = self.layout.channels() * bps;
-            let one: Vec<u8> = match sample {
-                SampleType::U8 => vec![u8::MAX],
-                SampleType::U16 => u16::MAX.to_ne_bytes().to_vec(),
-                SampleType::F16 => f16::ONE.to_bits().to_ne_bytes().to_vec(),
-                SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
-            };
-            let mut out = Vec::with_capacity(self.data.len() / src * (src + bps));
-            for px in self.data.chunks_exact(src) {
-                out.extend_from_slice(px);
-                out.extend_from_slice(&one);
-            }
-            out
-        } else if let Some(fast) = self.convert_int_direct(layout, sample) {
-            fast
-        } else if layout == self.layout {
-            quantize(&self.to_normalized(), sample)
-        } else {
-            let src = self.to_normalized();
-            let values = convert_layout(&src, self.layout, layout);
-            quantize(&values, sample)
-        };
+        let data = convert_data(&self.data, self.layout, self.sample, layout, sample);
         let mut meta = self.meta.clone();
         if sample != self.sample {
             // Extra samples are stored in the image's sample type, so they convert with it. A
@@ -705,55 +640,6 @@ impl Image {
         }
     }
 
-    /// Integer fast path of [`Image::convert`] for U8/U16 sources and targets whose result is
-    /// a pure channel copy: same colour model (alpha added as opaque, or dropped) or gray to
-    /// RGB. Bit-identical to the generic f32 route (see the equivalence tests) but without
-    /// the two intermediate f32 buffers. Returns `None` for everything else.
-    fn convert_int_direct(&self, layout: ChannelLayout, sample: SampleType) -> Option<Vec<u8>> {
-        let int = |s: SampleType| matches!(s, SampleType::U8 | SampleType::U16);
-        if !int(self.sample) || !int(sample) {
-            return None;
-        }
-        let gray_to_rgb = self.layout.is_gray() && layout.is_rgb();
-        if !gray_to_rgb && !layout.same_model(self.layout) {
-            return None;
-        }
-        let one: &[u8] = match sample {
-            SampleType::U8 => &[u8::MAX],
-            _ => &u16::MAX.to_ne_bytes(),
-        };
-        let (fc, tc) = (self.layout.channels(), layout.channels());
-        let (sb, db) = (self.sample.bytes(), sample.bytes());
-        let (src_color, dst_color) = (self.layout.color_channels(), layout.color_channels());
-        let n = self.data.len() / (fc * sb);
-        let mut out = Vec::with_capacity(n.checked_mul(tc)?.checked_mul(db)?);
-        macro_rules! run {
-            ($conv:expr) => {{
-                let conv = $conv;
-                for px in self.data.chunks_exact(fc * sb) {
-                    for j in 0..dst_color {
-                        let c = if src_color == 1 { 0 } else { j };
-                        conv(&px[c * sb..(c + 1) * sb], &mut out);
-                    }
-                    if layout.has_alpha() {
-                        if self.layout.has_alpha() {
-                            conv(&px[src_color * sb..(src_color + 1) * sb], &mut out);
-                        } else {
-                            out.extend_from_slice(one);
-                        }
-                    }
-                }
-            }};
-        }
-        match (self.sample, sample) {
-            (SampleType::U8, SampleType::U8) => run!(|s: &[u8], o: &mut Vec<u8>| o.push(s[0])),
-            (SampleType::U16, SampleType::U16) => run!(|s: &[u8], o: &mut Vec<u8>| o.extend_from_slice(s)),
-            (SampleType::U8, SampleType::U16) => run!(|s: &[u8], o: &mut Vec<u8>| o.extend_from_slice(&(u16::from(s[0]) * 257).to_ne_bytes())),
-            _ => run!(|s: &[u8], o: &mut Vec<u8>| o.push(((u32::from(u16::from_ne_bytes([s[0], s[1]])) + 128) / 257) as u8)),
-        }
-        Some(out)
-    }
-
     /// [`Image::convert`], borrowing `self` when it already has that layout and sample type
     /// (encoders use it so a full-size image isn't copied for nothing).
     pub fn converted(&self, layout: ChannelLayout, sample: SampleType) -> std::borrow::Cow<'_, Image> {
@@ -774,6 +660,98 @@ impl Image {
     pub fn to_rgba_f32(&self) -> Vec<f32> {
         convert_layout(&self.to_normalized(), self.layout, ChannelLayout::Rgba)
     }
+}
+
+/// The samples of `data` (`from` layout and sample type) in the `layout` and `sample` type: the
+/// arithmetic of [`Image::convert`], on borrowed bytes.
+fn convert_data(data: &[u8], from: ChannelLayout, from_sample: SampleType, layout: ChannelLayout, sample: SampleType) -> Vec<u8> {
+    if layout == from && sample == from_sample {
+        data.to_vec()
+    } else if sample == from_sample && !from.has_alpha() && layout == from.with_alpha() {
+        // Fast path (opening any opaque file): copy the samples, append an opaque alpha.
+        let bps = sample.bytes();
+        let src = from.channels() * bps;
+        let one: Vec<u8> = match sample {
+            SampleType::U8 => vec![u8::MAX],
+            SampleType::U16 => u16::MAX.to_ne_bytes().to_vec(),
+            SampleType::F16 => f16::ONE.to_bits().to_ne_bytes().to_vec(),
+            SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+        };
+        let mut out = Vec::with_capacity(data.len() / src * (src + bps));
+        for px in data.chunks_exact(src) {
+            out.extend_from_slice(px);
+            out.extend_from_slice(&one);
+        }
+        out
+    } else if let Some(fast) = convert_int_direct(data, from, from_sample, layout, sample) {
+        fast
+    } else if layout == from {
+        convert_depth(data, from_sample, sample)
+    } else {
+        let src = to_normalized(data, from_sample);
+        let values = convert_layout(&src, from, layout);
+        quantize(&values, sample)
+    }
+}
+
+/// [`Image::convert`] on borrowed pixels: `rows` rows of `width` pixels in `from` (layout, sample
+/// type) become the same pixels in `to`, bit for bit what the image conversion gives. Lets a
+/// caller convert a band of a decoded image without copying it into an [`Image`] first.
+pub fn convert_samples(src: &[u8], width: u32, rows: u32, from: (ChannelLayout, SampleType), to: (ChannelLayout, SampleType)) -> Result<Vec<u8>, CodecError> {
+    let expected = byte_len(width, rows, from.0, from.1).ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
+    if src.len() != expected {
+        return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{rows} {:?} {:?}", src.len(), from.0, from.1)));
+    }
+    Ok(convert_data(src, from.0, from.1, to.0, to.1))
+}
+
+/// Integer fast path of [`Image::convert`] for U8/U16 sources and targets whose result is
+/// a pure channel copy: same colour model (alpha added as opaque, or dropped) or gray to
+/// RGB. Bit-identical to the generic f32 route (see the equivalence tests) but without
+/// the two intermediate f32 buffers. Returns `None` for everything else.
+fn convert_int_direct(data: &[u8], from: ChannelLayout, from_sample: SampleType, layout: ChannelLayout, sample: SampleType) -> Option<Vec<u8>> {
+    let int = |s: SampleType| matches!(s, SampleType::U8 | SampleType::U16);
+    if !int(from_sample) || !int(sample) {
+        return None;
+    }
+    let gray_to_rgb = from.is_gray() && layout.is_rgb();
+    if !gray_to_rgb && !layout.same_model(from) {
+        return None;
+    }
+    let one: &[u8] = match sample {
+        SampleType::U8 => &[u8::MAX],
+        _ => &u16::MAX.to_ne_bytes(),
+    };
+    let (fc, tc) = (from.channels(), layout.channels());
+    let (sb, db) = (from_sample.bytes(), sample.bytes());
+    let (src_color, dst_color) = (from.color_channels(), layout.color_channels());
+    let n = data.len() / (fc * sb);
+    let mut out = Vec::with_capacity(n.checked_mul(tc)?.checked_mul(db)?);
+    macro_rules! run {
+        ($conv:expr) => {{
+            let conv = $conv;
+            for px in data.chunks_exact(fc * sb) {
+                for j in 0..dst_color {
+                    let c = if src_color == 1 { 0 } else { j };
+                    conv(&px[c * sb..(c + 1) * sb], &mut out);
+                }
+                if layout.has_alpha() {
+                    if from.has_alpha() {
+                        conv(&px[src_color * sb..(src_color + 1) * sb], &mut out);
+                    } else {
+                        out.extend_from_slice(one);
+                    }
+                }
+            }
+        }};
+    }
+    match (from_sample, sample) {
+        (SampleType::U8, SampleType::U8) => run!(|s: &[u8], o: &mut Vec<u8>| o.push(s[0])),
+        (SampleType::U16, SampleType::U16) => run!(|s: &[u8], o: &mut Vec<u8>| o.extend_from_slice(s)),
+        (SampleType::U8, SampleType::U16) => run!(|s: &[u8], o: &mut Vec<u8>| o.extend_from_slice(&(u16::from(s[0]) * 257).to_ne_bytes())),
+        _ => run!(|s: &[u8], o: &mut Vec<u8>| o.push(((u32::from(u16::from_ne_bytes([s[0], s[1]])) + 128) / 257) as u8)),
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -805,11 +783,26 @@ fn clamp01(v: f32) -> f32 {
 }
 
 pub(crate) fn quantize(values: &[f32], sample: SampleType) -> Vec<u8> {
+    quantize_samples(values.iter().copied(), sample)
+}
+
+/// Quantize normalized samples without an intermediate float buffer.
+fn quantize_samples(values: impl Iterator<Item = f32>, sample: SampleType) -> Vec<u8> {
     match sample {
-        SampleType::U8 => values.iter().map(|&v| (clamp01(v) * 255.0).round() as u8).collect(),
-        SampleType::U16 => values.iter().flat_map(|&v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
-        SampleType::F16 => values.iter().flat_map(|&v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
-        SampleType::F32 => values.iter().flat_map(|&v| v.to_ne_bytes()).collect(),
+        SampleType::U8 => values.map(|v| (clamp01(v) * 255.0).round() as u8).collect(),
+        SampleType::U16 => values.flat_map(|v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
+        SampleType::F16 => values.flat_map(|v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
+        SampleType::F32 => values.flat_map(|v| v.to_ne_bytes()).collect(),
+    }
+}
+
+/// Convert sample depth with source-type dispatch outside the sample loop.
+fn convert_depth(data: &[u8], from: SampleType, sample: SampleType) -> Vec<u8> {
+    match from {
+        SampleType::U8 => quantize_samples(data.iter().map(|&v| v as f32 / 255.0), sample),
+        SampleType::U16 => quantize_samples(data.as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes([c[0], c[1]]) as f32 / 65535.0), sample),
+        SampleType::F16 => quantize_samples(data.as_chunks::<2>().0.iter().map(|c| f16::from_bits(u16::from_ne_bytes([c[0], c[1]])).to_f32()), sample),
+        SampleType::F32 => quantize_samples(data.as_chunks::<4>().0.iter().map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])), sample),
     }
 }
 
@@ -886,9 +879,49 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn convert_samples_matches_image_convert_and_rejects_a_wrong_length() {
+        for sample in SampleType::ALL {
+            let vals: Vec<f32> = (0..5 * 2 * 3).map(|i| (i as f32 * 0.31) % 1.0).collect();
+            let img = Image::from_normalized(5, 2, ChannelLayout::Rgb, sample, &vals).unwrap();
+            for (layout, to) in [(ChannelLayout::Rgba, sample), (ChannelLayout::Gray, SampleType::F32), (ChannelLayout::Rgb, SampleType::U8)] {
+                let want = img.convert(layout, to);
+                let got = convert_samples(img.data(), 5, 2, (ChannelLayout::Rgb, sample), (layout, to)).unwrap();
+                assert_eq!(got, want.data(), "{sample:?} to {layout:?} {to:?}");
+            }
+            assert!(convert_samples(img.data().get(1..).unwrap_or_default(), 5, 2, (ChannelLayout::Rgb, sample), (ChannelLayout::Rgba, sample)).is_err());
+        }
+    }
+
     /// The generic f32 route `convert` used before the integer fast paths (the reference).
     fn convert_via_f32(img: &Image, layout: ChannelLayout, sample: SampleType) -> Vec<u8> {
         quantize(&convert_layout(&img.to_normalized(), img.layout, layout), sample)
+    }
+
+    /// Depth changes match eager normalization, including every U16 and F16 bit pattern.
+    #[test]
+    fn depth_conversion_matches_the_normalized_reference() {
+        for from in SampleType::ALL {
+            let data: Vec<u8> = match from {
+                SampleType::U8 => (0..=255).collect(),
+                SampleType::U16 | SampleType::F16 => (0u32..=65535).flat_map(|v| (v as u16).to_ne_bytes()).collect(),
+                SampleType::F32 => [
+                    0u32, 0x80000000, 1, 0x007fffff, 0x00800000, 0x3effffff, 0x3f000000, 0x3f000001, 0x3f7fffff, 0x3f800000, 0x3f800001, 0x7f7fffff,
+                    0xff7fffff, 0x7f800000, 0xff800000, 0x7fc12345, 0x7f812345,
+                ]
+                .into_iter()
+                .flat_map(u32::to_ne_bytes)
+                .collect(),
+            };
+            let img = Image::from_raw((data.len() / from.bytes()) as u32, 1, ChannelLayout::Gray, from, data).unwrap();
+            let normalized = img.to_normalized();
+            for to in SampleType::ALL {
+                if from == to || (!from.is_float() && !to.is_float()) {
+                    continue;
+                }
+                assert_eq!(img.convert(ChannelLayout::Gray, to).data(), quantize(&normalized, to), "{from:?} to {to:?}");
+            }
+        }
     }
 
     #[test]
