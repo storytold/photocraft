@@ -116,6 +116,24 @@ fn radius_with_a_number_then_no_number_alerts_the_invalid_entry_not_the_range() 
     assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()]);
 }
 
+/// Valid text, then a paste that takes the text past the numeric input limit, then leave: no number.
+#[test]
+fn an_oversized_paste_after_valid_text_is_an_invalid_entry_and_keeps_the_value() {
+    let mut h = bar();
+    type_radius(&mut h, "12");
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("1".into()));
+    h.run_steps(1);
+    h.event(egui::Event::Paste("1".repeat(128)));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()]);
+    assert_eq!(radius(&h), 1.0, "the last valid value (the `1` applied as typed) is kept");
+}
+
 #[test]
 fn an_emptied_radius_shows_no_invalid_entry_alert() {
     let mut h = bar();

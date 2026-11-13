@@ -33,7 +33,7 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
-    let (r, out_of_range, _) = value_field_alerting_in(ui, name, value, range, suffix, width, true);
+    let (r, out_of_range, _) = value_field_alerting_in(ui, name, value, range, suffix, width, true, false);
     (r, out_of_range)
 }
 
@@ -57,9 +57,11 @@ pub fn value_field_alerting_checked(
     suffix: &str,
     width: f32,
 ) -> (Response, bool, bool) {
-    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+    value_field_alerting_in(ui, name, value, range, suffix, width, false, true)
 }
 
+// The shared body takes the whole-number and invalid-entry switches beside the field's parameters.
+#[expect(clippy::too_many_arguments)]
 fn value_field_alerting_in(
     ui: &mut Ui,
     name: &str,
@@ -68,6 +70,7 @@ fn value_field_alerting_in(
     suffix: &str,
     width: f32,
     whole: bool,
+    checked: bool,
 ) -> (Response, bool, bool) {
     let (lo, hi) = (*range.start(), *range.end());
     let fit = |v: f32| {
@@ -116,7 +119,8 @@ fn value_field_alerting_in(
         ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     }
     // Text that is no number leaves the value as it was; an emptied field is left as before.
-    if r.has_focus() || r.lost_focus() {
+    // Only a `checked` field takes the invalid entry; the others keep a pending range alert.
+    if checked && (r.has_focus() || r.lost_focus()) {
         let blank = ui.ctx().data(|d| d.get_temp::<bool>(r.id.with("blank"))).unwrap_or(false);
         match crate::widgets::typed_text_parses(ui.ctx(), r.id) {
             Some(false) if !blank => ui.ctx().data_mut(|d| {
@@ -616,6 +620,11 @@ fn number_edit(
             .custom_parser(move |s| {
                 // Short events can accumulate: reject before either parser normalizes the text.
                 if s.chars().nth(NUMERIC_INPUT_LIMIT).is_some() {
+                    // An over-long entry is no number, so a checked field leaving it says so.
+                    ctx.data_mut(|d| {
+                        d.insert_temp(id.with("parses"), false);
+                        d.insert_temp(id.with("blank"), false);
+                    });
                     return None;
                 }
                 // A zoom field takes `,` or `.` as its decimal point (`100,90` is `100.90`) and reads
