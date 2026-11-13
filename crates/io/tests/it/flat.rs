@@ -490,7 +490,7 @@ fn psd_to_png_to_psd_chain() {
     let d3 = import("a.png", &png.bytes).unwrap().document;
     assert_eq!(d3.depth, SampleType::U16);
     let psd2 = export(&d3, "b.psd", &ExportOptions::default()).unwrap();
-    assert!(photocraft_psd::PsdFile::from_bytes(&psd2.bytes).is_ok());
+    assert!(craft_psd::PsdFile::from_bytes(&psd2.bytes).is_ok());
 }
 
 /// A one-layer document of 16-pixel-wide columns, each one straight colour (colour channels, then alpha).

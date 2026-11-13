@@ -51,8 +51,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             build_up_rate: current.build_up_rate,
             ..fresh_brush(tool, &current)
         },
-        // These tools start with their measured Reset Tool tips.
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp) => {
+        // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
+        // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
+        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
             fresh_brush(tool, &current)
         }
         None => {
@@ -98,13 +100,15 @@ const CLONE_STAMP_AND_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 /// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
 /// measured, so they stay the default brush's.
 const REMOVE_TOOL_SIZE: f32 = 19.0;
+/// The Smudge tool's tip after Reset Tool (#12964): a 13 px soft round at 25 % spacing.
+const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], and the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`]. Clone Stamp
 /// and History Brush use [`CLONE_STAMP_AND_HISTORY_BRUSH_TIP`] with no smoothing. The Remove tool
-/// uses [`REMOVE_TOOL_SIZE`] with the default hardness and spacing.
+/// uses [`REMOVE_TOOL_SIZE`] with the default hardness and spacing, and Smudge uses [`SMUDGE_TOOL_TIP`].
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -112,6 +116,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::BackgroundEraser => (brush.size, brush.hardness, brush.spacing) = BACKGROUND_ERASER_TIP,
         Tool::Healing => (brush.size, brush.hardness, brush.spacing) = HEALING_BRUSH_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
+        Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,
         Tool::CloneStamp | Tool::HistoryBrush => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_AND_HISTORY_BRUSH_TIP;
             brush.smoothing.amount = 0.0;
