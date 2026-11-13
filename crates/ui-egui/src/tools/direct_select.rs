@@ -1008,6 +1008,9 @@ mod convert_point_tolerance_tests;
 mod convert_point_drag_segment_tests;
 
 #[cfg(test)]
+mod shift_angle_tests;
+
+#[cfg(test)]
 mod freeform_command_tests {
     use super::*;
 
