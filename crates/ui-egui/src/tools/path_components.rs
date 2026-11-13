@@ -176,11 +176,25 @@ fn subpath_id(sp: &photocraft_doc::vector::Subpath) -> u64 {
     h
 }
 
+/// How far off a component's outline a press still lands on it, in document pixels: 6 screen points.
+pub(crate) fn press_tolerance(app: &PhotocraftApp) -> f64 {
+    6.0 / f64::from(app.point_zoom().max(0.01))
+}
+
+/// Whether a Path Selection press at `at` would land on a component: of a shape layer there (the
+/// press selects that layer first) or of the path it selects in. Where its cursor shows ⌥'s solid
+/// arrow (#13295).
+pub(crate) fn over_component(app: &PhotocraftApp, at: [f64; 2]) -> bool {
+    let tol = press_tolerance(app);
+    app.session.active().is_some_and(|st| crate::vector_ui::pick_shape_at(&st.doc, at, tol).is_some())
+        || target(app).is_some_and(|(_, path)| component_at(&path, at, tol).is_some())
+}
+
 /// Path Selection's press at `at`: selects the component there (⇧ adds or removes it). Pressing a
 /// selected component keeps the selection, so the drag moves all of it; pressing off every
 /// component deselects, unless ⇧ is held.
 pub(crate) fn press(app: &mut PhotocraftApp, at: [f64; 2], shift: bool) {
-    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let tol = press_tolerance(app);
     let Some((r, path)) = target(app) else {
         app.ui.direct_selection = DirectSelection::default();
         return;

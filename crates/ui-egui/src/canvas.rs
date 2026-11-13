@@ -1972,6 +1972,24 @@ fn pen_tool_cursor(app: &PhotocraftApp, ui: &egui::Ui, tool: Tool, doc: [f64; 2]
     pen_cursor(ui.ctx(), tool, p)
 }
 
+/// Path Selection's own arrow (#13295): white with a black outline, the solid black one with ⌥
+/// over a component. ⌘ keeps the white one, as measured; Precise keeps the crosshair.
+fn path_selection_cursor(app: &PhotocraftApp, ui: &egui::Ui, doc: [f64; 2], p: Pos2) -> egui::CursorIcon {
+    if precise_other_cursor(app) {
+        return egui::CursorIcon::Crosshair;
+    }
+    // A drag keeps the modifiers and the point it started with, so the arrow does not flicker
+    // under ⌥-drags: the components move away from the pointer only on release.
+    let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+    let (mods, at) = app.drag.as_ref().map_or((held, doc), |d| (d.modifiers, d.start));
+    if mods.alt && !mods.command && crate::path_components::over_component(app, at) {
+        crate::icons::cursor_arrow(ui.ctx(), p);
+    } else {
+        crate::icons::cursor_arrow_white(ui.ctx(), p);
+    }
+    egui::CursorIcon::None
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -2125,6 +2143,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         // Photoshop's Move tool keeps the standard arrow pointer (#5646): the movable
         // layer under it is marked by the hover outline, not by a different cursor.
         Tool::Move => egui::CursorIcon::Default,
+        Tool::PathSelection => path_selection_cursor(app, ui, xf.to_doc(p), p),
         // Dragging is handled with the pan itself, above.
         Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
         Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
