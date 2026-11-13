@@ -419,6 +419,11 @@ impl DevelopEdit {
         *settings != self.unedited
     }
 
+    /// The settings the raw opens with (what Reset goes back to).
+    pub fn unedited(&self) -> &DevelopSettings {
+        &self.unedited
+    }
+
     /// The white-balance scale the settings are on.
     pub fn basis(&self) -> WbBasis {
         self.basis

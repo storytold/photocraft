@@ -109,6 +109,8 @@ pub struct DevelopSource {
     proxy: Arc<Rgb32f>,
     info: SourceInfo,
     proxy_cache: StageCache,
+    /// For the mask overlay's renders, which differ from the preview's in depth and overlay.
+    overlay_cache: StageCache,
     full: OnceLock<Result<(Arc<Rgb32f>, SourceInfo), String>>,
     full_cache: StageCache,
 }
@@ -119,7 +121,15 @@ impl DevelopSource {
     pub fn new(bytes: Arc<Vec<u8>>, proxy_edge: usize, full_long: usize) -> Result<DevelopSource, IoError> {
         let Loaded { image, mut info, .. } = load(&bytes, proxy_edge.max(1))?;
         info.native_long = Some(full_long.max(image.width.max(image.height)));
-        Ok(DevelopSource { bytes, proxy: Arc::new(image), info, proxy_cache: StageCache::default(), full: OnceLock::new(), full_cache: StageCache::default() })
+        Ok(DevelopSource {
+            bytes,
+            proxy: Arc::new(image),
+            info,
+            proxy_cache: StageCache::default(),
+            overlay_cache: StageCache::default(),
+            full: OnceLock::new(),
+            full_cache: StageCache::default(),
+        })
     }
 
     /// The scale white balance is edited on ([`basis`]).
@@ -175,6 +185,37 @@ impl DevelopSource {
         render_rgb16(&self.proxy, &self.info, s, (w, h), &self.proxy_cache).map(|rgb| rgba(&rgb))
     }
 
+    /// The alpha of mask `id` of `s` (0..255 per pixel, row by row) where the proxy renders at
+    /// exactly `w`×`h`: what the mask overlay shows. `Err` for a mask `s` doesn't have (or one
+    /// without components).
+    pub fn mask_alpha(&self, s: &DevelopSettings, id: u32, w: usize, h: usize) -> Result<Vec<u8>, IoError> {
+        craft_develop::check_output_size(w, h).map_err(engine_error)?;
+        let id16 = u16::try_from(id).map_err(engine_error)?;
+        if !s.masks.iter().any(|m| m.id == id && !m.components.is_empty()) {
+            return Err(engine_error(format!("no mask {id} to show")));
+        }
+        let overlay = craft_develop::Overlay::Mask { id: id16, view: craft_develop::MaskView::WhiteOnBlack, color: [255, 255, 255], opacity: 100 };
+        let req = RenderRequest { overlay, quality: Quality::Full, ..RenderRequest::exact(w, h) };
+        let out = render_cached(&self.proxy, &self.info, s, &req, &self.overlay_cache);
+        if (out.image.width, out.image.height) != (w, h) {
+            return Err(engine_error(format!("rendered {}×{}, not the {w}×{h} asked for", out.image.width, out.image.height)));
+        }
+        Ok(out.image.data.iter().map(|p| p[0]).collect())
+    }
+
+    /// Where the proxy's render of `s` at `w`×`h` comes from ([`ViewMap`]): how a point on the
+    /// preview maps to mask, spot and red-eye coordinates.
+    pub fn view_map(&self, s: &DevelopSettings, w: usize, h: usize) -> ViewMap {
+        ViewMap { frame: craft_develop::frame_for(&self.proxy, &self.info, s, true), w: w.max(1), h: h.max(1) }
+    }
+
+    /// The colour a colour-range mask samples at `p` (normalized coordinates of the transformed
+    /// image, [`ViewMap::to_norm`]) under `s`; `None` outside the image.
+    pub fn color_range_sample(&self, s: &DevelopSettings, p: craft_geom::Point, w: usize, h: usize) -> Option<[f64; 3]> {
+        craft_develop::check_output_size(w, h).ok()?;
+        craft_develop::color_range_sample(&self.proxy, &self.info, s, &RenderRequest::exact(w, h), p)
+    }
+
     /// `cr` rendered from the whole frame at exactly `w`×`h` (the document's size), decoding the
     /// whole frame the first time.
     pub fn develop_full(&self, cr: &CameraRaw, w: usize, h: usize) -> Result<Vec<[f32; 4]>, IoError> {
@@ -186,6 +227,64 @@ impl DevelopSource {
         let full = self.full.get_or_init(|| load(&self.bytes, usize::MAX).map(|l| (Arc::new(l.image), l.info)).map_err(|e| e.to_string()));
         let (src, info) = full.as_ref().map_err(engine_error)?;
         render_rgb16(src, info, s, (w, h), &self.full_cache).map(|rgb| rgba(&rgb))
+    }
+}
+
+/// How the preview of a develop maps to the coordinates its settings store: points on the shown
+/// frame (0..1 across its width and height) to a mask's coordinates ([`craft_develop_model::Mask::on_photo`]:
+/// on the photo before lens corrections, Upright and Transform, or an old mask's on the corrected
+/// frame) and to the normalized coordinates spots and red eyes use, and back.
+#[derive(Clone)]
+pub struct ViewMap {
+    frame: craft_develop::geometry::Frame,
+    w: usize,
+    h: usize,
+}
+
+impl ViewMap {
+    fn px(&self, p: craft_geom::Point) -> craft_geom::Point {
+        craft_geom::Point::new(p.x * self.w as f64, p.y * self.h as f64)
+    }
+
+    fn unit(&self, o: craft_geom::Point) -> craft_geom::Point {
+        craft_geom::Point::new(o.x / self.w as f64, o.y / self.h as f64)
+    }
+
+    /// The mask coordinates at `p` on the shown frame.
+    pub fn to_mask(&self, on_photo: bool, p: craft_geom::Point) -> craft_geom::Point {
+        self.frame.for_mask(on_photo).out_to_mask(self.w, self.h).apply(self.px(p))
+    }
+
+    /// Where mask coordinates `n` show on the frame; `None` where the warp can't place them.
+    pub fn from_mask(&self, on_photo: bool, n: craft_geom::Point) -> Option<craft_geom::Point> {
+        self.frame.for_mask(on_photo).mask_to_out(self.w, self.h)(n).map(|o| self.unit(o))
+    }
+
+    /// The normalized coordinates (spots, red eyes, colour samples) at `p` on the shown frame.
+    pub fn to_norm(&self, p: craft_geom::Point) -> craft_geom::Point {
+        self.frame.out_to_norm(self.w, self.h).apply(self.px(p))
+    }
+
+    /// Where normalized coordinates `n` show on the frame.
+    pub fn from_norm(&self, n: craft_geom::Point) -> craft_geom::Point {
+        self.unit(self.frame.norm_to_out(self.w, self.h).apply(n))
+    }
+
+    /// The frame's long edge in shown pixels per unit of the image's long edge (radii and brush
+    /// sizes are fractions of that edge).
+    pub fn px_per_long(&self) -> f64 {
+        self.frame.px_per_long(self.w)
+    }
+
+    /// The oriented image's sides over its long side `(ow / l, oh / l)`: normalized ↔ long-edge units.
+    pub fn long_scale(&self) -> (f64, f64) {
+        let l = self.frame.ow.max(self.frame.oh).max(1e-9);
+        (self.frame.ow / l, self.frame.oh / l)
+    }
+
+    /// The shown frame's size in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.w, self.h)
     }
 }
 
@@ -362,5 +461,32 @@ mod tests {
         info.relative_wb = true;
         assert_eq!(basis(&info), WbBasis::Relative);
         assert_eq!(basis(&SourceInfo::default()), WbBasis::Relative);
+    }
+
+    /// The mask overlay is the alpha of the mask the render evaluates, and the view map takes a
+    /// point of the shown frame to the mask's coordinates and back.
+    #[test]
+    fn a_masks_alpha_and_the_view_map() {
+        use craft_develop_model::{Mask, MaskComponent, MaskOp, MaskShape};
+        let source = DevelopSource::new(Arc::new(dng()), 96, 96).unwrap();
+        let (w, h) = source.proxy_size();
+        let mut s = source.defaults();
+        let radial = MaskShape::Radial { center: craft_geom::Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 10.0, invert: false };
+        s.masks.push(Mask { id: 7, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: radial }], ..Mask::default() });
+        let a = source.mask_alpha(&s, 7, w, h).unwrap();
+        assert_eq!(a.len(), w * h);
+        assert!(a[(h / 2) * w + w / 2] > 240, "inside: {}", a[(h / 2) * w + w / 2]);
+        assert!(a[0] < 10, "outside: {}", a[0]);
+        assert!(source.mask_alpha(&s, 8, w, h).is_err(), "no such mask");
+        let map = source.view_map(&s, w, h);
+        let p = craft_geom::Point::new(0.25, 0.75);
+        let n = map.to_mask(true, p);
+        assert!((n.x - 0.25).abs() < 1e-6 && (n.y - 0.75).abs() < 1e-6, "no crop or warp: the same point {n:?}");
+        let back = map.from_mask(true, n).unwrap();
+        assert!((back.x - p.x).abs() < 1e-6 && (back.y - p.y).abs() < 1e-6);
+        let q = map.from_norm(map.to_norm(p));
+        assert!((q.x - p.x).abs() < 1e-6 && (q.y - p.y).abs() < 1e-6);
+        assert!(map.px_per_long() > 0.0);
+        assert!(source.color_range_sample(&s, craft_geom::Point::new(0.5, 0.5), w, h).is_some());
     }
 }
