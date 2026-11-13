@@ -487,7 +487,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 FrameDrag::Edit { layer, original, start, mode, .. } => {
                     let transform = edit_transform(&original, mode, start, [x, y], mods);
                     if transform != original.transform {
-                        let r = app.run("layer.frame.set", json!({"layer":layer.0,"transform":transform.m}));
+                        let mut p = json!({"layer":layer.0,"transform":transform.m});
+                        // Moving an empty frame is a "Move" step (#13880). Handle drags, and a
+                        // frame with an image (not measured yet), keep "Frame Properties".
+                        let empty = app.session.active().and_then(|st| st.doc.layer(layer)).is_some_and(|l| l.children().is_none_or(<[Layer]>::is_empty));
+                        if mode == EditMode::Move && empty {
+                            p["historyName"] = json!("Move");
+                        }
+                        let r = app.run("layer.frame.set", p);
                         report(app, r);
                     }
                 }
@@ -868,3 +875,5 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     false
 }
+#[cfg(test)]
+mod move_history_tests;
