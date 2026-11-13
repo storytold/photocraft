@@ -93,7 +93,7 @@ pub(crate) mod params {
         ParamFamily {
             check: Some(contact_sheet_ui::check),
             cancel: Some(filter_dialog::cancel),
-            ..ParamFamily::new(|key| key == contact_sheet_ui::COMMAND, filter_dialog::run)
+            ..ParamFamily::new(|key| key == contact_sheet_ui::COMMAND, contact_sheet_ui::run)
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(file_forms::owns, filter_dialog::run) },
         ParamFamily { listing: Some(stack_dialog::listing), ..ParamFamily::new(stack_dialog::owns, stack_dialog::run) },
@@ -623,7 +623,8 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 }
 
 /// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move.
-const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy"];
+/// Contact Sheet II keeps its folder and font there (#13695).
+const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy", contact_sheet_ui::COMMAND];
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.

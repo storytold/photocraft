@@ -69,7 +69,7 @@ fn open_form(app: &mut PhotocraftApp, key: &'static str, title: &str, rows: Vec<
 
 /// File › Automate › Contact Sheet II.
 pub(crate) fn open_contact_sheet(app: &mut PhotocraftApp) -> DialogId {
-    let rows = crate::dialogs::contact_sheet_ui::rows();
+    let rows = crate::dialogs::contact_sheet_ui::rows(app);
     open_form(app, CONTACT_SHEET, tl!("Contact Sheet II"), rows)
 }
 

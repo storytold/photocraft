@@ -47,7 +47,7 @@ fn values(h: &H, id: DialogId) -> Vec<Value> {
 fn a_fresh_dialog_has_no_folder_chosen() {
     let (h, id) = opened();
     assert_eq!(field(&h, id, "input"), json!(""), "not the working folder");
-    let rows = super::rows();
+    let rows = super::rows(&PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));
     let input = rows.iter().find(|p| p.key == "input").expect("an Input row");
     assert_eq!(input.kind.default_value().and_then(|v| serde_json::to_value(v).ok()), Some(json!("")));
 

@@ -67,7 +67,7 @@ pub(super) fn image_folder() -> tempfile::TempDir {
 
 /// The options of the list row `key`, as `(id, label)`.
 fn options(key: &str) -> Vec<(String, String)> {
-    let rows = super::rows();
+    let rows = super::rows(&PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));
     let row = rows.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("a {key} row"));
     let ParamKind::Choice { options, .. } = &row.kind else { panic!("{key} is a list") };
     options.iter().map(|(id, label)| (id.clone(), label.as_str().to_owned())).collect()
@@ -116,7 +116,7 @@ fn mode_bit_depth_place_and_units_list_the_reference_entries() {
     assert_eq!(labels("mode"), ["Grayscale", "RGB Color", "CMYK Color", "Lab Color"]);
     assert_eq!(labels("depth"), ["8-bit", "16-bit"]);
     assert_eq!(labels("place"), ["across first", "down first"]);
-    let rows = super::rows();
+    let rows = super::rows(&PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));
     let resolution = rows.iter().find(|p| p.key == "resolution").expect("a Resolution row");
     assert_eq!(resolution.unit_key(), Some("resolution.unit"), "Resolution has its own unit list");
 }
