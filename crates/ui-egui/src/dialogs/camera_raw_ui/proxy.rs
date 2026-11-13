@@ -25,6 +25,9 @@ pub(super) struct ProxyJob {
     /// the UI thread shouldn't wait for them.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(super) pixels: bool,
+    /// From [`CameraRawGpu::ticket`] when the job was made: a newer job overtakes it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) ticket: u64,
 }
 
 /// What the preview draws: an image converted on the CPU, or a frame converted on the GPU.
@@ -97,7 +100,7 @@ impl ProxyJob {
         if self.view && self.raw_curve.is_none() && self.selection.is_none() {
             let develop_start = crate::gpu_canvas::now_ms();
             if let Some(gpu) = &self.gpu
-                && let Some(mut frame) = gpu.develop_view(&self.proxy, Some(self.source_key), pw, ph, &p, self.float, &self.display, self.pixels)
+                && let Some(mut frame) = gpu.develop_view(&self.proxy, Some(self.source_key), pw, ph, &p, self.float, &self.display, self.pixels, self.ticket)
             {
                 let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
                 let histogram = frame.histogram.clone();

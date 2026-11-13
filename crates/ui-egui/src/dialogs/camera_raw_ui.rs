@@ -218,6 +218,7 @@ impl CameraRawDialog {
             source_key: self.source_key,
             view: true,
             pixels: self.wants_pixels,
+            ticket: self.gpu.as_ref().map_or(0, crate::camera_raw_gpu::CameraRawGpu::ticket),
         }
     }
 

@@ -122,6 +122,9 @@ pub(crate) struct CameraRawGpu {
     textures: Arc<Textures>,
     /// The buffer frames kept on the GPU are read back through.
     readback: Arc<Mutex<Option<wgpu::Buffer>>>,
+    /// The newest proxy job's ticket ([`Self::ticket`]). A job another has overtaken never
+    /// develops into a slot: the dialog may already show the newer frame there.
+    latest: Arc<AtomicU64>,
 }
 
 /// A frame kept on the GPU ([`CameraRawGpu::develop_view`]); none on the web, which has no
@@ -179,6 +182,7 @@ impl CameraRawGpu {
             shaper: Arc::default(),
             textures: Arc::new(Textures { renderer, ids: Mutex::new([None, None]) }),
             readback: Arc::default(),
+            latest: Arc::default(),
         }
     }
 
@@ -186,8 +190,9 @@ impl CameraRawGpu {
     /// `display`. `None` when [`Self::develop`] would be, and when `display`'s transform isn't a
     /// matrix/shaper (a CLUT or proofing profile): then the frame is read back and converted on
     /// the CPU. With `read` the pixels come back in the same submission
-    /// (`CameraRawFrame::read_back`). Native only: the web can't read a frame back when the
-    /// scopes need it.
+    /// (`CameraRawFrame::read_back`). `None` too when a job newer than `ticket` exists: the
+    /// slot it would pick may be the newer frame's. Native only: the web can't read a frame back
+    /// when the scopes need it.
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn develop_view(
@@ -200,6 +205,7 @@ impl CameraRawGpu {
         float: bool,
         display: &photocraft_engine::display_color::CanvasDisplay,
         read: bool,
+        ticket: u64,
     ) -> Option<GpuFrame> {
         if p.is_identity() || self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
             return None;
@@ -224,8 +230,14 @@ impl CameraRawGpu {
         let points = self.points(px, key, w, h, p);
         let stages = photocraft_algo::camera_raw::per_pixel(p, w, h, float, points)?;
         let size = [u32::try_from(w).ok()?, u32::try_from(h).ok()?];
-        let avoid = Some(self.shown.load(Ordering::Acquire)).filter(|s| *s != NONE_SHOWN);
         let mut pass = pass.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Under the pass's lock: a newer job takes its ticket before it waits here, and the frame
+        // on screen is published only after its develop released the lock, so an overtaken job
+        // stops here and the slot read below is the one on screen once any older frame is done.
+        if self.latest.load(Ordering::Acquire) != ticket {
+            return None;
+        }
+        let avoid = Some(self.shown.load(Ordering::Acquire)).filter(|s| *s != NONE_SHOWN);
         match pass.develop_view(&self.device, &self.queue, Some(&self.health), px, key, size, &stages, &view, avoid, read) {
             Ok(frame) => Some(frame),
             Err(e) => {
@@ -234,6 +246,11 @@ impl CameraRawGpu {
                 None
             }
         }
+    }
+
+    /// A ticket for a new proxy job; it overtakes every job ticketed before it.
+    pub(crate) fn ticket(&self) -> u64 {
+        self.latest.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
     }
 
     /// Notes which slot the preview shows (`None`: a CPU image), so the next frame develops into
