@@ -190,15 +190,100 @@ fn unmeasured_close_drag_alt_release_keeps_upstream_frozen_geometry() {
     assert_eq!([k.out_ctrl.x, k.out_ctrl.y], [250.0, 150.0]);
 }
 
+// David's repeated-cycle measurements use handles relative to the current anchor.
+fn relative_handles(app: &PhotocraftApp, incoming: [f64; 2], outgoing: [f64; 2]) {
+    let a = knot(app)[0];
+    handles(app, [a[0] + incoming[0], a[1] + incoming[1]], [a[0] + outgoing[0], a[1] + outgoing[1]]);
+}
+
+fn first_cycle(later: bool) -> PhotocraftApp {
+    let mut app = broken_drag(later);
+    let x = if later { 300.0 } else { 100.0 };
+    move_to(&mut app, x + 100.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-100.0, 100.0], [100.0, -100.0]);
+    move_to(&mut app, x + 150.0, 150.0, Modifiers::NONE);
+    relative_handles(&app, [-150.0, 150.0], [150.0, -150.0]);
+    app
+}
+
+fn second_cycle(later: bool) -> PhotocraftApp {
+    let mut app = first_cycle(later);
+    let x = if later { 300.0 } else { 100.0 };
+    move_to(&mut app, x + 200.0, 200.0, Modifiers::ALT);
+    relative_handles(&app, [-150.0, 150.0], [200.0, -100.0]);
+    app
+}
+
 #[test]
-fn unmeasured_second_alt_press_keeps_existing_frozen_behavior() {
-    let mut app = broken_drag(false);
-    move_to(&mut app, 200.0, 200.0, Modifiers::NONE);
-    let frozen = knot(&app)[1];
-    move_to(&mut app, 250.0, 150.0, Modifiers::ALT);
-    move_to(&mut app, 260.0, 140.0, Modifiers::NONE);
-    up(&mut app, 260.0, 140.0, Modifiers::NONE);
-    handles(&app, frozen, [260.0, 140.0]);
+fn measured_g0_first_release_then_movement_remains_mirrored() {
+    let mut app = first_cycle(false);
+    up(&mut app, 250.0, 150.0, Modifiers::NONE);
+    relative_handles(&app, [-150.0, 150.0], [150.0, -150.0]);
+}
+
+#[test]
+fn measured_g_second_release_without_movement_relinks() {
+    let mut app = second_cycle(false);
+    // No Move after the second Alt release: reconcile immediately before mouse-up.
+    up(&mut app, 300.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 100.0], [200.0, -100.0]);
+    assert!(app.ui.pen.as_ref().unwrap().unlinked.is_empty());
+}
+
+#[test]
+fn measured_h_mouse_up_before_second_alt_release_preserves_frozen_handle() {
+    let mut app = second_cycle(false);
+    up(&mut app, 300.0, 200.0, Modifiers::ALT);
+    move_to(&mut app, 300.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-150.0, 150.0], [200.0, -100.0]);
+    assert_eq!(app.ui.pen.as_ref().unwrap().unlinked, vec![0]);
+}
+
+#[test]
+fn measured_i_movement_after_second_release_mirrors_live() {
+    let mut app = second_cycle(false);
+    move_to(&mut app, 300.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 100.0], [200.0, -100.0]);
+    move_to(&mut app, 300.0, 250.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 50.0], [200.0, -50.0]);
+    up(&mut app, 300.0, 250.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 50.0], [200.0, -50.0]);
+}
+
+#[test]
+fn measured_k_later_anchor_second_release_without_movement_relinks() {
+    let mut app = second_cycle(true);
+    up(&mut app, 500.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 100.0], [200.0, -100.0]);
+    assert!(app.ui.pen.as_ref().unwrap().unlinked.is_empty());
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots[0], [[100.0, 300.0]; 3]);
+}
+
+#[test]
+fn stationary_second_release_relinks_before_mouse_up() {
+    let mut app = second_cycle(false);
+    move_to(&mut app, 300.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 100.0], [200.0, -100.0]);
+    assert!(app.ui.pen.as_ref().unwrap().unlinked.is_empty());
+    up(&mut app, 300.0, 200.0, Modifiers::NONE);
+    relative_handles(&app, [-200.0, 100.0], [200.0, -100.0]);
+}
+
+#[test]
+fn third_alt_cycle_freezes_and_relinks_on_first_and_later_anchors() {
+    for later in [false, true] {
+        let mut app = second_cycle(later);
+        let x = if later { 300.0 } else { 100.0 };
+        move_to(&mut app, x + 200.0, 200.0, Modifiers::NONE);
+        relative_handles(&app, [-200.0, 100.0], [200.0, -100.0]);
+        move_to(&mut app, x + 250.0, 150.0, Modifiers::NONE);
+        relative_handles(&app, [-250.0, 150.0], [250.0, -150.0]);
+        move_to(&mut app, x + 300.0, 250.0, Modifiers::ALT);
+        relative_handles(&app, [-250.0, 150.0], [300.0, -50.0]);
+        up(&mut app, x + 300.0, 250.0, Modifiers::NONE);
+        relative_handles(&app, [-300.0, 50.0], [300.0, -50.0]);
+        assert!(app.ui.pen.as_ref().unwrap().unlinked.is_empty());
+    }
 }
 
 #[test]

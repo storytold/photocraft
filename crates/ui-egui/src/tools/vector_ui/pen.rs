@@ -66,7 +66,7 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
         pen.owner = Some(owner);
     }
     pen.commit_failed = false;
-    pen.alt_drag = super::PenAltDrag::Unseen;
+    pen.relink_on_alt_release = false;
     pen.adjusting_in = false;
     pen.last_pointer = Some([x, y]);
     // Drawing on deselects an anchor Auto Add put on the path being drawn.
@@ -198,7 +198,7 @@ pub fn pen_up(app: &mut PhotocraftApp) {
     let jitter = 2.0 / f64::from(app.point_zoom().max(0.01));
     let Some(pen) = app.ui.pen.as_mut() else { return };
     pen.dragging = false;
-    pen.alt_drag = super::PenAltDrag::Unseen;
+    pen.relink_on_alt_release = false;
     pen.adjusting_last = false;
     pen.reposition = false;
     pen.last_pointer = None;
@@ -221,9 +221,9 @@ pub fn pen_break_handle(app: &mut PhotocraftApp) {
     cancel_stale_pen(app);
     let Some(pen) = app.ui.pen.as_mut().filter(|p| p.dragging && !p.adjusting_last) else { return };
     let Some(i) = pen.knots.len().checked_sub(1) else { return };
-    // Close-drags and a second Alt press are unmeasured: keep their existing frozen behavior.
-    if !closing(pen) && pen.alt_drag == super::PenAltDrag::Unseen {
-        pen.alt_drag = super::PenAltDrag::Broken;
+    // Each Alt press arms the matching release; close-drags keep their existing behavior.
+    if !closing(pen) {
+        pen.relink_on_alt_release = true;
     }
     if !pen.unlinked.contains(&i) {
         pen.unlinked.push(i);
@@ -234,13 +234,13 @@ pub fn pen_break_handle(app: &mut PhotocraftApp) {
 /// Rejoin only a pair broken while drawing this anchor, even if no pointer move follows Alt-up.
 pub fn pen_relink_handle(app: &mut PhotocraftApp) {
     cancel_stale_pen(app);
-    let Some(pen) = app.ui.pen.as_mut().filter(|p| p.dragging && p.alt_drag == super::PenAltDrag::Broken) else { return };
+    let Some(pen) = app.ui.pen.as_mut().filter(|p| p.dragging && p.relink_on_alt_release) else { return };
     let Some(i) = pen.knots.len().checked_sub(1) else { return };
     let Some(k) = pen.knots.last_mut() else { return };
     k[1] = [2.0 * k[0][0] - k[2][0], 2.0 * k[0][1] - k[2][1]];
     pen.unlinked.retain(|&index| index != i);
     pen.adjusting_last = false;
-    pen.alt_drag = super::PenAltDrag::Relinked;
+    pen.relink_on_alt_release = false;
 }
 
 /// ⌥/Alt-press on one of the last anchor's handles while drawing grabs that handle alone: the
@@ -267,7 +267,7 @@ pub fn pen_grab_handle(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         pen.unlinked.push(i);
     }
     pen.dragging = true;
-    pen.alt_drag = super::PenAltDrag::Unseen;
+    pen.relink_on_alt_release = false;
     pen.adjusting_last = true;
     pen.reposition = false;
     pen.last_pointer = Some([x, y]);

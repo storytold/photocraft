@@ -135,15 +135,6 @@ fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::Laye
     }
 }
 
-/// Only the first Alt-release of a newly drawn anchor is measured (#12895).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) enum PenAltDrag {
-    #[default]
-    Unseen,
-    Broken,
-    Relinked,
-}
-
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PenPath {
@@ -158,7 +149,7 @@ pub struct PenPath {
     pub adjusting_last: bool,
     /// Relink only a pair broken during this new-anchor drag, not a re-grab or close-drag.
     #[serde(skip)]
-    pub(crate) alt_drag: PenAltDrag,
+    pub(crate) relink_on_alt_release: bool,
     /// Space moves the anchor and both handles together during a Pen drag.
     #[serde(skip)]
     pub reposition: bool,
