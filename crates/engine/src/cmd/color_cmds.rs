@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use photocraft_cms::{Builtin, ColorSpace, GamutCheck, Intent, Lut3d, Profile, SampleKind, Transform};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent};
+use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent, TextStyles};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -125,6 +125,10 @@ pub struct ColorSettings {
     /// Advanced › "Blend Text Colors Using Gamma" (1 = off; Photoshop's default 1.45): type
     /// layers mix anti-aliased edges in this gamma (`photocraft_compose::psblend::set_text_gamma`).
     pub blend_text_gamma: f32,
+    /// Working Spaces › Spot: the dot gain, in percent at a 50 % dot, that previews of spot
+    /// channels add (Photoshop's default Dot Gain 20 %; its menu offers 10–30 % and custom
+    /// values). Lives in the compositor too (`photocraft_compose::multichannel::set_spot_dot_gain`).
+    pub spot_dot_gain: f32,
     /// Monitor profile the canvas is displayed in: `auto` (the main display's profile when the
     /// platform supplies it, else sRGB), a built-in RGB profile id or an `.icc` path.
     pub monitor_profile: String,
@@ -147,6 +151,7 @@ impl Default for ColorSettings {
             bpc: true,
             dither: true,
             blend_text_gamma: photocraft_compose::psblend::TEXT_GAMMA,
+            spot_dot_gain: photocraft_compose::multichannel::SPOT_DOT_GAIN,
             monitor_profile: "auto".into(),
         }
     }
@@ -197,6 +202,9 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
     }
     if Intent::parse(&c.intent).is_none() {
         return Err(format!("unknown intent `{}` (perceptual|relative|saturation|absolute)", c.intent));
+    }
+    if !(c.spot_dot_gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&c.spot_dot_gain)) {
+        return Err(format!("spot dot gain must be 0..{} %", photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN));
     }
     Ok(())
 }
@@ -397,16 +405,16 @@ impl ColorState {
     pub fn display_transform_for(&self, doc: &Document, display: Option<u32>) -> Result<Arc<Transform>> {
         let src = self.canvas_display_for(doc, display)?.source.clone();
         let dst = self.monitor_for(display);
-        let pv = self.proof(doc.id);
-        let proof = pv.enabled.then(|| (pv.setup.profile.content_hash(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper));
+        // Borrowed: the canvas asks per frame, and the default proof state allocates a profile.
+        let pv = self.proof_ref(doc.id).filter(|pv| pv.enabled);
+        let proof = pv.map(|pv| (pv.setup.profile.content_hash(), pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper));
         let key = (src.content_hash(), dst.content_hash(), proof);
         if let Some(t) = self.display_cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(t.clone());
         }
-        let t = if pv.enabled {
-            Transform::proof(&src, &pv.setup.profile, &dst, pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper)
-        } else {
-            Transform::new(&src, &dst, crate::display_color::DISPLAY_INTENT, crate::display_color::DISPLAY_BPC)
+        let t = match pv {
+            Some(pv) => Transform::proof(&src, &pv.setup.profile, &dst, pv.setup.intent, pv.setup.bpc, pv.setup.simulate_paper),
+            None => Transform::new(&src, &dst, crate::display_color::DISPLAY_INTENT, crate::display_color::DISPLAY_BPC),
         }
         .map_err(cms_err)?;
         let t = Arc::new(t);
@@ -558,6 +566,36 @@ pub fn document_profile(doc: &Document) -> Arc<Profile> {
         .and_then(|b| profile_from_bytes(b).ok())
         .filter(|p| p.color_space == mode_space(doc.mode))
         .unwrap_or_else(|| working_profile(doc.mode))
+}
+
+/// A swatch colour (straight RGB in the RGB working space, as the foreground and background hold
+/// it) as the active document takes it. In a Grayscale document that is the colour's gray with the
+/// sRGB tone curve (sGray), through `photocraft-cms` (relative colorimetric with black point
+/// compensation), returned as equal R, G and B so the pixel conversion keeps it: RGB 0,200,0
+/// becomes gray 172, as the reference paints it (173, measured), not its Rec.601 luma 117 (#11940).
+/// The reference's swatch conversion doesn't follow the document's Dot Gain curve (that gives 153),
+/// so pixel conversions such as Image › Mode › Grayscale keep using the document's profile. Other
+/// modes, and a failed conversion, keep the colour. So do Grayscale documents outside the default
+/// gray working space, which #11940 did not measure: a Working Gray other than Dot Gain 20 %, or a
+/// document tagged with a gray profile other than that one.
+pub fn swatch_in_doc(s: &Session, c: [f32; 4]) -> [f32; 4] {
+    let Some(st) = s.active().filter(|st| st.doc.mode == ColorMode::Grayscale) else { return c };
+    let default_gray = Builtin::DotGain20Compat;
+    if s.color.settings.working_gray != default_gray.id() || document_profile(&st.doc).content_hash() != default_gray.profile().content_hash() {
+        return c;
+    }
+    let opts = photocraft_cms::TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let sgray = Arc::new(Builtin::SGray.profile().clone());
+    let Ok(t) = photocraft_cms::cached(&working_profile(ColorMode::Rgb), &sgray, opts) else { return c };
+    let mut out = [0.0f32; 16];
+    t.eval(&[c[0], c[1], c[2]], &mut out);
+    let g = out[0];
+    if g.is_finite() {
+        let g = g.clamp(0.0, 1.0);
+        [g, g, g, c[3]]
+    } else {
+        c
+    }
 }
 
 /// Profile describing the compositor's RGB output for this document (see the module docs).
@@ -763,6 +801,26 @@ fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
     }
 }
 
+/// Applies `cc` to every colour a type style sets (character styles, paragraph styles and Basic
+/// Paragraph), so type converted with its document still matches its styles instead of showing
+/// a local override.
+fn convert_style_colors(st: &mut TextStyles, cc: &mut dyn FnMut(&mut Color)) {
+    let sets = st
+        .character
+        .iter_mut()
+        .map(|c| &mut c.attrs)
+        .chain(st.paragraph.iter_mut().chain([&mut st.basic]).flat_map(|p| [&mut p.para_attrs, &mut p.char_attrs]));
+    for attrs in sets {
+        for v in attrs.values_mut().filter(|v| v.is_object()) {
+            let Ok(mut c) = serde_json::from_value::<Color>(v.clone()) else { continue };
+            cc(&mut c);
+            if let Ok(n) = serde_json::to_value(c) {
+                *v = n;
+            }
+        }
+    }
+}
+
 fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
     match p {
         FxPaint::Color(c) => cc(c),
@@ -793,6 +851,7 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
         convert_layer_colors(l, &mut |c| convert_color(c, from_mode, to_mode, &t));
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| convert_color(c, from_mode, to_mode, &t));
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
     // Leaving Indexed / Duotone: the palette and inks no longer apply.
@@ -819,6 +878,12 @@ fn ink_duotone(doc: &mut Document) {
             }
         });
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| {
+        if matches!(c.mode, ColorMode::Grayscale | ColorMode::Duotone) {
+            let [r, g, b] = d.render(c.c[0]);
+            *c = Color::rgba(r, g, b, c.alpha);
+        }
+    });
     doc.mode = ColorMode::Rgb;
     doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
 }
@@ -872,7 +937,9 @@ fn ink_surface(s: &Surface, d: &Duotone) -> Surface {
 }
 
 /// Image › Mode › RGB/Grayscale/CMYK/Lab through the CMS. Params: `profile` (destination,
-/// default the mode's working profile), `intent` (default relative), `bpc` (default true).
+/// default the mode's working profile; Indexed→RGB without an explicit profile instead expands
+/// the already-RGB storage without changing its encoded samples or ICC bytes), `intent`
+/// (default relative), `bpc` (default true).
 pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     if doc.mode == ColorMode::Multichannel && mode != ColorMode::Multichannel {
@@ -881,8 +948,13 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     if doc.mode == mode && p.get("profile").is_none() {
         return Ok(Value::Null);
     }
+    let preserve_indexed_rgb = p.get("profile").and_then(Value::as_str).is_none()
+        && doc.mode == ColorMode::Indexed
+        && mode == ColorMode::Rgb
+        && doc.icc_profile.as_ref().is_none_or(|bytes| profile_from_bytes(bytes).ok().is_some_and(|p| p.color_space == ColorSpace::Rgb));
     let dst = match p.get("profile").and_then(Value::as_str) {
         Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
+        None if preserve_indexed_rgb => document_profile(doc),
         None => s.color.working(mode),
     };
     if space_mode(dst.color_space)
@@ -896,7 +968,16 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     }
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
-    s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+    if preserve_indexed_rgb {
+        s.edit("Mode Change", |doc, _| {
+            doc.mode = ColorMode::Rgb;
+            doc.color_table = None;
+            doc.duotone = None;
+            Ok(())
+        })?;
+    } else {
+        s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+    }
     Ok(json!({ "profile": dst.description, "intent": intent.id(), "bpc": bpc }))
 }
 
@@ -907,19 +988,8 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
 pub fn gamut_mask(doc: &Document, setup: &ProofSetup, threshold: f32) -> Result<(Vec<u8>, usize)> {
     let check = GamutCheck::new(&composite_profile(doc), &setup.profile, threshold).map_err(cms_err)?;
     let buf = photocraft_compose::flatten(doc);
-    let mut count = 0;
-    let mask = buf
-        .px
-        .iter()
-        .map(|p| {
-            if p[3] > 0.0 && check.out_of_gamut(&p[..3]) {
-                count += 1;
-                255
-            } else {
-                0
-            }
-        })
-        .collect();
+    let mut mask = vec![0u8; buf.px.len()];
+    let count = check.mask_rgba(&buf.px, &mut mask).map_err(cms_err)?;
     Ok((mask, count))
 }
 
@@ -1169,9 +1239,18 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => {}
     }
+    if let Some(v) = p.get("spotDotGain") {
+        let max = f64::from(photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN);
+        let g = v
+            .as_f64()
+            .filter(|g| (0.0..=max).contains(g))
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`spotDotGain` must be a dot gain of 0..{max} %") })?;
+        next.spot_dot_gain = g as f32;
+    }
     validate_settings(&next).map_err(|msg| EngineError::BadParams { cmd: cmd.into(), msg })?;
     if next != s.color.settings {
         photocraft_compose::psblend::set_text_gamma(next.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(next.spot_dot_gain);
         s.color.settings = next;
         // Persisted with the preferences.
         s.prefs.edit(|_| ());
@@ -1267,7 +1346,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.colorSettings",
             "Color Settings…",
             ["Edit"],
-            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
+            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"spotDotGain":0..49=20,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (spotDotGain = the Spot working space: the dot gain, in % at a 50 % dot, that spot channel previews add, as Photoshop's Spot menu (Dot Gain 10–30 %, or a custom value); working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
             always,
             color_settings,
             true,

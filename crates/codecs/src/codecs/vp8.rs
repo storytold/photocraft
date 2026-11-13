@@ -448,7 +448,9 @@ impl<'a> Encoder<'a> {
         let whole_cost = best_sse + 3 * lambda;
 
         // B_PRED: sub-blocks in raster order, each predicted from the reconstruction so far.
-        let saved_y = self.rec_y.data.clone();
+        // B_PRED writes only this macroblock's 16 rows: save those, not the whole plane.
+        let rows = |p: &Plane| -> [[u8; 16]; 16] { std::array::from_fn(|r| p.data[(y0 + r) * p.width + x0..][..16].try_into().unwrap_or([0; 16])) };
+        let saved_y = rows(&self.rec_y);
         let mut b_modes = [B_DC_PRED; 16];
         let mut b_blocks: Vec<Block> = Vec::with_capacity(16);
         let mut b_sse = 0u64;
@@ -490,7 +492,10 @@ impl<'a> Encoder<'a> {
             (B_PRED, None, b_blocks)
         } else {
             // Whole-block mode: undo the B_PRED reconstruction, code 16 blocks + Y2.
-            self.rec_y.data = saved_y;
+            let w = self.rec_y.width;
+            for (r, row) in saved_y.iter().enumerate() {
+                self.rec_y.data[(y0 + r) * w + x0..][..16].copy_from_slice(row);
+            }
             let mut dcs = [0i32; 16];
             let mut ac_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
             let mut deq_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
