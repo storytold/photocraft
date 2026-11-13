@@ -452,8 +452,8 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         return true;
     }
     let path = pen_to_json(pen, closed);
-    // The captured draft, not the currently selected tool, determines which Pen drew it.
-    let op = if freeform || pen.curvature { pen_path_op(&app.ui.tool_options) } else { pen_mode_path_op(&app.ui.tool_options) };
+    // All three Pen tools resolve the operation from their captured shared mode options.
+    let op = pen_mode_path_op(&app.ui.tool_options);
     let into_shape = op.and_then(|_| selected_shape(&app.session)).map(|id| id.0);
     let r = if let Some(r) = commit_resumed_on_layer(app, pen, &path, closed) {
         r
@@ -536,7 +536,7 @@ pub(super) fn draft_shape_path(app: &PhotocraftApp, pen: &PenPath) -> Option<(Va
     let Some(name) = draft_target(app, pen) else { return Some((drawn, true)) };
     let existing = doc_path(doc, &name)?;
     let mut p = photocraft_engine::vector_cmds::path_json(existing);
-    let op = if pen.curvature { pen_path_op(&app.ui.tool_options) } else { pen_mode_path_op(&app.ui.tool_options) }.unwrap_or("combine");
+    let op = pen_mode_path_op(&app.ui.tool_options).unwrap_or("combine");
     if let (Some(subs), Some(new)) = (p.get_mut("subpaths").and_then(Value::as_array_mut), drawn.get("subpaths").and_then(Value::as_array)) {
         subs.extend(new.iter().cloned().map(|mut sp| {
             sp["op"] = json!(op);
@@ -699,8 +699,8 @@ pub(crate) const PATH_OPS: [(&str, &str, &str); 5] = [
     ("exclude", "Exclude Overlapping Shapes", "path-op-exclude"),
 ];
 
-/// Legacy shared operation for Freeform/Curvature and non-Pen callers; None makes a new
-/// shape layer. Their unmeasured Path-mode New Layer sentinel continues to combine.
+/// Legacy operation for non-Pen callers (Path Selection); None makes a new shape layer.
+/// Pen-family drawing and menus use the shared per-mode resolver below (#12905).
 pub(crate) fn pen_path_op(o: &ToolOptions) -> Option<&'static str> {
     let op = PATH_OPS.iter().map(|(v, ..)| *v).find(|v| *v == o.pen_path_op).unwrap_or("newLayer");
     match op {
@@ -710,8 +710,8 @@ pub(crate) fn pen_path_op(o: &ToolOptions) -> Option<&'static str> {
     }
 }
 
-/// The ordinary Pen keeps a pick per mode. Preserve legacy explicit operations, while its
-/// New Layer sentinel (or an invalid value) uses the measured mode default (#12905).
+/// All three Pen tools share a pick per mode. Preserve legacy explicit operations, while
+/// New Layer (or an invalid value) resolves to the measured default (#12905).
 fn pen_mode_path_op(o: &ToolOptions) -> Option<&'static str> {
     let shape = o.vector_mode == "shape";
     let saved = if shape { &o.pen_shape_mode_op } else { &o.pen_path_mode_op };
@@ -751,8 +751,8 @@ fn tool_in_shape_mode(app: &PhotocraftApp) -> bool {
 
 /// The active tool's resolved operation (see `pen_path_op` and `shape_path_op`).
 fn tool_path_op(app: &PhotocraftApp) -> Option<&'static str> {
-    if app.ui.tool == Tool::Pen {
-        pen_mode_path_op(&app.ui.tool_options)
+    if matches!(app.ui.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
+        if app.ui.tool_options.vector_mode == "shape" && selected_shape(&app.session).is_none() { None } else { pen_mode_path_op(&app.ui.tool_options) }
     } else if super::shapes::is_shape_tool(app.ui.tool) {
         shape_path_op(&app.ui.tool_options)
     } else {
@@ -760,25 +760,10 @@ fn tool_path_op(app: &PhotocraftApp) -> Option<&'static str> {
     }
 }
 
-/// The active tool's operation setting: Shape tools, per-mode Pen, or the shared variants.
+/// Shape tools' operation or Path Selection's legacy next-path operation.
+/// Pen-family writes use `set_pen_operation` so both mode slots stay shared and independent.
 pub(crate) fn path_op_field(app: &mut PhotocraftApp) -> &mut String {
-    if app.ui.tool == Tool::Pen {
-        let o = &mut app.ui.tool_options;
-        let legacy = o.pen_path_op.clone();
-        // Freeze the other mode before the shared legacy pick changes. Variants keep sharing
-        // that legacy value, but a Pen mode switch must not overwrite the other mode's pick.
-        if o.vector_mode == "shape" {
-            o.pen_path_mode_op.get_or_insert_with(|| if legacy == "newLayer" { "exclude".into() } else { legacy.clone() });
-            o.pen_shape_mode_op.get_or_insert(legacy)
-        } else {
-            o.pen_shape_mode_op.get_or_insert_with(|| legacy.clone());
-            o.pen_path_mode_op.get_or_insert_with(|| if legacy == "newLayer" { "exclude".into() } else { legacy })
-        }
-    } else if super::shapes::is_shape_tool(app.ui.tool) {
-        &mut app.ui.tool_options.shape_path_op
-    } else {
-        &mut app.ui.tool_options.pen_path_op
-    }
+    if super::shapes::is_shape_tool(app.ui.tool) { &mut app.ui.tool_options.shape_path_op } else { &mut app.ui.tool_options.pen_path_op }
 }
 
 /// What the Path Operations menu's Merge Shape Components merges, as a command, its params and
@@ -940,7 +925,7 @@ fn path_op_button(ui: &mut egui::Ui, glyph: &str, label: &str, checked: bool) ->
 
 /// Refuse a Freeform stroke before drawing when its selected shape cannot be edited.
 pub(crate) fn freeform_locked_shape(app: &PhotocraftApp) -> bool {
-    if app.ui.tool_options.vector_mode != "shape" || pen_path_op(&app.ui.tool_options).is_none() {
+    if app.ui.tool_options.vector_mode != "shape" || pen_mode_path_op(&app.ui.tool_options).is_none() {
         return false;
     }
     let Some(id) = selected_shape(&app.session) else { return false };

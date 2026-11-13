@@ -411,10 +411,7 @@ impl ToolSet {
             app.ui.tool_options.vector_mode = m;
         }
         if let Some(o) = self.pen_path_op {
-            if app.ui.tool == Tool::Pen {
-                *crate::vector_ui::path_op_field(app) = o.clone();
-            }
-            app.ui.tool_options.pen_path_op = o;
+            crate::path_components::set_pen_op(app, &o);
         }
     }
 

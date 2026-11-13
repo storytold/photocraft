@@ -98,13 +98,12 @@ pub struct ToolOptions {
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
-    /// Legacy/shared last Path Operations pick (#1397), retained for old settings and the
-    /// Freeform/Curvature Pens: "newLayer" (Shape: new layer; Path: combine), "combine",
-    /// "subtract", "intersect" or "exclude". The ordinary Pen's mode slots take priority.
+    /// Legacy last Path Operations pick (#1397), retained for old settings and control inspection:
+    /// "newLayer", "combine", "subtract", "intersect" or "exclude". Shared mode slots take priority.
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
-    /// Pen-only Path/Shape picks (#12905). Missing fields retain legacy explicit picks;
-    /// the legacy New Layer sentinel means Exclude in Pen Path mode, New Layer in Shape mode.
+    /// Path/Shape picks shared by Pen, Freeform Pen and Curvature Pen (#12905).
+    /// Missing fields retain legacy explicit picks; New Layer means Exclude in Path mode.
     #[serde(default)]
     pub pen_path_mode_op: Option<String>,
     #[serde(default)]
@@ -337,6 +336,25 @@ fn default_crop_resolution_unit() -> String {
 
 fn default_move_target() -> String {
     "layer".into()
+}
+
+impl ToolOptions {
+    /// Store a shared Pen-family pick without changing the other mode. The legacy last pick
+    /// remains available to older settings/control clients, but is not a separate tool choice.
+    pub(crate) fn set_pen_operation(&mut self, op: &str, shape_selected: bool) {
+        let legacy = self.pen_path_op.clone();
+        self.pen_path_mode_op.get_or_insert_with(|| if legacy == "newLayer" { "exclude".into() } else { legacy.clone() });
+        self.pen_shape_mode_op.get_or_insert(legacy);
+        if self.vector_mode == "shape" {
+            // With no shape to act on, a menu pick does not replace New Layer (#12905).
+            if shape_selected {
+                self.pen_shape_mode_op = Some(op.into());
+            }
+        } else {
+            self.pen_path_mode_op = Some(op.into());
+        }
+        self.pen_path_op = op.into();
+    }
 }
 
 fn default_pen_path_op() -> String {
