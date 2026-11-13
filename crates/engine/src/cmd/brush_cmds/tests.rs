@@ -212,6 +212,35 @@ fn pencil_is_aliased_and_auto_erases() {
     assert_eq!(rgba(&s, 40, 26), [0.0, 0.0, 0.0, 1.0]);
 }
 
+/// #13060: in a CMYK document a foreground picked as CMYK inks (a rich black, which its sRGB
+/// stand-in does not convert back to) is painted as those inks, and Pencil Auto Erase recognises
+/// them: a stroke that starts on it paints the background colour, live and committed.
+#[test]
+fn pencil_auto_erase_probes_a_cmyk_pick_with_the_picked_inks() {
+    let rich_black = [0.6f32, 0.4, 0.4, 1.0];
+    let rgb = photocraft_color::convert::cmyk_to_rgb(rich_black).map(|c| c.clamp(0.0, 1.0));
+    let mut s = session(40, 20);
+    s.execute("image.mode.cmyk", json!({})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": rgb, "foregroundCmyk": rich_black, "background": "#ffffff"})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[5, 10], [35, 10]], "size": 5})).unwrap();
+    let pixel = |s: &Session, x: i32, y: i32| -> Vec<f32> { surface(s).read_region(Rect::new(x, y, x + 1, y + 1)).into_iter().take(4).collect() };
+    let painted = pixel(&s, 20, 10);
+    assert!(painted.iter().zip(rich_black).all(|(a, b)| (a - b).abs() < 0.01), "the stroke paints the picked inks: {painted:?}");
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+
+    // Live: the stroke that starts on the rich black paints the background.
+    let p = json!({"points": [[12, 10]], "autoErase": true, "smoothing": 0.0});
+    let mut live = LiveStroke::begin_with(&s, "paint.pencil", &p).unwrap();
+    live.push(&[StrokePoint::new(12.0, 18.0, 1.0)]).unwrap();
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(12, 17);
+    assert!(shown.iter().zip(white).all(|(a, b)| (a - b).abs() < 1e-3), "live: {shown:?}");
+
+    // Committed: the same.
+    s.execute("paint.pencil", json!({"points": [[20, 10], [20, 18]], "size": 3, "autoErase": true})).unwrap();
+    let erased = rgba(&s, 20, 17);
+    assert!(erased.iter().zip(white).all(|(a, b)| (a - b).abs() < 1e-3), "committed: {erased:?}");
+}
+
 #[test]
 fn mixer_brush_reservoir_and_cleaning() {
     let mut s = session(200, 30);
