@@ -151,20 +151,40 @@ pub(super) fn paste_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("AntA", enm("Annt", "Anno")).with("As  ", D::Class(class("Pxel"))))
 }
 
-/// Fade requires the settings recorded after the edit it fades, not guessed factory values.
+/// Fade plays the recorded settings; a missing key takes the reference application's fixed default
+/// (100 % opacity, Normal mode), not the dialog's last values. Opacity is rounded to a whole percent.
 pub(super) fn fade_from(d: &Descriptor) -> Mapped {
     let mapped = || {
         if !keys(d, &["Opct", "Md  "]) {
             return None;
         }
-        let mode = blend_label(&enumeration(d, "Md  ", "BlnM")?)?;
-        // An accepted alias would be rewritten to the exporter's preferred blend identifier.
-        if d.get("Md  ") != Some(&enm("BlnM", blend_ps(mode)?)) {
-            return None;
-        }
-        Some(json!({"opacity":unit(d,"Opct",b"#Prc")?.clamp(0.0,100.0),"mode":mode}))
+        let mode = match d.get("Md  ") {
+            None => "Normal",
+            Some(recorded) => {
+                let mode = blend_label(&enumeration(d, "Md  ", "BlnM")?)?;
+                // An accepted alias would be rewritten to the exporter's preferred blend identifier.
+                if *recorded != enm("BlnM", blend_ps(mode)?) {
+                    return None;
+                }
+                mode
+            }
+        };
+        let opacity = match d.get("Opct") {
+            None => 100.0,
+            Some(_) => fade_opacity(unit(d, "Opct", b"#Prc")?),
+        };
+        Some(json!({"opacity":opacity,"mode":mode}))
     };
     mapped().map_or(Mapped::Unsupported { harmless: false }, |p| step("edit.fade", p))
+}
+
+/// A recorded Fade opacity outside 0..=100 wraps modulo 100 (150 plays as 50, -5 as 95), as
+/// measured in the reference application, rather than clamping.
+fn fade_opacity(recorded: f64) -> f64 {
+    let rounded = recorded.round();
+    let wrapped = if (0.0..=100.0).contains(&rounded) { rounded } else { rounded.rem_euclid(100.0) };
+    // -0.4 rounds, and -200 wraps, to -0.0; adding zero stores it as 0.
+    wrapped + 0.0
 }
 
 /// Native omitted Fade settings retain the command's 100% Normal behavior.
