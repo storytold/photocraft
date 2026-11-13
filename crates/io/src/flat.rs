@@ -2387,8 +2387,14 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
             if format == Format::Gif {
                 // The whole table in its original order, as the palette PNG and BMP write it: a
                 // GIF colour table holds 2^n entries, and the writer pads the ones past the
-                // document's last entry with black, so no used index moves (#11824).
-                let bytes = codecs::web::encode_gif_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, false)?;
+                // document's last entry with black, so no used index moves (#11824). A
+                // transparent index past the last entry needs a slot too: pad through it, or a
+                // transparent pixel fails the export of an API-created table (#11861 review).
+                let mut colors = table.colors.clone();
+                if let Some(t) = table.transparent.filter(|t| usize::from(*t) >= colors.len()) {
+                    colors.resize(usize::from(t) + 1, [0, 0, 0]);
+                }
+                let bytes = codecs::web::encode_gif_indexed(doc.size.width, doc.size.height, &idx, &colors, table.transparent, false)?;
                 let mut warnings = vec![format!("written as a GIF with the document's colour table ({} colours)", table.colors.len())];
                 warnings.extend(gif_dropped_metadata(doc, opts));
                 return Ok(Some(ExportResult { bytes, warnings }));

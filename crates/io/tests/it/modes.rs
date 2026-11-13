@@ -298,6 +298,26 @@ fn indexed_gif_pads_a_200_entry_palette_to_256_entries() {
 }
 
 #[test]
+fn indexed_gif_pads_the_palette_through_a_transparent_index_beyond_it() {
+    // #11861 review: a table created through the API can designate a transparent index past its
+    // last entry. The index needs a table slot, so the palette pads through it (black, the same
+    // padding as the unused entries) instead of the export failing on a transparent pixel.
+    let palette: Vec<[u8; 3]> = vec![[10, 20, 30], [200, 100, 50], [7, 7, 7]];
+    let mut d = Document::with_background("m", Size::new(2, 1), ColorMode::Rgb, SampleType::U8, Color::rgba(1.0, 0.0, 0.0, 1.0));
+    d.mode = ColorMode::Indexed;
+    d.color_table = Some(ColorTable { colors: palette.clone(), transparent: Some(5) });
+    d.layers[0].surface_mut().unwrap().write_pixel(1, 0, &[0.0, 0.0, 0.0, 0.0]);
+    let r = photocraft_io::export(&d, "x.gif", &Default::default()).unwrap();
+    let (colors, transparent) = photocraft_codecs::gif_palette(&r.bytes).unwrap();
+    assert_eq!(colors.len(), 8, "padded through index 5, then to the next power of two");
+    assert_eq!(&colors[..3], &palette[..], "the document's entries keep their slots");
+    assert!(colors[3..].iter().all(|c| *c == [0, 0, 0]), "the padding is black");
+    assert_eq!(transparent, Some(5), "the transparency keeps its index");
+    let back = photocraft_io::import("x.gif", &r.bytes).unwrap().document;
+    assert_eq!(back.color_table.as_ref().unwrap().transparent, Some(5));
+}
+
+#[test]
 fn indexed_gif_keeps_the_transparent_index() {
     let mut d = Document::with_background("m", Size::new(2, 1), ColorMode::Rgb, SampleType::U8, Color::rgba(1.0, 0.0, 0.0, 1.0));
     d.mode = ColorMode::Indexed;
