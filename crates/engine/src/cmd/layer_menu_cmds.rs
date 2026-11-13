@@ -938,10 +938,19 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     alone.visible = true;
     alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
     alone.clipped = false;
+    let canvas = doc.bounds();
+    // Only where the layer can draw. The whole canvas of a storyboard over 2^30 px is more than
+    // one render holds: it came back empty, and the layer was reported empty.
+    let area = photocraft_compose::composite_bounds(&alone, canvas).unwrap_or(canvas).intersect(&canvas);
+    if area.is_empty() {
+        return Err(other("the layer is empty"));
+    }
+    if u64::from(area.width()) * u64::from(area.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(other(format!("the layer covers {} × {} px, more than one image can hold", area.width(), area.height())));
+    }
     let mut tmp = doc.clone();
     tmp.layers = vec![alone];
     tmp.selection = None;
-    let area = doc.bounds();
     let buf = photocraft_compose::render(&tmp, area);
     let w = area.width() as usize;
     let mut b = Rect::EMPTY;

@@ -960,3 +960,16 @@ fn decontamination_alpha_keeps_missing_source_alpha_only_inside_bounds() {
         assert_eq!(alpha.sample_channel(x, y, 0), 0.0);
     }
 }
+
+/// A layer on a canvas larger than one render (a storyboard over 2^30 px) exports from its own
+/// bounds: rendering the whole canvas came back empty, and Export As said the layer was empty.
+#[test]
+fn a_layer_on_a_canvas_over_one_render_exports_from_its_bounds() {
+    let mut d = Document::new("big", photocraft_doc::Size::new(40_000, 30_000), ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut l = Layer::raster("Board", fmt);
+    l.surface_mut().unwrap().fill_rect(Rect::new(30_000, 20_000, 30_100, 20_050), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+    let id = d.insert_above(None, l);
+    let one = layer_document(&d, id).unwrap();
+    assert_eq!((one.size.width, one.size.height), (100, 50));
+}
