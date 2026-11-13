@@ -3,6 +3,8 @@
 //! `photocraft_algo::matting`; these commands pick the pixels to analyse (active layer or
 //! composite), run them, and store the result as the selection (or a mask / new layer).
 
+use std::borrow::Cow;
+
 use photocraft_algo::matting::{self, RefineParams};
 use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick, subject};
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
@@ -255,24 +257,26 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
-/// Hard Edge off: the weight of a pixel itself in [`soften_edge`]'s two-tap filter; the pixel
-/// to its left (above) gets the rest.
-const SOFT_EDGE_SELF: f64 = 9.0 / 16.0;
+/// Hard Edge off: [`soften_edge`]'s horizontal taps in 64ths, for the pixel to the left, the
+/// pixel itself and the pixel to the right.
+const SOFT_EDGE_ACROSS: [f64; 3] = [11.0 / 64.0, 27.0 / 64.0, 26.0 / 64.0];
+/// Hard Edge off: [`soften_edge`]'s vertical taps in 64ths, for the pixel above, the pixel itself
+/// and the pixel below.
+const SOFT_EDGE_DOWN: [f64; 3] = [12.0 / 64.0, 22.0 / 64.0, 30.0 / 64.0];
 /// Hard Edge off: the filtered coverage that maps to 0 and the one that maps to 1 (#12855).
-const SOFT_EDGE_RAMP: (f64, f64) = (0.20, 0.54);
+const SOFT_EDGE_RAMP: (f64, f64) = (0.10, 0.55);
 
 /// Object Selection with Hard Edge off (#12855): `region` with the reference application's
-/// softer rim. Each way, every pixel takes 9/16 of itself and 7/16 of its neighbour to the left
-/// (above), which moves the edge about half a pixel right and down; a ramp then maps 0.20..0.54
-/// to 0..1. On a straight edge that leaves one rim pixel at about 195 on the right and bottom
-/// sides, and the left and top edges hard: measured on the reference application's test
-/// rectangle, the fully selected count rises and the partly selected count drops, with the rim
-/// mostly at 175-202. The result can reach one pixel further right and down. Pixels past
-/// `canvas` repeat the canvas edge, so an object that touches the document border stays fully
-/// selected there.
+/// softer rim. A three-tap filter runs across ([`SOFT_EDGE_ACROSS`]) and then down
+/// ([`SOFT_EDGE_DOWN`]), and a ramp maps [`SOFT_EDGE_RAMP`] to 0..1. On the reference
+/// application's test rectangle that softens both sides by one pixel, as it measures: the outer
+/// pixel on the left drops to about 176 and on the top to about 198, the old rim pixel on the
+/// right and bottom becomes fully selected, and a new rim pixel of about 65 follows it. The
+/// result can reach one pixel further out on every side. Pixels past `canvas` repeat the canvas
+/// edge, so an object that touches the document border stays fully selected there.
 fn soften_edge(region: &Region, canvas: Rect) -> Region {
     let src = region.bbox;
-    let bbox = Rect::new(src.x0, src.y0, src.x1.saturating_add(1), src.y1.saturating_add(1)).intersect(&canvas);
+    let bbox = Rect::new(src.x0.saturating_sub(1), src.y0.saturating_sub(1), src.x1.saturating_add(1), src.y1.saturating_add(1)).intersect(&canvas);
     if bbox.is_empty() || src.is_empty() {
         return region.clone();
     }
@@ -289,28 +293,32 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
         region.mask.get(cy * sw + cx).map_or(0.0, |v| f64::from(*v) / 255.0)
     };
     let (w, h) = (bbox.width() as usize, bbox.height() as usize);
-    let (a, b) = (SOFT_EDGE_SELF, 1.0 - SOFT_EDGE_SELF);
+    let [left, mid, right] = SOFT_EDGE_ACROSS;
+    let [up, centre, down] = SOFT_EDGE_DOWN;
     let (lo, hi) = SOFT_EDGE_RAMP;
-    // The vertical pass reads only the row above, so the horizontal pass keeps two rows, not the
-    // whole box: a large found object costs its 8-bit mask, not eight bytes a pixel more.
-    let horizontal = |y: i32, row: &mut Vec<f64>| {
+    // The vertical pass reads only the rows above and below, so the horizontal pass keeps three
+    // rows, not the whole box: a large found object costs its 8-bit mask, not eight bytes a pixel
+    // more.
+    let across = |y: i32, row: &mut Vec<f64>| {
         row.clear();
-        row.extend((bbox.x0..).take(w).map(|x| a * at(x, y) + b * at(x.saturating_sub(1), y)));
+        row.extend((bbox.x0..).take(w).map(|x| left * at(x.saturating_sub(1), y) + mid * at(x, y) + right * at(x.saturating_add(1), y)));
     };
-    let (mut above, mut row) = (Vec::with_capacity(w), Vec::with_capacity(w));
-    let mut rows = bbox.y0.saturating_sub(1)..;
-    horizontal(rows.next().unwrap_or(bbox.y0), &mut above);
+    let (mut above, mut row, mut below) = (Vec::with_capacity(w), Vec::with_capacity(w), Vec::with_capacity(w));
+    across(bbox.y0.saturating_sub(1), &mut above);
+    across(bbox.y0, &mut row);
     let mut mask = Vec::with_capacity(w * h);
-    for y in rows.take(h) {
-        horizontal(y, &mut row);
-        mask.extend(row.iter().zip(&above).map(|(m, u)| (((a * m + b * u - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8));
+    for y in bbox.y0..bbox.y1 {
+        across(y.saturating_add(1), &mut below);
+        let filtered = row.iter().zip(&above).zip(&below).map(|((m, u), d)| up * u + centre * m + down * d);
+        mask.extend(filtered.map(|v| (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8));
         std::mem::swap(&mut above, &mut row);
+        std::mem::swap(&mut row, &mut below);
     }
     trimmed(Region { bbox, mask }, w)
 }
 
 /// `r` (`w` pixels wide) cut down to its selected pixels, so the reported bounds are the
-/// selection's: the ramp empties the column and row the hard rim had on the left and top.
+/// selection's: [`soften_edge`]'s box has a spare pixel on each side that the ramp may empty.
 fn trimmed(r: Region, w: usize) -> Region {
     let rows: Vec<&[u8]> = r.mask.chunks_exact(w).collect();
     let used_rows: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.iter().any(|v| *v > 0)).map(|(y, _)| y).collect();
@@ -329,10 +337,11 @@ fn trimmed(r: Region, w: usize) -> Region {
     Region { bbox, mask }
 }
 
-/// `select.object`'s `"hardEdge"` (default on): off, the found object gets [`soften_edge`]'s rim.
-fn object_edge(canvas: Rect, p: &Value, region: Option<&Region>) -> Option<Region> {
+/// `select.object`'s `"hardEdge"` (default on): off, the found object gets [`soften_edge`]'s rim;
+/// on, the found object itself, borrowed rather than copied.
+fn object_edge<'a>(canvas: Rect, p: &Value, region: Option<&'a Region>) -> Option<Cow<'a, Region>> {
     let region = region?;
-    Some(if b(p, "hardEdge", true) { region.clone() } else { soften_edge(region, canvas) })
+    Some(if b(p, "hardEdge", true) { Cow::Borrowed(region) } else { Cow::Owned(soften_edge(region, canvas)) })
 }
 
 /// `select.object` with `"point"`: the Object Finder's object under the point (cached).
@@ -355,7 +364,7 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     };
     // The cache keeps the object as found; Hard Edge only shapes what is stored.
     let region = object_edge(canvas, p, region.as_deref());
-    let out = apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))?;
+    let out = apply(s, "Object Selection", region.as_deref(), mode(p, "replace"))?;
     if let Some(d) = s.active() {
         let doc = std::sync::Arc::clone(&d.doc);
         s.object_finder.follow(&doc);
@@ -391,8 +400,9 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
-    let region = with_sampler(s, all_layers, |smp, doc| object_edge(doc.bounds(), p, grabcut::object_select(smp, doc.bounds(), rect, 160_000).as_ref()))?;
-    apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
+    let canvas = d.doc.bounds();
+    let found = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
+    apply(s, "Object Selection", object_edge(canvas, p, found.as_ref()).as_deref(), mode(p, "replace"))
 }
 
 /// Select Subject's last result (#2865), so running it again on unchanged pixels answers at
@@ -643,7 +653,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim on the right and bottom, up to one pixel further out there)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out)"##,
             has_doc,
             object_selection
         ),
