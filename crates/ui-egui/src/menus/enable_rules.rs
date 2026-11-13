@@ -16,8 +16,10 @@ fn background_blocks(id: &str, has_selection: bool) -> bool {
         // Global Light and Hide All Effects are document-wide.
         return !matches!(id, "layer.layerStyle.globalLight" | "layer.layerStyle.hideAllEffects" | "layer.layerStyle.copyLayerStyle");
     }
-    // Transforms need a selection on the Background (they then move the selected pixels).
-    if !has_selection && (id == "edit.freeTransform" || (id.starts_with("edit.transform.") && id != "edit.transform.again")) {
+    // Transforms and Content-Aware Scale need a selection on the Background (they then move the
+    // selected pixels).
+    if !has_selection && (matches!(id, "edit.freeTransform" | "edit.contentAwareScale") || (id.starts_with("edit.transform.") && id != "edit.transform.again"))
+    {
         return true;
     }
     matches!(
@@ -25,9 +27,10 @@ fn background_blocks(id: &str, has_selection: bool) -> bool {
         "layer.createClippingMask"
             | "layer.releaseClippingMask"
             | "layer.mergeDown"
+            // The Background can't go into a group (#12866, measured on the canvas menu).
+            | "layer.new.groupFromLayers"
             | "layer.lockLayers"
             | "layer.maskAllObjects"
-            | "edit.contentAwareScale"
             | "edit.puppetWarp"
             | "edit.perspectiveWarp"
     )
@@ -103,6 +106,11 @@ fn selection_targets(id: &str) -> Option<Targets> {
 /// runs on all of them is greyed only when none of them can take it (the active layer alone must
 /// not decide). Everything else, and a single selected layer, is judged by the active layer.
 pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Option<&Layer>, id: &str) -> bool {
+    // The reference application refuses Group from Layers whenever the Background is among the
+    // selected layers, not only when it is the active one.
+    if id == "layer.new.groupFromLayers" && selected.iter().filter_map(|l| doc.layer(*l)).any(|l| crate::doc_props_ui::is_background(doc, l)) {
+        return true;
+    }
     let Some(rule) = selection_targets(id).filter(|_| selected.len() > 1) else { return disabled_for(doc, active, id) };
     let layers = selected.iter().filter_map(|l| doc.layer(*l));
     let can = |l: &Layer| !disabled_for(doc, Some(l), id) && (!matches!(rule, Targets::WithoutMask) || l.mask.is_none());
@@ -116,6 +124,25 @@ pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Opti
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     let Some(st) = app.session.active() else { return false };
     let active = st.active_layer.and_then(|a| st.doc.layer(a));
+    // The split warps edit the open Warp box's grid, or a smart object's stored warp: without
+    // either there is no grid to split (#12494).
+    if matches!(
+        id,
+        "edit.transform.splitWarpCrosswise" | "edit.transform.splitWarpHorizontally" | "edit.transform.splitWarpVertically" | "edit.transform.removeWarpSplit"
+    ) && !crate::transform_tool::warps_active_layer(app)
+    {
+        return true;
+    }
+    // Remove Warp Split takes out a split line of the open grid; with none (a single patch, as
+    // the engine's `Split::Remove` sees it) there is nothing to remove.
+    if id == "edit.transform.removeWarpSplit"
+        && app.ui.transform.as_ref().and_then(|t| t.warp.as_ref()).is_some_and(|w| {
+            let m = w.to_mesh(1, 1);
+            m.us.len() <= 2 && m.vs.len() <= 2
+        })
+    {
+        return true;
+    }
     // Free Transform Path works on the Background too: it moves the path, not the pixels.
     let transform = id == "edit.freeTransform" || (id.starts_with("edit.transform.") && id != "edit.transform.again");
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
@@ -126,8 +153,9 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     if transform && (target.is_object() || target == "quickMask") {
         return false;
     }
-    // Several layers selected: one box moves them all, the Background left out (#6501). It doesn't
-    // warp, and doesn't distort while editable type is among them.
+    // Several layers selected: one box moves them all (#6501); with the Background among them it
+    // refuses as locked when it opens (#11101). It doesn't warp, and doesn't distort while
+    // editable type is among them.
     if transform {
         let targets = photocraft_engine::transform_cmds::selection_targets(st);
         // Judged on the layers the box moves, linked ones included (#11217): one linked layer
@@ -165,7 +193,7 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
         return true;
     }
     // Only these commands depend on the selection; skip walking the layers for the rest.
-    if selection_targets(id).is_some() {
+    if selection_targets(id).is_some() || id == "layer.new.groupFromLayers" {
         return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
     }
     disabled_for(&st.doc, active, id)
@@ -216,6 +244,24 @@ mod tests {
         s.execute("channel.target", json!({"channel": 0})).unwrap();
         let app = crate::PhotocraftApp::new(s, crate::Services::default());
         assert!(!disabled(&app, "edit.freeTransform") && !disabled(&app, "edit.transform.flipHorizontal"));
+    }
+
+    /// Photoshop treats Content-Aware Scale like Free Transform: on the Background it needs a
+    /// selection, and then scales the selected pixels.
+    #[test]
+    fn content_aware_scale_on_the_background_needs_a_selection() {
+        let mut s = session();
+        assert!(off(&s, "edit.contentAwareScale"));
+        s.execute("select.all", json!({})).unwrap();
+        assert!(!off(&s, "edit.contentAwareScale"));
+        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(!disabled(&app, "edit.contentAwareScale"));
+        let r = app.session.execute("edit.contentAwareScale", json!({"scaleX": 70})).unwrap();
+        assert_eq!(r["to"], json!([14, 20]));
+        // A normal layer takes it without a selection.
+        app.session.execute("select.deselect", json!({})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        assert!(!disabled(&app, "edit.contentAwareScale"));
     }
 
     /// With several layers selected, Rasterize is judged by the whole selection, not by the layer
@@ -397,3 +443,7 @@ mod tests {
         assert!(off(&s, "layer.layerStyle.copyLayerStyle"));
     }
 }
+
+#[cfg(test)]
+#[path = "warp_split_enable_tests.rs"]
+mod warp_split_enable_tests;
