@@ -9,21 +9,21 @@ use crate::{PhotocraftApp, Services, state::DialogKind};
 
 const COMMAND: &str = "file.scripts.imageProcessor";
 
-fn open(gpu: bool) -> (Harness<'static, PhotocraftApp>, u64) {
+fn open(gpu: bool) -> Result<(Harness<'static, PhotocraftApp>, u64), String> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
-    app.run("file.new", json!({"width": 40, "height": 20})).unwrap();
+    app.run("file.new", json!({"width": 40, "height": 20}))?;
     let builder = Harness::builder().with_size(egui::vec2(1000.0, 760.0));
     let builder = if gpu { builder.wgpu() } else { builder };
     let mut h = builder.build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     let ctx = h.ctx.clone();
-    let id = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({}))?["dialog"].as_u64().ok_or("Image Processor did not open a dialog")?;
     h.run_steps(4);
-    (h, id)
+    Ok((h, id))
 }
 
 fn field(h: &Harness<'_, PhotocraftApp>, id: u64, key: &str) -> Value {
-    h.state().ui.dialogs.iter().find(|dialog| dialog.id == id).unwrap().fields[key].clone()
+    h.state().ui.dialogs.iter().find(|dialog| dialog.id == id).and_then(|dialog| dialog.fields.get(key)).cloned().unwrap_or(Value::Null)
 }
 
 fn edit_number(h: &mut Harness<'static, PhotocraftApp>, label: &str, input: &str) {
@@ -41,9 +41,9 @@ fn edit_number(h: &mut Harness<'static, PhotocraftApp>, label: &str, input: &str
 }
 
 fn alert(h: &Harness<'_, PhotocraftApp>, message: &str) {
-    let dialog = h.state().ui.dialogs.last().unwrap();
-    assert_eq!(dialog.kind, DialogKind::Error);
-    assert_eq!(dialog.fields["message"], message);
+    let dialog = h.state().ui.dialogs.last();
+    assert_eq!(dialog.map(|dialog| dialog.kind), Some(DialogKind::Error));
+    assert_eq!(dialog.and_then(|dialog| dialog.fields.get("message")).and_then(Value::as_str), Some(message));
 }
 
 fn dismiss(h: &mut Harness<'_, PhotocraftApp>) {
@@ -53,7 +53,7 @@ fn dismiss(h: &mut Harness<'_, PhotocraftApp>) {
 
 #[test]
 fn defaults_and_no_format_alert_preserve_the_dialog() {
-    let (mut h, id) = open(false);
+    let (mut h, id) = open(false).unwrap();
     assert_eq!(field(&h, id, "jpeg"), json!({"enabled": true, "quality": 5.0, "convertToSrgb": false, "resize": false, "width": 1.0, "height": 1.0}));
     assert_eq!(field(&h, id, "psd"), json!({"enabled": false, "maximizeCompatibility": true, "resize": false, "width": 1.0, "height": 1.0}));
     assert_eq!(field(&h, id, "tiff"), json!({"enabled": false, "lzw": false, "resize": false, "width": 1.0, "height": 1.0}));
@@ -75,7 +75,7 @@ fn defaults_and_no_format_alert_preserve_the_dialog() {
 
 #[test]
 fn run_dispatches_all_enabled_formats_with_their_own_dimensions() {
-    let (mut h, id) = open(false);
+    let (mut h, id) = open(false).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
     fields.insert("output".into(), json!(directory.path()));
@@ -102,7 +102,7 @@ fn run_dispatches_all_enabled_formats_with_their_own_dimensions() {
 
 #[test]
 fn numeric_fields_clamp_and_restore_the_last_value() {
-    let (mut h, id) = open(false);
+    let (mut h, id) = open(false).unwrap();
     edit_number(&mut h, "Quality", "7.6");
     assert_eq!(field(&h, id, "jpeg")["quality"], 7.6);
     for (input, value, message) in [
@@ -138,7 +138,7 @@ fn image_processor_gpu_snapshots() {
     let Some(path) = std::env::var_os("PHOTOCRAFT_PROCESSOR_SNAPSHOTS") else { return };
     let path = std::path::PathBuf::from(path);
     let _gpu = photocraft_testkit::gpu_lock();
-    let (mut h, _) = open(true);
+    let (mut h, _) = open(true).unwrap();
     h.render().unwrap().save(path.join("dialog.png")).unwrap();
     edit_number(&mut h, "Quality", "20");
     alert(&h, super::closest_value("quality"));
