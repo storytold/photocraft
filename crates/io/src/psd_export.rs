@@ -430,6 +430,9 @@ impl Ex<'_> {
         // Regenerate the private preview from its typed, source-bound value. Never retain a
         // stale block after source replacement or rasterization.
         raw.retain(|(key, _)| key != &crate::vector_preview::PSD_KEY);
+        // Known source hints are regenerated, so resetting/replacing the source cannot
+        // copy an obsolete interpretation. Unknown/future payloads stay verbatim and inert.
+        raw.retain(|(key, bytes)| key != &crate::smart_xcf_order::PSD_KEY || crate::smart_xcf_order::parse(bytes).is_none());
         let mut regenerated: Vec<([u8; 4], Vec<u8>)> = Vec::new();
         // `keys` is in the importer's priority order (`psd_raw` came from the first key present),
         // not file order: Photoshop writes `PlLd` before `SoLd`, and overwriting the first match
@@ -539,6 +542,7 @@ impl Ex<'_> {
                 }
             }
             LayerContent::Smart(sm) => {
+                raw.extend(sm.historical_xcf_sample_order.map(|order| (crate::smart_xcf_order::PSD_KEY, crate::smart_xcf_order::encode(order))));
                 if let Some(preview) = self.smart.vector_preview(sm) {
                     raw.push((crate::vector_preview::PSD_KEY, preview.block.clone()));
                 }
@@ -736,7 +740,7 @@ impl Ex<'_> {
         upsert(raw, &key, sold, None);
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
-            let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
+            let item = match (sm.stack_mode, self.source_composite(&src.uuid, sm.historical_xcf_sample_order)) {
                 (None, Some((img, img_bounds))) => {
                     let unfiltered = match &sm.perspective {
                         Some(p) => {
@@ -834,7 +838,7 @@ impl Ex<'_> {
                 let geometry = stored.map(|size| (size, f64::from(self.dpi))).or_else(|| {
                     let meta = photocraft_doc::Metadata { psd_global_blocks: self.smart.globals.clone(), ..Default::default() };
                     let f = crate::linked::find_linked_file(&meta, path)?;
-                    crate::linked::source_geometry(&f.file_name, &f.bytes, &photocraft_raster::Interrupt::NONE).ok()
+                    crate::smart_xcf_order::geometry(&f.file_name, &f.bytes, sm.historical_xcf_sample_order).ok()
                 });
                 let (size, dpi) = geometry.unwrap_or((size_from_layer(sm), f64::from(self.dpi)));
                 let original = self.smart.linked_contents.entry(path.clone()).or_insert(sm.contents_id);
@@ -874,7 +878,7 @@ impl Ex<'_> {
                     // and one to a device such as `/dev/zero` would never end (#8601).
                     let bytes = photocraft_format::read_file(&file).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
-                    let source = self.embed(sm.contents_id, &name, &bytes, true)?;
+                    let source = self.embed(sm.contents_id, &name, &bytes, true, sm.historical_xcf_sample_order)?;
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
                     Ok(source)
                 }
@@ -884,23 +888,28 @@ impl Ex<'_> {
             SmartSource::Embedded { file_name, bytes } => {
                 let identity = std::sync::Arc::as_ptr(bytes).addr();
                 let hash = self.smart.embedded_hashes.entry(identity).or_insert_with(|| (bytes.clone(), embed_source_hash(bytes))).1;
-                self.embed_hashed(sm.contents_id, file_name, bytes, false, hash)
+                self.embed_hashed(sm.contents_id, file_name, bytes, false, hash, sm.historical_xcf_sample_order)
             }
         }?;
         if let Some((preview, frame)) = preview {
             source.size = frame;
-            self.smart.docs.insert(source.uuid.clone(), preview);
+            self.smart.docs.insert((source.uuid.clone(), sm.historical_xcf_sample_order), preview);
         }
         Ok(source)
     }
 
     /// The composite of the source `uuid` (an embedded file of this export or of the imported
     /// document) in the document's pixel format, its top-left at the origin; decoded once.
-    fn source_composite(&mut self, uuid: &str) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
-        if let Some(c) = self.smart.composites.get(uuid) {
+    fn source_composite(
+        &mut self,
+        uuid: &str,
+        order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
+        let key = (uuid.to_string(), order);
+        if let Some(c) = self.smart.composites.get(&key) {
             return c.clone();
         }
-        let doc = match self.smart.docs.get(uuid) {
+        let doc = match self.smart.docs.get(&key) {
             Some(d) => Some(d.clone()),
             None => {
                 let file = self.smart.add.iter().find(|f| f.uuid == uuid).cloned().or_else(|| {
@@ -910,7 +919,7 @@ impl Ex<'_> {
                     };
                     crate::linked::find_linked_file(&meta, uuid)
                 });
-                file.and_then(|f| crate::import(&f.file_name, &f.bytes).ok()).map(|r| r.document)
+                file.and_then(|f| crate::smart_xcf_order::decode(&f.file_name, &f.bytes, order).ok())
             }
         };
         let c = doc.map(|d| {
@@ -929,7 +938,7 @@ impl Ex<'_> {
             s.prune();
             (std::sync::Arc::new(s), d.bounds())
         });
-        self.smart.composites.insert(uuid.to_string(), c.clone());
+        self.smart.composites.insert(key, c.clone());
         c
     }
 
@@ -938,22 +947,44 @@ impl Ex<'_> {
     /// `linked`: the bytes were read from a path the document names, so only a file PhotoCraft
     /// can open is embedded (a link to a text or settings file is written as pixels instead).
     #[cfg(not(target_arch = "wasm32"))]
-    fn embed(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8], linked: bool) -> Result<Source, String> {
-        self.embed_hashed(contents_id, file_name, bytes, linked, embed_source_hash(bytes))
+    fn embed(
+        &mut self,
+        contents_id: SmartContentsId,
+        file_name: &str,
+        bytes: &[u8],
+        linked: bool,
+        order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ) -> Result<Source, String> {
+        self.embed_hashed(contents_id, file_name, bytes, linked, embed_source_hash(bytes), order)
     }
 
     /// Reuse conversion only for the same contents identity, actual-byte digest and linked-file policy.
-    fn embed_hashed(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8], linked: bool, hash: [u8; 32]) -> Result<Source, String> {
-        let key = (contents_id, hash, linked);
+    fn embed_hashed(
+        &mut self,
+        contents_id: SmartContentsId,
+        file_name: &str,
+        bytes: &[u8],
+        linked: bool,
+        hash: [u8; 32],
+        order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ) -> Result<Source, String> {
+        let key = (contents_id, hash, linked, order);
         if let Some(r) = self.smart.converted.get(&key) {
             return r.clone();
         }
-        let r = self.convert_source(contents_id, file_name, bytes, linked);
+        let r = self.convert_source(contents_id, file_name, bytes, linked, order);
         self.smart.converted.insert(key, r.clone());
         r
     }
 
-    fn convert_source(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8], linked: bool) -> Result<Source, String> {
+    fn convert_source(
+        &mut self,
+        contents_id: SmartContentsId,
+        file_name: &str,
+        bytes: &[u8],
+        linked: bool,
+        order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ) -> Result<Source, String> {
         let (name, data, size, dpi, nested) = if photocraft_format::is_pcraft(bytes) {
             if self.smart.depth >= MAX_NESTING {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
@@ -973,16 +1004,22 @@ impl Ex<'_> {
         } else {
             // Embedded formats we can't decode (vector PDF/AI…) are kept; their size comes from the
             // layer. A linked file we can't decode is not embedded.
-            let (size, dpi) = match crate::linked::source_geometry(file_name, bytes, &photocraft_raster::Interrupt::NONE) {
+            let decoded = order.map(|_| crate::smart_xcf_order::decode(file_name, bytes, order));
+            let geometry = match &decoded {
+                Some(Ok(doc)) => Ok(((f64::from(doc.size.width), f64::from(doc.size.height)), f64::from(doc.resolution_dpi))),
+                Some(Err(error)) => Err(error.to_string()),
+                None => crate::linked::source_geometry(file_name, bytes, &photocraft_raster::Interrupt::NONE),
+            };
+            let (size, dpi) = match geometry {
                 Ok(geometry) => geometry,
                 Err(e) if linked => return Err(format!("the linked file {file_name} is not an image PhotoCraft can open: {e}")),
                 Err(_) => ((0.0, 0.0), f64::from(self.dpi)),
             };
-            (file_name.to_string(), bytes.to_vec(), size, dpi, None)
+            (file_name.to_string(), bytes.to_vec(), size, dpi, decoded.and_then(Result::ok))
         };
         let uuid = contents_uuid(contents_id, &data);
         if let Some(d) = nested {
-            self.smart.docs.insert(uuid.clone(), d);
+            self.smart.docs.insert((uuid.clone(), order), d);
         }
         if !self.smart.known.contains(&uuid) && !self.smart.add.iter().any(|f| f.uuid == uuid) {
             self.smart.add.push(crate::linked::LinkedFile { uuid: uuid.clone(), file_name: name, bytes: data });
@@ -1113,6 +1150,9 @@ impl Ex<'_> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod smart_xcf_order_tests;
 
 #[cfg(test)]
 pub(crate) use smart::EMBED_HASHED_SOURCE_BYTES;

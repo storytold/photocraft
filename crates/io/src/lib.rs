@@ -83,6 +83,7 @@ pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
 mod initial_view;
 pub mod slices_map;
 pub mod smart_map;
+mod smart_xcf_order;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;
@@ -645,22 +646,7 @@ pub fn import_with_svg_group_depth_and_interrupt(
     import_with_options_and_interrupt(name, bytes, &ImportOptions { max_group_depth, ..Default::default() }, ctl)
 }
 
-/// Explicit sample byte order for development XCF7–11 high-depth pixel data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HistoricalXcfSampleOrder {
-    BigEndian,
-    LittleEndian,
-}
-
-impl std::fmt::Display for HistoricalXcfSampleOrder {
-    /// Formats the explicit historical sample-order choice for user and agent diagnostics.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::BigEndian => "big-endian",
-            Self::LittleEndian => "little-endian",
-        })
-    }
-}
+pub use photocraft_doc::HistoricalXcfSampleOrder;
 
 /// An explicit user decision required by a historical format ambiguity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

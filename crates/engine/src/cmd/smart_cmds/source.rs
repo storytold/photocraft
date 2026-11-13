@@ -4,7 +4,7 @@ use photocraft_geom::TILE_SIZE;
 
 use super::{
     Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source, json, other,
+    base_name, decode_source_with_order, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -70,7 +70,7 @@ pub struct SourceImage {
     pub bounds: Rect,
 }
 
-type CacheKey = ([u8; 32], PixelFormat);
+type CacheKey = ([u8; 32], PixelFormat, Option<photocraft_doc::HistoricalXcfSampleOrder>);
 
 struct CacheEntry {
     key: CacheKey,
@@ -100,7 +100,11 @@ fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
 }
 
 pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
-    (*blake3::hash(bytes).as_bytes(), fmt)
+    cache_key_with_order(bytes, fmt, None)
+}
+
+pub(super) fn cache_key_with_order(bytes: &[u8], fmt: PixelFormat, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> CacheKey {
+    (*blake3::hash(bytes).as_bytes(), fmt, order)
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
@@ -135,7 +139,12 @@ fn cache_put_within(key: CacheKey, image: SourceImage, limit: usize) {
 
 /// How many times these contents were decoded at this pixel format (0 = never / evicted).
 pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
-    let key = cache_key(bytes, fmt);
+    source_decode_count_with_order(bytes, fmt, None)
+}
+
+/// Decode accounting for exactly this persisted source interpretation.
+pub fn source_decode_count_with_order(bytes: &[u8], fmt: PixelFormat, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> u32 {
+    let key = cache_key_with_order(bytes, fmt, order);
     cache().iter().find(|e| e.key == key).map(|e| e.decodes).unwrap_or(0)
 }
 
@@ -291,7 +300,7 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     let mut h = blake3::Hasher::new();
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
-    let key = (*h.finalize().as_bytes(), fmt);
+    let key = (*h.finalize().as_bytes(), fmt, None);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
@@ -318,7 +327,7 @@ pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> R
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
     h.update(&profile.to_bytes());
-    let key = (*h.finalize().as_bytes(), fmt);
+    let key = (*h.finalize().as_bytes(), fmt, None);
     if let Some(image) = cache_get(&key) {
         return Ok(image);
     }
@@ -353,12 +362,22 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    let key = cache_key(bytes, fmt);
+    source_image_with_order(file_name, bytes, fmt, None)
+}
+
+/// Decode and cache only pixels produced with the requested historical XCF interpretation.
+pub fn source_image_with_order(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<SourceImage> {
+    let key = cache_key_with_order(bytes, fmt, order);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
-    let doc = decode_source(file_name, bytes)?;
+    let doc = decode_source_with_order(file_name, bytes, order)?;
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)

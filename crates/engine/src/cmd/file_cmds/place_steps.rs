@@ -247,6 +247,7 @@ impl PlaceSteps {
                 None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
+            so.historical_xcf_sample_order = input.opts.historical_xcf_sample_order;
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.
             if let Some(doc) = &input.doc {

@@ -45,6 +45,8 @@ mod metadata_tests;
 #[cfg(test)]
 mod optional_mask_budget_tests;
 #[cfg(test)]
+mod optional_mask_header_refund_tests;
+#[cfg(test)]
 mod path_admission_tests;
 #[cfg(test)]
 mod path_geometry_review_tests;
@@ -448,10 +450,14 @@ impl<'a> Image<'a> {
             if effect.mask_offset != 0 && masks_seen.insert(effect.mask_offset) {
                 let start = effect.mask_offset;
                 let effect_source = self.outcomes.entry(outcome)?.source.clone();
+                let before_mask = self.meta_budget;
                 let record = match self.coverage_mask_header(start, ctl) {
                     Ok(record) => record,
                     Err(IoError::Cancelled) => return Err(IoError::Cancelled),
                     Err(error) => {
+                        // A failed optional header retains no child list or header allocation.
+                        // Keep the outer effect/traversal debits, which precede this snapshot.
+                        self.meta_budget = before_mask;
                         self.outcomes.push(ConversionEntry {
                             feature_code: "xcf.coverage_effect_mask".into(),
                             source: conversion::source("coverage_effect_mask", effect_source.ordinal as usize, start, "", &effect_source.item_path, None),

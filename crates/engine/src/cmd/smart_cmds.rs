@@ -70,12 +70,18 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
+    decode_source_with_order(file_name, bytes, None)
+}
+
+/// Decode with the persisted interpretation of historical XCF sample bytes, without inferring an order.
+pub fn decode_source_with_order(file_name: &str, bytes: &[u8], order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
     if photocraft_io::svg::is_svg(bytes) {
         return photocraft_io::svg::import_svg_bounded_images(file_name, bytes, 24_000_000)
             .map(|imported| imported.document)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
-    crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    let options = photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() };
+    crate::file_cmds::import_with_options(file_name, bytes, &options).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
 fn base_name(path: &str) -> String {
@@ -201,10 +207,15 @@ use rendering::refresh_or_fail;
 pub(crate) use rendering::source_box;
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
-pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
+pub use rendering::{
+    apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image, stack_image_with_order,
+};
 #[cfg(test)]
 use source::svg_source_image_in;
-pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
+pub use source::{
+    SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_decode_count_with_order, source_image,
+    source_image_with_order, svg_source_image,
+};
 use source::{authorize_source, authorized_source_bytes};
 pub(crate) use source::{restore_unrendered, take_caches, vector_scale};
 
@@ -251,7 +262,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let i = s.active_index().ok_or(EngineError::NoDocument)?;
             Ok(json!({"updated": commit_child(s, i)?}))
         }),
-        spec!("layer.smartObjects.replaceContents", "Replace Contents…", SO, r##"{"layer":id?,"path":str}"##, has_smart, replace_contents),
+        spec!(
+            "layer.smartObjects.replaceContents",
+            "Replace Contents…",
+            SO,
+            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?} (a fresh source; absent/null clears the previous sample order)"##,
+            has_smart,
+            replace_contents
+        ),
         spec!(
             "layer.smartObjects.exportContents",
             "Export Contents…",
@@ -260,10 +278,21 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             export_contents
         ),
-        spec!("layer.smartObjects.relinkToFile", "Relink to File…", SO, r##"{"layer":id?,"path":str}"##, has_smart, |s, p| {
-            let path = path_param("layer.smartObjects.relinkToFile", p)?.to_string();
-            set_source(s, p, "Relink to File", false, |_, _| Ok(SmartSource::Linked { path }))
-        }),
+        spec!(
+            "layer.smartObjects.relinkToFile",
+            "Relink to File…",
+            SO,
+            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?} (absent preserves the stored source interpretation; null clears it)"##,
+            has_smart,
+            |s, p| {
+                let order_override = p
+                    .get("historicalXcfSampleOrder")
+                    .map(|_| crate::file_cmds::historical_xcf_sample_order(p, "layer.smartObjects.relinkToFile"))
+                    .transpose()?;
+                let path = path_param("layer.smartObjects.relinkToFile", p)?.to_string();
+                set_source(s, p, "Relink to File", false, order_override, |_, _| Ok(SmartSource::Linked { path }))
+            }
+        ),
         spec!("layer.smartObjects.updateModifiedContent", "Update Modified Content", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Update Modified Content", |doc, _| refresh_or_fail(doc, id))?;
@@ -294,7 +323,7 @@ pub fn specs() -> Vec<CommandSpec> {
             unpack::convert_to_layers
         ),
         spec!("layer.smartObjects.convertToEmbedded", "Embed Linked", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
-            set_source(s, p, "Convert to Embedded", true, |meta, src| {
+            set_source(s, p, "Convert to Embedded", true, None, |meta, src| {
                 let (file_name, bytes) = source_bytes(meta, src).ok_or_else(|| other("the linked file can't be read"))?;
                 Ok(SmartSource::Embedded { file_name, bytes })
             })
@@ -315,7 +344,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             |s, p| {
                 let path = path_param("layer.smartObjects.convertToLinked", p)?.to_string();
-                set_source(s, p, "Convert to Linked", false, |meta, src| {
+                set_source(s, p, "Convert to Linked", false, None, |meta, src| {
                     let (_, bytes) = source_bytes(meta, src).ok_or_else(|| other("the smart object's contents are unavailable"))?;
                     crate::file_cmds::write_file(&path, &bytes)?;
                     Ok(SmartSource::Linked { path })

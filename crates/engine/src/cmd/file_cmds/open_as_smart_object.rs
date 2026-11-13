@@ -15,6 +15,11 @@ const CMD: &str = "file.openAsSmartObject";
 /// The history step's name.
 const LABEL: &str = "Open As Smart Object";
 
+struct SourcePolicy {
+    damaged: bool,
+    historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+}
+
 /// Opens the file as a document holding one embedded smart object. The read, decode and flatten
 /// run on the job's worker (inline under `execute`); the document is built, given File › Open's
 /// colour policy and admitted, or held for its profile prompt, when the job is applied. The reply
@@ -40,9 +45,10 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
             ctx.progress(0.9, "Flattening");
             // The file as one image: the smart object's rendered contents.
             let pixels = flattened_checked(&r.document, r.document.pixel_format(), CMD)?;
-            Ok((path, name, Arc::new(bytes), r, pixels, confirm_damage && damaged))
+            let policy = SourcePolicy { damaged: confirm_damage && damaged, historical_xcf_sample_order: opts.historical_xcf_sample_order };
+            Ok((path, name, Arc::new(bytes), r, pixels, policy))
         },
-        |s, (path, name, bytes, r, pixels, damaged)| apply(s, &path, &name, bytes, r, pixels, damaged),
+        |s, (path, name, bytes, r, pixels, policy)| apply(s, &path, &name, bytes, r, pixels, policy),
     )
 }
 
@@ -53,8 +59,9 @@ fn apply(
     bytes: Arc<Vec<u8>>,
     r: photocraft_io::ImportResult,
     pixels: photocraft_raster::Surface,
-    damaged: bool,
+    policy: SourcePolicy,
 ) -> Result<Value> {
+    let SourcePolicy { damaged, historical_xcf_sample_order } = policy;
     let warnings = r.warnings;
     let mut src = r.document;
     super::tag_exr_colorspace(s, file, &mut src);
@@ -71,7 +78,8 @@ fn apply(
 
     // Embedded (not linked): the original file name keeps its extension, so Edit Contents opens it.
     let source = SmartSource::Embedded { file_name: file.to_string(), bytes };
-    let so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
+    let mut so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
+    so.historical_xcf_sample_order = historical_xcf_sample_order;
     let layer = Layer::new(layer_name, LayerContent::Smart(so));
     let layer_id = layer.id;
     crate::layer_place::insert_new(&mut doc, None, layer, Place::AutoEditable);
