@@ -68,8 +68,8 @@ fn a_new_documents_opening_state_reads_new_with_the_opening_icon() {
     let new = h.get_by_label("New").rect();
     let first_step = h.get_all_by_label("New Layer").next().expect("the first New Layer row").rect();
     assert!(new.bottom() <= first_step.top() + 0.5, "New is the row above the first step: {new:?} {first_step:?}");
-    assert_eq!(step_icon("New"), "image");
-    assert_eq!(step_icon("New"), step_icon("Open"));
+    assert_eq!(history_step_icon("New"), "image");
+    assert_eq!(history_step_icon("New"), history_step_icon("Open"));
 }
 
 /// The ghost label that follows a History row being dragged to the trash (the text painted at
