@@ -367,7 +367,11 @@ pub fn top(app: &PhotocraftApp) -> Option<u64> {
 /// point (x, y). Off the image or over transparency nothing changes.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) {
     let Some(id) = top(app) else { return };
-    let (rgb, keep) = if let Some((rgb, inks)) = crate::canvas::sampled_cmyk_color(app, x, y, "all") {
+    let picker_document = app.ui.dialog_mut(id).and_then(|d| d.fields.get("__document").and_then(Value::as_u64));
+    let active_document = app.session.active().map(|st| st.doc.id.0);
+    let same_document = picker_document.is_some() && picker_document == active_document;
+    let sampled = if same_document { crate::canvas::sampled_cmyk_color(app, x, y, "all") } else { None };
+    let (rgb, keep) = if let Some((rgb, inks)) = sampled {
         (rgb, Keep::Cmyk(inks))
     } else {
         let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };

@@ -3,6 +3,7 @@ use crate::{Services, color_picker_ui};
 use photocraft_geom::Rect as DocRect;
 
 const INKS: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+const MIXED_INKS: [[f32; 4]; 2] = [[0.95, 0.10, 0.0, 0.0], [0.95, 0.20, 0.0, 0.0]];
 
 fn chart(depth: u32) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
@@ -17,6 +18,59 @@ fn chart(depth: u32) -> PhotocraftApp {
         .unwrap();
     app.ui.tool = Tool::Eyedropper;
     app
+}
+
+fn mixed_chart(depth: u32) -> PhotocraftApp {
+    let mut app = chart(depth);
+    app.session
+        .edit("Mixed CMYK chart", |doc, _| {
+            for (i, ink) in MIXED_INKS.iter().enumerate() {
+                doc.layers[0]
+                    .surface_mut()
+                    .unwrap()
+                    .fill_rect(DocRect::new((i * 8) as i32, 0, ((i + 1) * 8) as i32, 8), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    app
+}
+
+#[test]
+fn eyedropper_cmyk_mixed_inks_preserve_quantized_channels() {
+    for depth in [8, 16] {
+        let mut app = mixed_chart(depth);
+        let tolerance = if depth == 8 { 1.0 / 255.0 + 1e-6 } else { 1.0 / 65535.0 + 1e-6 };
+        let mut previous = None;
+
+        for (i, nominal) in MIXED_INKS.iter().enumerate() {
+            let x = (i * 8 + 3) as i32;
+            let stored = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(x, 3);
+
+            for ch in 0..4 {
+                assert!((stored[ch] - nominal[ch]).abs() <= tolerance, "depth {depth}, sample {i}, channel {ch}: stored {:?}, expected {:?}", stored, nominal);
+            }
+
+            sample_eyedropper(&mut app, x as f64, 3.0, egui::Modifiers::NONE);
+            let sampled = app.session.tools.picked_role_cmyk(0).unwrap();
+
+            for ch in 0..4 {
+                assert!((sampled[ch] - stored[ch]).abs() <= 1e-6, "depth {depth}, sample {i}, channel {ch}: sampled {:?}, stored {:?}", sampled, stored);
+            }
+
+            let id = color_picker_ui::open(&mut app, "foreground");
+            let reopened = color_picker_ui::current(&app.ui.dialog_mut(id).unwrap().fields).cmyk;
+            for ch in 0..4 {
+                assert!((reopened[ch] - sampled[ch]).abs() <= 1e-6);
+            }
+            app.ui.close_dialog(id);
+
+            if let Some(prev) = previous {
+                assert_ne!(sampled, prev, "distinct mixed CMYK inks must remain distinct");
+            }
+            previous = Some(sampled);
+        }
+    }
 }
 
 #[test]
@@ -94,11 +148,14 @@ fn eyedropper_cmyk_dialog_sampling_confirms_original_inks_and_reset_restores_ope
 
 #[test]
 fn eyedropper_cmyk_dialog_web_only_still_snaps_and_drops_native_inks() {
-    let mut app = chart(8);
+    let mut app = mixed_chart(8);
+    let original_rgb = crate::canvas::sampled_cmyk_color(&app, 3.0, 3.0, "all").unwrap().0;
+    let original_hex = color_picker_ui::hex(original_rgb);
     app.ui.color_panel.web_only = true;
     let id = color_picker_ui::open(&mut app, "foreground");
     color_picker_ui::sample_at(&mut app, 3.0, 3.0);
     let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_ne!(fields["color"], json!(original_hex), "web-only must actually snap the sampled color");
     assert!(fields.get("__cmyk").is_none());
     assert!(color_picker_ui::current(fields).rgb.iter().all(|v| (v * 5.0 - (v * 5.0).round()).abs() < 1e-6));
 }
