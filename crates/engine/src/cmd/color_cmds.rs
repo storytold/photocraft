@@ -1690,6 +1690,8 @@ mod tests {
         assert_eq!(s.color.proof(doc(&s).id).setup.profile, s.color.working(ColorMode::Cmyk));
     }
 
+    /// A saved Proof Setup with fields missing takes their defaults; one that is no object or names
+    /// a profile that no longer resolves gives the built-in default, as does removing it.
     #[test]
     fn saved_proof_setup_loads_leniently() {
         let mut partial = Session::new();

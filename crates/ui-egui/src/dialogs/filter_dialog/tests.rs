@@ -499,14 +499,30 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
 /// proofs with it: a new document there starts from Gray Gamma 2.2 and Proof Colors shows it.
 #[test]
 fn proof_setup_ok_is_the_proof_condition_after_a_restart() {
+    assert_proof_setup_survives_a_restart("gray-gamma-2.2");
+}
+
+/// #12820 with an .icc file no menu lists: the dialog's own remembered choices would drop the
+/// path, so the engine's record of it must stay what the next launch proofs with.
+#[test]
+fn a_custom_icc_proof_setup_survives_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let icc = tmp.path().join("press.icc");
+    std::fs::write(&icc, photocraft_cms::builtin::COATED_CMYK_ICC).unwrap();
+    assert_proof_setup_survives_a_restart(&icc.to_string_lossy());
+}
+
+/// Confirm Custom Proof Setup on `profile`, check the saved preference, then launch again on
+/// those preferences: a new document proofs with `profile` and the dialog reopens on it.
+fn assert_proof_setup_survives_a_restart(profile: &str) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let d = open(&mut app, "view.proofSetup").unwrap();
-    app.ui.dialog_mut(d).unwrap().fields.insert("profile".into(), json!("gray-gamma-2.2"));
+    app.ui.dialog_mut(d).unwrap().fields.insert("profile".into(), json!(profile));
     crate::dialogs::confirm(&mut app, d).unwrap();
     assert_eq!(
         app.session.prefs().dialogs.get("view.proofSetup"),
-        Some(&json!({"profile": "gray-gamma-2.2", "intent": "relative", "bpc": true, "simulatePaper": false}))
+        Some(&json!({"profile": profile, "intent": "relative", "bpc": true, "simulatePaper": false}))
     );
 
     let mut session = photocraft_engine::Session::new();
@@ -514,13 +530,13 @@ fn proof_setup_ok_is_the_proof_condition_after_a_restart() {
     let mut restarted = PhotocraftApp::new(session, Default::default());
     restarted.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let id = restarted.session.active().unwrap().doc.id;
-    assert_eq!(restarted.session.color.proof(id).setup.name, "gray-gamma-2.2");
+    assert_eq!(restarted.session.color.proof(id).setup.name, profile);
     restarted.run("view.proofColors", json!({})).unwrap();
     let pv = restarted.session.color.proof(id);
-    assert_eq!((pv.setup.name.as_str(), pv.enabled), ("gray-gamma-2.2", true));
+    assert_eq!((pv.setup.name.as_str(), pv.enabled), (profile, true));
     // The dialog opens on it too.
     let d = open(&mut restarted, "view.proofSetup").unwrap();
-    assert_eq!(restarted.ui.dialog_mut(d).unwrap().fields["profile"], json!("gray-gamma-2.2"));
+    assert_eq!(restarted.ui.dialog_mut(d).unwrap().fields["profile"], json!(profile));
 }
 
 #[test]
