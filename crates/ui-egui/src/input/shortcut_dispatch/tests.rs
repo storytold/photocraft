@@ -1126,11 +1126,12 @@ fn f6_while_recording_records_a_named_call_not_the_child_steps() {
         ..Default::default()
     });
     crate::actions::assign_shortcut(h.state_mut(), 0, "F6").unwrap();
+    let action_id = h.state().session.actions.list[0].action_id.clone().expect("the shortcut target has a stable identity");
     h.state_mut().run("actions.record", json!({"name":"Action 2"})).unwrap();
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "Nested overlay");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R"}))]);
+    assert_eq!(h.state().session.actions.list[1].steps, [("actions.play".into(), json!({"action":"LivePrint 2R","actionId":action_id}))]);
 }
 
 /// ⇧⌘> / ⇧⌘< follow the keys' position: a Nordic or German layout reports ⇧⌘. as `:`, which is
