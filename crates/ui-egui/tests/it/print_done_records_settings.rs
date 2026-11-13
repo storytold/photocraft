@@ -133,3 +133,30 @@ fn cancel_while_recording_keeps_nothing() {
     assert_eq!(action["steps"], json!([]), "Cancel records no step: {action}");
     assert!(h.state().session.file_menu.last_print.is_none(), "and stores no settings");
 }
+
+/// The review's edge on #11750: when automation authorization refuses a Done click the dialog
+/// stays open, and the Done marker must not survive that refusal - otherwise the next Print
+/// click or Enter records settings instead of printing.
+#[test]
+fn a_refused_done_clears_the_marker_so_the_next_answer_prints() {
+    let (mut app, id) = app();
+    app.session.execute("actions.record", json!({"name": "Print setup"})).expect("record");
+    let mut h = harness(app);
+    set_fields(&mut h, id, json!({"paper": "a4", "scale": 150, "dryRun": true, "colorHandling": "noColorManagement"}));
+    // A Done click installs the marker; the automation gate then refuses the command it routes
+    // to, which leaves the dialog open as every refused confirm does.
+    h.state_mut().ui.dialog_mut(id).expect("the dialog is open").fields.insert(photocraft_ui_egui::file_ui::RECORD_DONE.into(), json!(true));
+    h.state_mut().automation_input = true;
+    h.state_mut().services.automation_command = Some(Box::new(|command, _| if command == "file.printSettings" { Err("printing denied".into()) } else { Ok(()) }));
+    let refused = photocraft_ui_egui::dialogs::confirm(h.state_mut(), id);
+    assert!(refused.is_err(), "the gate refuses the settings command: {refused:?}");
+    let open = fields(&h, id);
+    assert!(!open.contains_key(photocraft_ui_egui::file_ui::RECORD_DONE), "the refusal clears the Done marker: {open:?}");
+    // The next answer is a plain print again: file.print, not file.printSettings, lands in the action.
+    let printed = photocraft_ui_egui::dialogs::confirm(h.state_mut(), id);
+    assert!(printed.is_ok(), "the second confirm prints a preview instead: {printed:?}");
+    let stopped = run(&mut h, "actions.stop", json!({}));
+    let action = run(&mut h, "actions.get", json!({"action": "Print setup"}));
+    assert_eq!(stopped["steps"], json!(1), "one step, the print itself: {stopped}");
+    assert_eq!(action["steps"][0][0], json!("file.print"), "the refused Done recorded nothing: {action}");
+}

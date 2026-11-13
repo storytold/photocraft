@@ -1132,7 +1132,14 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 }
 
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
-    confirm_preflight(app, id)?;
+    if let Err(why) = confirm_preflight(app, id) {
+        // A refused confirm leaves the dialog open: the Done marker must not outlive the
+        // refusal, or the next Print answer records settings instead of printing (#11750 review).
+        if let Some(open) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
+            open.fields.remove(crate::file_ui::RECORD_DONE);
+        }
+        return Err(why);
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {

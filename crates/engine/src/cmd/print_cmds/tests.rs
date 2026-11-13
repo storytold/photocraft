@@ -1679,3 +1679,29 @@ fn a_done_step_records_the_settings_and_replays_them() {
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps, "playback stores settings, it does not edit the document");
 }
+
+/// The driver's printable area belongs to the printer of the recording session: a step that
+/// carried it would validate a replay against margins that never existed on another printer.
+/// The recording boundary drops it, so every replay re-derives it from its own printer
+/// (#11750 review). The live command still accepts and checks it, so today's dialog is unchanged.
+#[test]
+fn recorded_print_steps_drop_the_drivers_printable_area() {
+    let mut s = session("rgb", 8);
+    s.execute("actions.record", json!({"name": "Margins"})).unwrap();
+    let area = json!({"paper": "a4", "scale": 150, "printable": [36.0, 36.0, 523.0, 720.0]});
+    s.execute("file.printSettings", area).unwrap();
+    let dir = tmp("recorded-print-area");
+    let ran = s.execute("file.print", json!({"paper": "a4", "center": true, "scale": 100, "dryRun": true,
+        "output": format!("{dir}/job.pdf"), "printable": [36.0, 36.0, 523.0, 720.0]})).unwrap();
+    assert_eq!(ran["sent"], json!(false), "dryRun prints nothing");
+    let stopped = s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(stopped["steps"], json!(2), "both print commands recorded: {stopped}");
+    let got = s.execute("actions.get", json!({"action": "Margins"})).unwrap();
+    assert_eq!(got["steps"][0][0], json!("file.printSettings"));
+    assert!(got["steps"][0][1].get("printable").is_none(), "the settings step drops the printer's own area: {}", got["steps"][0][1]);
+    assert_eq!(got["steps"][0][1]["paper"], json!("a4"), "everything else keeps its place");
+    assert_eq!(got["steps"][1][0], json!("file.print"));
+    assert!(got["steps"][1][1].get("printable").is_none(), "the print step drops it too: {}", got["steps"][1][1]);
+    // Live validation of an area given in this session stays exactly as it was.
+    assert!(matches!(s.execute("file.printSettings", json!({"paper": "a4", "printable": [0.0, 0.0, 1e9, 1.0]})), Err(EngineError::BadParams { .. })));
+}
