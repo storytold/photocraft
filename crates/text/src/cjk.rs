@@ -457,7 +457,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
         //   Debian / Ubuntu (`fonts-noto-cjk`, `fonts-noto-cjk-extra`)
         // - `/usr/share/fonts/opentype/NotoSansCJK*-Regular.otf` and `/usr/share/fonts/truetype/NotoSansCJK*-Regular.otf`:
         //   openSUSE (`noto-sans-cjk-fonts`, `google-noto-sans-cjk-fonts`)
-        // - `/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSans*-Regular.otf`:
+        // - `/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSans*-Regular.otf` and
+        //   `/usr/share/fonts/google-noto-sans-cjk-{jp,sc,tc,kr}-fonts/NotoSans*-Regular.otf`:
         //   Fedora / RHEL (`google-noto-sans-cjk-jp-fonts`, `google-noto-sans-cjk-sc-fonts`,
         //   `google-noto-sans-cjk-tc-fonts`, `google-noto-sans-cjk-kr-fonts`)
         match script {
@@ -473,6 +474,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/truetype/NotoSansCJKjp-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansJP-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKjp-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-jp-fonts/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-jp-fonts/NotoSansCJKjp-Regular.otf", ""),
             ]),
             SimplifiedChinese => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf", ""),
@@ -486,6 +489,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/truetype/NotoSansCJKsc-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansSC-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKsc-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-sc-fonts/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-sc-fonts/NotoSansCJKsc-Regular.otf", ""),
             ]),
             TraditionalChinese => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansTC-Regular.otf", ""),
@@ -499,6 +504,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/truetype/NotoSansCJKtc-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansTC-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKtc-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-tc-fonts/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-tc-fonts/NotoSansCJKtc-Regular.otf", ""),
             ]),
             Korean => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansKR-Regular.otf", ""),
@@ -513,6 +520,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/truetype/NotoSansCJKkr-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansKR-Regular.otf", ""),
                 f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJKkr-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-kr-fonts/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-kr-fonts/NotoSansCJKkr-Regular.otf", ""),
             ]),
         }
         v.extend(match script {
@@ -1097,6 +1106,8 @@ mod flatpak_tests {
         for expected in [
             "/usr/share/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
             "/run/host/fonts/noto-cjk/NotoSansCJKjp-Regular.otf",
+            "/usr/share/fonts/google-noto-sans-cjk-jp-fonts/NotoSansJP-Regular.otf",
+            "/run/host/fonts/google-noto-sans-cjk-jp-fonts/NotoSansJP-Regular.otf",
             "/usr/share/fonts/TTF/VL-PGothic-Regular.ttf",
             "/run/host/fonts/TTF/VL-PGothic-Regular.ttf",
             "/usr/share/fonts/TTF/VL-Gothic-Regular.ttf",
@@ -1104,8 +1115,20 @@ mod flatpak_tests {
         ] {
             assert!(ja.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
         }
+        let sc = font_files(CjkScript::SimplifiedChinese);
+        for expected in [
+            "/usr/share/fonts/google-noto-sans-cjk-sc-fonts/NotoSansSC-Regular.otf",
+            "/run/host/fonts/google-noto-sans-cjk-sc-fonts/NotoSansSC-Regular.otf",
+        ] {
+            assert!(sc.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
+        }
         let ko = font_files(CjkScript::Korean);
-        for expected in ["/usr/share/fonts/TTF/gulim.ttf", "/run/host/fonts/TTF/gulim.ttf"] {
+        for expected in [
+            "/usr/share/fonts/google-noto-sans-cjk-kr-fonts/NotoSansKR-Regular.otf",
+            "/run/host/fonts/google-noto-sans-cjk-kr-fonts/NotoSansKR-Regular.otf",
+            "/usr/share/fonts/TTF/gulim.ttf",
+            "/run/host/fonts/TTF/gulim.ttf",
+        ] {
             assert!(ko.iter().any(|file| file.path == std::path::Path::new(expected) && file.family.is_empty()), "missing {expected}");
         }
     }
