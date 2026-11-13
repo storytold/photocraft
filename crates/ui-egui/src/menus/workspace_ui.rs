@@ -64,23 +64,6 @@ fn saved_name(app: &PhotocraftApp, id: &str) -> Option<String> {
     app.session.prefs().workspaces.keys().nth(i).cloned()
 }
 
-/// The top-bar workspace switcher's options as (key, label): the presets, then saved workspaces.
-pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
-    // Keys stay English (`apply_workspace` matches them); the dropdown shows the preset labels
-    // in the UI language.
-    let presets = [
-        ("Essentials", tl!("Essentials")),
-        ("Photography", tl!("Photography")),
-        ("Painting", tl!("Painting")),
-        ("Graphic and Web", tl!("Graphic and Web")),
-        ("Pixel Art", tl!("Pixel Art")),
-        ("Motion", tl!("Motion")),
-    ];
-    let mut opts: Vec<(String, String)> = presets.iter().map(|(k, l)| ((*k).to_string(), (*l).to_string())).collect();
-    opts.extend(saved_names(app).into_iter().map(|n| (n.clone(), n)));
-    opts
-}
-
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     match id {
         i if i.starts_with(SAVED) => Some(saved_name(app, i).is_some_and(|n| n == app.ui.workspace)),
@@ -684,10 +667,6 @@ mod tests {
         for bad in ["9", "-1", "x", ""] {
             assert!(crate::menus::invoke(&mut app, &ctx, &format!("{SAVED}{bad}"), json!({})).is_err(), "{bad}");
         }
-        // The top-bar switcher lists them after the presets.
-        let keys: Vec<String> = switcher_options(&app).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys[6..], ["Comp", "Retouch"]);
-        assert!(keys.contains(&app.ui.workspace));
     }
 
     #[test]

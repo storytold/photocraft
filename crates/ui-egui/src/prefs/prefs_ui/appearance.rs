@@ -116,41 +116,6 @@ pub(super) const DARK_THEME_OPTIONS: &[(&str, ThemeKind)] = &[
     ("softDark", ThemeKind::SoftDark),
 ];
 
-pub(super) fn favorite_theme_groups(favorites: &[SavedTheme]) -> (Vec<ThemeKind>, Vec<ThemeKind>) {
-    let group = |options: &[(&str, ThemeKind)]| {
-        options.iter().filter_map(|(id, kind)| SavedTheme::parse(id).filter(|theme| favorites.contains(theme)).map(|_| *kind)).collect()
-    };
-    (group(LIGHT_THEME_OPTIONS), group(DARK_THEME_OPTIONS))
-}
-
-/// Right-click menu on the top-right appearance button. A plain click still cycles modes.
-pub(crate) fn appearance_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.button(tl!("Appearance Settings…")).clicked() {
-        open_preferences(app, "interface");
-        ui.close();
-    }
-    let (light, dark) = favorite_theme_groups(&app.session.prefs().interface.favorite_themes);
-    let has_light = !light.is_empty();
-    if !light.is_empty() || !dark.is_empty() {
-        ui.separator();
-    }
-    for kind in light {
-        if ui.selectable_label(app.ui.theme == kind, tl!(kind.label())).clicked() {
-            app.set_theme(ui.ctx(), kind);
-            ui.close();
-        }
-    }
-    if has_light && !dark.is_empty() {
-        ui.separator();
-    }
-    for kind in dark {
-        if ui.selectable_label(app.ui.theme == kind, tl!(kind.label())).clicked() {
-            app.set_theme(ui.ctx(), kind);
-            ui.close();
-        }
-    }
-}
-
 pub(super) fn system_theme(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui::Theme> {
     app.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
 }

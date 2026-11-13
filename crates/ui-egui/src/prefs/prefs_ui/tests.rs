@@ -494,7 +494,7 @@ fn preferences_interface_offers_and_applies_sync_with_system() {
 }
 
 #[test]
-fn theme_star_saves_favorite_and_menu_groups_it() {
+fn theme_star_saves_favorite() {
     use egui_kittest::{Harness, kittest::Queryable};
     let (mut app, _) = app_with_store();
     open_preferences(&mut app, "interface");
@@ -511,9 +511,6 @@ fn theme_star_saves_favorite_and_menu_groups_it() {
     h.run_steps(2);
     assert_eq!(h.state().session.prefs().interface.favorite_themes, vec![SavedTheme::Classic]);
     assert!(h.query_by_label("Remove from favorites: Classic").is_some());
-    let (light, dark) = favorite_theme_groups(&[SavedTheme::Studio, SavedTheme::Classic, SavedTheme::Adwaita]);
-    assert_eq!(light, vec![ThemeKind::Classic, ThemeKind::Adwaita]);
-    assert_eq!(dark, vec![ThemeKind::Studio]);
 }
 
 /// The favourite star badge overhangs its swatch; showing it on hover must not move the swatches
