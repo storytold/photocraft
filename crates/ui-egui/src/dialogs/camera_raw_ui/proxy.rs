@@ -24,6 +24,8 @@ pub(super) struct ProxyJob {
     pub(super) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(super) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
     pub(super) source_key: u64,
+    /// The mask whose alpha the overlay shows ([`ProxyFrame::mask_alpha`]), if it is shown.
+    pub(super) overlay: Option<u32>,
 }
 
 /// A developed proxy, ready to show.
@@ -36,6 +38,10 @@ pub(super) struct ProxyFrame {
     pub(super) ms: f64,
     pub(super) develop_ms: f64,
     pub(super) backend: &'static str,
+    /// How the frame maps to mask, spot and red-eye coordinates (a shared-engine develop).
+    pub(super) view_map: Option<photocraft_io::raw_develop::ViewMap>,
+    /// The alpha of the overlay's mask over the frame ([`ProxyJob::overlay`]).
+    pub(super) mask_alpha: Option<Vec<u8>>,
 }
 
 impl ProxyJob {
@@ -54,7 +60,16 @@ impl ProxyJob {
             None => self.develop_classic(),
         };
         let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
-        self.finish(px, backend, t0, develop_ms)
+        let shown = self.develop.as_ref().map(|d| (d, self.settings.clone().unwrap_or_else(|| d.settings(&self.params))));
+        let view_map = shown.as_ref().map(|(d, s)| d.view_map(s, pw, ph));
+        let mask_alpha = match (&shown, self.overlay) {
+            (Some((d, s)), Some(id)) => d.mask_alpha(s, id, pw, ph).ok(),
+            _ => None,
+        };
+        let mut frame = self.finish(px, backend, t0, develop_ms);
+        frame.view_map = view_map;
+        frame.mask_alpha = mask_alpha;
+        frame
     }
 
     /// The develop before the shared engine: raw-stage settings from the sensor data (or by
@@ -118,6 +133,17 @@ impl ProxyJob {
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
+        ProxyFrame {
+            px,
+            histogram,
+            histogram_ms,
+            image,
+            display: self.display,
+            ms: crate::gpu_canvas::now_ms() - t0,
+            develop_ms,
+            backend,
+            view_map: None,
+            mask_alpha: None,
+        }
     }
 }

@@ -1,42 +1,69 @@
 //! The Edit panel for a raw the shared develop engine (craft-develop, LightCraft's) develops: the
-//! dialog's settings are its [`DevelopSettings`], edited here directly.
+//! dialog's settings are its [`DevelopSettings`], edited here directly, in LightCraft's develop
+//! look ([`super::lc`]): an "Edit" title with Auto, B&W and Reset, the Profile row, then the
+//! sections under chevron headers (with their eye where the engine has a switch for them), the
+//! sliders in LightCraft's style, and the flyouts (Curve, Color Mixer, Color Grading) inside them.
 //!
 //! The sliders come from the shared control registry ([`controls::CONTROLS`]): each section lists
 //! every control of its [`Section`] in registry order, with the spec's label, range, default
 //! (double-click resets to it), step, decimals and track. A control LightCraft adds to a section,
 //! or a section it adds, shows here on a dependency bump without a change to this file. What the
 //! registry does not describe is drawn by hand on the same settings: the profile menu, Auto, B&W,
-//! the white-balance mode menu, the point curve, the Color Mixer's Hue / Saturation / Luminance
-//! tabs, vignette style, the Optics and Lens Blur switches and Upright.
+//! Reset, the white-balance mode menu, the point curve, the Color Mixer's Hue / Saturation /
+//! Luminance tabs, vignette style, the Optics and Lens Blur switches and Upright.
 //!
-//! Not drawn: Point Color and Red Eye (indexed controls, which need a sampling tool on the
-//! preview), the HDR switch (the sliders of HDR editing show only once settings have it on: an
-//! opened raw is a 16-bit document) and AI Denoise's amount (PhotoCraft has no denoise model).
+//! Not drawn: Point Color (indexed controls, which need a sampling tool on the preview), the HDR
+//! switch (the sliders of HDR editing show only once settings have it on: an opened raw is a
+//! 16-bit document) and AI Denoise's amount (PhotoCraft has no denoise model).
 
 use craft_develop_model::controls::{self, ControlSpec, Section, Track};
-use craft_develop_model::{DevelopSettings, MIXER_HUES, Treatment, Upright, VignetteStyle, WbMode, WbScale, WhiteBalance};
-use egui::{Color32, FontId};
+use craft_develop_model::{DevelopSettings, Treatment, Upright, VignetteStyle, WbMode, WbScale, WhiteBalance};
+use egui::{Rect, Sense, Stroke, pos2, vec2};
 use photocraft_io::develop_bridge::{DevelopEdit, WbBasis};
 use photocraft_io::raw_develop::DevelopSource;
 
+use super::lc::icons::Icon;
+use super::lc::widgets::{self as w, snap};
+use super::lc::{self, Lc};
 use crate::camera_raw_scope_ui::ToneZone;
-use crate::widgets;
 
 /// Controls the panel leaves out whatever the settings (module docs): AI Denoise's amount.
 pub(crate) const NOT_SHOWN: &[&str] = &["enhance.denoise"];
 
-/// The panel's own state: tabs, the curve channel, and what it drew last.
-#[derive(Default)]
+/// The panel's own state: open sections and flyouts, tabs, the curve channel, and what it drew last.
 pub(crate) struct DevelopPanel {
     /// Color Mixer tab: 0 Hue, 1 Saturation, 2 Luminance.
     pub(crate) mixer_tab: usize,
     /// Point curve channel: 0 master, 1 red, 2 green, 3 blue.
     pub(crate) curve_channel: usize,
     pub(crate) curve_state: crate::state::PointCurveState,
-    /// Every section open (the control channel's `expandAll`, and tests).
+    /// Every section and flyout open (the control channel's `expandAll`, and tests).
     pub(crate) expand_all: bool,
+    /// The sections and flyouts open (by id: "light", "curve"…).
+    pub(crate) open: Vec<String>,
     /// The control ids drawn in the last frame, in order.
     pub(crate) drawn: Vec<&'static str>,
+}
+
+impl Default for DevelopPanel {
+    fn default() -> Self {
+        // Light open, as LightCraft opens a photo
+        DevelopPanel { mixer_tab: 0, curve_channel: 0, curve_state: Default::default(), expand_all: false, open: vec!["light".into()], drawn: Vec::new() }
+    }
+}
+
+impl DevelopPanel {
+    fn is_open(&self, id: &str) -> bool {
+        self.expand_all || self.open.iter().any(|o| o == id)
+    }
+
+    fn toggle(&mut self, id: &str) {
+        if let Some(i) = self.open.iter().position(|o| o == id) {
+            self.open.remove(i);
+        } else {
+            self.open.push(id.to_string());
+        }
+    }
 }
 
 /// What a frame of the panel did beyond editing the settings.
@@ -55,7 +82,7 @@ pub(crate) struct Tools<'a> {
     pub(crate) alt: &'a mut Option<ToneZone>,
 }
 
-fn tr(s: &str) -> &str {
+pub(crate) fn tr(s: &str) -> &str {
     crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", s)
 }
 
@@ -152,44 +179,6 @@ fn view(spec: &'static ControlSpec, v: f64, basis: WbBasis) -> (&'static Control
     }
 }
 
-/// `v` on `spec`'s steps, in range.
-fn snap(spec: &ControlSpec, v: f64) -> f64 {
-    let v = if spec.step > 0.0 && spec.step.is_finite() { (v / spec.step).round() * spec.step } else { v };
-    spec.clamp(v)
-}
-
-fn hex(s: &str) -> Option<Color32> {
-    let h = s.strip_prefix('#')?;
-    let n = u32::from_str_radix(h.get(..6)?, 16).ok()?;
-    Some(Color32::from_rgb((n >> 16) as u8, (n >> 8) as u8, n as u8))
-}
-
-fn band_hue(band: u8) -> f32 {
-    MIXER_HUES.get(usize::from(band) % MIXER_HUES.len()).copied().unwrap_or(0.0) as f32
-}
-
-/// The track colours of `track` (none: PhotoCraft's plain track).
-pub(crate) fn gradient(track: Track) -> Option<Vec<Color32>> {
-    let n = MIXER_HUES.len() as u8;
-    Some(match track {
-        Track::Plain | Track::Centered => return None,
-        Track::Temp => super::controls::temp_stops(),
-        Track::Tint => super::controls::tint_stops(),
-        Track::Gradient { from, to } => vec![hex(from)?, hex(to)?],
-        Track::Hue { band } => {
-            let band = band % n;
-            [(band + n - 1) % n, band, (band + 1) % n].map(|b| widgets::hue_color(band_hue(b))).to_vec()
-        }
-        Track::Sat { band } => vec![Color32::from_gray(128), widgets::hue_color(band_hue(band))],
-        Track::Lum { band } => {
-            let c = widgets::hue_color(band_hue(band));
-            let scale = |k: f32| Color32::from_rgb((f32::from(c.r()) * k) as u8, (f32::from(c.g()) * k) as u8, (f32::from(c.b()) * k) as u8);
-            vec![scale(0.25), c, Color32::from_rgb(c.r().saturating_add(90), c.g().saturating_add(90), c.b().saturating_add(90))]
-        }
-        Track::Rainbow => widgets::hue_stops(),
-    })
-}
-
 fn tone_zone(id: &str) -> Option<ToneZone> {
     Some(match id {
         "light.exposure" => ToneZone::Exposure,
@@ -201,43 +190,20 @@ fn tone_zone(id: &str) -> Option<ToneZone> {
     })
 }
 
-/// One registry control as a slider row.
+/// One registry control as a LightCraft slider row.
 fn row(ui: &mut egui::Ui, drawn: &mut Vec<&'static str>, s: &mut DevelopSettings, spec: &'static ControlSpec, basis: WbBasis, alt: &mut Option<ToneZone>) {
     let Some(stored) = controls::get(s, spec.id) else { return };
     let (shown_spec, value, store) = view(spec, stored, basis);
-    let mut x = value as f32;
-    let grad = gradient(shown_spec.track);
     let on = enabled(spec.id, s);
-    let r = ui
-        .push_id(spec.id, |ui| {
-            ui.add_enabled_ui(on, |ui| {
-                widgets::slider_row_mapped(
-                    ui,
-                    tr(shown_spec.label),
-                    &mut x,
-                    shown_spec.min as f32..=shown_spec.max as f32,
-                    u32::from(shown_spec.decimals),
-                    grad.as_deref(),
-                    shown_spec.default as f32,
-                    widgets::TrackMap {
-                        position: &|v| shown_spec.position(f64::from(v)) as f32,
-                        value_at: &|p| snap(shown_spec, shown_spec.value_at(f64::from(p))) as f32,
-                    },
-                )
-            })
-            .inner
-        })
-        .inner;
+    let out = ui.push_id(spec.id, |ui| w::slider(ui, shown_spec, value, on, tr(shown_spec.label))).inner;
     drawn.push(spec.id);
-    if r.dragged()
-        && ui.input(|i| i.modifiers.alt)
+    if out.alt_drag
         && let Some(zone) = tone_zone(spec.id)
     {
         *alt = Some(zone);
     }
-    if r.changed() && x.is_finite() {
-        let v = store(snap(shown_spec, f64::from(x)));
-        controls::set(s, spec.id, v);
+    if let Some(v) = out.value.filter(|v| v.is_finite()) {
+        controls::set(s, spec.id, store(snap(shown_spec, v)));
         if spec.id.starts_with("wb.") {
             s.wb.mode = WbMode::Custom;
             s.wb.scale = scale(basis);
@@ -269,84 +235,163 @@ fn rows(
     }
 }
 
-fn collapse(ui: &mut egui::Ui, expand: bool, title: &str, open: bool, force: Option<bool>, body: impl FnOnce(&mut egui::Ui)) -> egui::CollapsingResponse<()> {
-    egui::CollapsingHeader::new(egui::RichText::new(tr(title)).font(FontId::proportional(13.0)))
-        .id_salt(("camera-raw-develop-section", title))
-        .default_open(open)
-        .open(if expand { Some(true) } else { force })
-        .show(ui, body)
+/// The engine's switch for a section (its eye), where it has one.
+fn eye_id(section: Section) -> Option<&'static str> {
+    Some(match section {
+        Section::Light => "light",
+        Section::Color => "color",
+        Section::Effects => "effects",
+        Section::Detail => "detail",
+        Section::Optics => "optics",
+        Section::Geometry => "geometry",
+        Section::LensBlur => "lensBlur",
+        Section::Calibration => "calibration",
+        _ => return None,
+    })
 }
 
-/// Auto, B&W and the profile, above the sections.
-fn header(
+/// A section under a LightCraft header, its body when open, and the divider below.
+fn section(
     ui: &mut egui::Ui,
     st: &mut DevelopPanel,
     s: &mut DevelopSettings,
-    source: Option<&DevelopSource>,
-    basis: WbBasis,
-    tools: &mut Tools<'_>,
-    out: &mut PanelOut,
+    id: &str,
+    title: &str,
+    eye: Option<&str>,
+    body: impl FnOnce(&mut egui::Ui, &mut DevelopPanel, &mut DevelopSettings),
 ) {
-    ui.horizontal(|ui| {
-        if let Some(source) = source
-            && ui.button(tl!("Auto")).on_hover_text(tl!("Set the tone sliders from the image")).clicked()
-        {
-            source.auto_tone(s).apply(s);
-            out.auto = true;
-        }
-        let bw = s.treatment == Treatment::Bw;
-        let r = widgets::pill_tab(ui, tr("B&W"), bw).on_hover_text(tl!("Black & White"));
-        if r.clicked() {
-            s.treatment = if bw { Treatment::Color } else { Treatment::Bw };
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label(tr("Profile"));
-        let mut id = s.profile.id.clone();
-        let mut options: Vec<(String, &str)> = photocraft_io::raw_develop::PROFILES.iter().map(|p| (p.id.to_string(), tr(p.name))).collect();
-        if !options.iter().any(|(o, _)| *o == id) {
-            // a profile this build doesn't know (an imported one in LightCraft): kept, and shown by id
-            options.push((id.clone(), s.profile.id.as_str()));
-        }
-        if widgets::dropdown(ui, "camera-raw-profile", tl!("Profile"), &mut id, &options, 180.0) {
-            s.profile.id = id;
-        }
-    });
-    if s.profile.id != "lc.color" {
-        rows(ui, st, s, Section::Profile, basis, tools.alt, |_| true);
+    let open = st.is_open(id);
+    let (resp, toggled) = w::section_header(ui, id, tr(title), open, eye.map(|e| s.section_enabled(e)));
+    if let (Some(on), Some(e)) = (toggled, eye) {
+        s.set_section_enabled(e, on);
+    } else if resp.clicked() {
+        st.toggle(id);
+    }
+    if open {
+        body(ui, st, s);
+        ui.add_space(8.0);
+    }
+    w::divider(ui);
+}
+
+/// A flyout inside a section; `body` when open.
+fn flyout(ui: &mut egui::Ui, st: &mut DevelopPanel, id: &str, title: &str, icon: Icon, body: impl FnOnce(&mut egui::Ui, &mut DevelopPanel)) {
+    let open = st.is_open(id);
+    if w::flyout_row(ui, id, title, icon, open).clicked() {
+        st.toggle(id);
+    }
+    if open {
+        body(ui, st);
+        ui.add_space(4.0);
     }
 }
 
-/// The white-balance mode menu: a preset or Auto sets its white, as LightCraft's does.
-fn white_balance(ui: &mut egui::Ui, s: &mut DevelopSettings, source: Option<&DevelopSource>, basis: WbBasis) {
-    ui.horizontal(|ui| {
-        ui.label(tr("White Balance"));
-        let mut mode = s.wb.mode;
-        let options: Vec<(WbMode, &str)> = WbMode::ALL.iter().map(|m| (*m, tr(m.label()))).collect();
-        if widgets::dropdown(ui, "camera-raw-wb-mode", tl!("White Balance"), &mut mode, &options, 150.0) && mode != s.wb.mode {
-            match (mode, source) {
-                (WbMode::Custom, _) | (_, None) => s.wb.mode = mode,
-                (_, Some(source)) => {
-                    let (temp, tint) = source.white_balance_for(mode);
-                    s.wb = WhiteBalance { mode, temp: temp.clamp(2000.0, 50000.0), tint: tint.clamp(-150.0, 150.0), scale: scale(basis) };
-                }
+/// "Edit", then Auto, B&W and Reset, as LightCraft's header has them.
+fn header(ui: &mut egui::Ui, unedited: &DevelopSettings, s: &mut DevelopSettings, source: Option<&DevelopSource>, out: &mut PanelOut) {
+    w::title(ui, tr("Edit"));
+    w::padded(ui, 8, 14, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if let Some(source) = source
+                && w::text_button(ui, tr("Auto"), false).on_hover_text(tr("Set the tone sliders from the image")).clicked()
+            {
+                source.auto_tone(s).apply(s);
+                out.auto = true;
             }
-        }
+            let bw = s.treatment == Treatment::Bw;
+            if w::text_button(ui, tr("B&W"), bw).on_hover_text(tr("Black & White")).clicked() {
+                s.treatment = if bw { Treatment::Color } else { Treatment::Bw };
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if w::text_button(ui, tr("Reset"), false).on_hover_text(tr("Reset all settings")).clicked() {
+                    *s = unedited.clone();
+                }
+            });
+        });
     });
 }
 
-/// The point curve of the chosen channel (0..1 in the model, 0..255 in the editor).
+/// The Profile row (a borderless dropdown of craft-develop's profiles) and its Amount.
+fn profile(ui: &mut egui::Ui, st: &mut DevelopPanel, s: &mut DevelopSettings, basis: WbBasis, alt: &mut Option<ToneZone>) {
+    let t = Lc::get(ui.ctx());
+    w::padded(ui, 14, 14, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tr("Profile")).font(t.font(13.0)).color(t.text_dim));
+            let known = photocraft_io::raw_develop::PROFILES.iter().find(|p| p.id == s.profile.id);
+            // a profile this build doesn't know (an imported one in LightCraft): kept, and shown by id
+            let name = known.map_or(s.profile.id.clone(), |p| tr(p.name).to_string());
+            let r = w::dropdown(ui, &name, t.font(15.0), t.text_label);
+            egui::Popup::menu(&r).show(|ui| {
+                lc::style(ui);
+                for p in photocraft_io::raw_develop::PROFILES {
+                    if w::menu_item(ui, tr(p.name), p.id == s.profile.id) {
+                        s.profile.id = p.id.to_string();
+                    }
+                }
+            });
+        });
+    });
+    if s.profile.id != "lc.color" {
+        rows(ui, st, s, Section::Profile, basis, alt, |_| true);
+        ui.add_space(6.0);
+    }
+}
+
+/// The white-balance row: the mode menu (a preset or Auto sets its white, as LightCraft's does).
+fn white_balance(ui: &mut egui::Ui, s: &mut DevelopSettings, source: Option<&DevelopSource>, basis: WbBasis) {
+    let t = Lc::get(ui.ctx());
+    w::padded(ui, 2, 2, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
+            let r = w::dropdown(ui, tr(s.wb.mode.label()), t.font(14.0), t.text_label);
+            egui::Popup::menu(&r).show(|ui| {
+                lc::style(ui);
+                for mode in WbMode::ALL {
+                    if mode == WbMode::Custom || !w::menu_item(ui, tr(mode.label()), s.wb.mode == mode) || mode == s.wb.mode {
+                        continue;
+                    }
+                    match source {
+                        None => s.wb.mode = mode,
+                        Some(source) => {
+                            let (temp, tint) = source.white_balance_for(mode);
+                            s.wb = WhiteBalance { mode, temp: temp.clamp(2000.0, 50000.0), tint: tint.clamp(-150.0, 150.0), scale: scale(basis) };
+                        }
+                    }
+                }
+            });
+        });
+    });
+}
+
+/// The point curve of the chosen channel (0..1 in the model, 0..255 in the editor), drawn as
+/// LightCraft's: channel dots above a dark square with a grid and a white curve.
 fn curve(ui: &mut egui::Ui, st: &mut DevelopPanel, s: &mut DevelopSettings) -> egui::Rect {
-    ui.horizontal_wrapped(|ui| {
-        for (i, name) in ["Master", "Red", "Green", "Blue"].into_iter().enumerate() {
-            let on = st.curve_channel == i;
-            let response = widgets::pill_tab(ui, tr(name), on);
-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tr(name)));
-            if response.clicked() && !on {
-                st.curve_channel = i;
-                st.curve_state = Default::default();
+    let t = Lc::get(ui.ctx());
+    let channels = [
+        ("Master", t.text),
+        ("Red", egui::Color32::from_rgb(220, 60, 60)),
+        ("Green", egui::Color32::from_rgb(60, 190, 80)),
+        ("Blue", egui::Color32::from_rgb(60, 120, 230)),
+    ];
+    w::padded(ui, 4, 4, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            for (i, (name, color)) in channels.into_iter().enumerate() {
+                let on = st.curve_channel == i;
+                let (r, resp) = ui.allocate_exact_size(vec2(22.0, 26.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tr(name)));
+                let c = pos2(r.center().x, r.top() + 11.0);
+                ui.painter().circle_stroke(c, 8.0, Stroke::new(1.5, color));
+                if on {
+                    ui.painter().circle_filled(c, 4.0, color);
+                    ui.painter().line_segment([pos2(r.left() + 3.0, r.bottom() - 1.0), pos2(r.right() - 3.0, r.bottom() - 1.0)], Stroke::new(2.0, t.text));
+                }
+                if resp.on_hover_text(tr(name)).clicked() && !on {
+                    st.curve_channel = i;
+                    st.curve_state = Default::default();
+                }
             }
-        }
+        });
     });
     let c = &mut s.curve;
     let pts = match st.curve_channel {
@@ -359,16 +404,43 @@ fn curve(ui: &mut egui::Ui, st: &mut DevelopPanel, s: &mut DevelopSettings) -> e
     if points.len() < 2 {
         points = vec![[0.0, 0.0], [255.0, 255.0]];
     }
-    let (rect, changed) = super::controls::curve_points_editor(ui, &mut points, &mut st.curve_state);
+    let (rect, changed) = w::padded(ui, 4, 8, |ui| curve_editor(ui, &mut points, &mut st.curve_state));
     if changed {
         *pts = points.iter().map(|[x, y]| craft_geom::Point::new(f64::from(*x) / 255.0, f64::from(*y) / 255.0)).collect();
     }
     rect
 }
 
-/// Upright's modes (Off … Guided) and Guided's guides, as the classic panel has them.
+/// The point-curve editor in LightCraft's look, with PhotoCraft's curve gestures (click to add,
+/// drag, right-click to delete).
+fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, state: &mut crate::state::PointCurveState) -> (Rect, bool) {
+    let t = Lc::get(ui.ctx());
+    let side = ui.available_width().min(270.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
+    let painter = ui.painter_at(rect.expand(6.0));
+    painter.rect_filled(rect, 2.0, t.canvas);
+    for i in 1..4 {
+        let f = i as f32 / 4.0;
+        let grid = Stroke::new(1.0, t.chrome);
+        painter.line_segment([pos2(rect.left() + f * side, rect.top()), pos2(rect.left() + f * side, rect.bottom())], grid);
+        painter.line_segment([pos2(rect.left(), rect.top() + f * side), pos2(rect.right(), rect.top() + f * side)], grid);
+    }
+    painter.line_segment([rect.left_bottom(), rect.right_top()], Stroke::new(1.0, t.track.gamma_multiply(0.6)));
+    let to_screen = |x: f32, y: f32| pos2(rect.left() + x / 255.0 * side, rect.bottom() - y / 255.0 * side);
+    let changed = crate::point_curve::interact(ui, &resp, rect, points, state).changed;
+    let lut = photocraft_algo::camera_raw::curve_lut(points, 256);
+    let line: Vec<egui::Pos2> = lut.iter().enumerate().map(|(i, v)| to_screen(i as f32, v * 255.0)).collect();
+    painter.add(egui::Shape::line(line, Stroke::new(2.0, t.text)));
+    for (i, c) in points.iter().enumerate() {
+        let at = to_screen(c[0], c[1]);
+        painter.circle_filled(at, 4.0, if state.selected == Some(i) { t.accent } else { t.text });
+    }
+    (rect, changed)
+}
+
+/// Upright's modes (Off … Guided) and Guided's guides.
 fn upright(ui: &mut egui::Ui, s: &mut DevelopSettings, tools: &mut Tools<'_>) {
-    widgets::section_label(ui, tl!("Upright"));
+    w::sub_title(ui, tr("Upright"));
     const MODES: [(Upright, &str, &str); 6] = [
         (Upright::Off, "Off", "Disable Upright"),
         (Upright::Auto, "Auto", "Auto: apply balanced perspective corrections"),
@@ -377,138 +449,145 @@ fn upright(ui: &mut egui::Ui, s: &mut DevelopSettings, tools: &mut Tools<'_>) {
         (Upright::Full, "Full", "Full: apply level, horizontal, and vertical perspective corrections"),
         (Upright::Guided, "Guided", "Guided: draw two or more guides to customize perspective corrections"),
     ];
-    ui.horizontal_wrapped(|ui| {
-        for (mode, name, tip) in MODES {
-            let on = s.geometry.upright == mode;
-            let response = widgets::pill_tab(ui, tr(name), on).on_hover_text(tr(tip));
-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tr(name)));
-            if response.clicked() {
-                if !on {
-                    let g = &mut s.geometry;
-                    g.upright = mode;
-                    // guides belong to Guided, and the solved transform to the mode it was solved for
-                    g.guides.clear();
-                    g.upright_transform = None;
+    w::padded(ui, 2, 4, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            for (mode, name, tip) in MODES {
+                let on = s.geometry.upright == mode;
+                if w::text_button(ui, tr(name), on).on_hover_text(tr(tip)).clicked() {
+                    if !on {
+                        let g = &mut s.geometry;
+                        g.upright = mode;
+                        // guides belong to Guided, and the solved transform to the mode it was solved for
+                        g.guides.clear();
+                        g.upright_transform = None;
+                    }
+                    tools.guides.active = mode == Upright::Guided;
+                    if tools.guides.active {
+                        *tools.sampler = false;
+                    }
                 }
-                tools.guides.active = mode == Upright::Guided;
-                if tools.guides.active {
-                    *tools.sampler = false;
-                }
+            }
+        });
+        if s.geometry.upright == Upright::Guided {
+            let t = Lc::get(ui.ctx());
+            let n = s.geometry.guides.len();
+            let text = if n < 2 {
+                tl!("Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).")
+            } else {
+                tl!("Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.")
+            };
+            ui.label(egui::RichText::new(text).size(11.5).color(t.text_dim));
+            if n > 0 && w::text_button(ui, tl!("Clear Guides"), false).clicked() {
+                s.geometry.guides.clear();
+                tools.guides.selected = None;
             }
         }
     });
-    if s.geometry.upright == Upright::Guided {
-        let n = s.geometry.guides.len();
-        let text = if n < 2 {
-            tl!("Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).")
-        } else {
-            tl!("Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.")
-        };
-        ui.label(egui::RichText::new(text).small().weak());
-        if n > 0 && ui.button(tl!("Clear Guides")).clicked() {
-            s.geometry.guides.clear();
-            tools.guides.selected = None;
-        }
-    }
+}
+
+/// A LightCraft check box row.
+fn check(ui: &mut egui::Ui, v: &mut bool, label: &str) {
+    w::padded(ui, 2, 2, |ui| {
+        ui.checkbox(v, label);
+    });
 }
 
 /// The panel: every registry section in order, each with its controls. Edits `e.settings` in place.
 pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&DevelopSource>, st: &mut DevelopPanel, mut tools: Tools<'_>) -> PanelOut {
+    lc::style(ui);
+    ui.spacing_mut().item_spacing.y = 0.0;
     st.drawn.clear();
     let basis = e.basis();
+    let unedited = e.unedited().clone();
     let s = &mut e.settings;
     let mut out = PanelOut::default();
-    header(ui, st, s, source, basis, &mut tools, &mut out);
-    let expand = st.expand_all;
-    for section in sections() {
-        match section {
-            // drawn by the header, the Color Mixer and Effects
-            Section::Profile | Section::BwMix | Section::Vignette | Section::Grain => {}
-            Section::Light => {
-                collapse(ui, expand, "Light", true, None, |ui| rows(ui, st, s, Section::Light, basis, tools.alt, |_| true));
-            }
-            Section::Curve => {
-                collapse(ui, expand, "Curve", false, None, |ui| {
-                    out.curve_rect = Some(curve(ui, st, s));
-                    rows(ui, st, s, Section::Curve, basis, tools.alt, |_| true);
-                });
-            }
-            Section::Color => {
-                collapse(ui, expand, "Color", true, None, |ui| {
-                    white_balance(ui, s, source, basis);
-                    rows(ui, st, s, Section::Color, basis, tools.alt, |_| true);
-                });
-            }
-            Section::Mixer => {
+    header(ui, &unedited, s, source, &mut out);
+    w::divider(ui);
+    profile(ui, st, s, basis, tools.alt);
+    w::divider(ui);
+    let all = sections();
+    for sec in all.iter().copied() {
+        let eye = eye_id(sec);
+        match sec {
+            // drawn by the Profile row, in Light (Curve), Color (the mixers, Color Grading) and Effects
+            Section::Profile | Section::Curve | Section::Mixer | Section::BwMix | Section::Grading | Section::Vignette | Section::Grain => {}
+            Section::Light => section(ui, st, s, "light", "Light", eye, |ui, st, s| {
+                rows(ui, st, s, Section::Light, basis, tools.alt, |_| true);
+                ui.add_space(6.0);
+                if all.contains(&Section::Curve) {
+                    flyout(ui, st, "curve", tr("Curve"), Icon::Curve, |ui, st| {
+                        out.curve_rect = Some(curve(ui, st, s));
+                        rows(ui, st, s, Section::Curve, basis, tools.alt, |_| true);
+                    });
+                }
+            }),
+            Section::Color => section(ui, st, s, "color", "Color", eye, |ui, st, s| {
+                white_balance(ui, s, source, basis);
+                rows(ui, st, s, Section::Color, basis, tools.alt, |_| true);
+                ui.add_space(6.0);
                 let bw = s.treatment == Treatment::Bw;
-                collapse(ui, expand, if bw { "B&W Mixer" } else { "Color Mixer" }, false, None, |ui| {
+                flyout(ui, st, "mixer", if bw { tr("B&W Mixer") } else { tr("Color Mixer") }, Icon::Radial, |ui, st| {
                     if bw {
                         rows(ui, st, s, Section::BwMix, basis, tools.alt, |_| true);
                         return;
                     }
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, name) in ["Hue", "Saturation", "Luminance"].into_iter().enumerate() {
-                            let on = st.mixer_tab == i;
-                            let response = widgets::pill_tab(ui, tr(name), on);
-                            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tr(name)));
-                            if response.clicked() {
-                                st.mixer_tab = i;
-                            }
-                        }
-                    });
+                    let tabs = [tr("Hue"), tr("Saturation"), tr("Luminance")];
+                    if let Some(i) = w::padded(ui, 4, 4, |ui| w::segmented(ui, &tabs, Some(st.mixer_tab))) {
+                        st.mixer_tab = i;
+                    }
                     let tab = st.mixer_tab;
                     rows(ui, st, s, Section::Mixer, basis, tools.alt, |c| on_tab(c.track, tab));
                 });
-            }
-            Section::Effects => {
-                collapse(ui, expand, "Effects", false, None, |ui| {
-                    rows(ui, st, s, Section::Effects, basis, tools.alt, |_| true);
-                    widgets::section_label(ui, tr(Section::Vignette.label()));
-                    let mut style = s.vignette.style;
-                    let styles = [
-                        (VignetteStyle::HighlightPriority, tl!("Highlight Priority")),
-                        (VignetteStyle::ColorPriority, tl!("Color Priority")),
-                        (VignetteStyle::PaintOverlay, tl!("Paint Overlay")),
-                    ];
-                    if widgets::dropdown(ui, "camera-raw-develop-vignette-style", tl!("Vignetting"), &mut style, &styles, 200.0) {
-                        s.vignette.style = style;
-                    }
-                    rows(ui, st, s, Section::Vignette, basis, tools.alt, |_| true);
-                    widgets::section_label(ui, tr(Section::Grain.label()));
-                    rows(ui, st, s, Section::Grain, basis, tools.alt, |_| true);
-                });
-            }
-            Section::Optics => {
-                collapse(ui, expand, "Optics", false, None, |ui| {
-                    widgets::checkbox(ui, &mut s.optics.remove_ca, tl!("Remove Chromatic Aberration"));
-                    widgets::checkbox(ui, &mut s.optics.lens_profile, tl!("Enable Lens Corrections"));
-                    rows(ui, st, s, Section::Optics, basis, tools.alt, |_| true);
-                });
-            }
+                if all.contains(&Section::Grading) {
+                    flyout(ui, st, "grading", tr("Color Grading"), Icon::GradeAll, |ui, st| {
+                        rows(ui, st, s, Section::Grading, basis, tools.alt, |_| true);
+                    });
+                }
+            }),
+            Section::Effects => section(ui, st, s, "effects", "Effects", eye, |ui, st, s| {
+                rows(ui, st, s, Section::Effects, basis, tools.alt, |_| true);
+                w::sub_title(ui, tr(Section::Vignette.label()));
+                let styles = [VignetteStyle::HighlightPriority, VignetteStyle::ColorPriority, VignetteStyle::PaintOverlay];
+                let labels = [tr("Highlight"), tr("Color"), tr("Paint")];
+                let active = styles.iter().position(|v| *v == s.vignette.style);
+                if let Some(i) = w::padded(ui, 2, 4, |ui| w::segmented(ui, &labels, active))
+                    && let Some(v) = styles.get(i)
+                {
+                    s.vignette.style = *v;
+                }
+                rows(ui, st, s, Section::Vignette, basis, tools.alt, |_| true);
+                w::sub_title(ui, tr(Section::Grain.label()));
+                rows(ui, st, s, Section::Grain, basis, tools.alt, |_| true);
+            }),
+            Section::Optics => section(ui, st, s, "optics", "Optics", eye, |ui, st, s| {
+                check(ui, &mut s.optics.remove_ca, tl!("Remove Chromatic Aberration"));
+                check(ui, &mut s.optics.lens_profile, tl!("Enable Lens Corrections"));
+                rows(ui, st, s, Section::Optics, basis, tools.alt, |_| true);
+            }),
             Section::Geometry => {
                 // Shift+T opens the section (the Guided Upright tool)
-                let reveal = std::mem::take(&mut tools.guides.reveal);
-                let r = collapse(ui, expand, "Geometry", false, reveal.then_some(true), |ui| {
+                if std::mem::take(&mut tools.guides.reveal) && !st.is_open("geometry") {
+                    st.toggle("geometry");
+                }
+                section(ui, st, s, "geometry", "Geometry", eye, |ui, st, s| {
                     upright(ui, s, &mut tools);
-                    widgets::section_label(ui, tl!("Manual Transformations"));
+                    w::sub_title(ui, tl!("Manual Transformations"));
                     rows(ui, st, s, Section::Geometry, basis, tools.alt, |_| true);
                 });
-                if reveal {
-                    r.header_response.scroll_to_me(Some(egui::Align::TOP));
-                }
             }
-            Section::LensBlur => {
-                collapse(ui, expand, "Lens Blur", false, None, |ui| {
-                    widgets::checkbox(ui, &mut s.lens_blur.enabled, tl!("Apply"));
-                    rows(ui, st, s, Section::LensBlur, basis, tools.alt, |_| true);
-                });
-            }
+            Section::LensBlur => section(ui, st, s, "lensBlur", "Lens Blur", eye, |ui, st, s| {
+                check(ui, &mut s.lens_blur.enabled, tl!("Apply"));
+                rows(ui, st, s, Section::LensBlur, basis, tools.alt, |_| true);
+            }),
             // any other section, including one added to the registry later: its controls in order
             other => {
-                collapse(ui, expand, other.label(), false, None, |ui| rows(ui, st, s, other, basis, tools.alt, |_| true));
+                let id = format!("{other:?}");
+                section(ui, st, s, &id, other.label(), eye, |ui, st, s| rows(ui, st, s, other, basis, tools.alt, |_| true));
             }
         }
     }
+    ui.add_space(40.0);
     out
 }
 
@@ -517,12 +596,12 @@ mod tests {
     use super::*;
     use photocraft_algo::camera_raw::CameraRaw;
 
-    /// One frame of the panel on `e`, every section open; the control ids it drew.
+    /// One frame of the panel on `e`; the control ids it drew.
     fn draw(ctx: &egui::Context, e: &mut DevelopEdit, st: &mut DevelopPanel, frame: f64) -> Vec<&'static str> {
         let mut guides = crate::camera_raw_guides_ui::GuideTool::default();
         let (mut sampler, mut alt) = (false, None);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(330.0, 20000.0))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(330.0, 30000.0))),
             time: Some(frame),
             ..Default::default()
         };
@@ -572,6 +651,10 @@ mod tests {
             draw(&ctx, &mut e, &mut st, frame + 2.0).into_iter().filter(|id| controls::find(id).is_some_and(|c| c.section == Section::Light)).collect();
         let registry: Vec<&str> = controls::in_section(Section::Light).map(|c| c.id).filter(|id| shown(id, &e.settings)).collect();
         assert_eq!(light, registry);
+        // folded, a section draws no sliders; Light is open by default
+        let mut st = DevelopPanel::default();
+        let shown_now = draw(&ctx, &mut e, &mut st, frame + 3.0);
+        assert!(shown_now.contains(&"light.exposure") && !shown_now.contains(&"color.vibrance"), "{shown_now:?}");
     }
 
     /// A slider writes its control by id, on the spec's steps and in its range, and a white
@@ -589,9 +672,8 @@ mod tests {
         assert!((v - 30.0).abs() < 1e-6, "{v}");
         assert!((store(v) - craft_develop_model::crs::rel_to_kelvin(30.0)).abs() < 1e-6);
         assert_eq!(view(temp, 5000.0, WbBasis::Kelvin { as_shot_temp: 5000.0, as_shot_tint: 0.0 }).0.id, "wb.temp");
-        assert!(gradient(Track::Temp).is_some() && gradient(Track::Plain).is_none());
-        assert_eq!(gradient(Track::Gradient { from: "#ff0000", to: "#0000ff" }), Some(vec![Color32::from_rgb(255, 0, 0), Color32::from_rgb(0, 0, 255)]));
-        assert_eq!(gradient(Track::Gradient { from: "bad", to: "#0000ff" }), None, "a bad colour is a plain track, not a crash");
+        assert!(w::track_stops(Track::Temp).is_some() && w::track_stops(Track::Plain).is_none());
         assert!(sections().contains(&Section::Light) && !sections().contains(&Section::PointColor), "indexed-only sections have no rows");
+        assert_eq!(eye_id(Section::Light), Some("light"));
     }
 }

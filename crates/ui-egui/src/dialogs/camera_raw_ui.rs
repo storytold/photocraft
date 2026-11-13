@@ -33,9 +33,13 @@ mod controls;
 mod convert;
 pub(crate) mod develop_panel;
 mod filmstrip;
+pub(crate) mod lc;
+mod local;
+mod local_panels;
 mod menu;
 mod open;
 mod proxy;
+mod rail;
 mod sidecar;
 
 pub use controls::show;
@@ -119,6 +123,10 @@ pub struct CameraRawDialog {
     /// for what still reads one (sidecars, the filmstrip, the control channel's `set`).
     pub(crate) develop: Option<photocraft_io::develop_bridge::DevelopEdit>,
     pub(crate) develop_panel: develop_panel::DevelopPanel,
+    /// The develop view's tool (its icon rail): Edit, Heal, Masking, Red Eye.
+    pub(crate) tool: rail::Tool,
+    /// The local tools' selection and settings (masks, spots, red eyes).
+    pub(crate) local: local::LocalTools,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
@@ -161,6 +169,15 @@ impl CameraRawDialog {
         result["panel"] = json!(if self.develop.is_some() { "develop" } else { "classic" });
         result["develop"] = self.develop.as_ref().map(|e| e.settings.to_json()).unwrap_or(Value::Null);
         result["developControls"] = json!(self.develop_panel.drawn);
+        result["tool"] = json!(self.tool.id());
+        result["sections"] = json!(self.develop_panel.open);
+        result["selectedMask"] = json!(self.local.selected);
+        result["maskComponent"] = json!(self.local.component);
+        result["maskDraw"] = json!(format!("{:?}", self.local.draw).to_lowercase());
+        result["maskOverlay"] = json!(self.local.overlay);
+        result["maskOverlayShown"] = json!(self.local.overlay_tex.as_ref().map(|(_, id)| *id));
+        result["selectedSpot"] = json!(self.local.spot);
+        result["selectedEye"] = json!(self.local.eye);
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
@@ -269,6 +286,22 @@ impl CameraRawDialog {
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
+            overlay: self.overlay_mask(),
+        }
+    }
+
+    /// The mask whose overlay the preview shows (Masking, a mask selected, the overlay on).
+    fn overlay_mask(&self) -> Option<u32> {
+        let e = self.develop.as_ref()?;
+        self.local.overlay_mask(self.tool, &e.settings)
+    }
+
+    /// The tool changed from `was`: a gesture ends, and the overlay comes or goes.
+    pub(crate) fn tool_changed(&mut self, was: rail::Tool) {
+        self.local.end_gesture();
+        self.local.paused = false;
+        if was == rail::Tool::Masking || self.tool == rail::Tool::Masking {
+            self.dirty = true;
         }
     }
 
@@ -285,6 +318,22 @@ impl CameraRawDialog {
             }
             self.before_display_key = Some(frame.display.key);
         }
+        if frame.view_map.is_some() {
+            self.local.view_map = frame.view_map;
+        }
+        self.local.overlay_tex = match (frame.mask_alpha, self.overlay_mask()) {
+            (Some(alpha), Some(id)) => local::overlay_image(&alpha, self.pw, self.ph).map(|img| {
+                let tex = match self.local.overlay_tex.take() {
+                    Some((mut t, _)) => {
+                        t.set(img, egui::TextureOptions::LINEAR);
+                        t
+                    }
+                    None => ctx.load_texture("camera-raw-mask-overlay", img, egui::TextureOptions::LINEAR),
+                };
+                (tex, id)
+            }),
+            _ => None,
+        };
         self.after_histogram = frame.histogram;
         self.histogram_ms = frame.histogram_ms;
         self.processed = frame.px;

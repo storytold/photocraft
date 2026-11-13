@@ -32,7 +32,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" | "view" | "demosaic" | "filmstrip" | "develop" => {}
+            "set" | "scope" | "view" | "demosaic" | "filmstrip" | "develop" | "local" => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "expandAll" if value.is_boolean() => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "expandAll" => {
                 return Some(Err(format!("RAW Develop {key} must be a boolean")));
@@ -189,6 +189,11 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if let Some(on) = ui.get("expandAll").and_then(Value::as_bool) {
         d.develop_panel.expand_all = on;
     }
+    if let Some(v) = ui.get("local")
+        && let Err(e) = local_update(d, v)
+    {
+        return Some(Err(e));
+    }
     if ui.get("auto").and_then(Value::as_bool) == Some(true) {
         d.auto_all = true;
     }
@@ -230,4 +235,132 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     super::filmstrip::refresh_thumbnails(app, true);
     super::filmstrip::refresh_shown_thumbnail(app);
     Some(Ok(super::describe(app).unwrap_or(Value::Null)))
+}
+
+/// A point `[x, y]` on the shown frame (0..1 across it).
+fn frame_point(v: &Value) -> Option<craft_geom::Point> {
+    let a = v.as_array()?;
+    let (x, y) = (a.first()?.as_f64()?, a.get(1)?.as_f64()?);
+    (x.is_finite() && y.is_finite()).then(|| craft_geom::Point::new(x, y))
+}
+
+/// The control channel's `local`: the develop view's tools, as the rail and their panels and
+/// gestures drive them. `tool` ("edit", "heal", "masking", "redEye"), `sections` (the Edit panel's
+/// open sections and flyouts), `newMask` (a kind: brush, linear, radial, luminanceRange,
+/// colorRange), `addComponent` ({kind, op: add | subtract}), `selectMask` (an id, or null),
+/// `overlay` (show the selected mask's overlay), `brush` ({points: [[x, y]…] on the shown frame,
+/// size, feather, flow, erase}: a stroke painted into the selected brush component), `heal`
+/// ({at: [x, y], mode: heal | clone | remove}: a spot placed as a click places it), `redEye`
+/// ({at: [x, y], pet}). Checked whole before anything changes; one undo step.
+fn local_update(d: &mut super::CameraRawDialog, v: &Value) -> Result<(), String> {
+    use super::local;
+    let o = v.as_object().ok_or("RAW Develop local must be an object")?;
+    let edit = d.develop.as_ref().ok_or("the develop view's tools apply only to a raw the shared develop engine develops")?;
+    let mut settings = edit.settings.clone();
+    let mut st = d.local.clone();
+    let (mut tool, mut sections) = (d.tool, None);
+    let map = st.view_map.clone();
+    let result = (|| -> Result<(), String> {
+        for (key, value) in o {
+            match key.as_str() {
+                "tool" => tool = value.as_str().and_then(super::rail::Tool::from_id).ok_or("tool must be edit, heal, masking or redEye")?,
+                "sections" => {
+                    let list = value.as_array().ok_or("sections must be a list of section ids")?;
+                    sections = Some(
+                        list.iter().map(|s| s.as_str().map(str::to_string).ok_or("sections must be a list of section ids")).collect::<Result<Vec<_>, _>>()?,
+                    );
+                }
+                "newMask" => {
+                    local::add_mask(&mut st, &mut settings, value.as_str().ok_or("newMask must be a mask kind")?)?;
+                }
+                "addComponent" => {
+                    let kind = value.get("kind").and_then(Value::as_str).ok_or("addComponent needs a kind")?;
+                    let op = match value.get("op").and_then(Value::as_str).unwrap_or("add") {
+                        "add" => craft_develop_model::MaskOp::Add,
+                        "subtract" => craft_develop_model::MaskOp::Subtract,
+                        _ => return Err("addComponent op must be add or subtract".into()),
+                    };
+                    local::add_component(&mut st, &mut settings, kind, op)?;
+                }
+                "selectMask" => {
+                    let id = match value {
+                        Value::Null => None,
+                        v => {
+                            let id = v.as_u64().and_then(|i| u32::try_from(i).ok()).ok_or("selectMask must be a mask id")?;
+                            Some(settings.masks.iter().any(|m| m.id == id).then_some(id).ok_or(format!("no mask {id}"))?)
+                        }
+                    };
+                    local::select(&mut st, &settings, id);
+                }
+                "overlay" => st.overlay = value.as_bool().ok_or("overlay must be a boolean")?,
+                "brush" => {
+                    let map = map.as_ref().ok_or("the preview has not rendered yet")?;
+                    let on_photo = local::selected_mask(&st, &mut settings).ok_or("no mask is selected")?.on_photo;
+                    let f = |k: &str| value.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+                    if let Some(v) = f("size") {
+                        st.brush.size = v.clamp(0.0025, 0.25);
+                    }
+                    if let Some(v) = f("feather") {
+                        st.brush.feather = v.clamp(0.0, 100.0);
+                    }
+                    if let Some(v) = f("flow") {
+                        st.brush.flow = v.clamp(1.0, 100.0);
+                    }
+                    if let Some(e) = value.get("erase").and_then(Value::as_bool) {
+                        st.brush.erase = e;
+                    }
+                    let pts = value.get("points").and_then(Value::as_array).ok_or("brush needs points")?;
+                    let pts = pts
+                        .iter()
+                        .take(4096)
+                        .map(|p| frame_point(p).map(|u| map.to_mask(on_photo, u)))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or("brush points must be [x, y] pairs")?;
+                    local::paint_stroke(&mut st, &mut settings, pts)?;
+                }
+                "heal" => {
+                    let map = map.as_ref().ok_or("the preview has not rendered yet")?;
+                    let at = value.get("at").and_then(frame_point).ok_or("heal needs at: [x, y]")?;
+                    if let Some(mode) = value.get("mode") {
+                        st.heal.mode = serde_json::from_value(mode.clone()).map_err(|_| "heal mode must be heal, clone, remove or fill")?;
+                    }
+                    let n = map.to_norm(at);
+                    let (sx, _) = map.long_scale();
+                    let dx = 2.5 * st.heal.size / sx.max(1e-9);
+                    local::add_spot(&mut st, &mut settings, n, Some(craft_geom::Point::new(if n.x + dx <= 1.0 { dx } else { -dx }, 0.0)));
+                }
+                "redEye" => {
+                    let map = map.as_ref().ok_or("the preview has not rendered yet")?;
+                    let at = value.get("at").and_then(frame_point).ok_or("redEye needs at: [x, y]")?;
+                    st.pet = value.get("pet").and_then(Value::as_bool).unwrap_or(st.pet);
+                    local::add_eye(&mut st, &mut settings, map.to_norm(at), 0.02, 0.015);
+                }
+                other => return Err(format!("unknown RAW Develop local property {other}")),
+            }
+        }
+        Ok(())
+    })();
+    result?;
+    let overlay_was = d.overlay_mask();
+    d.local = st;
+    if tool != d.tool {
+        let was = d.tool;
+        d.tool = tool;
+        d.tool_changed(was);
+    }
+    if let Some(open) = sections {
+        d.develop_panel.open = open;
+    }
+    if d.develop.as_ref().is_some_and(|e| e.settings != settings) {
+        remember_edit(d);
+        if let Some(e) = d.develop.as_mut() {
+            e.settings = settings;
+            d.params = e.camera_raw(&d.params);
+        }
+        d.dirty = true;
+    }
+    if d.overlay_mask() != overlay_was {
+        d.dirty = true;
+    }
+    Ok(())
 }

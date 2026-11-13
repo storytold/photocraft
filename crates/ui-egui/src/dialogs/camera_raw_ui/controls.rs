@@ -356,10 +356,28 @@ pub(super) fn curve_points_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>,
 fn develop_props(ui: &mut egui::Ui, d: &mut CameraRawDialog, sampler: &mut bool) -> Option<bool> {
     let edit = d.develop.as_mut()?;
     let before = edit.settings.clone();
-    let tools = super::develop_panel::Tools { guides: &mut d.guides, sampler, alt: &mut d.scope.alt_tone };
-    let out = super::develop_panel::panel(ui, edit, d.develop_source.as_deref(), &mut d.develop_panel, tools);
-    d.curve_rect = out.curve_rect;
-    d.auto_all |= out.auto;
+    match d.tool {
+        super::rail::Tool::Edit => {
+            let tools = super::develop_panel::Tools { guides: &mut d.guides, sampler, alt: &mut d.scope.alt_tone };
+            let out = super::develop_panel::panel(ui, edit, d.develop_source.as_deref(), &mut d.develop_panel, tools);
+            d.curve_rect = out.curve_rect;
+            d.auto_all |= out.auto;
+        }
+        tool => {
+            super::lc::style(ui);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let overlay_was = d.local.overlay_mask(tool, &edit.settings);
+            match tool {
+                super::rail::Tool::Masking => super::local_panels::masking(ui, &mut d.local, &mut edit.settings),
+                super::rail::Tool::Heal => super::local_panels::heal(ui, &mut d.local, &mut edit.settings),
+                _ => super::local_panels::red_eye(ui, &mut d.local, &mut edit.settings),
+            }
+            // another mask selected, or the overlay switched: the preview renders its alpha
+            if d.local.overlay_mask(tool, &edit.settings) != overlay_was {
+                d.dirty = true;
+            }
+        }
+    }
     let edited = edit.settings != before;
     if edited {
         d.params = edit.camera_raw(&d.params);
@@ -426,6 +444,147 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// The develop view's Heal, Masking and Red Eye on the preview's image rect `r`: the mask
+/// overlay, the tool's outlines and handles, and its gestures.
+fn local_preview(preview: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &egui::Response, panning: bool) {
+    if d.show_before || d.tool == super::rail::Tool::Edit {
+        return;
+    }
+    let Some(e) = d.develop.as_mut() else { return };
+    super::local::paint_overlay(preview, &d.local, r, d.tool, &e.settings);
+    let source = d.develop_source.clone();
+    let (pw, ph) = (d.pw, d.ph);
+    let sample = move |s: &craft_develop_model::DevelopSettings, n: craft_geom::Point| source.as_ref().and_then(|src| src.color_range_sample(s, n, pw, ph));
+    let out = super::local::preview(preview, &mut d.local, d.tool, &mut e.settings, r, response, panning, &sample);
+    if out.edited {
+        d.params = e.camera_raw(&d.params);
+        d.dirty = true;
+    }
+}
+
+/// The dialog's colours and panel width: PhotoCraft's, or LightCraft's in the develop view.
+struct Look {
+    chrome: Color32,
+    /// Round the preview.
+    body: Color32,
+    canvas: Color32,
+    dock: Color32,
+    separator: Color32,
+    panel_w: f32,
+}
+
+impl Look {
+    fn of(ctx: &egui::Context, lc_view: bool) -> Look {
+        let t = Tokens::get(ctx);
+        if lc_view {
+            let l = super::lc::Lc::get(ctx);
+            Look { chrome: l.chrome, body: l.canvas, canvas: l.canvas, dock: l.chrome, separator: l.divider, panel_w: super::lc::PANEL_W + super::lc::RAIL_W }
+        } else {
+            Look { chrome: t.chrome, body: t.chrome, canvas: t.canvas, dock: t.dock, separator: t.separator, panel_w: PANEL_W }
+        }
+    }
+}
+
+/// The settings panel's area in `right` (with the develop view's rail at its right edge), and a
+/// `Ui` inside its margins to draw the panel in.
+fn panels(ui: &mut egui::Ui, painter: &egui::Painter, d: &mut CameraRawDialog, right: ERect) -> (ERect, egui::Ui) {
+    if d.develop.is_some() {
+        let right = rail_and_panel(ui, painter, d, right);
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(0.0, 8.0))));
+        super::lc::style(&mut props);
+        return (right, props);
+    }
+    let t = Tokens::get(ui.ctx());
+    painter.rect_filled(right, 0.0, t.dock);
+    painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
+    (right, ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0)))))
+}
+
+/// The develop view's icon rail at the right edge of `right`, and the panel's background beside
+/// it; the panel's rect.
+fn rail_and_panel(ui: &mut egui::Ui, painter: &egui::Painter, d: &mut CameraRawDialog, mut right: ERect) -> ERect {
+    let lc_t = super::lc::Lc::get(ui.ctx());
+    // the rail at the far right, the panel beside it, as LightCraft lays them out
+    let rail = ERect::from_min_max(pos2(right.right() - super::lc::RAIL_W, right.top()), right.max);
+    right.max.x = rail.left();
+    let was = d.tool;
+    super::rail::rail(ui, rail, &mut d.tool);
+    if d.tool != was {
+        d.tool_changed(was);
+    }
+    painter.rect_filled(right, 0.0, lc_t.chrome);
+    painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, lc_t.divider));
+    right
+}
+
+/// The dialog's footer buttons (LightCraft's in the develop view); the action clicked.
+fn footer(fu: &mut egui::Ui, d: &mut CameraRawDialog, lc_view: bool, ok_label: &'static str) -> Option<&'static str> {
+    let t = Tokens::get(fu.ctx());
+    let lc_t = super::lc::Lc::get(fu.ctx());
+    let mut action = None;
+    if lc_view {
+        super::lc::style(fu);
+    }
+    if lc_view {
+        // LightCraft's footer: a filled Open, rounded outline buttons for the rest
+        if super::lc::widgets::accent_button(fu, ok_label, 90.0).clicked() {
+            action = Some("ok");
+        }
+        if super::lc::widgets::pill_button(fu, tl!("Cancel"), Some(90.0)).clicked() {
+            action = Some("cancel");
+        }
+        if d.target == Target::OpenRaw
+            && super::lc::widgets::pill_button(fu, tl!("Done"), Some(90.0))
+                .on_hover_text(tl!("Save the settings to each raw's sidecar without opening it"))
+                .clicked()
+        {
+            action = Some("done");
+        }
+        fu.add_space(12.0);
+        if super::lc::widgets::text_button(fu, tl!("Before (Y)"), d.show_before).clicked() {
+            d.show_before = !d.show_before;
+        }
+        fu.label(egui::RichText::new(format!("{:.0} ms", d.render_ms)).color(lc_t.text_dim));
+        fu.add_space(12.0);
+        if super::lc::widgets::pill_button(fu, tl!("Save Settings…"), None).on_hover_text(tl!("Save these settings as a Camera Raw .xmp file")).clicked() {
+            action = Some("save");
+        }
+        if super::lc::widgets::pill_button(fu, tl!("Load Settings…"), None).on_hover_text(tl!("Load settings from a Camera Raw .xmp file")).clicked() {
+            action = Some("load");
+        }
+    } else {
+        if let Some(role) = widgets::dialog_buttons(
+            fu,
+            &[
+                widgets::DialogButton::new(widgets::ButtonRole::Default, ok_label, 90.0),
+                widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 90.0),
+            ],
+        ) {
+            action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
+        }
+        // Done (open-time dialog): keep the settings in the raws' sidecars, open nothing.
+        if d.target == Target::OpenRaw
+            && fu
+                .add_sized([90.0, 28.0], egui::Button::new(tl!("Done")))
+                .on_hover_text(tl!("Save the settings to each raw's sidecar without opening it"))
+                .clicked()
+        {
+            action = Some("done");
+        }
+        fu.add_space(12.0);
+        widgets::checkbox(fu, &mut d.show_before, tl!("Before (Y)"));
+        fu.label(egui::RichText::new(format!("{:.0} ms", d.render_ms)).color(t.text_faint));
+        fu.add_space(12.0);
+        if fu.button(tl!("Save Settings…")).on_hover_text(tl!("Save these settings as a Camera Raw .xmp file")).clicked() {
+            action = Some("save");
+        }
+        if fu.button(tl!("Load Settings…")).on_hover_text(tl!("Load settings from a Camera Raw .xmp file")).clicked() {
+            action = Some("load");
+        }
+    }
+    action
 }
 
 /// Whether to bring Camera Raw's window to the front: when the main window has just gained focus
@@ -499,7 +658,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         d.clear_recovered_error(&mut app.ui);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
         let painter = ui.painter().clone();
-        painter.rect_filled(full, 0.0, t.chrome);
+        // A raw the shared engine develops: LightCraft's develop view (its palette, panel and rail).
+        let lc_view = d.develop.is_some();
+        let look = Look::of(ctx, lc_view);
+        painter.rect_filled(full, 0.0, look.chrome);
         let title = ERect::from_min_size(full.min, vec2(full.width(), if own_window { 0.0 } else { 30.0 }));
         if !own_window {
             painter.rect_filled(title, 0.0, t.dock);
@@ -525,8 +687,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 film_click = Some(super::filmstrip::FilmClick::SelectAll);
             }
         }
+        let panel_w = look.panel_w;
         let preview_body =
-            ERect::from_min_max(pos2(body.left() + film_w, body.top()), pos2((body.right() - PANEL_W).max(body.left() + film_w + 1.0), body.bottom()));
+            ERect::from_min_max(pos2(body.left() + film_w, body.top()), pos2((body.right() - panel_w).max(body.left() + film_w + 1.0), body.bottom()));
+        painter.rect_filled(preview_body, 0.0, look.body);
         let view = ERect::from_min_max(
             preview_body.min + vec2(16.0, 16.0),
             pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
@@ -537,18 +701,24 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let navigation = &mut app.ui.camera_raw_preview;
         let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
-        preview.painter().rect_filled(view, 0.0, t.canvas);
+        preview.painter().rect_filled(view, 0.0, look.canvas);
         // The Guided Upright tool takes the preview's clicks as the sampler does (the Hand and
         // Zoom tools put it down, and so does choosing the sampler with S).
         if d.params.upright != "guided" || scope.sampler_tool {
             d.guides.active = false;
         }
         let guided = d.guides.active;
-        let mut clicks_taken = scope.sampler_tool || guided;
+        // the develop view's Heal, Masking and Red Eye draw on the preview
+        let local_tool = lc_view && d.tool != super::rail::Tool::Edit && !d.local.paused && !d.show_before;
+        let mut clicks_taken = scope.sampler_tool || guided || local_tool;
         let (r, response, panning, zoom_box) = crate::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut clicks_taken, animated_zoom);
         if !clicks_taken {
             scope.sampler_tool = false;
             d.guides.active = false;
+            if local_tool {
+                // the Hand or Zoom took the preview: the tool waits until it is picked again
+                d.local.paused = true;
+            }
         }
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
         if let Some(tex) = tex {
@@ -565,6 +735,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
             d.scope.preview_rect = Some(r);
             crate::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+            if lc_view {
+                local_preview(&mut preview, d, r, &response, panning);
+            }
             if guided && d.guides.active && !d.show_before {
                 let shown = d.params.clone();
                 let (fw, fh) = (d.full_w, d.full_h);
@@ -592,13 +765,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
         }
         // Panels.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
+        let (right, mut props) = panels(ui, &painter, d, ERect::from_min_max(pos2(body.right() - panel_w, body.top()), body.max));
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
-        crate::camera_raw_scope_ui::header(&mut props, d, scope);
+        if !lc_view || d.tool == super::rail::Tool::Edit {
+            crate::camera_raw_scope_ui::header(&mut props, d, scope);
+        }
         d.scope.alt_tone = None;
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
@@ -744,36 +916,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         // Footer.
         let foot = ERect::from_min_max(pos2(full.left(), full.bottom() - footer_h), full.max);
-        painter.rect_filled(foot, 0.0, t.dock);
-        painter.line_segment([foot.left_top(), foot.right_top()], Stroke::new(1.0, t.separator));
+        painter.rect_filled(foot, 0.0, look.dock);
+        painter.line_segment([foot.left_top(), foot.right_top()], Stroke::new(1.0, look.separator));
         let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        if let Some(role) = widgets::dialog_buttons(
-            &mut fu,
-            &[
-                widgets::DialogButton::new(widgets::ButtonRole::Default, ok_label, 90.0),
-                widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 90.0),
-            ],
-        ) {
-            action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
-        }
-        // Done (open-time dialog): keep the settings in the raws' sidecars, open nothing.
-        if d.target == Target::OpenRaw
-            && fu
-                .add_sized([90.0, 28.0], egui::Button::new(tl!("Done")))
-                .on_hover_text(tl!("Save the settings to each raw's sidecar without opening it"))
-                .clicked()
-        {
-            action = Some("done");
-        }
-        fu.add_space(12.0);
-        widgets::checkbox(&mut fu, &mut d.show_before, tl!("Before (Y)"));
-        fu.label(egui::RichText::new(format!("{:.0} ms", d.render_ms)).color(t.text_faint));
-        fu.add_space(12.0);
-        if fu.button(tl!("Save Settings…")).on_hover_text(tl!("Save these settings as a Camera Raw .xmp file")).clicked() {
-            action = Some("save");
-        }
-        if fu.button(tl!("Load Settings…")).on_hover_text(tl!("Load settings from a Camera Raw .xmp file")).clicked() {
-            action = Some("load");
+        if let Some(a) = footer(&mut fu, d, lc_view, ok_label) {
+            action = Some(a);
         }
         // One undo step per finished edit: a pointer gesture from where it began, and an edit made
         // without the pointer (a button from the keyboard or a screen reader) from this frame's start.

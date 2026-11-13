@@ -1942,3 +1942,60 @@ fn the_filter_on_a_layer_keeps_the_classic_panel() {
     assert!(r["develop"].is_null());
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": {"light": {"exposure": 1.0}}}})).unwrap().is_err());
 }
+
+/// The develop view's masks, spots and red eyes are develop settings: they stay with their raw
+/// when the filmstrip shows another and comes back, and the other raw has none of its own.
+#[test]
+fn local_edits_stay_with_their_raw_across_the_filmstrip() {
+    let (mut app, ctx, _) = filmstrip_app(2);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"view": {}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"local": {"tool": "masking", "newMask": "radial"}}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["masks"].as_array().map(Vec::len), Some(1), "{r}");
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"local": {"heal": {"at": [0.5, 0.5]}, "redEye": {"at": [0.2, 0.2]}}}})).unwrap().unwrap();
+    assert_eq!((r["develop"]["spots"].as_array().map(Vec::len), r["develop"]["red_eye"].as_array().map(Vec::len)), (Some(1), Some(1)), "{r}");
+    film(&mut app, &ctx, json!({"click": 1})).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"view": {}}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["masks"].as_array().map(Vec::len), Some(0), "the other raw: {}", r["develop"]["masks"]);
+    film(&mut app, &ctx, json!({"click": 0})).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"view": {}}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["masks"].as_array().map(Vec::len), Some(1), "back: {}", r["develop"]["masks"]);
+    assert_eq!(r["develop"]["spots"].as_array().map(Vec::len), Some(1));
+    assert_eq!(r["develop"]["red_eye"].as_array().map(Vec::len), Some(1));
+    // a bad local request changes nothing
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"local": {"newMask": "radial", "addComponent": {"kind": "sky"}}}})).unwrap().is_err());
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"view": {}}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["masks"].as_array().map(Vec::len), Some(1));
+}
+
+/// Open develops the whole frame with the dialog's masks: a mask that brightens the frame
+/// brightens the opened document.
+#[test]
+fn open_develops_with_the_masks() {
+    let mean_of = |mask: bool| {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("IMG_0001.dng", &dng).unwrap();
+        let raw = take_queued(&mut app).unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"view": {}}})).unwrap().unwrap();
+        if mask {
+            let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"local": {"tool": "masking", "newMask": "radial"}}})).unwrap().unwrap();
+            let mut masks = r["develop"]["masks"].clone();
+            masks[0]["components"][0]["shape"]["rx"] = json!(2.0);
+            masks[0]["components"][0]["shape"]["ry"] = json!(2.0);
+            masks[0]["adjust"]["exposure"] = json!(1.5);
+            menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": {"masks": masks}}})).unwrap().unwrap();
+        } else {
+            // an edit of the same kind of size, so both develop again on Open
+            menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": {"light": {"contrast": 1.0}}}})).unwrap().unwrap();
+        }
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+        assert_eq!(r["redeveloped"], true, "{r}");
+        let st = app.session.active().unwrap();
+        let s = st.doc.layers.iter().find_map(|l| l.surface()).unwrap();
+        let px: Vec<[f32; 4]> = (0..8).map(|i| s.rgba(4 + i * 4, 16)).collect();
+        px.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / px.len() as f32
+    };
+    let (plain, masked) = (mean_of(false), mean_of(true));
+    assert!(masked > plain + 0.1, "the mask brightens the opened document: {plain} → {masked}");
+}
