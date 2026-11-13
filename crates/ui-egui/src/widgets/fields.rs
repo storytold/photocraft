@@ -33,12 +33,22 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
-    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+    let (r, out_of_range, _) = value_field_alerting_in(ui, name, value, range, suffix, width, true);
+    (r, out_of_range)
 }
 
 /// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
-/// typed value past `range` becomes the closest end, unrounded.
-pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
+/// typed value past `range` becomes the closest end, unrounded. The third flag is true once the
+/// field is left after text that is no number was typed (`abc`, #13619): the value stays as it
+/// was, and the caller shows the reference's invalid-entry alert. A field left empty is not that.
+pub fn value_field_alerting(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+) -> (Response, bool, bool) {
     value_field_alerting_in(ui, name, value, range, suffix, width, false)
 }
 
@@ -50,7 +60,7 @@ fn value_field_alerting_in(
     suffix: &str,
     width: f32,
     whole: bool,
-) -> (Response, bool) {
+) -> (Response, bool, bool) {
     let (lo, hi) = (*range.start(), *range.end());
     let fit = |v: f32| {
         if !v.is_finite() {
@@ -74,8 +84,14 @@ fn value_field_alerting_in(
     // The field's own range is wide, so the typed value reaches here unclamped.
     let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
     let out_id = r.id.with("out-of-range");
+    let invalid_id = r.id.with("no-number-typed");
     if r.gained_focus() {
-        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| {
+            d.remove_temp::<bool>(out_id);
+            d.remove_temp::<bool>(invalid_id);
+            d.remove_temp::<bool>(r.id.with("parses"));
+            d.remove_temp::<bool>(r.id.with("blank"));
+        });
     }
     if r.changed() && typed.is_finite() {
         *value = fit(typed);
@@ -91,8 +107,23 @@ fn value_field_alerting_in(
     if !r.has_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     }
+    // Text that is no number leaves the value as it was; an emptied field is left as before.
+    if r.has_focus() || r.lost_focus() {
+        let blank = ui.ctx().data(|d| d.get_temp::<bool>(r.id.with("blank"))).unwrap_or(false);
+        match crate::widgets::typed_text_parses(ui.ctx(), r.id) {
+            Some(false) if !blank => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(out_id);
+                d.insert_temp(invalid_id, true);
+            }),
+            Some(_) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(invalid_id);
+            }),
+            None => {}
+        }
+    }
     let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
-    (r, alert)
+    let invalid = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(invalid_id)).unwrap_or(false);
+    (r, alert, invalid)
 }
 
 /// A [`value_field`] whose visible caption was drawn apart from it (an options-bar caption in a
@@ -606,7 +637,10 @@ fn number_edit(
                     parse_num_in(s, units)
                 };
                 // Whether the text being typed is a number at all, for [`typed_text_parses`].
-                ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
+                ctx.data_mut(|d| {
+                    d.insert_temp(id.with("parses"), v.is_some());
+                    d.insert_temp(id.with("blank"), s.trim().is_empty());
+                });
                 if ctx.memory(|m| m.has_focus(id)) && !blank && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
