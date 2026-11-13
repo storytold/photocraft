@@ -5,13 +5,18 @@
 //! of them are kept in the shape the dialog shows and turned into the command's at OK ([`command_params`]): the
 //! resolution's unit (the command takes pixels/inch), Bit Depth (`"8"` or `"16"`) and Place (`"across"` or `"down"`).
 
-use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, NumberUnit, Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, NumberUnit, Param, ParamKind, ParamResult};
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
 use photocraft_engine::prefs::Unit;
 use serde_json::{Map, Value, json};
 
+use crate::PhotocraftApp;
+
 pub(crate) const COMMAND: &str = "file.automate.contactSheetII";
+
+/// The reference application's alert for OK while no image folder is chosen (#13692).
+pub(crate) const NO_FOLDER_ALERT: &str = "Select an Image Folder";
 
 const UNITS: [(&str, &str); 3] = [("inches", "inches"), ("cm", "cm"), ("pixels", "pixels")];
 const MODES: [(&str, &str); 4] = [("gray", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
@@ -23,15 +28,16 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
     list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect()
 }
 
-/// The rows of the dialog, opening on the folder `dir`.
-pub(crate) fn rows(dir: String) -> Vec<Param> {
+/// The rows of the dialog. A fresh dialog has no folder chosen (#13692): not the working folder, nor that of the
+/// document in front.
+pub(crate) fn rows() -> Vec<Param> {
     let resolution = vec![
         NumberUnit::new("in", UnitKind::PixelsPerInch, tl!("pixels/inch"), 1.0),
         NumberUnit::new("cm", UnitKind::PixelsPerCentimetre, tl!("pixels/cm"), 2.54),
     ];
     vec![
         Param::section(tl!("Source Images")),
-        Param::new("input", tl!("Input"), ParamKind::text(dir)).browse(PathKind::Folder),
+        Param::new("input", tl!("Input"), ParamKind::text("")).browse(PathKind::Folder).hint(tl!("[Select Image Folder]")),
         // The folder, then Include Subfolders (on) and, right below it, Group Images by Folder (off, greyed while
         // Include Subfolders is off).
         Param::new("includeSubfolders", tl!("Include Subfolders"), ParamKind::bool(true)),
@@ -58,6 +64,18 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
         Param::new("font", tl!("Font"), ParamKind::text(photocraft_text::fonts::DEFAULT_FAMILY)).enabled_when("caption", true),
         Param::new("fontSize", tl!("Font size"), ParamKind::number(Some(1.0), None, 12.0, 1.0, 1)).unit(UnitKind::Points).enabled_when("caption", true),
     ]
+}
+
+/// The `ParamFamily::check` of the dialog: OK without a folder shows [`NO_FOLDER_ALERT`] over the dialog, which stays
+/// open with its values. A folder that holds no images or is gone still reaches the command and gets its error.
+pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    if result.fields.text("input").is_some_and(|dir| !dir.is_empty()) {
+        return Ok(());
+    }
+    let message = tl!(NO_FOLDER_ALERT);
+    // Repeated confirms (automation) keep one alert.
+    crate::dialogs::alerts::alert(app, message);
+    Err(Label::from(message))
 }
 
 /// The units Width and Height were last shown in, kept by [`follow_units`].
