@@ -583,3 +583,36 @@ fn plain_documents_lose_nothing() {
     cmyk.mode = ColorMode::Cmyk;
     assert_eq!(losses(&cmyk).len(), 1, "a document OpenRaster can't hold at all");
 }
+
+/// Layers naming one image entry decode it once and share it, and each distinct entry is
+/// charged against the archive's inflate budget: before, every reference inflated the entry
+/// again, uncharged.
+#[test]
+fn layers_sharing_an_image_inflate_it_once() {
+    let png = solid_png(2, 2, [9, 8, 7, 255]);
+    let xml = format!("<image w='2' h='2'><stack>{}</stack></image>", "<layer src='a.png'/>".repeat(3));
+    let bytes = archive(&xml, &[("a.png", png.clone())]);
+    let r = import_within("x.ora", &bytes, &Interrupt::NONE, png.len()).unwrap();
+    assert_eq!(r.document.layers.len(), 3);
+    for l in &r.document.layers {
+        assert_eq!(l.surface().unwrap().to_interleaved(Rect::new(1, 1, 2, 2)), [9, 8, 7, 255]);
+    }
+    let two = "<image w='2' h='2'><stack><layer src='a.png'/><layer src='b.png'/></stack></image>";
+    let bytes = archive(two, &[("a.png", png.clone()), ("b.png", png.clone())]);
+    let e = import_within("x.ora", &bytes, &Interrupt::NONE, 2 * png.len() - 1).unwrap_err().to_string();
+    assert!(e.contains("inflate"), "{e}");
+    assert!(import_within("x.ora", &bytes, &Interrupt::NONE, 2 * png.len()).is_ok());
+}
+
+/// A shared decode still costs every layer its pixels: each converts and writes the whole image,
+/// even a transparent one that prunes to nothing. Thirty-two references of a 2048² image use up
+/// the 1 GiB pixel budget (8 bytes a pixel); a thirty-third is refused, a few import.
+#[test]
+fn every_reference_to_a_shared_image_is_charged_its_pixels() {
+    let png = solid_png(2048, 2048, [0; 4]);
+    let stack = |n: usize| format!("<image w='4' h='4'><stack>{}</stack></image>", "<layer src='a.png'/>".repeat(n));
+    let e = crate::import("x.ora", &archive(&stack(33), &[("a.png", png.clone())])).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("1 GiB limit"), "{e}");
+    let r = crate::import("x.ora", &archive(&stack(2), &[("a.png", png)])).unwrap();
+    assert_eq!(r.document.layers.len(), 2);
+}

@@ -73,8 +73,9 @@ files GIMP 3.2 writes; no GIMP code. Every read is bounds-checked and returns an
 malformed file, never a panic: canvases at most 300,000 px a side and 1 GiB of decoded pixels,
 at most 8,192 layers and 1,024 channels, nesting at most 64 deep, property payloads at most
 64 MiB, strings 1 MiB, gzipped files inflating to at most 1 GiB. Tile data is decoded into the
-exact size the drawable declares; a run that crosses a tile or a zlib stream that ends early is an
-error. The property lengths the specification warns about (`PROP_COLORMAP`, `PROP_USER_UNIT`) are
+exact size the drawable declares; a run that crosses a tile, an RLE long run of length zero or a
+zlib stream that ends early is an error. Each tile reads at most 1.5 whole tiles of data (the most
+GIMP reads for one), even when the next tile pointer is further away or not past it. The property lengths the specification warns about (`PROP_COLORMAP`, `PROP_USER_UNIT`) are
 computed from the payload instead of trusted. Truncated files are covered by tests at every cut.
 
 ## Verification

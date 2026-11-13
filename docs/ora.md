@@ -53,7 +53,8 @@ The reader takes the archive with the bounded ZIP reader of `photocraft-format` 
 CRC-checked), parses `stack.xml` with `roxmltree` (16 MiB cap), and decodes each layer image
 through `photocraft-codecs` with size limits. Canvases are at most 300,000 px a side, at most
 8,192 layers and groups, nesting at most `MAX_GROUP_DEPTH` deep, and 1 GiB of decoded pixels in
-total. Malformed archives, XML, numbers and images return errors; truncated and corrupted files
+total. Layers naming the same image entry share one decode (each still counts its pixels against
+the limit), and the layer images inflated from one archive total at most 2 GiB. Malformed archives, XML, numbers and images return errors; truncated and corrupted files
 are covered by tests.
 
 ## Verification

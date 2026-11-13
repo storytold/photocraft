@@ -835,3 +835,80 @@ fn blank_layers_are_not_charged_for_pruned_tiles() {
     }
     assert_eq!(budget, MAX_PIXEL_BYTES);
 }
+
+/// A long run (op 127 repeat, op 128 literal) with a zero count consumes input and writes
+/// nothing, so a stream of them never fills the tile: it is refused, not skipped.
+#[test]
+fn zero_length_long_rle_runs_are_errors() {
+    for stream in [&[127u8, 0, 0, 9, 0, 9][..], &[128, 0, 0, 0, 9]] {
+        let e = rle_decode(stream, 1, 1).unwrap_err().to_string();
+        assert!(e.contains("empty"), "{stream:?}: {e}");
+    }
+    // Long runs with a count still decode.
+    assert_eq!(rle_decode(&[127, 1, 0, 5], 1, 256).unwrap(), vec![5; 256]);
+    assert_eq!(rle_decode(&[128, 0, 2, 7, 8], 1, 2).unwrap(), vec![7, 8]);
+}
+
+/// A zlib stream whose pixels follow `empty` empty stored blocks (5 bytes each, inflating to
+/// nothing), for `data`.
+fn padded_zlib(empty: usize, data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    for _ in 0..empty {
+        out.extend_from_slice(&[0, 0, 0, 0xff, 0xff]);
+    }
+    let len = data.len() as u16;
+    out.push(1);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&(!len).to_le_bytes());
+    out.extend_from_slice(data);
+    let (mut a, mut b) = (1u32, 0u32);
+    for &v in data {
+        a = (a + u32::from(v)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    out
+}
+
+/// GIMP reads at most 1.5 whole tiles of data per tile, so a tile's input stops there even when
+/// the next pointer is far away (or not past it): input that only produces pixels beyond that is
+/// cut short instead of being read to the end of the file once per tile.
+#[test]
+fn a_tile_reads_at_most_one_and_a_half_tiles_of_data() {
+    let bpp = 4;
+    let pixels = (TILE * TILE) as usize;
+    let limit = pixels * bpp * 3 / 2;
+    let data = vec![9u8; pixels * bpp];
+    let within = padded_zlib(10, &data);
+    assert!(within.len() <= limit);
+    let past = padded_zlib(limit / 5, &data);
+    for (bytes, ok) in [(&within, true), (&past, false)] {
+        let c = Cursor { b: bytes, pos: 0, wide: false };
+        let r = decode_tile(&c, 0, bytes.len(), Compression::Zlib, bpp, pixels);
+        assert_eq!(r.is_ok(), ok, "{} bytes: {:?}", bytes.len(), r.err());
+    }
+    // The same bound applies to RLE: a stream of one-byte runs (two bytes of input per pixel
+    // byte, more than GIMP reads for a tile) passes it.
+    let runs: Vec<u8> = std::iter::repeat_n([0u8, 9], pixels * bpp).flatten().collect();
+    let c = Cursor { b: &runs, pos: 0, wide: false };
+    assert!(decode_tile(&c, 0, runs.len(), Compression::Rle, bpp, pixels).is_err());
+}
+
+/// Every tile of a drawable pointing at one stream whose pixels lie past the tile-data bound:
+/// before, each tile read on to the end of the file (the next pointer is not past it).
+#[test]
+fn tiles_sharing_one_oversized_stream_are_errors() {
+    let mut img = TestImage::rgb8(64, 128);
+    img.compression = Compression::Zlib;
+    img.layers.push(TestLayer::rgba("L", 64, 128, rgba(64, 128, |_, _| [9, 9, 9, 255])));
+    let mut bytes = img.write();
+    // Point both tiles at a padded stream appended at the end.
+    let stream = bytes.len();
+    bytes.extend(padded_zlib(TILE as usize * TILE as usize * 4 * 3 / 2 / 5, &[9u8; 64 * 64 * 4]));
+    let level = bytes.windows(8).rposition(|w| w == [0, 0, 0, 64, 0, 0, 0, 128]).unwrap();
+    for t in 0..2 {
+        let slot = level + 8 + t * 8;
+        bytes[slot..slot + 8].copy_from_slice(&(stream as u64).to_be_bytes());
+    }
+    assert!(open(&bytes).is_err());
+}

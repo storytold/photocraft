@@ -1,6 +1,6 @@
 //! `decode_gif_frames`: every frame of an animated GIF, composited, with its delay.
 
-use photocraft_codecs::{AnimationFrame, CodecError, DecodeOptions, DecodeWarning, Format, Limits, decode, decode_gif_frames};
+use photocraft_codecs::{AnimationFrame, CodecError, DecodeOptions, DecodeWarning, Format, Limits, decode, decode_gif_frames, for_each_gif_frame};
 
 const RED: [u8; 4] = [255, 0, 0, 255];
 const GREEN: [u8; 4] = [0, 255, 0, 255];
@@ -165,4 +165,70 @@ fn the_byte_budget_covers_all_frames_together() {
     let opts = DecodeOptions { limits, ..Default::default() };
     assert_eq!(decode_gif_frames(&solid_gif(&[RED, GREEN], 4, 4, 100), &opts).unwrap().len(), 2);
     assert!(matches!(decode_gif_frames(&solid_gif(&[RED, GREEN, BLUE], 4, 4, 100), &opts), Err(CodecError::LimitExceeded(_))));
+}
+
+/// What a streaming caller's callback gives back: its own refusal, or a codec error.
+#[derive(Debug)]
+enum Stop {
+    Refused,
+    Codec(CodecError),
+}
+
+impl From<CodecError> for Stop {
+    fn from(e: CodecError) -> Self {
+        Stop::Codec(e)
+    }
+}
+
+#[test]
+fn streaming_hands_out_each_frame_before_decoding_the_next() {
+    // Two 4x4 RGBA frames (64 bytes each) fit the budget; a third does not. A decoder that read
+    // every frame before handing any out would fail on the budget with no callback at all.
+    let g = solid_gif(&[RED, GREEN, BLUE], 4, 4, 100);
+    let opts = DecodeOptions { limits: Limits { max_alloc: 128, ..Limits::default() }, ..Default::default() };
+    let mut seen = Vec::new();
+    let r = for_each_gif_frame(&g, &opts, &mut |f| {
+        seen.push(pixels(&f));
+        Ok::<(), Stop>(())
+    });
+    assert!(matches!(r, Err(Stop::Codec(CodecError::LimitExceeded(_)))), "{r:?}");
+    assert_eq!(seen, [RED.repeat(16), GREEN.repeat(16)]);
+}
+
+#[test]
+fn streaming_stops_decoding_when_the_callback_refuses_a_frame() {
+    let g = solid_gif(&[RED, GREEN, BLUE], 4, 4, 100);
+    // The refusal comes back as it was given, before the budget refuses the third frame.
+    let opts = DecodeOptions { limits: Limits { max_alloc: 128, ..Limits::default() }, ..Default::default() };
+    let mut calls = 0;
+    let r = for_each_gif_frame(&g, &opts, &mut |_| {
+        calls += 1;
+        Err(Stop::Refused)
+    });
+    assert!(matches!(r, Err(Stop::Refused)), "{r:?}");
+    assert_eq!(calls, 1);
+    // Without a refusal every frame arrives, in order, and the count says so.
+    let mut delays = Vec::new();
+    let done = for_each_gif_frame(&g, &DecodeOptions::default(), &mut |f| {
+        delays.push(f.delay_ms);
+        Ok::<(), CodecError>(())
+    })
+    .unwrap();
+    assert_eq!((done.frames, delays), (3, vec![100; 3]));
+    assert!(done.warnings.is_empty());
+}
+
+#[test]
+fn streaming_reports_a_damaged_later_frame_once_the_rest_are_out() {
+    let good = solid_gif(&[RED, GREEN, BLUE], 8, 8, 100);
+    let cut = &good[..good.len() - 12];
+    let mut calls = 0;
+    let done = for_each_gif_frame(cut, &DecodeOptions::default(), &mut |f| {
+        calls += 1;
+        assert!(f.image.warnings.is_empty(), "the frames handed out carry no warning of their own");
+        Ok::<(), CodecError>(())
+    })
+    .unwrap();
+    assert_eq!(done.frames, calls);
+    assert_eq!(done.warnings, [DecodeWarning::Truncated { format: Format::Gif }]);
 }
