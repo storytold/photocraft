@@ -315,14 +315,24 @@ mod tests {
         #[test]
         fn clicking_the_scrollbar_track_keeps_the_list_open() {
             let mut h = open(60);
-            let row = h.get_by_label("Document 0").rect();
-            let at = pos2(row.right() - 3.0, WINDOW.y - 60.0);
+            let first_row = h.get_by_label("Document 0").rect();
+            // The popup's own rect, then the scroll bar's track: the right edge inside the frame, below the thumb.
+            let popup = h.ctx.memory(|m| m.layer_ids().last().and_then(|l| m.area_rect(l.id))).expect("the open list is the topmost layer");
+            assert!(popup.contains_rect(first_row), "the first row is inside the popup: {popup:?} vs {first_row:?}");
+            let style = h.ctx.global_style();
+            let bar = style.spacing.scroll;
+            let frame_right = f32::from(egui::Frame::popup(&style).inner_margin.right);
+            let x = popup.right() - frame_right - bar.bar_outer_margin - bar.bar_width / 2.0;
+            let at = pos2(x, popup.bottom() - 20.0);
+            assert!(popup.contains(at), "the click lands in the popup: {at:?} in {popup:?}");
+            assert!(at.y > popup.top() + popup.height() * 0.5, "below the thumb at the top: {at:?} in {popup:?}");
             h.hover_at(at);
             h.run_steps(2);
             click_at(&mut h, at);
             h.run_steps(4);
             assert!(h.query_by_label("Document 0").is_some(), "the list is still open after a click on the scroll bar track");
             assert_eq!(h.state().1, None, "nothing was picked");
+            assert!(h.query_by_label("Document 0").is_none_or(|n| n.rect().top() < first_row.top()), "the track click paged the list (x = {x})");
         }
 
         #[test]
