@@ -1442,7 +1442,7 @@ fn batch_plays_a_photoshop_actions_file() {
 fn extensionless_version_12_actions_file_is_read_as_atn() {
     let d = tmp("atn-v12");
     let path = d.join("Legacy Actions");
-    std::fs::write(&path, include_bytes!("../../../../crates/psd/tests/fixtures/atn/v12-commands.atn")).unwrap();
+    std::fs::write(&path, include_bytes!("../../../../crates/engine/tests/fixtures/atn/v12-commands.atn")).unwrap();
     let (steps, set, warnings) = photocraft_cli::load_actions_file(&path, None).unwrap();
     assert_eq!(set.len(), 1);
     assert_eq!(steps, vec![("actions.play".to_string(), json!({"action": set[0].name}))]);

@@ -46,7 +46,7 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     let size = Size::new(parsed.width as u32, parsed.height as u32);
     let format = PixelFormat::RGBA8;
     let raster_bytes = usize::try_from(photocraft_raster::tile_storage_bytes(Rect::from_xywh(0, 0, size.width, size.height), &format)).unwrap_or(usize::MAX);
-    let total = parsed.decoded_bytes().checked_add(raster_bytes.saturating_mul(parsed.surface_count())).unwrap_or(usize::MAX);
+    let total = parsed.decoded_bytes().saturating_add(raster_bytes.saturating_mul(parsed.surface_count()));
     if total > MAX_PIXEL_BYTES {
         return Err(invalid("decoded pixels exceed the 1 GiB limit"));
     }

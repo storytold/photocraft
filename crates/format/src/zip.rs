@@ -38,6 +38,7 @@ impl ZipWriter {
     }
 
     /// Reserves the complete archive from its entry names and payload sizes.
+    #[cfg(test)]
     pub(crate) fn with_entries<'a>(entries: impl IntoIterator<Item = (&'a str, usize)>) -> Result<Self, FormatError> {
         let (size, directory) = entries.into_iter().try_fold((22usize, 0usize), |(size, directory), (name, bytes)| {
             let directory = directory.checked_add(46 + name.len());
