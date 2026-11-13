@@ -412,3 +412,97 @@ fn selecting_another_layer_keeps_the_stamp_preview() {
     assert!(Arc::ptr_eq(&after.0, &before.0));
     assert_eq!(after.1, before.1);
 }
+
+#[test]
+fn a_cancelled_vanishing_point_job_keeps_the_planes_and_strokes() {
+    let (ctx, mut app) = app_with_layer();
+    app.background_jobs = true;
+    // Something to paste: a red square on the clipboard.
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("edit.copy", json!({})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+    control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+    let planes = app.distort.vanishing.as_ref().unwrap().planes.clone();
+    let params = app.distort.vanishing.as_ref().unwrap().params();
+    let steps = app.session.active().unwrap().history.past_len();
+
+    let r = commit(&mut app).unwrap();
+    assert_eq!(r["result"]["pending"], true, "a background job: {r}");
+    assert!(app.distort.vanishing.is_none(), "the mode closes while the job runs");
+    let job = photocraft_engine::jobs::JobId(r["result"]["job"].as_u64().unwrap());
+    // Cancelled before the result is polled, so it never lands whatever the worker has done.
+    assert!(app.session.cancel_job(job));
+    app.session.join_cancelled_jobs();
+    for _ in 0..200 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.distort.vanishing.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let s = app.distort.vanishing.as_ref().expect("the mode comes back after the cancel");
+    assert_eq!(s.planes, planes);
+    assert_eq!(s.params(), params, "the same planes and paste, ready to retry");
+    assert!(app.distort.vanishing_committing.is_empty());
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing applied");
+}
+
+#[test]
+fn a_commit_on_another_document_keeps_the_first_commits_session() {
+    // One pending slot: a commit on B replaced A's session, so A's failed or cancelled job had
+    // nothing to give back.
+    let (ctx, mut app) = app_with_layer();
+    app.background_jobs = true;
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("edit.copy", json!({})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    let open_and_commit = |app: &mut PhotocraftApp, corners: Value| {
+        crate::distort_ui::menu(app, &ctx, VP, &json!({})).unwrap().unwrap();
+        control(app, &json!({"planes": [{"corners": corners}]})).unwrap();
+        let planes = app.distort.vanishing.as_ref().unwrap().planes.clone();
+        let r = commit(app).unwrap();
+        assert_eq!(r["result"]["pending"], true, "a background job: {r}");
+        (photocraft_engine::jobs::JobId(r["result"]["job"].as_u64().unwrap()), planes)
+    };
+    let a_doc = app.session.active().unwrap().doc.id;
+    let (a_job, a_planes) = open_and_commit(&mut app, json!([[70, 60], [170, 60], [220, 150], [20, 150]]));
+
+    // Document B, with its own commit (the clipboard still holds the red square).
+    app.session.execute("file.new", json!({"width": 240, "height": 160, "depth": 16})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+    app.sync_views();
+    let (b_job, b_planes) = open_and_commit(&mut app, json!([[60, 50], [180, 50], [230, 150], [10, 150]]));
+    assert_ne!(a_planes, b_planes);
+    assert_eq!(app.distort.vanishing_committing.len(), 2, "both sessions are held");
+
+    // Back on A, its job is cancelled: A's own session comes back, B's stays held.
+    let a_index = app.session.documents().iter().position(|st| st.doc.id == a_doc).unwrap();
+    assert!(app.session.set_active(a_index));
+    app.sync_views();
+    assert!(app.session.cancel_job(a_job));
+    app.session.join_cancelled_jobs();
+    for _ in 0..200 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.distort.vanishing.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let s = app.distort.vanishing.as_ref().expect("A's mode comes back after the cancel");
+    assert_eq!(s.document, a_doc);
+    assert_eq!(s.planes, a_planes);
+    assert!(app.distort.vanishing_committing.iter().all(|(job, _)| *job != a_job), "A's entry is gone");
+    // B's job ends (landed or not): its entry goes too.
+    for _ in 0..400 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.distort.vanishing_committing.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.distort.vanishing_committing.iter().all(|(job, _)| *job != b_job), "B's entry goes when its job ends");
+}

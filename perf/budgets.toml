@@ -882,3 +882,45 @@ issue = 9329
 bench = "perf_scenarios"
 row = "app frame after Paste Into on 24 MP (CPU canvas)"
 enforce = false  # new; no baseline yet
+
+# ---- #210: Lens Correction, Adaptive Wide Angle, RAW Develop Filter and Vanishing Point off the UI thread
+
+[[scenario]]
+id = "P122"
+title = "Lens Correction on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "Lens Correction 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P123"
+title = "Adaptive Wide Angle on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "Adaptive Wide Angle 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P124"
+title = "RAW Develop Filter on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "RAW Develop Filter 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P125"
+title = "Vanishing Point on 24 MP (longest UI-thread step)"
+issue = 210
+bench = "perf_scenarios"
+row = "Vanishing Point 24 MP: longest UI-thread step"
+metric = "max"
+budget_ms = 100
+enforce = false  # new; no baseline yet

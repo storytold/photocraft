@@ -29,6 +29,10 @@ pub struct Distort {
     pub puppet: Option<crate::puppet_ui::PuppetSession>,
     pub perspective: Option<crate::perspective_ui::PerspSession>,
     pub vanishing: Option<crate::vp_ui::VpSession>,
+    /// Vanishing Point commits running as background jobs, each with the session it closed: a
+    /// failed or cancelled job gives its own session back ([`crate::vp_ui::on_job_event`]). One
+    /// per job, since commits on different documents can run at once.
+    pub vanishing_committing: Vec<(photocraft_engine::jobs::JobId, crate::vp_ui::VpSession)>,
     /// Filter Gallery dialog (gallery_ui).
     pub gallery: Option<crate::gallery_ui::GalleryDialog>,
     /// The document the open sessions belong to, noted by [`drop_foreign`] on the first frame they are open.
