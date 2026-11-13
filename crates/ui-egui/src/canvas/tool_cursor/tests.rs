@@ -199,6 +199,53 @@ fn scaled_wayland_bucket_uses_one_cached_image_area_without_a_split_crosshair() 
     assert_eq!(moved_hotspot, moved_at, "the cached image keeps its hotspot aligned after movement");
 }
 
+/// A tip too small to read alone (#13602): its ring at its real size, then on each axis a fully
+/// transparent stretch, then an arm. Off the axes nothing but the ring is drawn.
+#[test]
+fn small_tip_bitmap_draws_the_tip_inside_arms_that_leave_it_clear_at_each_dpi() {
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        for radius in [0.5, 1.0, 2.2, 2.9] {
+            let image = rasterize(&Shape::SmallTip { radius }, scale).unwrap();
+            let [x, y] = image.hotspot;
+            assert_eq!(image.size, [2 * x + 1, 2 * y + 1]);
+            let what = format!("radius {radius} at {scale}x");
+            let (gap, length) = small_tip_arms(radius);
+            // Every pixel past the ring's outline and short of the arms' is clear.
+            let (near, far) = (((radius + 1.5) * scale + 0.5).ceil() as u16, ((gap - 1.5) * scale - 0.5).floor() as u16);
+            assert!(near <= far, "{what}: no clear pixel between the tip and the arms");
+            for d in near..=far {
+                for (px, py) in [(x + d, y), (x - d, y), (x, y + d), (x, y - d)] {
+                    assert_eq!(alpha(&image, px, py), 0, "{what}: {d} px out on an axis");
+                }
+            }
+            // The arms: opaque from just past the gap to just short of their end.
+            for d in ((gap * scale).ceil() as u16)..=((length * scale).floor() as u16) {
+                for (px, py) in [(x + d, y), (x - d, y), (x, y + d), (x, y - d)] {
+                    assert!(alpha(&image, px, py) > 230, "{what}: the arm {d} px out");
+                }
+            }
+            // The tip: its ring on the diagonal, where no arm reaches, and nothing past it there.
+            let k = (radius * scale / std::f32::consts::SQRT_2).round() as u16;
+            assert!(alpha(&image, x + k, y + k) > 0 && alpha(&image, x - k, y - k) > 0, "{what}: the ring");
+            let out = (((radius + 2.0) * scale + 1.0) / std::f32::consts::SQRT_2).ceil() as u16;
+            assert_eq!(alpha(&image, x + out, y + out), 0, "{what}: only the ring off the axes");
+        }
+    }
+}
+
+#[test]
+fn small_tip_radius_is_the_tip_s_own_from_a_dot_up() {
+    assert_eq!(small_tip_radius(2.0), 2.0);
+    assert_eq!(small_tip_radius(0.1), SMALL_TIP_DOT, "a sub-pixel tip is still a dot");
+    assert_eq!(small_tip_radius(50.0), SMALL_TIP_RADIUS);
+    for hostile in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+        assert_eq!(small_tip_radius(hostile), SMALL_TIP_DOT, "{hostile}");
+    }
+    for radius in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+        assert!(rasterize(&Shape::SmallTip { radius }, 1.0).is_none(), "{radius}");
+    }
+}
+
 /// On Linux a tip stays within what X servers and hardware cursor planes take (256 px); a larger
 /// one falls back to the painted outline. Windows and macOS take far larger cursors.
 #[test]
@@ -467,6 +514,9 @@ fn write_cursor_preview() {
         (Shape::Circle { radius: 20.0, centre: true }, 2.0),
         (Shape::Crosshair { length: 8.0, gap: 2.0 }, 2.0),
         (Shape::Crosshair { length: 6.0, gap: 0.0 }, 2.0),
+        (Shape::SmallTip { radius: 0.5 }, 1.0),
+        (Shape::SmallTip { radius: 0.5 }, 2.0),
+        (Shape::SmallTip { radius: 2.0 }, 2.0),
         (Shape::Hand { closed: false }, 1.0),
         (Shape::Hand { closed: true }, 1.0),
         (Shape::Hand { closed: false }, 1.5),
