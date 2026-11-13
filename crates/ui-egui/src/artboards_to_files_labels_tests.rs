@@ -86,7 +86,7 @@ fn export_workflow(snapshots: Option<&std::path::Path>) {
 
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
-    h.get_by_label("Choose a destination folder.");
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["message"], "Choose a destination folder.");
     click(&mut h, "OK");
 
     let dir = tempfile::tempdir().unwrap();
@@ -97,7 +97,7 @@ fn export_workflow(snapshots: Option<&std::path::Path>) {
     let fields = h.state().ui.dialogs[0].fields.clone();
     click(&mut h, "Run");
     let error = format!("Destination does not exist: {}", missing.display());
-    h.get_by_label(&error);
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["message"], error);
     assert!(!missing.exists());
     snapshot(&mut h, snapshots, "missing-destination");
 
@@ -112,6 +112,7 @@ fn export_workflow(snapshots: Option<&std::path::Path>) {
     let dialogs = &h.state().ui.dialogs;
     assert_eq!(dialogs.len(), 1);
     assert_eq!(dialogs[0].kind, DialogKind::Error);
+    assert_eq!(crate::dialogs::title(&dialogs[0]), "Artboards to Files");
     let message = format!("Artboards To Files was successful.\n{}", dir.path().display());
     h.get_by_label(&message);
     assert!(dir.path().join("Custom_0000_Red Board.jpg").is_file());
