@@ -102,7 +102,7 @@ pub struct ToolOptions {
     /// "newLayer", "combine", "subtract", "intersect" or "exclude". Shared mode slots take priority.
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
-    /// Path/Shape picks shared by Pen, Freeform Pen and Curvature Pen (#12905).
+    /// Path pick shared by all five path tools; Shape pick shared by the three Pens (#12905).
     /// Missing fields retain legacy explicit picks; New Layer means Exclude in Path mode.
     #[serde(default)]
     pub pen_path_mode_op: Option<String>,
@@ -339,13 +339,13 @@ fn default_move_target() -> String {
 }
 
 impl ToolOptions {
-    /// Store a shared Pen-family pick without changing the other mode. The legacy last pick
-    /// remains available to older settings/control clients, but is not a separate tool choice.
-    pub(crate) fn set_pen_operation(&mut self, op: &str, shape_selected: bool) {
+    /// Store a shared pick without changing the other mode. Selection tools use only the Path
+    /// slot (`path_only`), without changing the Pens' mode. Keep the legacy last pick for clients.
+    pub(crate) fn set_pen_operation(&mut self, op: &str, shape_selected: bool, path_only: bool) {
         let legacy = self.pen_path_op.clone();
         self.pen_path_mode_op.get_or_insert_with(|| if legacy == "newLayer" { "exclude".into() } else { legacy.clone() });
         self.pen_shape_mode_op.get_or_insert(legacy);
-        if self.vector_mode == "shape" {
+        if self.vector_mode == "shape" && !path_only {
             // With no shape to act on, a menu pick does not replace New Layer (#12905).
             if shape_selected {
                 self.pen_shape_mode_op = Some(op.into());

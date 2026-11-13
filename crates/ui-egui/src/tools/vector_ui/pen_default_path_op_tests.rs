@@ -461,3 +461,176 @@ fn control_updates_pen_slots_even_when_another_tool_is_active() {
         assert_eq!(tool_path_op(&app), Some("intersect"));
     }
 }
+
+const FIVE_PATH_TOOLS: [Tool; 5] = [Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::PathSelection, Tool::DirectSelection];
+
+fn five_operations(app: &mut PhotocraftApp) -> Vec<Option<&'static str>> {
+    FIVE_PATH_TOOLS
+        .into_iter()
+        .map(|tool| {
+            crate::tool_memory::select(app, tool);
+            tool_path_op(app)
+        })
+        .collect()
+}
+
+#[test]
+fn five_tool_exact_reference_sequence() {
+    let mut app = app();
+    let mut rows = vec![five_operations(&mut app)];
+    for (tool, op) in [(Tool::Pen, "subtract"), (Tool::PathSelection, "intersect"), (Tool::Pen, "combine")] {
+        app.ui.tool = tool;
+        crate::path_components::set_op(&mut app, op).unwrap();
+        rows.push(five_operations(&mut app));
+    }
+    eprintln!("Reference sequence [Pen, Freeform, Curvature, Path Selection, Direct Selection]: {rows:?}");
+    assert_eq!(rows, ["exclude", "subtract", "intersect", "combine"].map(|op| vec![Some(op); 5]).to_vec());
+}
+
+#[test]
+fn five_tool_changes_from_each_origin_before_and_after_explicit_pen_picks() {
+    for explicit in [false, true] {
+        let mut app = app();
+        if explicit {
+            crate::path_components::set_op(&mut app, "subtract").unwrap();
+        }
+        for (tool, op) in FIVE_PATH_TOOLS.into_iter().zip(["combine", "subtract", "intersect", "exclude", "combine"]) {
+            app.ui.tool = tool;
+            crate::path_components::set_op(&mut app, op).unwrap();
+            assert_eq!(five_operations(&mut app), vec![Some(op); 5], "origin {tool:?}, prior explicit Pen pick {explicit}");
+        }
+    }
+}
+
+#[test]
+fn five_tool_pen_resets_restore_shared_exclude() {
+    for reset in [Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen] {
+        let mut app = app();
+        crate::path_components::set_op(&mut app, "subtract").unwrap();
+        app.ui.tool = Tool::PathSelection;
+        crate::path_components::set_op(&mut app, "intersect").unwrap();
+        crate::tool_reset::reset_options(&mut app.ui.tool_options, reset);
+        assert_eq!(five_operations(&mut app), vec![Some("exclude"); 5], "reset {reset:?}");
+    }
+}
+
+#[test]
+fn five_tool_selectors_write_path_without_changing_pen_shape_mode_or_operation() {
+    for selector in [Tool::PathSelection, Tool::DirectSelection] {
+        let mut app = app();
+        app.ui.tool_options.vector_mode = "shape".into();
+        square(&mut app, 20.0, 20.0, 100.0);
+        crate::path_components::set_op(&mut app, "subtract").unwrap();
+        app.ui.tool_options.vector_mode = "path".into();
+        crate::path_components::set_op(&mut app, "combine").unwrap();
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool = selector;
+        crate::path_components::set_op(&mut app, "intersect").unwrap();
+        assert_eq!(app.ui.tool_options.vector_mode, "shape");
+        assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("intersect"));
+        assert_eq!(app.ui.tool_options.pen_shape_mode_op.as_deref(), Some("subtract"));
+        assert_eq!(tool_path_op(&app), Some("intersect"));
+        app.ui.tool = Tool::Pen;
+        assert_eq!(tool_path_op(&app), Some("subtract"));
+        app.ui.tool_options.vector_mode = "path".into();
+        assert_eq!(five_operations(&mut app), vec![Some("intersect"); 5]);
+    }
+}
+
+#[test]
+fn five_tool_control_selectors_write_path_even_while_pen_mode_is_shape() {
+    for selector in ["pathSelection", "directSelection"] {
+        let mut app = app();
+        app.ui.tool_options.vector_mode = "shape".into();
+        square(&mut app, 20.0, 20.0, 100.0);
+        crate::path_components::set_op(&mut app, "subtract").unwrap();
+        control(&mut app, json!({"tool":selector,"penPathOp":"intersect"}));
+        assert_eq!(app.ui.tool_options.vector_mode, "shape");
+        assert_eq!(app.ui.tool_options.pen_shape_mode_op.as_deref(), Some("subtract"));
+        assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("intersect"));
+        assert_eq!(tool_path_op(&app), Some("intersect"));
+    }
+}
+
+#[test]
+fn five_tool_path_selection_no_component_menu_updates_shared_pick_without_editing_path() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 100.0);
+    app.ui.tool = Tool::PathSelection;
+    assert!(crate::path_components::selected(&app).is_none());
+    let before = app.session.active().unwrap().doc.work_path.clone();
+    let steps = app.session.active().unwrap().history.past_len();
+    let mut h = menu_harness(app);
+    h.get_by_label("Path operations").click();
+    h.run_steps(3);
+    assert!(h.get_by_label("New Layer").accesskit_node().is_disabled(), "preserve current Path Selection menu enablement");
+    assert_eq!(h.get_by_label("Exclude Overlapping Shapes").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    h.get_by_label("Intersect Shape Areas").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().doc.work_path, before);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+    assert_eq!(five_operations(h.state_mut()), vec![Some("intersect"); 5]);
+}
+
+#[test]
+fn five_tool_selected_component_keeps_global_write_first_and_existing_history() {
+    let mut app = app();
+    crate::path_components::set_op(&mut app, "combine").unwrap();
+    square(&mut app, 20.0, 20.0, 100.0);
+    square(&mut app, 45.0, 45.0, 30.0);
+    let before = app.session.active().unwrap().doc.work_path.clone().unwrap();
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [60.0, 60.0], false);
+    assert_eq!(crate::path_components::selected(&app).unwrap().2, vec![1]);
+    let steps = app.session.active().unwrap().history.past_len();
+    crate::path_components::set_op(&mut app, "subtract").unwrap();
+    assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("subtract"), "keep global write before component edit");
+    assert_eq!(crate::path_components::selected_op(&app), Some("subtract"));
+    let changed = app.session.active().unwrap().doc.work_path.clone().unwrap();
+    assert_eq!(changed.subpaths[1].op, PathOp::Subtract);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    app.session.undo();
+    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref(), Some(&before));
+    app.session.redo();
+    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref(), Some(&changed));
+    // Component zero remains Combine on main. Even this no-op must keep the prior global write.
+    crate::path_components::press(&mut app, [30.0, 30.0], false);
+    assert_eq!(crate::path_components::selected(&app).unwrap().2, vec![0]);
+    let steps = app.session.active().unwrap().history.past_len();
+    crate::path_components::set_op(&mut app, "intersect").unwrap();
+    assert_eq!(app.ui.tool_options.pen_path_mode_op.as_deref(), Some("intersect"));
+    assert_eq!(crate::path_components::selected_op(&app), Some("combine"));
+    assert_eq!(app.session.active().unwrap().doc.work_path.as_ref(), Some(&changed));
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
+fn five_tool_legacy_path_values_and_shape_mode_do_not_fork_selector_reads() {
+    let mut app = app();
+    for op in ["newLayer", "combine", "subtract", "intersect", "exclude"] {
+        app.ui.tool_options = serde_json::from_value(json!({"pen_path_op":op})).unwrap();
+        let expected = if op == "newLayer" { "exclude" } else { op };
+        assert_eq!(five_operations(&mut app), vec![Some(expected); 5]);
+        app.ui.tool_options.vector_mode = "shape".into();
+        for tool in [Tool::PathSelection, Tool::DirectSelection] {
+            app.ui.tool = tool;
+            assert_eq!(tool_path_op(&app), Some(expected));
+        }
+    }
+}
+
+#[test]
+fn five_tool_selector_pick_is_used_by_the_next_work_path_component() {
+    let mut app = app();
+    crate::path_components::set_op(&mut app, "subtract").unwrap();
+    square(&mut app, 20.0, 20.0, 100.0);
+    app.ui.tool = Tool::PathSelection;
+    assert!(crate::path_components::selected(&app).is_none());
+    crate::path_components::set_op(&mut app, "exclude").unwrap();
+    app.ui.tool = Tool::Pen;
+    square(&mut app, 45.0, 45.0, 30.0);
+    let path = app.session.active().unwrap().doc.work_path.as_ref().unwrap();
+    assert_eq!(path.subpaths.len(), 2);
+    assert_eq!(path.subpaths[1].op, PathOp::Exclude);
+}
