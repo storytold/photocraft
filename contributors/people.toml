@@ -32,6 +32,9 @@ sync_github_name = false
 display_name = "Skyfuller"
 sync_github_name = true
 
+[people.JohnXu28]
+display_name = "JohnXu"
+
 [people.AlanRockefeller]
 sync_github_name = true
 
@@ -325,6 +328,9 @@ sync_github_name = true
 
 [people.Luis-0508]
 sync_github_name = true
+
+[people.ashokram-si]
+real_name = "Ashok Ram"
 
 [people.Kaedo17]
 sync_github_name = true
