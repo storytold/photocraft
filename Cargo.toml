@@ -46,6 +46,13 @@ photocraft-tablet = { path = "crates/tablet" }
 photocraft-ipp = { path = "crates/ipp" }
 
 # external
+# Krita, OpenRaster and GIMP XCF: the format code (archives, node trees, tiles); the mapping onto
+# documents stays in crates/io (craft-libs#928, #935, #960).
+craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53" }
+craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53" }
+craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53" }
+# Paint.NET PDN3 and its MS-NRBF serialization (craft-libs#968).
+craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53" }
 # DDS, DICOM, FITS, IFF/ILBM, PCX, PNM and XPM: the shared decoders and encoders (craft-libs#880).
 # DPX and Cineon frames (craft-libs#887); the mapping onto images stays in crates/codecs.
 craft-dpx = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53" }
