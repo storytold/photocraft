@@ -57,13 +57,14 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             use crate::brush_mode_menu as m;
             let tool = app.ui.tool;
             let current = m::current(app, tool);
+            let checked = m::checked(app, ctx, tool);
             json!({
                 "pos": pos,
                 "tool": tool,
                 "mode": current.and_then(m::Item::label),
                 "choices": m::labels(tool),
                 "items": m::items(tool).into_iter().map(|i| match i.label() {
-                    Some(label) => json!({"label": label, "enabled": m::enabled(app, i), "checked": Some(i) == current}),
+                    Some(label) => json!({"label": label, "enabled": m::enabled(app, i), "checked": Some(i) == checked}),
                     None => json!({"separator": true}),
                 }).collect::<Vec<_>>(),
             })
