@@ -87,6 +87,34 @@ fn typed_values_outside_the_range_clamp() {
     }
 }
 
+/// The reference application has no 0.1 step for this whole number: Ctrl/Cmd+arrow leaves 13 as
+/// 13 on every pass, instead of writing 12.9 for the next pass to round back. A plain arrow still
+/// steps by one.
+#[test]
+fn command_arrows_leave_the_whole_number_as_it_is() {
+    // The field's value after every pass, so a fraction that only lives until the next pass shows.
+    // A bare field has no caption to name it; the options bar gives it one.
+    let mut h = Harness::builder().with_size(vec2(200.0, 40.0)).with_accessibility_check(false).build_ui_state(
+        |ui, (value, seen): &mut (f32, Vec<f32>)| {
+            crate::widgets::value_field_int(ui, value, 0.0..=255.0, "", 58.0);
+            seen.push(*value);
+        },
+        (13.0_f32, Vec::new()),
+    );
+    h.run();
+    h.get_by_role(Role::SpinButton).click();
+    h.run();
+    for key in [egui::Key::ArrowDown, egui::Key::ArrowDown, egui::Key::ArrowUp] {
+        h.state_mut().1.clear();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, key);
+        h.run_steps(2);
+        assert!(h.state().1.iter().all(|&v| v == 13.0), "after Command+{key:?}: {:?}", h.state().1);
+    }
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    assert_eq!(h.state().0, 14.0, "a plain arrow still steps by one");
+}
+
 /// The Paint Bucket's plain field shares this option and keeps today's behaviour, and a restored
 /// preference file can hold a fraction: the wand's field takes whatever it finds as the whole
 /// number it shows, so the wand can never floor a value the field is displaying.

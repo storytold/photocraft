@@ -210,7 +210,7 @@ fn value_field_box(
     opts: FieldOpts,
     name: Option<&str>,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, step_from_decimals, units, extent, .. } = opts;
+    let FieldOpts { decimals, step_from_decimals, units, extent, integer, .. } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
     let last_editor = ui.data(|d| d.get_temp::<egui::Id>(slot.id));
@@ -261,7 +261,7 @@ fn value_field_box(
     let (lo, hi) = (*range.start(), *range.end());
     // The field's id is only known once it's drawn: last frame's, saved under `slot` below.
     let focused = ui.data(|d| d.get_temp::<egui::Id>(slot.id)).filter(|id| ui.memory(|m| m.has_focus(*id)));
-    let (step, grid) = arrow_step(ui, slot.id, unit);
+    let (step, grid) = arrow_step(ui, slot.id, unit, integer);
     // The wheel steps it as the arrow keys do (#5473), focused or under the pointer.
     let notches = crate::field_wheel::notches(ui, slot.id, focused.is_some(), rect);
     if notches != 0.0
@@ -693,8 +693,10 @@ fn zoom_number(text: &str, units: crate::numeric_expression::Units) -> Option<f6
 }
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
-/// Returns the amount to add, and what to round the value to first.
-fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
+/// Returns the amount to add, and what to round the value to first. A whole-number field has no
+/// 0.1 step: Ctrl/Cmd+arrow leaves its value as it is, as the reference application's Magic Wand
+/// Tolerance does, instead of writing a fraction the field rounds back next frame (#11786).
+fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32, integer: bool) -> (f32, f32) {
     use egui::{Key, Modifiers};
     // The field's id is only known once it's drawn, so `value_field` saves it under `slot` for the next frame.
     let Some(id) = ui.data(|d| d.get_temp::<egui::Id>(slot)).filter(|id| ui.memory(|m| m.has_focus(*id))) else {
@@ -706,6 +708,9 @@ fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
         for (mods, k) in [(Modifiers::COMMAND, (step / 10.0).max(0.01)), (Modifiers::SHIFT, 10.0 * step), (Modifiers::NONE, step)] {
             let presses = i.count_and_consume_key(mods, Key::ArrowUp) as f32 - i.count_and_consume_key(mods, Key::ArrowDown) as f32;
             if presses != 0.0 && mods == Modifiers::COMMAND {
+                if integer {
+                    continue;
+                }
                 grid = k;
             }
             n += k * presses;
