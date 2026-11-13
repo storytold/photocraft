@@ -482,6 +482,9 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         // Metadata: None drops EXIF and resolution as well as XMP. A missing key keeps them,
         // which is what Export As wrote before the choice existed.
         embed_metadata: metadata != "none",
+        // Export As's JPGs are progressive (SOF2) in the reference application, measured at its
+        // default quality; the scan layout is one setting for the whole dialog.
+        jpeg_format: photocraft_codecs::JpegFormat::Progressive,
         ..Default::default()
     }
 }
@@ -1184,6 +1187,9 @@ mod tests;
 
 #[cfg(test)]
 mod enter_key_tests;
+
+#[cfg(test)]
+mod jpg_progressive_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
