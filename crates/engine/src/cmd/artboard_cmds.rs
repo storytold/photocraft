@@ -679,18 +679,18 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd)).map_err(|_| EngineError::Other("Choose a destination folder.".into()))?;
+    let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    let save = SaveOpts::from_params(s, p, cmd)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    let documents = chosen_documents(&d.doc, p)?;
     // Leave other filesystem errors to the existing save path.
     #[cfg(not(target_arch = "wasm32"))]
     if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
         return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
     }
-    let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
-    let save = SaveOpts::from_params(s, p, cmd)?;
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let doc = d.doc.clone();
     let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
+    for (i, one) in documents.into_iter().enumerate() {
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(dir, &format!("{name}.{format}"));
