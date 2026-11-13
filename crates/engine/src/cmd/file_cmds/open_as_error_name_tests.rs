@@ -66,6 +66,19 @@ fn an_unknown_as_value_is_a_parameter_error_naming_it() {
 }
 
 #[test]
+fn every_camera_raw_and_affinity_extension_is_an_open_as_format() {
+    // The `as` check must take every format the importer reads, not a copy of the lists that can
+    // fall behind them: a text file asked to open as one fails to read, never as a parameter error.
+    let dir = tmp("raw-exts");
+    let path = write_notes(&dir);
+    let mut s = Session::new();
+    for ext in photocraft_io::raw::EXTENSIONS.iter().chain(photocraft_io::affinity::EXTENSIONS) {
+        let r = s.execute("file.openAs", json!({"path": path, "as": ext}));
+        assert!(!matches!(r, Err(EngineError::BadParams { .. })), "{ext}: {r:?}");
+    }
+}
+
+#[test]
 fn a_png_opened_as_png_keeps_its_real_file_name() {
     let dir = tmp("png");
     let img = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, vec![200; 48]).unwrap();

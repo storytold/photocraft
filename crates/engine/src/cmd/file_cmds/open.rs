@@ -238,17 +238,20 @@ pub fn open_bytes_as_with_options(
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
 
-/// Extensions Open As reads besides the codec formats: the document, vector and camera raw
-/// formats `photocraft_io::import` handles (and `raw`, the Open As type for any camera raw).
-const OPEN_AS_EXTRA: &[&str] = &[
-    "raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf", "ai", "af", "afdesign", "afphoto",
-    "afpub", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "raf", "rw2", "srf", "sr2",
-];
+/// Extensions Open As reads besides the codec formats, the camera raw formats
+/// (`photocraft_io::raw::EXTENSIONS`) and the Affinity ones (`photocraft_io::affinity::EXTENSIONS`):
+/// the document and vector formats `photocraft_io::import` handles, and `raw`, the Open As type
+/// for any camera raw.
+const OPEN_AS_EXTRA: &[&str] = &["raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf", "ai"];
 
 /// Whether `ext` (the `as` value of Open As) names a format PhotoCraft reads.
 fn is_open_as_format(ext: &str) -> bool {
     let ext = ext.trim_start_matches('.').to_ascii_lowercase();
-    OPEN_AS_EXTRA.contains(&ext.as_str()) || photocraft_codecs::from_extension(&ext).is_some_and(|f| f.caps().read)
+    let ext = ext.as_str();
+    OPEN_AS_EXTRA.contains(&ext)
+        || photocraft_io::raw::EXTENSIONS.contains(&ext)
+        || photocraft_io::affinity::EXTENSIONS.contains(&ext)
+        || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read)
 }
 
 /// Open the selected file with its decoder options and record its Batch source identity.
