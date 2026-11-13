@@ -1522,9 +1522,8 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         choose_spelling(app, &menu, command)
     } else if menu.text || menu.type_layer {
         choose_type(app, ctx, command)
-    } else if path_menu(menu.tool) && !menu.transform {
-        choose_pen(app, ctx, &menu, command)
-    } else if shape_tool_menu(menu.tool) && !menu.transform && !shape_layer_row(command) {
+    } else if !menu.transform && (path_menu(menu.tool) || (shape_tool_menu(menu.tool) && !shape_layer_row(command))) {
+        // The shape menu's path rows run as the Pen's; its layer rows as the menu bar's, below.
         choose_pen(app, ctx, &menu, command)
     } else if sampler_menu(&menu) {
         let (id, params) = engine_call(app, &menu, command);
