@@ -565,6 +565,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
-mod import_enabled_tests;
-#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod import_enabled_tests;
