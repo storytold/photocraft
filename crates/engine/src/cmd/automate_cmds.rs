@@ -735,3 +735,7 @@ mod contact_sheet_subfolders_tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_flatten_tests.rs"]
 mod contact_sheet_flatten_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_geometry_tests.rs"]
+mod contact_sheet_geometry_tests;
