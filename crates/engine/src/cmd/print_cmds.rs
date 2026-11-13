@@ -1525,6 +1525,12 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- Paths to Illustrator ----------
 
+/// `s` with line terminators and other control characters replaced by spaces, so a name stays
+/// inside its one PostScript comment line instead of ending it and adding instructions.
+fn ps_comment_text(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
 /// The document's paths as an Illustrator 3 PostScript file. `which`: "all", "work" or a path
 /// name. Coordinates are points (pixels at the document resolution), y up.
 pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
@@ -1544,7 +1550,7 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     }
     let mut s = String::new();
     s.push_str("%!PS-Adobe-2.0 EPSF-1.2\n%%Creator: PhotoCraft\n");
-    s.push_str(&format!("%%Title: ({})\n", doc.name.replace([')', '('], "_")));
+    s.push_str(&format!("%%Title: ({})\n", ps_comment_text(&doc.name).replace([')', '('], "_")));
     s.push_str(&format!(
         "%%BoundingBox: 0 0 {} {}\n%%HiResBoundingBox: 0 0 {w:.4} {h:.4}\n%AI3_Cropmarks: 0 0 {w:.4} {h:.4}\n",
         w.ceil() as i64,
@@ -1559,7 +1565,7 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             continue;
         }
         n += 1;
-        s.push_str(&format!("%%Note: {name}\n"));
+        s.push_str(&format!("%%Note: {}\n", ps_comment_text(name)));
         let compound = subs.len() > 1;
         if compound {
             s.push_str("*u\n");
