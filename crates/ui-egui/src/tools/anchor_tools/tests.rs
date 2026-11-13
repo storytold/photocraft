@@ -95,7 +95,7 @@ fn add_on_a_curve_splits_it_where_clicked() {
 }
 
 #[test]
-fn delete_removes_the_clicked_anchor_and_alt_swaps_the_tools() {
+fn delete_removes_the_clicked_anchor_and_alt_makes_it_add() {
     let mut app = app(Tool::DeleteAnchorPoint);
     with_path(&mut app);
     let n = steps(&app);
@@ -104,15 +104,15 @@ fn delete_removes_the_clicked_anchor_and_alt_swaps_the_tools() {
     assert_eq!((p.subpaths[0].knots.len(), p.subpaths[0].closed), (3, true));
     assert_eq!(p.subpaths[0].knots[2].anchor, Point::new(40.0, 120.0));
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-    // ⌥ with Delete adds; ⌥ with Add deletes.
+    // ⌥ with Delete adds; ⌥ with Add deletes nothing (#12709).
     click(&mut app, [80.0, 120.0], Modifiers::ALT);
     assert_eq!(work(&app).subpaths[0].knots.len(), 3, "the bottom edge is gone; ⌥ on empty canvas adds nothing");
     click(&mut app, [40.0, 80.0], Modifiers::ALT);
     assert_eq!(work(&app).subpaths[0].knots.len(), 4);
     app.ui.tool = Tool::AddAnchorPoint;
     click(&mut app, [40.0, 80.0], Modifiers::ALT);
-    assert_eq!(work(&app).subpaths[0].knots.len(), 3);
-    assert_eq!(steps(&app), n + 3);
+    assert_eq!(work(&app).subpaths[0].knots.len(), 4);
+    assert_eq!(steps(&app), n + 2);
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn the_cursor_shows_plus_or_minus() {
     assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::NONE), None, "off the path's segments");
     app.hover_doc = Some([80.0, 120.0]);
     assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::NONE), Some(Badge::Add));
-    assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::ALT), Some(Badge::Subtract));
+    assert_eq!(badge(&app, Tool::AddAnchorPoint, Modifiers::ALT), Some(Badge::Add), "⌥ is the arrow with \"+\" (#12709)");
     assert_eq!(badge(&app, Tool::DeleteAnchorPoint, Modifiers::NONE), Some(Badge::Subtract));
     assert_eq!(badge(&app, Tool::DeleteAnchorPoint, Modifiers::COMMAND), None, "⌘ is Direct Selection");
 }

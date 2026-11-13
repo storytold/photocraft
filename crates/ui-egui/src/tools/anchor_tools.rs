@@ -9,8 +9,10 @@
 //!   direction handles showing, and a drag from the click moves it, as in Photoshop (#8653).
 //! * Delete Anchor Point: hovering an anchor highlights it; a click removes it
 //!   (`path.deleteAnchor`), joining its neighbours.
-//! * ⌥ swaps the two tools and ⌘/Ctrl is Direct Selection (`direct_select`) while held; ⌥-click
-//!   with Delete Anchor Point on an anchor selects its whole subpath instead.
+//! * ⌘/Ctrl is Direct Selection (`direct_select`) while held. ⌥ with Add Anchor Point works on a
+//!   whole subpath (#12709): a click on a segment selects the subpath, a drag copies it and moves
+//!   the copy; it adds and deletes nothing. ⌥ turns Delete Anchor Point into Add Anchor Point,
+//!   and its ⌥-click on an anchor selects the whole subpath instead.
 //! * The Pen does both with Auto Add/Delete on (its options bar, on by default, #4144): a click on
 //!   a segment adds, a click on an anchor deletes, except an open subpath's end points; ⇧ turns it
 //!   off while held. It edits the active path, or while a path is being drawn that path (#6140),
@@ -30,11 +32,12 @@ use crate::canvas::ToolEvent;
 use crate::direct_select::{DirectSelection, Owner, PathRef};
 use crate::state::Tool;
 
-/// The anchor tool in effect, if the current tool is one: ⌥ swaps Add and Delete.
+/// The anchor tool in effect, if the current tool is one: ⌥ turns Delete into Add. Add stays Add,
+/// as in the reference (#12709): its ⌥ selects or copies a whole subpath (`alt_press`).
 pub fn effective(tool: Tool, mods: Modifiers) -> Option<Tool> {
     let (add, delete) = (Tool::AddAnchorPoint, Tool::DeleteAnchorPoint);
     match tool {
-        Tool::AddAnchorPoint => Some(if mods.alt { delete } else { add }),
+        Tool::AddAnchorPoint => Some(add),
         Tool::DeleteAnchorPoint => Some(if mods.alt { add } else { delete }),
         _ => None,
     }
@@ -177,7 +180,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     match ev {
         ToolEvent::Down { x, y, .. } => {
             app.ui.direct_selection.subpath_press = None;
-            if app.ui.tool == Tool::DeleteAnchorPoint && mods.alt && subpath_at(app, [x, y]).is_some() {
+            if app.ui.tool == Tool::AddAnchorPoint && mods.alt {
+                alt_press(app, [x, y]);
+            } else if app.ui.tool == Tool::DeleteAnchorPoint && mods.alt && subpath_at(app, [x, y]).is_some() {
                 let owner = Owner::current(app);
                 let ds = &mut app.ui.direct_selection;
                 ds.subpath_press = Some([x, y]);
@@ -237,6 +242,24 @@ fn start_segment_drag(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) -> 
     ds.drag =
         Some(crate::direct_select::Drag::Edit { target: r, base: path, edit: crate::direct_select::Edit::Segment(k, t), start: p, end: p, preview: None });
     true
+}
+
+/// ⌥-press with Add Anchor Point (#12709), as in the reference: on a segment of the targeted path
+/// it selects that whole subpath, with no History step, and a drag copies the subpath and moves
+/// the copy (Direct Selection's drag, `Edit::Duplicate`, one step **Drag Path**); the drag's Move
+/// and Up reach `direct_select::pointer` first. It never adds or deletes an anchor: a press on an
+/// anchor, or off the path, does nothing (not measured further). The Pen path being drawn is left alone.
+fn alt_press(app: &mut PhotocraftApp, p: [f64; 2]) {
+    use crate::direct_select::{Drag, Edit};
+    let Some((r, path, Hit::Segment([s, _], _))) = target(app, Tool::AddAnchorPoint, p) else { return };
+    if r == PathRef::Pen {
+        return;
+    }
+    let anchors = edit::subpath_anchors(&path, s);
+    let owner = Owner::current(app);
+    let ds = &mut app.ui.direct_selection;
+    *ds = DirectSelection { target: Some(r), anchors: anchors.clone(), owner, ..Default::default() };
+    ds.drag = Some(Drag::Edit { target: r, base: path, edit: Edit::Duplicate(anchors), start: p, end: p, preview: None });
 }
 
 /// ⌥-click with Delete Anchor Point on an anchor of a targeted path selects its whole subpath, as
@@ -372,7 +395,8 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
 /// pointer and shows the anchor a click would add; Delete highlights the anchor it would remove.
 pub fn draw_hover(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32, mods: Modifiers) {
     let (Some(tool), Some(p)) = (effective(app.ui.tool, mods), app.hover_doc) else { return };
-    if mods.command {
+    // ⌥ with Add Anchor Point adds no anchor (#12709), so it shows none.
+    if mods.command || (app.ui.tool == Tool::AddAnchorPoint && mods.alt) {
         return;
     }
     let Some((_, path, hit)) = target(app, tool, p) else { return };
@@ -406,6 +430,8 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
     }
 }
 
+#[cfg(test)]
+mod add_anchor_alt_tests;
 #[cfg(test)]
 mod add_anchor_lock_tests;
 #[cfg(test)]

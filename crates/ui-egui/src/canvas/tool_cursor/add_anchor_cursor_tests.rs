@@ -1,7 +1,7 @@
 //! #12729: Add Anchor Point's cursor says what a click would do. Over a segment of the targeted path
 //! it is the pen with "+"; over an anchor, a handle end, empty canvas, with no path targeted and
 //! over a locked shape layer's segments it is the black arrow. ⌘ keeps Direct Selection's arrow,
-//! ⌥ and the Precise "Other Cursors" crosshair stay as they were. The tests drive the real canvas
+//! ⌥ is the arrow (with "+", #12709) everywhere, and the Precise "Other Cursors" crosshair stays. The tests drive the real canvas
 //! (`document_area`) and compare the OS cursor bitmap it hands the platform with the arrow's and
 //! the pen's.
 
@@ -130,8 +130,10 @@ fn with_ctrl_held_it_is_the_black_arrow_even_over_a_segment() {
 }
 
 #[test]
-fn with_alt_held_it_stays_the_pen_over_empty_canvas() {
-    assert_eq!(on_path_one(SQUARE_MIDDLE, Modifiers::ALT), Shown::Pen);
+fn with_alt_held_it_is_the_arrow_everywhere() {
+    // #12709: the reference shows the arrow with "+" over empty canvas and over a segment alike.
+    assert_eq!(on_path_one(SQUARE_MIDDLE, Modifiers::ALT), Shown::Arrow);
+    assert_eq!(on_path_one(SQUARE_TOP, Modifiers::ALT), Shown::Arrow);
 }
 
 #[test]
