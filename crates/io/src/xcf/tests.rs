@@ -338,7 +338,12 @@ fn xcf_import_can_be_cancelled_while_parsing_layer_metadata() {
     let mut img = TestImage::rgb8(3, 3);
     img.layers.push(TestLayer::rgba("first", 3, 3, rgba(3, 3, |_, _| [1, 2, 3, 255])));
     img.layers.push(TestLayer::rgba("second", 3, 3, rgba(3, 3, |_, _| [4, 5, 6, 255])));
-    let bytes = img.write();
+    let mut bytes = img.write();
+    // Make the second layer independently invalid. If cancellation is checked after parsing
+    // its metadata, this must produce a format error instead of `Cancelled`.
+    let second_name = bytes.windows(b"second\0".len()).position(|w| w == b"second\0").unwrap();
+    bytes[second_name - 4..second_name].copy_from_slice(&99u32.to_be_bytes());
+    assert!(matches!(super::import("invalid.xcf", &bytes, &Interrupt::NONE), Err(IoError::Xcf(_))));
     let checks = AtomicUsize::new(0);
     let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 1;
 
