@@ -94,6 +94,9 @@ fn over_a_pixel_layer_the_fill_rows_report_the_layer_and_change_nothing() {
         for label in ["Copy Fill", "Paste Fill"] {
             assert_eq!(greyed_style_rows(&mut h, tool), ["Copy Complete Stroke", "Paste Complete Stroke"], "{tool:?}");
             let before = h.state().session.journal.len();
+            // The previous row's report must not stand in for this one's.
+            h.state_mut().ui.status.clear();
+            h.state_mut().ui.status_error = false;
             pick(&mut h, label);
             let app = h.state();
             assert!(app.ui.status_error, "{tool:?}: {label}");
