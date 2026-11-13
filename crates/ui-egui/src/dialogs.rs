@@ -1310,6 +1310,7 @@ pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod equalize_ui;
 pub mod export_dialog;
+pub(crate) mod fade_modes;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
