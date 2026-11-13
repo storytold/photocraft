@@ -9,12 +9,12 @@
 use crate::common;
 
 use common::*;
+use craft_psd::PsdFile;
+use craft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 use photocraft_geom::Size;
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
-use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
 
 /// A `vibA` block as Photoshop writes it: a one-NUL name, the items, padding to 4 bytes.
 fn photoshop_vib(items: &[(&str, Value)]) -> Vec<u8> {

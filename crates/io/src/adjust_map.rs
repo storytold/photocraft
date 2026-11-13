@@ -395,9 +395,9 @@ pub(crate) fn retarget_vibrance(data: &mut Vec<u8>, target: &Adjustment) -> bool
             }
             (None, 0) => {}
             (None, v) => {
-                let before = |k: &photocraft_psd::descriptor::Id| k.is("useLegacy") || sliders.iter().take(i).any(|(p, _)| k.is(p));
+                let before = |k: &craft_psd::descriptor::Id| k.is("useLegacy") || sliders.iter().take(i).any(|(p, _)| k.is(p));
                 let at = desc.items.iter().rposition(|(k, _)| before(k)).map_or(0, |p| p + 1);
-                desc.items.insert(at, (photocraft_psd::descriptor::Id::new(key), Value::Integer(v)));
+                desc.items.insert(at, (craft_psd::descriptor::Id::new(key), Value::Integer(v)));
             }
         }
     }

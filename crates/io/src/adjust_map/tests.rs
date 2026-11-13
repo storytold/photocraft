@@ -641,7 +641,7 @@ fn vibrance_golden_block() {
 /// A `vibA` block shaped as Photoshop writes it: a one-NUL name and padding to 4 bytes.
 fn photoshop_vib(items: &[(&str, Value)]) -> Vec<u8> {
     let mut d = Descriptor::new("null");
-    d.name = photocraft_psd::descriptor::UnicodeString::new_nul("");
+    d.name = craft_psd::descriptor::UnicodeString::new_nul("");
     for (k, v) in items {
         d = d.with(k, v.clone());
     }
@@ -726,7 +726,7 @@ fn vibrance_edit_keeps_the_files_method_and_other_keys() {
 /// is 0, as Photoshop omits zeros.
 #[test]
 fn malformed_vibrance_sliders_parse_as_unsupported() {
-    let text = Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("28"));
+    let text = Value::Text(craft_psd::descriptor::UnicodeString::new_nul("28"));
     let bad = [Value::Double(f64::NAN), Value::Double(f64::INFINITY), Value::Double(-f64::INFINITY), text, Value::Boolean(true)];
     for v in bad {
         for key in ["vibrance", "Strt"] {
