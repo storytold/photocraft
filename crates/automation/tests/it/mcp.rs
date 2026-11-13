@@ -970,22 +970,22 @@ async fn doc_export_layers_reports_skipped_layers() {
     let hidden = json_of(&call(&client, "command_run", json!({"id": "layer.new.layer", "params": {"name": "Hidden"}})).await)["layer"].clone();
     json_of(&call(&client, "command_run", json!({"id": "layer.setProps", "params": {"visible": false}})).await);
     let result = json_of(&call(&client, "doc_export_layers", json!({"dir": "layers"})).await);
-    assert_eq!(result["count"], 1);
-    assert_eq!(result["files"], json!(["layers/card_0001_Background.png"]));
+    assert_eq!(result["count"], 2);
+    assert_eq!(result["files"], json!(["layers/card_0000_Levels_α.png", "layers/card_0001_Background.png"]));
     assert_eq!(
         result["skipped"],
         json!([
-            {"layer": hidden, "name": "Hidden", "reason": "hidden by visibleOnly"},
-            {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
+            {"layer": hidden, "name": "Hidden", "reason": "hidden by visibleOnly"}
         ])
     );
     let all = json_of(&call(&client, "doc_export_layers", json!({"dir": "all", "visible_only": false})).await);
-    assert_eq!(all["count"], 2);
-    assert_eq!(all["skipped"].as_array().unwrap().len(), 1);
-    assert_eq!(std::fs::read_dir(base.join("layers")).unwrap().count(), 1);
-    assert_eq!(std::fs::read_dir(base.join("all")).unwrap().count(), 2);
+    assert_eq!(all["count"], 3);
+    assert_eq!(all["skipped"].as_array().unwrap().len(), 0);
+    assert_eq!(std::fs::read_dir(base.join("layers")).unwrap().count(), 2);
+    assert_eq!(std::fs::read_dir(base.join("all")).unwrap().count(), 3);
     // Every top-level layer is still accounted for when none can be exported.
     json_of(&call(&client, "command_run", json!({"id": "layer.setProps", "params": {"layer": background, "visible": false}})).await);
+    json_of(&call(&client, "command_run", json!({"id": "layer.setProps", "params": {"layer": adjustment, "visible": false}})).await);
     let none = json_of(&call(&client, "doc_export_layers", json!({"dir": "none"})).await);
     assert_eq!(none["files"], json!([]));
     assert_eq!(none["count"], 0);
