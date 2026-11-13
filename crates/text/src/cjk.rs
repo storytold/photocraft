@@ -1075,6 +1075,8 @@ mod tests {
 mod flatpak_tests {
     use super::*;
 
+    /// Verifies that Flatpak host font mirrors preserve collection face names and include
+    /// split distro CJK font paths for each script.
     #[test]
     fn cjk_discovery_includes_host_fonts_with_the_matching_collection_face() {
         for script in [CjkScript::Japanese, CjkScript::SimplifiedChinese, CjkScript::TraditionalChinese, CjkScript::Korean] {
