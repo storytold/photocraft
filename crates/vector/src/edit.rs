@@ -293,26 +293,55 @@ pub fn delete_anchor_and_segments(path: &mut Path, [s, k]: [usize; 2]) -> Result
     Ok(false)
 }
 
-/// Can open subpath `s` split in two, the second half keeping its op, without a guess at how the
-/// reference folds the halves into the shape (#13606)? Only where "one component" and "two
-/// components with the original op" agree: a [`PathOp::Join`] subpath after the first (both
-/// halves stay in its component), or a Combine subpath that is a component of its own. Not a
-/// subpath that subtracts, intersects or excludes, the first subpath with another stored op
-/// (it acts as Combine, the copy wouldn't), or one a Join subpath after it belongs with.
-fn split_keeps_components(path: &Path, s: usize) -> bool {
-    let Some(sp) = path.subpaths.get(s) else { return false };
+/// Why open subpath `s` can't split in two before knot `end`, the second half keeping its op,
+/// without a guess at how the reference folds the halves into the shape (#13606); `None` when it
+/// can. Only where "one component" and "two components with the original op" agree: a
+/// [`PathOp::Join`] subpath after the first (both halves stay in its component), or a Combine
+/// subpath that is a component of its own and whose halves don't overlap. Not a subpath that
+/// subtracts, intersects or excludes, the first subpath with another stored op (it acts as
+/// Combine, the copy wouldn't), or one a Join subpath after it belongs with. Overlapping halves
+/// are refused because one component sums their winding numbers while two are each filled on
+/// their own and united: where their windings cancel (a reversed half inside the other) or,
+/// under even-odd, wherever they overlap, the fill would change.
+fn split_refusal(path: &Path, s: usize, end: usize) -> Option<&'static str> {
+    let sp = path.subpaths.get(s)?;
+    if s > 0 && sp.op == PathOp::Join {
+        return None;
+    }
     let next_joins = s.checked_add(1).and_then(|n| path.subpaths.get(n)).is_some_and(|n| n.op == PathOp::Join);
-    (s > 0 && sp.op == PathOp::Join) || (sp.op == PathOp::Combine && !next_joins)
+    if sp.op != PathOp::Combine || next_joins {
+        return Some(
+            "deleting this segment would split a shape component that subtracts, intersects, excludes or joins other subpaths; that isn't supported yet",
+        );
+    }
+    let (Some(a), Some(b)) = (sp.knots.get(..end).and_then(knots_box), sp.knots.get(end..).and_then(knots_box)) else {
+        return Some("deleting this segment would split the subpath where it has no anchors to keep");
+    };
+    let apart = a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1];
+    (!apart).then_some("deleting this segment would split the subpath into halves that overlap and change how the shape fills; that isn't supported yet")
+}
+
+/// `[x0, y0, x1, y1]` around `knots`, handles included: the curves between them and the line that
+/// closes them for filling stay inside it. `None` for no knots or a coordinate that isn't finite.
+fn knots_box(knots: &[Knot]) -> Option<[f64; 4]> {
+    let mut b: Option<[f64; 4]> = None;
+    for p in knots.iter().flat_map(|k| [k.anchor, k.in_ctrl, k.out_ctrl]) {
+        if !(p.x.is_finite() && p.y.is_finite()) {
+            return None;
+        }
+        b = Some(b.map_or([p.x, p.y, p.x, p.y], |b| [b[0].min(p.x), b[1].min(p.y), b[2].max(p.x), b[3].max(p.y)]));
+    }
+    b
 }
 
 /// ⌫ / Delete on a segment selected with Direct Selection: removes the segment that leaves
 /// `[s, k]` and keeps every anchor. A closed subpath opens there, starting at the segment's end
 /// and ending at `k`; an open subpath splits in two. The knots keep their handles. An open
 /// subpath whose halves the reference may fold in differently is refused until #13606 is
-/// measured ([`split_keeps_components`]).
+/// measured ([`split_refusal`]).
 pub fn delete_segment(path: &mut Path, [s, k]: [usize; 2]) -> Result<(), String> {
     let [_, end] = segment_end(path, [s, k])?;
-    let keeps_components = split_keeps_components(path, s);
+    let refusal = split_refusal(path, s, end);
     let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
     if sp.closed {
         // `end` is `k + 1`, or 0 when the closing segment goes.
@@ -320,10 +349,8 @@ pub fn delete_segment(path: &mut Path, [s, k]: [usize; 2]) -> Result<(), String>
         sp.closed = false;
         return Ok(());
     }
-    if !keeps_components {
-        return Err(
-            "deleting this segment would split a shape component that subtracts, intersects, excludes or joins other subpaths; that isn't supported yet".into(),
-        );
+    if let Some(why) = refusal {
+        return Err(why.into());
     }
     // Open: `end` = `k + 1` < len.
     let rest = Subpath { closed: false, knots: sp.knots.split_off(end), op: sp.op };
@@ -803,6 +830,37 @@ mod tests {
             assert_eq!(p.subpaths.iter().map(|sp| sp.op).collect::<Vec<_>>(), [PathOp::Combine, op, op], "{op:?}");
             assert_eq!(p.components().iter().map(|r| r.end).collect::<Vec<_>>(), ends, "{op:?}");
         }
+    }
+
+    #[test]
+    fn deleting_a_segment_refuses_a_combine_split_whose_halves_overlap() {
+        // Splitting between (0,100) and (10,80) leaves a triangle and a reversed one inside it. As
+        // one component their windings cancel inside the small one, a hole as before the split; as
+        // two Combine components (what the split makes) the hole would fill.
+        let pts = [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (10.0, 80.0), (80.0, 10.0), (10.0, 10.0)];
+        let before = Path::new(vec![Subpath::polyline(&pts)]);
+        let rect = photocraft_geom::Rect::new(0, 0, 100, 100);
+        let hole = |p: &Path| crate::path_coverage(p, rect)[30 * 100 + 30];
+        let (first, rest) = (Subpath::polyline(&pts[..3]), Subpath::polyline(&pts[3..]));
+        assert_eq!(hole(&before), 0.0, "a hole before the split");
+        assert_eq!(hole(&Path::new(vec![first.clone(), rest.clone().with_op(PathOp::Join)])), 0.0, "and as one component");
+        assert_eq!(hole(&Path::new(vec![first, rest])), 1.0, "filled as two");
+        let mut p = before.clone();
+        let err = delete_segment(&mut p, [0, 2]).unwrap_err();
+        assert!(err.contains("overlap"), "{err}");
+        assert_eq!(p, before, "unchanged");
+        // Handles count: the anchors are apart, but a curve of the second half reaches back into
+        // the first half's box.
+        let mut curved = Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)]);
+        curved.knots[2].out_ctrl = Point::new(5.0, -5.0);
+        let before = Path::new(vec![curved]);
+        let mut p = before.clone();
+        assert!(delete_segment(&mut p, [0, 1]).unwrap_err().contains("overlap"));
+        assert_eq!(p, before, "unchanged");
+        // Halves apart still split.
+        let mut p = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)])]);
+        delete_segment(&mut p, [0, 1]).unwrap();
+        assert_eq!(p.subpaths.len(), 2);
     }
 
     #[test]
