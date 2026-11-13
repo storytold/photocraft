@@ -68,26 +68,24 @@ impl AuthorizedWorkspace {
     /// save to a same-named file in the write root. Aliases and nested roots need an
     /// explicit Save As; this is not canonical desktop document identity.
     pub fn read_with_save_path(&self, path: &str) -> Result<(Vec<u8>, Option<String>), AutomationError> {
-        let (mut file, root) = self.open_read(path)?;
-        let metadata = file.metadata().map_err(|e| file_error("read", path, e))?;
-        if !metadata.is_file() {
-            return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
-        }
+        let (mut file, len, root) = self.open_read(path)?;
         // Retain main's bounded, growth-checked reads while keeping save provenance.
-        let bytes = read_to_observed_length(&mut file, metadata.len())?;
+        let bytes = read_to_observed_length(&mut file, len)?;
         let save_path = self.write.as_ref().filter(|write| Arc::ptr_eq(&root.dir, &write.dir)).map(|_| path.to_owned());
         Ok((bytes, save_path))
     }
 
-    fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
+    /// The first root's regular file at `path`, with its length ([`open_regular`]).
+    fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, u64, &RootCapability), AutomationError> {
         if self.read.is_empty() {
             return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
         }
         let mut not_found = None;
         for root in &self.read {
             let Some(relative) = scoped_path(path, root)? else { continue };
-            match root.dir.open(&relative) {
-                Ok(file) => return Ok((file, root)),
+            match open_regular(&root.dir, &relative) {
+                Ok(Some((file, len))) => return Ok((file, len, root)),
+                Ok(None) => return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`"))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => not_found = Some(error),
                 Err(error) => return Err(file_error("read", path, error)),
             }
@@ -191,7 +189,7 @@ impl AuthorizedWorkspace {
                 use std::os::fd::AsFd;
                 // Best effort, and only when there is a file being replaced: a save still
                 // succeeds for a document whose Finder tag could not come along.
-                if let Ok(old) = root.dir.open(&relative) {
+                if let Ok(Some((old, _))) = open_regular(&root.dir, &relative) {
                     let old = old.into_std();
                     let _ = photocraft_format::atomic::meta::copy_xattrs(old.as_fd(), file.as_fd());
                     // The creation time too (#9388), through the same handles.
@@ -245,10 +243,35 @@ fn written_kind(name: &str) -> bool {
 /// magic). Containers that also hold other things (zip, PDF) are judged by name only.
 fn holds_image(dir: &Dir, relative: &Path) -> bool {
     let mut head = [0u8; 64];
-    let Ok(mut file) = dir.open(relative) else { return false };
+    let Ok(Some((mut file, _))) = open_regular(dir, relative) else { return false };
     let Ok(n) = file.read(&mut head) else { return false };
     let head = &head[..n];
     head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some()
+}
+
+/// `relative` below `dir` opened for reading with its length if it is a regular file, `Ok(None)`
+/// for anything else (a directory, FIFO, socket or device). The open must not wait: a FIFO with
+/// no writer, or a serial device, blocks a plain open until a writer or carrier appears, and the
+/// headless server holds the session across a read. So on Unix the open carries `O_NONBLOCK`,
+/// the opened handle is judged (not a name checked first and opened again), and on a regular
+/// file the flag is cleared so reads block as usual (FUSE file systems may honour it), as in
+/// [`photocraft_format::read_file`].
+fn open_regular(dir: &Dir, relative: &Path) -> std::io::Result<Option<(cap_std::fs::File, u64)>> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = dir.open_with(relative, &options)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    rustix::fs::fcntl_setfl(&file, rustix::fs::OFlags::empty())?;
+    Ok(Some((file, metadata.len())))
 }
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
@@ -586,13 +609,11 @@ struct DirHandle {
 impl photocraft_format::ByteSource for DirHandle {
     fn get(&self, path: &str, max: usize) -> photocraft_format::Result<Vec<u8>> {
         let missing = || photocraft_format::FormatError::Corrupt(format!("missing `{path}`"));
-        let mut file = self.dir.open(path).map_err(|_| missing())?;
-        let metadata = file.metadata().map_err(|_| missing())?;
-        if !metadata.is_file() {
-            // A FIFO or device would block the open and stream without end.
+        // A FIFO or device is refused without waiting on the open; read, it would stream without end.
+        let Some((mut file, len)) = open_regular(&self.dir, Path::new(path)).map_err(|_| missing())? else {
             return Err(photocraft_format::FormatError::Corrupt(format!("`{path}` is not a regular file")));
-        }
-        photocraft_format::read_entry(&mut file, metadata.len(), max, path)
+        };
+        photocraft_format::read_entry(&mut file, len, max, path)
     }
 }
 

@@ -101,6 +101,47 @@ fn open_pcraft_rejects_non_regular_entries_and_escaping_symlinks() {
     std::fs::create_dir(&bundle2).unwrap();
     std::os::unix::fs::symlink("/dev/zero", bundle2.join("manifest.json")).unwrap();
     assert!(workspace2.open_pcraft("native.pcraft").is_err(), "an escaping symlink entry is refused");
+
+    // A FIFO entry is refused without waiting for a writer: the open itself used to block,
+    // holding the session. It runs on its own thread so that a regression fails here.
+    let (inside3, _, workspace3) = roots("pcraft-fifo");
+    let bundle3 = inside3.join("native.pcraft");
+    std::fs::create_dir(&bundle3).unwrap();
+    assert!(std::process::Command::new("mkfifo").arg(bundle3.join("manifest.json")).status().unwrap().success(), "mkfifo failed");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(workspace3.open_pcraft("native.pcraft").map(|_| ()).map_err(|e| e.to_string())));
+    let error = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("opening a FIFO entry blocked").unwrap_err();
+    assert!(error.contains("not a regular file"), "a FIFO entry is refused, not opened: {error}");
+}
+
+/// A FIFO at a read path is refused at once: opening it for reading blocked until a writer
+/// appeared, and the headless server holds the session across the read, stalling every other
+/// request. Through a symlink too. The reads run on their own thread so that a regression fails
+/// here instead of hanging the test run.
+#[cfg(unix)]
+#[test]
+fn read_refuses_a_fifo_without_blocking() {
+    let (inside, _, workspace) = roots("fifo-read");
+    for name in ["pipe.psd", "pipe.pcraft"] {
+        assert!(std::process::Command::new("mkfifo").arg(inside.join(name)).status().unwrap().success(), "mkfifo failed");
+    }
+    std::os::unix::fs::symlink("pipe.psd", inside.join("link.psd")).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // A `.pcraft` name is first tried as a directory bundle; a FIFO is not one, and then
+        // the bytes path refuses it like any other.
+        let _ = tx.send(("pipe.pcraft (bundle)", workspace.open_pcraft("pipe.pcraft").map(|d| d.is_some()).map_err(|e| e.to_string())));
+        for name in ["pipe.psd", "link.psd", "pipe.pcraft"] {
+            let _ = tx.send((name, workspace.read(name).map(|_| true).map_err(|e| e.to_string())));
+        }
+    });
+    let (name, bundle) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("open_pcraft blocked on a FIFO");
+    assert_eq!(bundle, Ok(false), "{name}: a FIFO is not a directory bundle");
+    for _ in 0..3 {
+        let (name, result) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("read blocked on a FIFO");
+        let error = result.unwrap_err();
+        assert!(error.contains("not a regular file"), "{name}: {error}");
+    }
 }
 
 fn temp_files(dir: &Path) -> Vec<String> {
@@ -205,6 +246,34 @@ fn write_refuses_a_fifo_target_without_blocking() {
         let error = result.unwrap_err();
         assert!(error.contains("is not a regular file"), "{name}: {error}");
     }
+    assert!(temp_files(&inside).is_empty());
+}
+
+/// A file that turns into a FIFO while its replacement is being written does not block the
+/// save: copying the old file's attributes reopens it after the up-front check, and that open
+/// used to wait for a writer. The FIFO is skipped and the new file still takes its place. The
+/// save runs on its own thread so that a regression fails here instead of hanging the run.
+#[cfg(unix)]
+#[test]
+fn write_does_not_block_when_the_target_becomes_a_fifo_during_the_save() {
+    let (inside, _, workspace) = roots("fifo-swap");
+    workspace.write("out.png", b"original").unwrap();
+    let target = inside.join("out.png");
+    let swapped = target.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = workspace.write_stream("out.png", &mut |w| {
+            w.write_all(b"replacement")?;
+            std::fs::remove_file(&swapped)?;
+            let made = std::process::Command::new("mkfifo").arg(&swapped).status()?;
+            if made.success() { Ok(()) } else { Err(std::io::Error::other("mkfifo failed")) }
+        });
+        let _ = tx.send(result.map_err(|e| e.to_string()));
+    });
+    let result = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the save blocked reopening a FIFO");
+    result.unwrap();
+    assert!(std::fs::symlink_metadata(&target).unwrap().is_file(), "the new file replaced the FIFO");
+    assert_eq!(std::fs::read(&target).unwrap(), b"replacement");
     assert!(temp_files(&inside).is_empty());
 }
 

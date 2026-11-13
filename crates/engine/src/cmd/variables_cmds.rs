@@ -207,9 +207,10 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
         return Ok(());
     }
     let fmt = doc.pixel_format();
-    // The path is stored in the document's data sets.
+    // The path is stored in the document's data sets. Only a regular file is read, and opening
+    // anything else does not wait (a FIFO without a writer would hold the session).
     let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
-    let bytes = std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
+    let bytes = photocraft_format::read_file(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let src = crate::file_cmds::import(path, &bytes)?;
     let img = crate::file_cmds::flattened(&src, fmt);
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
