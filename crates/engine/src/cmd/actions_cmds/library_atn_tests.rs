@@ -1041,6 +1041,49 @@ fn review_literal_wire_scopes_play_the_literal_set_and_preserve_source_bytes() {
 }
 
 #[test]
+fn review_conditional_import_keeps_each_resolved_literal_set_scope() {
+    for (params, expected, width) in [
+        (
+            json!({"if":"always","then":"Left","else":"Right","set":"Ungrouped Actions"}),
+            json!({"if":"always","then":"Left","else":"Right","set":"Ungrouped Actions","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
+            5,
+        ),
+        (
+            json!({"if":"never","then":"Left","else":"Right","set":"Ungrouped Actions","thenSet":null,"elseSet":null}),
+            json!({"if":"never","then":"Left","else":"Right","set":"Ungrouped Actions","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
+            7,
+        ),
+        (
+            json!({"if":"always","then":"Left","else":"Left","set":"Ungrouped Actions"}),
+            json!({"if":"always","then":"Left","else":"Left","set":"Ungrouped Actions 2"}),
+            5,
+        ),
+        (
+            json!({"if":"never","then":"Left","else":"Right","set":"External","thenSet":"Ungrouped Actions","elseSet":"Ungrouped Actions"}),
+            json!({"if":"never","then":"Left","else":"Right","set":"External","thenSet":"Ungrouped Actions 2","elseSet":"Ungrouped Actions 3"}),
+            7,
+        ),
+    ] {
+        let left = Action::new("Left", vec![("file.new".into(), json!({"width":5,"height":1}))]);
+        let right = Action::new("Right", vec![("file.new".into(), json!({"width":7,"height":1}))]);
+        let caller = Action::new("Caller", vec![("actions.conditional".into(), params.clone())]);
+        let bytes = native_archive(&[("Ungrouped Actions", &[left]), ("Ungrouped Actions", &[right]), ("C", &[caller])]);
+        let imported = atn_cmds::import(&bytes).unwrap();
+        assert_eq!(imported.sets.iter().map(|set| set.name.as_str()).collect::<Vec<_>>(), ["Ungrouped Actions 2", "Ungrouped Actions 3", "C"]);
+        assert_eq!(imported.actions[2].steps[0].1, params, "parsing retains the original wire scope");
+        let mut session = crate::Session::new();
+        session.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+        assert_eq!(session.actions.list[2].steps[0].1, expected);
+        let restored = library::decode(&encode(&session.actions)).unwrap();
+        assert_eq!(restored.list[2].steps[0].1, expected, "durable reopen keeps each resolved destination");
+        session.actions = restored;
+        let played = session.execute("actions.play", json!({"action":"Caller","set":"C"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(session.active().unwrap().doc.size.width, width);
+    }
+}
+
+#[test]
 fn review_interleaved_scoped_calls_load_across_rows_but_duplicate_targets_refuse() {
     let child = Action::new("Child", vec![("file.new".into(), json!({"width":7,"height":1}))]);
     let caller = Action { set: Some("C".into()), ..Action::new("Caller", vec![("actions.play".into(), json!({"action":"Child","set":"A"}))]) };

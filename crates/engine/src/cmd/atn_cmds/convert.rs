@@ -99,9 +99,10 @@ pub fn normalize_import(
                 "actions.conditional" => &["then", "else"],
                 _ => &[],
             };
-            // Both branches resolve in the original wire namespace, even after the first
-            // branch rewrites a shared set to its logical display alias.
+            // All branches resolve in the original wire namespace before publishing
+            // their logical display aliases.
             let shared_scope = params.get("set").and_then(Value::as_str).map(str::to_owned);
+            let mut shared_scopes = Vec::new();
             for key in keys {
                 if let Some(target) = params.get(*key).and_then(Value::as_str) {
                     let branch_scope = format!("{key}Set");
@@ -121,10 +122,23 @@ pub fn normalize_import(
                     if let Some((to, scope)) = to {
                         params[*key] = json!(to);
                         if let Some(scope) = scope {
-                            params[scope_key] = json!(scope);
+                            if scope_key == "set" {
+                                shared_scopes.push((*key, scope));
+                            } else {
+                                params[scope_key] = json!(scope);
+                            }
                         }
                     }
                 }
+            }
+            // Repeated wire sets can give the two branches different logical aliases.
+            // Keep a common set only when it still names both resolved destinations.
+            if shared_scopes.windows(2).any(|pair| pair[0].1 != pair[1].1) {
+                for (key, scope) in shared_scopes {
+                    params[format!("{key}Set")] = json!(scope);
+                }
+            } else if let Some((_, scope)) = shared_scopes.pop() {
+                params["set"] = json!(scope);
             }
             Ok(())
         };
