@@ -521,8 +521,13 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.set_width(232.0);
         let view = app.ui.presets_ui.shape_picker_view;
         let mut gear: Option<egui::Response> = None;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let g = named(crate::icons::button(ui, "settings", 24.0, false, tl!("Custom Shape Options")), "Custom Shape Options");
+        // Right-aligned by its own measured width rather than `Layout::right_to_left`, which
+        // inside a Popup whose size is still settling fed its own last-frame width back into
+        // this frame's position, growing the popup a little taller every frame forever.
+        ui.horizontal(|ui| {
+            const GEAR_SIZE: f32 = 24.0;
+            ui.add_space((ui.available_width() - GEAR_SIZE).max(0.0));
+            let g = named(crate::icons::button(ui, "settings", GEAR_SIZE, false, tl!("Custom Shape Options")), "Custom Shape Options");
             if g.clicked() {
                 let open = ctx.data(|d| d.get_temp::<PickerMenu>(menu_id));
                 ctx.data_mut(|d| {
