@@ -753,10 +753,13 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
         && let Some(i) = s.selected.filter(|i| *i < d.params.masks.len())
     {
         overlay(&ctx, &mut s, d, i, r, &painter);
-        pins(&painter, &d.params.masks[i], s.component, r, t.accent);
+        // Masks apply where the develop runs: the canvas, when Geometry moves pixels and the
+        // layer reaches past it.
+        let mr = masks_frame(&shown, d.canvas_frame, d.pw, d.ph, r);
+        pins(&painter, &d.params.masks[i], s.component, mr, t.accent);
         // The guide tool's drag belongs to `guide_drag` above.
         if s.tool != DrawTool::Guide && edits && !d.show_before {
-            mask_drag(&mut s, d, i, r, response, &painter);
+            mask_drag(&mut s, d, i, mr, response, &painter);
         }
     }
     if d.params != before {
@@ -764,6 +767,13 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
         s.overlay_tex = None;
     }
     store(&ctx, s);
+}
+
+/// The part of the preview image `r` the masks apply to with the settings `shown`: the canvas
+/// when Geometry moves pixels and the layer reaches past it (the develop then runs on the
+/// canvas only, see `ProxyJob::run`), else the whole image.
+fn masks_frame(shown: &CameraRaw, canvas_frame: Option<[usize; 4]>, pw: usize, ph: usize, r: ERect) -> ERect {
+    if shown.geometry_neutral() { r } else { guide_frame(canvas_frame, pw, ph, r).0 }
 }
 
 fn overlay(ctx: &egui::Context, s: &mut MaskUi, d: &CameraRawDialog, i: usize, r: ERect, painter: &egui::Painter) {
@@ -958,9 +968,22 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
         }
     } else if response.clicked() && s.tool == DrawTool::ColorPick && r.contains(p) {
         // Only on the image: past its edge (a preview smaller than the view) there is no pixel.
+        // `r` may be the canvas part of the proxy (`masks_frame`): sample that part.
         let (w, h) = (d.pw, d.ph);
         let src: &[[f32; 4]] = if d.processed.len() >= w * h { &d.processed } else { &d.proxy };
-        color_pick(s, m, (src, w, h), u, ctx.input(|x| x.modifiers.shift));
+        color_pick(s, m, (src, w, h), in_proxy(pick_frame, w, h, u), ctx.input(|x| x.modifiers.shift));
+    }
+}
+
+/// `u` (0 … 1) on the part `frame` of a `pw × ph` proxy (the whole proxy without one), as 0 … 1
+/// on the whole proxy.
+fn in_proxy(frame: Option<[usize; 4]>, pw: usize, ph: usize, u: [f32; 2]) -> [f32; 2] {
+    match frame {
+        Some([x0, y0, x1, y1]) if x0 < x1 && y0 < y1 && x1 <= pw && y1 <= ph => {
+            let (pw, ph) = (pw as f32, ph as f32);
+            [(x0 as f32 + u[0] * (x1 - x0) as f32) / pw, (y0 as f32 + u[1] * (y1 - y0) as f32) / ph]
+        }
+        _ => u,
     }
 }
 
@@ -1476,6 +1499,24 @@ mod tests {
         frame(egui::RawInput::default(), false);
         frame(shift_w(), false);
         assert!(is_open(&ctx), "the shortcut");
+    }
+
+    /// With Geometry moving pixels and the layer past the canvas, masks apply on the canvas, so
+    /// their pins, drags and colour samples are relative to it; without Geometry, to the whole
+    /// preview.
+    #[test]
+    fn masks_are_relative_to_the_canvas_under_geometry() {
+        let r = ERect::from_min_size(pos2(10.0, 20.0), egui::vec2(280.0, 160.0));
+        let frame = Some([7, 0, 28, 16]);
+        let flat = CameraRaw::default();
+        assert_eq!(masks_frame(&flat, frame, 28, 16, r), r);
+        let turned = CameraRaw { perspective_rotate: 3.0, ..CameraRaw::default() };
+        assert!(!turned.geometry_neutral());
+        assert_eq!(masks_frame(&turned, frame, 28, 16, r), ERect::from_min_max(pos2(80.0, 20.0), pos2(290.0, 180.0)));
+        assert_eq!(masks_frame(&turned, None, 28, 16, r), r);
+        assert_eq!(in_proxy(frame, 28, 16, [0.0, 0.5]), [0.25, 0.5]);
+        assert_eq!(in_proxy(frame, 28, 16, [1.0, 1.0]), [1.0, 1.0]);
+        assert_eq!(in_proxy(None, 28, 16, [0.3, 0.4]), [0.3, 0.4]);
     }
 
     /// Guides are relative to the canvas when the layer extends past it (Geometry warps the
