@@ -84,6 +84,32 @@ pub(super) fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64, keep_angle
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
 pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+    shape_geometry_with(o, tool, start, end, mods, None)
+}
+
+/// [`shape_geometry`] of a drag in `app`: ⇧ with the Custom Shape tool keeps the chosen shape's own
+/// proportions (#13464).
+fn drag_geometry(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
+    let aspect = if tool == Tool::CustomShape { chosen_shape(app).and_then(|s| aspect(&s.path)) } else { None };
+    shape_geometry_with(&app.ui.tool_options, tool, start, end, mods, aspect)
+}
+
+/// The custom shape the Custom Shape tool draws (the options bar's pick).
+fn chosen_shape(app: &PhotocraftApp) -> Option<photocraft_engine::presets::shapes::ShapePreset> {
+    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    groups.into_iter().flat_map(|g| g.items).find(|s| s.name == app.ui.presets_ui.shape())
+}
+
+/// Width over height of the box `presets::shapes::fit` maps `path` from.
+fn aspect(path: &photocraft_doc::vector::Path) -> Option<f64> {
+    let (x0, y0, x1, y1) = path.control_bounds()?;
+    (x1 > x0 && y1 > y0).then(|| (x1 - x0) / (y1 - y0))
+}
+
+/// [`shape_geometry`] where ⇧ keeps the proportions `aspect` (width over height) when given: the
+/// largest box of that aspect inside the drag's, from the press corner (⌥: centred on the press),
+/// as Photoshop's Custom Shape tool does. Without it ⇧ squares the drag on its longer side.
+fn shape_geometry_with(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, aspect: Option<f64>) -> Option<Value> {
     Some(if tool == Tool::Line {
         let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
         // Too short a drag draws nothing. Measured before ⇧ shortens a diagonal, so a short
@@ -115,7 +141,10 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
             "arrowConcavity": o.arrow_concavity})
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
-        if mods.shift {
+        if let (true, Some(a)) = (mods.shift, aspect) {
+            let (aw, ah) = if w.abs() > h.abs() * a { (h.abs() * a, h.abs()) } else { (w.abs(), w.abs() / a) };
+            (w, h) = (aw.copysign(w), ah.copysign(h));
+        } else if mods.shift {
             let m = w.abs().max(h.abs());
             (w, h) = (m * w.signum(), m * h.signum());
         }
@@ -184,7 +213,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         }
         return;
     }
-    let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
+    let Some(mut p) = drag_geometry(app, tool, start, end, mods) else { return };
     if tool == Tool::CustomShape {
         // With an operation other than New Layer the shape joins the active shape layer as one
         // component, its holes joined to it as in Path mode.
@@ -210,7 +239,7 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             }
             return;
         }
-        // ⇧ keeps the shape's proportions (the rect is already squared).
+        // ⇧ keeps the shape's proportions (the rect already has them).
         if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
             let (fill, stroke) = (fill_param(app), stroke_param(app));
             crate::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
@@ -309,11 +338,10 @@ fn as_one_component(outline: &photocraft_doc::vector::Path, rule: photocraft_doc
 
 /// The outline a Shape-tool drag draws, as a path (a custom shape fitted to the drag's box).
 fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::vector::Path> {
-    let geometry = shape_geometry(&app.ui.tool_options, tool, start, end, mods)?;
+    let geometry = drag_geometry(app, tool, start, end, mods)?;
     if tool == Tool::CustomShape {
         let rect = geometry.get("rect").and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok())?;
-        let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
-        let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
+        let shape = chosen_shape(app)?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift))
     } else {
         photocraft_engine::vector_cmds::shape_path(&geometry).ok()
@@ -355,3 +383,7 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
         painter.extend(crate::tool_feedback::contrast_path(pts, true, accent));
     }
 }
+
+#[cfg(test)]
+#[path = "custom_shape_shift_proportions_tests.rs"]
+mod custom_shape_shift_proportions_tests;
