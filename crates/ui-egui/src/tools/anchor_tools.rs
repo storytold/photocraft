@@ -437,6 +437,11 @@ impl Pull {
         self.last = p;
     }
 
+    /// Has Space moved the anchor off where the add put it?
+    pub(crate) fn repositioned(&self) -> bool {
+        self.anchor != self.from
+    }
+
     /// `path` with the knot as the drag has it so far: the preview.
     pub(crate) fn apply(&self, path: &mut Path) -> Result<(), String> {
         let k = path.subpaths.get_mut(self.knot[0]).and_then(|sp| sp.knots.get_mut(self.knot[1])).ok_or("no such anchor")?;

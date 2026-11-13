@@ -848,7 +848,8 @@ pub(crate) fn moved(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool
 /// End of an edit drag: commit it as one command (or one history step). A click (no movement) commits nothing, except
 /// Pen + ⌥ on an anchor, which makes it a corner. The Pen path being drawn takes the edit directly.
 fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, start: [f64; 2], end: [f64; 2], mods: Modifiers) {
-    let moved = moved(app, start, end);
+    // A pull whose anchor Space moved commits even if the pointer came back to the press.
+    let moved = moved(app, start, end) || matches!(edit, Edit::Pull(pull) if pull.repositioned());
     if target == PathRef::Pen {
         let edited = match edit {
             Edit::Convert(k) if !moved => {

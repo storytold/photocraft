@@ -134,6 +134,22 @@ fn space_moves_the_anchor_with_its_handles_and_letting_go_returns_to_the_handle(
     assert!(!crate::anchor_tools::set_reposition(&mut app, true), "no drag, nothing to reposition");
 }
 
+/// A pull whose anchor Space moved is kept when the pointer comes back to the press point before
+/// the release: the release is not a click.
+#[test]
+fn space_moves_are_kept_when_the_pointer_returns_to_the_press() {
+    let mut app = square();
+    down(&mut app, [300.0, 400.0]);
+    to(&mut app, [340.0, 400.0], Modifiers::NONE);
+    crate::anchor_tools::set_reposition(&mut app, true);
+    to(&mut app, [340.0, 440.0], Modifiers::NONE);
+    crate::anchor_tools::set_reposition(&mut app, false);
+    to(&mut app, [300.0, 400.0], Modifiers::NONE);
+    up(&mut app, [300.0, 400.0], Modifiers::NONE);
+    let k = knot_at(&saved(&app), [300.0, 440.0]);
+    assert_knot(&k, [300.0, 440.0], [300.0, 400.0], [300.0, 480.0]);
+}
+
 /// The Space case through the real canvas: the held key reaches the drag, and the view does not pan.
 #[test]
 fn space_in_the_canvas_moves_the_anchor_instead_of_panning() {
