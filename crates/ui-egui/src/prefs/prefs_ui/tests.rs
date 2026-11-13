@@ -1575,6 +1575,19 @@ fn a_saved_enable_animations_loads_and_leaves_egui_animating() {
     }
 }
 
+/// Enhanced Controls › Scrubby Slider Acceleration reaches the scrubby labels each frame, so a
+/// change applies to the next drag.
+#[test]
+fn tick_hands_scrubby_slider_acceleration_to_the_scrubby_labels() {
+    let (mut app, _) = app_with_saved(None);
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    assert!(crate::widgets::scrub_acceleration_on(&ctx), "on by default");
+    app.session.prefs.edit(|p| p.enhanced_controls.scrubby_slider_acceleration = false);
+    tick(&mut app, &ctx);
+    assert!(!crate::widgets::scrub_acceleration_on(&ctx));
+}
+
 #[test]
 fn unimplemented_preferences_are_hidden_from_the_dialog() {
     let values = prefs::Preferences::default().to_json();
@@ -1592,13 +1605,12 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     assert!(!prefs::is_hidden("type.useEscToCommit"));
     assert!(!prefs::is_hidden("type.smartQuotes"));
     assert!(!prefs::is_hidden("type.showFontNamesInEnglish"));
-    // Rotate View with Trackpad, the pinch zoom and Enable Gestures are live; the other
-    // Enhanced Controls rows stay hidden.
+    // Enhanced Controls are all live: Scrubby Slider Acceleration drives label scrubs (widgets::scrub).
     assert!(has_visible_fields(&values, "enhancedControls"));
     assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
     assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
     assert!(!prefs::is_hidden("enhancedControls.touchGestures"));
-    assert!(prefs::is_hidden("enhancedControls.scrubbySliderAcceleration"));
+    assert!(!prefs::is_hidden("enhancedControls.scrubbySliderAcceleration"));
     // Camera Raw Defaults are all live: the dialog's Open applies them (camera_raw_ui).
     assert!(has_visible_fields(&values, "rawDefaults"));
     for k in ["openInCameraRaw", "demosaic", "applyAutoTone", "colorSpace", "bitDepth", "resolution", "sharpenFor", "openAsSmartObject", "writeXmpSidecars"] {
