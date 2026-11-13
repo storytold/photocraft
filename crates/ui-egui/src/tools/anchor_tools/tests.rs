@@ -386,11 +386,12 @@ fn an_added_anchor_on_a_curve_is_selected_smooth_and_shows_its_handles() {
     assert_eq!(work(&app), before);
 }
 
-/// #8653: a drag from the click moves the anchor it adds, handles and all; the
-/// add and the move are one history step, for the Add Anchor Point tool and the Pen's Auto Add.
+/// #8653: with the Pen's Auto Add a drag from the click moves the anchor it adds, handles and all;
+/// the add and the move are one history step. (Add Anchor Point's drag pulls out the handles
+/// instead, #12707: `add_anchor_drag_tests`.)
 #[test]
 fn dragging_from_an_add_moves_the_new_anchor_in_one_step() {
-    for tool in [Tool::AddAnchorPoint, Tool::Pen] {
+    for tool in [Tool::Pen] {
         let mut app = app(tool);
         with_path(&mut app);
         let (before, n) = (work(&app), steps(&app));
