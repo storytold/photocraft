@@ -1308,3 +1308,7 @@ mod analysis_ruler_escape_tests;
 #[cfg(test)]
 #[path = "count_options_bar_tests.rs"]
 mod count_options_bar_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_ctrl_move_tests.rs"]
+mod analysis_ruler_ctrl_move_tests;
