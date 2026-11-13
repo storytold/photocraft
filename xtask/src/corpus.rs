@@ -24,15 +24,7 @@ const HEIF_CRATES: &[&str] = &["craft-image-codecs", "photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates,
 /// and the engine's `.atn` import and export).
-const CRITICAL: &[&str] = &[
-    "crates/io/",
-    "crates/compose/",
-    "crates/gpu/",
-    "crates/text/",
-    "crates/format/",
-    "crates/raw/",
-    "crates/engine/src/atn_cmds",
-];
+const CRITICAL: &[&str] = &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine/src/atn_cmds"];
 /// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local] | --gimp [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
