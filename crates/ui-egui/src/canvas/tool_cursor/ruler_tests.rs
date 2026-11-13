@@ -270,4 +270,29 @@ fn the_canvas_gives_the_ruler_tool_its_own_pointer() {
         assert!(h.output().platform_output.cursor_image.is_none(), "{doc:?}: ⌘ shows no Ruler bitmap");
         assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Default, "{doc:?}: the Move tool's pointer");
     }
+    // Preferences › Cursors › Other Cursors = Precise: the Ruler keeps the plain crosshair, as
+    // the Move and Type tools do; its own arrow is a nice-to-have, not a precise pointer (#12037 review).
+    let mut app = ruler_app(1.0);
+    app.run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
+    let mut hp = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&hp.ctx, crate::theme::ThemeKind::ALL[0]);
+    hp.run_steps(4);
+    for doc in [AWAY, END] {
+        hp.event(Event::ModifiersChanged(Modifiers::NONE));
+        hp.event(Event::PointerMoved(crate::canvas::ViewXform::active(hp.state()).expect("a view").to_screen(doc[0] as f32, doc[1] as f32)));
+        hp.run_steps(2);
+        // The icon is the point: Precise asks for the plain crosshair, exactly as the Move and
+        // Type arms do; the small bitmap that rides with it on native is the cursor pipeline's
+        // visible crosshair fallback, not the Ruler's arrow-and-ruler art of the phases above.
+        assert_eq!(hp.output().platform_output.cursor_icon, CursorIcon::Crosshair, "{doc:?}: Precise keeps the crosshair");
+    }
 }
