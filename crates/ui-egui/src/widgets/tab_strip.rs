@@ -47,7 +47,8 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
     crate::icons::paint(&paint_ui, r, "chevrons-right", 16.0, t.text);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let resp = resp.on_hover_text(tip);
-    egui::Popup::menu(&resp).show(|ui| {
+    // A click on the scroll bar's track is not a pick: only an entry, Escape or a click outside closes it.
+    egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(140.0);
         // Taller than the room below the popup's top (many documents open): scroll (#13189).
         let room = (ui.ctx().content_rect().bottom() - ui.min_rect().top() - 12.0).max(80.0);
@@ -254,6 +255,15 @@ mod tests {
 
         type State = (Vec<String>, Option<usize>);
 
+        fn click_at(h: &mut Harness<'static, State>, pos: egui::Pos2) {
+            h.hover_at(pos);
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+        }
+
         fn open(count: usize) -> Harness<'static, State> {
             let names: Vec<String> = (0..count).map(|i| format!("Document {i}")).collect();
             let mut h = Harness::builder().with_size(WINDOW).build_ui_state(
@@ -300,6 +310,45 @@ mod tests {
             h.get_by_label(&format!("Document {last}")).click();
             h.run_steps(4);
             assert_eq!(h.state().1, Some(last));
+        }
+
+        #[test]
+        fn clicking_the_scrollbar_track_keeps_the_list_open() {
+            let mut h = open(60);
+            let row = h.get_by_label("Document 0").rect();
+            let at = pos2(row.right() - 3.0, WINDOW.y - 60.0);
+            h.hover_at(at);
+            h.run_steps(2);
+            click_at(&mut h, at);
+            h.run_steps(4);
+            assert!(h.query_by_label("Document 0").is_some(), "the list is still open after a click on the scroll bar track");
+            assert_eq!(h.state().1, None, "nothing was picked");
+        }
+
+        #[test]
+        fn picking_an_entry_closes_the_list() {
+            let mut h = open(5);
+            h.get_by_label("Document 2").click();
+            h.run_steps(4);
+            assert_eq!(h.state().1, Some(2));
+            assert!(h.query_by_label("Document 2").is_none(), "the list closed after the pick");
+        }
+
+        #[test]
+        fn a_click_outside_closes_the_list() {
+            let mut h = open(5);
+            click_at(&mut h, pos2(100.0, 400.0));
+            h.run_steps(4);
+            assert!(h.query_by_label("Document 2").is_none(), "the list closed");
+            assert_eq!(h.state().1, None);
+        }
+
+        #[test]
+        fn escape_closes_the_list() {
+            let mut h = open(5);
+            h.key_press(egui::Key::Escape);
+            h.run_steps(4);
+            assert!(h.query_by_label("Document 2").is_none(), "the list closed");
         }
 
         #[test]
