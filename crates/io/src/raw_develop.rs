@@ -23,10 +23,13 @@ use photocraft_algo::camera_raw::CameraRaw;
 use photocraft_codecs::{self as codecs, ChannelLayout, Image};
 
 use crate::camera_raw_xmp::Crop;
-use crate::develop_bridge::{WbBasis, to_develop};
+use crate::develop_bridge::{DevelopEdit, WbBasis, to_develop};
+
 use crate::flat::image_to_document;
 use crate::raw::DEVELOPED_NOTE;
 use crate::{ImportResult, IoError};
+/// The base profiles a panel lists (`craft_develop::profiles`).
+pub use craft_develop::profiles::{PROFILES, ProfileInfo, profile, profile_groups};
 
 /// Names the engine in a developed raw's import note, after [`DEVELOPED_NOTE`]: what tells the
 /// dialog a document came from this module, so it previews with the same engine.
@@ -77,11 +80,11 @@ fn load(bytes: &[u8], max_edge: usize) -> Result<Loaded, IoError> {
     Ok(loaded)
 }
 
-/// `cr` rendered from `src` at exactly `w`×`h` (16-bit ProPhoto), as interleaved RGB.
-fn render_rgb16(src: &Arc<Rgb32f>, info: &SourceInfo, cr: &CameraRaw, (w, h): (usize, usize), cache: &StageCache) -> Result<Vec<u16>, IoError> {
+/// `s` rendered from `src` at exactly `w`×`h` (16-bit ProPhoto), as interleaved RGB.
+fn render_rgb16(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, (w, h): (usize, usize), cache: &StageCache) -> Result<Vec<u16>, IoError> {
     craft_develop::check_output_size(w, h).map_err(engine_error)?;
     let req = RenderRequest { space: OutputSpace::ProPhoto, depth: OutputDepth::U16, quality: Quality::Full, ..RenderRequest::exact(w, h) };
-    let out = render_cached(src, info, &settings(info, cr), &req, cache);
+    let out = render_cached(src, info, s, &req, cache);
     let deep = out.deep.ok_or_else(|| engine_error("the render has no 16-bit result"))?;
     if (deep.width, deep.height) != (w, h) {
         return Err(engine_error(format!("rendered {}×{}, not the {w}×{h} asked for", deep.width, deep.height)));
@@ -129,18 +132,60 @@ impl DevelopSource {
         (self.proxy.width, self.proxy.height)
     }
 
+    /// What the proxy was decoded with: the file's as-shot white, its white-balance scale.
+    pub fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+
+    /// The develop settings of Camera Raw settings `cr` for this raw ([`settings`]).
+    pub fn settings(&self, cr: &CameraRaw) -> DevelopSettings {
+        settings(&self.info, cr)
+    }
+
+    /// The settings the raw opens with (Camera Raw's defaults on this raw's defaults): what the
+    /// developed document shows.
+    pub fn defaults(&self) -> DevelopSettings {
+        self.settings(&CameraRaw::default())
+    }
+
+    /// Develop settings edited directly, starting from Camera Raw settings `cr` (a sidecar's, the
+    /// defaults).
+    pub fn edit(&self, cr: &CameraRaw) -> DevelopEdit {
+        DevelopEdit::new(cr, self.basis(), &DevelopSettings::for_raw(self.info.as_shot_temp, self.info.as_shot_tint))
+    }
+
+    /// Auto's tone settings for the proxy under `s`'s white balance.
+    pub fn auto_tone(&self, s: &DevelopSettings) -> craft_develop::auto::AutoTone {
+        craft_develop::auto::auto_tone(&self.proxy, &self.info, s)
+    }
+
+    /// The white (temperature, tint) white-balance `mode` gives this raw.
+    pub fn white_balance_for(&self, mode: craft_develop_model::WbMode) -> (f64, f64) {
+        craft_develop::auto::white_balance_for(mode, &self.proxy, &self.info)
+    }
+
     /// `cr` rendered from the proxy at exactly `w`×`h`, as straight RGBA in the document's encoding
     /// (ProPhoto, gamma 1.8).
     pub fn develop_proxy(&self, cr: &CameraRaw, w: usize, h: usize) -> Result<Vec<[f32; 4]>, IoError> {
-        render_rgb16(&self.proxy, &self.info, cr, (w, h), &self.proxy_cache).map(|rgb| rgba(&rgb))
+        self.develop_proxy_with(&self.settings(cr), w, h)
+    }
+
+    /// Develop settings `s` rendered from the proxy at exactly `w`×`h` ([`Self::develop_proxy`]).
+    pub fn develop_proxy_with(&self, s: &DevelopSettings, w: usize, h: usize) -> Result<Vec<[f32; 4]>, IoError> {
+        render_rgb16(&self.proxy, &self.info, s, (w, h), &self.proxy_cache).map(|rgb| rgba(&rgb))
     }
 
     /// `cr` rendered from the whole frame at exactly `w`×`h` (the document's size), decoding the
     /// whole frame the first time.
     pub fn develop_full(&self, cr: &CameraRaw, w: usize, h: usize) -> Result<Vec<[f32; 4]>, IoError> {
+        self.develop_full_with(&self.settings(cr), w, h)
+    }
+
+    /// Develop settings `s` rendered from the whole frame ([`Self::develop_full`]).
+    pub fn develop_full_with(&self, s: &DevelopSettings, w: usize, h: usize) -> Result<Vec<[f32; 4]>, IoError> {
         let full = self.full.get_or_init(|| load(&self.bytes, usize::MAX).map(|l| (Arc::new(l.image), l.info)).map_err(|e| e.to_string()));
         let (src, info) = full.as_ref().map_err(engine_error)?;
-        render_rgb16(src, info, cr, (w, h), &self.full_cache).map(|rgb| rgba(&rgb))
+        render_rgb16(src, info, s, (w, h), &self.full_cache).map(|rgb| rgba(&rgb))
     }
 }
 
@@ -167,6 +212,18 @@ pub(crate) fn crop_rgb(rgb: &mut Vec<u16>, (w, h): (usize, usize), crop: Crop) -
 /// A raw the engine can't develop opens as [`crate::raw::import_raw_tuned`] opens it, its note
 /// saying so.
 pub fn import_raw_developed(name: &str, bytes: &[u8], cr: &CameraRaw, crop: Option<Crop>) -> Result<(ImportResult, bool), IoError> {
+    import_raw_developed_with(name, bytes, cr, None, crop)
+}
+
+/// [`import_raw_developed`] rendering `develop` when given (the dialog's develop settings, edited
+/// directly), else `cr` through the bridge. `cr` is what a raw the engine can't develop opens with.
+pub fn import_raw_developed_with(
+    name: &str,
+    bytes: &[u8],
+    cr: &CameraRaw,
+    develop: Option<&DevelopSettings>,
+    crop: Option<Crop>,
+) -> Result<(ImportResult, bool), IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
     let loaded = match load(bytes, usize::MAX) {
         Ok(l) => l,
@@ -175,12 +232,14 @@ pub fn import_raw_developed(name: &str, bytes: &[u8], cr: &CameraRaw, crop: Opti
     let camera = craft_raw::probe_info(bytes).map(|i| crate::raw::camera_name(i.camera.make.as_deref(), i.camera.model.as_deref())).unwrap_or_default();
     let (w, h) = (loaded.image.width, loaded.image.height);
     let src = Arc::new(loaded.image);
-    let mut rgb = render_rgb16(&src, &loaded.info, cr, (w, h), &StageCache::default())?;
+    let from_cr = settings(&loaded.info, cr);
+    let s = develop.unwrap_or(&from_cr);
+    let mut rgb = render_rgb16(&src, &loaded.info, s, (w, h), &StageCache::default())?;
     let (w, h) = match crop {
         Some(c) => crop_rgb(&mut rgb, (w, h), c.oriented(photocraft_raw::orientation(bytes).unwrap_or(1)))?,
         None => (w, h),
     };
-    let default = crop.is_none() && cr.is_identity();
+    let default = crop.is_none() && *s == settings(&loaded.info, &CameraRaw::default());
     let summary = if default {
         format!("{DEVELOPED_NOTE} ({DEVELOP_ENGINE}, as-shot white balance)")
     } else {

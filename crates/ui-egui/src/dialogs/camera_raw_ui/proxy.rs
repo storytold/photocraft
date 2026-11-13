@@ -15,6 +15,9 @@ pub(super) struct ProxyJob {
     /// not used.
     pub(super) develop: Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>>,
     pub(super) params: CameraRaw,
+    /// The develop settings to render with [`Self::develop`] (edited directly); `None`: `params`
+    /// through the bridge.
+    pub(super) settings: Option<craft_develop_model::DevelopSettings>,
     pub(super) float: bool,
     pub(super) size: (usize, usize),
     pub(super) full_w: usize,
@@ -42,7 +45,11 @@ impl ProxyJob {
         let develop_start = crate::gpu_canvas::now_ms();
         // The shared engine renders the whole develop at the proxy's size; if it fails, the proxy
         // is adjusted as for any layer.
-        let (px, backend) = match self.develop.as_ref().and_then(|d| d.develop_proxy(&self.params, pw, ph).ok()) {
+        let developed = self.develop.as_ref().and_then(|d| match &self.settings {
+            Some(s) => d.develop_proxy_with(s, pw, ph).ok(),
+            None => d.develop_proxy(&self.params, pw, ph).ok(),
+        });
+        let (px, backend) = match developed {
             Some(px) => (px, "craft-develop"),
             None => self.develop_classic(),
         };

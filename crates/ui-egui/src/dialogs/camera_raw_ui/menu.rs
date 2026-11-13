@@ -32,9 +32,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" | "view" | "demosaic" | "filmstrip" => {}
-            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
+            "set" | "scope" | "view" | "demosaic" | "filmstrip" | "develop" => {}
+            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "expandAll" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "expandAll" => {
                 return Some(Err(format!("RAW Develop {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown RAW Develop ui property {key}"))),
@@ -74,6 +74,35 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     result
 }
 
+/// The control channel's `develop` (a partial of the shared develop settings, merged as
+/// LightCraft's `develop.merge` merges), checked: an error for a dialog without develop settings
+/// or a partial that doesn't merge.
+fn develop_partial(d: &super::CameraRawDialog, v: Option<&Value>) -> Result<Option<Value>, String> {
+    let Some(v) = v else { return Ok(None) };
+    let e = d.develop.as_ref().ok_or("develop settings apply only to a raw the shared develop engine develops")?;
+    if !v.is_object() {
+        return Err("bad develop settings: expected an object".into());
+    }
+    e.settings.merged(v).map_err(|err| format!("bad develop settings: {err}"))?;
+    Ok(Some(v.clone()))
+}
+
+/// Merges partial `v` into the dialog's develop settings, as one undo step.
+fn merge_develop(d: &mut super::CameraRawDialog, v: &Value) {
+    d.sync_develop();
+    let Some(e) = d.develop.as_ref() else { return };
+    let Ok(next) = e.settings.merged(v) else { return };
+    if next == e.settings {
+        return;
+    }
+    remember_edit(d);
+    if let Some(e) = d.develop.as_mut() {
+        e.settings = next;
+        d.params = e.camera_raw(&d.params);
+    }
+    d.dirty = true;
+}
+
 fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Option<Result<Value, String>> {
     // Stage both filter and presentation updates. No texture, preference or dialog mutation
     // occurs until every part of the request has passed validation.
@@ -82,8 +111,18 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         return Some(Err("Done is for raws being opened".into()));
     }
     let mut next_params = d.params.clone();
-    // Auto (the Light panel's button): the tone sliders from the image's histogram.
-    if ui.get("auto").and_then(Value::as_bool) == Some(true) {
+    let auto = ui.get("auto").and_then(Value::as_bool) == Some(true);
+    // `develop`: a partial of the shared develop settings (a raw the shared engine develops),
+    // merged over them as LightCraft's `develop.merge` merges; checked here, applied below.
+    let develop_partial = match develop_partial(d, ui.get("develop")) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    // Auto (the Light panel's button): the tone sliders from the image's histogram (with the
+    // shared engine, the engine's Auto).
+    if auto && let Some(p) = d.develop_auto() {
+        next_params = p;
+    } else if auto {
         photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut next_params);
     }
     if let Some(set) = ui.get("set") {
@@ -143,6 +182,12 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         remember_edit(d);
         d.dirty = true;
         d.params = next_params;
+    }
+    if let Some(v) = &develop_partial {
+        merge_develop(d, v);
+    }
+    if let Some(on) = ui.get("expandAll").and_then(Value::as_bool) {
+        d.develop_panel.expand_all = on;
     }
     if ui.get("auto").and_then(Value::as_bool) == Some(true) {
         d.auto_all = true;

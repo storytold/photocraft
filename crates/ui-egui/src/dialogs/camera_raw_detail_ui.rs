@@ -30,6 +30,10 @@ pub(crate) struct DetailPreview {
     /// The open-time dialog's raw decoded for the shared develop engine (a raw it developed): the
     /// whole develop renders from it at full size.
     pub(crate) develop: Option<Arc<photocraft_io::raw_develop::DevelopSource>>,
+    /// The dialog's develop settings for [`Self::develop`] (edited directly), and whether they
+    /// are the ones the document was developed with; `None`: the Camera Raw settings through the
+    /// bridge.
+    pub(crate) settings: Option<(craft_develop_model::DevelopSettings, bool)>,
     area: PixelRect,
     coverage: Coverage,
     result: Option<(u64, Surface)>,
@@ -57,6 +61,7 @@ impl DetailPreview {
             raw_curve: None,
             raw: None,
             develop: None,
+            settings: None,
             area,
             coverage,
             result: None,
@@ -69,6 +74,14 @@ impl DetailPreview {
             overlay_texture: None,
             overlay_key: None,
             ready: false,
+        }
+    }
+
+    /// Whether the settings are the ones the source pixels were developed with.
+    fn unedited(&self, params: &CameraRaw) -> bool {
+        match &self.settings {
+            Some((_, default)) => *default,
+            None => params.is_identity(),
         }
     }
 
@@ -123,6 +136,7 @@ impl DetailPreview {
         let coverage = self.coverage.clone();
         let mut params = params.clone();
         params.pixel_scale = 1.0;
+        let settings = self.settings.as_ref().map(|(s, _)| s.clone());
         let cancel = self.cancel.clone();
         let ctx = ctx.clone();
         let (tx, rx) = std::sync::mpsc::channel::<DetailResult>();
@@ -131,7 +145,7 @@ impl DetailPreview {
                 return;
             }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                match engine.as_deref().and_then(|e| develop_with_engine(&source, e, area, &params, &coverage)) {
+                match engine.as_deref().and_then(|e| develop_with_engine(&source, e, area, &params, settings.as_ref(), &coverage)) {
                     Some(surface) => surface,
                     None => develop(&source, raw_curve.as_deref().map(Vec::as_slice), raw.as_ref(), area, &params, &coverage),
                 }
@@ -189,7 +203,7 @@ impl DetailPreview {
             return false;
         }
         let Some(crop) = visible_pixels(image, ui.clip_rect(), self.area, ui.input(|i| i.max_texture_side)) else { return false };
-        let original = before || params.is_identity();
+        let original = before || self.unedited(params);
         if !original {
             self.request(ui.ctx(), revision, params);
             self.poll(revision);
@@ -228,7 +242,7 @@ impl DetailPreview {
         if !self.ready || !p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
             return None;
         }
-        let source = if before || params.is_identity() {
+        let source = if before || self.unedited(params) {
             &self.source
         } else if let Some((r, source)) = &self.result
             && *r == revision
@@ -349,10 +363,15 @@ fn develop_with_engine(
     engine: &photocraft_io::raw_develop::DevelopSource,
     area: PixelRect,
     params: &CameraRaw,
+    settings: Option<&craft_develop_model::DevelopSettings>,
     coverage: &Coverage,
 ) -> Option<Surface> {
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let px = engine.develop_full(params, w, h).ok()?;
+    let px = match settings {
+        Some(s) => engine.develop_full_with(s, w, h),
+        None => engine.develop_full(params, w, h),
+    }
+    .ok()?;
     let result = with_pixels(source, area, |i| px.get(i).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]));
     Some(blend_coverage(source, result, area, coverage))
 }

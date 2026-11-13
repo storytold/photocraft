@@ -289,6 +289,62 @@ pub fn slider_row_prec(
     r
 }
 
+/// How a [`slider_row_mapped`] track maps values: the fraction of the track a value sits at, and
+/// back. A develop control's spec says it (the Kelvin temperature's track is not linear).
+pub struct TrackMap<'a> {
+    pub position: &'a dyn Fn(f32) -> f32,
+    pub value_at: &'a dyn Fn(f32) -> f32,
+}
+
+/// [`slider_row_prec`] whose track runs through `map` instead of linearly over `range`, and whose
+/// double-click on the track sets `reset`. `label` is shown as given (already translated). The
+/// field types, scrubs and steps the value itself, in `decimals` places.
+#[allow(clippy::too_many_arguments)]
+pub fn slider_row_mapped(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: u32,
+    gradient: Option<&[Color32]>,
+    reset: f32,
+    map: TrackMap<'_>,
+) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let mut field = None;
+    let mut label_id = None;
+    ui.horizontal(|ui| {
+        let l = ui.label(egui::RichText::new(label).color(t.text_dim));
+        label_id = Some(l.id);
+        scrub_label_within(ui, &l, f32::INFINITY);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let opts = FieldOpts { decimals: Some(decimals), step_from_decimals: true, ..Default::default() };
+            field = Some(value_field_in(ui, value, range.clone(), "", 74.0, 0.0, opts, None).0);
+        });
+    });
+    let mut pos = (map.position)(*value);
+    let s = slider_with(ui, &mut pos, 0.0..=1.0, gradient, RowGestures::default());
+    if s.changed() {
+        *value = (map.value_at)(pos);
+    }
+    s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), label));
+    let s = if let Some(id) = label_id { s.labelled_by(id) } else { s };
+    let mut r = s.clone();
+    if r.double_clicked() && ui.is_enabled() {
+        *value = reset;
+        r.mark_changed();
+    }
+    if let Some(v) = field {
+        if v.changed() {
+            r.mark_changed();
+        }
+        use egui::response::Flags;
+        r.flags |= v.flags & (Flags::DRAG_STARTED | Flags::DRAGGED | Flags::DRAG_STOPPED);
+    }
+    ui.add_space(4.0);
+    r
+}
+
 /// A dialog row's label, right-aligned in a column `width` wide, so the controls after it line up
 /// (Photoshop's label column in Layer Style). A label too long for it, as some translations are,
 /// is cut short and shows in full on hover.

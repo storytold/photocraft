@@ -153,6 +153,7 @@ pub(super) fn open_pixels(
         None => raw.as_ref().and_then(|r| raw_proxy(r, &Default::default(), w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px)),
     };
     let raw = raw.filter(|_| developed.is_some() && develop.is_none());
+    let develop_edit = develop.as_ref().map(|s| s.edit(&params));
     let (proxy, pw, ph, k) = match developed {
         Some(px) => (px, w.div_ceil(k), h.div_ceil(k), k),
         None => box_proxy(&surf, area, w, h),
@@ -240,6 +241,8 @@ pub(super) fn open_pixels(
         raw_curve: None,
         raw_source: raw,
         develop_source: develop,
+        develop: develop_edit,
+        develop_panel: Default::default(),
         pending: None,
         preview_error: None,
         gpu,

@@ -8,7 +8,7 @@
 //! them, and an edit to it changes the same settings on every other selected raw
 //! ([`sync_selected`]).
 
-use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
+use super::open::{Target, commit_open_raw, open_raw_kept, return_on_failure};
 use super::sidecar::read_sidecar;
 use super::{
     Align2, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PhotocraftApp, RawOpen, Rect, Sense, Stroke, Tokens, Value, json, pos2, vec2, widgets,
@@ -26,6 +26,9 @@ pub struct HeldRaw {
     /// Its settings and the settings it started from (its sidecar's, or the defaults) once it
     /// has been shown and left for another (`None`: not edited yet).
     pub(super) kept: Option<(CameraRaw, CameraRaw)>,
+    /// Its develop settings once left, for a raw the shared engine develops: `kept`'s Camera Raw
+    /// settings are their copy (edits synced to it land there, and come in when it is shown).
+    pub(super) kept_develop: Option<photocraft_io::develop_bridge::DevelopEdit>,
     /// The filmstrip thumbnail until it is first drawn, then its texture.
     pub(super) thumb: Option<egui::ColorImage>,
     tex: Option<egui::TextureHandle>,
@@ -65,7 +68,7 @@ struct ThumbSource {
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
         let thumb = super::open::raw_document(app, &raw).and_then(|doc| thumbnail(app, &doc));
-        HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None }
+        HeldRaw { raw, kept: None, kept_develop: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None }
     }
 }
 
@@ -116,8 +119,8 @@ fn shrink(px: &[[f32; 4]], w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize) 
 /// Camera Raw Defaults' Auto, or the defaults the first time).
 pub(super) fn open_held(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize) -> Result<(), String> {
     let held = app.raw_shelf.get(i).ok_or("no raw file at that place in the filmstrip")?;
-    let (raw, kept) = (held.raw.clone(), held.kept.clone());
-    open_raw_with(app, ctx, raw, kept)
+    let (raw, kept, kept_develop) = (held.raw.clone(), held.kept.clone(), held.kept_develop.clone());
+    open_raw_kept(app, ctx, raw, kept, kept_develop)
 }
 
 /// Shows raw `to` of the filmstrip; the one being left keeps its settings, and its thumbnail
@@ -148,6 +151,7 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     let Some(raw) = &d.raw_open else { return };
     let Some(held) = app.raw_shelf.iter_mut().find(|h| h.raw.document == raw.document) else { return };
     held.kept = Some((d.params.clone(), d.original.clone()));
+    held.kept_develop = d.develop.clone();
     held.raw.demosaic = raw.demosaic;
     // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
     let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
@@ -175,6 +179,17 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
 /// Camera Raw's Auto for a filmstrip raw, from the pixels the dialog's Auto reads
 /// ([`default_proxy`]), so showing a raw doesn't change what Auto gives it.
 pub(super) fn auto_tone(app: &PhotocraftApp, raw: &RawOpen, p: &mut CameraRaw) {
+    // A raw the shared engine develops: its Auto, from the proxy the dialog would preview it from.
+    if raw.develop
+        && let Some(doc) = super::open::raw_document(app, raw)
+        && let Some(surf) = doc.layers.iter().find_map(|l| l.surface())
+        && let Some(source) = super::open::develop_source(raw, doc.bounds(), surf)
+    {
+        let mut e = source.edit(p);
+        source.auto_tone(&e.settings).apply(&mut e.settings);
+        *p = e.camera_raw(p);
+        return;
+    }
     if let Some(proxy) = super::open::raw_document(app, raw).and_then(|doc| default_proxy(&doc)) {
         photocraft_algo::camera_raw::auto_tone(&proxy, p);
     }
@@ -194,7 +209,13 @@ pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 
 /// several. A raw leaves the filmstrip once it has opened or its background develop has started:
 /// one that fails stays or comes back there with its settings, so the dialog returns for it (or
 /// Cancel still closes it).
-pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
+pub(super) fn open_all(
+    app: &mut PhotocraftApp,
+    params: &CameraRaw,
+    develop: Option<&craft_develop_model::DevelopSettings>,
+    raw: &RawOpen,
+    original: &CameraRaw,
+) -> Result<Value, String> {
     keep_settings(app);
     let selected = selection(app);
     let mut others = Vec::new();
@@ -212,7 +233,7 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
             app.session.close(index);
         }
     }
-    let first = commit_open_raw(app, params, raw, Some(original));
+    let first = commit_open_raw(app, params, develop, raw, Some(original));
     if let Ok(v) = &first {
         return_on_failure(app, v, original);
         app.raw_shelf.retain(|h| h.raw.document != raw.document);
@@ -233,7 +254,9 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
             Some((p, original)) => (p, Some(original)),
             None => first_settings(app, &held_raw),
         };
-        match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
+        // its own develop settings with the edits synced to it since it was left
+        let settings = held.kept_develop.as_ref().map(|e| e.settings_for(&p)).filter(|s| held.kept_develop.as_ref().is_some_and(|e| e.edited(s)));
+        match commit_open_raw(app, &p, settings.as_ref(), &held_raw, loaded.as_ref()) {
             Ok(v) => {
                 return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
                 opened.push(v);
@@ -485,12 +508,15 @@ pub(super) fn sync_selected(app: &mut PhotocraftApp) {
                 (p, loaded.unwrap_or_default())
             }
         };
+        // Auto first, then the rest of the edit over it: the shared engine's Auto also sets
+        // Vibrance and Saturation, which an edit sent with it sets after it.
+        let mut base = base;
+        if auto {
+            auto_tone(app, &raw, &mut base);
+        }
         let Ok(mut merged) = serde_json::to_value(&base) else { continue };
         merge_changes(&old, &new, &mut merged);
-        let Ok(mut next) = serde_json::from_value::<CameraRaw>(merged) else { continue };
-        if auto {
-            auto_tone(app, &raw, &mut next);
-        }
+        let Ok(next) = serde_json::from_value::<CameraRaw>(merged) else { continue };
         // A curve the shown raw takes is valid for every raw; this only guards the merge.
         if next.validate_changes(&original).is_err() {
             continue;
@@ -572,12 +598,14 @@ pub(super) fn refresh_shown_thumbnail(app: &mut PhotocraftApp) -> bool {
 /// Everything one thumbnail redraw reads, owned, so it can run off the UI thread.
 struct ThumbJob {
     params: CameraRaw,
+    settings: Option<craft_develop_model::DevelopSettings>,
     source: Result<std::sync::Arc<ThumbSource>, (photocraft_raster::Surface, photocraft_geom::Rect, RawOpen, f32)>,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
 }
 
 fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
     let (params, _) = held.kept.clone()?;
+    let settings = held.kept_develop.as_ref().map(|e| e.settings_for(&params));
     // A held raw: not a document, so not in the session.
     let doc = super::open::raw_document(app, &held.raw)?;
     let display = app.session.color.canvas_display(&doc).ok()?;
@@ -588,7 +616,7 @@ fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
             Err((surf, doc.bounds(), held.raw.clone(), photocraft_engine::lens_cmds::encoding_gamma(&doc)))
         }
     };
-    Some(ThumbJob { params, source, display })
+    Some(ThumbJob { params, settings, source, display })
 }
 
 fn spawn_thumb(job: ThumbJob) -> ThumbRedraw {
@@ -622,6 +650,7 @@ fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::Color
         raw_source: source.raw.clone(),
         develop: source.develop.clone(),
         params,
+        settings: job.settings,
         float: source.float,
         size: source.size,
         full_w: source.full_w,

@@ -113,12 +113,19 @@ pub fn hold_for_dialog(
 /// Opens the open-time dialog on a queued raw's (only) layer.
 #[cfg(test)]
 pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
-    open_raw_with(app, ctx, raw, None)
+    open_raw_kept(app, ctx, raw, None, None)
 }
 
 /// [`open_raw`], or with `kept` settings and the settings they started from (a filmstrip raw
-/// shown again).
-pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: RawOpen, kept: Option<(CameraRaw, CameraRaw)>) -> Result<(), String> {
+/// shown again), and the develop settings it was left with (`kept_develop`, a raw the shared
+/// engine develops): what the Camera Raw copy can't hold (a profile, B&W) comes back too.
+pub(super) fn open_raw_kept(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    mut raw: RawOpen,
+    kept: Option<(CameraRaw, CameraRaw)>,
+    kept_develop: Option<photocraft_io::develop_bridge::DevelopEdit>,
+) -> Result<(), String> {
     let doc = raw_document(app, &raw).ok_or("the raw document was closed")?;
     let (layer, surf) = doc.layers.iter().find_map(|l| Some((l.id, l.surface()?.clone()))).ok_or("the raw document has no pixels")?;
     // A raw the shared engine developed previews with it (one it can't decode again previews by
@@ -130,6 +137,14 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
         open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
         if let Some(d) = app.camera_raw.as_mut() {
             d.original = original;
+            if d.develop.is_some()
+                && let Some(edit) = kept_develop
+            {
+                // (an edit synced to it since it was left comes in through its Camera Raw copy)
+                d.develop = Some(edit);
+                d.sync_develop();
+                d.render(ctx);
+            }
         }
         attach_raw(app, raw);
         return Ok(());
@@ -161,7 +176,10 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
         && let Some(proxy) = super::filmstrip::default_proxy(&doc)
         && let Some(d) = app.camera_raw.as_mut()
     {
-        photocraft_algo::camera_raw::auto_tone(&proxy, &mut d.params);
+        // (the shared engine's Auto for a raw it develops, as the dialog's Auto button)
+        if d.auto_develop().is_none() {
+            photocraft_algo::camera_raw::auto_tone(&proxy, &mut d.params);
+        }
         // Where the raw starts, not an edit for the other selected raws.
         d.synced = d.params.clone();
         d.dirty = true;
@@ -189,7 +207,11 @@ fn raw_source(raw: &RawOpen, canvas: Rect, surf: &photocraft_raster::Surface) ->
 /// The raw file of `raw` decoded for the shared develop engine, its proxy at most the size the
 /// dialog's preview reduces the developed `surf` to (see [`raw_source`]). `None` when the file
 /// can't be read or decoded again.
-fn develop_source(raw: &RawOpen, canvas: Rect, surf: &photocraft_raster::Surface) -> Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>> {
+pub(super) fn develop_source(
+    raw: &RawOpen,
+    canvas: Rect,
+    surf: &photocraft_raster::Surface,
+) -> Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>> {
     let (_, w, h) = preview_area(canvas, surf).ok()?;
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
     let bytes = raw_bytes(raw)?;
@@ -306,7 +328,17 @@ pub(crate) fn after_raw_stage(p: &CameraRaw, white_balance: bool) -> CameraRaw {
 /// on) it runs as a job like the open itself: the reply is `{"job", "pending": true}`, a raw
 /// already in the session is locked meanwhile, and [`on_redevelop_event`] finishes when it lands.
 /// Elsewhere (tests, the web) it runs inline.
-pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, loaded: Option<&CameraRaw>) -> Result<Value, String> {
+///
+/// `develop`: the develop settings a raw the shared engine develops was edited to, when they
+/// differ from the ones it opened with; they render instead of `params` (still what its sidecar
+/// keeps).
+pub(super) fn commit_open_raw(
+    app: &mut PhotocraftApp,
+    params: &CameraRaw,
+    develop: Option<&craft_develop_model::DevelopSettings>,
+    raw: &RawOpen,
+    loaded: Option<&CameraRaw>,
+) -> Result<Value, String> {
     let index = match &raw.held {
         Some(_) => None,
         None => Some(document_index(app, raw.document).ok_or("the raw document was closed")?),
@@ -326,8 +358,8 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
     };
     // A raw the shared engine developed develops again with every setting (none left for a Camera
     // Raw step), when any differs from the defaults it opened with, or the sidecar crops it.
-    let redevelop = if raw.develop { !params.is_identity() || raw.crop.is_some() } else { tuning != as_opened };
-    let develop = raw.develop.then(|| (params.clone(), raw.crop));
+    let redevelop = if raw.develop { develop.is_some() || !params.is_identity() || raw.crop.is_some() } else { tuning != as_opened };
+    let develop = raw.develop.then(|| (params.clone(), develop.cloned(), raw.crop));
     let Some(source) = source.filter(|_| redevelop) else {
         let index = match (&raw.held, index) {
             (Some(doc), _) => admit(app, raw, (**doc).clone())?,
@@ -356,7 +388,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         ctx.check()?;
         ctx.progress(0.05, "Developing");
         match &develop {
-            Some((params, crop)) => photocraft_io::raw_develop::import_raw_developed(&name, &bytes, params, *crop),
+            Some((params, settings, crop)) => photocraft_io::raw_develop::import_raw_developed_with(&name, &bytes, params, settings.as_ref(), *crop),
             None => photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning),
         }
         .map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
@@ -578,7 +610,7 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
         let defaults = app.session.prefs().raw_defaults.clone();
         finish_open_raw(app, index, params, None, &raw, &defaults, true)
     } else {
-        commit_open_raw(app, &params, &raw, sidecar.as_ref())
+        commit_open_raw(app, &params, None, &raw, sidecar.as_ref())
     };
     if let Err(e) = r {
         app.ui.status = e;

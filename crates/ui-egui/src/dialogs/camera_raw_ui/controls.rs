@@ -7,21 +7,40 @@ use super::{
 
 const RAW_UNDO_LIMIT: usize = 40;
 
+/// The dialog's settings at one moment: the Camera Raw settings and, for a raw the shared engine
+/// develops, the develop settings they mirror (an undo step must bring back both).
+pub(super) type Snapshot = (CameraRaw, Option<photocraft_io::develop_bridge::DevelopEdit>);
+
+pub(super) fn snapshot(d: &CameraRawDialog) -> Snapshot {
+    (d.params.clone(), d.develop.clone())
+}
+
+fn restore(d: &mut CameraRawDialog, s: Snapshot) {
+    (d.params, d.develop) = s;
+}
+
+/// Undo or redo to `s`: a curve that changes loses its selected point.
+fn step_to(d: &mut CameraRawDialog, s: Snapshot) {
+    let curve = |s: &Snapshot| (s.0.point_curve.clone(), s.1.as_ref().map(|e| e.settings.curve.clone()));
+    if curve(&snapshot(d)) != curve(&s) {
+        d.curve_state = Default::default();
+        d.develop_panel.curve_state = Default::default();
+    }
+    restore(d, s);
+}
+
 pub(super) fn remember_edit(d: &mut CameraRawDialog) {
     if d.undo.len() == RAW_UNDO_LIMIT {
         d.undo.remove(0);
     }
-    d.undo.push(d.params.clone());
+    d.undo.push(snapshot(d));
     d.redo.clear();
 }
 
 pub(super) fn undo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(prev) = d.undo.pop() else { return false };
-    d.redo.push(d.params.clone());
-    if d.params.point_curve != prev.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = prev;
+    d.redo.push(snapshot(d));
+    step_to(d, prev);
     d.dirty = true;
     d.edit_origin = None;
     true
@@ -29,11 +48,8 @@ pub(super) fn undo_edit(d: &mut CameraRawDialog) -> bool {
 
 pub(super) fn redo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(next) = d.redo.pop() else { return false };
-    d.undo.push(d.params.clone());
-    if d.params.point_curve != next.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = next;
+    d.undo.push(snapshot(d));
+    step_to(d, next);
     d.dirty = true;
     d.edit_origin = None;
     true
@@ -49,6 +65,9 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
 }
 
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
+    if let Some(d) = app.camera_raw.as_mut() {
+        d.sync_develop();
+    }
     let d = app.camera_raw.as_ref().ok_or(tl!("RAW Develop isn't open"))?;
     let result = match d.target {
         Target::NewFilter => {
@@ -69,7 +88,8 @@ pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         Target::OpenRaw => {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
             let (params, original) = (d.params.clone(), d.original.clone());
-            super::filmstrip::open_all(app, &params, &raw, &original)?
+            let develop = d.develop.as_ref().filter(|e| e.edited(&e.settings)).map(|e| e.settings.clone());
+            super::filmstrip::open_all(app, &params, develop.as_ref(), &raw, &original)?
         }
     };
     app.camera_raw = None;
@@ -95,11 +115,11 @@ fn demosaic_row(ui: &mut egui::Ui, m: &mut photocraft_io::raw::Demosaic) {
     ui.add_space(4.0);
 }
 
-fn temp_stops() -> Vec<Color32> {
+pub(super) fn temp_stops() -> Vec<Color32> {
     vec![Color32::from_rgb(70, 120, 230), Color32::from_rgb(200, 200, 200), Color32::from_rgb(235, 200, 60)]
 }
 
-fn tint_stops() -> Vec<Color32> {
+pub(super) fn tint_stops() -> Vec<Color32> {
     vec![Color32::from_rgb(70, 190, 80), Color32::from_rgb(200, 200, 200), Color32::from_rgb(210, 80, 200)]
 }
 
@@ -233,7 +253,7 @@ fn guide_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
         pressed && i.consume_key(egui::Modifiers::SHIFT, egui::Key::T)
     });
     if shift_t {
-        let was = d.params.clone();
+        let was = snapshot(d);
         if crate::camera_raw_guides_ui::toggle(&mut d.guides, &mut d.params) {
             remember_shortcut_edit(d, was);
         }
@@ -244,26 +264,41 @@ fn guide_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
     let delete = d.guides.active
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
     if delete {
-        let was = d.params.clone();
+        let was = snapshot(d);
         if crate::camera_raw_guides_ui::delete_selected(&mut d.guides, &mut d.params) {
             remember_shortcut_edit(d, was);
         }
     }
 }
 
+/// The pointer is up: the edit since its gesture began (or, without one, since `frame_start`) is
+/// one undo step.
+fn record_edit(d: &mut CameraRawDialog, frame_start: Snapshot) {
+    d.sync_develop();
+    let origin = d.edit_origin.take().unwrap_or(frame_start);
+    if origin != snapshot(d) {
+        let edited = snapshot(d);
+        restore(d, origin);
+        remember_edit(d);
+        restore(d, edited);
+    }
+}
+
 /// A shortcut changed the settings from `was`: its own undo step. A gesture the pointer is still
 /// holding ends here with a step of its own, so its release doesn't record `was` a second time.
-fn remember_shortcut_edit(d: &mut CameraRawDialog, was: CameraRaw) {
-    let edited = std::mem::replace(&mut d.params, was);
+fn remember_shortcut_edit(d: &mut CameraRawDialog, was: Snapshot) {
+    let edited = snapshot(d);
+    restore(d, was);
     if let Some(origin) = d.edit_origin.take()
-        && origin != d.params
+        && origin != snapshot(d)
     {
-        let was = std::mem::replace(&mut d.params, origin);
+        let was = snapshot(d);
+        restore(d, origin);
         remember_edit(d);
-        d.params = was;
+        restore(d, was);
     }
     remember_edit(d);
-    d.params = edited;
+    restore(d, edited);
     d.dirty = true;
 }
 
@@ -277,6 +312,19 @@ fn wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel) {
 
 /// Small point-curve editor (master channel): click to add, drag to move, right-click to delete.
 fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &mut crate::state::PointCurveState) -> ERect {
+    // The identity handles are presentation until a gesture actually edits them.
+    let mut points = if p.point_curve.is_empty() { vec![[0.0, 0.0], [255.0, 255.0]] } else { p.point_curve.clone() };
+    let (rect, changed) = curve_points_editor(ui, &mut points, state);
+    if changed {
+        p.point_curve = points;
+        *dirty = true;
+    }
+    rect
+}
+
+/// The point-curve editor on `points` (0..255 in and out). Returns its rect and whether a gesture
+/// changed the points.
+pub(super) fn curve_points_editor(ui: &mut egui::Ui, points: &mut Vec<[f32; 2]>, state: &mut crate::state::PointCurveState) -> (ERect, bool) {
     let t = Tokens::get(ui.ctx());
     let side = ui.available_width().min(260.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
@@ -288,14 +336,9 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
         painter.line_segment([pos2(rect.left(), rect.top() + f * side), pos2(rect.right(), rect.top() + f * side)], Stroke::new(1.0, t.separator));
     }
     let to_screen = |x: f32, y: f32| pos2(rect.left() + x / 255.0 * side, rect.bottom() - y / 255.0 * side);
-    // The identity handles are presentation until a gesture actually edits them.
-    let mut points = if p.point_curve.is_empty() { vec![[0.0, 0.0], [255.0, 255.0]] } else { p.point_curve.clone() };
-    if crate::point_curve::interact(ui, &resp, rect, &mut points, state).changed {
-        p.point_curve = points.clone();
-        *dirty = true;
-    }
+    let changed = crate::point_curve::interact(ui, &resp, rect, points, state).changed;
     // Curve (point curve after the parametric one).
-    let lut = curve_lut(&points, 256);
+    let lut = curve_lut(points, 256);
     let pts: Vec<Pos2> = lut.iter().enumerate().map(|(i, value)| to_screen(i as f32, value * 255.0)).collect();
     painter.add(egui::Shape::line(pts, Stroke::new(1.5, t.text)));
     for (i, c) in points.iter().enumerate() {
@@ -305,7 +348,23 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
         }
         painter.circle_stroke(center, 4.0, Stroke::new(1.5, t.accent));
     }
-    rect
+    (rect, changed)
+}
+
+/// The develop panel ([`super::develop_panel`]) of a raw the shared engine develops, and whether it
+/// edited the settings; `None` for the classic panel.
+fn develop_props(ui: &mut egui::Ui, d: &mut CameraRawDialog, sampler: &mut bool) -> Option<bool> {
+    let edit = d.develop.as_mut()?;
+    let before = edit.settings.clone();
+    let tools = super::develop_panel::Tools { guides: &mut d.guides, sampler, alt: &mut d.scope.alt_tone };
+    let out = super::develop_panel::panel(ui, edit, d.develop_source.as_deref(), &mut d.develop_panel, tools);
+    d.curve_rect = out.curve_rect;
+    d.auto_all |= out.auto;
+    let edited = edit.settings != before;
+    if edited {
+        d.params = edit.camera_raw(&d.params);
+    }
+    Some(edited)
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -318,7 +377,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     {
         // It opens as developed with the defaults rather than vanish.
         let held = app.raw_shelf.remove(0);
-        let _ = super::open::commit_open_raw(app, &Default::default(), &held.raw, None);
+        let _ = super::open::commit_open_raw(app, &Default::default(), None, &held.raw, None);
         app.ui.status = e;
         app.ui.status_error = true;
     }
@@ -416,11 +475,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             app.ui.camera_raw_scope.sampler_tool = false;
         }
         let pointer = ctx.input(|i| i.pointer.primary_down());
+        // Edits made elsewhere (the guides, a sidecar) reach the develop settings first.
+        d.sync_develop();
         if pointer && d.edit_origin.is_none() {
-            d.edit_origin = Some(d.params.clone());
+            d.edit_origin = Some(snapshot(d));
         }
         // What this frame's controls start from, for an edit no pointer made (below).
-        let frame_start = d.params.clone();
+        let frame_start = snapshot(d);
         if let Some(display) = &current_display
             && display.key != d.display.key
         {
@@ -497,6 +558,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Without the sensor data, the full-size preview can't show the raw-stage sliders.
             let raw_tone = d.raw_source.is_none() && d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
             let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
+            d.detail.settings = d.develop.as_ref().map(|e| (e.settings.clone(), !e.edited(&e.settings)));
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -541,6 +603,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
+            // A raw the shared engine develops: LightCraft's Edit panel, from the control registry.
+            if let Some(edited) = develop_props(ui, d, &mut scope.sampler_tool) {
+                dirty |= edited;
+                return;
+            }
             let p = &mut d.params;
             let proxy = &d.proxy;
             let auto_all = &mut d.auto_all;
@@ -711,12 +778,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // One undo step per finished edit: a pointer gesture from where it began, and an edit made
         // without the pointer (a button from the keyboard or a screen reader) from this frame's start.
         if !ctx.input(|i| i.pointer.primary_down()) {
-            let origin = d.edit_origin.take().unwrap_or(frame_start);
-            if origin != d.params {
-                let edited = std::mem::replace(&mut d.params, origin);
-                remember_edit(d);
-                d.params = edited;
-            }
+            record_edit(d, frame_start);
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);

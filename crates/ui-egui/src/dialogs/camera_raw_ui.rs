@@ -31,6 +31,7 @@ use crate::widgets;
 
 mod controls;
 mod convert;
+pub(crate) mod develop_panel;
 mod filmstrip;
 mod menu;
 mod open;
@@ -113,6 +114,11 @@ pub struct CameraRawDialog {
     /// The open-time dialog's raw decoded for the shared develop engine (a raw it developed,
     /// [`RawOpen::develop`]): the preview renders every setting from it, and Open develops with it.
     develop_source: Option<std::sync::Arc<photocraft_io::raw_develop::DevelopSource>>,
+    /// The settings of a raw the shared engine develops ([`Self::develop_source`]), edited
+    /// directly by the Edit panel ([`develop_panel`]); [`Self::params`] is their Camera Raw copy
+    /// for what still reads one (sidecars, the filmstrip, the control channel's `set`).
+    pub(crate) develop: Option<photocraft_io::develop_bridge::DevelopEdit>,
+    pub(crate) develop_panel: develop_panel::DevelopPanel,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
@@ -125,10 +131,10 @@ pub struct CameraRawDialog {
     develop_ms: f64,
     pub(crate) develop_backend: &'static str,
     /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
-    undo: Vec<CameraRaw>,
-    redo: Vec<CameraRaw>,
-    /// Params at pointer-down. One drag is one undo step.
-    edit_origin: Option<CameraRaw>,
+    undo: Vec<controls::Snapshot>,
+    redo: Vec<controls::Snapshot>,
+    /// Settings at pointer-down. One drag is one undo step.
+    edit_origin: Option<controls::Snapshot>,
     /// Geometry › Upright › Guided's tool (Shift+T).
     pub(crate) guides: crate::camera_raw_guides_ui::GuideTool,
     /// The settings as last applied to the other raws selected in the filmstrip: what differs
@@ -152,6 +158,9 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
+        result["panel"] = json!(if self.develop.is_some() { "develop" } else { "classic" });
+        result["develop"] = self.develop.as_ref().map(|e| e.settings.to_json()).unwrap_or(Value::Null);
+        result["developControls"] = json!(self.develop_panel.drawn);
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
@@ -208,7 +217,35 @@ impl CameraRawDialog {
     /// Develops the proxy with the current settings and shows it, on this thread. The control
     /// channel and the first frame use this, so a reply always describes its own settings; the
     /// dialog's own controls go through [`Self::request_render`].
+    /// Brings what was changed on [`Self::params`] since it was last shown into the develop
+    /// settings (see [`photocraft_io::develop_bridge::DevelopEdit`]).
+    pub(crate) fn sync_develop(&mut self) {
+        if let Some(e) = self.develop.as_mut()
+            && e.take_camera_raw(&self.params)
+        {
+            self.dirty = true;
+        }
+    }
+
+    /// The Camera Raw copy of these settings with the shared engine's Auto applied (a raw it
+    /// develops), without keeping it; `None` for the classic develop.
+    pub(crate) fn develop_auto(&self) -> Option<CameraRaw> {
+        let (e, source) = (self.develop.as_ref()?, self.develop_source.as_ref()?);
+        let mut e = e.clone();
+        e.take_camera_raw(&self.params);
+        source.auto_tone(&e.settings).apply(&mut e.settings);
+        Some(e.camera_raw(&self.params))
+    }
+
+    /// [`Self::develop_auto`], kept. `None` for the classic develop (nothing changed).
+    pub(crate) fn auto_develop(&mut self) -> Option<()> {
+        self.params = self.develop_auto()?;
+        self.sync_develop();
+        Some(())
+    }
+
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
+        self.sync_develop();
         // A render still running on the worker has older settings than this one.
         self.pending = None;
         let frame = self.proxy_job().run();
@@ -224,6 +261,8 @@ impl CameraRawDialog {
             raw_source: self.raw_source.clone(),
             develop: self.develop_source.clone(),
             params: self.params.clone(),
+            // (with what was set on `params` since: a job may be taken before the next sync)
+            settings: self.develop.as_ref().map(|e| e.settings_for(&self.params)),
             float: self.float,
             size: (self.pw, self.ph),
             full_w: self.full_w,
@@ -261,6 +300,7 @@ impl CameraRawDialog {
     /// A slider drag never waits for the develop, which takes hundreds of milliseconds with
     /// Shadows or Highlights set (#5964); the preview shows the latest finished frame.
     fn request_render(&mut self, ctx: &egui::Context) {
+        self.sync_develop();
         if !self.dirty || self.pending.is_some() {
             return;
         }

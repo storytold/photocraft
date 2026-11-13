@@ -367,9 +367,133 @@ pub fn to_camera_raw(d: &DevelopSettings, basis: WbBasis, base: &CameraRaw) -> C
     cr
 }
 
+/// Develop settings edited directly (the dialog's source of truth for a raw the shared engine
+/// develops), with the [`CameraRaw`] they were last shown to the rest of PhotoCraft as.
+///
+/// PhotoCraft code that still speaks [`CameraRaw`] (sidecars, Load Settings, the control
+/// channel's `set`, the filmstrip, Guided Upright) edits that copy; [`Self::take_camera_raw`]
+/// brings what it changed into the settings, and only that, so a setting Camera Raw has no control
+/// for (the profile, B&W, optics, a white-balance preset) survives an edit made there. After an
+/// edit of the settings themselves, [`Self::camera_raw`] gives the copy to show.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DevelopEdit {
+    pub settings: DevelopSettings,
+    shown: CameraRaw,
+    basis: WbBasis,
+    /// The settings of Camera Raw's defaults: what the raw opens developed with.
+    unedited: DevelopSettings,
+}
+
+/// `target` with what changed from `old` to `new` (JSON objects compared key by key; any other
+/// value replaced whole).
+fn apply_changes(old: &serde_json::Value, new: &serde_json::Value, target: &mut serde_json::Value) {
+    use serde_json::Value;
+    match (old, new, target) {
+        (Value::Object(o), Value::Object(n), Value::Object(t)) => {
+            for (k, nv) in n {
+                let ov = o.get(k).unwrap_or(&Value::Null);
+                if ov == nv {
+                    continue;
+                }
+                match t.get_mut(k) {
+                    Some(tv) => apply_changes(ov, nv, tv),
+                    None => {
+                        t.insert(k.clone(), nv.clone());
+                    }
+                }
+            }
+        }
+        (o, n, t) if o != n => *t = n.clone(),
+        _ => {}
+    }
+}
+
+impl DevelopEdit {
+    /// `cr` as develop settings on `basis`, from `defaults` for what Camera Raw has no control for.
+    pub fn new(cr: &CameraRaw, basis: WbBasis, defaults: &DevelopSettings) -> DevelopEdit {
+        DevelopEdit { settings: to_develop(cr, basis, defaults), shown: cr.clone(), basis, unedited: to_develop(&CameraRaw::default(), basis, defaults) }
+    }
+
+    /// Whether `settings` differ from those the raw opens with (Camera Raw's defaults).
+    pub fn edited(&self, settings: &DevelopSettings) -> bool {
+        *settings != self.unedited
+    }
+
+    /// The white-balance scale the settings are on.
+    pub fn basis(&self) -> WbBasis {
+        self.basis
+    }
+
+    /// The settings with what `cr` changed from the copy last shown, without keeping it.
+    pub fn settings_for(&self, cr: &CameraRaw) -> DevelopSettings {
+        if *cr == self.shown {
+            return self.settings.clone();
+        }
+        let (old, new) = (to_develop(&self.shown, self.basis, &self.settings), to_develop(cr, self.basis, &self.settings));
+        let mut target = self.settings.to_json();
+        apply_changes(&old.to_json(), &new.to_json(), &mut target);
+        // (only values `to_develop` wrote: they read back; if not, the whole conversion)
+        let mut s = DevelopSettings::from_json(&target).unwrap_or_else(|_| new.clone());
+        // a white balance is one setting: a new temperature or tint is Custom, whatever preset was chosen
+        if old.wb != new.wb {
+            s.wb = new.wb;
+        }
+        s
+    }
+
+    /// Takes what `cr` changed from the copy last shown into the settings. Returns whether it changed anything.
+    pub fn take_camera_raw(&mut self, cr: &CameraRaw) -> bool {
+        if *cr == self.shown {
+            return false;
+        }
+        self.settings = self.settings_for(cr);
+        self.shown = cr.clone();
+        true
+    }
+
+    /// The settings as Camera Raw settings, from `base` for what the model has none of; kept as
+    /// the copy shown.
+    pub fn camera_raw(&mut self, base: &CameraRaw) -> CameraRaw {
+        self.shown = to_camera_raw(&self.settings, self.basis, base);
+        self.shown.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_develop_edit_keeps_what_camera_raw_has_no_control_for() {
+        let defaults = DevelopSettings::for_raw(5150.0, 7.0);
+        let mut e = DevelopEdit::new(&CameraRaw::default(), KELVIN, &defaults);
+        assert_eq!(e.settings, to_develop(&CameraRaw::default(), KELVIN, &defaults));
+        assert!(!e.edited(&e.settings));
+        assert!(!e.take_camera_raw(&CameraRaw::default()), "nothing changed");
+        // edited directly: a profile, a white-balance preset and an optics switch
+        e.settings.profile.id = "lc.vivid".into();
+        e.settings.wb.mode = WbMode::Daylight;
+        e.settings.wb.temp = 5500.0;
+        e.settings.optics.remove_ca = true;
+        e.settings.light.contrast = 20.0;
+        assert!(e.edited(&e.settings));
+        let shown = e.camera_raw(&CameraRaw::default());
+        assert_eq!(shown.contrast, 20.0);
+        // an edit made on the Camera Raw copy (Exposure) comes in, and only it
+        let edited = CameraRaw { exposure: 1.5, ..shown.clone() };
+        assert!(e.take_camera_raw(&edited));
+        assert_eq!(e.settings.light.exposure, 1.5);
+        assert_eq!(e.settings.light.contrast, 20.0);
+        assert_eq!(e.settings.profile.id, "lc.vivid");
+        assert_eq!((e.settings.wb.mode, e.settings.wb.temp), (WbMode::Daylight, 5500.0), "the preset is not rewritten as Custom");
+        assert!(e.settings.optics.remove_ca);
+        // a white balance changed there does come in
+        let warmer = CameraRaw { temperature: 30.0, ..edited };
+        let s = e.settings_for(&warmer);
+        assert_eq!(s.wb.mode, WbMode::Custom);
+        assert!(s.wb.temp > 5150.0, "{}", s.wb.temp);
+        assert_eq!(e.settings.wb.mode, WbMode::Daylight, "settings_for keeps nothing");
+    }
 
     const KELVIN: WbBasis = WbBasis::Kelvin { as_shot_temp: 5150.0, as_shot_tint: 7.0 };
 

@@ -1881,3 +1881,64 @@ fn a_synced_thumbnail_matches_the_dialogs_own() {
     let mean = |img: &egui::ColorImage| img.pixels.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).sum::<f32>() / img.pixels.len() as f32;
     assert!((mean(&before) - mean(&synced)).abs() > 3.0, "and it changed: {} → {}", mean(&before), mean(&synced));
 }
+
+/// With the shared engine the dialog's settings are develop settings: the panel is LightCraft's
+/// (from the control registry), a setting Camera Raw has no control for (the profile) previews,
+/// survives an edit made through the Camera Raw copy, undoes, and goes into Open's develop.
+#[test]
+fn the_shared_engines_dialog_edits_develop_settings() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("IMG_0001.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"view": {}}})).unwrap().unwrap();
+    assert_eq!(r["panel"], "develop", "{}", r["panel"]);
+    assert_eq!(r["develop"]["profile"]["id"], "lc.color");
+    let plain = app.camera_raw.as_ref().unwrap().processed.clone();
+    // a profile, which CameraRaw can't hold: the preview turns grey
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": {"profile": {"id": "lc.mono"}}}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["profile"]["id"], "lc.mono");
+    let grey = |px: &[[f32; 4]]| px.iter().map(|p| (p[0] - p[1]).abs() + (p[2] - p[1]).abs()).sum::<f32>() / px.len() as f32;
+    let mono = app.camera_raw.as_ref().unwrap().processed.clone();
+    assert!(grey(&mono) < grey(&plain) * 0.5, "Monochrome previews: {} vs {}", grey(&mono), grey(&plain));
+    // an edit through the Camera Raw copy keeps it
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["profile"]["id"], "lc.mono");
+    assert_eq!(r["develop"]["light"]["exposure"], 0.5);
+    assert_eq!(r["params"]["exposure"], 0.5);
+    // a develop edit shows in the Camera Raw copy where it has the control
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": {"light": {"contrast": 25.0}}}})).unwrap().unwrap();
+    assert_eq!(r["params"]["contrast"], 25.0);
+    // undo goes back step by step, through the develop-only edit too
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"undo": true}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"undo": true}})).unwrap().unwrap();
+    assert_eq!((r["develop"]["profile"]["id"].as_str(), r["params"]["exposure"].as_f64()), (Some("lc.mono"), Some(0.0)));
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"undo": true}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["profile"]["id"], "lc.color");
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"redo": true}})).unwrap().unwrap();
+    assert_eq!(r["develop"]["profile"]["id"], "lc.mono");
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": 3}})).unwrap().is_err(), "not an object");
+    // Open develops with the profile: a grey document
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], true, "{r}");
+    let st = app.session.active().unwrap();
+    let s = st.doc.layers.iter().find_map(|l| l.surface()).unwrap();
+    let px: Vec<[f32; 4]> = (0..8).map(|i| s.rgba(4 + i * 4, 16)).collect();
+    assert!(grey(&px) < 0.01, "Open develops Monochrome: {px:?}");
+}
+
+/// The classic panel stays for a layer's RAW Develop Filter: no develop settings there, and a
+/// develop partial is refused.
+#[test]
+fn the_filter_on_a_layer_keeps_the_classic_panel() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+    assert_eq!(r["panel"], "classic");
+    assert!(r["develop"].is_null());
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"develop": {"light": {"exposure": 1.0}}}})).unwrap().is_err());
+}
