@@ -49,8 +49,7 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highl
         if f == 1 { d } else { guided_upsample(&small, &d, full) }
     };
     let d_hl = pass(&u, &lum, hl, &multiscale::HIGHLIGHTS);
-    let after = Plane { w, h, v: u.v.iter().zip(&d_hl).map(|(a, b)| a + b).collect() };
-    let lum_after: Vec<f32> = lum.iter().zip(&d_hl).map(|(y, d)| y * d.exp2()).collect();
+    let (after, lum_after) = after_highlights(&lum, &d_hl, w, h, FLOOR);
     let d_sh = pass(&after, &lum_after, sh, &multiscale::SHADOWS);
     let colour = |c: (f32, f32), a: f32| if a > 0.0 { c.0 } else { c.1 };
     let (c_hl, c_sh) = (colour(HIGHLIGHTS_COLOUR, hl), colour(SHADOWS_COLOUR, sh));
@@ -74,6 +73,15 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highl
             }
         }
     });
+}
+
+/// The luminance after the Highlights move `d_hl` (stops), linear and as the log2 plane (plus
+/// `floor`) the Shadows pass reads at full size. The floor is added after the move, as
+/// [`shrink_linear`] adds it to the reduced copy, so both paths see the same input near black.
+fn after_highlights(lum: &[f32], d_hl: &[f32], w: usize, h: usize, floor: f32) -> (Plane, Vec<f32>) {
+    let lum_after: Vec<f32> = lum.iter().zip(d_hl).map(|(y, d)| y * d.exp2()).collect();
+    let v = lum_after.iter().map(|y| (y + floor).log2()).collect();
+    (Plane { w, h, v }, lum_after)
 }
 
 /// The luminance `lum` (`w × h`) averaged over `f × f` blocks, then to log2 (plus `floor`).
@@ -141,6 +149,21 @@ mod tests {
         let out = guided_upsample(&small, &d, &full);
         assert!(out.iter().all(|m| m.abs() <= multiscale::MAX_MOVE), "{out:?}");
         assert!(out[27] > 1.0, "the move still follows the guide: {}", out[27]);
+    }
+
+    /// Near black the full-size Shadows input and the reduced one (the same pixels, one per
+    /// block) must agree: the floor goes on after the Highlights move in both.
+    #[test]
+    fn full_size_and_reduced_shadows_inputs_agree_near_black() {
+        const FLOOR: f32 = 1.0 / 65536.0;
+        let (w, h) = (4, 2);
+        let lum = [0.0, 1e-6, 1e-5, 4e-5, 1e-4, 0.0, 2e-6, 0.3];
+        let d_hl = [-2.0, -1.5, 1.0, -3.0, 0.5, 2.0, -0.5, -1.0];
+        let (full, lum_after) = after_highlights(&lum, &d_hl, w, h, FLOOR);
+        let reduced = shrink_linear(&lum_after, w, h, 1, FLOOR);
+        for (a, b) in full.v.iter().zip(&reduced.v) {
+            assert!((a - b).abs() < 1e-5, "{:?} vs {:?}", full.v, reduced.v);
+        }
     }
 
     fn grey(w: usize, h: usize, f: impl Fn(usize, usize) -> f32) -> Vec<[f32; 4]> {
