@@ -227,3 +227,7 @@ fn number(f: &Map<String, Value>, key: &str, d: f64) -> f64 {
 fn flag(f: &Map<String, Value>, key: &str, d: bool) -> bool {
     f.get(key).and_then(Value::as_bool).unwrap_or(d)
 }
+
+#[cfg(test)]
+#[path = "contact_sheet_layout_tests.rs"]
+mod contact_sheet_layout_tests;
