@@ -41,7 +41,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     let o = &mut app.ui.tool_options;
     if matches!(tool, Tool::PathSelection | Tool::DirectSelection) && target.is_none() {
+        // No shape for W and H to show: empty and greyed (#13277).
+        crate::shape_options::size_fields(ui, &lbl, None);
         if tool == Tool::PathSelection {
+            crate::widgets::vline(ui, 22.0);
             lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the selected path") });
         }
         return true;

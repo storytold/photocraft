@@ -222,6 +222,10 @@ pub(crate) struct SizeBox {
 }
 
 fn size_box(app: &PhotocraftApp) -> Option<SizeBox> {
+    // A saved path selected in the Paths panel is Path Selection's target, not the active shape.
+    if crate::vector_ui::selected_saved_path_index(app).is_some() {
+        return None;
+    }
     let st = app.session.active()?;
     let layer = st.doc.layer(st.active_layer?)?;
     // The path's geometry without the stroke, as Properties' W / H take a shape's.
