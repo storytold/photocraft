@@ -1622,3 +1622,51 @@ fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
     s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
     assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
 }
+
+/// A Blur Gallery pin is a fraction of the smart object, so moving the object (which re-renders
+/// the filter from the source) moves the blur with it instead of leaving it on the canvas.
+#[test]
+fn blur_gallery_pins_move_with_the_smart_object() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("filter.blurGallery.fieldBlur", json!({"pins": [{"x": 0.25, "y": 0.25, "blur": 12.0}]})).unwrap();
+    let before = flat(&s);
+    s.execute("edit.transform", json!({"layer": id, "matrix": [1, 0, 0, 1, 8, 6], "interpolation": "nearest"})).unwrap();
+    let after = flat(&s);
+    for y in 18..30 {
+        for x in 14..30 {
+            let (a, b) = (before[(y * W + x) as usize], after[((y + 6) * W + x + 8) as usize]);
+            assert!((0..4).all(|c| (a[c] - b[c]).abs() < 0.02), "at {x},{y}: {a:?} vs {b:?}");
+        }
+    }
+}
+
+/// A tilt-shift's centre is a fraction of the object: for an object in the lower part of a taller
+/// canvas the sharp band sits at the object's vertical centre, not the canvas's.
+#[test]
+fn blur_gallery_pins_are_fractions_of_the_object() {
+    let mut s = session(8);
+    let block = Rect::new(0, 24, W, H);
+    s.edit("setup", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let fmt = surf.format();
+        let mut data = Vec::new();
+        for y in block.y0..block.y1 {
+            for x in block.x0..block.x1 {
+                let v = if (x + y) % 2 == 0 { 0.0 } else { 1.0 };
+                data.extend(photocraft_raster::from_rgba(&fmt, [v, v, v, 1.0]));
+            }
+        }
+        surf.write_region(block, &data);
+        Ok(())
+    })
+    .unwrap();
+    convert(&mut s);
+    s.execute("filter.blurGallery.tiltShift", json!({"centerX": 0.5, "centerY": 0.5, "blur": 10.0, "focus": 0.2, "transition": 0.3})).unwrap();
+    let px = flat(&s);
+    // Mean absolute horizontal gradient per row: high where the checkerboard is still sharp.
+    let sharp = |y: i32| (0..W - 1).map(|x| (px[(y * W + x) as usize][1] - px[(y * W + x + 1) as usize][1]).abs()).sum::<f32>();
+    let (centre, top, bottom) = (sharp(36), sharp(25), sharp(46));
+    assert!(centre > top * 2.0 && centre > bottom * 2.0, "rows: top {top}, centre {centre}, bottom {bottom}");
+}
