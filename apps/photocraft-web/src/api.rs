@@ -9,7 +9,7 @@
 //! applying a command the page was told had failed.
 
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, TrySendError, sync_channel};
 
 use craft_web_api::methods::Methods;
 use craft_web_api::page::{PageApi, Request};
@@ -22,6 +22,10 @@ const APP: &str = "photocraft";
 
 /// How often a waiting call looks for the app's reply, in milliseconds (about a frame).
 const POLL_MS: i32 = 16;
+
+/// How many control requests may wait for the app at once. `craft-web-api` already refuses calls past its own
+/// in-flight limit; this bounds the app's queue too, so a flood of calls can't grow it without limit.
+const QUEUE: usize = 64;
 
 /// A queued control request whose reply has not arrived. Dropping it before the reply (the page's
 /// timeout fired) gives the request up: the app skips it if it has not started it.
@@ -59,7 +63,7 @@ impl Drop for Pending {
 /// Put `window.photocraft` on the page and return the queue the app drains each frame (hand it to
 /// `PhotocraftApp::with_control`). An existing `window.photocraft` keeps the functions it already has.
 pub fn install(ctx: egui::Context) -> Receiver<ControlRequest> {
-    let (queue, requests) = channel::<ControlRequest>();
+    let (queue, requests) = sync_channel::<ControlRequest>(QUEUE);
     let request: Request = Rc::new(move |method, mut params| {
         // `ui.screenshot` rejects fields it does not know (`path`, `focus`), and the crate adds `data: true`
         // to ask for an inline PNG. Without a `path` the reply is inline already, so drop that one value;
@@ -72,8 +76,12 @@ pub fn install(ctx: egui::Context) -> Receiver<ControlRequest> {
         }
         let (control, reply) = ControlRequest::new(method, params);
         let dispatch = control.dispatch.clone();
-        if queue.send(control).is_err() {
-            return Box::pin(async { json!({"ok": false, "error": "the app is not running"}) });
+        if let Err(refused) = queue.try_send(control) {
+            let error = match refused {
+                TrySendError::Full(_) => format!("photocraft is busy: {QUEUE} requests are already waiting for the app"),
+                TrySendError::Disconnected(_) => "the app is not running".to_string(),
+            };
+            return Box::pin(async move { json!({"ok": false, "error": error}) });
         }
         ctx.request_repaint();
         let mut pending = Pending {
