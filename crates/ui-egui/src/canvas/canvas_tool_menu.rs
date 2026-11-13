@@ -831,10 +831,10 @@ fn shape_layer_row(command: &str) -> bool {
     )
 }
 
-/// Shape tools whose right-click opens [`SHAPE_MENU`]: the Line (#13249), the Rectangle (#13341)
-/// and the Triangle (#13367). The other shape tools join here once measured.
+/// Shape tools whose right-click opens [`SHAPE_MENU`]: the Line (#13249), the Rectangle (#13341),
+/// the Triangle (#13367) and the Ellipse (#13232). The other shape tools join here once measured.
 pub fn shape_tool_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Line | Tool::Rectangle | Tool::Triangle)
+    matches!(tool, Tool::Line | Tool::Rectangle | Tool::Triangle | Tool::EllipseShape)
 }
 
 /// Shape tools whose menu was measured in Path mode too, over a Work Path with a pixel layer
