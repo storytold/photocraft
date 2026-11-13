@@ -254,12 +254,24 @@ impl Mask {
 }
 
 /// Brush-grid cells one dab can touch (an upper bound: the grid's long side is at most
-/// [`shapes::BRUSH_GRID`]).
-fn dab_work(d: &Dab) -> f64 {
+/// [`shapes::BRUSH_GRID`]). The dabs of all masks together may touch [`MAX_BRUSH_WORK`].
+pub fn dab_work(d: &Dab) -> f64 {
     let grid = shapes::BRUSH_GRID as f64;
     let r = f64::from(d.size.abs().min(MAX_DAB_SIZE)) * grid;
     let side = 2.0 * r + 2.0;
     (side * side).min(grid * grid)
+}
+
+/// The brush work of all the masks' dabs together, which [`validate`] holds to [`MAX_BRUSH_WORK`].
+pub fn brush_work(masks: &[Mask]) -> f64 {
+    masks
+        .iter()
+        .flat_map(|m| &m.components)
+        .map(|c| match &c.shape {
+            Shape::Brush { dabs } => dabs.iter().map(dab_work).sum::<f64>(),
+            _ => 0.0,
+        })
+        .sum()
 }
 
 /// Checks masks from untrusted input: counts, finite coordinates, Depth Range and the brushes'

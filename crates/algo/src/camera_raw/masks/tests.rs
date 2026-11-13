@@ -390,3 +390,17 @@ fn colour_and_luminance_ranges_read_the_document_encoding() {
     let base = CameraRaw { encoding_gamma: 1.8, document_primaries: Some([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), ..CameraRaw::default() };
     assert_eq!(as_global(&Local::default(), &base).document_primaries, base.document_primaries);
 }
+
+/// `brush_work` is the total `validate` holds to `MAX_BRUSH_WORK`: two brushes full of the
+/// largest dabs pass it.
+#[test]
+fn brush_work_is_what_validate_limits() {
+    let full = Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: vec![Dab { size: MAX_DAB_SIZE, ..Dab::default() }; MAX_DABS] } };
+    let one = Mask { components: vec![full], ..Mask::default() };
+    assert!(brush_work(std::slice::from_ref(&one)) <= MAX_BRUSH_WORK);
+    assert!(validate(std::slice::from_ref(&one)).is_ok());
+    let two = vec![one.clone(), one];
+    assert!(brush_work(&two) > MAX_BRUSH_WORK);
+    assert!(validate(&two).is_err());
+    assert_eq!(brush_work(&[Mask::default()]), 0.0);
+}

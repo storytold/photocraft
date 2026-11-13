@@ -73,6 +73,11 @@ pub(crate) struct MaskUi {
     pending_op: Option<Op>,
     /// The overlay texture and the key of the mask it shows.
     overlay_tex: Option<(u64, TextureHandle)>,
+    /// Brush work the masks may still take ([`masks::MAX_BRUSH_WORK`] less their dabs'), set
+    /// when a brush stroke paints.
+    budget: f64,
+    /// A refusal the panel shows (English; translated when drawn).
+    notice: Option<&'static str>,
 }
 
 impl Default for MaskUi {
@@ -91,6 +96,8 @@ impl Default for MaskUi {
             drag: None,
             pending_op: None,
             overlay_tex: None,
+            budget: 0.0,
+            notice: None,
         }
     }
 }
@@ -159,6 +166,7 @@ pub(crate) fn describe(ctx: &egui::Context) -> Value {
         "tool": TOOLS.iter().find(|(t, _)| *t == s.tool).map_or("none", |(_, n)| n),
         "overlay": s.overlay,
         "overlayMode": OVERLAYS.iter().find(|(o, _)| *o == s.overlay_mode).map_or("color", |(_, n)| n),
+        "notice": s.notice,
         "brush": {"size": s.brush.size, "feather": s.brush.feather, "flow": s.brush.flow, "density": s.brush.density, "erase": s.erase, "autoMask": s.brush.auto},
     })
 }
@@ -472,6 +480,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
         s.component = None;
         s.pending_op = None;
         s.tool = DrawTool::None;
+    }
+    if let Some(notice) = s.notice {
+        ui.label(egui::RichText::new(trc(notice)).color(Tokens::get(ui.ctx()).warning));
     }
     if let Some(i) = s.selected.filter(|i| *i < p.masks.len()) {
         ui.horizontal_wrapped(|ui| {
@@ -831,6 +842,13 @@ pub(crate) fn apply_list_action(p: &mut CameraRaw, s: &mut MaskUi, i: usize, op:
     }
     match op {
         0 if p.masks.len() < masks::MAX_MASKS => {
+            // The copy's brush dabs count against what all the masks may paint.
+            let copy_work = masks::brush_work(std::slice::from_ref(&p.masks[i]));
+            if copy_work > 0.0 && masks::brush_work(&p.masks) + copy_work > masks::MAX_BRUSH_WORK {
+                s.notice = Some(BRUSH_FULL);
+                return;
+            }
+            s.notice = None;
             let mut copy = p.masks[i].clone();
             copy.name = format!("{} {}", copy.name, trc("copy"));
             p.masks.insert(i + 1, copy);
@@ -865,12 +883,17 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
         painter.circle_stroke(p, rad, Stroke::new(1.0, Color32::WHITE));
         painter.circle_stroke(p, rad * (1.0 - s.brush.feather / 100.0), Stroke::new(1.0, Color32::from_white_alpha(120)));
     }
+    if s.tool == DrawTool::Brush {
+        s.budget = masks::MAX_BRUSH_WORK - masks::brush_work(&d.params.masks);
+    }
+    // The canvas part of the proxy `r` shows when it is not the whole (`masks_frame`).
+    let pick_frame = d.canvas_frame.filter(|_| s.tool == DrawTool::ColorPick && !d.effective_params().geometry_neutral());
     let Some(m) = d.params.masks.get_mut(i) else { return };
     let alt = ctx.input(|x| x.modifiers.alt);
     if response.drag_started_by(egui::PointerButton::Primary) {
         s.drag = match s.tool {
             DrawTool::Brush => brush_target(m, s).map(|j| {
-                dab(m, j, u, &s.brush, s.erase || alt);
+                dab(s, m, j, u, alt);
                 Drag::Brush(u)
             }),
             DrawTool::Linear => {
@@ -931,7 +954,7 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
     } else if response.clicked() && s.tool == DrawTool::Brush {
         // A click without a drag paints one dab, as in Camera Raw.
         if let Some(j) = brush_target(m, s) {
-            dab(m, j, u, &s.brush, s.erase || alt);
+            dab(s, m, j, u, alt);
         }
     } else if response.clicked() && s.tool == DrawTool::ColorPick && r.contains(p) {
         // Only on the image: past its edge (a preview smaller than the view) there is no pixel.
@@ -977,7 +1000,7 @@ fn drag_to(s: &mut MaskUi, m: &mut Mask, r: ERect, p: Pos2, u: [f32; 2], alt: bo
                 let n = ((dist / step) as usize).clamp(1, 64);
                 for k in 1..=n {
                     let f = k as f32 / n as f32;
-                    dab(m, j, [last[0] + dx * f, last[1] + dy * f], &s.brush, s.erase || alt);
+                    dab(s, m, j, [last[0] + dx * f, last[1] + dy * f], alt);
                 }
                 s.drag = Some(Drag::Brush(u));
             }
@@ -1050,12 +1073,23 @@ fn brush_target(m: &mut Mask, s: &mut MaskUi) -> Option<usize> {
     Some(j)
 }
 
-fn dab(m: &mut Mask, j: usize, u: [f32; 2], brush: &Dab, erase: bool) {
-    if let Some(Component { shape: Shape::Brush { dabs }, .. }) = m.components.get_mut(j)
-        && dabs.len() < masks::MAX_DABS
-    {
-        dabs.push(Dab { x: u[0], y: u[1], erase, ..*brush });
+/// Shown when the masks' brushes together hold all the dabs they may paint.
+const BRUSH_FULL: &str = "The masks hold as many brush strokes as they can paint. Delete a brush or a mask to paint more.";
+
+/// Paints one dab of the brush (erasing with Erase or `alt`) at `u` into brush component `j`,
+/// within the component's dab limit and the brush work all the masks may still take
+/// ([`MaskUi::budget`]); past that it paints nothing and says why.
+fn dab(s: &mut MaskUi, m: &mut Mask, j: usize, u: [f32; 2], alt: bool) {
+    let Some(Component { shape: Shape::Brush { dabs }, .. }) = m.components.get_mut(j) else { return };
+    let d = Dab { x: u[0], y: u[1], erase: s.erase || alt, ..s.brush };
+    let work = masks::dab_work(&d);
+    if dabs.len() >= masks::MAX_DABS || work > s.budget {
+        s.notice = Some(BRUSH_FULL);
+        return;
     }
+    s.budget -= work;
+    s.notice = None;
+    dabs.push(d);
 }
 
 /// `frame`: the guides' rectangle on screen and its size in proxy pixels ([`guide_frame`]).
@@ -1260,11 +1294,40 @@ mod tests {
     #[test]
     fn dabs_stop_at_the_limit() {
         let mut m = Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: Vec::new() } }], ..Mask::default() };
+        let mut s = MaskUi { brush: Dab::default(), budget: masks::MAX_BRUSH_WORK, ..MaskUi::default() };
         for _ in 0..masks::MAX_DABS + 10 {
-            dab(&mut m, 0, [0.5, 0.5], &Dab::default(), false);
+            dab(&mut s, &mut m, 0, [0.5, 0.5], false);
         }
         assert!(matches!(&m.components[0].shape, Shape::Brush { dabs } if dabs.len() == masks::MAX_DABS));
-        dab(&mut m, 7, [0.5, 0.5], &Dab::default(), false); // no such component: nothing
+        dab(&mut s, &mut m, 7, [0.5, 0.5], false); // no such component: nothing
+    }
+
+    /// Dabs stop, and duplicating stops, where all the masks' brushes together would hold more
+    /// work than OK accepts (`MAX_BRUSH_WORK`), with a notice: the settings always validate.
+    #[test]
+    fn brushes_stop_at_the_total_brush_work() {
+        let largest = Dab { size: masks::MAX_DAB_SIZE, ..Dab::default() };
+        let full = Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: vec![largest; masks::MAX_DABS] } };
+        let mut p = CameraRaw { masks: vec![Mask { components: vec![full], ..Mask::default() }], ..CameraRaw::default() };
+        let mut s = MaskUi { brush: largest, ..MaskUi::default() };
+        // Duplicating the full brush would pass the total.
+        apply_list_action(&mut p, &mut s, 0, 0);
+        assert_eq!(p.masks.len(), 1, "not duplicated");
+        assert_eq!(s.notice, Some(BRUSH_FULL));
+        // A second brush fills up to the total and no further.
+        p.masks.push(Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: Vec::new() } }], ..Mask::default() });
+        s.notice = None;
+        for _ in 0..masks::MAX_DABS {
+            s.budget = masks::MAX_BRUSH_WORK - masks::brush_work(&p.masks);
+            dab(&mut s, &mut p.masks[1], 0, [0.5, 0.5], false);
+        }
+        assert!(matches!(&p.masks[1].components[0].shape, Shape::Brush { dabs } if dabs.len() < masks::MAX_DABS));
+        assert_eq!(s.notice, Some(BRUSH_FULL));
+        assert!(p.validate().is_ok(), "OK accepts what the dialog painted");
+        // Small masks still duplicate, and the notice goes.
+        p.masks.push(Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }], ..Mask::default() });
+        apply_list_action(&mut p, &mut s, 2, 0);
+        assert_eq!((p.masks.len(), s.notice), (4, None));
     }
 
     #[test]
