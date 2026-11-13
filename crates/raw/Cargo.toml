@@ -15,6 +15,7 @@ testgen = ["dep:image"]
 corpus = []
 
 [dependencies]
+craft-raw.workspace = true
 # Adobe DNG compression 8: zlib (RFC 1950) with the TIFF predictor (pure-Rust backend).
 flate2 = { workspace = true }
 # Adobe DNG compression 34892: baseline JPEG tiles (lossy), decoded by zune-jpeg.

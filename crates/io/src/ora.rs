@@ -15,7 +15,7 @@ mod tests;
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
-use photocraft_format::zip::{ZipReader, ZipWriter};
+use photocraft_format::zip::ZipWriter;
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::{Interrupt, Surface};
 
@@ -31,7 +31,6 @@ pub(crate) const MAX_PIXEL_BYTES: usize = 1 << 30;
 pub(crate) const MAX_SIDE: u32 = 300_000;
 /// Layers and groups in one document.
 pub(crate) const MAX_NODES: usize = 8192;
-const MAX_STACK_XML: usize = 16 << 20;
 const MAX_ENTRY: usize = 512 << 20;
 const THUMBNAIL_SIDE: u32 = 256;
 
@@ -42,24 +41,12 @@ fn invalid(message: impl Into<String>) -> IoError {
 /// The payload of a ZIP's first entry when it is a stored file named `mimetype`, which is how
 /// OpenRaster and Krita mark their archives (so the type is readable without unzipping).
 pub(crate) fn zip_mimetype(bytes: &[u8]) -> Option<&[u8]> {
-    let u16_at = |o: usize| bytes.get(o..o + 2).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_le_bytes);
-    let u32_at = |o: usize| bytes.get(o..o + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_le_bytes);
-    if u32_at(0)? != 0x0403_4b50 || u16_at(8)? != 0 {
-        return None;
-    }
-    let size = usize::try_from(u32_at(18)?).ok()?;
-    let name_len = usize::from(u16_at(26)?);
-    let extra_len = usize::from(u16_at(28)?);
-    if bytes.get(30..30 + name_len)? != b"mimetype" || size > 256 {
-        return None;
-    }
-    let start = 30 + name_len + extra_len;
-    bytes.get(start..start.checked_add(size)?)
+    craft_ora::zip_mimetype(bytes)
 }
 
 /// `true` for an OpenRaster archive (by its `mimetype` entry).
 pub(crate) fn is_ora(bytes: &[u8]) -> bool {
-    zip_mimetype(bytes) == Some(MIMETYPE)
+    craft_ora::is_ora(bytes)
 }
 
 /// Blend modes by Krita composite-op id: Krita's `.kra` `compositeop` attribute and the
@@ -221,40 +208,6 @@ impl Warnings {
 }
 
 /// A number attribute; a missing one is `default`, an unparsable one an error.
-fn num(node: roxmltree::Node<'_, '_>, name: &str, default: f64) -> Result<f64> {
-    match node.attribute(name) {
-        None => Ok(default),
-        Some(v) => v.trim().parse::<f64>().ok().filter(|v| v.is_finite()).ok_or_else(|| invalid(format!("invalid {name} attribute `{v}`"))),
-    }
-}
-
-fn int(node: roxmltree::Node<'_, '_>, name: &str) -> Result<i32> {
-    let v = num(node, name, 0.0)?.round();
-    if v.abs() > f64::from(MAX_SIDE) * 4.0 {
-        return Err(invalid(format!("{name} offset {v} is out of range")));
-    }
-    Ok(v as i32)
-}
-
-fn flag(node: roxmltree::Node<'_, '_>, name: &str) -> bool {
-    node.attribute(name).is_some_and(|v| matches!(v.trim(), "true" | "1"))
-}
-
-/// Shared node properties: name, visibility, opacity and composite operation.
-fn props(node: roxmltree::Node<'_, '_>, layer: &mut Layer, index: usize, warnings: &mut Warnings) -> Result<()> {
-    layer.name = node.attribute("name").filter(|name| !name.trim().is_empty()).map_or_else(|| format!("Layer {index}"), str::to_string);
-    layer.visible = node.attribute("visibility").is_none_or(|v| v.trim() != "hidden");
-    layer.opacity = num(node, "opacity", 1.0)?.clamp(0.0, 1.0) as f32;
-    layer.blend = composite_op(node.attribute("composite-op").map_or("svg:src-over", str::trim), &layer.name, warnings);
-    if flag(node, "edit-locked") {
-        layer.locks.all = true;
-    }
-    if flag(node, "alpha-preserve") {
-        layer.locks.transparency = true;
-    }
-    Ok(())
-}
-
 /// OpenRaster 0.0.6 defaults to isolated groups and makes `auto` explicitly pass-through.
 /// Older files used inference from the group's blend mode; keep that behavior when the
 /// version is absent or unrecognized, too. Compare the numeric core, not version strings.
@@ -269,7 +222,7 @@ fn uses_explicit_group_isolation(version: Option<&str>) -> bool {
 }
 
 struct Reader<'a, 'c> {
-    zip: ZipReader<'a>,
+    archive: craft_ora::Archive<'a>,
     ctl: &'c Interrupt<'c>,
     explicit_group_isolation: bool,
     nodes: usize,
@@ -287,11 +240,10 @@ enum Node {
 
 impl Reader<'_, '_> {
     fn png(&mut self, src: &str, layer: &str) -> Result<Option<usize>> {
-        let Some(entry) = self.zip.find(src).cloned() else {
+        let Some(data) = self.archive.entry(src, MAX_ENTRY).map_err(|e| invalid(format!("{src}: {e}")))? else {
             self.warnings.layer(layer, "the layer's image is missing from the archive; the layer opens empty");
             return Ok(None);
         };
-        let data = self.zip.read(&entry, MAX_ENTRY).map_err(|e| invalid(format!("{src}: {e}")))?;
         let mut opts = codecs::DecodeOptions::default();
         opts.limits.max_width = MAX_SIDE;
         opts.limits.max_height = MAX_SIDE;
@@ -307,36 +259,45 @@ impl Reader<'_, '_> {
         Ok(Some(self.images.len() - 1))
     }
 
-    fn stack(&mut self, stack: roxmltree::Node<'_, '_>, depth: usize) -> Result<Vec<Node>> {
+    fn stack(&mut self, stack: &[craft_ora::Node], depth: usize) -> Result<Vec<Node>> {
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(IoError::Unsupported(format!("layer groups nested deeper than {}", photocraft_doc::MAX_GROUP_DEPTH)));
         }
         let mut out = Vec::new();
-        for child in stack.children().filter(roxmltree::Node::is_element) {
+        for child in stack {
             self.ctl.check().map_err(|_| IoError::Cancelled)?;
             self.nodes += 1;
             if self.nodes > MAX_NODES {
                 return Err(invalid(format!("more than {MAX_NODES} layers")));
             }
             let index = self.nodes;
-            match child.tag_name().name() {
-                "layer" => {
+            match child {
+                craft_ora::Node::Layer(record) => {
                     let mut layer = Layer::raster("", PixelFormat::RGBA8);
-                    props(child, &mut layer, index, &mut self.warnings)?;
-                    let (x, y) = (int(child, "x")?, int(child, "y")?);
-                    let image = match child.attribute("src") {
-                        Some(src) => self.png(src.trim(), &layer.name.clone())?,
+                    layer.name = record.props.name.as_deref().filter(|s| !s.trim().is_empty()).map_or_else(|| format!("Layer {index}"), str::to_string);
+                    layer.visible = record.props.visible;
+                    layer.opacity = record.props.opacity.clamp(0.0, 1.0);
+                    layer.blend = composite_op(record.props.composite_op.as_deref().unwrap_or("svg:src-over"), &layer.name, &mut self.warnings);
+                    layer.locks.all = record.props.edit_locked;
+                    layer.locks.transparency = record.props.alpha_preserve;
+                    let image = match record.src.as_deref() {
+                        Some(src) => self.png(src, &layer.name.clone())?,
                         None => {
                             self.warnings.layer(&layer.name, "the layer has no image; it opens empty");
                             None
                         }
                     };
-                    out.push(Node::Raster { layer, image, x, y });
+                    out.push(Node::Raster { layer, image, x: record.x, y: record.y });
                 }
-                "stack" => {
+                craft_ora::Node::Stack(record) => {
                     let mut layer = Layer::group("", Vec::new());
-                    props(child, &mut layer, index, &mut self.warnings)?;
-                    let isolation = child.attribute("isolation").map(str::trim);
+                    layer.name = record.props.name.as_deref().filter(|s| !s.trim().is_empty()).map_or_else(|| format!("Layer {index}"), str::to_string);
+                    layer.visible = record.props.visible;
+                    layer.opacity = record.props.opacity.clamp(0.0, 1.0);
+                    layer.blend = composite_op(record.props.composite_op.as_deref().unwrap_or("svg:src-over"), &layer.name, &mut self.warnings);
+                    layer.locks.all = record.props.edit_locked;
+                    layer.locks.transparency = record.props.alpha_preserve;
+                    let isolation = record.isolation.as_deref();
                     let pass_through = if self.explicit_group_isolation {
                         // Since 0.0.6 only explicit `auto` passes through, ignoring the
                         // group's composite-op. An omitted isolation means `isolate`.
@@ -347,12 +308,12 @@ impl Reader<'_, '_> {
                     if pass_through {
                         layer.blend = BlendMode::PassThrough;
                     }
-                    let children = self.stack(child, depth + 1)?;
+                    let children = self.stack(&record.children, depth + 1)?;
                     out.push(Node::Group { layer, children });
                 }
-                other => {
-                    let name = child.attribute("name").unwrap_or(other).to_string();
-                    self.warnings.layer(&name, &format!("OpenRaster <{other}> elements are not supported and were skipped"));
+                craft_ora::Node::Other { tag, name } => {
+                    let name = name.as_deref().unwrap_or(tag).to_string();
+                    self.warnings.layer(&name, &format!("OpenRaster <{tag}> elements are not supported and were skipped"));
                 }
             }
         }
@@ -417,40 +378,25 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, budget: &mut usiz
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
-    let zip = ZipReader::new(bytes).map_err(|e| invalid(e.to_string()))?;
-    let mime = zip.read_by_name("mimetype", 256).map_err(|e| invalid(e.to_string()))?;
-    if mime.trim_ascii() != MIMETYPE {
-        return Err(invalid("the archive's mimetype is not image/openraster"));
+    let archive = craft_ora::Archive::open(bytes).map_err(|e| invalid(e.to_string()))?;
+    let image = archive.image().clone();
+    let (w, h) = (image.width, image.height);
+    if w > MAX_SIDE || h > MAX_SIDE {
+        return Err(invalid(format!("image size {w}×{h} exceeds {MAX_SIDE} pixels per side")));
     }
-    let xml = zip.read_by_name("stack.xml", MAX_STACK_XML).map_err(|e| invalid(e.to_string()))?;
-    let xml = std::str::from_utf8(&xml).map_err(|_| invalid("stack.xml is not UTF-8"))?;
-    let tree = crate::xml::parse(xml, roxmltree::ParsingOptions::default()).map_err(|e| invalid(format!("stack.xml: {e}")))?;
-    let image = tree.root_element();
-    if image.tag_name().name() != "image" {
-        return Err(invalid("stack.xml has no <image> root"));
-    }
-    let side = |attr: &str| -> Result<u32> {
-        let v = num(image, attr, 0.0)?;
-        if !(1.0..=f64::from(MAX_SIDE)).contains(&v) || v.fract() != 0.0 {
-            return Err(invalid(format!("image {attr} {v} must be a whole number of pixels from 1 to {MAX_SIDE}")));
-        }
-        Ok(v as u32)
-    };
-    let (w, h) = (side("w")?, side("h")?);
     if (w as usize).saturating_mul(h as usize).saturating_mul(8) > MAX_PIXEL_BYTES {
         return Err(invalid("the canvas exceeds the 1 GiB pixel limit"));
     }
-    let root = image.children().find(|n| n.has_tag_name("stack")).ok_or_else(|| invalid("stack.xml has no root <stack>"))?;
     let mut reader = Reader {
-        zip,
+        archive,
         ctl,
-        explicit_group_isolation: uses_explicit_group_isolation(image.attribute("version")),
+        explicit_group_isolation: uses_explicit_group_isolation(image.version.as_deref()),
         nodes: 0,
         budget: MAX_PIXEL_BYTES,
         warnings: Warnings::default(),
         images: Vec::new(),
     };
-    let nodes = reader.stack(root, 1)?;
+    let nodes = reader.stack(&image.stack, 1)?;
     ctl.progress(0.8);
     let depth = document_depth(&reader.images);
     if depth == SampleType::F32 {
@@ -459,8 +405,8 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
     let mut document = Document::new(name, Size::new(w, h), ColorMode::Rgb, depth);
     document.layers = build(nodes, &reader.images, fmt, &mut reader.budget, ctl)?;
-    let xres = num(image, "xres", 72.0)?;
-    let yres = num(image, "yres", xres)?;
+    let xres = image.xres;
+    let yres = image.yres;
     if xres > 0.0 && xres < 1.0e6 {
         document.resolution_dpi = xres as f32;
         reader.warnings.general.extend(crate::unequal_resolution_warning(xres, yres));

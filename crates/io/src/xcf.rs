@@ -64,13 +64,12 @@ fn invalid(message: impl Into<String>) -> IoError {
 
 /// `true` for an XCF file (by its signature).
 pub(crate) fn is_xcf(bytes: &[u8]) -> bool {
-    bytes.starts_with(MAGIC)
+    craft_xcf::is_xcf(bytes)
 }
 
 /// `true` for a gzip stream named `.xcf.gz` / `.xcfgz` (GIMP writes and reads compressed XCF).
 pub(crate) fn is_gzipped_xcf(name: &str, bytes: &[u8]) -> bool {
-    let lower = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
-    bytes.starts_with(&[0x1f, 0x8b]) && (lower.ends_with(".xcf.gz") || lower.ends_with(".xcfgz"))
+    craft_xcf::is_gzipped_xcf(name, bytes)
 }
 
 /// Inflates a gzipped XCF, bounded.

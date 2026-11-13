@@ -37,6 +37,12 @@ photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-format = { path = "../format" }
 craft-docpath = { workspace = true }
+craft-ora = { workspace = true }
+craft-kra = { workspace = true }
+craft-xcf = { workspace = true }
+craft-pdn = { workspace = true }
+craft-svg = { workspace = true }
+craft-tiff = { workspace = true }
 thiserror = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }

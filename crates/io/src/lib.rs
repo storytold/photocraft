@@ -554,7 +554,7 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if xcf::is_gzipped_xcf(name, bytes) {
         return ImportPreflight::Unbounded;
     }
-    if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
+    if craft_pdn::is_pdn(bytes) || has_extension(name, "pdn") {
         return ImportPreflight::Unbounded;
     }
     if raw::is_raw(bytes) {
@@ -986,7 +986,7 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if xcf::is_gzipped_xcf(name, bytes) {
         return Route::GzippedXcf;
     }
-    if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
+    if craft_pdn::is_pdn(bytes) || has_extension(name, "pdn") {
         return Route::Pdn;
     }
     if raw::is_raw(bytes) {
@@ -1059,7 +1059,7 @@ fn has_format_signature(name: &str, bytes: &[u8]) -> bool {
         || kra::is_kra(bytes)
         || xcf::is_xcf(bytes)
         || has_extension(name, "pdn")
-        || bytes.starts_with(b"PDN3")
+        || craft_pdn::is_pdn(bytes)
         || photocraft_format::is_pcraft(bytes)
         || has_extension(name, photocraft_format::EXTENSION)
 }

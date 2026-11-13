@@ -34,7 +34,7 @@ type Result<T> = std::result::Result<T, IoError>;
 
 /// The `mimetype` entry of a Krita archive.
 pub(crate) const MIMETYPE: &[u8] = b"application/x-krita";
-pub(crate) const EXTENSIONS: [&str; 2] = ["kra", "krz"];
+pub(crate) const EXTENSIONS: [&str; 2] = craft_kra::EXTENSIONS;
 const MAX_MAINDOC: usize = 32 << 20;
 const MAX_LAYER_FILE: usize = 1 << 30;
 
@@ -44,7 +44,7 @@ fn invalid(message: impl Into<String>) -> IoError {
 
 /// `true` for a Krita archive (by its `mimetype` entry).
 pub(crate) fn is_kra(bytes: &[u8]) -> bool {
-    crate::ora::zip_mimetype(bytes).is_some_and(|mime| mime.trim_ascii() == MIMETYPE)
+    craft_kra::is_kra(bytes)
 }
 
 fn attr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {

@@ -135,13 +135,7 @@ pub const MAX_INFLATED_BYTES: u64 = 128 << 20;
 
 /// Does this look like an SVG document (plain XML; `.svgz` is recognised by its extension)?
 pub fn is_svg(bytes: &[u8]) -> bool {
-    let head = bytes.get(..bytes.len().min(4096)).unwrap_or(bytes);
-    let text = String::from_utf8_lossy(head);
-    let t = text.trim_start_matches('\u{feff}').trim_start();
-    if t.starts_with("<svg") {
-        return true;
-    }
-    (t.starts_with("<?xml") || t.starts_with("<!DOCTYPE") || t.starts_with("<!--")) && t.contains("<svg")
+    craft_svg::sniff::is_svg(bytes)
 }
 
 /// The fonts text runs are shaped with: the bundled craft fonts plus, on the desktop, the
@@ -968,20 +962,8 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
 
 /// [`inflate`] with an explicit `limit`, which also applies to uncompressed input.
 fn inflate_with_limit(bytes: &[u8], limit: u64) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
-    use std::io::Read;
-    if !bytes.starts_with(&[0x1f, 0x8b]) {
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
-            return Err(IoError::Svg(format!("the SVG exceeds the {limit} byte limit")));
-        }
-        return Ok(std::borrow::Cow::Borrowed(bytes));
-    }
-    let mut out = Vec::new();
-    let mut reader = flate2::bufread::MultiGzDecoder::new(bytes).take(limit.saturating_add(1));
-    reader.read_to_end(&mut out).map_err(|e| IoError::Svg(format!("the compressed SVG couldn't be inflated: {e}")))?;
-    if u64::try_from(out.len()).unwrap_or(u64::MAX) > limit {
-        return Err(IoError::Svg(format!("the compressed SVG inflates past {} MB", limit >> 20)));
-    }
-    Ok(std::borrow::Cow::Owned(out))
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    craft_svg::svgz::inflate(bytes, limit).map_err(|e| IoError::Svg(e.to_string()))
 }
 
 /// The deepest element nesting in `xml`, stopping as soon as it passes `limit` (the result is
