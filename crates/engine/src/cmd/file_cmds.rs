@@ -33,6 +33,7 @@ mod save;
 
 pub use batch_naming::plan as plan_batch_names;
 use batch_run::batch;
+pub(crate) use batch_run::check_batch_depth;
 pub use batch_run::same_format as batch_same_format;
 use batch_run::same_format;
 #[cfg(not(target_arch = "wasm32"))]

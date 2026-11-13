@@ -124,7 +124,10 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = photocraft_io::ImportOptions {
+            keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
+            ..photocraft_engine::jobs::import_options(self.session.prefs())
+        };
         opts.pdf = pdf;
         let pdf_page = pdf_untitled(name, bytes, &opts);
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
