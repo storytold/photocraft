@@ -9,7 +9,7 @@ whole filename; without `{ext}`, no extension is added.
 | --- | --- |
 | `{name}`, `{NAME}`, `{Name}` | Input filename without its last extension, unchanged, uppercase, or initial capital |
 | `{serial}`, `{serial:1}` … `{serial:4}` | Input position plus **Starting serial** (default 1), padded to at least 3 or the specified number of digits |
-| `{letter}`, `{LETTER}` | Serial letters: a … z, aa …; uppercase with `{LETTER}` |
+| `{letter}`, `{LETTER}` | Serial letters: a … z, aa …, following the serial (from starting serial 0, the first input is a); uppercase with `{LETTER}` |
 | `{date}` | UTC date at the start of the batch, in `YYYY-MM-DD` form |
 | `{date:mmddyy}`, `{date:mmdd}`, `{date:yyyymmdd}`, `{date:yymmdd}`, `{date:yyddmm}`, `{date:ddmmyy}` | Other UTC date arrangements |
 | `{ext}`, `{EXT}` | Output extension, lowercase or uppercase; a dot is added when this is the final component, unless the template already supplied one |

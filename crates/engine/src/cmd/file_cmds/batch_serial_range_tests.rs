@@ -21,6 +21,17 @@ fn serial_zero_counts_from_000_with_three_digits() {
     assert_eq!(names(json!({"naming": "{serial:3}_{name}", "startingSerial": 0})), ["000_first", "001_second"]);
 }
 
+/// Serial 0 has no letter of its own: from 0, template and structured letters both start at `a`,
+/// never at an empty name. From 1 up, template letters still follow the serial.
+#[test]
+fn letters_from_serial_zero_start_at_a() {
+    assert_eq!(names(json!({"naming": "{letter}{ext}", "startingSerial": 0})), ["a.png", "b.png"]);
+    assert_eq!(names(json!({"naming": "{name}_{LETTER}", "startingSerial": 0})), ["first_A", "second_B"]);
+    assert_eq!(names(json!({"namingComponents": [{"component": "letter"}], "startingSerial": 0})), ["a", "b"]);
+    assert_eq!(names(json!({"naming": "{letter}", "startingSerial": 1})), ["a", "b"]);
+    assert_eq!(names(json!({"naming": "{letter}", "startingSerial": 26})), ["z", "aa"]);
+}
+
 #[test]
 fn a_serial_wider_than_its_digits_keeps_every_digit() {
     assert_eq!(names(json!({"namingComponents": [{"component": "serial3"}], "startingSerial": 1000})), ["1000", "1001"]);
