@@ -678,7 +678,15 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
 /// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
+    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?;
+    if dir.is_empty() {
+        return Err(bad(cmd, "Choose a destination folder."));
+    }
+    // Leave other filesystem errors to the existing save path.
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
+        return Err(bad(cmd, format!("Destination does not exist: {dir}")));
+    }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -688,7 +696,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
-        let path = join(&dir, &format!("{name}.{format}"));
+        let path = join(dir, &format!("{name}.{format}"));
         save_doc(&one, &path, save)?;
         files.push(path);
     }
