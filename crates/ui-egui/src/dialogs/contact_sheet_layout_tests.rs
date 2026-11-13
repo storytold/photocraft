@@ -30,7 +30,7 @@ pub(super) fn fields(h: &H) -> &Map<String, Value> {
 }
 
 /// The number the value field `name` shows.
-fn shown(h: &H, name: &str) -> f64 {
+pub(super) fn shown(h: &H, name: &str) -> f64 {
     h.get_by_role_and_label(Role::SpinButton, name).accesskit_node().numeric_value().unwrap_or(f64::NAN)
 }
 

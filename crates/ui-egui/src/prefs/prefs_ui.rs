@@ -119,4 +119,4 @@ mod shortcut_capture_tests;
 mod shortcut_set_tests;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
