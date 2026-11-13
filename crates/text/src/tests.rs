@@ -3723,6 +3723,34 @@ fn fit_lines_force_breaks() {
     assert!(!l.overflowed);
 }
 
+/// Each paragraph finds its solved lines by binary search on their sorted starts (a scan of every
+/// line per paragraph was quadratic in long text), and an empty paragraph whose start has a line
+/// gets none rather than a reversed slice.
+#[test]
+fn fit_lines_inside_a_paragraph_are_found_by_search() {
+    use photocraft_doc::text::FitLine;
+    let lines: Vec<FitLine> = [0u32, 2, 3, 7].iter().map(|&start| FitLine { start, scale: 1.0 }).collect();
+    let starts = |s: &[FitLine]| s.iter().map(|l| l.start).collect::<Vec<u32>>();
+    assert_eq!(starts(crate::layout::lines_inside(&lines, 0, 7)), [2, 3]);
+    assert_eq!(starts(crate::layout::lines_inside(&lines, 2, 8)), [3, 7]);
+    assert!(crate::layout::lines_inside(&lines, 2, 2).is_empty(), "an empty paragraph with a line at its start");
+    assert!(crate::layout::lines_inside(&lines, 3, 2).is_empty(), "end before start");
+    assert!(crate::layout::lines_inside(&lines, 7, 9).is_empty());
+    assert!(crate::layout::lines_inside(&[], 0, 9).is_empty());
+
+    let mut t = box_layer(
+        "aa
+
+bb",
+        20.0,
+        (0.0, 0.0, 4000.0, 400.0),
+    );
+    t.fit = fit_lines(&[(0, 1.0), (3, 1.0), (4, 1.0)]);
+    let l = layout_of(&t);
+    let got: Vec<(usize, usize)> = l.lines.iter().map(|ln| (ln.range.start, ln.paragraph)).collect();
+    assert_eq!(got, [(0, 0), (3, 1), (4, 2)], "{:?}", l.lines);
+}
+
 /// A paragraph run edge inside a paragraph (as imported or hand-edited `paragraphs` can have)
 /// doesn't restyle the paragraph's later solved lines: all of them take its first run's style,
 /// as unsolved layout does.

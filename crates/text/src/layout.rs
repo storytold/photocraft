@@ -521,6 +521,16 @@ struct Unit {
     last: bool,
 }
 
+/// The solved lines (starts strictly increasing, as `TextFit::valid_lines` guarantees) that start
+/// strictly after `start` and before `end`. Two binary searches, so splitting every paragraph costs
+/// O(paragraphs × log lines) rather than a scan of every line per paragraph. Empty when `end` is
+/// at or before `start` (an empty paragraph whose own start has a line).
+pub(crate) fn lines_inside(lines: &[FitLine], start: usize, end: usize) -> &[FitLine] {
+    let from = lines.partition_point(|l| l.start as usize <= start);
+    let to = lines.partition_point(|l| (l.start as usize) < end);
+    lines.get(from..to).unwrap_or_default()
+}
+
 /// Paragraphs, each split at the starts of `lines` (valid solved Dynamic Text lines, else empty)
 /// that fall inside its text. A unit takes the scale of the line it starts in.
 fn break_units(text: &str, lines: &[FitLine]) -> Vec<Unit> {
@@ -532,7 +542,7 @@ fn break_units(text: &str, lines: &[FitLine]) -> Vec<Unit> {
     for (paragraph, prange) in split_paragraphs(text).into_iter().enumerate() {
         let content_end = strip_break(text, &prange);
         let mut cuts = vec![prange.start];
-        cuts.extend(lines.iter().map(|l| l.start as usize).filter(|&s| s > prange.start && s < content_end));
+        cuts.extend(lines_inside(lines, prange.start, content_end).iter().map(|l| l.start as usize));
         for (j, &a) in cuts.iter().enumerate() {
             let (range, end) = match cuts.get(j + 1) {
                 None => (a..prange.end, content_end),
