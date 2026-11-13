@@ -738,3 +738,7 @@ mod contact_sheet_subfolders_tests;
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_geometry_tests.rs"]
 mod contact_sheet_geometry_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_caption_tests.rs"]
+mod contact_sheet_caption_tests;
