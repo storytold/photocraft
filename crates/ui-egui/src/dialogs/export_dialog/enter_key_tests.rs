@@ -18,7 +18,6 @@ fn export_as_open() -> (Harness<'static, PhotocraftApp>, u64, Asked) {
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     let (show, asked) = crate::file_dialog::fake(vec![None]);
     app.services.file_dialog = Some(show);
-    let id = open(&mut app).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
         |ui, app| {
             crate::dialogs::show(app, ui.ctx());
@@ -26,7 +25,9 @@ fn export_as_open() -> (Harness<'static, PhotocraftApp>, u64, Asked) {
         },
         app,
     );
+    // The dialog opens once the app's fonts are in: the harness draws a first frame as it is built.
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut()).unwrap();
     h.run_steps(4);
     (h, id, asked)
 }
