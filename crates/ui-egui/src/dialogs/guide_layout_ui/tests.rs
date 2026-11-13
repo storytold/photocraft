@@ -626,3 +626,37 @@ fn a_corrupt_saved_layout_keeps_the_defaults() {
     let app = relaunched(json!({"dialogs": {COMMAND: "junk"}}).to_string());
     assert_eq!(app.ui.view.guide_layout, crate::view_cmds::default_guide_layout());
 }
+
+/// The target and the Columns, Rows and Margin checkboxes come back after a restart too: an OK
+/// on the selected artboards with Columns and Margin off reopens that way when an artboard is
+/// selected again, and falls back to the document when none is.
+#[test]
+fn the_confirmed_target_and_sections_survive_a_restart() {
+    let board = json!({"rect": [200, 100, 140, 40]});
+    let mut app = app();
+    app.run("layer.new.artboard", board.clone()).unwrap();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    for (key, value) in [
+        ("target", json!("selectedArtboards")),
+        ("rows", json!(2)),
+        ("__columnsEnabled", json!(false)),
+        ("__rowsEnabled", json!(true)),
+        ("__marginEnabled", json!(false)),
+    ] {
+        f.insert(key.into(), value);
+    }
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let saved = app.session.prefs_value().to_string();
+
+    let mut app = relaunched(saved.clone());
+    app.run("layer.new.artboard", board).unwrap();
+    let id = open(&mut app);
+    let f = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(f["target"], json!("selectedArtboards"));
+    assert_eq!((&f["__columnsEnabled"], &f["__rowsEnabled"], &f["__marginEnabled"]), (&json!(false), &json!(true), &json!(false)));
+
+    let mut app = relaunched(saved);
+    let id = open(&mut app);
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["target"], json!("document"), "no artboard selected");
+}
