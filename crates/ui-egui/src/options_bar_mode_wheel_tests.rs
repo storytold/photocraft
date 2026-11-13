@@ -13,7 +13,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// The app with a new document and `tool` chosen.
-fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -26,12 +26,12 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The options bar's Mode dropdown: the highest one showing `Normal` (the Layers panel's is lower).
-fn mode_dropdown(h: &Harness<'_, PhotocraftApp>) -> Rect {
+pub(super) fn mode_dropdown(h: &Harness<'_, PhotocraftApp>) -> Rect {
     h.query_all_by_role(Role::ComboBox).filter(|n| n.value().as_deref() == Some("Normal")).map(|n| n.rect()).min_by(|a, b| a.top().total_cmp(&b.top())).unwrap()
 }
 
 /// `lines` wheel lines at `at` in one event: negative is down.
-fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, lines: f32) {
+pub(super) fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, lines: f32) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::MouseWheel {
@@ -44,7 +44,7 @@ fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, lines: f32) {
     h.run_steps(3);
 }
 
-fn brush_mode(h: &Harness<'_, PhotocraftApp>) -> BlendMode {
+pub(super) fn brush_mode(h: &Harness<'_, PhotocraftApp>) -> BlendMode {
     h.state().session.tools.brush.mode
 }
 

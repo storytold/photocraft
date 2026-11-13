@@ -151,9 +151,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 super::brush_controls::pattern_stamp_mode_dropdown(ui, "retouch-mode", &mut brush, behind);
                             } else if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                                 opt_label(ui, tl!("Mode"));
-                                if let Some(Some(m)) =
-                                    tool_mode_dropdown(ui, "retouch-mode", &modes, Some(crate::blend_keys::brush_tool_mode(tool, brush.mode)))
-                                {
+                                let mode = crate::blend_keys::brush_tool_mode(tool, brush.mode);
+                                // Indexed Color names Normal "Threshold"; the other modes weren't measured.
+                                let threshold = crate::retouch_ui::clone_stamp_indexed(app);
+                                if let Some(Some(m)) = tool_mode_dropdown(ui, "retouch-mode", &modes, Some(mode), threshold) {
                                     brush.mode = m;
                                 }
                             }
@@ -525,7 +526,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             if let Some(modes) = crate::blend_keys::tool_modes(tool) {
                 let o = &mut app.ui.tool_options;
                 let current = if o.bucket_clear { None } else { Some(o.bucket_blend_mode) };
-                if let Some(m) = tool_mode_dropdown(ui, "bucket-mode", &modes, current) {
+                if let Some(m) = tool_mode_dropdown(ui, "bucket-mode", &modes, current, false) {
                     o.bucket_clear = m.is_none();
                     if let Some(m) = m {
                         o.bucket_blend_mode = m;

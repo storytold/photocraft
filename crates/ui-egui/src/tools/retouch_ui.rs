@@ -35,7 +35,8 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
     // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
+    let sample = if clone_stamp_indexed(app) { "current" } else { o.clone_sample.as_str() };
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
@@ -46,6 +47,12 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // so falling back to them would read another document's coordinates from this one's pixels.
     app.session.presets.clone.active().source?;
     Some(p)
+}
+
+/// The Clone Stamp in an Indexed Color document, where the reference greys Sample at Current Layer
+/// and names the Normal Mode "Threshold" (#12613).
+pub(crate) fn clone_stamp_indexed(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::CloneStamp && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
 }
 
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
@@ -879,6 +886,17 @@ fn protect_tones_checkbox(ui: &mut egui::Ui, on: &mut bool) -> (egui::Response, 
     (resp, label_resp.id)
 }
 
+/// The Clone Stamp's and Healing Brush's Sample. `indexed` ([`clone_stamp_indexed`]) greys it at
+/// Current Layer and leaves the stored choice for other documents.
+fn clone_sample_dropdown(ui: &mut egui::Ui, stored: &mut String, indexed: bool) {
+    let opts = [("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))];
+    let mut sample = if indexed { "current" } else { stored.as_str() };
+    let changed = ui.add_enabled_ui(!indexed, |ui| crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut sample, &opts, 130.0)).inner;
+    if changed && !indexed {
+        *stored = sample.to_owned();
+    }
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -891,6 +909,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
+    let indexed = clone_stamp_indexed(app);
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -959,12 +978,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Healing | Tool::CloneStamp => {
             crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
             opt(ui, tl!("Sample:"));
-            let opts = [
-                ("current".to_string(), tl!("Current Layer")),
-                ("currentAndBelow".to_string(), tl!("Current & Below")),
-                ("all".to_string(), tl!("All Layers")),
-            ];
-            crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
+            clone_sample_dropdown(ui, &mut o.clone_sample, indexed);
             if app.ui.clone_source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));

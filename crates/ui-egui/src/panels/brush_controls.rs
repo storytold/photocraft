@@ -3,8 +3,19 @@ use super::{Align2, BlendMode, Color32, PhotocraftApp, Rect, Sense, Stroke, Stro
 /// A painting tool's Mode dropdown over `modes` (`None` is Clear); the wheel over it steps the
 /// mode. Returns the mode picked this frame. A list of every blend mode draws the Layers panel's
 /// group lines (#5532; Clear starts none); a short one (the Healing Brush's) draws none.
-pub(super) fn tool_mode_dropdown(ui: &mut egui::Ui, id: &str, modes: &[Option<BlendMode>], current: Option<BlendMode>) -> Option<Option<BlendMode>> {
-    let opts: Vec<(Option<BlendMode>, &str)> = modes.iter().map(|m| (*m, m.map_or("Clear", BlendMode::label))).collect();
+/// `threshold` names Normal "Threshold", as the reference does in an Indexed Color document.
+pub(super) fn tool_mode_dropdown(
+    ui: &mut egui::Ui,
+    id: &str,
+    modes: &[Option<BlendMode>],
+    current: Option<BlendMode>,
+    threshold: bool,
+) -> Option<Option<BlendMode>> {
+    let label = |m: &Option<BlendMode>| match m {
+        Some(BlendMode::Normal) if threshold => tl!("Threshold"),
+        _ => m.map_or("Clear", BlendMode::label),
+    };
+    let opts: Vec<(Option<BlendMode>, &str)> = modes.iter().map(|m| (*m, label(m))).collect();
     let grouped = BlendMode::LAYER_MODES.iter().all(|m| modes.contains(&Some(*m)));
     let mut mode = current;
     let chosen = widgets::dropdown_wheel_grouped(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| grouped && m.is_some_and(starts_blend_group)).0;
