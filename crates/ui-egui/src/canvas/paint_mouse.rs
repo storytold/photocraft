@@ -353,8 +353,9 @@ pub fn track_right_press_view(response: &Response, view: &crate::state::View, fl
 
 /// Route the canvas response's buttons: the left one drives the tool; the right one resizes the
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
-/// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
-pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
+/// `secondary_erase` or `brush_resize_armed` for this frame's `Down`. `xf` is this canvas's view,
+/// one cell of a Window › Arrange layout: it places a right-click on the image or the pasteboard.
+pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, xf: &crate::canvas::ViewXform) -> Buttons {
     if crate::brush_mode_menu::blocks_canvas(app, &response.ctx) {
         app.secondary_erase = false;
         return Buttons::default();
@@ -383,12 +384,13 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     // Decided by the modifiers held when the button went down, not by those of the release frame that reports the click.
-    let mode_menu =
-        crate::brush_mode_menu::opens_on(app, tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
+    let menu_mods = crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods));
+    let menu_at = right_click_at(response);
+    let mode_menu = crate::brush_mode_menu::opens_on(app, tool, menu_mods, menu_at.map(|p| xf.to_doc(p)));
     if mode_menu && !resizing && app.drag.is_none() {
         app.secondary_erase = false;
-        if let Some(p) = right_click_at(response) {
-            crate::brush_mode_menu::open(app, &response.ctx, [p.x, p.y]);
+        if let Some(p) = menu_at {
+            crate::brush_mode_menu::open(app, &response.ctx, [p.x, p.y], menu_mods);
         }
         return Buttons {
             started: response.drag_started_by(PointerButton::Primary),
@@ -461,10 +463,11 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         app.brush_resize_armed = down && app.drag.is_none();
         return true;
     }
-    if crate::brush_mode_menu::opens_on(app, tool, mods) && app.drag.is_none() && app.brush_resize.is_none() {
+    // The control channel opens the pasteboard menu before it gets here (`secondary_canvas_menu_took`).
+    if crate::brush_mode_menu::opens_on(app, tool, mods, None) && app.drag.is_none() && app.brush_resize.is_none() {
         app.secondary_erase = false;
         if down {
-            crate::brush_mode_menu::open(app, ctx, at);
+            crate::brush_mode_menu::open(app, ctx, at, mods);
         }
         return false;
     }
