@@ -6,6 +6,7 @@ use super::{
     Affine, Color, Document, EngineError, Fill, FillRule, Layer, LayerContent, LayerId, LiveShape, Path, PathOp, Point, Result, SHAPE_BLOCKS, Session,
     ShapeLayer, Value, bad, json, sel, vector,
 };
+use std::borrow::Cow;
 
 fn active_shape(s: &Session) -> std::result::Result<&ShapeLayer, String> {
     let d = s.active().ok_or("no document open")?;
@@ -70,7 +71,22 @@ pub(super) fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
 /// The path `shape.create` draws for live-shape params `p` (the Shape tools preview it while dragging).
 pub fn shape_path(p: &Value) -> Result<Path> {
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
-    Ok(vector::shapes::live_path(&live_from_params("shape.create", kind, p, None)?))
+    let (kind, p) = triangle_as_polygon(kind, p);
+    Ok(vector::shapes::live_path(&live_from_params("shape.create", kind, &p, None)?))
+}
+
+/// `kind: "triangle"` (the Triangle tool, Create Triangle) is a 3-sided polygon: the live-shape
+/// kind and params to build it from. Its own kind only names the new layer (Triangle N).
+fn triangle_as_polygon<'a>(kind: &'a str, p: &'a Value) -> (&'a str, Cow<'a, Value>) {
+    if kind != "triangle" {
+        return (kind, Cow::Borrowed(p));
+    }
+    let mut q = p.clone();
+    if let Some(o) = q.as_object_mut() {
+        o.insert("sides".into(), json!(3));
+        o.remove("starRatio");
+    }
+    ("polygon", Cow::Owned(q))
 }
 
 fn live_kind(l: &LiveShape) -> &'static str {
@@ -426,6 +442,7 @@ fn default_name(kind: &str) -> &'static str {
         "roundedRect" | "roundRect" => "Rounded Rectangle",
         "ellipse" => "Ellipse",
         "polygon" => "Polygon",
+        "triangle" => "Triangle",
         "star" => "Star",
         "line" => "Line",
         _ => "Shape",
@@ -433,7 +450,8 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// The Freeform Pen history override labels new layers; additions retain the Add Shape label.
+/// The Freeform Pen or Line Tool history override labels new layers; additions retain the Add
+/// Shape label.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
@@ -442,7 +460,8 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         let v = p.get("path").ok_or_else(|| bad(CMD, "kind \"path\" needs `path`"))?;
         (parse_path(v).map_err(|e| bad(CMD, e))?, None)
     } else {
-        let l = live_from_params(CMD, kind, p, None)?;
+        let (live_kind, q) = triangle_as_polygon(kind, p);
+        let l = live_from_params(CMD, live_kind, &q, None)?;
         (vector::shapes::live_path(&l), Some(l))
     };
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
@@ -453,7 +472,10 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         let id = LayerId(target);
         with_shape(s, id, "Add Shape", |sh, _| {
             for mut sp in path.subpaths {
-                sp.op = op;
+                // A joined subpath (a hole) belongs to the component before it, which takes `op`.
+                if sp.op != PathOp::Join {
+                    sp.op = op;
+                }
                 sh.path.subpaths.push(sp);
             }
             sh.live = None;
@@ -781,6 +803,10 @@ pub(super) fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     }
     shape_create(s, &q)
 }
+
+#[cfg(test)]
+#[path = "triangle_layer_name_tests.rs"]
+mod triangle_layer_name_tests;
 
 #[cfg(test)]
 mod arrow_affine_regression_tests {

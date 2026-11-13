@@ -789,6 +789,13 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         }
         Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
         Tool::Zoom => {
+            // Zoom In / Zoom Out: a pair, exactly one pressed; Zoom Out makes a click step out.
+            for (zoom_in, icon, tip) in [(true, "zoom-in", tl!("Zoom In")), (false, "zoom-out", tl!("Zoom Out"))] {
+                if icons::button(ui, icon, 24.0, app.ui.tool_options.zoom_in == zoom_in, tip).clicked() {
+                    app.ui.tool_options.zoom_in = zoom_in;
+                }
+            }
+            widgets::vline(ui, 22.0);
             // Resize Windows to Fit is Preferences › Zoom Resizes Windows itself, as in
             // Photoshop: one setting, shown in both places (zoom_window_fit.rs).
             let mut fit = app.session.prefs().general.zoom_resizes_windows;
