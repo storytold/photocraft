@@ -569,8 +569,9 @@ mod tests {
         h.get_by_role(Role::ComboBox).click();
         h.run_steps(4);
         let Some(list) = open_list(&h) else { panic!("the list is open") };
-        // Beside the list, over the panel.
-        h.hover_at(egui::pos2(list.right() + 20.0, list.center().y));
+        // Beside the list, over the panel: below the slider's row, which would take the gesture.
+        let slider = h.get_by_role(Role::Slider).rect();
+        h.hover_at(egui::pos2(list.right() + 20.0, slider.bottom() + 10.0));
         h.run_steps(1);
         let down = || egui::Event::MouseWheel {
             source: egui::MouseWheelSource::Unknown,

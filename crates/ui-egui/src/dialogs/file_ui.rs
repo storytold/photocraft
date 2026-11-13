@@ -143,7 +143,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
                 }
                 names.extend(d.doc.paths.iter().map(|p| p.name.clone()));
             }
-            form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": "all"}), json!({"paths": names}))
+            // Opens on the Paths panel's selected row, as the reference application does (#13777).
+            // A shape layer's path ("layer") is not an entry yet, and a row the document no longer
+            // has falls back to All Paths.
+            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or("all").to_string();
+            form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}))
         }
         _ => return None,
     }))
@@ -215,10 +219,16 @@ fn b(f: &Map<String, Value>, k: &str, d: bool) -> bool {
 #[path = "file_ui/web_preview.rs"]
 mod web_preview;
 
+/// Draw a compact dropdown whose selected value wraps within its assigned width.
 fn dropdown_str(ui: &mut egui::Ui, id: &str, name: &str, f: &mut Map<String, Value>, key: &str, opts: &[(&str, &str)], w: f32) {
     let mut v = s(f, key, opts.first().map_or("", |o| o.0));
     let o: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, name, &mut v, &o, w) {
+    let changed = ui.scope(|ui| {
+        ui.set_max_width(w);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        crate::widgets::dropdown(ui, id, name, &mut v, &o, w)
+    });
+    if changed.inner {
         f.insert(key.into(), json!(v));
     }
 }
