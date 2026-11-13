@@ -534,6 +534,20 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text || m.crop.is_some()) {
         return false;
     }
+    // The Space-Hand view menu (the menu of a view tool opened over another tool, #11271) takes a
+    // plain Esc and ↵ too: they don't cancel or commit a pending crop under it. Esc closes the
+    // menu here and both keys are withheld from the dispatch below; every other key, modified ↵
+    // and tool keys included, dispatches as usual.
+    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.under.is_some() && crate::canvas_tool_menu::is_view_tool(m.tool)) {
+        let plain = |e: &egui::Event, k: egui::Key| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.is_none());
+        let (esc, enter) = ctx.input(|i| (i.events.iter().any(|e| plain(e, egui::Key::Escape)), i.events.iter().any(|e| plain(e, egui::Key::Enter))));
+        if esc {
+            app.ui.canvas_tool_menu = None;
+        }
+        if esc || enter {
+            ctx.input_mut(|i| i.events.retain(|e| !plain(e, egui::Key::Escape) && !plain(e, egui::Key::Enter)));
+        }
+    }
     let symmetry_editing = app.ui.symmetry_transform.is_some();
     crate::symmetry_ui::track(app, ctx);
     if symmetry_editing && (app.ui.symmetry_transform.is_none() || egui::Popup::is_any_open(ctx)) {
@@ -693,9 +707,11 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     // Backspace/Delete. Once the last anchor is removed, regular Undo works again.
     if app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         let mods = ctx.input(|i| i.modifiers);
-        let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
-            .and_then(|shortcut| parse(&shortcut))
-            .is_some_and(|shortcut| consume(ctx, &shortcut));
+        // Not while a Free Transform or Crop box owns Undo: Edit › Undo steps the box.
+        let command_undo = !crate::vector_ui::box_steps(app, "edit.undo")
+            && effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+                .and_then(|shortcut| parse(&shortcut))
+                .is_some_and(|shortcut| consume(ctx, &shortcut));
         let remove = !mods.command
             && !mods.ctrl
             && !mods.shift
@@ -893,6 +909,9 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Rotate View, Adaptive Wide Angle, the Filter Gallery, the TIFF prompt, any open egui popup
     // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
+        // A Direct Selection drag (a Cmd-drag on an anchor) never reaches `app.drag`: Esc must not
+        // leave full screen or deselect pixels while its release is still to come (#13072).
+        || (app.ui.tool == Tool::DeleteAnchorPoint && app.ui.direct_selection.drag.is_some())
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
         || app.ui.layer_menu.is_some()
@@ -905,6 +924,17 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || ctx.any_popup_open()
         || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some())
         || crate::panels::toolbar::more_flyout_open(ctx);
+    // Active operations and popups have already had priority. Reset a rotated view before
+    // idle Escape actions such as leaving full screen or deselecting; Rotate View handles its
+    // own Escape later, where it also clears an in-progress rotation drag.
+    if !esc_taken
+        && let Some(view) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i))
+        && view.rotation != 0.0
+        && pressed(Key::Escape)
+    {
+        view.rotation = 0.0;
+        return;
+    }
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {
@@ -921,22 +951,64 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Delete Anchor Point (#12773): Esc first clears anchors selected on the saved path targeted in
-    // the Paths panel, then deselects that path, so clicks edit nothing. Not while its name is typed
-    // in the panel: egui has already dropped the field's focus, and the panel cancels on Esc.
+    // Delete Anchor Point (#12773): Esc first hides the anchors of the saved path targeted in the
+    // Paths panel, then deselects that path, so clicks edit nothing. The first Esc leaves the path
+    // targeted whether or not an anchor was selected (#13072), and clears only anchors selected on
+    // that path, never another path's. Not while its name is typed in the panel: egui has already
+    // dropped the field's focus, and the panel cancels on Esc. A Direct Selection drag keeps Esc
+    // away through `esc_taken` above, so its release still moves the anchors (#13072).
     if !esc_taken
         && app.ui.tool == Tool::DeleteAnchorPoint
         && !crate::vector_ui::path_renaming(app, ctx)
         && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
     {
         let ds = &app.ui.direct_selection;
-        let selected = ds.target == Some(crate::direct_select::PathRef::Saved(index)) && (!ds.anchors.is_empty() || ds.segment.is_some());
+        let on_this_path = ds.target == Some(crate::direct_select::PathRef::Saved(index));
+        let selected = on_this_path && (!ds.anchors.is_empty() || ds.segment.is_some());
         if pressed(Key::Escape) {
-            if selected {
-                app.ui.direct_selection.anchors.clear();
-                app.ui.direct_selection.segment = None;
+            // The stage belongs to this path: choosing another one starts at the first Esc again.
+            if selected || app.ui.direct_selection.escape_hidden != Some(index) {
+                if selected {
+                    app.ui.direct_selection.anchors.clear();
+                    app.ui.direct_selection.segment = None;
+                }
+                app.ui.direct_selection.escape_hidden = Some(index);
             } else {
                 app.ui.selected_path = None;
+                app.ui.direct_selection.escape_hidden = None;
+            }
+            return;
+        }
+    }
+    // Path Selection (#13287): with components of the saved path targeted in the Paths panel
+    // selected, Esc deselects the components and keeps the path targeted and drawn, while a plain
+    // Enter deselects the components and also untargets the path (its Paths panel row and outline
+    // go). Neither adds a History step. Free Transform Path and ⌘↩ (Make Selection) took their
+    // keys earlier; with no component selected both keys keep today's behaviour. Not while the
+    // path's name is typed in the panel. Only the bare keys: `consume_key` would also take them with
+    // ⇧ or ⌥, which were not measured.
+    let bare = |k: Key| {
+        ctx.input_mut(|i| {
+            let n = i.events.len();
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if *key == k && modifiers.is_none()));
+            i.events.len() != n
+        })
+    };
+    if !esc_taken
+        && app.ui.tool == Tool::PathSelection
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+        && let Some((crate::direct_select::PathRef::Saved(i), ..)) = crate::path_components::selected(app)
+        && i == index
+    {
+        if bare(Key::Escape) {
+            crate::path_components::deselect_components(app);
+            return;
+        }
+        if bare(Key::Enter) {
+            crate::path_components::deselect_components(app);
+            if let Some(name) = app.ui.selected_path.clone() {
+                crate::vector_ui::deselect_loaded_path(app, &name);
             }
             return;
         }

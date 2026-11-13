@@ -53,28 +53,17 @@ pub fn triangle_rect(row: Rect, x: f32) -> Rect {
     Rect::from_min_size(pos2(x - 2.0, row.top()), vec2(TRIANGLE_W + 2.0, row.height()))
 }
 
-/// Paint and handle a group row's disclosure triangle at `*x` (advancing it). Returns true when
-/// it was clicked this frame, so the row doesn't also treat the click as a selection.
-pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions: &mut Vec<(String, Value)>) -> bool {
+/// A group row's disclosure triangle as a widget only, at `x`: its hit area, the click that queues
+/// `layer.setExpanded`, the tooltip and the accessibility label ("Expand group {name}" / "Collapse
+/// group {name}"). Paints nothing, so a row scrolled out of view keeps the widget (accessibility,
+/// scroll-to) without painting its row (#13117). `None` for a layer that is no group, or a frame.
+pub fn disclosure_widget(ui: &mut egui::Ui, row: Rect, x: f32, l: &Layer, actions: &mut Vec<(String, Value)>) -> Option<egui::Response> {
     if l.frame.is_some() {
-        return false;
+        return None;
     }
-    let LayerContent::Group(g) = &l.content else { return false };
-    let hit = triangle_rect(row, *x);
-    let resp = ui.interact(hit, ui.scope_id().with(("disclosure", l.id.0)), Sense::click());
-    let t = Tokens::get(ui.ctx());
-    let c = pos2(*x + TRIANGLE_W / 2.0 - 1.0, row.center().y);
-    let s = 3.5;
-    let pts = if g.expanded {
-        vec![pos2(c.x - s, c.y - s * 0.6), pos2(c.x + s, c.y - s * 0.6), pos2(c.x, c.y + s * 0.6)]
-    } else {
-        vec![pos2(c.x - s * 0.6, c.y - s), pos2(c.x + s * 0.6, c.y), pos2(c.x - s * 0.6, c.y + s)]
-    };
-    let color = if resp.hovered() { t.text } else { t.icon };
-    ui.painter().add(Shape::convex_polygon(pts, color, Stroke::NONE));
-    *x += TRIANGLE_W;
-    let clicked = resp.clicked();
-    if clicked {
+    let LayerContent::Group(g) = &l.content else { return None };
+    let resp = ui.interact(triangle_rect(row, x), ui.scope_id().with(("disclosure", l.id.0)), Sense::click());
+    if resp.clicked() {
         let (nested, siblings) = ui.input(|i| (i.modifiers.alt, i.modifiers.command));
         actions.push(("layer.setExpanded".into(), json!({"layer": l.id.0, "expanded": !g.expanded, "nested": nested, "siblings": siblings})));
     }
@@ -87,7 +76,27 @@ pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions:
     let (alt, cmd) = (crate::shortcuts::pretty("Alt"), crate::shortcuts::pretty("Cmd"));
     let resp = resp.on_hover_text(crate::i18n::fmt(tip, &[("alt", &alt), ("cmd", &cmd)]));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{verb} group {name}")));
-    clicked
+    Some(resp)
+}
+
+/// Paint and handle a group row's disclosure triangle at `*x` (advancing it): the widget of
+/// [`disclosure_widget`] plus the triangle. Returns true when it was clicked this frame, so the row
+/// doesn't also treat the click as a selection.
+pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions: &mut Vec<(String, Value)>) -> bool {
+    let Some(resp) = disclosure_widget(ui, row, *x, l, actions) else { return false };
+    let LayerContent::Group(g) = &l.content else { return false };
+    let t = Tokens::get(ui.ctx());
+    let c = pos2(*x + TRIANGLE_W / 2.0 - 1.0, row.center().y);
+    let s = 3.5;
+    let pts = if g.expanded {
+        vec![pos2(c.x - s, c.y - s * 0.6), pos2(c.x + s, c.y - s * 0.6), pos2(c.x, c.y + s * 0.6)]
+    } else {
+        vec![pos2(c.x - s * 0.6, c.y - s), pos2(c.x + s * 0.6, c.y), pos2(c.x - s * 0.6, c.y + s)]
+    };
+    let color = if resp.hovered() { t.text } else { t.icon };
+    ui.painter().add(Shape::convex_polygon(pts, color, Stroke::NONE));
+    *x += TRIANGLE_W;
+    resp.clicked()
 }
 
 #[cfg(test)]
