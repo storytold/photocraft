@@ -368,23 +368,28 @@ impl Compositor {
         self.fx_budget = caches.saturating_sub(self.prefix.budget());
     }
 
-    /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
-    /// surface's tiles within the region's page cells, in their texture format).
+    /// Bytes of the layer pages a render of `region` needs resident (the tiles, within each of
+    /// the region's page cells, of the layer and mask surfaces that draw in that cell's part of
+    /// the region, in their texture format).
     pub fn working_set(&self, doc: &Document, region: Rect) -> u64 {
         let Ok(plan) = plan(doc) else { return 0 };
         let grid = tile_grid(doc.bounds());
-        let cells = grid_rects(region.intersect(&doc.bounds()), self.page)
-            .into_iter()
-            .map(|r| cell_rect((r.x0.div_euclid(self.page as i32), r.y0.div_euclid(self.page as i32)), self.page))
-            .fold(Rect::EMPTY, |a, c| if a.is_empty() { c } else { a.union(&c) });
+        let runs = super::batch::batch_runs(&plan);
         let mut seen = std::collections::HashSet::new();
         let mut total = 0u64;
-        for p in &plan.passes {
-            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
-            for (layer, role, s) in sources.into_iter().flatten() {
-                if seen.insert((layer, role)) {
-                    let a = s.tile_bounds().intersect(&grid).intersect(&cells);
-                    total += a.width() as u64 * a.height() as u64 * TexKind::for_surface(role, s.format()).bytes_per_pixel() as u64;
+        // Cell by cell, as a render binds them: only the passes that draw in the cell's part of
+        // the region (`cells::live_passes`) bring their pages in.
+        for part in grid_rects(region.intersect(&doc.bounds()), self.page) {
+            let cell = (part.x0.div_euclid(self.page as i32), part.y0.div_euclid(self.page as i32));
+            let cr = cell_rect(cell, self.page);
+            let live = super::cells::live_passes(&plan, &runs, &grid_rects(part, self.chunk));
+            for (p, _) in plan.passes.iter().zip(&live).filter(|(_, l)| **l) {
+                let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
+                for (layer, role, s) in sources.into_iter().flatten() {
+                    if seen.insert((layer, role, cell)) {
+                        let a = s.tile_bounds().intersect(&grid).intersect(&cr);
+                        total += a.width() as u64 * a.height() as u64 * TexKind::for_surface(role, s.format()).bytes_per_pixel() as u64;
+                    }
                 }
             }
         }
