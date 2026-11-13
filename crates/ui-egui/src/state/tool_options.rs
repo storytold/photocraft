@@ -103,6 +103,11 @@ pub struct ToolOptions {
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Shape tools › Path operations (#13235): how a drag combines with the active shape layer
+    /// (Shape mode) or work path (Path mode). Same values as `pen_path_op`; in Path mode "newLayer"
+    /// means Exclude Overlapping Shapes.
+    #[serde(default = "default_shape_path_op")]
+    pub shape_path_op: String,
     /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
     /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
     pub shape_mode: String,
@@ -332,6 +337,10 @@ fn default_pen_path_op() -> String {
     "newLayer".into()
 }
 
+fn default_shape_path_op() -> String {
+    "newLayer".into()
+}
+
 fn default_curve_fit() -> f32 {
     2.0
 }
@@ -502,6 +511,7 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            shape_path_op: default_shape_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
             stroke_width: 0.0,

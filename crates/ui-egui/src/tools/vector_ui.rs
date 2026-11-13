@@ -57,7 +57,7 @@ pub use paths_panel::{PathEntry, PathRow, path_rows, paths_footer, paths_panel};
 pub(crate) use pen::over_first_anchor;
 #[cfg(test)]
 use pen::pen_to_json;
-pub(crate) use pen::{PATH_OPS, pen_path, pen_replace};
+pub(crate) use pen::{PATH_OPS, path_op_field, pen_path, pen_replace};
 pub use pen::{
     cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
     pen_undo_last_point, pen_up,
@@ -114,7 +114,7 @@ fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::Laye
                         *end,
                         bounded(*width, 1.0, 4096.0),
                         bounded(*length, 1.0, 4096.0),
-                        bounded(*concavity, 0.0, 100.0),
+                        bounded(*concavity, -50.0, 50.0),
                         bounded(*weight, 1.0, 10000.0),
                     ))
                 }
@@ -236,7 +236,16 @@ mod delete_anchor_options_bar_tests;
 mod pen_enter_deselects_tests;
 
 #[cfg(test)]
+mod line_shift_snap_tests;
+
+#[cfg(test)]
+mod ellipse_shift_circle_tests;
+
+#[cfg(test)]
 mod pen_mode_menu_tests;
+
+#[cfg(test)]
+mod ellipse_path_menus_tests;
 
 pub(crate) use pen::freeform_locked_shape;
 #[cfg(test)]
