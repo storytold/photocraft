@@ -530,10 +530,14 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         && seen.is_some_and(|s| s != (revision, preview_key))
         && let Some(r) = crate::canvas::sweep::changed_since_shown(app, &doc, display_key)
     {
-        damage = Some(if r.is_empty() { r } else { r.inflate(effect_reach(&doc.layers)) });
+        // Clipped once widened by the effects' reach: a change past the canvas edge counts only
+        // where an effect carries it in.
+        let on_canvas = if r.is_empty() { r } else { r.inflate(effect_reach(&doc.layers)).intersect(&doc.bounds()) };
+        damage = Some(on_canvas);
         // An empty area is a certain answer (only view state changed, a group opened or
-        // closed): nothing to redraw, and no safety net behind it.
-        from_diff = !r.is_empty();
+        // closed, or a change wholly past the edge): nothing to redraw, and no safety net behind
+        // it.
+        from_diff = !on_canvas.is_empty();
     }
     // The Navigator may draw this texture while it holds the plain document or a drag preview
     // that updates the full texture (not an adjustment preview composited only where the view is).
