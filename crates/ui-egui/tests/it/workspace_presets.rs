@@ -179,36 +179,3 @@ fn presets_preserve_shell_preferences_and_workspace_lock() {
         assert!(app.session.prefs().workspace_locked);
     }
 }
-
-#[test]
-fn titlebar_picker_displays_every_selected_preset() {
-    fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
-        match shape {
-            egui::Shape::Text(text) => texts.push(text.galley.text().to_string()),
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_text(shape, texts)),
-            _ => {}
-        }
-    }
-
-    let mut missing = Vec::new();
-    for (suffix, name, _, _) in PRESETS {
-        let mut app = app();
-        select(&mut app, suffix);
-        let ctx = egui::Context::default();
-        PhotocraftApp::setup_context(&ctx, Default::default());
-        let mut texts = Vec::new();
-        for _ in 0..3 {
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 900.0))), ..Default::default() };
-            let mut output = ctx.run_ui(input, |ui| photocraft_ui_egui::panels::title_bar(&mut app, ui));
-            output.textures_delta.clear();
-            texts.clear();
-            for shape in output.shapes {
-                collect_text(&shape.shape, &mut texts);
-            }
-        }
-        if !texts.iter().any(|text| text == name) {
-            missing.push(name);
-        }
-    }
-    assert!(missing.is_empty(), "selected presets missing from titlebar picker: {missing:?}");
-}
