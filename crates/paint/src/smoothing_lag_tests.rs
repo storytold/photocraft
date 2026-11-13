@@ -72,3 +72,16 @@ fn strokes_without_timestamps_keep_their_per_point_pull() {
     let x = out.last().map_or(f64::NAN, |p| p.x);
     assert!((x - 90.0).abs() < 1e-4, "a 10 % untimed step reached {x}, want 90");
 }
+
+/// A timed stroke stays timed: a report with no time since the last one (two events in one
+/// millisecond) leaves the brush where it is, instead of jumping it by the untimed per-point pull.
+#[test]
+fn a_report_with_no_time_passed_does_not_move_a_timed_brush() {
+    let cfg = Smoothing { amount: 0.1, catch_up: true, catch_up_on_end: false, ..Default::default() };
+    let at = |x: f64, time: f64| StrokePoint { time, ..StrokePoint::new(x, 0.0, 1.0) };
+    let timed = smooth_points(&cfg, 1.0, &[at(0.0, 0.0), at(100.0, 10.0)]);
+    let twice = smooth_points(&cfg, 1.0, &[at(0.0, 0.0), at(100.0, 10.0), at(100.0, 10.0)]);
+    let (before, after) = (timed.last().map_or(f64::NAN, |p| p.x), twice.last().map_or(f64::NAN, |p| p.x));
+    assert!(before > 0.0 && before < 90.0, "the timed move lags: {before}");
+    assert_eq!(after, before, "no time passed, so the brush stays");
+}

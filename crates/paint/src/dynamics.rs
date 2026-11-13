@@ -117,12 +117,15 @@ pub struct Smoother {
     zoom: f64,
     pos: Option<StrokePoint>,
     last_input: Option<StrokePoint>,
+    /// Has time passed between two input points? Then the stroke is timed, and a later point
+    /// with no time since the last one moves the brush no further (not by the untimed pull).
+    timed: bool,
 }
 
 impl Smoother {
     /// `zoom` is the view zoom (only used with `adjust_for_zoom`).
     pub fn new(cfg: &Smoothing, zoom: f32) -> Self {
-        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None }
+        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None, timed: false }
     }
 
     fn active(&self) -> bool {
@@ -171,7 +174,13 @@ impl Smoother {
             // Without Stroke Catch-Up the brush stops while the pointer pauses (Photoshop).
             return;
         }
-        let (iters, step) = if dt > 0.0 && dt.is_finite() {
+        let has_time = dt > 0.0 && dt.is_finite();
+        self.timed |= has_time;
+        if self.timed && !has_time {
+            // No time passed (two reports in one millisecond): the brush stays where it is.
+            return;
+        }
+        let (iters, step) = if has_time {
             let steps = dt / SMOOTHING_STEP_MS;
             let iters = steps.ceil().clamp(1.0, 64.0);
             // Each of `iters` moves covers `steps / iters` steps' worth of pull.
