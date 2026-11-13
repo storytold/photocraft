@@ -251,7 +251,7 @@ fn vector_geometry_copy_shortage_keeps_raster_and_reports_retention_limit() {
         image.meta_budget = copy_bytes - usize::from(shortage);
         let mut document = Document::new("Vector pixels", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
         document.paths.push(path);
-        image.path_tattoos.insert(7, Some(0));
+        image.path_tattoos.insert(7, Some(PathBinding { index: 0, geometry_complete: true }));
         let mut layer = Layer::raster("Vector owner", PixelFormat::RGBA8);
         let LayerContent::Raster(pixels) = &mut layer.content else { panic!("saved raster") };
         pixels.write_region(document.bounds(), &[1., 0., 0., 1.]);
@@ -392,7 +392,7 @@ fn malformed_optional_paths_do_not_make_retained_tattoos_or_selection_look_uniqu
             assert_eq!(document.paths.len(), 1);
             let complete = malformed.is_none();
             assert_eq!(image.initial_view.selected_path, complete.then_some(0));
-            assert_eq!(image.path_tattoos.get(&7), Some(&complete.then_some(0)));
+            assert_eq!(image.path_tattoos.get(&7), Some(&complete.then_some(PathBinding { index: 0, geometry_complete: true })));
             let conversion = image.outcomes.finish().unwrap();
             let ImportConversion::Report(report) = &conversion else { panic!("conversion report") };
             assert_eq!(

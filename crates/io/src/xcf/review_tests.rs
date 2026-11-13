@@ -185,7 +185,7 @@ fn unavailable_native_vector_colors_preserve_the_saved_raster() {
         pixels.write_region(Rect::new(0, 0, 1, 1), &[1., 0., 0., 1.]);
     }
     document.paths.push(photocraft_doc::vector::NamedPath { name: "Saved".into(), path: Default::default(), psd_raw: None });
-    image.path_tattoos.insert(7, Some(0));
+    image.path_tattoos.insert(7, Some(PathBinding { index: 0, geometry_complete: true }));
     image.native_color_error = Some("profile has no native reverse transform".into());
     import_vectors(&mut document, &mut image, &Interrupt::NONE).unwrap();
     let LayerContent::Raster(pixels) = &document.layers[0].content else { panic!("saved raster fallback") };

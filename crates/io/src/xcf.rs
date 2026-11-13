@@ -46,6 +46,8 @@ mod metadata_tests;
 mod optional_mask_budget_tests;
 #[cfg(test)]
 mod path_admission_tests;
+#[cfg(test)]
+mod path_geometry_review_tests;
 mod paths;
 mod resources;
 #[cfg(test)]
@@ -138,7 +140,7 @@ struct Image<'a> {
     initial_view: crate::initial_view::NativeInitialView,
     resolution_dpi: f32,
     pending_effects: Vec<PendingLayerEffects>,
-    path_tattoos: HashMap<u32, Option<usize>>,
+    path_tattoos: HashMap<u32, Option<PathBinding>>,
     pending_vectors: Vec<(photocraft_doc::LayerId, usize, paths::VectorStyle)>,
     /// Unavailable literal-color conversion keeps source text/vector rasters intact.
     native_color_error: Option<String>,
@@ -158,6 +160,12 @@ struct PendingLayerEffects {
     owner: usize,
     bounds: Rect,
     pointers: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PathBinding {
+    index: usize,
+    geometry_complete: bool,
 }
 
 /// Pixel data of a drawable: `channels` normalised samples per pixel, row-major.
@@ -1205,16 +1213,27 @@ fn import_paths<'a>(
             image.initial_view.selected_path = Some(index);
         }
         if let Some(tattoo) = path.tattoo {
-            image.path_tattoos.entry(tattoo).and_modify(|value| *value = None).or_insert((!incomplete_identity).then_some(index));
+            image
+                .path_tattoos
+                .entry(tattoo)
+                .and_modify(|value| *value = None)
+                .or_insert((!incomplete_identity).then_some(PathBinding { index, geometry_complete: path.geometry_complete }));
         }
         let outcome = image.outcomes.push(ConversionEntry {
             feature_code: "xcf.path".into(),
             source: conversion::source("path", ordinal, offset, &name, &[], path.tattoo),
             targets: vec![NativeTargetRef { path_index: Some(index as u32), label: name, ..Default::default() }],
             disposition: if path.source_only { ConversionDisposition::NativeApproximation } else { ConversionDisposition::NativeEquivalent },
-            reason: ConversionReason::NativePolicy,
-            source_description: "Saved cubic anchors, handles and open/closed subpaths".into(),
-            native_description: if path.source_only {
+            reason: if path.geometry_complete { ConversionReason::NativePolicy } else { ConversionReason::MissingMapping },
+            source_description: if path.geometry_complete {
+                "Saved cubic anchors, handles and open/closed subpaths"
+            } else {
+                "Saved path includes unsupported strokes; only part of its geometry could be translated"
+            }
+            .into(),
+            native_description: if !path.geometry_complete {
+                "Native path contains only supported cubic geometry; this incomplete path cannot replace a vector layer's saved pixels"
+            } else if path.source_only {
                 "Native editable cubic path; source auxiliary axes and non-geometric flags are not editing rules"
             } else {
                 "Native editable cubic path with document-coordinate geometry"
@@ -1326,8 +1345,8 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
             )?;
             continue;
         }
-        let index = image.path_tattoos.get(&vector.path_tattoo).copied().flatten();
-        let Some(path) = index.and_then(|index| document.paths.get(index)) else {
+        let binding = image.path_tattoos.get(&vector.path_tattoo).copied().flatten();
+        let Some((binding, path)) = binding.and_then(|binding| document.paths.get(binding.index).map(|path| (binding, path))) else {
             image.outcomes.notice(
                 outcome,
                 "xcf.vector_layer",
@@ -1341,6 +1360,20 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
             )?;
             continue;
         };
+        if !binding.geometry_complete {
+            image.outcomes.notice(
+                outcome,
+                "xcf.vector_layer",
+                ConversionReason::MissingMapping,
+                (
+                    format!("Source path tattoo {} includes unsupported stroke geometry", vector.path_tattoo),
+                    "Stored pixels preserved as a native raster; incomplete editable path remains available without replacing the layer".into(),
+                ),
+                Some("has incomplete vector geometry and opens as pixels"),
+                &mut image.warnings,
+            )?;
+            continue;
+        }
         let knots = path.path.subpaths.iter().try_fold(0usize, |n, s| n.checked_add(s.knots.len())).ok_or_else(|| invalid("vector geometry count overflow"))?;
         let bytes = knots
             .checked_mul(std::mem::size_of::<photocraft_doc::vector::Knot>())

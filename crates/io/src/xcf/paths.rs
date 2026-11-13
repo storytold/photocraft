@@ -24,6 +24,8 @@ pub(super) struct DecodedPath {
     pub selected: bool,
     /// Source flags, pressure/tilt, parasites or unsupported stroke records.
     pub source_only: bool,
+    /// False when an unsupported stroke was omitted, independently of harmless source-only metadata.
+    pub geometry_complete: bool,
 }
 
 pub(super) struct VectorStyle {
@@ -183,9 +185,16 @@ fn native_path(mut subpaths: Vec<Subpath>) -> Path {
 
 /// Decode bounded cubic handle/anchor triples into native knots.
 /// Unknown strokes and auxiliary pressure data remain source-only rather than authorizing paint behavior.
-fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<(Path, bool)> {
+struct Geometry {
+    path: Path,
+    source_only: bool,
+    complete: bool,
+}
+
+fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<Geometry> {
     let mut out = Vec::new();
     let mut source_only = false;
+    let mut complete = true;
     for _ in 0..n {
         let kind = c.u32()?;
         let closed = c.u32()?;
@@ -202,6 +211,7 @@ fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<(Path, bo
         let raw = c.take(bytes)?;
         if kind != 1 {
             source_only = true;
+            complete = false;
             continue;
         }
         if !points.is_multiple_of(3) {
@@ -231,7 +241,7 @@ fn strokes(c: &mut Cursor<'_>, n: usize, budget: &mut usize) -> Result<(Path, bo
         }
         out.push(Subpath { closed: closed != 0, knots, ..Default::default() });
     }
-    Ok((native_path(out), source_only))
+    Ok(Geometry { path: native_path(out), source_only, complete })
 }
 
 /// The pre-version-18 image PROP_VECTORS payload.
@@ -257,12 +267,13 @@ pub(super) fn vectors(data: &[u8]) -> Result<Vec<DecodedPath>> {
             let bytes = count(&mut c, super::MAX_PAYLOAD, "path parasite byte")?;
             c.take(bytes)?;
         }
-        let (path, source_only) = strokes(&mut c, n, &mut budget)?;
+        let Geometry { path, source_only, complete } = strokes(&mut c, n, &mut budget)?;
         out.push(DecodedPath {
             named: NamedPath { name, path, psd_raw: None },
             tattoo: (tattoo != 0).then_some(tattoo),
             selected: i == active,
             source_only: source_only || visible != 0 || linked != 0 || parasites != 0,
+            geometry_complete: complete,
         });
     }
     if c.pos != data.len() {
@@ -359,6 +370,7 @@ pub(super) fn legacy(data: &[u8]) -> Result<Vec<DecodedPath>> {
             tattoo,
             selected: index == active,
             source_only: linked != 0 || state != 0,
+            geometry_complete: true,
         });
     }
     if c.pos != data.len() {
@@ -390,11 +402,11 @@ pub(super) fn standalone(c: &Cursor<'_>, offset: usize) -> Result<DecodedPath> {
     }
     let n = count(&mut p, MAX_POINTS, "path stroke")?;
     let mut budget = MAX_POINTS;
-    let (path, extra) = strokes(&mut p, n, &mut budget)?;
+    let Geometry { path, source_only: extra, complete } = strokes(&mut p, n, &mut budget)?;
     if p.pos != raw.len() {
         return Err(invalid("standalone path payload length mismatch"));
     }
-    Ok(DecodedPath { named: NamedPath { name, path, psd_raw: None }, tattoo, selected, source_only: source_only || extra })
+    Ok(DecodedPath { named: NamedPath { name, path, psd_raw: None }, tattoo, selected, source_only: source_only || extra, geometry_complete: complete })
 }
 
 #[cfg(test)]
