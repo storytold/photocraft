@@ -163,7 +163,7 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   with `CodecError::Unsupported`: they are sensor data, not flat images. `photocraft-raw` decodes
   and develops them, and `photocraft-io` routes them there.
 
-* **HEIF/HEIC (read-only, feature `heif`).** Decoding lives in the optional `photocraft-heif` crate
+* **HEIF/HEIC (read-only, feature `heif`).** Decoding lives in the optional `craft-heif` crate from craft-libs
   behind the non-default `heif` feature (official PhotoCraft builds enable it; distributors choose).
   Without it, HEIF is still detected and decoding returns `CodecError::Unsupported` ("HEIC/HEIF
   support isn't included in this build"). iPhone and Mac photos decode with `heic-rs` (pure Rust, no `unsafe`):
@@ -255,8 +255,10 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
     ms in release). Image data cut off by the end of the file decodes with
     `DecodeWarning::Truncated`; a file far too small for its declared size (more than any
     compression could expand) is refused before allocating.
-  * YCbCr, CIE Lab, signed integers and compressions that the `tiff` crate lacks (CCITT,
-    JPEG-in-TIFF) return `Unsupported`.
+  * YCbCr with three 8- or 16-bit samples decodes to RGB. YCbCr with other sample counts or
+    bit depths returns `Unsupported`. JPEG-compressed YCbCr uses the full-range JFIF conversion.
+  * 8/16-bit CIELab and ICCLab decode to the Lab channel layout.
+  * Signed integer samples and unsupported compression methods return `Unsupported`.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
   the file could pass 4 GiB. `Metadata::extra_samples` (up to 16) are written after the colour
   and alpha samples, with their `kind` in the ExtraSamples tag (a reserved `kind` above 2 is
