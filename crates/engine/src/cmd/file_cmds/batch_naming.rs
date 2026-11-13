@@ -250,11 +250,11 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
     if flat && structured.is_none() {
         return Err(bad("flatOutput needs namingComponents"));
     }
+    // Starting Serial # takes 0 as the reference's Batch does (serial 0 with 3 Digit Serial
+    // Number is `000`, #13662); the dialog keeps its field to 0..9999.
     let start = match params.get("startingSerial") {
         None => 1,
-        Some(n) => {
-            n.as_u64().and_then(|n| u32::try_from(n).ok()).filter(|&n| n > 0).ok_or_else(|| bad("startingSerial must be an integer from 1 to 4294967295"))?
-        }
+        Some(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad("startingSerial must be an integer from 0 to 4294967295"))?,
     };
     let template = match params.get("naming") {
         None => "",
@@ -434,3 +434,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "batch_serial_range_tests.rs"]
+mod batch_serial_range_tests;
