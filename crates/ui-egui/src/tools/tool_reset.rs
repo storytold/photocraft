@@ -132,7 +132,11 @@ fn is_selection_tool(tool: Tool) -> bool {
     )
 }
 
-/// Put `tool`'s fields of `o` back to their defaults.
+/// Options a tool preset stores but Reset Tool leaves, as in Photoshop: the Zoom tool keeps Zoom
+/// Out selected (#12066).
+const KEPT_BY_RESET: &[&str] = &["zoom_in"];
+
+/// Put `tool`'s fields of `o` back to their defaults, except those [`KEPT_BY_RESET`].
 pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let keys = option_keys(tool);
     if keys.is_empty() {
@@ -141,7 +145,7 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
-    for k in keys {
+    for k in keys.iter().filter(|k| !KEPT_BY_RESET.contains(k)) {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
         }
@@ -167,8 +171,8 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
     m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
-/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
-/// what a tool preset made with + stores (#7356).
+/// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets (but
+/// for [`KEPT_BY_RESET`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
     macro_rules! reset {
@@ -216,7 +220,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Eyedropper => reset!(eyedropper_size, eyedropper_sample, eyedropper_ring),
         Tool::Brush => reset!(brush_clear),
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
-        Tool::Eraser => reset!(eraser_mode),
+        Tool::Eraser => reset!(eraser_mode, erase_to_history),
         Tool::Remove => reset!(remove_new_layer, remove_after_each_stroke),
         Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg, bg_tolerance_control),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
@@ -226,7 +230,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }
-        Tool::Zoom => reset!(zoom_scrubby),
+        Tool::Zoom => reset!(zoom_scrubby, zoom_in),
         Tool::Hand => reset!(hand_scroll_all),
         Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
@@ -237,11 +241,11 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::ArtHistoryBrush => reset!(art_history_style, art_history_area, art_history_tolerance),
         Tool::PatternStamp => reset!(pattern_stamp_aligned, pattern_stamp_impressionist, pattern_stamp_scale, pattern_stamp_angle),
         Tool::Blur | Tool::Sharpen => reset!(strength, protect_detail),
-        Tool::Smudge => reset!(strength, finger_painting),
+        Tool::Smudge => reset!(strength, finger_painting, smudge_mode),
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
-        Tool::Sponge => reset!(sponge_mode, vibrance),
+        Tool::Sponge => reset!(sponge_mode, sponge_flow, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete),
+        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, pen_rubber_band),
         Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
         Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
         Tool::Line => reset!(

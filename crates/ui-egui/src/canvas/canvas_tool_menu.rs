@@ -3,7 +3,7 @@
 //! pasteboard (outside the image), a guide and a pending crop.
 
 use egui::Context;
-use photocraft_doc::LayerContent;
+use photocraft_doc::{ColorMode, LayerContent};
 use photocraft_engine::prefs::{self, CanvasColor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -29,12 +29,20 @@ pub struct CanvasToolMenu {
     /// Zoom Out keep under the pointer.
     #[serde(default)]
     pub anchor: Option<[f64; 2]>,
+    /// The selected tool when Space holds the Hand over it (`tool` is then the Hand): the menu
+    /// closes when that tool changes (#11271).
+    #[serde(default)]
+    pub under: Option<Tool>,
     /// Opened while a Type tool edits text: the text and type rows instead of the tool's actions.
     #[serde(default)]
     pub text: bool,
     /// Opened with a Type tool over committed type (no edit running): the type layer rows.
     #[serde(default)]
     pub type_layer: bool,
+    /// The shape of the committed text a type layer menu opened on, which picks its Convert row
+    /// (#12043); `None` for every other menu.
+    #[serde(default)]
+    pub type_shape: Option<TypeShape>,
     /// Opened on a guide: the guide menu (`guide_select`) instead of the tool's actions.
     #[serde(default)]
     pub guide: bool,
@@ -55,6 +63,13 @@ pub struct CanvasToolMenu {
     /// becomes active, the index may name a different sampler, so the menu closes and Delete greys.
     #[serde(default)]
     pub sampler_at: Option<(usize, [f64; 2])>,
+    /// The Eyedropper's menu (#11747): the composite colour under the right-click, averaged with
+    /// the Sample Size, which its Copy Color rows put on the clipboard. `None` over transparency.
+    #[serde(default)]
+    pub color: Option<[f32; 3]>,
+    /// Opened with the Content-Aware Move tool inside the active selection (#12194).
+    #[serde(default)]
+    pub inside_selection: bool,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -154,36 +169,85 @@ pub const TYPE_EDIT_MENU: &[Row] = &[
     Some(("Warp Text…", "type.warpText")),
 ];
 
-/// Right-click with a Type tool over type that isn't being edited (#7324): the type edit menu's
-/// layer rows. Its edit rows would act on the document instead of the text, and Faux Bold/Italic
-/// on characters being edited, so they are left out.
-pub const TYPE_LAYER_MENU: &[Row] = &[
-    Some(("Check Spelling…", "edit.checkSpelling")),
-    Some(("Find and Replace Text…", "edit.findAndReplaceText")),
-    None,
-    Some(("Rasterize Type", "type.rasterizeTypeLayer")),
-    Some(("Create Work Path", "type.createWorkPath")),
-    Some(("Convert to Shape", "type.convertToShape")),
-    None,
-    Some(("Horizontal", "type.orientation.horizontal")),
-    Some(("Vertical", "type.orientation.vertical")),
-    None,
-    Some(("None", "type.antiAlias.none")),
-    Some(("Sharp", "type.antiAlias.sharp")),
-    Some(("Crisp", "type.antiAlias.crisp")),
-    Some(("Strong", "type.antiAlias.strong")),
-    Some(("Smooth", "type.antiAlias.smooth")),
-    Some(("Windows LCD", "type.antiAlias.windowsLcd")),
-    Some(("Windows", "type.antiAlias.windows")),
-    None,
-    Some(("Convert to Paragraph Text", "type.convertToParagraphText")),
-    Some(("Convert to Point Text", "type.convertToPointText")),
-    Some(("Warp Text…", "type.warpText")),
-];
+/// Right-click with a Type tool over type that isn't being edited (#7324): the type layer rows,
+/// in the reference menu's order (#12043) — Edit Type… on top, Faux Bold and Faux Italic for the
+/// whole layer, Layer Style… last, and only the Convert row the layer's text shape allows. Its
+/// text-edit rows (Undo, Cut, Copy, Paste, Select All) stay in [`TYPE_EDIT_MENU`]: away from an
+/// edit they would act on the document instead of the text.
+macro_rules! type_layer_menu {
+    ($($convert:expr),*) => {
+        &[
+            Some(("Edit Type…", "type.editText")),
+            None,
+            Some(("Check Spelling…", "edit.checkSpelling")),
+            Some(("Find and Replace Text…", "edit.findAndReplaceText")),
+            None,
+            Some(("Rasterize Type", "type.rasterizeTypeLayer")),
+            Some(("Create Work Path", "type.createWorkPath")),
+            Some(("Convert to Shape", "type.convertToShape")),
+            None,
+            Some(("Horizontal", "type.orientation.horizontal")),
+            Some(("Vertical", "type.orientation.vertical")),
+            None,
+            Some(("None", "type.antiAlias.none")),
+            Some(("Sharp", "type.antiAlias.sharp")),
+            Some(("Crisp", "type.antiAlias.crisp")),
+            Some(("Strong", "type.antiAlias.strong")),
+            Some(("Smooth", "type.antiAlias.smooth")),
+            Some(("Windows LCD", "type.antiAlias.windowsLcd")),
+            Some(("Windows", "type.antiAlias.windows")),
+            None,
+            Some(("Faux Bold", FAUX_BOLD)),
+            Some(("Faux Italic", FAUX_ITALIC)),
+            None,
+            $($convert,)*
+            None,
+            Some(("Warp Text…", "type.warpText")),
+            None,
+            Some(("Layer Style…", LAYER_STYLE)),
+        ]
+    };
+}
 
-/// The type edit menu's Faux Bold and Faux Italic rows.
+/// Point text: the only Convert row that applies turns it into paragraph text.
+pub const TYPE_LAYER_MENU: &[Row] = type_layer_menu!(Some(("Convert to Paragraph Text", "type.convertToParagraphText")));
+/// Paragraph (box) text: the mirror case, per the measured reference (#12043).
+pub const TYPE_LAYER_MENU_PARAGRAPH: &[Row] = type_layer_menu!(Some(("Convert to Point Text", "type.convertToPointText")));
+/// Path and area text: how the layer could be converted was not measured, so both rows stay as
+/// before, each greyed unless the engine takes the layer.
+pub const TYPE_LAYER_MENU_OTHER: &[Row] =
+    type_layer_menu!(Some(("Convert to Paragraph Text", "type.convertToParagraphText")), Some(("Convert to Point Text", "type.convertToPointText")));
+
+/// The shape of the committed text a type layer menu was opened on, which decides the Convert
+/// rows it lists (#12043). Captured when the menu opens, as the crop menu captures its presets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TypeShape {
+    /// Point text: the menu lists Convert to Paragraph Text ([`TYPE_LAYER_MENU`]).
+    Point,
+    /// Paragraph (box) text: the menu lists Convert to Point Text ([`TYPE_LAYER_MENU_PARAGRAPH`]).
+    Paragraph,
+    /// Path or area text: both rows, greyed unless applicable ([`TYPE_LAYER_MENU_OTHER`]).
+    Other,
+}
+
+/// The type layer menu's rows for the shape the menu captured; a menu without one (an older
+/// snapshot) keeps today's table with both Convert rows.
+fn type_layer_rows(menu: &CanvasToolMenu) -> &'static [Row] {
+    match menu.type_shape {
+        Some(TypeShape::Point) => TYPE_LAYER_MENU,
+        Some(TypeShape::Paragraph) => TYPE_LAYER_MENU_PARAGRAPH,
+        _ => TYPE_LAYER_MENU_OTHER,
+    }
+}
+
+/// The type edit menu's Faux Bold and Faux Italic rows. In the type layer menu they toggle the
+/// style of the whole layer instead of the characters being edited (#12043).
 pub const FAUX_BOLD: &str = "type.fauxBold";
 pub const FAUX_ITALIC: &str = "type.fauxItalic";
+/// The type layer menu's Layer Style… row: the Layer Style dialog on the target layer, as the
+/// Layer menu's Blending Options… (#12043).
+pub const LAYER_STYLE: &str = "layer.layerStyle.blendingOptions";
 
 /// Type edit rows that act on the whole layer (it may stop being type): the edit ends first.
 const ENDS_TYPE_EDIT: [&str; 5] =
@@ -307,13 +371,17 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: false,
         spelling: None,
         crop: Some(users),
         sampler: None,
         sampler_at: None,
+        color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -390,24 +458,38 @@ pub const HAND_MENU: &[Row] = &[
 /// the view itself.
 pub const FILL_SCREEN: &str = "view.fillScreen";
 
+/// A selection menu: the rows every selection menu shares, with `$fills` (the rows between
+/// Transform Selection and Last Filter) in its own order.
+macro_rules! selection_menu {
+    ($($fills:expr),* $(,)?) => {
+        &[
+            Some(("Deselect", "select.deselect")),
+            Some(("Select Inverse", "select.inverse")),
+            Some(("Feather…", "select.modify.feather")),
+            Some(("Select and Mask…", "select.selectAndMask")),
+            None,
+            Some(("Save Selection…", "select.saveSelection")),
+            Some(("Make Work Path…", "select.toWorkPath")),
+            None,
+            Some(("Layer Via Copy", "layer.new.layerViaCopy")),
+            Some(("Layer Via Cut", "layer.new.layerViaCut")),
+            Some(("New Layer…", "layer.new.layer")),
+            None,
+            Some(("Free Transform", "edit.freeTransform")),
+            Some(("Transform Selection", "select.transformSelection")),
+            $($fills,)*
+            None,
+            Some(("Last Filter", "filter.lastFilter")),
+            None,
+            Some(("Fade…", "edit.fade")),
+        ]
+    };
+}
+
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
 /// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
 /// their menu-bar twins.
-pub const SELECTION_MENU: &[Row] = &[
-    Some(("Deselect", "select.deselect")),
-    Some(("Select Inverse", "select.inverse")),
-    Some(("Feather…", "select.modify.feather")),
-    Some(("Select and Mask…", "select.selectAndMask")),
-    None,
-    Some(("Save Selection…", "select.saveSelection")),
-    Some(("Make Work Path…", "select.toWorkPath")),
-    None,
-    Some(("Layer Via Copy", "layer.new.layerViaCopy")),
-    Some(("Layer Via Cut", "layer.new.layerViaCut")),
-    Some(("New Layer…", "layer.new.layer")),
-    None,
-    Some(("Free Transform", "edit.freeTransform")),
-    Some(("Transform Selection", "select.transformSelection")),
+pub const SELECTION_MENU: &[Row] = selection_menu![
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
     None,
@@ -415,10 +497,6 @@ pub const SELECTION_MENU: &[Row] = &[
     Some(("Fill…", "edit.fill")),
     Some(("Stroke…", "edit.stroke")),
     Some(("Content-Aware Fill…", "edit.contentAwareFill")),
-    None,
-    Some(("Last Filter", "filter.lastFilter")),
-    None,
-    Some(("Fade…", "edit.fade")),
 ];
 
 /// The selection tools' context menu with nothing selected: making a selection.
@@ -429,6 +507,79 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     None,
     Some(("Load Selection…", "select.loadSelection")),
 ];
+
+/// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
+/// tool's canvas menu on a marker or off one (#11772), and the Red Eye tool's without a selection. Each row is enabled as the Layers panel
+/// menu enables it for the active layer (`menus::is_enabled`) and runs like the menu item.
+pub const COUNT_MENU: &[Row] = &[
+    Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
+    None,
+    Some(("Duplicate Layer…", "layer.duplicate")),
+    Some(("Delete Layer", "layer.delete")),
+    Some(("Group from Layers…", "layer.new.groupFromLayers")),
+    None,
+    Some(("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")),
+    Some(("Convert to Layers", "layer.smartObjects.convertToLayers")),
+    None,
+    Some(("Rasterize Layer", "layer.rasterize.layer")),
+    Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")),
+    None,
+    Some(("Free Transform", "edit.freeTransform")),
+    None,
+    Some(("Color Range…", "select.colorRange")),
+    Some(("Load Selection…", "select.loadSelection")),
+    Some(("Reselect", "select.reselect")),
+];
+
+/// Right-click with the Content-Aware Move tool inside an active selection (#12194).
+pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
+
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577):
+/// no Distort or Perspective, and Delete and Fill Selection after the fills.
+pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
+    None,
+    Some(("Fill…", "edit.fill")),
+    Some(("Stroke…", "edit.stroke")),
+    Some(("Content-Aware Fill…", "edit.contentAwareFill")),
+    Some(("Delete and Fill Selection", "edit.deleteAndFillSelection")),
+];
+
+/// The Eyedropper's copy rows (#11747).
+pub const EYEDROPPER_COPY_HTML: &str = "canvasMenu.eyedropper.copyHtml";
+pub const EYEDROPPER_COPY_HEX: &str = "canvasMenu.eyedropper.copyHex";
+
+/// The Eyedropper's canvas menu, in the reference application's order (#11747): the Sample Sizes
+/// (the current one checked), then the two Copy Color rows for the colour under the pointer.
+pub const EYEDROPPER_MENU: &[Row] = &[
+    Some(("Point Sample", "canvasMenu.eyedropper.size.1")),
+    Some(("3 by 3 Average", "canvasMenu.eyedropper.size.3")),
+    Some(("5 by 5 Average", "canvasMenu.eyedropper.size.5")),
+    Some(("11 by 11 Average", "canvasMenu.eyedropper.size.11")),
+    Some(("31 by 31 Average", "canvasMenu.eyedropper.size.31")),
+    Some(("51 by 51 Average", "canvasMenu.eyedropper.size.51")),
+    Some(("101 by 101 Average", "canvasMenu.eyedropper.size.101")),
+    None,
+    Some(("Copy Color as HTML", EYEDROPPER_COPY_HTML)),
+    Some(("Copy Color's Hex Code", EYEDROPPER_COPY_HEX)),
+];
+
+/// The Sample Size an Eyedropper menu row sets.
+fn eyedropper_size(command: &str) -> Option<u32> {
+    command.strip_prefix("canvasMenu.eyedropper.size.")?.parse().ok()
+}
+
+/// Is `menu` the Eyedropper's own menu (not the pasteboard, guide, transform or crop menu it can
+/// also open)?
+fn is_eyedropper(menu: &CanvasToolMenu) -> bool {
+    menu.tool == Tool::Eyedropper
+        && menu.crop.is_none()
+        && !menu.guide
+        && !menu.pasteboard
+        && !menu.transform
+        && menu.anchor.is_none()
+        && !menu.text
+        && !menu.type_layer
+}
 
 /// Photoshop's Pen context menu order. Rows whose operation is not applicable to the current
 /// path or layer stay visible and disabled.
@@ -463,6 +614,25 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Make Symmetry Path", "paint.symmetryFromPath")),
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
+
+/// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
+/// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
+/// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
+/// menus, keep the table's label.
+pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    if command != "path.transform" || menu.tool != Tool::Pen {
+        return label;
+    }
+    if app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2) {
+        return "Free Transform Points";
+    }
+    let any_path = app.session.active().is_some_and(|st| {
+        st.doc.work_path.is_some()
+            || !st.doc.paths.is_empty()
+            || st.doc.walk().iter().any(|(_, _, l)| l.vector_mask.is_some() || matches!(l.content, LayerContent::Shape(_)))
+    });
+    if any_path { label } else { "Free Transform" }
+}
 
 /// The Color Sampler menu's Delete row: removes the sampler the menu opened on.
 pub const SAMPLER_DELETE: &str = "view.colorSamplers.delete";
@@ -506,8 +676,49 @@ fn sampler_menu(menu: &CanvasToolMenu) -> bool {
     menu.tool == Tool::ColorSampler && !menu.transform && !menu.pasteboard && !menu.guide && menu.crop.is_none() && menu.anchor.is_none()
 }
 
-/// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the path
-/// menu and the Color Sampler's.
+/// Is `menu` the Content-Aware Move tool's menu opened inside the active selection (#12194)?
+pub fn inside_selection(menu: &CanvasToolMenu) -> bool {
+    menu.tool == Tool::ContentAwareMove
+        && menu.has_selection
+        && menu.inside_selection
+        && !menu.transform
+        && !menu.pasteboard
+        && !menu.guide
+        && menu.crop.is_none()
+        && menu.anchor.is_none()
+}
+
+/// Content-Aware Move's canvas context menu requires an open document and leaves Bitmap, Duotone
+/// and Multichannel documents on their existing no-menu path (#12194).
+fn cam_allowed(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|s| !matches!(s.doc.mode, ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel))
+}
+
+/// Is document point `d` on the image and inside the active selection?
+fn selected_at(app: &PhotocraftApp, d: [f64; 2]) -> bool {
+    d.iter().all(|v| v.is_finite())
+        && d[0] >= 0.0
+        && d[1] >= 0.0
+        && app.session.active().is_some_and(|s| {
+            d[0] < f64::from(s.doc.size.width)
+                && d[1] < f64::from(s.doc.size.height)
+                && s.doc.selection.as_ref().is_some_and(|sel| sel.sample_channel(d[0].floor() as i32, d[1].floor() as i32, 0) >= 0.5)
+        })
+}
+
+/// Does a Red Eye right-click at `doc` open a menu (#12577)? Only where the reference application
+/// was measured: an RGB document whose one layer is a pixel layer, with no selection or the pointer
+/// inside it. Elsewhere it keeps opening nothing.
+fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
+    app.session.active().is_some_and(|s| {
+        s.doc.mode == ColorMode::Rgb
+            && matches!(s.doc.layers.as_slice(), [l] if matches!(l.content, LayerContent::Raster(_)) && l.frame.is_none())
+            && (s.doc.selection.is_none() || doc.is_some_and(|d| selected_at(app, d)))
+    })
+}
+
+/// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
+/// Content-Aware Move menu, the path menu, the Color Sampler's and the Red Eye tool's.
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -524,6 +735,13 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
             | Tool::ColorSampler
+            // The layer menu (#11772).
+            | Tool::Count
+            // Sample Size and Copy Color (#11747).
+            | Tool::Eyedropper
+            | Tool::ContentAwareMove
+            // The layer or selection menu, where measured (#12577).
+            | Tool::RedEye
     ) || path_menu(tool)
 }
 
@@ -570,11 +788,19 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     } else if menu.text {
         TYPE_EDIT_MENU
     } else if menu.type_layer {
-        TYPE_LAYER_MENU
+        type_layer_rows(menu)
     } else if path_menu(menu.tool) {
         PEN_MENU
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if menu.tool == Tool::Count {
+        COUNT_MENU
+    } else if menu.tool == Tool::RedEye {
+        if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
+    } else if menu.tool == Tool::Eyedropper {
+        EYEDROPPER_MENU
+    } else if inside_selection(menu) {
+        CAM_INSIDE_SELECTION_MENU
     } else {
         selection_rows(menu.has_selection)
     }
@@ -600,6 +826,9 @@ pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: 
     }
     if menu.text || menu.type_layer {
         return type_checked(app, command);
+    }
+    if is_eyedropper(menu) {
+        return eyedropper_size(command) == Some(app.ui.tool_options.eyedropper_size);
     }
     menu.transform
         && matches!(command, "edit.freeTransform" | "edit.transform.rotate" | "edit.transform.skew" | "edit.transform.distort" | "edit.transform.perspective")
@@ -647,6 +876,34 @@ fn target_type_layer(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) -> bo
         photocraft_engine::layer_multi_cmds::set_selection(&mut app.session, selected, Some(id), Some(id)).is_ok()
     } else {
         app.session.select_layer(id).is_ok()
+    }
+}
+
+/// Are the type layer menu's faux rows live? They run `type.setStyle` on the selected type
+/// layers, so they are offered exactly when that command takes them (#12043 review): at least
+/// one selected type layer, and none of them under Lock All - `check_text_unlocked`'s one
+/// rejection. A position lock styles fine, as the command does.
+fn faux_rows_enabled(app: &PhotocraftApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let targets: Vec<photocraft_doc::LayerId> =
+        st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))).collect();
+    !targets.is_empty() && targets.iter().all(|id| !st.doc.effective_locks(*id).all)
+}
+
+/// The text shape of the menu's target layer, which is active after [`target_type_layer`]:
+/// point or paragraph text get their single Convert row, anything else the pair (#12043).
+fn active_type_shape(app: &PhotocraftApp) -> TypeShape {
+    let Some(st) = app.session.active() else { return TypeShape::Other };
+    match st.active_layer.and_then(|id| st.doc.layer(id)) {
+        Some(l) => match &l.content {
+            LayerContent::Text(t) => match t.shape {
+                photocraft_doc::text::TextShape::Point => TypeShape::Point,
+                photocraft_doc::text::TextShape::Box { .. } => TypeShape::Paragraph,
+                _ => TypeShape::Other,
+            },
+            _ => TypeShape::Other,
+        },
+        None => TypeShape::Other,
     }
 }
 
@@ -709,13 +966,17 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         transform: true,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: false,
         spelling: None,
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -747,7 +1008,7 @@ pub fn engine_call(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) ->
     match pasteboard_choice(command) {
         Some(c) if menu.pasteboard => ("prefs.set".into(), json!({"values": {"interface.canvasColor": c.name()}})),
         _ if menu.pasteboard => ("prefs.set".into(), json!({})),
-        _ if menu.text && matches!(command, FAUX_BOLD | FAUX_ITALIC) => ("type.setStyle".into(), json!({})),
+        _ if (menu.text || menu.type_layer) && matches!(command, FAUX_BOLD | FAUX_ITALIC) => ("type.setStyle".into(), json!({})),
         _ if is_spelling(menu, command) => spelling_call(menu, command),
         _ => (command.into(), json!({})),
     }
@@ -773,7 +1034,7 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
+    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && !editing_text(app, tool)
 }
 
 /// Right-click on the pasteboard: its colour menu at screen point `pos`.
@@ -792,13 +1053,17 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         transform: false,
         pasteboard: true,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: false,
         spelling: None,
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -825,13 +1090,17 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: true,
         spelling: None,
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -866,6 +1135,9 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if menu.pasteboard {
         return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
     }
+    if is_eyedropper(menu) {
+        return eyedropper_size(command).is_some() || (matches!(command, EYEDROPPER_COPY_HTML | EYEDROPPER_COPY_HEX) && menu.color.is_some());
+    }
     // Warp needs a layer, selection or path box: a lone mask or channel keeps the plain box.
     if menu.transform && command == "edit.transform.warp" {
         return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none());
@@ -882,11 +1154,22 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
         };
     }
     if menu.type_layer {
-        return TYPE_LAYER_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command);
+        return match command {
+            // #12043: over committed type the faux rows toggle the whole layer: they run as
+            // `type.setStyle` on its type layers, so they are live exactly when that command
+            // takes them.
+            FAUX_BOLD | FAUX_ITALIC => faux_rows_enabled(app),
+            c => type_layer_rows(menu).iter().flatten().any(|(_, id)| *id == c) && crate::menus::is_enabled(app, c),
+        };
     }
     // Off a sampler every row is greyed. The readout rows wait for per-sampler readout modes.
     if sampler_menu(menu) {
         return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
+    }
+    // Inside the Content-Aware Move selection menu (#12194), Load Selection… stays greyed until a
+    // selection channel (non-spot alpha channel) has been saved.
+    if inside_selection(menu) && command == "select.loadSelection" {
+        return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
     }
     if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
@@ -938,8 +1221,26 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     if !pos.iter().all(|v| v.is_finite()) {
         return false;
     }
-    let type_layer = !text && doc.and_then(|d| type_layer_at(app, tool, d)).is_some_and(|id| target_type_layer(app, id));
+    let mut type_shape = None;
+    let type_layer = !text
+        && doc.and_then(|d| type_layer_at(app, tool, d)).is_some_and(|id| {
+            if !target_type_layer(app, id) {
+                return false;
+            }
+            // The clicked layer is the menu's target; its shape picks the Convert row (#12043).
+            type_shape = Some(active_type_shape(app));
+            true
+        });
     if !(applies(tool) || text || type_layer) {
+        return false;
+    }
+    // Without an active document or in Bitmap/Duotone/Multichannel modes, Content-Aware Move opens
+    // no menu (#12194); release any non-held control-channel HUD that would otherwise stay open.
+    if tool == Tool::ContentAwareMove && !cam_allowed(app) {
+        crate::color_hud::release(&mut app.ui);
+        return false;
+    }
+    if tool == Tool::RedEye && !red_eye_measured(app, doc) {
         return false;
     }
     app.ui.brush_picker = None;
@@ -948,8 +1249,12 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
+    let inside_selection = tool == Tool::ContentAwareMove && doc.is_some_and(|d| selected_at(app, d));
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
     let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
+    // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
+    // Size, whatever its Sample setting (#11747). Picking a row later copies this colour.
+    let color = if tool == Tool::Eyedropper && !text && !type_layer { doc.and_then(|d| crate::canvas::composite_color(app, d[0], d[1])) } else { None };
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
         tool,
@@ -959,20 +1264,25 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         transform: false,
         pasteboard: false,
         anchor: None,
+        under: None,
         text,
         type_layer,
+        type_shape,
         guide: false,
         spelling,
         crop: None,
         sampler,
         sampler_at,
+        color,
+        inside_selection,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
 }
 
 /// Right-click with the Zoom or Hand tool at screen point `pos`, over document point `doc`: the
-/// view menu.
+/// view menu. With the Hand held by Space over another tool, it closes when that tool changes
+/// (#11271).
 pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2], doc: [f64; 2]) -> bool {
     if !is_view_tool(tool) || !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
         return false;
@@ -988,13 +1298,17 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         transform: false,
         pasteboard: false,
         anchor: Some(doc),
+        under: (tool != app.ui.tool).then_some(app.ui.tool),
         text: false,
         type_layer: false,
+        type_shape: None,
         guide: false,
         spelling: None,
         crop: None,
         sampler: None,
         sampler_at: None,
+        color: None,
+        inside_selection: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1054,6 +1368,8 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     } else if sampler_menu(&menu) {
         let (id, params) = engine_call(app, &menu, command);
         app.run(&id, params).map(|_| ())
+    } else if is_eyedropper(&menu) {
+        choose_eyedropper(app, ctx, &menu, command)
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
         spec_dialog(app, command, "Make Work Path", r##"{"tolerance":0.5..10=2}"##, serde_json::Map::new());
@@ -1065,6 +1381,20 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+/// An Eyedropper row (#11747): a size sets the Sample Size (shared with the options bar); a Copy
+/// Color row puts the colour read at the right-click on the clipboard, as the Color panel's menu
+/// does. Neither touches the foreground colour or the history.
+fn choose_eyedropper(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    if let Some(size) = eyedropper_size(command) {
+        app.ui.tool_options.eyedropper_size = size;
+        return Ok(());
+    }
+    let rgb = menu.color.ok_or("No colour under the pointer")?;
+    let text = if command == EYEDROPPER_COPY_HTML { crate::color_panel_ui::html_color(rgb) } else { crate::color_panel_ui::hex_code(rgb) };
+    ctx.copy_text(text);
+    Ok(())
 }
 
 /// A spelling row: replace the word under the pointer (the caret lands after the replacement), or
@@ -1087,7 +1417,10 @@ fn choose_type(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<
         FAUX_BOLD | FAUX_ITALIC => {
             let bold = command == FAUX_BOLD;
             let on = !type_checked(app, command);
-            let mut p = crate::type_tool::formatting_params(app).ok_or("No type is being edited")?;
+            // While editing, the selection's characters are styled; over a committed type layer
+            // the same run takes the whole layer, which is what formatting_params scopes to with
+            // no selection (#12043). Either way one `type.setStyle` run is one history state.
+            let mut p = crate::type_tool::formatting_params(app).ok_or("No type to format")?;
             p[if bold { "fauxBold" } else { "fauxItalic" }] = json!(on);
             app.run("type.setStyle", p)?;
         }
@@ -1166,6 +1499,7 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
     if command == "path.toSelection" {
         // OK deselects and hides the path, as ⌘↩ does (#6079).
         fields.insert("__deselectPath".into(), json!(true));
+        fields.insert(MAKE_SELECTION.into(), json!(true));
     }
     if command == "path.fill" {
         let fg = app.session.tools.foreground;
@@ -1184,6 +1518,63 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
         fields.insert("simulatePressure".into(), json!(remembered_simulate_pressure(app)));
     }
     spec_dialog(app, command, label, spec, fields);
+}
+
+/// Marks the Make Selection dialog [`pen_dialog`] opens. It keeps the schema dialog's fields, so OK
+/// and Alt+Reset work as before; only the body is Photoshop's layout (#12917).
+const MAKE_SELECTION: &str = "__makeSelection";
+
+/// The Make Selection operations, in Photoshop's order: (`path.toSelection` mode, label).
+const MAKE_SELECTION_OPERATIONS: [(&str, &str); 4] =
+    [("replace", "New Selection"), ("add", "Add to Selection"), ("subtract", "Subtract from Selection"), ("intersect", "Intersect with Selection")];
+
+/// Is this dialog the Make Selection dialog?
+pub(crate) fn owns_make_selection(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(MAKE_SELECTION)
+}
+
+/// Photoshop's Make Selection dialog: Rendering (Feather Radius, Anti-aliased) and Operation.
+/// Without a selection there is nothing to combine with, so only New Selection is available.
+pub(crate) fn make_selection_body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut serde_json::Map<String, Value>) {
+    let has_selection = app.session.active().is_some_and(|st| st.doc.selection.is_some());
+    ui.spacing_mut().item_spacing.y = 6.0;
+    crate::widgets::section_label(ui, tl!("Rendering"));
+    crate::widgets::hairline(ui);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Feather Radius:"));
+        let mut feather = f.get("feather").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        crate::widgets::value_field(ui, &mut feather, 0.0..=250.0, "", 64.0).accessible_name(tl!("Feather Radius:"));
+        ui.label(tl!("pixels"));
+        // The schema dialog's rounding, so OK sends what it sent.
+        f.insert("feather".into(), json!((feather * 10.0).round() / 10.0));
+    });
+    let mut anti_alias = f.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
+    crate::widgets::checkbox(ui, &mut anti_alias, tl!("Anti-aliased"));
+    f.insert("antiAlias".into(), json!(anti_alias));
+    ui.add_space(4.0);
+    crate::widgets::section_label(ui, tl!("Operation"));
+    crate::widgets::hairline(ui);
+    let mut mode = f.get("mode").and_then(Value::as_str).unwrap_or("replace").to_string();
+    // A combining mode set from outside, or a selection gone while the dialog was open.
+    if !has_selection {
+        mode = "replace".into();
+    }
+    for (key, label) in MAKE_SELECTION_OPERATIONS {
+        ui.add_enabled_ui(key == "replace" || has_selection, |ui| ui.radio_value(&mut mode, key.to_string(), tl!(label)));
+    }
+    f.insert("mode".into(), json!(mode));
+}
+
+/// OK in the Make Selection dialog: a new selection is the History step Selection Change, as in
+/// Photoshop (#12917). ⌘↩, the Paths panel and the combining operations keep the engine's Make
+/// Selection (not measured). Only a step this run added is renamed: `revision` is from before it.
+pub(crate) fn name_make_selection_step(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, params: &Value, revision: Option<u64>) {
+    if !owns_make_selection(fields) || params.get("mode").and_then(Value::as_str).is_some_and(|m| m != "replace") {
+        return;
+    }
+    if let Some(st) = app.session.active_mut().filter(|st| Some(st.revision) != revision) {
+        st.history.set_current_label("Selection Change");
+    }
 }
 
 /// The Pen options bar's Make Selection (Path mode, #5703): the canvas menu's Make Selection…
@@ -1236,9 +1627,9 @@ fn menu_id() -> egui::Id {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
-    let Some(menu) = app.ui.canvas_tool_menu.clone() else { return };
+    let Some(mut menu) = app.ui.canvas_tool_menu.clone() else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        || app.ui.tool != menu.tool
+        || app.ui.tool != menu.under.unwrap_or(menu.tool)
         || (menu.transform && app.ui.transform.is_none())
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
@@ -1247,6 +1638,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     {
         app.ui.canvas_tool_menu = None;
         return;
+    }
+    // The committed text's shape can change while its menu is open - a Convert, or an Undo of
+    // one: the Convert row follows the shape frame by frame instead of freezing on the value
+    // captured when the menu opened (#12043 review). The stored menu is refreshed too, so the
+    // control channel's entries and a row pick see the same list the canvas draws.
+    if menu.type_layer {
+        let fresh = Some(active_type_shape(app));
+        if menu.type_shape != fresh {
+            if let Some(m) = app.ui.canvas_tool_menu.as_mut() {
+                m.type_shape = fresh;
+            }
+            menu.type_shape = fresh;
+        }
     }
     let id = menu_id();
     let screen = ctx.content_rect();
@@ -1300,7 +1704,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         ui.separator();
                         continue;
                     };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, command), tl!(label)).min_size(egui::vec2(200.0, 20.0));
+                    let text = match row_label(app, &menu, label, command) {
+                        // Spelled out so `cargo xtask i18n-coverage` lists the new label.
+                        "Free Transform Points" => tl!("Free Transform Points"),
+                        key => tl!(key),
+                    };
+                    let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
                         selected = Some((*command).to_string());
                     }
@@ -1332,7 +1741,21 @@ pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rec
 }
 
 #[cfg(test)]
-mod tests;
+mod cam_menu_tests;
+#[cfg(test)]
+pub(crate) mod tests;
+
+#[cfg(test)]
+pub(crate) mod count_tests;
 
 #[cfg(test)]
 mod hand_menu_entries_tests;
+
+#[cfg(test)]
+mod pen_free_transform_label_tests;
+
+#[cfg(test)]
+mod make_selection_dialog_tests;
+
+#[cfg(test)]
+mod type_layer_menu_tests;
