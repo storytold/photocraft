@@ -56,12 +56,40 @@ pub fn is_selection_tool(tool: Tool) -> bool {
 /// 2 Subtract, 3 Intersect) and the held modifiers: exactly what the tool's gesture will use.
 pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
     match tool {
-        // Quick Selection always adds (⌥ subtracts), like Photoshop's after the first stroke.
+        // Quick Selection: options bar has New (0), Add (1, default), Subtract (2).
         Tool::QuickSelection => {
-            if m.alt {
-                "subtract"
-            } else {
-                "add"
+            let eff_bar = match bar {
+                0..=2 => bar,
+                _ => 1,
+            };
+            match eff_bar {
+                2 => {
+                    // Photoshop: Shift always adds and Alt (also Shift+Alt) always subtracts,
+                    // whatever the mode.
+                    if m.alt {
+                        "subtract"
+                    } else if m.shift {
+                        "add"
+                    } else {
+                        "subtract"
+                    }
+                }
+                0 => {
+                    if m.alt {
+                        "subtract"
+                    } else if m.shift {
+                        "add"
+                    } else {
+                        "replace"
+                    }
+                }
+                _ => {
+                    if m.alt {
+                        "subtract"
+                    } else {
+                        "add"
+                    }
+                }
             }
         }
         // Every other selection tool, Object Selection included: ⇧⌥ intersects, ⇧ adds, ⌥
@@ -84,11 +112,12 @@ pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
 /// subtract from or intersect with, so it draws a new selection, as in Photoshop (where ⌥ then
 /// only draws a marquee from its centre). An options-bar Subtract or Intersect is kept (#1106).
 pub fn document_selection_mode(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> &'static str {
-    let mode = selection_mode(tool, app.ui.selection_mode, m);
+    let bar = if tool == Tool::QuickSelection { app.ui.tool_options.quick_selection_mode } else { app.ui.selection_mode };
+    let mode = selection_mode(tool, bar, m);
     // Asked last, and from the bounds the selection outline caches (same key): the canvas asks
     // every frame while a Patch lasso is drawn or hovered with ⌥.
     let selected = || app.session.active().is_some_and(|st| st.doc.selection.as_ref().is_some_and(|s| !app.known_bounds(u64::MAX - st.doc.id.0, s).is_empty()));
-    if m.alt && matches!(mode, "subtract" | "intersect") && selection_mode(tool, app.ui.selection_mode, egui::Modifiers::NONE) == "replace" && !selected() {
+    if m.alt && matches!(mode, "subtract" | "intersect") && selection_mode(tool, bar, egui::Modifiers::NONE) == "replace" && !selected() {
         "replace"
     } else {
         mode
@@ -143,6 +172,9 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // The Lasso's Alt with nothing selected draws straight segments; it subtracts nothing.
     if matches!(tool, Tool::Lasso | Tool::PolygonLasso) && app.drag.is_none() && app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
         m.alt = false;
+    }
+    if tool == Tool::QuickSelection {
+        return Badge::from_mode(document_selection_mode(app, tool, m));
     }
     Badge::from_mode(selection_mode(tool, app.ui.selection_mode, m))
 }
@@ -286,9 +318,15 @@ mod tests {
         assert_eq!(badge(&app, Tool::Lasso, shift), Some(Badge::Add));
         app.ui.selection_mode = 3;
         assert_eq!(badge(&app, Tool::RectMarquee, none), Some(Badge::Intersect));
-        // Smart selection tools.
+        // Smart selection tools. The Quick Selection starts in New, so its badge follows the
+        // mode it is in.
+        app.ui.tool_options.quick_selection_mode = 1;
         assert_eq!(badge(&app, Tool::QuickSelection, none), Some(Badge::Add));
         assert_eq!(badge(&app, Tool::QuickSelection, alt), Some(Badge::Subtract));
+        // Quick Selection in New mode with nothing selected falls back to a new selection (no − badge).
+        app.ui.tool_options.quick_selection_mode = 0;
+        assert_eq!(badge(&app, Tool::QuickSelection, alt), None);
+        app.ui.tool_options.quick_selection_mode = 1;
         // Object Selection follows the options bar like the other selection tools (#12853).
         assert_eq!(badge(&app, Tool::ObjectSelection, none), Some(Badge::Intersect));
         app.ui.selection_mode = 0;
