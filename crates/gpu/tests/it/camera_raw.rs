@@ -847,8 +847,9 @@ fn check_view(g: &mut Gpu, p: &CameraRaw, src: &[[f32; 4]], (w, h): (usize, usiz
     true
 }
 
-/// Every stage kind at each depth, plain and sRGB-encoded, at the proxy's size and on tiny and
-/// odd frames: exact pixels, histogram and display bytes.
+/// Every stage kind at each depth, plain and sRGB-encoded, on a frame of several histogram rows
+/// and on tiny ones, then once at the proxy's size: exact pixels, histogram and display bytes.
+/// (The proxy is checked once: on a software adapter each 858×572 round takes seconds.)
 #[test]
 fn the_view_shows_and_counts_the_developed_frame() {
     let Some(mut g) = gpu() else { return };
@@ -858,7 +859,7 @@ fn the_view_shows_and_counts_the_developed_frame() {
         CameraRaw { shadows: 50.0, highlights: -50.0, clarity: 30.0, sharpen_amount: 60.0, noise_color: 30.0, ..Default::default() },
     ];
     for depth in DEPTHS {
-        for (w, h) in [(858, 572), (171, 113), (1, 1), (3, 2)] {
+        for (w, h) in [(171, 113), (1, 1), (3, 2)] {
             let src = image(w, h, depth);
             for p in &sets {
                 for srgb in [false, true] {
@@ -868,6 +869,8 @@ fn the_view_shows_and_counts_the_developed_frame() {
             }
         }
     }
+    let proxy = image(858, 572, Depth::Float);
+    assert!(check_view(&mut g, &sets[2], &proxy, (858, 572), true), "the proxy develops on the GPU");
 }
 
 /// Transparent, out-of-range and non-finite pixels count where `RgbHistogram` counts them, and
