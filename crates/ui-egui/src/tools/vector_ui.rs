@@ -114,7 +114,7 @@ fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::Laye
                         *end,
                         bounded(*width, 1.0, 4096.0),
                         bounded(*length, 1.0, 4096.0),
-                        bounded(*concavity, 0.0, 100.0),
+                        bounded(*concavity, -50.0, 50.0),
                         bounded(*weight, 1.0, 10000.0),
                     ))
                 }
@@ -237,6 +237,9 @@ mod pen_enter_deselects_tests;
 
 #[cfg(test)]
 mod line_shift_snap_tests;
+
+#[cfg(test)]
+mod ellipse_shift_circle_tests;
 
 #[cfg(test)]
 mod pen_mode_menu_tests;
