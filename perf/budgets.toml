@@ -303,7 +303,7 @@ bench = "perf_scenarios"
 row = "open 20 MP layered PSD (decode + first composite)"
 budget_ms = 3000
 
-# P20/P63: generated fixtures (`photocraft_psd::fixtures`, #5107); the row checks a pixel, so a
+# P20/P63: generated fixtures (`craft_psd::fixtures`, #5107); the row checks a pixel, so a
 # blank document fails it. No time budget yet: the target is the behaviour (progress, editable).
 [[scenario]]
 id = "P20"
