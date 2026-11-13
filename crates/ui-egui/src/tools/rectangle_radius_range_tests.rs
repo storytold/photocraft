@@ -134,6 +134,24 @@ fn an_oversized_paste_after_valid_text_is_an_invalid_entry_and_keeps_the_value()
     assert_eq!(radius(&h), 1.0, "the last valid value (the `1` applied as typed) is kept");
 }
 
+/// The same out-of-range number typed again after text that was no number: the value does not
+/// change, but the range alert is still owed.
+#[test]
+fn the_same_out_of_range_number_after_a_non_number_still_alerts_the_range() {
+    let mut h = bar();
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    for text in ["200000", "abc", "200000"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alerts(&h), vec![RADIUS_RANGE_ALERT.to_string()]);
+    assert_eq!(radius(&h), 150_000.0);
+}
+
 #[test]
 fn an_emptied_radius_shows_no_invalid_entry_alert() {
     let mut h = bar();
