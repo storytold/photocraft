@@ -653,7 +653,7 @@ pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
                 continue;
             }
             // A layer's colour of a float document keeps light above white, as the brush does (#11126).
-            let r = photocraft_paint::render_stroke_to(surf, &brush, &pts, sel.as_ref(), lock, 1.0, crate::channel_cmds::is_color_target(p));
+            let r = photocraft_paint::render_stroke_to(surf, &brush, &pts, sel.as_ref(), lock, 1.0, crate::channel_cmds::is_color_target(p), None);
             dmg = if dmg.is_empty() { r } else { dmg.union(&r) };
         }
         Ok(dmg)
