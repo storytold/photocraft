@@ -110,8 +110,19 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             };
             let (name, set) = (action.name.clone(), action.set.clone());
             let (names, sets) = crate::actions::action_form_choices(app);
-            let mut fields =
-                json!({"path": format!("{dir}/{name}.pcdroplet"), "name": name, "action": name, "output": format!("{dir}/droplet-output"), "format": "same"});
+            // The Play group: four checkboxes under the Set and Action dropdowns, all off.
+            let mut fields = json!({
+                "path": format!("{dir}/{name}.pcdroplet"), "name": name, "action": name,
+                "overrideOpen": false, "includeSubfolders": false, "suppressOpenOptions": false, "suppressWarnings": false,
+                "output": format!("{dir}/droplet-output"), "format": "same",
+                "__labels": {
+                    "overrideOpen": tl!("Override Action \"Open\" Commands"),
+                    "includeSubfolders": tl!("Include All Subfolders"),
+                    "suppressOpenOptions": tl!("Suppress File Open Options Dialogs"),
+                    "suppressWarnings": tl!("Suppress Color Profile Warnings"),
+                },
+                "__order": ["path", "name", "set", "action", "overrideOpen", "includeSubfolders", "suppressOpenOptions", "suppressWarnings", "output", "format"]
+            });
             // The Set dropdown picks between same-named actions; an action outside any set has none.
             if let Some(set) = set {
                 fields["set"] = json!(set);
@@ -247,6 +258,9 @@ fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str,
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "file_ui/droplet_play_options_tests.rs"]
+mod droplet_play_options_tests;
 
 #[cfg(test)]
 mod web_playback_tests {
