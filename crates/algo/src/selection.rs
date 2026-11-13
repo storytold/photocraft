@@ -289,13 +289,22 @@ pub fn rgba8_image(s: &Surface, area: Rect) -> Vec<[u8; 4]> {
 /// Tolerance in a colour space the document is not in. For an 8-bit surface the levels are the
 /// stored bytes exactly; a deeper surface is quantized to the 8-bit grid here, so where this is
 /// the right read stays the caller's decision.
+/// Band rows for the parallel readers of [`stored_levels_planes`]: `read_region_into` hands back
+/// f32 samples, so an unrestricted 256-row band stages ~25 MB per worker on a wide multi-channel
+/// area (6000 px CMYK: 16 workers × ~24 MB of floats before quantizing). Keep one worker's f32
+/// staging near 2 MB; the u8 output plane is the larger fixed cost either way (#11785 review).
+fn levels_band_rows(w: usize, ch: usize) -> usize {
+    let per_row = (w * ch * 4).max(1);
+    (2u64 << 20).checked_div(per_row as u64).unwrap_or(256).clamp(16, 256) as usize
+}
+
 pub fn stored_levels_planes(s: &Surface, area: Rect) -> Vec<u8> {
     let (w, h, ch) = (area.width() as usize, area.height() as usize, s.channels());
     let mut data = vec![0u8; w * h * ch];
     if w == 0 || h == 0 {
         return data;
     }
-    let band = 256usize;
+    let band = levels_band_rows(w, ch);
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let read = |bi: usize, chunk: &mut [u8]| {
         let y0 = area.y0 + (bi * band) as i32;
@@ -614,10 +623,12 @@ fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch
             *o = v;
             // Same rule as `magic_wand`: the region stays fully selected; a pixel just outside
             // it gets a fringe by how far its colour is past the tolerance.
-            if anti_alias && v == 0 && touches_region(x, y, w, h, |nx, ny| at(nx, ny) != 0) {
-                if let Some((d, a)) = colour_diff(y * w + x) {
-                    *o = fringe_coverage((d - tol) as f32, a);
-                }
+            if anti_alias
+                && v == 0
+                && touches_region(x, y, w, h, |nx, ny| at(nx, ny) != 0)
+                && let Some((d, a)) = colour_diff(y * w + x)
+            {
+                *o = fringe_coverage((d - tol) as f32, a);
             }
         }
     };
