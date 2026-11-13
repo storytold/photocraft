@@ -1420,3 +1420,47 @@ fn an_overtaken_job_never_writes_a_gpu_slot() {
     assert!(matches!(next.shown, proxy::Shown::Gpu(_)));
     assert_eq!(gpu.read(&shown).expect("its pixels"), before);
 }
+
+/// A job still running after its dialog closed is overtaken by the next dialog's first frame:
+/// the slots and their tickets belong to the device's pass, not to one dialog, so the old job
+/// reads its frame back and the new dialog's frame on screen keeps its pixels.
+#[test]
+fn a_closed_dialogs_job_never_writes_the_next_dialogs_slot() {
+    use serde_json::json;
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+        return;
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.set_wgpu(rs);
+    let Some(canvas) = app.gpu.clone() else { return };
+    app.run("file.new", json!({"width": 300, "height": 200, "depth": 8})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("filter.render.clouds", json!({"seed": 5})).unwrap();
+    canvas.force_camera_raw_pass();
+    let ctx = egui::Context::default();
+    crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    if d.gpu.is_none() {
+        return;
+    }
+    // Two frames, so the first dialog shows slot 1, then a job it never gets to publish.
+    for exposure in [0.3, 0.5] {
+        d.params = CameraRaw { exposure, ..Default::default() };
+        d.render(&ctx);
+    }
+    assert_eq!(d.processed.gpu_frame().map(crate::camera_raw_gpu::slot), Some(1));
+    d.params = CameraRaw { exposure: -0.7, ..Default::default() };
+    let orphan = d.proxy_job();
+    app.camera_raw = None;
+    crate::camera_raw_ui::open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    let gpu = d.gpu.clone().expect("GPU");
+    d.params = CameraRaw { exposure: 0.8, ..Default::default() };
+    d.render(&ctx);
+    let shown = d.processed.gpu_frame().expect("the new dialog's frame on the GPU").clone();
+    let before = gpu.read(&shown).expect("its pixels");
+    let late = orphan.run();
+    assert!(matches!(late.shown, proxy::Shown::Image(_)), "the closed dialog's job read its frame back");
+    assert_eq!(gpu.read(&shown).expect("its pixels"), before, "the new dialog's frame kept its pixels");
+}

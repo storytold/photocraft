@@ -114,17 +114,35 @@ pub(crate) struct CameraRawGpu {
     failed: Arc<AtomicBool>,
     /// Whites and Blacks adapt to the image; its points change only with these settings.
     points: Arc<Mutex<Points>>,
-    /// The pass's slot the preview shows ([`NONE_SHOWN`] when it shows a CPU image): the next
-    /// frame develops into the other one.
-    shown: Arc<AtomicUsize>,
+    /// Which of the pass's slots is on screen, and the newest job's ticket: shared by every
+    /// dialog on the device, as the pass and its slots are.
+    slots: SlotState,
     /// The display transform as the GPU applies it, for the display key it was made for.
     shaper: Arc<Mutex<Shaper>>,
     textures: Arc<Textures>,
     /// The buffer frames kept on the GPU are read back through.
     readback: Arc<Mutex<Option<wgpu::Buffer>>>,
-    /// The newest proxy job's ticket ([`Self::ticket`]). A job another has overtaken never
-    /// develops into a slot: the dialog may already show the newer frame there.
-    latest: Arc<AtomicU64>,
+}
+
+/// The pass's slots as the dialogs use them, one per device beside the pass ([`Slot`]): a job
+/// from a closed dialog is overtaken by the next dialog's first job, and never writes the slot
+/// that dialog shows.
+#[derive(Clone)]
+pub(crate) struct SlotState(Arc<SlotInner>);
+
+struct SlotInner {
+    /// The slot on screen ([`NONE_SHOWN`] when the preview shows a CPU image): the next frame
+    /// develops into the other one.
+    shown: AtomicUsize,
+    /// The newest proxy job's ticket ([`CameraRawGpu::ticket`]). A job another has overtaken
+    /// never develops into a slot: the preview may already show the newer frame there.
+    latest: AtomicU64,
+}
+
+impl Default for SlotState {
+    fn default() -> Self {
+        SlotState(Arc::new(SlotInner { shown: AtomicUsize::new(NONE_SHOWN), latest: AtomicU64::new(0) }))
+    }
 }
 
 /// A frame kept on the GPU ([`CameraRawGpu::develop_view`]); none on the web, which has no
@@ -149,7 +167,7 @@ pub(crate) type Renderer = Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>
 /// The display key and its transform's matrix/shaper (`None`: not one).
 type Shaper = Option<(u64, Option<photocraft_cms::GpuMatrixShaper>)>;
 
-/// [`CameraRawGpu::shown`] when no slot is on screen.
+/// The slot on screen when the preview shows a CPU image.
 const NONE_SHOWN: usize = usize::MAX;
 
 /// The pass's slots registered with egui, with the generation of the slot's textures. Freed
@@ -170,7 +188,7 @@ impl Drop for Textures {
 }
 
 impl CameraRawGpu {
-    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue, health: DeviceHealth, pass: Slot, renderer: Renderer) -> Self {
+    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue, health: DeviceHealth, pass: Slot, slots: SlotState, renderer: Renderer) -> Self {
         CameraRawGpu {
             device,
             queue,
@@ -178,11 +196,10 @@ impl CameraRawGpu {
             pass,
             failed: Arc::default(),
             points: Arc::default(),
-            shown: Arc::new(AtomicUsize::new(NONE_SHOWN)),
+            slots,
             shaper: Arc::default(),
             textures: Arc::new(Textures { renderer, ids: Mutex::new([None, None]) }),
             readback: Arc::default(),
-            latest: Arc::default(),
         }
     }
 
@@ -234,10 +251,10 @@ impl CameraRawGpu {
         // Under the pass's lock: a newer job takes its ticket before it waits here, and the frame
         // on screen is published only after its develop released the lock, so an overtaken job
         // stops here and the slot read below is the one on screen once any older frame is done.
-        if self.latest.load(Ordering::Acquire) != ticket {
+        if self.slots.0.latest.load(Ordering::Acquire) != ticket {
             return None;
         }
-        let avoid = Some(self.shown.load(Ordering::Acquire)).filter(|s| *s != NONE_SHOWN);
+        let avoid = Some(self.slots.0.shown.load(Ordering::Acquire)).filter(|s| *s != NONE_SHOWN);
         match pass.develop_view(&self.device, &self.queue, Some(&self.health), px, key, size, &stages, &view, avoid, read) {
             Ok(frame) => Some(frame),
             Err(e) => {
@@ -250,13 +267,13 @@ impl CameraRawGpu {
 
     /// A ticket for a new proxy job; it overtakes every job ticketed before it.
     pub(crate) fn ticket(&self) -> u64 {
-        self.latest.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
+        self.slots.0.latest.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
     }
 
     /// Notes which slot the preview shows (`None`: a CPU image), so the next frame develops into
     /// the other.
     pub(crate) fn show(&self, slot: Option<usize>) {
-        self.shown.store(slot.unwrap_or(NONE_SHOWN), Ordering::Release);
+        self.slots.0.shown.store(slot.unwrap_or(NONE_SHOWN), Ordering::Release);
     }
 
     /// `frame`'s display texture as egui knows it, registered the first time its slot is shown

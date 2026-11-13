@@ -171,6 +171,8 @@ pub struct GpuCanvas {
     canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
     camera_raw: crate::camera_raw_gpu::Slot,
+    /// The slots of [`Self::camera_raw`]'s pass as every dialog uses them.
+    camera_raw_slots: crate::camera_raw_gpu::SlotState,
     camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     compositor_build: compositor_build::Slot,
     compositor_completion: compositor_build::Completion,
@@ -239,6 +241,7 @@ impl GpuCanvas {
             vram,
             canvas_budget: budget,
             camera_raw: Default::default(),
+            camera_raw_slots: Default::default(),
             camera_raw_started: Default::default(),
             compositor_build: Default::default(),
             compositor_completion: Default::default(),
@@ -311,6 +314,7 @@ impl GpuCanvas {
             self.rs.queue.clone(),
             self.health.clone(),
             self.camera_raw.clone(),
+            self.camera_raw_slots.clone(),
             self.rs.renderer.clone(),
         ))
     }
