@@ -101,10 +101,14 @@ impl FxCache {
         s
     }
 
-    /// Counts `bytes` for `slot`, just filled by a build, while it is still the slot of `key`
-    /// (eviction may have dropped it meanwhile).
-    fn admit(&mut self, key: u64, slot: &FxSlot, bytes: usize) {
-        if self.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot)) {
+    /// Fills `slot`, the one a build took for `key`, with `entry` and counts its bytes while it is
+    /// still the slot of `key` (eviction may have dropped it meanwhile). Both under the cache lock:
+    /// filled before it, the slot could be evicted, its bytes taken off a count that never had
+    /// them, and the count would stay short until a purge. A concurrent build that filled the slot
+    /// first wins, and only its bytes are counted.
+    fn publish(&mut self, key: u64, slot: &FxSlot, entry: FxEntry) {
+        let bytes = entry.bytes;
+        if slot.set(entry).is_ok() && self.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot)) {
             self.bytes += bytes;
         }
     }
@@ -289,10 +293,8 @@ fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &Fx
         // Built from a scratch placeholder: use it for this frame, never cache it.
         return maps;
     }
-    if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
-        // Counted exactly once, by the build that filled the slot.
-        fx_cache().lock().unwrap_or_else(|e| e.into_inner()).admit(key, slot, bytes);
-    }
+    // Counted exactly once, by the build that filled the slot.
+    fx_cache().lock().unwrap_or_else(|e| e.into_inner()).publish(key, slot, FxEntry { maps: maps.clone(), _pin: pin, bytes });
     // A concurrent build that finished first wins, so every tile shares one map.
     slot.get().map_or(maps, |e| e.maps.clone())
 }
@@ -361,15 +363,25 @@ mod tests {
 
     /// Each test builds its own cache: the global one is shared by every test running at once.
     /// `fill` goes through the same steps as a miss in `cached_effect_maps`: take the slot, fill
-    /// it as `build_fx_slot_maps` does, count it, evict over `budget`.
+    /// and count it as `build_fx_slot_maps` does, evict over `budget`.
     fn fill(c: &mut FxCache, key: u64, bytes: usize, budget: usize) {
         let slot = c.slot(key);
+        c.publish(key, &slot, entry(bytes));
+        assert!(slot.get().is_some());
+        c.evict_over(budget, key);
+    }
+
+    /// Maps said to take `bytes`.
+    fn entry(bytes: usize) -> FxEntry {
         let layer = Layer::new("fx", LayerContent::Raster(Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true))));
         let tex = effects::TextureCtx { rect: Rect::EMPTY, patterns: &[], anchor: (0.0, 0.0) };
         let maps = std::sync::Arc::new(effects::build_maps(&layer, Vec::new(), Rect::EMPTY, &photocraft_doc::GlobalLight::default(), &tex));
-        assert!(slot.set(FxEntry { maps, _pin: Vec::new(), bytes }).is_ok());
-        c.admit(key, &slot, bytes);
-        c.evict_over(budget, key);
+        FxEntry { maps, _pin: Vec::new(), bytes }
+    }
+
+    /// The bytes of the entries the cache holds, which its count must equal.
+    fn held(c: &FxCache) -> usize {
+        c.map.values().filter_map(|s| s.get()).map(|e| e.bytes).sum()
     }
 
     fn hit(c: &mut FxCache, key: u64, budget: usize) {
@@ -441,8 +453,26 @@ mod tests {
         let mut c = FxCache::default();
         let slot = c.slot(1);
         c.purge();
-        c.admit(1, &slot, 10);
+        c.publish(1, &slot, entry(10));
+        assert!(slot.get().is_some(), "the build's render still uses its maps");
         assert_eq!(c.bytes, 0);
+    }
+
+    /// Review of #11582: a build that finishes between another build's fill and its eviction is
+    /// counted before that eviction can drop it, so the count never falls short of what the cache
+    /// holds (it once did: filled outside the lock, B was evicted, its bytes taken off before they
+    /// were added, and the cache held 32 bytes over a 24-byte budget while counting 16).
+    #[test]
+    fn a_build_finishing_between_another_ones_fill_and_eviction_is_counted_before_it_goes() {
+        let mut c = FxCache::default();
+        let b = c.slot(2); // B starts building: the oldest slot.
+        fill(&mut c, 1, 16, 100); // A
+        let s3 = c.slot(3);
+        c.publish(3, &s3, entry(16)); // C fills its slot...
+        c.publish(2, &b, entry(16)); // ...B finishes...
+        assert_eq!((c.bytes, held(&c)), (48, 48));
+        c.evict_over(24, 3); // ...and C evicts over the budget: B, then A.
+        assert_eq!((keys(&c), c.bytes, held(&c)), (vec![3], 16, 16));
     }
 
     /// Eviction takes the oldest first: maps used by every render (layers a render server never
