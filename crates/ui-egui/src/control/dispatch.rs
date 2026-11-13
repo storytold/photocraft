@@ -1559,6 +1559,8 @@ fn forward_pointer_event(app: &mut PhotocraftApp, g: &PointerGesture, s: Pointer
     if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
         d.reposition = g.space;
     }
+    // Add Anchor Point's handle drag: Space moves the new anchor (#12707).
+    crate::anchor_tools::set_reposition(app, g.space);
     // A Crop drag in the default mode turns and pans the view with the image: its
     // points are read as the view showed them at the press (`crop_mode`).
     let ev = match s.ev {

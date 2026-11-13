@@ -233,3 +233,21 @@ fn non_finite_pointer_positions_leave_the_drag_alone() {
     up(&mut app, [200.0, 560.0], Modifiers::NONE);
     assert_knot(&knot_at(&saved(&app), [200.0, 500.0]), [200.0, 500.0], [200.0, 560.0], [200.0, 440.0]);
 }
+
+/// The Space case driven by an agent: `ui.pointer` with `space: true` moves the anchor.
+#[test]
+fn an_agents_space_moves_the_anchor() {
+    let mut app = square();
+    let ctx = egui::Context::default();
+    let mut pointer = |app: &mut PhotocraftApp, params: serde_json::Value| {
+        let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", params);
+        match crate::control::handle(app, &ctx, &req) {
+            crate::control::Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
+            _ => panic!("expected an immediate reply"),
+        }
+    };
+    pointer(&mut app, json!({"events": [{"kind": "down", "x": 300, "y": 400}, {"kind": "move", "x": 340, "y": 400}]}));
+    pointer(&mut app, json!({"space": true, "events": [{"kind": "move", "x": 340, "y": 440}]}));
+    pointer(&mut app, json!({"events": [{"kind": "move", "x": 352, "y": 440}, {"kind": "up", "x": 352, "y": 440}]}));
+    assert_knot(&knot_at(&saved(&app), [300.0, 440.0]), [300.0, 440.0], [352.0, 440.0], [248.0, 440.0]);
+}
