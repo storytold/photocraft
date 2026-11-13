@@ -12,27 +12,32 @@ use crate::PhotocraftApp;
 use crate::warp_text_dialog_tests::harness;
 
 /// The checkboxes as Photoshop's two columns show them, row by row.
-const LEFT: [&str; 4] = ["Bitmap", "Grayscale", "Duotone", "Indexed Color"];
-const RIGHT: [&str; 4] = ["RGB Color", "CMYK Color", "Lab Color", "Multichannel"];
+pub(super) const LEFT: [&str; 4] = ["Bitmap", "Grayscale", "Duotone", "Indexed Color"];
+pub(super) const RIGHT: [&str; 4] = ["RGB Color", "CMYK Color", "Lab Color", "Multichannel"];
 const ALL_IDS: [&str; 8] = ["bitmap", "grayscale", "duotone", "indexed", "rgb", "cmyk", "lab", "multichannel"];
 
 /// An RGB document with the dialog opened from the File menu.
 fn opened() -> (Harness<'static, PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 20})).unwrap();
+    open_in(app)
+}
+
+/// `app` drawn with the dialog opened from the File menu.
+pub(super) fn open_in(mut app: PhotocraftApp) -> (Harness<'static, PhotocraftApp>, u64) {
     let id = crate::menus::invoke(&mut app, &egui::Context::default(), COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
     (harness(app), id)
 }
 
-fn field(h: &Harness<'_, PhotocraftApp>, id: u64, key: &str) -> Value {
+pub(super) fn field(h: &Harness<'_, PhotocraftApp>, id: u64, key: &str) -> Value {
     h.state().ui.dialogs.iter().find(|d| d.id == id).map_or(Value::Null, |d| d.fields[key].clone())
 }
 
-fn checked(h: &Harness<'_, PhotocraftApp>, label: &str) -> bool {
+pub(super) fn checked(h: &Harness<'_, PhotocraftApp>, label: &str) -> bool {
     h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled() == Some(Toggled::True)
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, role: Role, label: &str) {
+pub(super) fn click(h: &mut Harness<'_, PhotocraftApp>, role: Role, label: &str) {
     h.get_by_role_and_label(role, label).click();
     h.run_steps(3);
 }
@@ -41,16 +46,16 @@ fn rect(h: &Harness<'_, PhotocraftApp>, role: Role, label: &str) -> egui::Rect {
     h.get_by_role_and_label(role, label).rect()
 }
 
-fn mode(h: &Harness<'_, PhotocraftApp>) -> ColorMode {
+pub(super) fn mode(h: &Harness<'_, PhotocraftApp>) -> ColorMode {
     h.state().session.active().unwrap().doc.mode
 }
 
-fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
+pub(super) fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
     h.state().session.active().unwrap().history.entries().len()
 }
 
 /// Open the Mode: list and pick `label` from it.
-fn pick_target(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+pub(super) fn pick_target(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
     h.get_by_role(Role::ComboBox).click();
     h.run_steps(3);
     let entry = h.query_all_by_label(label).find(|n| n.accesskit_node().role() != Role::CheckBox && n.accesskit_node().role() != Role::ComboBox);
