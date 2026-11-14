@@ -144,6 +144,11 @@ fn degenerate_quads_never_panic() {
     for i in 0..4 {
         let _ = edge_moved([[0.0, 0.0], [f64::MAX, 0.0], [f64::MAX, f64::MAX], [0.0, f64::MAX]], i, [1.0, 1.0]);
     }
+    // One zero-length side (CodeRabbit on #14767): corner 3 sits on corner 0, so edge 2 has a side
+    // of length 0. The edge moves straight by the drag, both corners alike.
+    let one_side = [[100.0, 50.0], [700.0, 50.0], [700.0, 450.0], [100.0, 50.0]];
+    let moved = edge_moved(one_side, 2, [0.0, -50.0]);
+    assert_eq!((moved[2], moved[3]), ([700.0, 400.0], [100.0, 0.0]), "both corners move by the drag");
     // Through the tool, nothing non-finite is ever stored.
     let mut app = setup(point);
     drag(&mut app, [50.0, 50.0], [70.0, 80.0], SHIFT);
