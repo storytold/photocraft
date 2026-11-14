@@ -370,6 +370,9 @@ pub(crate) struct Place<'a> {
     pub(crate) max_h: f32,
     pub(crate) new_tip: &'a str,
     pub(crate) flush: bool,
+    /// Extra rows drawn under the last group, inside the list's scroll area and above the footer:
+    /// the Swatches panel's Recently Used Colors (#11524). `None` for the other preset panels.
+    pub(crate) extra: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
 }
 
 /// Space between the cells of a preset grid, and the grid's inset from the panel's left edge.
@@ -429,7 +432,7 @@ pub(crate) fn browser(
     thumb: &mut dyn FnMut(&egui::Ui, Rect, usize, usize),
 ) -> Vec<Ev> {
     let t = Tokens::get(ui.ctx());
-    let Place { canvas, max_h, new_tip, flush } = place;
+    let Place { canvas, max_h, new_tip, flush, mut extra } = place;
     let mut ev = Vec::new();
     let size = *st.sizes.get(panel).unwrap_or(&40.0);
     let list = size <= MIN_THUMB + 0.5;
@@ -585,6 +588,11 @@ pub(crate) fn browser(
                     let y = if before.is_some() { r.top() - 1.0 } else { r.bottom() + 1.0 };
                     ui.painter().line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(2.0, t.accent));
                 }
+            }
+            // The panel's own rows under the library (the Swatches panel's Recently Used Colors,
+            // #11524): they scroll with the list and stay clear of the footer.
+            if let Some(extra) = extra.as_mut() {
+                extra(ui);
             }
         },
     );
