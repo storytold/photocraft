@@ -409,6 +409,16 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
+/// The seed (jitter and 8-bit dither) of a Brush, Pencil or Eraser drag: from its first position
+/// and the document's revision, so a stroke started where the last one started still rounds
+/// differently and repeated soft dabs on one spot don't build up a fixed grain (#9156). The live
+/// stroke begins with it and the commit reuses it; nothing edits the document in between.
+pub(super) fn brush_seed(app: &PhotocraftApp, d: &Drag) -> Option<u64> {
+    let st = app.session.active()?;
+    let first = d.points.first()?;
+    Some(photocraft_engine::paint::rng::seed_from_bytes(json!([first[0], first[1], st.revision]).to_string().as_bytes()))
+}
+
 /// Starts the live preview of the current drag, from the params its tool commits. `None` without
 /// an active document or drag, or when the tool's preview can't begin.
 pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
@@ -459,7 +469,10 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         unsmoothed_line(&mut p, d.line);
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
-        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
+        if let Some(seed) = brush_seed(app, d) {
+            p["seed"] = json!(seed);
+        }
         EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
@@ -738,7 +751,8 @@ pub(super) fn draw_smoothing_string(painter: &egui::Painter, xf: &ViewXform, (br
 pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     let live = app.live_stroke.take();
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-    if let Some(seed) = live.as_ref().and_then(|l| l.seed) {
+    // Without a live stroke (its preview failed or never started), the seed it would have had.
+    if let Some(seed) = live.as_ref().and_then(|l| l.seed).or_else(|| brush_seed(app, d)) {
         p["seed"] = json!(seed);
     }
     let Some(l) = live else {
