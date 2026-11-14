@@ -488,9 +488,9 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
     let fg_tip = if eyedropper { tl!("Sample the foreground color") } else { tl!("Set foreground color") };
     let bg_tip = if eyedropper { tl!("Sample the background color") } else { tl!("Set background color") };
     if fg_resp.on_hover_text(fg_tip).clicked() {
-        chip_action(app, "foreground", eyedropper);
+        chip_action(app, "foreground");
     } else if bg_resp.on_hover_text(bg_tip).clicked() {
-        chip_action(app, "background", eyedropper);
+        chip_action(app, "background");
     }
     // Default Colors at the left, Switch Colors at the right, over the chips.
     let (dr, sr) = if studio {
@@ -588,8 +588,8 @@ fn chip_command(app: &mut PhotocraftApp, id: &str) {
 /// chip's colour moves into it and the replaced foreground falls to the background — Photoshop's
 /// own behaviour, a swap — while the foreground chip is already where it would be sampled to
 /// and changes nothing.
-fn chip_action(app: &mut PhotocraftApp, chip: &str, eyedropper: bool) {
-    if !eyedropper {
+fn chip_action(app: &mut PhotocraftApp, chip: &str) {
+    if app.ui.tool != Tool::Eyedropper {
         crate::color_picker_ui::open(app, chip);
         return;
     }
@@ -614,18 +614,23 @@ mod tests {
     #[test]
     fn the_eyedropper_samples_the_chips_instead_of_editing_them() {
         let mut app = chips(Tool::Eyedropper);
-        chip_action(&mut app, "background", true);
+        chip_action(&mut app, "background");
         assert_eq!(app.session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "the background colour became the foreground");
         assert_eq!(app.session.tools.background, [1.0, 0.0, 0.0, 1.0], "the replaced foreground fell to the background");
-        chip_action(&mut app, "foreground", true);
+        chip_action(&mut app, "foreground");
         assert_eq!(app.session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "the foreground chip is already where it samples to");
         assert_eq!(app.session.tools.background, [1.0, 0.0, 0.0, 1.0], "and does not swap");
         assert!(crate::color_picker_ui::top(&app).is_none(), "the Eyedropper opens no Color Picker");
         // Every other tool keeps the chips' Photoshop edit behaviour.
         let mut app = chips(Tool::Brush);
-        chip_action(&mut app, "background", false);
+        chip_action(&mut app, "background");
         assert_eq!(app.session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the Brush click edits, it does not swap");
         assert_eq!(app.session.tools.background, [0.0, 0.0, 1.0, 1.0]);
         assert!(crate::color_picker_ui::top(&app).is_some(), "the chip opens the Color Picker");
+        let mut app = chips(Tool::Brush);
+        chip_action(&mut app, "foreground");
+        assert_eq!(app.session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the foreground chip edits too");
+        assert_eq!(app.session.tools.background, [0.0, 0.0, 1.0, 1.0]);
+        assert!(crate::color_picker_ui::top(&app).is_some(), "the foreground chip opens the Color Picker");
     }
 }
