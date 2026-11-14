@@ -155,6 +155,8 @@ impl ByteSource for ZipSource<'_> {
 fn bundle_error(error: craft_pcraft_bundle::Error) -> FormatError {
     match error {
         craft_pcraft_bundle::Error::LimitExceeded { entry, limit } => FormatError::LimitExceeded(format!("`{entry}` exceeds {limit} bytes")),
+        // A ZIP member past its read bound arrives as a craft-zip error, not as `LimitExceeded`.
+        craft_pcraft_bundle::Error::Zip(error) => crate::zip::map_read_error(error),
         other => FormatError::corrupt(other.to_string()),
     }
 }
