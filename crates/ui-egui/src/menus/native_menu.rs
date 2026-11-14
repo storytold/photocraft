@@ -751,6 +751,15 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !crate::menus::modal_allows(app, &id) {
             continue;
         }
+        // Show All Menu Items (#14333): AppKit can't reopen the menu, so the bar shows that menu
+        // in full from now until another of its items is chosen.
+        let show_all = id.starts_with(crate::menus::SHOW_ALL_ITEM);
+        let shown = ctx.data_mut(|d| {
+            if show_all { d.get_temp::<String>(crate::menus::native_show_all_id()) } else { d.remove_temp::<String>(crate::menus::native_show_all_id()) }
+        });
+        if let Some(menu) = app.services.native_menu.as_mut().filter(|_| show_all || shown.is_some()) {
+            menu.dirty = true;
+        }
         if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -768,7 +777,8 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let lang = crate::i18n::current();
-    let mut items = crate::menus::menu_items(app);
+    let full: Option<String> = ctx.data(|d| d.get_temp(crate::menus::native_show_all_id()));
+    let mut items = crate::menus::menu_items_showing(app, full.as_deref());
     // AppKit swallows a key equivalent whose item is disabled: no action, no key-down for the
     // window (#8965). While a Keyboard Shortcuts field waits for keys, every item with a key
     // stays enabled, so its key comes back as a key press for the field to record (⌘Z, ⌘⌥Z,
