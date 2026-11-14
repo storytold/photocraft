@@ -4,6 +4,18 @@ pub(crate) fn legacy_name(s: &str) -> Vec<u8> {
     s.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c as u8 } else { b'?' }).take(255).collect()
 }
 
+/// A saved path's resource name. Path resources (2000–2997) carry the name only in the Pascal
+/// string — unlike channel names (1006) there is no Unicode companion resource — so the name is
+/// written as UTF-8, which is what the import side decodes back (#13184). The Pascal length cap
+/// truncates on a char boundary.
+pub(crate) fn saved_path_name(s: &str) -> Vec<u8> {
+    let mut end = s.len().min(255);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.as_bytes()[..end].to_vec()
+}
+
 pub(crate) fn unicode_names_resource(names: &[&str]) -> Vec<u8> {
     let mut v = Vec::new();
     for n in names {
@@ -61,7 +73,7 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
             _ => path_to_records(&p.path, w, h).to_bytes(),
         };
         let mut r = ImageResource::new(crate::vector_map::SAVED_PATHS.start() + i as u16, data);
-        r.name = legacy_name(&p.name);
+        r.name = saved_path_name(&p.name);
         out.push(r);
     }
     if let Some(wp) = &doc.work_path {
