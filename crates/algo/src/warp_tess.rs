@@ -62,6 +62,18 @@ const TANG_TOL: f64 = 0.5;
 const BEFORE_TOL: f64 = 1.35;
 /// Distance (document px) of an inner control point past its chord's end that splits a segment.
 const AFTER_TOL: f64 = 1.0;
+/// A segment that turns back only a little (the fold's apex lies inside it: no inner control point
+/// reaches past [`SHALLOW_AFTER_REACH`] of the chord's length from its start) splits past its end
+/// from this distance on; the crease probes' cells around a fold's apex split this early.
+const SHALLOW_AFTER_TOL: f64 = 0.45;
+/// How far along the chord (in chord lengths, from its start) an inner control point may lie for
+/// [`SHALLOW_AFTER_TOL`] to apply.
+const SHALLOW_AFTER_REACH: f64 = 1.7;
+/// The same before the chord's start: [`BEFORE_TOL`] becomes this when no inner control point lies
+/// more than [`SHALLOW_BEFORE_REACH`] chord lengths before it.
+const SHALLOW_BEFORE_TOL: f64 = 0.5;
+/// See [`SHALLOW_BEFORE_TOL`].
+const SHALLOW_BEFORE_REACH: f64 = 0.42;
 /// Twist of a cell's control net (document px) past which it splits.
 const TWIST_TOL: f64 = 1.0;
 /// The twist past which a one-patch full mesh's cell that already splits across splits down too:
@@ -153,6 +165,50 @@ impl Net {
         }
         m
     }
+    /// The largest component along `d` of a quad's twist `P00 − P10 − P01 + P11` (0 for a zero `d`).
+    fn twist_along(&self, d: P) -> f64 {
+        let n = d[0].hypot(d[1]);
+        if n.is_nan() || n <= 0.0 {
+            return 0.0;
+        }
+        let mut m = 0.0f64;
+        for j in 0..self.nv.saturating_sub(1) {
+            for i in 0..self.nu.saturating_sub(1) {
+                let (a, b, c, e) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
+                let t = ((a[0] - b[0] - c[0] + e[0]) * d[0] + (a[1] - b[1] - c[1] + e[1]) * d[1]).abs() / n;
+                if t.is_finite() {
+                    m = m.max(t);
+                }
+            }
+        }
+        m
+    }
+    /// The largest quad twist with its component along the rows (`du`) counted at `1 / k`: the
+    /// twist across the rows in full, the rows' own stretching less.
+    fn twist_across_rows(&self, du: P, dv: P, k: f64) -> f64 {
+        let (n, m) = (du[0].hypot(du[1]), dv[0].hypot(dv[1]));
+        if n.is_nan() || m.is_nan() || n <= 0.0 || m <= 0.0 {
+            return self.twist();
+        }
+        let (ux, uy) = (du[0] / n, du[1] / n);
+        let mut m = 0.0f64;
+        for j in 0..self.nv.saturating_sub(1) {
+            for i in 0..self.nu.saturating_sub(1) {
+                let (a, b, c, e) = (self.at(i, j), self.at(i + 1, j), self.at(i, j + 1), self.at(i + 1, j + 1));
+                let t = [a[0] - b[0] - c[0] + e[0], a[1] - b[1] - c[1] + e[1]];
+                let (along, across) = (t[0] * ux + t[1] * uy, -t[0] * uy + t[1] * ux);
+                let v = (across * across + (along / k) * (along / k)).sqrt();
+                if v.is_finite() {
+                    m = m.max(v);
+                }
+            }
+        }
+        m
+    }
+    /// The largest of the net's rows' [`need`]s, its inner control rows included.
+    fn rows_need(&self) -> f64 {
+        (0..self.nv).map(|j| need(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>())).fold(0.0, f64::max)
+    }
     /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net.
     fn twist(&self) -> f64 {
         let mut m = 0.0f64;
@@ -213,7 +269,8 @@ fn segment(c: &[P], t0: f64, t1: f64) -> Vec<P> {
 ///
 /// An inner control point that lies before the chord's start or past its end (the curve turns back
 /// on itself there, as a row does in a crease) counts by its distance from that end instead, over
-/// [`BEFORE_TOL`] or [`AFTER_TOL`], and is left out of the mean along the chord.
+/// [`BEFORE_TOL`] or [`AFTER_TOL`] ([`SHALLOW_BEFORE_TOL`] or [`SHALLOW_AFTER_TOL`] where the
+/// segment turns back only a little), and is left out of the mean along the chord.
 fn need(c: &[P]) -> f64 {
     let n = c.len().saturating_sub(1);
     let (Some(&a), Some(&b)) = (c.first(), c.last()) else { return 0.0 };
@@ -234,6 +291,12 @@ fn need(c: &[P]) -> f64 {
         let (tx, ty) = (ch[0] / len, ch[1] / len);
         let mut far = 0.0f64;
         let (mut sum, mut inside) = (0.0f64, 0usize);
+        // How far the inner control points reach before the chord's start and past its end.
+        let along_of = |p: &P| ((p[0] - a[0]) * tx + (p[1] - a[1]) * ty) / len;
+        let first = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::INFINITY, f64::min);
+        let last = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::NEG_INFINITY, f64::max);
+        let before_tol = if first > -SHALLOW_BEFORE_REACH { SHALLOW_BEFORE_TOL } else { BEFORE_TOL };
+        let after_tol = if last < SHALLOW_AFTER_REACH { SHALLOW_AFTER_TOL } else { AFTER_TOL };
         for (k, p) in (1..n).filter_map(|k| c.get(k).map(|p| (k, p))) {
             let r = [p[0] - a[0], p[1] - a[1]];
             // Where the point lies along the chord (0 at its start, 1 at its end) and how far off it.
@@ -241,9 +304,9 @@ fn need(c: &[P]) -> f64 {
             let side = (r[0] * ty - r[1] * tx).abs();
             far = far.max(side / PERP_TOL);
             if along < 0.0 {
-                far = far.max(side.hypot(-along * len) / BEFORE_TOL);
+                far = far.max(side.hypot(-along * len) / before_tol);
             } else if along > 1.0 {
-                far = far.max(side.hypot((along - 1.0) * len) / AFTER_TOL);
+                far = far.max(side.hypot((along - 1.0) * len) / after_tol);
             } else if along >= 0.0 {
                 sum += (along - k as f64 / n as f64) * len;
                 inside += 1;
@@ -545,7 +608,8 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
         let column = |c: &Cell| (c[0] / (2.0 * (c[1] - c[0])) + EPS).floor() as i64;
         for &c in &level_cells {
             let [u0, u1, v0, v1] = c;
-            let fu = need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1)));
+            // A quilt's patch measures its cells' rows by all the rows of their control nets.
+            let fu = if rules.twist_spreads { net.sub(c).rows_need() } else { need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1))) };
             let fv = need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)));
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let mut twist_down = false;
@@ -557,9 +621,17 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             let goes_across = lu > lv + EPS;
             if twisty {
                 let sub = net.sub(c);
+                let (p00, p10, p01) = (sub.at(0, 0), sub.at(sub.nu - 1, 0), sub.at(0, sub.nv - 1));
+                let (du, dv) = ([p10[0] - p00[0], p10[1] - p00[1]], [p01[0] - p00[0], p01[1] - p00[1]]);
+                let whole = lu > 1.0 - EPS && lv > 1.0 - EPS;
                 let tw = match (rules.twist_by_side, goes_across) {
                     (true, true) => sub.twist_left(),
                     (true, false) => sub.twist_top(),
+                    // A quilt's patch: a whole patch splits down for the twist across its rows (the
+                    // rows' own stretching counts half); a smaller cell for the larger of its
+                    // twist's components along its v side (at 0.9) and along its u side.
+                    (false, _) if rules.twist_spreads && whole && !goes_across => sub.twist_across_rows(du, dv, 2.0),
+                    (false, _) if rules.twist_spreads && !whole => (0.9 * sub.twist_along(dv)).max(sub.twist_along(du)),
                     (false, _) => sub.twist(),
                 };
                 if tw > TWIST_TOL + EPS && (!across || tw > rules.across_twist + EPS) {
@@ -782,17 +854,71 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
     let mut pos: HashMap<(u64, u64), P> = HashMap::new();
     let mut by_size: Vec<&Cell> = leaves.iter().collect();
     by_size.sort_by(|a, b| ((b[1] - b[0]) * (b[3] - b[2])).total_cmp(&((a[1] - a[0]) * (a[3] - a[2]))));
-    for &&[u0, u1, v0, v1] in &by_size {
-        let mut corner = |u: f64, v: f64| *pos.entry(key(u, v)).or_insert_with(|| place(&own, u, v));
+    // Lines the T-point rule keeps on the surface: rows by the row rule's levels, columns by the
+    // fixed level.
+    let fixed_row = |v: f64| {
+        level(v)
+            <= match level(v) {
+                0 => 0,
+                1 => rules.mid_row_level,
+                _ => rules.fixed_level,
+            }
+    };
+    let fixed_col = |u: f64| level(u) <= rules.fixed_level;
+    let area = |c: &Cell| (c[1] - c[0]) * (c[3] - c[2]);
+    // Every leaf's top and bottom edges by their row, its sides by their column, and the areas of
+    // the leaves meeting at each corner.
+    let mut rows_at: HashMap<u64, Vec<(f64, f64, f64)>> = HashMap::new();
+    let mut cols_at: HashMap<u64, Vec<(f64, f64, f64)>> = HashMap::new();
+    let mut corner_areas: HashMap<(u64, u64), Vec<f64>> = HashMap::new();
+    for c in leaves {
+        let [u0, u1, v0, v1] = *c;
+        for v in [v0, v1] {
+            rows_at.entry(v.to_bits()).or_default().push((u0, u1, area(c)));
+        }
+        for u in [u0, u1] {
+            cols_at.entry(u.to_bits()).or_default().push((v0, v1, area(c)));
+        }
+        for p in [[u0, v0], [u1, v0], [u0, v1], [u1, v1]] {
+            corner_areas.entry(key(p[0], p[1])).or_default().push(area(c));
+        }
+    }
+    // A corner lying inside the edge of a leaf at least as big (not on a line kept on the surface)
+    // is that edge's to place: two equal leaves meeting at a T don't race for it.
+    let edge_point = |u: f64, v: f64, at_least: f64| {
+        let inside_of = |t: f64, (a, b, s): &(f64, f64, f64)| *s >= at_least - 1e-12 && t > a + 1e-12 && t < b - 1e-12;
+        (!fixed_row(v) && rows_at.get(&v.to_bits()).is_some_and(|l| l.iter().any(|e| inside_of(u, e))))
+            || (!fixed_col(u) && cols_at.get(&u.to_bits()).is_some_and(|l| l.iter().any(|e| inside_of(v, e))))
+    };
+    let corner_of_equal = |u: f64, v: f64, me: f64| corner_areas.get(&key(u, v)).is_some_and(|l| l.iter().any(|s| (s - me).abs() < 1e-12));
+    for c in &by_size {
+        let [u0, u1, v0, v1] = **c;
+        let me = area(c);
+        let mut corner = |u: f64, v: f64| {
+            if let Some(p) = pos.get(&key(u, v)) {
+                return *p;
+            }
+            if edge_point(u, v, me) {
+                return place(&own, u, v);
+            }
+            *pos.entry(key(u, v)).or_insert_with(|| place(&own, u, v))
+        };
         let (c00, c10, c01, c11) = (corner(u0, v0), corner(u1, v0), corner(u0, v1), corner(u1, v1));
+        // On a line kept on the surface, a corner of a leaf as big as this one keeps its own place.
         for (v, a, b) in [(v0, c00, c10), (v1, c01, c11)] {
             for u in inside(on_v.get(&v.to_bits()), u0, u1) {
+                if fixed_row(v) && corner_of_equal(u, v, me) {
+                    continue;
+                }
                 let o = place(&own, u, v);
                 pos.entry(key(u, v)).or_insert_with(|| onto(a, b, o));
             }
         }
         for (u, a, b) in [(u0, c00, c01), (u1, c10, c11)] {
             for v in inside(on_u.get(&u.to_bits()), v0, v1) {
+                if fixed_col(u) && corner_of_equal(u, v, me) {
+                    continue;
+                }
                 let o = place(&own, u, v);
                 pos.entry(key(u, v)).or_insert_with(|| onto(a, b, o));
             }
@@ -843,10 +969,10 @@ fn triangulate(net: &Net, surf: &dyn Fn(f64, f64) -> P, leaves: &[Cell], log: &[
                     uv.len() - 1
                 });
             }
-            // A point of this cell's side that is no vertex: on the side's chord, its own.
-            let s = (v - v0) / (v1 - v0);
+            // A point of this cell's side that is no vertex: dropped onto the side's chord from its own place.
             uv.push([u, v]);
-            out_pos.push(if u == u0 { lerp(c00, c01, s) } else { lerp(c10, c11, s) });
+            let o = place(&own, u, v);
+            out_pos.push(if u == u0 { onto(c00, c01, o) } else { onto(c10, c11, o) });
             uv.len() - 1
         };
         for w in vs.windows(2) {
@@ -993,20 +1119,27 @@ mod tests {
     /// by its distance from that end, not in the mean along the chord.
     #[test]
     fn need_measures_a_point_past_the_chord_from_that_end() {
-        // 1 px before the start, the other point in its even place: whole (the mean along the
-        // chord would be 1 px and split it); 1.4 px before splits.
-        assert!(need(&[[0.0, 0.0], [-1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]) < 1.0);
-        assert!(need(&[[0.0, 0.0], [-1.4, 0.0], [2.0, 0.0], [3.0, 0.0]]) >= 1.0);
-        // Past the end the tolerance is 1 px.
-        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.9, 0.0], [3.0, 0.0]]) < 1.0);
-        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [4.1, 0.0], [3.0, 0.0]]) >= 1.0);
+        let t = 4.0 / 3.0;
+        // A long turn back (more than SHALLOW_BEFORE_REACH chord lengths before the start): 1 px
+        // before a 2 px chord stays whole (the mean along the chord would split it); 1.4 px splits.
+        assert!(need(&[[0.0, 0.0], [-1.0, 0.0], [t, 0.0], [2.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [-1.4, 0.0], [t, 0.0], [2.0, 0.0]]) >= 1.0);
+        // Past the end the tolerance is 1 px (reaching past SHALLOW_AFTER_REACH chord lengths).
+        assert!(need(&[[0.0, 0.0], [1.0 / 3.0, 0.0], [1.9, 0.0], [1.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [1.0 / 3.0, 0.0], [2.1, 0.0], [1.0, 0.0]]) >= 1.0);
         // The distance is from the end itself, sideways included: 1.2 px before and 0.7 px off.
-        assert!(need(&[[0.0, 0.0], [-1.2, 0.0], [2.0, 0.0], [3.0, 0.0]]) < 1.0);
-        assert!(need(&[[0.0, 0.0], [-1.2, 0.7], [2.0, 0.0], [3.0, 0.0]]) >= 1.0);
-        // The points left inside still split by their own mean: half a px along.
-        assert!(need(&[[0.0, 0.0], [-1.0, 0.0], [2.5, 0.0], [3.0, 0.0]]) >= 1.0);
+        assert!(need(&[[0.0, 0.0], [-1.2, 0.0], [t, 0.0], [2.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [-1.2, 0.7], [t, 0.0], [2.0, 0.0]]) >= 1.0);
+        // The points left inside still split by their own mean: more than half a px along.
+        assert!(need(&[[0.0, 0.0], [-1.0, 0.0], [1.9, 0.0], [2.0, 0.0]]) >= 1.0);
+        // A shallow turn back (a fold's apex inside the segment) splits sooner: from half a px
+        // before the start, from 0.45 px past the end.
+        assert!(need(&[[0.0, 0.0], [-0.45, 0.0], [2.0, 0.0], [3.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [-0.55, 0.0], [2.0, 0.0], [3.0, 0.0]]) >= 1.0);
+        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.4, 0.0], [3.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.5, 0.0], [3.0, 0.0]]) >= 1.0);
         // Both points outside and close to the ends: nothing to split; non-finite points neither.
-        assert!(need(&[[0.0, 0.0], [-0.5, 0.0], [3.5, 0.0], [3.0, 0.0]]) < 1.0);
+        assert!(need(&[[0.0, 0.0], [-0.4, 0.0], [3.4, 0.0], [3.0, 0.0]]) < 1.0);
         assert_eq!(need(&[[0.0, 0.0], [f64::NAN, 0.0], [2.0, f64::INFINITY], [3.0, 0.0]]), 0.0);
     }
 
@@ -1120,6 +1253,96 @@ mod tests {
         assert!(tallest(&quilt) <= 0.25 + 1e-9, "bottom cells {}", tallest(&quilt));
         let alone = Rules { twist_spreads: false, ..quilt };
         assert!(tallest(&alone) >= 0.5 - 1e-9, "without the rule the bottom cells stay half the patch");
+    }
+
+    /// Two leaves of the same size meeting at a T (an eighth by a sixteenth beside a sixteenth by
+    /// an eighth) don't race for the point they share, so a mesh symmetric top to bottom keeps its
+    /// vertices symmetric (the reference's smooth pinch does; placing by leaf order didn't).
+    #[test]
+    fn equal_leaves_place_their_shared_point_alike() {
+        for amp in [30.0, 60.0, 90.0, 120.0, 150.0] {
+            for fall in [2.0, 4.0, 8.0, 16.0] {
+                let pinch = |u: f64, v: f64| {
+                    let (dx, dy) = (u - 0.5, v - 0.5);
+                    let k = amp * (-(dx * dx + dy * dy) * fall).exp();
+                    [128.0 * u - k * dx, 128.0 * v - k * dy]
+                };
+                let m = envelope_mesh(&pinch, true).expect("finite");
+                for (k, p) in m.uv.iter().enumerate() {
+                    let Some(j) = m.uv.iter().position(|q| (q[0] - p[0]).abs() < 1e-12 && (q[1] - (1.0 - p[1])).abs() < 1e-12) else { continue };
+                    let (a, b) = (m.pos[k], m.pos[j]);
+                    assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] + b[1] - 128.0).abs() < 1e-9, "amp {amp} fall {fall} {p:?}: {a:?} vs {b:?}");
+                }
+            }
+        }
+    }
+
+    fn quilt_rules() -> Rules {
+        Rules {
+            start: 1,
+            force_down: false,
+            twist_spreads: true,
+            fixed_level: 0,
+            mid_row_level: 0,
+            cut_sides: false,
+            across_twist: TWIST_TOL,
+            twist_by_side: false,
+            square_twist: None,
+            column_chords: None,
+            flat_columns: None,
+        }
+    }
+
+    /// The parts of a quad's twist `P00 − P10 − P01 + P11`: along the rows (the rows stretch
+    /// unevenly) and across them.
+    #[test]
+    fn a_twist_splits_into_its_parts_along_and_across_the_rows() {
+        let quad = |d: P| Net { nu: 2, nv: 2, p: vec![[0.0, 0.0], [10.0, 0.0], [0.0, 10.0], d] };
+        let (du, dv) = ([10.0, 0.0], [0.0, 10.0]);
+        // Twist (2, 0): along the rows only, counted at half across the rows.
+        let along = quad([12.0, 10.0]);
+        assert!((along.twist_along(du) - 2.0).abs() < 1e-12 && along.twist_along(dv).abs() < 1e-12);
+        assert!((along.twist_across_rows(du, dv, 2.0) - 1.0).abs() < 1e-12);
+        // Twist (0, 1.5): across the rows, in full.
+        let across = quad([10.0, 11.5]);
+        assert!((across.twist_across_rows(du, dv, 2.0) - 1.5).abs() < 1e-12);
+        assert!((across.twist_along(dv) - 1.5).abs() < 1e-12);
+        // A degenerate side: the whole twist, or nothing along it.
+        assert!((along.twist_across_rows([0.0, 0.0], dv, 2.0) - 2.0).abs() < 1e-12);
+        assert_eq!(along.twist_along([0.0, 0.0]), 0.0);
+    }
+
+    /// A whole quilt patch splits down for the twist across its rows; rows that only stretch
+    /// unevenly count half. Bent patches the reference redrew stay whole at 1.2 to 1.9 px of twist
+    /// along their rows; waved ones (twist across the rows) split from 1 px.
+    #[test]
+    fn a_quilt_patch_bent_along_its_rows_does_not_split_down() {
+        let quilt = quilt_rules();
+        let splits_down = |at: &dyn Fn(f64, f64) -> P| {
+            let (_, log) = cells(&cubic_net(at), true, &quilt);
+            log.iter().any(|s| s.down && s.cell[3] - s.cell[2] > 1.0 - 1e-9)
+        };
+        // Straight rows and columns, twist 16/9 px per quad of the cubic net.
+        let bend = |u: f64, v: f64| [64.0 * u + 16.0 * u * v, 64.0 * v];
+        let wave = |u: f64, v: f64| [64.0 * u, 64.0 * v + 16.0 * u * v];
+        assert!(!splits_down(&bend), "twist along the rows split the patch down");
+        assert!(splits_down(&wave), "twist across the rows left the patch whole");
+        let (_, log) = cells(&cubic_net(&bend), true, &Rules { twist_spreads: false, ..quilt });
+        assert!(log.iter().any(|s| s.down), "a one-patch mesh splits for any twist");
+    }
+
+    /// A quilt patch measures its cells' rows by all the rows of their control nets: a bulge whose
+    /// top and bottom rows are straight still splits across.
+    #[test]
+    fn a_quilt_patch_measures_its_inner_control_rows() {
+        let quilt = quilt_rules();
+        let bulge = |u: f64, v: f64| [128.0 * u, 128.0 * v + 96.0 * u * (1.0 - u) * v * (1.0 - v)];
+        let across = |rules: &Rules| {
+            let (_, log) = cells(&cubic_net(&bulge), true, rules);
+            log.iter().any(|s| s.across && s.cell[1] - s.cell[0] > 1.0 - 1e-9 && s.cell[3] - s.cell[2] > 1.0 - 1e-9)
+        };
+        assert!(across(&quilt), "the inner rows' bend didn't split the patch across");
+        assert!(!across(&Rules { twist_spreads: false, ..quilt }), "straight outer rows split a one-patch mesh across");
     }
 
     /// A full mesh starts as 2 × 2 cells, so only its halfway lines stay on the surface: a point at

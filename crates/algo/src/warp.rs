@@ -483,8 +483,8 @@ fn t_slivers(uv: &[[f64; 2]], quads: &[[usize; 4]]) -> Vec<([usize; 3], usize)> 
 }
 
 /// Joins the patches of a quilt: a point the patches share becomes one vertex, and a point on a
-/// patch border inside a neighbouring patch's longer edge is moved onto that straight edge, so no
-/// crack opens where the two sides were cut differently.
+/// patch border inside a neighbouring patch's longer edge is moved onto that straight edge (to its
+/// nearest point there), so no crack opens where the two sides were cut differently.
 fn stitch_patches(m: crate::warp_tess::EnvelopeMesh, us: &[f64], vs: &[f64]) -> crate::warp_tess::EnvelopeMesh {
     use std::collections::HashMap;
     let q = |t: f64| (t * f64::from(1u32 << 30)).round() as i64;
@@ -544,9 +544,13 @@ fn stitch_patches(m: crate::warp_tess::EnvelopeMesh, us: &[f64], vs: &[f64]) -> 
                 continue;
             }
             let (Some(&pa), Some(&pb)) = (pos.get(a), pos.get(b)) else { continue };
-            let s = (t - from) / (to - from);
+            // Dropped onto the edge from where its own patch put it (the nearest point of the edge),
+            // as a point inside a patch is dropped onto a bigger cell's edge.
             if let Some(slot) = pos.get_mut(k) {
-                *slot = [pa[0] + (pb[0] - pa[0]) * s, pa[1] + (pb[1] - pa[1]) * s];
+                let d = [pb[0] - pa[0], pb[1] - pa[1]];
+                let l2 = d[0] * d[0] + d[1] * d[1];
+                let w = if l2 > 0.0 { (((slot[0] - pa[0]) * d[0] + (slot[1] - pa[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { (t - from) / (to - from) };
+                *slot = [pa[0] + d[0] * w, pa[1] + d[1] * w];
             }
             if let Some(m) = moved.get_mut(k) {
                 *m = true;
@@ -3156,8 +3160,9 @@ mod tests {
     }
 
     /// Two patches side by side, the left one whole and the right one cut in half down: the point
-    /// the right patch adds on the shared border joins the left patch's straight edge (and the
-    /// border's ends are shared), so the two sides meet.
+    /// the right patch adds on the shared border joins the left patch's straight edge at the point
+    /// of it nearest where the right patch put it (not by its place along the border), and the
+    /// border's ends are shared, so the two sides meet.
     #[test]
     fn a_quilt_border_point_joins_the_bigger_neighbour() {
         use crate::warp_tess::EnvelopeMesh;
@@ -3174,12 +3179,12 @@ mod tests {
             [1.0, 1.0], // right patch
         ];
         let mut pos: Vec<[f64; 2]> = uv.iter().map(|p| [100.0 * p[0], 100.0 * p[1]]).collect();
-        pos[6] = [53.0, 50.0]; // the right patch's border point, on its own (curved) surface
+        pos[6] = [53.0, 47.0]; // the right patch's border point, on its own (curved) surface
         let quads = vec![[0, 1, 2, 3], [4, 5, 6, 7], [6, 7, 8, 9]];
         let m = stitch_patches(EnvelopeMesh { uv, pos, quads }, &[0.0, 0.5, 1.0], &[0.0, 1.0]);
         assert_eq!(m.uv.len(), 8, "the border's shared ends are one vertex each");
         let k = m.uv.iter().position(|p| *p == [0.5, 0.5]).expect("border point");
-        assert_eq!(m.pos[k], [50.0, 50.0]);
+        assert_eq!(m.pos[k], [50.0, 47.0]);
         assert_eq!(m.quads[1][0], m.quads[0][1], "the border's top end is shared");
     }
 
