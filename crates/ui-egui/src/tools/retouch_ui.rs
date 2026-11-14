@@ -893,6 +893,24 @@ fn clone_sample_dropdown(ui: &mut egui::Ui, stored: &mut String, indexed: bool) 
     }
 }
 
+/// Healing's Angle and Pressure edit the tool's own brush in one command gesture.
+fn healing_brush_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // The shell swaps in this tool's brush; both controls use the same command
+    // gesture as Brush Settings and leave the other tools' brushes alone.
+    let before = app.session.tools.brush.clone();
+    let mut brush = before.clone();
+    let angle_alert = crate::eraser_ui::angle_field(ui, &mut brush);
+    let name = tl!("Always use pressure for size");
+    let pressure = crate::icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
+    if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
+        brush.pressure_size = !brush.pressure_size;
+    }
+    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
+    if angle_alert {
+        open_alert_once(app, crate::eraser_ui::ANGLE_RANGE_MESSAGE);
+    }
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -976,20 +994,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Sample:"));
             clone_sample_dropdown(ui, &mut o.clone_sample, indexed);
             if tool == Tool::Healing {
-                // The shell swaps in this tool's brush; both controls use the same command
-                // gesture as Brush Settings and leave the other tools' brushes alone.
-                let before = app.session.tools.brush.clone();
-                let mut brush = before.clone();
-                let angle_alert = crate::eraser_ui::angle_field(ui, &mut brush);
-                let name = tl!("Always use pressure for size");
-                let pressure = crate::icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
-                if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
-                    brush.pressure_size = !brush.pressure_size;
-                }
-                crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
-                if angle_alert {
-                    open_alert_once(app, crate::eraser_ui::ANGLE_RANGE_MESSAGE);
-                }
+                healing_brush_controls(app, ui);
             }
             if app.session.presets.clone.active().source.is_none() {
                 crate::widgets::vline(ui, 22.0);
