@@ -8,11 +8,11 @@ fn tmp(name: &str) -> String {
     d.to_string_lossy().into_owned()
 }
 
-/// A 64×48 document: white background, a red square with soft (half-transparent) edges on a
+/// An untagged 64×48 document: white background, a red square with soft (half-transparent) edges on a
 /// transparent layer, and a gradient band.
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
-    s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "name": "web.psd", "background": "transparent"})).unwrap();
+    s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "name": "web.psd", "background": "transparent", "profile": "none"})).unwrap();
     s.edit("paint", |doc, active| {
         let fmt = doc.pixel_format();
         let mut l = Layer::raster("Logo", fmt);
