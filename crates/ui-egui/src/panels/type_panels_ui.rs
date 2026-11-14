@@ -34,6 +34,9 @@ pub struct TypePanelsUi {
     pub glyph_selected: Option<String>,
     /// Edit › Check Spelling dialog.
     pub spell: Option<SpellDialog>,
+    /// Check All Layers as the dialog was last closed in this session; Edit › Check Spelling… opens
+    /// with it when no `allLayers` is given (#14183).
+    pub spell_all_layers: Option<bool>,
 }
 
 /// State of the Check Spelling dialog.
@@ -88,7 +91,13 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// `action`). `params.show` forces a panel open or closed.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "edit.checkSpelling" && params.get("action").is_none() && params.get("ui").is_none_or(|u| u.as_bool() != Some(false)) {
-        return Some(open_spelling(app, params.get("allLayers").and_then(Value::as_bool).unwrap_or(true)));
+        // An open dialog keeps its own state. Off needs a layer to check, so without one the
+        // dialog opens on, as before.
+        let p = &app.ui.type_panels;
+        let has_layer = app.session.active().is_some_and(|st| st.active_layer.is_some());
+        let last = p.spell.as_ref().map(|d| d.all_layers).or(p.spell_all_layers).filter(|all| *all || has_layer);
+        let all_layers = params.get("allLayers").and_then(Value::as_bool).or(last).unwrap_or(true);
+        return Some(open_spelling(app, all_layers));
     }
     if !handles(id) {
         return None;
@@ -803,8 +812,12 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
 /// Done: an action being recorded gets one Check Spelling step with Check All Layers as the dialog
 /// has it, and an action paused at a Check Spelling step continues on the document it was playing
 /// on. When recording the step fails, the status keeps that error with the playback's outcome.
+/// Check All Layers is remembered for the next open, except from a played step, which has its own.
 pub fn close_spelling(app: &mut PhotocraftApp) {
     let Some(d) = app.ui.type_panels.spell.take() else { return };
+    if d.resume.is_none() {
+        app.ui.type_panels.spell_all_layers = Some(d.all_layers);
+    }
     let mut recording_error = None;
     if app.session.actions.recording.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
         recording_error = Some(app.ui.status.clone());
