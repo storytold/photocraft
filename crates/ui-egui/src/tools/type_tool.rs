@@ -63,7 +63,7 @@ pub(crate) use keys::flow_key;
 pub use keys::handle_keys;
 pub use layout::layout;
 pub(crate) use layout::{hit_layer, offset_at, shows_own_layout};
-pub(crate) use opentype::{availability as opentype_availability, target_features as opentype_target_features};
+pub(crate) use opentype::{Availability as OpenTypeAvailability, availability as opentype_availability, target_features as opentype_target_features};
 #[cfg(test)]
 use options_bar::num_field;
 pub use options_bar::options_bar;
@@ -146,6 +146,8 @@ mod font_commit_tests;
 mod font_picker_tests;
 #[cfg(test)]
 mod options_tooltips_tests;
+#[cfg(test)]
+mod panels_toggle_tests;
 
 #[cfg(test)]
 mod tests;

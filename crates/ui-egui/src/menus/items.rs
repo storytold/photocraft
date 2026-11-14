@@ -52,7 +52,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
 }
 
 /// Report transient font-engine contention with the rows so renderers can retry instead of
-/// caching the temporary unknown capabilities as stable menu state.
+/// caching the temporarily disabled rows as stable menu state.
 pub(super) fn menu_items_with_retry(app: &PhotocraftApp) -> (Vec<MenuItem>, bool) {
     let features = crate::type_tool::opentype_target_features(app);
     let enabled = |id: &str| features.availability(id).is_none_or(|availability| availability.enabled()) && is_enabled_without_opentype(app, id);
@@ -147,7 +147,7 @@ pub(super) fn menu_items_with_retry(app: &PhotocraftApp) -> (Vec<MenuItem>, bool
         item.label = reveal_label().into();
     }
     // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
-    if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
+    if let Some(after) = items.iter().position(|i| i.id == "file.openAsSmartObject").or_else(|| items.iter().position(|i| i.id == "file.openAs")) {
         let rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
         let mut recent: Vec<MenuItem> = app
             .ui

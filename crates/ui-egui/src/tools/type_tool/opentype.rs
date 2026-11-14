@@ -5,12 +5,13 @@ use super::{PhotocraftApp, text_layer};
 use photocraft_doc::text::CharStyle;
 use photocraft_text::FaceRequest;
 
-/// Whether every face affected by a UI formatting action advertises its required GSUB tags.
+/// Whether every affected face advertises the required GSUB tags, or inspection must wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Availability {
     Available,
     Unsupported,
     Unknown,
+    Busy,
 }
 
 impl Availability {
@@ -19,17 +20,18 @@ impl Availability {
         self == Self::Available
     }
 
-    /// Explain a disabled control without claiming that a missing font is the fallback face.
+    /// Explain a disabled control, distinguishing missing font information from a temporary lock.
     pub(super) fn explanation(self) -> &'static str {
         match self {
             Self::Available => "",
             Self::Unsupported => "Not supported by all selected font faces",
             Self::Unknown => "Feature support is unknown: font information is unavailable",
+            Self::Busy => "Font engine is busy",
         }
     }
 }
 
-/// GSUB tags required by an existing command. Numerals combinations require both tags;
+/// GSUB tags associated with an existing command. Numerals combinations require both tags;
 /// Default resets saved numeral flags and does not require a substitution in the font.
 fn command_tags(id: &str) -> Option<Vec<&'static str>> {
     use photocraft_engine::type_extra_cmds::{NumeralsStyle, STYLISTIC_SET_TAGS};
@@ -129,14 +131,23 @@ impl TargetFeatures {
     }
 
     /// Look up any existing OpenType UI command against this target snapshot. Default Numerals
-    /// resets stored tags and remains available even when a font cannot be inspected.
+    /// resets stored tags and remains available even when a font cannot be inspected. A busy
+    /// engine disables other features temporarily so a live click can ask the user to retry.
     pub(crate) fn availability(&self, id: &str) -> Option<Availability> {
         let tags = command_tags(id)?;
         if tags.is_empty() {
             return Some(Availability::Available);
         }
-        let Self::Ready(Some(faces)) = self else { return Some(Availability::Unknown) };
-        Some(if faces.iter().any(|features| tags.iter().any(|tag| !features.contains(tag))) { Availability::Unsupported } else { Availability::Available })
+        let faces = match self {
+            Self::Ready(Some(faces)) => faces,
+            Self::Ready(None) => return Some(Availability::Unknown),
+            Self::Busy => return Some(Availability::Busy),
+        };
+        let supported = |face: &photocraft_text::FaceFeatures| {
+            // Layout's Standard Ligatures switch controls both default ligature tags.
+            if tags.as_slice() == ["liga"] { face.contains("liga") || face.contains("clig") } else { tags.iter().all(|tag| face.contains(tag)) }
+        };
+        Some(if faces.iter().all(|face| supported(face)) { Availability::Available } else { Availability::Unsupported })
     }
 }
 

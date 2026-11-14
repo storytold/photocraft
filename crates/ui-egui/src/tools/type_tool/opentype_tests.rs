@@ -9,6 +9,33 @@ use photocraft_engine::type_extra_cmds::feature_on;
 
 const DLIG: &str = "type.openType.discretionaryLigatures";
 
+/// A face with only contextual ligatures can still respond to Standard Ligatures. A mixed
+/// target containing a second face with neither default ligature tag remains unsupported.
+#[test]
+fn standard_ligatures_checks_both_tags_per_face() {
+    use photocraft_text::{FaceRequest, FontDb, fonts::INTER_REGULAR};
+
+    let mut font = INTER_REGULAR.to_vec();
+    let tables = u16::from_be_bytes(font[4..6].try_into().unwrap()) as usize;
+    let record = (0..tables).map(|index| 12 + 16 * index).find(|&at| &font[at..at + 4] == b"GSUB").unwrap();
+    let gsub = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+    let features = gsub + u16::from_be_bytes(font[gsub + 6..gsub + 8].try_into().unwrap()) as usize;
+    let count = u16::from_be_bytes(font[features..features + 2].try_into().unwrap()) as usize;
+    let dlig = (0..count).map(|index| features + 2 + 6 * index).find(|&at| &font[at..at + 4] == b"dlig").unwrap();
+    font[dlig..dlig + 4].copy_from_slice(b"clig");
+
+    let mut db = FontDb::new();
+    let family = "Contextual Ligatures Fixture";
+    assert_eq!(db.register_font_data_as(font, family), [family]);
+    let request = FaceRequest { family, style: "", postscript: None, weight: 400, italic: false };
+    let known = db.face_features_for_requests([request]).unwrap();
+    assert!(known[0].contains("clig") && !known[0].contains("liga"));
+    let command = "type.openType.standardLigatures";
+    assert_eq!(opentype::TargetFeatures::Ready(Some(known)).availability(command), Some(Availability::Available));
+    let mixed = db.face_features_for_requests([request, FaceRequest { family: "Inter", ..request }]).unwrap();
+    assert_eq!(opentype::TargetFeatures::Ready(Some(mixed)).availability(command), Some(Availability::Unsupported));
+}
+
 /// A deterministic document with two text layers whose GSUB sets differ; system fonts do not
 /// affect Inter/JetBrains Mono's bundled faces. The active layer is also the selected layer.
 fn fixture() -> (PhotocraftApp, [LayerId; 2]) {
@@ -393,8 +420,8 @@ fn native_opentype_click_rechecks_the_current_target() {
     assert!(!style(&app, other, 1).discretionary_ligatures, "the old edit's selected range did not style the new document");
 }
 
-/// A menu opened while a render owns the font engine must return promptly with unknown
-/// capabilities, then refresh the same target after release even when no input arrived.
+/// A native row published before a font lock can still deliver a click. Report the retry,
+/// keep style and history intact, refresh without input, then accept a fresh click.
 #[test]
 fn native_menu_retries_open_type_after_background_font_lock() {
     use crate::menus::native_menu::{self, Backend, Event, MenuBar, NativeMenu};
@@ -405,25 +432,34 @@ fn native_menu_retries_open_type_after_background_font_lock() {
         time::{Duration, Instant},
     };
 
-    struct RecordDlig(Rc<RefCell<Vec<bool>>>);
+    struct RecordDlig {
+        enabled: Rc<RefCell<Vec<bool>>>,
+        clicks: Rc<RefCell<Vec<Event>>>,
+    }
 
     impl Backend for RecordDlig {
         /// Record the actual published availability, including the first busy frame.
         fn sync(&mut self, bar: &MenuBar) {
-            self.0.borrow_mut().push(bar.find(DLIG).unwrap().enabled);
+            self.enabled.borrow_mut().push(bar.find(DLIG).unwrap().enabled);
         }
 
+        /// Deliver each queued native click once, even if the target now refuses it.
         fn drain(&mut self) -> Vec<Event> {
-            Vec::new()
+            std::mem::take(&mut *self.clicks.borrow_mut())
         }
     }
 
-    let (mut app, _) = fixture();
+    let (mut app, ids) = fixture();
     let rendered = Rc::new(RefCell::new(Vec::new()));
-    app.services.native_menu = Some(NativeMenu::new(Box::new(RecordDlig(rendered.clone()))));
+    let clicks = Rc::new(RefCell::new(Vec::new()));
+    app.services.native_menu = Some(NativeMenu::new(Box::new(RecordDlig { enabled: rendered.clone(), clicks: clicks.clone() })));
+    let ctx = egui::Context::default();
+    ctx.run_ui(egui::RawInput::default(), |ui| native_menu::sync(&mut app, ui.ctx())).textures_delta.clear();
+    assert_eq!(*rendered.borrow(), vec![true], "the click originates from an enabled row");
+    let history = app.session.active().unwrap().history.entries().len();
     let (locked, waiting) = mpsc::sync_channel(0);
     let (release, finished) = mpsc::channel();
-    let photocraft_engine::jobs::Started::Job(job) = app
+    let photocraft_engine::jobs::Started::Job(_) = app
         .session
         .start_job(
             "test.holdFontEngine",
@@ -445,10 +481,23 @@ fn native_menu_retries_open_type_after_background_font_lock() {
         panic!("the font engine fixture needs a native worker");
     };
     waiting.recv_timeout(Duration::from_secs(5)).unwrap();
-    let ctx = egui::Context::default();
-    ctx.run_ui(egui::RawInput::default(), |ui| native_menu::sync(&mut app, ui.ctx())).textures_delta.clear();
+    clicks.borrow_mut().push(Event::Click(DLIG.into()));
+    let mut raw = egui::RawInput::default();
+    app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+    ctx.run_ui(raw, |ui| {
+        native_menu::run(&mut app, ui.ctx());
+        native_menu::sync(&mut app, ui.ctx());
+    })
+    .textures_delta
+    .clear();
     let _ = release.send(());
-    assert_eq!(*rendered.borrow(), vec![false], "busy metadata must not wait for or borrow the rendered face");
+    let retry = tl!("Font engine is busy. Try the OpenType command again.");
+    assert_eq!(app.ui.status, retry);
+    assert!(app.ui.status_error);
+    assert!(app.ui.notices.iter().any(|notice| notice.title == retry && notice.error), "the feedback must survive job progress replacing the status line");
+    assert_eq!(app.session.active().unwrap().history.entries().len(), history);
+    assert!(!style(&app, ids[0], 0).discretionary_ligatures);
+    assert_eq!(*rendered.borrow(), vec![true, false], "busy metadata must not wait for or borrow the rendered face");
     assert!(!app.services.native_menu.as_ref().unwrap().has_stable_snapshot(), "a busy menu cannot be cached as stable");
     assert!(app.session.has_jobs(), "keep the same menu hash while the worker releases the engine");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -456,8 +505,22 @@ fn native_menu_retries_open_type_after_background_font_lock() {
         ctx.run_ui(egui::RawInput::default(), |ui| native_menu::sync(&mut app, ui.ctx())).textures_delta.clear();
         std::thread::sleep(Duration::from_millis(5));
     }
-    app.session.wait_job(job).unwrap();
     assert_eq!(rendered.borrow().last(), Some(&true), "a menu published while busy must refresh without input");
+    while app.session.has_jobs() && Instant::now() < deadline {
+        ctx.run_ui(egui::RawInput::default(), |ui| crate::jobs_ui::tick(&mut app, ui.ctx())).textures_delta.clear();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!app.session.has_jobs());
+    assert_eq!(app.ui.status, "Hold font engine", "completion replaced the status line");
+    assert!(app.ui.notices.iter().any(|notice| notice.title == retry), "completion must not remove the retry notice");
+    assert!(!style(&app, ids[0], 0).discretionary_ligatures, "refresh must not replay the refused click");
+    clicks.borrow_mut().push(Event::Click(DLIG.into()));
+    let mut raw = egui::RawInput::default();
+    app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+    ctx.run_ui(raw, |ui| native_menu::run(&mut app, ui.ctx())).textures_delta.clear();
+    assert!(style(&app, ids[0], 0).discretionary_ligatures);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), history + 1);
+    assert!(!app.ui.status_error);
 }
 
 /// Capability inspection must not advance the engine's active-layer marker or create history.

@@ -264,11 +264,18 @@ fn fixed(v: f32) -> [u8; 4] {
 /// "Heavy" (900, 100) names itself `InstanceTest-Black`. Outlines do not vary, but an `HVAR` table
 /// (see [`width_hvar`]) narrows every advance on `wdth`, so layout width shows which instance drew.
 pub(super) fn instance_font(source: &[u8]) -> Vec<u8> {
+    variable_sibling(source, "InstanceTest", "InstanceTest-Regular")
+}
+
+/// Give variable siblings distinct PostScript identities while keeping their family and
+/// instance subfamily names equal, so suffix collisions are reproducible in one catalog.
+pub(super) fn variable_sibling(source: &[u8], prefix: &str, postscript: &str) -> Vec<u8> {
     let names = [
         (1u16, "Instance Test"),
         (2, "Regular"),
-        (6, "InstanceTest-Regular"),
+        (6, postscript),
         (16, "Instance Test"),
+        (25, prefix),
         (256, "Weight"),
         (257, "Width"),
         (258, "Light Condensed"),

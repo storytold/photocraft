@@ -76,6 +76,9 @@ pub const LAO_FAMILIES: &[&str] = &["Lao Sangam MN", "Lao MN", "Lao UI", "Noto S
 /// Myanmar/Burmese-capable families: macOS (Myanmar Sangam MN, Myanmar MN), Windows (Myanmar Text)
 /// and Linux (Noto).
 pub const MYANMAR_FAMILIES: &[&str] = &["Myanmar Sangam MN", "Myanmar MN", "Myanmar Text", "Noto Sans Myanmar"];
+/// Georgian-capable families: craft-fonts and Linux (Noto), Windows (Sylfaen), macOS (".SF Georgian",
+/// a hidden system face). Georgian in a font without Mkhedruli glyphs falls back to these.
+pub const GEORGIAN_FAMILIES: &[&str] = &["Noto Sans Georgian", "Noto Serif Georgian", "Sylfaen", ".SF Georgian"];
 /// Indic-script families for document text. Windows has `Nirmala UI` for all nine scripts (from
 /// Windows 8); macOS has the Kohinoor and Sangam MN families; Linux has Noto Sans. Indic text in a
 /// font without these glyphs had no candidate to fall back to and drew .notdef boxes (#218).
@@ -119,6 +122,7 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
     v.extend_from_slice(KHMER_FAMILIES);
     v.extend_from_slice(LAO_FAMILIES);
     v.extend_from_slice(MYANMAR_FAMILIES);
+    v.extend_from_slice(GEORGIAN_FAMILIES);
     for fams in INDIC_FAMILIES {
         for f in *fams {
             // Nirmala UI covers all nine scripts and is listed by each; probe it once.
@@ -866,13 +870,14 @@ impl FontDb {
     /// own is named as Adobe Technical Note #5902 derives it: the variations prefix (name 25, else
     /// the family name) and the subfamily name without spaces, joined by a hyphen. Names compare
     /// without punctuation or case, and the subfamily alone matches the part of `ps` after the
-    /// first hyphen, since the prefix a document stored can differ from the font's. The result
-    /// distinguishes a full name match from this shaping compatibility fallback.
+    /// first hyphen, since the prefix a document stored can differ from the font's. Prefer a
+    /// full match anywhere in the family to the first suffix match, which only shaping accepts.
     fn named_instance(&mut self, family: &str, faces: &[FaceInfo], ps: &str) -> Option<NamedInstance> {
         let key = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
         let wanted = key(ps);
         let wanted_style = ps.split_once('-').map(|(_, s)| key(s));
         let info = self.fcx.collection.family_by_name(family)?;
+        let mut fallback = None;
         for (index, face) in info.fonts().iter().enumerate() {
             if faces.get(index).is_none_or(|f| f.axes.is_empty()) {
                 continue;
@@ -891,14 +896,18 @@ impl FontDb {
                     Some(own) => key(own) == wanted,
                     None => key(&prefix) + &key(&subfamily) == wanted,
                 };
-                let style_only = own.is_none() && !subfamily.is_empty() && wanted_style.as_deref() == Some(key(&subfamily).as_str());
+                let style_only = fallback.is_none() && own.is_none() && !subfamily.is_empty() && wanted_style.as_deref() == Some(key(&subfamily).as_str());
                 if exact || style_only {
                     let axes = font.axes().iter().map(|a| a.tag().to_string()).zip(instance.user_coords()).collect();
-                    return Some(NamedInstance { face_index: index, axes, exact });
+                    let instance = NamedInstance { face_index: index, axes, exact };
+                    if exact {
+                        return Some(instance);
+                    }
+                    fallback = Some(instance);
                 }
             }
         }
-        None
+        fallback
     }
 
     /// Finds a face by PostScript name (as stored in PSD files): exact match by reading the

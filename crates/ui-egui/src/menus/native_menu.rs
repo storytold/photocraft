@@ -744,8 +744,9 @@ impl NativeMenu {
     }
 }
 
-/// Run queued native clicks against current modal state and OpenType capabilities. The
-/// published menu can still reflect an earlier selection when a native click arrives.
+/// Check current modal state and OpenType capabilities before dispatching queued native clicks.
+/// If the font engine became busy after the menu was published, post a retry notice so a
+/// background job finishing in the same frame cannot hide the feedback.
 pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_mut() else { return };
     let clicks = std::mem::take(&mut menu.clicks);
@@ -754,7 +755,15 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             continue;
         }
-        if !crate::menus::modal_allows(app, &id) || crate::type_tool::opentype_availability(app, &id).is_some_and(|availability| !availability.enabled()) {
+        if !crate::menus::modal_allows(app, &id) {
+            continue;
+        }
+        if let Some(availability) = crate::type_tool::opentype_availability(app, &id)
+            && !availability.enabled()
+        {
+            if availability == crate::type_tool::OpenTypeAvailability::Busy {
+                crate::notices::error(app, tl!("Font engine is busy. Try the OpenType command again.").into());
+            }
             continue;
         }
         if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
@@ -766,7 +775,8 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Bring the native menu up to date when anything it shows may have changed: a command ran, the
 /// document or selection changed, or the user clicked or pressed a key. Building the rows walks
-/// every command's enabled state, so it doesn't run on frames that only animate or scroll.
+/// every command's enabled state, so stable rows are reused. Busy font metadata schedules
+/// another check even without input.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(menu) = app.services.native_menu.as_ref() else { return };
     let state = state_hash(app, had_input(ctx).then_some(app.frame));
@@ -778,8 +788,13 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if retry {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
+    // AppKit swallows a key equivalent whose item is disabled: no action, no key-down for the
+    // window (#8965). While a Keyboard Shortcuts field waits for keys, every item with a key
+    // stays enabled, so its key comes back as a key press for the field to record (⌘Z, ⌘⌥Z,
+    // ⌘H…); a click on one is still dropped under the dialog ([`run`]).
+    let capturing = crate::prefs_ui::capturing_shortcut(app);
     for it in &mut items {
-        it.enabled &= crate::menus::modal_allows(app, &it.id);
+        it.enabled = if capturing && it.shortcut.is_some() { true } else { it.enabled && crate::menus::modal_allows(app, &it.id) };
     }
     let layout = app_layout(app, &items, lang, &app.session.prefs().interface.language);
     let Some(menu) = app.services.native_menu.as_mut() else { return };
@@ -825,6 +840,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     ui.text_edit.as_ref().map(|edit| (edit.document, edit.layer, edit.anchor, edit.caret)).hash(&mut h);
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
     (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
+    crate::prefs_ui::capturing_shortcut(app).hash(&mut h);
     // Edit / Clear Selected Guides are enabled only while a guide is selected.
     crate::guide_select::selected(app).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);

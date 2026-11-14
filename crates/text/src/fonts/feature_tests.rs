@@ -341,6 +341,27 @@ fn variable_instance_suffix_alone_does_not_verify_a_face() {
     assert!(db.face_features(&style).unwrap().contains("dlig"));
 }
 
+/// An earlier sibling with the same instance-style suffix cannot shadow a later exact
+/// PostScript match. Shaping and capability inspection must choose the same source face.
+#[test]
+fn variable_instance_exact_match_precedes_an_earlier_sibling_suffix() {
+    use super::font_names_tests::variable_sibling;
+    let mut db = FontDb::new();
+    db.register_font_data(variable_sibling(&INTER_REGULAR, "First", "First-Regular"));
+    db.register_font_data(variable_sibling(&JETBRAINS_MONO_REGULAR, "Second", "Second-Regular"));
+    let faces = db.faces("Instance Test");
+    assert_eq!(faces.iter().map(|face| face.postscript_name.as_deref()).collect::<Vec<_>>(), [Some("First-Regular"), Some("Second-Regular")]);
+
+    let mut style = CharStyle { font_family: "Instance Test".into(), postscript_name: Some("Second-LightCondensed".into()), ..Default::default() };
+    assert!(!db.face_features(&style).unwrap().contains("dlig"), "the exact Second instance has Mono's features");
+    db.select_named_face(&mut style);
+    assert_eq!(db.faces(&style.font_family)[0].postscript_name.as_deref(), Some("Second-Regular"));
+    let mut fallback = CharStyle { font_family: "Instance Test".into(), postscript_name: Some("Unrelated-LightCondensed".into()), ..Default::default() };
+    assert!(db.face_features(&fallback).is_none(), "the suffix cannot identify a font for capability inspection");
+    db.select_named_face(&mut fallback);
+    assert_eq!(db.faces(&fallback.font_family)[0].postscript_name.as_deref(), Some("First-Regular"), "shaping still accepts the first suffix fallback");
+}
+
 /// Borrowed metadata admission consumes only a bounded prefix of an oversized iterator.
 /// A duplicate-font stream retains one result while ignoring irrelevant feature payloads.
 #[test]
