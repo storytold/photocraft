@@ -204,7 +204,7 @@ fn ok_runs_the_command_with_the_same_params() {
         set(&mut h, "input", input.clone());
         type_into(&mut h, "Output", &output);
         pick(&mut h, "File Type", "PNG");
-        pick(&mut h, "Profile", "None");
+        pick(&mut h, "Profile", "Generic");
         pick(&mut h, "Edge", "White Color");
         for label in ["Geometric Distortion", "Chromatic Aberration", "Vignette", "Auto Scale Image"] {
             h.get_by_role_and_label(Role::CheckBox, label).click();
@@ -212,7 +212,7 @@ fn ok_runs_the_command_with_the_same_params() {
         }
         assert_eq!(
             crate::filter_dialog::params_of(fields(&h)),
-            json!({"input": input, "output": output, "format": "png", "profile": "none", "correctDistortion": false, "correctVignette": true, "correctCA": true, "autoScale": false, "edge": "white"})
+            json!({"input": input, "output": output, "format": "png", "profile": "generic", "correctDistortion": false, "correctVignette": true, "correctCA": true, "autoScale": false, "edge": "white"})
         );
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);

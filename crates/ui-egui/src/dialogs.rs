@@ -498,7 +498,8 @@ fn button_row(
         let can_ok = crate::crop_presets::can_confirm(app, fields)
             && crate::stack_dialog::can_confirm(fields)
             && merge_channels_ui::can_confirm(fields)
-            && (!crate::actions::library::owns(fields) || crate::actions::library::can_confirm(app, d.id));
+            && (!crate::actions::library::owns(fields) || crate::actions::library::can_confirm(app, d.id))
+            && lens_batch_ui::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -1226,6 +1227,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
+    lens_batch_ui::preflight(&app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {

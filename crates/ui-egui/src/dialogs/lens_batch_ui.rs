@@ -30,6 +30,31 @@ pub(crate) fn owns(f: &Map<String, Value>) -> bool {
     f.contains_key("__form") && f.get("__command").and_then(Value::as_str) == Some(COMMAND)
 }
 
+/// Why OK is greyed, as in the reference application (#13986): no source file, or no profile
+/// (Match Best Profile off and no profile file: today `profile` `none`, or what the engine reads
+/// as none). The corrections do not count.
+fn missing(f: &Map<String, Value>) -> Option<&'static str> {
+    if !super::lens_batch_sources::has_sources(f) {
+        Some("Lens Correction needs at least one source file")
+    } else if f.get("profile").is_some_and(|p| matches!(p.as_str().unwrap_or("none"), "none" | "")) {
+        Some("Lens Correction needs a lens profile: auto or generic")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn can_confirm(f: &Map<String, Value>) -> bool {
+    !owns(f) || missing(f).is_none()
+}
+
+/// `ui.dialog.confirm` refuses what the greyed OK does.
+pub(super) fn preflight(ui: &crate::state::UiState, id: u64) -> Result<(), String> {
+    match ui.dialogs.iter().find(|d| d.id == id).filter(|d| owns(&d.fields)).and_then(|d| missing(&d.fields)) {
+        Some(why) => Err(why.into()),
+        None => Ok(()),
+    }
+}
+
 /// The dialog body: one block per group. A missing or mistyped field is set to its [`fallback`]
 /// first, so the dialog shows what OK sends.
 pub(crate) fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
