@@ -191,6 +191,20 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.end_row();
                 continue;
             }
+            // A choice named in `__radios` is a column of radio buttons, one per option.
+            let radios = f.get("__radios").and_then(Value::as_array).is_some_and(|r| r.iter().any(|n| n.as_str() == Some(k.as_str())));
+            if radios && let (Some(cur), Some(opts)) = (v.as_str(), choices.get(&k).and_then(Value::as_array)) {
+                let mut s = cur.to_owned();
+                ui.label("");
+                ui.vertical(|ui| {
+                    for o in opts.iter().filter_map(Value::as_str) {
+                        ui.radio_value(&mut s, o.to_owned(), label(o));
+                    }
+                });
+                f.insert(k, json!(s));
+                ui.end_row();
+                continue;
+            }
             let new = match &v {
                 Value::Array(_) | Value::Object(_) | Value::Null => continue,
                 Value::Bool(b) => {
@@ -507,9 +521,13 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
                     "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
             } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
+                // Include Overlapping Areas / Artboard Content Only, right below the prefix.
+                json!({"dir": dir, "prefix": prefix, "content": "overlapping", "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10,
+                    "__radios": ["content"], "__labels": {"overlapping": tl!("Include Overlapping Areas"), "artboard": tl!("Artboard Content Only")},
+                    "__order": ["dir", "prefix", "content", "format", "quality"]})
             };
-            dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
+            let content = if id == "file.export.artboardsToFiles" { json!(["overlapping", "artboard"]) } else { Value::Null };
+            dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"], "content": content}))
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
