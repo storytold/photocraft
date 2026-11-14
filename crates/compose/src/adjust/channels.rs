@@ -240,6 +240,9 @@ pub(super) fn apply_lab(adj: &Adjustment, buf: &mut Buffer, depth: Option<Sample
         }
         Adjustment::BrightnessContrast { brightness, contrast, legacy } => {
             let legacy_curve = legacy_brightness_contrast(*brightness, *contrast);
+            if !*legacy && *brightness == 0.0 && *contrast == 0.0 {
+                return;
+            }
             let modern = (!*legacy).then(|| modern_lut(*brightness, *contrast));
             let curve = |v: f32| match &modern {
                 Some(table) => lut(table, v),

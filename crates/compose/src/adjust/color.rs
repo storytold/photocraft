@@ -65,6 +65,78 @@ pub fn hue_saturation_in(c: [f32; 3], hue: f32, s: f32, l: f32, colorize: bool, 
     hsl_to_rgb(hh, ss, ll)
 }
 
+/// Evaluates one RGB/8 pixel using whole channel and hue levels for the neutral-range master
+/// adjustment at hue -180..=0 degrees. `factor` is chroma
+/// gain in 1/256 units, `shift` is a 1/256-sector hue offset, and `lightness_levels` contains
+/// the rounded channel levels after Lightness. The 256-step sectors have 255 source positions.
+/// Measured against the clipped Photoshop 26.11.6 RGB/8 source/PSD oracle (`image-1-hs`).
+pub(super) fn hue_saturation_rgb8(c: [f32; 3], factor: i32, shift: i32, rotated: bool, lightness: f32, lightness_levels: &[i32; 256]) -> [f32; 3] {
+    let rgb = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as i32);
+    let rgb = rgb.map(|v| lightness_levels.get(v as usize).copied().unwrap_or_else(|| rgb8_lightness(v as f32, lightness).round() as i32));
+    let (r, g, b) = (rgb[0], rgb[1], rgb[2]);
+    let (minimum, maximum) = (r.min(g).min(b), r.max(g).max(b));
+    let old_chroma = maximum - minimum;
+    if old_chroma == 0 {
+        return [minimum as f32 / 255.0; 3];
+    }
+    let sum = minimum + maximum;
+    let chroma = ((old_chroma * factor + 127) / 256).min(sum.min(510 - sum));
+    let low = (sum - chroma) / 2;
+    let high = (sum + chroma) / 2;
+
+    // At a shared maximum, choose the next primary around the hue wheel. This puts yellow,
+    // cyan and magenta on the same descending sector edge as Photoshop's RGB/8 oracle.
+    let (base, numerator) = if r > g && r >= b {
+        (0, g - b)
+    } else if g > b && g >= r {
+        (512, b - r)
+    } else {
+        (1024, r - g)
+    };
+    let ratio = rgb8_hue_ratio(numerator, old_chroma);
+    // The rotated primary identifies the sector before the source hue's signed offset. Only a
+    // source hue that crosses that sector boundary needs the extra endpoint step.
+    let primary_sector = (base + shift).rem_euclid(1536) / 256;
+    let initial = (base + ratio + shift).rem_euclid(1536);
+    let initial_sector = initial / 256;
+    let phase = if rotated && numerator > 0 && initial_sector != primary_sector && initial_sector % 2 == 0 { 2 } else { 0 };
+    let position = (initial + phase).rem_euclid(1536);
+    let sector = position / 256;
+    let offset = position % 256;
+    let rising = low + (chroma * offset + 127) / 256;
+    // Crossing into the preceding descending sector uses its full endpoint. A source hue that
+    // stays in the rotated primary's sector uses the usual 254-step endpoint.
+    let falling_span = if !rotated || (numerator < 0 && initial_sector != primary_sector) { 256 } else { 254 };
+    let falling = low + (chroma * (falling_span - offset) + 127).div_euclid(256);
+    let out = match sector {
+        0 => [high, rising, low],
+        1 => [falling, high, low],
+        2 => [low, high, rising],
+        3 => [low, falling, high],
+        4 => [rising, low, high],
+        _ => [high, low, falling],
+    };
+    out.map(|v| v.clamp(0, 255) as f32 / 255.0)
+}
+
+/// Maps each 0..=255 RGB/8 channel level through signed Lightness once per adjustment.
+/// Each entry preserves the f32 operation order and rounding of the channel transform.
+pub(super) fn rgb8_lightness_levels(lightness: f32) -> [i32; 256] {
+    std::array::from_fn(|v| rgb8_lightness(v as f32, lightness).round() as i32)
+}
+
+fn rgb8_lightness(value: f32, lightness: f32) -> f32 {
+    if lightness >= 0.0 { value + (255.0 - value) * lightness } else { value * (1.0 + lightness) }
+}
+
+/// Rounded position within a 255-step source hue sector. The numerator is at most 65,152,
+/// exactly representable in f32; a nonintegral quotient is at least 1/255 from either integer.
+/// Direct division and floor therefore produce the same quotient as integer division for RGB/8.
+pub(super) fn rgb8_hue_ratio(numerator: i32, chroma: i32) -> i32 {
+    let rounded_numerator = numerator.abs() * 255 + chroma / 2;
+    numerator.signum() * ((rounded_numerator as f32 / chroma as f32).floor() as i32)
+}
+
 /// The factor 32-bit Hue/Saturation scales chroma by for saturation `s` (-1..1), as Photoshop
 /// computes it (measured at every whole percent from -100 to +100 on a 32-bit document): lowering
 /// cuts `s` to 1/256 steps, raising cuts it to 254 steps out of 255, takes 255 / (255 - steps) to
