@@ -7,6 +7,8 @@
 //! `layer.translate`) moves the board with its contents. The canvas grows to fit every board,
 //! in every direction, like Photoshop's auto-expanding artboard canvas ([`fit_canvas`]).
 
+use std::collections::HashSet;
+
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Artboard, ArtboardBackground, Document, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
@@ -744,14 +746,35 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded),
+/// all in one file at `path`, or with `"mode": "perArtboard"` one single-page file per board
+/// named by [`pdf_file_stems`]. Every page is encoded before any file is written.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
-    let path = str_param(p, "path", cmd)?.to_string();
+    let per_artboard = match p.get("mode") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(m)) if m == "multiPage" => false,
+        Some(Value::String(m)) if m == "perArtboard" => true,
+        Some(other) => return Err(bad(cmd, format!("\"mode\" must be \"multiPage\" or \"perArtboard\", not {other}"))),
+    };
+    let path = if per_artboard { p.get("path").and_then(Value::as_str).unwrap_or_default().to_string() } else { str_param(p, "path", cmd)?.to_string() };
+    // Document Per Artboard: the folder and prefix default to those of `path` (the dialog's
+    // `<folder>/<document name>.pdf`), so `<folder>/<document name><artboard name>.pdf`.
+    let dir = match p.get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None if per_artboard && path.is_empty() => return Err(bad(cmd, "missing \"dir\" or \"path\"")),
+        None => path.rfind(['/', '\\']).map_or(String::new(), |i| path[..i].to_string()),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
+    let prefix = match p.get("prefix").and_then(Value::as_str) {
+        Some(prefix) => prefix.to_string(),
+        None if path.is_empty() => stem(&doc.name),
+        None => stem(&path),
+    };
     let quality = f64_param(p, "quality").or(Some(10.0));
     let mut pages = Vec::new();
+    let mut names = Vec::new();
     for one in chosen_documents(&doc, p)? {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
@@ -762,12 +785,45 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
         let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+        names.push(one.name);
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
-    write_file(&path, &raster_pdf(&pages))?;
-    Ok(json!({"path": path, "pages": pages.len()}))
+    if !per_artboard {
+        write_file(&path, &raster_pdf(&pages))?;
+        return Ok(json!({"path": path, "pages": pages.len(), "files": [path]}));
+    }
+    let mut files = Vec::new();
+    for (page, name) in pages.iter().zip(pdf_file_stems(&prefix, &names)) {
+        let file = join(&dir, &format!("{name}.pdf"));
+        write_file(&file, &raster_pdf(std::slice::from_ref(page)))?;
+        files.push(file);
+    }
+    Ok(json!({"pages": pages.len(), "files": files}))
+}
+
+/// Document Per Artboard's file names: `<prefix><artboard name>`, spaces kept and no separator
+/// added, with characters a file name can't hold as `_`. A name an earlier board already took,
+/// ignoring letter case, gets the first `-2`, `-3`… no other board's name takes, so every board
+/// keeps a file of its own on case-insensitive file systems; the first board of a name keeps it.
+fn pdf_file_stems(prefix: &str, names: &[String]) -> Vec<String> {
+    // Upper case of lower case also folds `ß`/`ẞ` and `σ`/`ς`/`Σ` together, as NTFS does.
+    let key = |stem: &str| stem.to_lowercase().to_uppercase();
+    let plain: Vec<String> = names.iter().map(|name| sanitize(&format!("{prefix}{name}"))).collect();
+    let mut taken: HashSet<String> = plain.iter().map(|stem| key(stem)).collect();
+    let mut seen = HashSet::new();
+    plain
+        .into_iter()
+        .map(|stem| {
+            if seen.insert(key(&stem)) {
+                return stem;
+            }
+            // At most 2 x names keys are taken, so one of these many suffixes is always free.
+            let last = u64::try_from(names.len()).unwrap_or(u64::MAX).saturating_mul(2).saturating_add(2);
+            (2..=last).map(|n| format!("{stem}-{n}")).find(|candidate| taken.insert(key(candidate))).unwrap_or(stem)
+        })
+        .collect()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -837,7 +893,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
+            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"artboards":[id]?,"quality":0..12=10} → {path (multi-page), pages, files} (one raster page per board)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -847,6 +903,9 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_document_per_artboard_tests.rs"]
+mod pdf_document_per_artboard_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
