@@ -149,7 +149,10 @@ pub(crate) fn gaussian(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f3
     match crate::separable::Separable::of(&FilterParams::GaussianBlur { radius }) {
         Some(crate::separable::Separable::Boxes(boxes)) => box_passes(src, out, ctx.alpha, &boxes),
         Some(crate::separable::Separable::Kernel(k)) => conv_sep(src, out, &k, &k, ctx.alpha),
-        None => src.crop(out),
+        // Not what a Gaussian describes; the source unblurred rather than a panic.
+        Some(crate::separable::Separable::Extreme { .. } | crate::separable::Separable::Disc { .. } | crate::separable::Separable::Convolve { .. }) | None => {
+            src.crop(out)
+        }
     }
 }
 
