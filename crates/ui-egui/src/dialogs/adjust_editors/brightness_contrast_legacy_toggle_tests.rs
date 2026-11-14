@@ -1,5 +1,6 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use photocraft_doc::{Adjustment, LayerContent};
 use serde_json::json;
 
 use super::{EditorCx, editor};
@@ -11,6 +12,7 @@ fn legacy_toggle_resets_both_values_in_the_dialog() {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+        session.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
         PhotocraftApp::new(session, crate::Services::default())
     });
     let ctx = h.ctx.clone();
@@ -30,6 +32,9 @@ fn legacy_toggle_resets_both_values_in_the_dialog() {
         assert_eq!(fields["legacy"], !was_legacy);
         assert_eq!(fields["brightness"].as_f64(), Some(0.0));
         assert_eq!(fields["contrast"].as_f64(), Some(0.0));
+        let (preview, _) = crate::adjust_preview::display_doc(h.state_mut(), 0).expect("live Brightness/Contrast preview");
+        let adjustment = &preview.layer(crate::adjust_preview::PREVIEW_LAYER).unwrap().content;
+        assert_eq!(adjustment, &LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 0.0, contrast: 0.0, legacy: !was_legacy }));
     }
 }
 
