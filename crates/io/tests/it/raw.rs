@@ -239,7 +239,7 @@ fn unsupported_raw_falls_back_to_the_embedded_preview() {
 }
 
 /// A DNG 1.7 laid out as converters write one with JPEG XL raw data: an 8×6 JPEG thumbnail in
-/// IFD0, raw data this reader refuses (here floating-point LinearRaw), and a 40×30 preview
+/// IFD0, raw data this reader refuses (here 64-bit floating-point LinearRaw), and a 40×30 preview
 /// compressed with JPEG XL, stored as the raw is (IFD0 Orientation 6).
 fn dng_with_jxl_preview() -> Vec<u8> {
     use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions};
@@ -250,18 +250,18 @@ fn dng_with_jxl_preview() -> Vec<u8> {
     let mut preview = Vec::new();
     zune_jpegxl::JxlSimpleEncoder::new(&rgb, EncoderOptions::new(w, h, ColorSpace::RGB, BitDepth::Eight)).encode(&mut preview).unwrap();
     let mut t = TiffBuilder::default();
-    let raw_strip = t.blob(vec![0; 4 * 4 * 3 * 2]);
+    let raw_strip = t.blob(vec![0; 4 * 4 * 3 * 8]);
     let raw = t.ifd(vec![
         (254, Val::Long(vec![0])),
         (256, Val::Long(vec![4])),
         (257, Val::Long(vec![4])),
-        (258, Val::Short(vec![16, 16, 16])),
+        (258, Val::Short(vec![64, 64, 64])),
         (259, Val::Short(vec![1])),
         (262, Val::Short(vec![34892])),
         (273, Val::Blobs(vec![raw_strip])),
         (277, Val::Short(vec![3])),
         (278, Val::Long(vec![4])),
-        (279, Val::Long(vec![4 * 4 * 3 * 2])),
+        (279, Val::Long(vec![4 * 4 * 3 * 8])),
         (339, Val::Short(vec![3, 3, 3])),
     ]);
     let preview_len = preview.len() as u32;
