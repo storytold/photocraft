@@ -544,9 +544,9 @@ pub const COUNT_MENU: &[Row] = &[
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
-/// The selection menu as measured in the reference application with the Red Eye tool (#12577) and
-/// the Object Selection tool (#12866): no Distort or Perspective, and Delete and Fill Selection
-/// after the fills.
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577), the
+/// Object Selection tool (#12866) and the Quick Selection tool (#12935): no Distort or
+/// Perspective, and Delete and Fill Selection after the fills.
 pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
     None,
     Some(("Fill…", "edit.fill")),
@@ -853,7 +853,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         SAMPLER_MENU
     } else if menu.tool == Tool::Count {
         COUNT_MENU
-    } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
+    } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection | Tool::QuickSelection) {
         if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
     } else if menu.tool == Tool::Eyedropper {
         EYEDROPPER_MENU
@@ -1845,3 +1845,6 @@ mod convert_point_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod quick_selection_menu_tests;
