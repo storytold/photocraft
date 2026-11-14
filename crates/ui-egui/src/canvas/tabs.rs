@@ -846,6 +846,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             let (shown, rect) = document_window_canvas(app, ui, &w, view.clone(), focused);
             view = shown;
+            // The fork's cross-document transfer finishes its gesture per document window, right
+            // after its canvas drew (it used to run inside this panel before upstream's refactor).
+            crate::layer_transfer::finish(app, ui.ctx());
             // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
             crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
         });
@@ -857,6 +860,12 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             win.focused = focused;
             if close {
                 win.open = false;
+                if app.move_viewport == Some(vid) {
+                    app.clear_move_blocked();
+                    if app.layer_box.as_ref().is_some_and(|b| b.grabbed_layer.is_some()) {
+                        app.layer_box = None;
+                    }
+                }
             }
         }
     }

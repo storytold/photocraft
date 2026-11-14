@@ -87,22 +87,36 @@ fn top_group(doc: &Document, id: LayerId) -> LayerId {
 /// The topmost selectable layer at (x, y), or its outermost group if `group` is set.
 /// Type layers hit across their text bounds. Effective Lock All is skipped. Position-locked layers remain selectable.
 pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
-    pick_target(doc, x, y, group, false)
+    pick_target(doc, x, y, group, false, false)
 }
 
 /// The Move tool's Auto-Select target, matching `layer.pickAt` with `moveAutoSelect` enabled.
 /// Both effective Position and All locks are skipped before resolving the group.
 pub fn move_auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
-    pick_target(doc, x, y, group, true)
+    pick_target(doc, x, y, group, true, false)
 }
 
 /// Choose the topmost hit eligible for selection before resolving its group. An effective Lock
 /// All excludes a layer from selection here. Move Auto-Select also skips effective Position locks.
-fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool) -> Option<LayerId> {
+/// `include_locked` names a layer with an effective Lock All as well, in either Auto-Select mode,
+/// so a probe can report it as a transfer candidate; such a layer is never selected. A layer with
+/// an effective Position lock is named the same way: this probe skips those layers, so the group
+/// around one is not the target either.
+fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool, include_locked: bool) -> Option<LayerId> {
     let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
         let locks = doc.effective_locks(*id);
-        !locks.all && (!move_auto_select || !locks.position)
+        let all_locked = locks.all;
+        (include_locked || !all_locked) && (all_locked || !move_auto_select || !locks.position)
     })?;
+    // With Move Target Group a layer with an effective Lock All keeps its own identity: it is what
+    // a cross-document drag transfers, and resolving its group first would hide the lock from the
+    // caller's transfer check (the group around it is not locked). A Position lock is the same
+    // case: the transfer probe skips those layers, so the group around one is not the target
+    // either, and the caller's check on the returned layer is what reports the lock.
+    let locks = doc.effective_locks(hit);
+    if include_locked && (locks.all || locks.position) {
+        return Some(hit);
+    }
     Some(if group { top_group(doc, hit) } else { hit })
 }
 
@@ -120,8 +134,10 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let group = p.get("target").and_then(Value::as_str) == Some("group");
     let move_auto_select = p.get("moveAutoSelect").and_then(Value::as_bool).unwrap_or(false);
-    let Some(target) = pick_target(&doc, x, y, group, move_auto_select) else { return Ok(json!({ "layer": null })) };
-    if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
+    let include_locked = p.get("includeLocked").and_then(Value::as_bool).unwrap_or(false);
+    let Some(target) = pick_target(&doc, x, y, group, move_auto_select, include_locked) else { return Ok(json!({ "layer": null })) };
+    // A layer with an effective Lock All is only named, never selected.
+    if p.get("select").and_then(Value::as_bool).unwrap_or(true) && !doc.effective_locks(target).all {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
         // Like Photoshop, a plain click on one of several selected layers keeps them all
         // selected, so the drag that follows moves the whole selection.
@@ -221,7 +237,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Auto-Select Layer",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","moveAutoSelect":bool=false (also skip Position locks),"list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
+            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","moveAutoSelect":bool=false (also skip Position locks),"includeLocked":bool=false (also name a layer with an effective Lock All, without selecting it),"list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
             enabled: has_doc,
             journal: false,
             run: pick,
@@ -255,6 +271,32 @@ mod tests {
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
     }
 
+    /// A probe can name a layer with an effective Lock All (a transfer candidate) without selecting
+    /// it; without that, the hit falls through to the layer underneath.
+    #[test]
+    fn a_probe_can_name_an_all_locked_layer_without_selecting_it() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "locked"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let locked = s.active().unwrap().active_layer.unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        s.execute("layer.select", json!({"layer": locked.0})).unwrap();
+        s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+        s.execute("select.deselectLayers", json!({})).unwrap();
+
+        // Without the flag the All-locked layer is skipped and the layer underneath answers.
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
+        // With it the locked layer is named, in either Auto-Select mode, and nothing is selected.
+        for move_auto_select in [false, true] {
+            let r = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false, "includeLocked": true, "moveAutoSelect": move_auto_select})).unwrap();
+            assert_eq!(r["layer"], locked.0, "moveAutoSelect={move_auto_select}");
+        }
+        assert!(s.active().unwrap().selected_layers().is_empty(), "the probe selects nothing");
+    }
+
     /// Two filled squares: A at (0..10), B at (20..30), both in their own layers.
     fn two_squares() -> (Session, LayerId, LayerId) {
         let mut s = Session::new();
@@ -285,6 +327,26 @@ mod tests {
         s.execute("layer.setProps", json!({"layer": outer, "visible": false})).unwrap();
         let bg = s.active().unwrap().doc.layers[0].id;
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
+    }
+
+    /// Move Target Group keeps a locked child's identity: the group around it is not locked, so
+    /// resolving the group first would let a cross-document drag transfer the layer beneath.
+    #[test]
+    fn a_group_target_keeps_the_identity_of_an_all_locked_child() {
+        let (mut s, a, _) = two_squares();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        let group = s.execute("layer.new.groupFromLayers", json!({"name": "Group"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+        s.execute("select.deselectLayers", json!({})).unwrap();
+
+        // The probe names the locked child, not the unlocked group that contains it.
+        let r = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false, "target": "group", "includeLocked": true})).unwrap();
+        assert_eq!(r["layer"], a.0, "the locked child keeps its identity");
+        // Without the flag the lock is honoured: neither the child nor its unlocked group.
+        let plain = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false, "target": "group"})).unwrap();
+        assert_ne!(plain["layer"], a.0);
+        assert_ne!(plain["layer"], group, "an unlocked group over a locked child is not the hit");
     }
 
     #[test]

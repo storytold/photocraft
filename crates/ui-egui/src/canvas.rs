@@ -2363,6 +2363,7 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    app.current_viewport = Some(ctx.viewport_id());
     // The Frame tool starts transforms from pointer events, which carry no context; the options
     // bar that also records it can be hidden.
     if primary {

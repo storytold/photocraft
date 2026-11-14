@@ -12,10 +12,12 @@ use crate::canvas::{ToolEvent, ViewXform};
 /// The marquee being dragged, in document pixels.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LayerBox {
-    start: [f64; 2],
-    end: [f64; 2],
+    pub(crate) start: [f64; 2],
+    pub(crate) end: [f64; 2],
     /// ⇧ at the press: add to the layer selection.
     add: bool,
+    /// A locked or background layer that was hit under the pointer, kept for a cross-document transfer.
+    pub(crate) grabbed_layer: Option<photocraft_doc::LayerId>,
     /// The actual Move tool skips Position locks. Temporary Move keeps ordinary rectangle picks.
     move_auto_select: bool,
     /// An empty plain marquee from a locked-only hit clears the selection.
@@ -27,7 +29,24 @@ pub(crate) struct LayerBox {
 /// locked-only press so an empty replacement marquee clears the selection.
 /// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
 pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
-    app.layer_box = Some(LayerBox { start: p, end: p, add, move_auto_select, clear_on_empty });
+    app.layer_box = Some(LayerBox { start: p, end: p, add, grabbed_layer: None, move_auto_select, clear_on_empty });
+    app.prefs_rt.snap = None;
+    app.prefs_rt.snap_lines.clear();
+    app.move_mods = Default::default();
+}
+
+/// Starts a Move marquee drag at p, optionally recording a locked or background layer that was hit
+/// under the pointer for potential cross-document transfer.
+pub(crate) fn begin_with_layer(
+    app: &mut PhotocraftApp,
+    p: [f64; 2],
+    add: bool,
+    grabbed_layer: Option<photocraft_doc::LayerId>,
+    move_auto_select: bool,
+    clear_on_empty: bool,
+) {
+    app.layer_box = Some(LayerBox { start: p, end: p, add, grabbed_layer, move_auto_select, clear_on_empty });
+    app.move_viewport = app.current_viewport;
     app.prefs_rt.snap = None;
     app.prefs_rt.snap_lines.clear();
     app.move_mods = Default::default();
@@ -41,11 +60,24 @@ pub(crate) fn empty_at(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
 /// The pointer moves or is released while a marquee is dragged (unsnapped, unconstrained): true
 /// when the event was the marquee's.
 pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
+    if app.layer_box.is_none() {
+        return false;
+    }
+    // The window that began the marquee owns it: a second window's Move or Up must neither move
+    // the endpoint nor commit a selection against another document. A Down still falls through
+    // to the branch below, which drops the marquee.
+    if let (Some(owner), Some(here)) = (app.move_viewport, app.current_viewport)
+        && owner != here
+        && !matches!(ev, ToolEvent::Down { .. })
+    {
+        return false;
+    }
     let Some(b) = app.layer_box.as_mut() else { return false };
     match ev {
         // A press never continues a marquee (one left over from a lost release).
         ToolEvent::Down { .. } => {
             app.layer_box = None;
+            app.move_viewport = None;
             false
         }
         ToolEvent::Move { x, y, .. } => {
@@ -55,6 +87,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
         ToolEvent::Up { x, y } => {
             let b = LayerBox { end: [x, y], ..*b };
             app.layer_box = None;
+            app.move_viewport = None;
             let (w, h) = (b.end[0] - b.start[0], b.end[1] - b.start[1]);
             if w == 0.0 && h == 0.0 && !b.add {
                 // A click on the pasteboard clears the layer target; a drag from there still

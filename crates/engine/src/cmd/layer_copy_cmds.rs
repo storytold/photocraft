@@ -237,6 +237,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     if ids.is_empty() {
         return Err(bad("no layers to copy"));
     }
+    // `selectionOnly` copies selected pixels from one raster layer without cutting or targeting a mask.
+    // `selection` enables copying or cutting selected pixels or mask content (`cut`, `target: "mask"`).
     let selection_only = match p.get("selectionOnly") {
         None => false,
         Some(Value::Bool(on)) => *on,
@@ -245,6 +247,23 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     if selection_only && (ids.len() != 1 || sdoc.selection.is_none()) {
         return Err(bad("copying selected pixels requires a selection and one pixel layer"));
     }
+    let selection = match p.get("selection") {
+        None => false,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(bad("`selection` must be a boolean")),
+    };
+    if selection && (ids.len() != 1 || sdoc.selection.is_none()) {
+        return Err(bad("copying a selection requires a selection and one pixel layer"));
+    }
+    let cut = match p.get("cut") {
+        None => false,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(bad("`cut` must be a boolean")),
+    };
+    if cut && !selection {
+        return Err(bad("`cut` requires `selection: true`"));
+    }
+    let mask_target = selection && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Mask;
     for (doc, role) in [(&sdoc, "source"), (&ddoc, "destination")] {
         if !layered(doc.mode) {
             return Err(EngineError::Other(format!("layers can't be copied with a {:?} {role} document", doc.mode)));
@@ -257,9 +276,63 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     // Type re-lays out at the source's resolution, so it keeps its size in pixels.
     copies.resolution_dpi = sdoc.resolution_dpi;
     copies.text_styles.clone_from(&sdoc.text_styles);
+    // A cut's parts outlive the loop: the source is changed from them after the copy.
+    /// What a cut leaves behind in the source: the cut bounds, the floating piece's offset, the
+    /// floating piece's parts (when the selection was floating) and whether the mask travelled.
+    type CutPartsOf = (photocraft_geom::Rect, (i32, i32), Option<std::sync::Arc<crate::float_cmds::CutParts>>, bool);
+    let mut cut_parts: Option<CutPartsOf> = None;
     for id in &ids {
         let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
-        let mut l = if selection_only {
+        let mut l = if selection {
+            // A floating selection travels as its piece; otherwise the selection is lifted from
+            // the layer's pixels, or from its mask when the mask is the target.
+            let floating_parts = floating.as_ref().filter(|f| f.layer == *id).map(|f| {
+                let (piece, bounds) = f.parts.piece();
+                (piece.clone(), bounds, f.offset, f.parts.clone())
+            });
+            let (clip_surface, clip_bounds, float_off, float_parts) = match floating_parts {
+                Some((piece, bounds, off, parts)) => {
+                    // The floating piece must carry what the caller asked for: a pixel selection
+                    // for a pixels copy, a floating layer mask for a mask copy. The other one would
+                    // copy (and cut) the wrong content. The drag passes `target: "mask"` when it
+                    // floats a mask (`layer_transfer`), so a mismatch is a caller error rather than
+                    // something to guess.
+                    if parts.is_mask() != mask_target {
+                        return Err(bad(if mask_target {
+                            "a floating pixel selection cannot be copied as mask content"
+                        } else {
+                            "a floating layer mask cannot be copied as pixels"
+                        }));
+                    }
+                    (piece, bounds, off, Some(parts))
+                }
+                None => {
+                    let surf = if mask_target {
+                        &src_layer.mask.as_ref().ok_or_else(|| EngineError::Other("the active layer has no layer mask".into()))?.surface
+                    } else {
+                        src_layer.surface().ok_or_else(|| EngineError::Other("the active layer has no pixels to copy".into()))?
+                    };
+                    let clip = crate::cmd::edit_cmds::lift(surf, sdoc.selection.as_ref(), sdoc.bounds())?;
+                    (clip.surface, clip.bounds, (0, 0), None)
+                }
+            };
+            if clip_bounds.is_empty() {
+                return Err(bad("the selected pixels are empty"));
+            }
+            if cut {
+                cut_parts = Some((clip_bounds, float_off, float_parts, mask_target));
+            }
+            // A mask's surface is grayscale; the copy is a colour layer, so it is converted
+            // to the source document's colour with alpha before it becomes a layer.
+            let target_fmt = photocraft_color::PixelFormat::new(sdoc.mode, sdoc.depth, true);
+            let clip_surface = if clip_surface.format() == target_fmt { clip_surface } else { clip_surface.convert(target_fmt) };
+            let mut layer = Layer::new(src_layer.name.clone(), LayerContent::Raster(clip_surface));
+            layer.opacity = src_layer.opacity;
+            if float_off != (0, 0) {
+                crate::commands::translate_layer(&sdoc, &mut layer, float_off.0, float_off.1);
+            }
+            layer
+        } else if selection_only {
             let parts = match floating.as_ref().filter(|f| f.layer == *id) {
                 Some(f) if f.parts.is_mask() => return Err(bad("a floating layer mask cannot be transferred as selected pixels")),
                 Some(f) => f.parts.clone(),
@@ -313,6 +386,48 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     translate_copies(&mut copies, &ddoc, dx, dy);
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
+    // Snapshot the source state before cutting so any failure while cutting or inserting into
+    // the destination restores the exact pre-cut pixels, selection, active document, and coalesced
+    // history without calling rollback.
+    let prior_src = if cut && cut_parts.is_some() { s.documents().get(src).cloned() } else { None };
+    if let Some((_bounds, _off, float_parts, mask_target)) = cut_parts
+        && cut
+    {
+        let cut_id = ids[0];
+        let bg = s.tools.background;
+        s.set_active(src);
+        s.edit("Cut Pixels", |doc, _| {
+            // Mirror `edit.cut`: a locked source keeps its pixels, so the clear below never runs
+            // on a layer the user locked. The snapshot in `prior_src` restores the source if the
+            // destination insert fails afterwards.
+            if mask_target {
+                crate::commands::check_all_unlocked(doc, cut_id)?;
+            } else {
+                crate::commands::check_pixels_unlocked(doc, cut_id)?;
+            }
+            if let Some(parts) = &float_parts {
+                if parts.copied {
+                    // A copy-created float leaves the original pixels in the source layer, so
+                    // `cut` clears the selected pixels there instead of restoring a remainder
+                    // that was never cut.
+                    if mask_target {
+                        crate::cmd::edit_cmds::clear_mask(doc, cut_id, bg, &json!({"target": "mask"}))?;
+                    } else {
+                        crate::cmd::edit_cmds::clear_selected(doc, cut_id, bg)?;
+                    }
+                } else {
+                    // A floating selection: the layer gets the rest of the piece's source.
+                    parts.place_rest(doc)?;
+                }
+            } else if mask_target {
+                crate::cmd::edit_cmds::clear_mask(doc, cut_id, bg, &json!({"target": "mask"}))?;
+            } else {
+                crate::cmd::edit_cmds::clear_selected(doc, cut_id, bg)?;
+            }
+            doc.selection = None;
+            Ok(())
+        })?;
+    }
     s.set_active(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
@@ -333,9 +448,14 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         crate::layer_multi_cmds::check_group_depth(doc, "Copy Layers")?;
         Ok(new)
     });
-    // Nothing changed: the source stays the active document.
+    // Nothing succeeded: restore the pre-cut source state (and keep it active) so a destination
+    // failure never empties the source or drops an earlier coalesced edit.
     if edited.is_err() {
         s.set_active(src);
+        if let (Some(saved), Some(st)) = (prior_src, s.active_mut()) {
+            *st = saved;
+        }
+        s.sync_tools_mask_target();
     }
     let new = edited?;
     if let (Some(name), [id]) = (typed, new.as_slice()) {
@@ -425,7 +545,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Copy Layers to Document",
         menu: &[],
         shortcut: None,
-        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
+        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"selection":bool=false (copy or cut selected pixels or mask content from one layer),"cut":bool=false (when selection is true: clear the selected pixels in the source),"target":"mask"? (when selection is true: the layer's mask is the content that travels),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
         enabled,
         run: copy_to_document,
         journal: true,

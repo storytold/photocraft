@@ -205,7 +205,7 @@ fn active_id(s: &Session) -> Result<LayerId> {
 /// selected or no selection, already in the clip's format) is shared copy-on-write, so a plain
 /// Copy or Select All, Copy costs a pointer per tile; only the other tiles are read and written,
 /// one at a time, instead of the whole area as one `f32` buffer.
-fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
+pub(crate) fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     let fmt = src.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let area = match sel {
@@ -455,7 +455,8 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 
-fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Result<()> {
+/// Clear the selected area of layer `id` to `background`, leaving the rest untouched.
+pub(crate) fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Result<()> {
     let sel = doc.selection.clone();
     let canvas = doc.bounds();
     let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
