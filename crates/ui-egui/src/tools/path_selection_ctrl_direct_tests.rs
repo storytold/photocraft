@@ -151,7 +151,14 @@ fn eval_direct_selection_multi_anchor_drag_records_plural_label() {
     // Drag both selected anchors
     drag(&mut app, [100.0, 300.0], [120.0, 320.0], Modifiers::NONE);
 
-    // Invariant: Multiple anchors must record "Drag Anchor Points" (plural)
+    // Invariant 1: Exactly the two selected anchors moved
+    assert_eq!(
+        anchors(&app),
+        vec![[120.0, 320.0], [320.0, 320.0], SQUARE[2], SQUARE[3]],
+        "only the two selected anchors moved"
+    );
+
+    // Invariant 2: Multiple anchors must record "Drag Anchor Points" (plural)
     assert_eq!(
         undo_label(&app).as_deref(),
         Some("Drag Anchor Points"),
