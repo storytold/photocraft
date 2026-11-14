@@ -329,6 +329,20 @@ fn a_print_job_carries_the_document_and_returns_its_id() {
 }
 
 #[test]
+fn print_job_requires_a_positive_job_id() {
+    for id in [i32::MIN, -1, 0] {
+        let (ep, _rx) = fake(ipp(0, &[ok_header(), (TAG_JOB_GROUP, &[(TAG_INTEGER, "job-id", &[&id.to_be_bytes()])])]), false, 200);
+        let result = print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" });
+        assert!(matches!(result, Err(Error::Protocol(_))), "job-id {id}: {result:?}");
+    }
+    for id in [1i32, i32::MAX] {
+        let (ep, _rx) = fake(ipp(0, &[ok_header(), (TAG_JOB_GROUP, &[(TAG_INTEGER, "job-id", &[&id.to_be_bytes()])])]), false, 200);
+        let result = print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" });
+        assert_eq!(result.unwrap(), id as u32);
+    }
+}
+
+#[test]
 fn error_statuses_and_broken_replies_are_errors() {
     let (ep, _rx) = fake(ipp(0x0506, &[ok_header(), (TAG_OPERATION_GROUP, &[(TAG_TEXT, "status-message", &[b"Printer is not accepting jobs"])])]), false, 200);
     let e = print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" }).unwrap_err();

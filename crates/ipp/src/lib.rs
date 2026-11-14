@@ -686,8 +686,10 @@ pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
         .iter()
         .find(|a| a.name == "job-id")
         .and_then(Attribute::int)
-        .map(|id| id.max(0) as u32)
-        .ok_or_else(|| Error::Protocol("no job id in the reply".into()))
+        // RFC 8011 requires job-id to be an integer in 1..=i32::MAX.
+        .filter(|id| *id > 0)
+        .map(|id| id as u32)
+        .ok_or_else(|| Error::Protocol("no valid job id in the reply".into()))
 }
 
 /// A request as a server sees it: the operation (the request's status field), its attributes
