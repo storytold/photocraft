@@ -528,6 +528,16 @@ fn bayer4(p: vec2<i32>) -> f32 {
     return (m[(p.y & 3) * 4 + (p.x & 3)] + 0.5) / 16.0 - 0.5;
 }
 
+fn gradient_dither(p: vec2<i32>) -> f32 {
+    var h = bitcast<u32>(p.x) * 0x8da6b343u ^ bitcast<u32>(p.y) * 0xd8163841u ^ 0x9e3779b9u;
+    h = h ^ (h >> 15u);
+    h = h * 0x2c1b3c6du;
+    h = h ^ (h >> 12u);
+    let a = f32(h & 0xffffu) / 65536.0 - 0.5;
+    let b = f32((h >> 16u) & 0xffffu) / 65536.0 - 0.5;
+    return a + 0.38 * b;
+}
+
 // compose::adjust::lut3d_sample
 fn color_lookup(c: vec3<f32>, n: i32, tetra: bool) -> vec3<f32> {
     let m = f32(n - 1);
@@ -774,7 +784,32 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             var t = lum(c);
             if (p0.x > 0.5) { t = 1.0 - t; }
             var o = vec3(lut(0, t), lut(1, t), lut(2, t));
-            if (p0.y > 0.5) { o = clamp(o + bayer4(adj_px) / 255.0, vec3(0.0), vec3(1.0)); }
+            if (p0.y > 1.5) {
+                o = clamp(o + bayer4(adj_px) / 255.0, vec3(0.0), vec3(1.0));
+            } else if (p0.y > 0.5) {
+                let eps = 1.0 / 255.0;
+                let t_lo = max(t - eps, 0.0);
+                let t_hi = min(t + eps, 1.0);
+                let c_lo = vec3(lut(0, t_lo), lut(1, t_lo), lut(2, t_lo));
+                let c_hi = vec3(lut(0, t_hi), lut(1, t_hi), lut(2, t_hi));
+                let span = max(t_hi - t_lo, 1e-6);
+                let diff = abs(c_hi - c_lo) / span;
+                let slope = max(diff.x, max(diff.y, diff.z));
+                var amp = 0.0;
+                if (slope < 0.50) {
+                    amp = 0.50 + 1.85 * slope;
+                } else if (slope < 1.00) {
+                    amp = 1.425 + 1.39 * (slope - 0.50);
+                } else if (slope < 1.45) {
+                    amp = 2.16 + 0.52 * (slope - 1.00);
+                } else if (slope < 2.30) {
+                    amp = 3.42;
+                } else {
+                    amp = 2.95 + 3.05 * min(slope - 2.30, 1.75);
+                }
+                let d = gradient_dither(adj_px) * (amp / 255.0);
+                o = clamp(o + vec3(d), vec3(0.0), vec3(1.0));
+            }
             return o;
         }
         case 15: { return selective_color(c, p0.x > 0.5); }                       // Selective color

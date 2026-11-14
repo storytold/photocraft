@@ -123,6 +123,17 @@ pub fn bayer4(x: i32, y: i32) -> f32 {
     (M[((y & 3) * 4 + (x & 3)) as usize] + 0.5) / 16.0 - 0.5
 }
 
+/// Deterministic per-pixel dither value in -0.69..0.69 for Gradient Map at document pixel (x, y).
+pub fn gradient_dither(x: i32, y: i32) -> (f32, f32) {
+    let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ 0x9e37_79b9;
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    let a = (h & 0xffff) as f32 / 65536.0 - 0.5;
+    let b = ((h >> 16) & 0xffff) as f32 / 65536.0 - 0.5;
+    (a + 0.38 * b, 0.0)
+}
+
 /// Samples a 3D LUT (`n`³ RGB triplets, red fastest) at `c`, trilinear or tetrahedral.
 pub fn lut3d_sample(lut: &[f32], n: usize, c: [f32; 3], tetrahedral: bool) -> [f32; 3] {
     // A degenerate or short table can't be sampled: leave the colour alone.

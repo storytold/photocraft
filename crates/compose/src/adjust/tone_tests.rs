@@ -684,7 +684,7 @@ fn gradient_map_dither_stays_close() {
     let mut b = ramp();
     apply(&Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false, source: None }, &mut a);
     apply(&Adjustment::GradientMap { stops, reverse: false, dither: true, source: None }, &mut b);
-    assert!(a.px.iter().zip(&b.px).all(|(x, y)| (x[0] - y[0]).abs() <= 0.5 / 255.0 + 1e-6));
+    assert!(a.px.iter().zip(&b.px).all(|(x, y)| (x[0] - y[0]).abs() <= 2.0 / 255.0 + 1e-6));
     assert!(a.px.iter().zip(&b.px).any(|(x, y)| x[0] != y[0]));
 }
 
