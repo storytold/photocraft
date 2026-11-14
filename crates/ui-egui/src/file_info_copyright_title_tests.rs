@@ -52,6 +52,44 @@ fn undo_and_redo_take_the_prefix_with_them() {
     assert!(title(&app).starts_with("\u{a9} oracle @ "), "{}", title(&app));
 }
 
+/// #13993: the main window title (the OS title bar, taskbar and Alt-Tab entry) has the prefix too.
+#[test]
+fn the_main_window_title_has_the_prefix() {
+    let window = crate::panels::window_title;
+    let mut app = app();
+    assert_eq!(window(&app), "oracle \u{2014} PhotoCraft");
+    status(&mut app, "copyrighted");
+    assert_eq!(window(&app), "*\u{a9} oracle \u{2014} PhotoCraft");
+    // With the file name hidden there is no name to prefix.
+    app.session.prefs.edit(|p| p.interface.show_file_name_in_title = false);
+    assert_eq!(window(&app), "*PhotoCraft");
+    app.session.prefs.edit(|p| p.interface.show_file_name_in_title = true);
+    for s in ["publicDomain", "copyrighted", "unknown"] {
+        status(&mut app, s);
+        let want = if s == "copyrighted" { "*\u{a9} oracle \u{2014} PhotoCraft" } else { "*oracle \u{2014} PhotoCraft" };
+        assert_eq!(window(&app), want, "{s}");
+    }
+    // An XMP packet with Marked False, or none at all: no prefix.
+    let xmp = r#"<rdf:Description xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/" xmpRights:Marked="False"/>"#;
+    for packet in [Some(xmp), None] {
+        let mut app = self::app();
+        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = packet.map(Into::into);
+        assert_eq!(window(&app), "oracle \u{2014} PhotoCraft", "{packet:?}");
+    }
+}
+
+#[test]
+fn undo_and_redo_take_the_main_window_title_prefix_with_them() {
+    let window = crate::panels::window_title;
+    let mut app = app();
+    status(&mut app, "copyrighted");
+    assert!(window(&app).contains("\u{a9} oracle"), "{}", window(&app));
+    assert!(app.session.undo());
+    assert_eq!(window(&app).trim_start_matches('*'), "oracle \u{2014} PhotoCraft");
+    assert!(app.session.redo());
+    assert_eq!(window(&app).trim_start_matches('*'), "\u{a9} oracle \u{2014} PhotoCraft");
+}
+
 #[test]
 fn a_file_opened_with_the_mark_already_set_shows_the_prefix() {
     let packets = [

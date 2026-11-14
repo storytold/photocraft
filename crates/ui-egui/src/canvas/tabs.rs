@@ -567,9 +567,9 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     format!("{} @ {}% ({layer}{model}/{}){}{saving}", titled_name(st), fmt_zoom(zoom), st.doc.depth.bits(), if st.is_dirty() { "*" } else { "" })
 }
 
-/// The document's name as its tab and window title show it: "© name" when File Info marks it
-/// Copyrighted, as Photoshop does (#13821).
-fn titled_name(st: &photocraft_engine::DocState) -> String {
+/// The document's name as its tab and window titles show it: "© name" when File Info marks it
+/// Copyrighted, as Photoshop does (#13821, #13993).
+pub(crate) fn titled_name(st: &photocraft_engine::DocState) -> String {
     let copyrighted = photocraft_engine::file_cmds::copyright_marked(st.doc.metadata.xmp.as_deref());
     format!("{}{}", if copyrighted { "\u{a9} " } else { "" }, st.doc.name)
 }
