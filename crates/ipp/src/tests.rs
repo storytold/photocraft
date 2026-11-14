@@ -647,6 +647,13 @@ fn an_impossible_chunk_size_is_a_protocol_error_not_a_panic() {
 }
 
 #[test]
+fn chunk_data_must_end_with_crlf() {
+    for body in [b"1\r\naXX0\r\n\r\n", b"1\r\na\n\r0\r\n\r\n"] {
+        assert!(matches!(dechunk(body), Err(Error::Protocol(_))), "accepted malformed chunk: {body:?}");
+    }
+}
+
+#[test]
 fn printer_names_are_encoded_as_one_request_target_segment() {
     assert_eq!(queue_path("office printer/1", false).unwrap(), "/printers/office%20printer%2F1");
     assert!(queue_path("printer\r\nX-Injected: yes", false).is_err());
