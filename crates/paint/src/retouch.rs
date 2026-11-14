@@ -296,6 +296,30 @@ pub fn apply_dab_stroke(
     Ok(bounds)
 }
 
+/// A sequential-dab stroke whose dense working copy would exceed the memory budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrokeTooLarge;
+
+impl std::fmt::Display for StrokeTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("stroke too large")
+    }
+}
+
+impl std::error::Error for StrokeTooLarge {}
+
+/// Bytes a sequential-dab stroke's dense buffers may take: the original and working copies over the
+/// grown stroke rectangle and the mixed result, `f32` samples.
+const MAX_DAB_STROKE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
+
+/// Whether [`apply_dab_stroke`]'s three `channels`-deep planes over `outer` fit [`MAX_DAB_STROKE_BYTES`].
+fn fits_dab_stroke_budget(outer: Rect, channels: usize) -> bool {
+    (outer.width() as u64)
+        .checked_mul(outer.height() as u64)
+        .and_then(|px| px.checked_mul(channels as u64)?.checked_mul(3 * size_of::<f32>() as u64))
+        .is_some_and(|b| b <= MAX_DAB_STROKE_BYTES)
+}
+
 /// The row height of the [`mix_back_banded`] walking bands, with its measurements in that doc.
 const BAND_ROWS: i32 = 64;
 
