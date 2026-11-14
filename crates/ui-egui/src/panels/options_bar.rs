@@ -507,6 +507,16 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
         Tool::MagicWand => {
             selection_mode_buttons(&mut app.ui.selection_mode, ui);
             widgets::vline(ui, 22.0);
+            opt_label(ui, tl!("Sample Size"));
+            widgets::dropdown(
+                ui,
+                "wand-sample-size",
+                tl!("Sample Size"),
+                &mut app.ui.tool_options.magic_wand_sample_size,
+                &crate::eyedropper_ui::size_options(),
+                130.0,
+            );
+            widgets::vline(ui, 22.0);
             opt_label(ui, tl!("Tolerance"));
             widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));

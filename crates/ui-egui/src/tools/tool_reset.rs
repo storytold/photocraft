@@ -209,7 +209,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
         Tool::Lasso | Tool::PolygonLasso => reset!(feather, anti_alias),
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
-        Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
+        Tool::MagicWand => reset!(tolerance, anti_alias, contiguous, magic_wand_sample_size),
         Tool::QuickSelection => reset!(enhance_edge),
         Tool::ObjectSelection => reset!(enhance_edge, object_finder),
         Tool::Crop => reset!(
