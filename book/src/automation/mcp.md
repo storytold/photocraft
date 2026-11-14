@@ -6,9 +6,9 @@
 - **Bridge:** `BridgeClient` forwards tools to a desktop application started with `photocraft --control <port>`.
 - **The open window:** plain `photocraft-cli mcp` finds the desktop application through the connection file it publishes while the person lets agents use it (ArtCraft Launcher › Settings › AI agents), before every tool call; while the app is closed it starts it, serves a headless session, or reports an error, as chosen in Preferences › AI Integrations. Without that consent, or with `--headless`, it is the headless session above.
 
-The simplest setup needs no terminal: turn on ArtCraft Launcher › Settings › AI agents and click *Add* next to the AI app; that one entry reaches every Craft app. See [`docs/mcp.md`](../../../docs/mcp.md#connecting-the-desktop-app-no-terminal).
+The simplest setup needs no terminal: turn on ArtCraft Launcher › Settings › AI agents and click *Add* next to the AI app; that one entry reaches every Craft app. See [`docs/mcp.md`](https://github.com/storytold/photocraft/blob/main/docs/mcp.md#connecting-the-desktop-app-no-terminal).
 
-For a source checkout, first [install the CLI on PATH and register the server](../../../docs/mcp.md#install-and-register).
+For a source checkout, first [install the CLI on PATH and register the server](https://github.com/storytold/photocraft/blob/main/docs/mcp.md#install-and-register).
 The installed binary survives `cargo clean`; a symlink into `target/release` does not.
 
 Start the headless server with (without `--headless`, `mcp` works in the open PhotoCraft window
@@ -77,4 +77,4 @@ listed. `photocraft://document` and `photocraft://commands` expose live JSON. Lo
 that are waited on report progress and stop when the request is cancelled, headless and in
 bridge mode (where they may also outlast the bridge's reply timeout), and direct headless
 Render Video does too, using the granted write root; see
-[`docs/mcp.md`](../../../docs/mcp.md) for arguments, cleanup and transport behavior.
+[`docs/mcp.md`](https://github.com/storytold/photocraft/blob/main/docs/mcp.md) for arguments, cleanup and transport behavior.
