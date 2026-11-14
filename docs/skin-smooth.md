@@ -14,6 +14,8 @@ GPU pipelines and buffers are created lazily and reused. Software adapters, CPU 
 
 Samples are normalized source RGB, read before effects or the Mask overlay. Positive and negative groups each accept at most 16 colours; repeated picks do not increase strength. Positive weights use their maximum, negative weights their maximum, then multiply by one minus the exclusion. With no positive samples, automatic skin selection remains the base. This is a colour range, not a portrait detector or spatial brush.
 
+Adding a colour removes exclusion samples whose ranges cover that colour at the current Tolerance, so an excluded colour can be added back. Unrelated exclusions remain. This includes nearby colours and colours differing only in brightness, because ranges match chroma rather than exact RGB. Excluding a colour preserves the positive samples: removing the last positive would otherwise switch the selection base back to automatic skin detection. The plain Sample tool replaces both groups. Hover or focus a swatch to reveal its removal cross; click it to remove only that sample. Clear samples still clears both groups.
+
 Samples survive preset switches and Reset, but clear on OK, Cancel or source invalidation. Named presets omit them; formal command parameters retain them for replay. The display toggle is not a formal filter or preset parameter.
 
 Mask weight is skin weight × document selection coverage × source alpha. With Skin Only off, skin weight is one. It describes the input's potential contribution, not final composite visibility or effect strength. Preview and Show Mask are independent; OK applies smoothing, never the Mask.
@@ -24,7 +26,7 @@ Mask/sampling support unmasked, unclipped RGB raster layers in Composite view at
 
 Native filter previews run on one background worker with cancellation of stale requests. Ordinary plug-in previews use the visible region plus context and an appropriate proxy. Web/cooperative and explicitly inline sessions reuse a full proxy while panning, without rerunning the plug-in. OK handles the full image/selection. Reduced previews remain approximate. Smart-filter stack previews keep their stack processing rules.
 
-Mask has a separate worker and texture, limited to at most 1M visible/proxy pixels and does not run smoothing. Its request identity covers the source revision/target, dialog, samples, tolerance, Skin Only, viewport and scale. Closed dialogs and invalid sources cancel work; stale results cannot paint over another request. It does not write pixels, selection or history.
+Mask has a separate worker and texture, limited to at most 1M visible/proxy pixels and does not run smoothing. Its request identity covers the source revision/target, dialog, samples, tolerance, Skin Only, viewport and scale. While samples or controls change, the last completed Mask stays visible until the current result is ready. It is never reused for a different source, dialog, viewport or scale. Closed dialogs and invalid sources cancel work; stale worker results cannot replace the displayed Mask. It does not write pixels, selection or history.
 
 The main document view owns Show Mask. After undocking a document, its floating window owns it instead. Additional New Window views show the normal image and cannot replace that view's mask request.
 

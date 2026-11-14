@@ -110,20 +110,21 @@ fn row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, default: f32, m
     f.insert(key.into(), json!((value * 10.0).round() / 10.0));
 }
 
-/// Displays encoded source RGB samples directly, avoiding a second gamma conversion.
-fn swatches(ui: &mut egui::Ui, f: &Map<String, Value>, key: &str, label: &str, empty: &str) {
-    let samples = colors(f, key);
+/// Shows encoded source RGB samples with a hover/focus removal cross and per-sample deletion.
+fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, empty: &str) {
+    let mut samples = colors(f, key);
+    let mut remove = None;
     ui.horizontal_wrapped(|ui| {
         ui.add_sized([80.0, 20.0], egui::Label::new(label).truncate()).on_hover_text(label);
         if samples.is_empty() {
             ui.label(egui::RichText::new(empty).color(Tokens::get(ui.ctx()).text_dim));
         }
-        for rgb in samples {
+        for (index, &rgb) in samples.iter().enumerate() {
             let [r, g, b] = rgb.map(|v| (v * 255.0).round() as u8);
             let color = Color32::from_rgb(r, g, b);
-            let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, ui.is_enabled(), format!("{label}: {}", crate::color_picker_ui::hex(rgb))));
+            let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
+            let hint = format!("{}: {}", tl!(&format!("Remove {label} sample")), crate::color_picker_ui::hex(rgb));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &hint));
             ui.painter().rect_filled(rect, Tokens::get(ui.ctx()).radius_sm, color);
             ui.painter().rect_stroke(
                 rect,
@@ -131,9 +132,29 @@ fn swatches(ui: &mut egui::Ui, f: &Map<String, Value>, key: &str, label: &str, e
                 egui::Stroke::new(1.0, Tokens::get(ui.ctx()).field_border),
                 egui::StrokeKind::Inside,
             );
-            response.on_hover_text(format!("{label}: {}", crate::color_picker_ui::hex(rgb)));
+            if response.hovered() || response.has_focus() {
+                let t = Tokens::get(ui.ctx());
+                let center = rect.center();
+                ui.painter().circle_filled(center, 7.0, t.field);
+                for direction in [-1.0, 1.0] {
+                    let offset = vec2(3.0, 3.0 * direction);
+                    ui.painter().line_segment([center - offset, center + offset], egui::Stroke::new(1.5, t.text));
+                }
+                if response.has_focus() {
+                    ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                }
+            }
+            if response.clicked() {
+                remove = Some(index);
+            }
+            response.on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand);
         }
     });
+    if let Some(index) = remove {
+        samples.remove(index);
+        f.insert(key.into(), json!(samples));
+        f.remove("__skinError");
+    }
 }
 
 /// Draws smoothing, tone and skin-range controls, disabling sampling when the source cannot be represented.
@@ -254,6 +275,12 @@ pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers)
     }
     if tool == "sample" {
         f.insert(NEGATIVE.into(), json!([]));
+    } else if tool == "add" {
+        // Restore the picked colour without changing the positive selection's base on exclusion.
+        let tolerance = f.get("tolerance").and_then(Value::as_f64).unwrap_or(55.0) as f32;
+        let mut negative = colors(f, NEGATIVE);
+        negative.retain(|sample| weight(rgb, tolerance, &[*sample], &[]) == 0.0);
+        f.insert(NEGATIVE.into(), json!(negative));
     }
     f.insert(key.into(), json!(samples));
     f.remove("__skinError");
@@ -460,8 +487,8 @@ pub(crate) fn overlay(
     if preview.key.as_ref() != Some(&request) {
         publish(preview, ctx, request.clone(), mask_buffer(&doc, layer, &fields, region, k, &|| false));
     }
-    // Never repaint with a mask from a previous sample set, viewport, source or dialog.
-    if preview.key.as_ref() != Some(&request) {
+    // Keep the last mask while colours change, but never reuse it across sources or viewports.
+    if !preview.key.as_ref().is_some_and(|key| key.same_target(&request)) {
         return None;
     }
     // A partial proxy pixel must stop at the canvas edge, including when rotated or flipped.

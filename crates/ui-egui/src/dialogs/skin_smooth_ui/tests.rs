@@ -69,8 +69,8 @@ fn duplicate_windows_cannot_replace_the_canonical_mask_request() {
 fn sample_swatch_shows_encoded_source_rgb_without_a_second_gamma_conversion() {
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
-    let fields = json!({POSITIVE:[[128.0f32/255.0,64.0f32/255.0,32.0f32/255.0]]});
-    let mut output = ctx.run_ui(Default::default(), |ui| swatches(ui, fields.as_object().unwrap(), POSITIVE, "Include", "None"));
+    let mut fields = json!({POSITIVE:[[128.0f32/255.0,64.0f32/255.0,32.0f32/255.0]]});
+    let mut output = ctx.run_ui(Default::default(), |ui| swatches(ui, fields.as_object_mut().unwrap(), POSITIVE, "Include", "None"));
     output.textures_delta.clear();
     assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == Color32::from_rgb(128,64,32))));
 }
@@ -247,7 +247,8 @@ fn background_mask_discards_stale_samples_and_cancel_releases_it() {
     initial.clear();
     field(&mut app, NEGATIVE, json!([[0.7, 0.5, 0.4]]));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none() {
+    while app.skin_smooth_mask.as_ref().unwrap().key.as_ref().unwrap().params["values"][NEGATIVE] != json!([[0.7, 0.5, 0.4]]) {
+        assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_some(), "keep the displayed mask until its replacement is ready");
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
@@ -508,4 +509,81 @@ fn confirmation_checks_sample_source_before_the_next_frame() {
             assert_eq!(state.history.entries(), history);
         }
     }
+}
+
+/// Hovering preserves both groups; clicking removes only the requested sample.
+#[test]
+fn clicking_a_swatch_removes_only_that_sample() {
+    for key in [POSITIVE, NEGATIVE] {
+        let first = [0.7, 0.5, 0.4];
+        let second = [0.2, 0.4, 0.8];
+        let fields = json!({POSITIVE:[first,second],NEGATIVE:[first,second],"__skinError":"sample limit"}).as_object().unwrap().clone();
+        let label = if key == POSITIVE { "Include" } else { "Exclude" };
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(320.0, 100.0)).build_ui_state(move |ui, fields| swatches(ui, fields, key, label, "None"), fields);
+        h.run_steps(3);
+        h.get_by_label(&format!("Remove {label} sample: {}", crate::color_picker_ui::hex(first))).hover();
+        h.run_steps(3);
+        assert_eq!(colors(h.state(), key), vec![first, second], "hovering must not remove a sample");
+        h.get_by_label(&format!("Remove {label} sample: {}", crate::color_picker_ui::hex(first))).click();
+        h.run_steps(3);
+        assert_eq!(colors(h.state(), key), vec![second]);
+        assert_eq!(colors(h.state(), if key == POSITIVE { NEGATIVE } else { POSITIVE }), vec![first, second]);
+        assert!(!h.state().contains_key("__skinError"));
+    }
+}
+
+/// Restoring a colour clears covering exclusions while exclusion retains the positive base.
+#[test]
+fn latest_pick_replaces_conflicting_ranges_and_preserves_unrelated_samples() {
+    for tolerance in [0.0, 55.0, 100.0] {
+        let mut app = app();
+        field(&mut app, "__skinTool", json!("add"));
+        field(&mut app, "tolerance", json!(tolerance));
+        let rgb = <[f32; 3]>::try_from(&app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1)[..3]).unwrap();
+        let nearby = [rgb[0] + 0.01, rgb[1], rgb[2] - 0.01];
+        let blue = [0.1, 0.2, 0.9];
+        field(&mut app, POSITIVE, json!([rgb]));
+        field(&mut app, NEGATIVE, json!([nearby, blue]));
+        for _ in 0..2 {
+            assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::SHIFT));
+            let f = &app.ui.dialogs[0].fields;
+            assert_eq!(colors(f, POSITIVE), vec![rgb]);
+            assert_eq!(colors(f, NEGATIVE), vec![blue]);
+            assert!(weight(rgb, tolerance, &colors(f, POSITIVE), &colors(f, NEGATIVE)) > 0.99);
+            assert!(pick(&mut app, [1.0, 1.0], egui::Modifiers::ALT));
+            let f = &app.ui.dialogs[0].fields;
+            assert_eq!(colors(f, POSITIVE), vec![rgb], "exclusion must preserve the explicit selection base");
+            assert_eq!(weight(rgb, tolerance, &colors(f, POSITIVE), &colors(f, NEGATIVE)), 0.0);
+        }
+    }
+}
+
+/// A blocked replacement keeps the current mask, but cannot reuse it for another source or view.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_mask_keeps_its_texture_only_for_the_same_source_and_viewport() {
+    let mut app = app();
+    field(&mut app, "__skinMask", json!(true));
+    let doc = app.session.active().unwrap().doc.clone();
+    let ctx = egui::Context::default();
+    let original = overlay(&mut app, &ctx, doc.id, doc.bounds()).unwrap();
+    app.background_jobs = true;
+    let (release, wait) = std::sync::mpsc::channel();
+    let preview = app.skin_smooth_mask.as_mut().unwrap();
+    preview
+        .worker
+        .start(preview.key.clone().unwrap(), ctx.clone(), move |_| {
+            let _ = wait.recv();
+            super::super::filter_preview_worker::Computed { result: None, ms: 0.0 }
+        })
+        .unwrap();
+    for (key, value) in [("tolerance", json!(80)), (POSITIVE, json!([[0.7, 0.5, 0.4]])), (NEGATIVE, json!([[0.2, 0.4, 0.8]]))] {
+        field(&mut app, key, value);
+        assert_eq!(overlay(&mut app, &ctx, doc.id, doc.bounds()).unwrap(), original);
+    }
+    assert!(overlay(&mut app, &ctx, doc.id, Rect::new(0, 0, 16, 12)).is_none(), "do not reuse a mask from another viewport");
+    app.session.active_mut().unwrap().revision += 1;
+    assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none(), "do not reuse a mask from another source revision");
+    release.send(()).unwrap();
 }
