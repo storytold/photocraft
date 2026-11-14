@@ -166,9 +166,8 @@ impl Endpoint {
             #[cfg(not(unix))]
             Endpoint::Unix(path) => Err(Error::Unreachable(format!("{}: Unix sockets are not available here", path.display()))),
             Endpoint::Tcp(host, port) => {
-                let addr = (host.as_str(), *port).to_socket_addrs().map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?.next();
-                let addr = addr.ok_or_else(|| Error::Unreachable(format!("{host}:{port}: no address")))?;
-                open_tcp(host, *port, addr, |addr| TcpStream::connect_timeout(&addr, CONNECT))
+                let addrs = (host.as_str(), *port).to_socket_addrs().map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?;
+                open_tcp(host, *port, addrs, |addr, timeout| TcpStream::connect_timeout(&addr, timeout))
             }
         }
     }
@@ -200,14 +199,35 @@ impl std::fmt::Display for Endpoint {
     }
 }
 
-/// Open one address and put the request timeouts on it. The connect call is a parameter so the
-/// refusal path can be tested at all: no port is guaranteed to stay free between picking one and
-/// using it, and what a refused connect reported is what the caller is supposed to hear.
-fn open_tcp(host: &str, port: u16, addr: SocketAddr, open: impl FnOnce(SocketAddr) -> std::io::Result<TcpStream>) -> Result<Stream> {
-    let s = open(addr).map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?;
-    let _ = s.set_read_timeout(Some(REQUEST));
-    let _ = s.set_write_timeout(Some(REQUEST));
-    Ok(Stream::Tcp(s))
+/// Try the resolved addresses within one connection budget, so an unreachable IPv6 address does
+/// not hide a working IPv4 address. The connector is a parameter so refusals can be tested without
+/// racing to claim a port; the last failed attempt still reports why it failed.
+fn open_tcp(
+    host: &str,
+    port: u16,
+    addrs: impl IntoIterator<Item = SocketAddr>,
+    mut open: impl FnMut(SocketAddr, Duration) -> std::io::Result<TcpStream>,
+) -> Result<Stream> {
+    let mut addrs = addrs.into_iter();
+    let first = addrs.next().ok_or_else(|| Error::Unreachable(format!("{host}:{port}: no address")))?;
+    let started = std::time::Instant::now();
+    let mut last_error = None;
+    for addr in std::iter::once(first).chain(addrs) {
+        let timeout = CONNECT.saturating_sub(started.elapsed());
+        if timeout.is_zero() {
+            break;
+        }
+        match open(addr, timeout) {
+            Ok(s) => {
+                let _ = s.set_read_timeout(Some(REQUEST));
+                let _ = s.set_write_timeout(Some(REQUEST));
+                return Ok(Stream::Tcp(s));
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let cause = last_error.map(|error| error.to_string()).unwrap_or_else(|| "connection timed out".into());
+    Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
 }
 
 enum Stream {
