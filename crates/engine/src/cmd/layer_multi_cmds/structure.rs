@@ -115,6 +115,12 @@ pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
 /// into a new, collapsed group placed where the top-most of them was. Bottom-to-top order is
 /// preserved. The New Group dialog's colour, mode and opacity are set in the same history step.
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    group_layers_named(s, p, "Group Layers")
+}
+
+/// [`group_layers`] recorded under the history name `step`: Group from Layers adds
+/// "Create Group from Layers" (#14710).
+pub(crate) fn group_layers_named(s: &mut Session, p: &Value, step: &str) -> Result<Value> {
     let ids = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
         None => selected(s),
@@ -123,7 +129,7 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("no layer selected".into()));
     }
     let opts = crate::group_options::GroupOptions::parse("layer.groupLayers", p)?;
-    let gid = s.edit("Group Layers", |doc, active| {
+    let gid = s.edit(step, |doc, active| {
         let ids = top_level(doc, &ids);
         // Artboards stay at the top level: inside a group they would stop being boards.
         if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
