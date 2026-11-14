@@ -66,9 +66,9 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
     rotate_arbitrary_with(s, p, true)
 }
 
-/// [`rotate_arbitrary`]; `keep_counts` leaves the count points where they were (Image Rotation,
-/// #11762). The Crop tool's straighten turn moves them with the image, as before.
-pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: bool) -> Result<Value> {
+/// Image Rotation uses hundredths of a degree and leaves count points in place (#11762).
+/// Crop and Ruler straightening use the full angle and rotate the count points.
+pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
     let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
@@ -80,6 +80,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo
         "ccw" => -angle,
         d => return Err(bad(CMD, format!("direction `{d}` (cw|ccw)"))),
     };
+    let deg = if image_rotation { (deg * 100.0).round() % 36_000.0 / 100.0 } else { deg };
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
@@ -138,7 +139,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, keep_counts: boo
             // What Free Transform leaves alone: unlinked vector masks, gradient angles, artboards…
             crate::canvas_geom::transform_layer_geometry(l, &a, false, dpi);
         }
-        if keep_counts {
+        if image_rotation {
             crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::transform_doc_marks(doc, &a));
         } else {
             crate::canvas_geom::transform_doc_marks(doc, &a);
@@ -830,3 +831,7 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "rotate_canvas_tiny_angle_tests.rs"]
+mod rotate_canvas_tiny_angle_tests;
