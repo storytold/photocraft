@@ -230,6 +230,24 @@ fn paint_bucket_mode_reaches_the_fill() {
     assert!(px[0] > 0.98 && px[3] > 0.98, "filled behind: {px:?}");
 }
 
+/// Behind is greyed on the Background (#12531): a bucket click there turns it off, as the
+/// Brush's Clear is turned off (#11897), so the fill is sent with the blend mode and the
+/// stored option no longer names a mode the Background cannot use.
+#[test]
+fn paint_bucket_behind_turns_off_on_the_background() {
+    let mut app = app();
+    let background = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.ui.tool = Tool::PaintBucket;
+    app.ui.tool_options.bucket_behind = true;
+    app.session.active_mut().unwrap().active_layer = Some(background);
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
+    assert!(!app.ui.tool_options.bucket_behind, "Behind turns off on the Background");
+    assert_eq!(app.session.journal.last().unwrap().1["mode"], "Normal");
+}
+
 #[test]
 fn clone_without_a_source_names_the_platform_modifier() {
     // Option-click on the Mac, Alt-click elsewhere (#251). The Clone Stamp says it in an alert

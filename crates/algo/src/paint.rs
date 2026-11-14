@@ -117,6 +117,11 @@ fn composite_area(
                         continue;
                     }
                 }
+                // Behind leaves opaque and transparency-locked pixels unchanged; skip the
+                // encode and write, whose CMYK round trip can shift their inks (#12531 review).
+                if mode == FillMode::Behind && (lock_transparency || d[3] >= 1.0) {
+                    continue;
+                }
                 let o = match mode {
                     FillMode::Blend(m) if lock_transparency => blend::composite_atop(m, d, color(x, y), k),
                     FillMode::Blend(m) => blend::composite(m, d, color(x, y), k),
@@ -502,6 +507,29 @@ mod tests {
         let edge = s.rgba(3, 0);
         assert!(edge[3] > 0.5, "the fill raised the partial pixel's alpha: {edge:?}");
         assert!(!is_inks(&raw(&s, 3)), "a blended destination keeps its own encoding: {:?}", raw(&s, 3));
+    }
+
+    /// #12531 review: Behind returns an opaque or transparency-locked pixel unchanged, so
+    /// composite_area must not run it through the RGB encode at all — on a CMYK target the
+    /// round trip is lossy and shifts the inks of artwork Behind cannot touch. The stored
+    /// channels stay byte for byte.
+    #[test]
+    fn behind_leaves_opaque_and_locked_cmyk_pixels_as_stored() {
+        let a = Rect::new(0, 0, 8, 1);
+        let green = |_, _| [0.0, 1.0, 0.0, 1.0];
+        // Opaque inks off the conversion lattice: a CMYK -> RGB -> CMYK trip moves them.
+        let mut s = Surface::new(PixelFormat::CMYKA8);
+        s.fill_rect(a, &[0.13, 0.37, 0.71, 0.29, 1.0]);
+        let before = s.read_region(a);
+        assert!(bucket_fill_inks(&mut s, a, (1, 0), 255.0, false, false, 1.0, None, false, green, None, FillMode::Behind));
+        assert_eq!(s.read_region(a), before, "opaque pixels keep their stored inks");
+
+        // Locked transparency: a partly transparent pixel is likewise returned unchanged.
+        let mut s = Surface::new(PixelFormat::CMYKA8);
+        s.fill_rect(a, &[0.13, 0.37, 0.71, 0.29, 0.5]);
+        let before = s.read_region(a);
+        assert!(bucket_fill_inks(&mut s, a, (1, 0), 255.0, false, false, 1.0, None, true, green, None, FillMode::Behind));
+        assert_eq!(s.read_region(a), before, "locked pixels keep their stored inks");
     }
 
     /// #11354 review: the soft rim a Clear leaves rises only partly. The reference application
