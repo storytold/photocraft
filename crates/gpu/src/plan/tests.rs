@@ -32,7 +32,7 @@ fn lab_channel_adjustments_defer_to_the_cpu_in_lab_documents() {
         Adjustment::Posterize { levels: 4 },
         Adjustment::Threshold { level: 0.5 },
         Adjustment::BrightnessContrast { brightness: 10.0, contrast: 5.0, legacy: false },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false, source: None },
     ];
     for adj in &lab_rules {
         assert!(!adjustment_on_gpu(adj, ColorMode::Lab), "{adj:?}");
@@ -181,6 +181,47 @@ fn small_layers_composite_only_over_their_bounds() {
     d.layers[1].children_mut().unwrap()[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 60, 60), &[1.0, 0.0, 0.0, 1.0]);
     let p = plan(&d).unwrap();
     assert!(p.passes.iter().all(|p| p.clip.is_none()));
+}
+
+/// #8639: Stroke Emboss shades the stroke's band, which only the CPU compositor builds: a
+/// document using it is composited on the CPU, so both show the same pixels.
+#[test]
+fn stroke_emboss_defers_to_the_cpu() {
+    use photocraft_doc::{Bevel, BevelStyle, BevelTechnique, Contour, FxCommon};
+    let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut l = Layer::raster("embossed", d.pixel_format());
+    l.surface_mut().unwrap().fill_rect(Rect::new(2, 2, 5, 5), &[1.0, 0.0, 0.0, 1.0]);
+    let bevel = |style| Bevel {
+        enabled: true,
+        style,
+        technique: BevelTechnique::Smooth,
+        depth: 1.0,
+        up: true,
+        size: 3.0,
+        soften: 0.0,
+        angle: 90.0,
+        altitude: 30.0,
+        use_global_light: false,
+        gloss_contour: Contour::Linear,
+        gloss_anti_alias: false,
+        highlight: FxCommon::new(BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    };
+    l.effects.items.push(photocraft_doc::Effect::BevelEmboss(bevel(BevelStyle::InnerBevel)));
+    d.layers.push(l);
+    assert!(plan(&d).is_ok(), "other bevel styles stay on the GPU");
+    d.layers[1].effects.items[0] = photocraft_doc::Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss));
+    let err = plan(&d).unwrap_err();
+    assert!(err.0.contains("Stroke Emboss"), "{err}");
+    // Turned off, it no longer matters.
+    if let photocraft_doc::Effect::BevelEmboss(b) = &mut d.layers[1].effects.items[0] {
+        b.enabled = false;
+    }
+    assert!(plan(&d).is_ok());
 }
 
 #[test]
@@ -334,6 +375,50 @@ fn advanced_blending_falls_back_to_the_cpu() {
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
     assert!(plan(&d).is_err(), "knockout inside a group");
+}
+
+/// A chunk-sized texture per live slot: nesting isolated groups keeps every ancestor's slot
+/// live, so past a depth the plan is refused and the CPU composites instead.
+#[test]
+fn deeply_nested_isolated_groups_are_refused_before_their_slots_are_allocated() {
+    let nested = |depth: usize| {
+        let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut inner = Layer::raster("leaf", d.pixel_format());
+        inner.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+        let mut layers = vec![inner];
+        for _ in 0..depth {
+            let mut sibling = Layer::raster("s", d.pixel_format());
+            sibling.surface_mut().unwrap().fill_rect(Rect::new(2, 2, 6, 6), &[1.0, 0.0, 0.0, 0.5]);
+            let mut group = Layer::group("g", vec![sibling, layers.pop().unwrap()]);
+            group.blend = BlendMode::Multiply;
+            group.opacity = 0.5;
+            layers = vec![group];
+        }
+        d.layers.extend(layers);
+        d
+    };
+    assert!(plan(&nested(4)).unwrap().slots <= planner::MAX_PLAN_SLOTS);
+    let e = plan(&nested(200)).unwrap_err().to_string();
+    assert!(e.contains("accumulator slots"), "{e}");
+}
+
+/// Every gradient fill planned keeps a 64 KiB lookup table: a document of thousands of them
+/// (or one that plans the same fills again at every nesting level) is refused.
+#[test]
+fn too_many_gradient_tables_refuse_the_plan() {
+    let doc = |n: usize| {
+        let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        for _ in 0..n {
+            let fill = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
+            let mut l = Layer::new("fill", LayerContent::Fill(fill));
+            l.opacity = 0.5;
+            d.layers.push(l);
+        }
+        d
+    };
+    assert!(plan(&doc(16)).is_ok());
+    let e = plan(&doc(1100)).unwrap_err().to_string();
+    assert!(e.contains("gradient fills"), "{e}");
 }
 
 /// Adjustments whose LUT rows the planner caches (#11498), with settings away from identity.
