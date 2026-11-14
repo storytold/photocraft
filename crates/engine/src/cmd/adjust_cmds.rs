@@ -337,8 +337,9 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Adjustments › Exposure: [`has_adjustable`], refused in the CMYK, Lab, Indexed Color and
 /// Multichannel documents measured in #14630 (`Session::precondition` refuses Bitmap for every
-/// adjustment but Invert). Duotone and a targeted alpha channel, Quick Mask or layer mask (a gray
-/// plane in any mode) were not measured and keep today's behaviour.
+/// adjustment but Invert). Duotone and an alpha channel or Quick Mask targeted in the Channels
+/// panel (a gray plane in any mode) were not measured and keep today's behaviour; a targeted layer
+/// mask never reaches this check (`channel_cmds::mask_target_enabled` answers for it).
 pub(crate) fn exposure_enabled(s: &Session) -> std::result::Result<(), String> {
     use photocraft_color::ColorMode;
     if crate::channel_cmds::edits_channel(s) {

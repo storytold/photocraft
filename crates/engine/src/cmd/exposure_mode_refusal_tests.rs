@@ -84,7 +84,7 @@ fn duotone_documents_keep_todays_behaviour() {
     assert!(s.is_enabled(EXPOSURE), "Duotone is not refused by this item");
 }
 
-/// The refusal names the document's mode, like the other RGB-or-Grayscale checks.
+/// The refusal names the document's mode as the Image › Mode menu does.
 #[test]
 fn the_refusal_names_the_documents_mode() {
     let s = new_doc("cmyk", 8);
