@@ -1738,7 +1738,7 @@ pub fn export_flat_with_renderer(
     ctl: &photocraft_raster::Interrupt,
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
-    if let Some(mut r) = export_mode_specific(doc, format, opts)? {
+    if let Some(mut r) = export_mode_specific(doc, format, opts, ctl)? {
         // Palette PNG/BMP/GIF and Duotone exports render on their own paths before the renderer
         // branch: say so, or `--gpu` would silently do nothing for them.
         if let Some(renderer) = &mut renderer {
@@ -2360,7 +2360,7 @@ fn gif_dropped_metadata(doc: &Document, opts: &ExportOptions) -> Vec<String> {
 
 /// Indexed Color → PNG-8, an 8-bit BMP or a GIF with the document's colour table; Duotone → the
 /// inks rendered as RGB.
-fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) -> Result<Option<ExportResult>, IoError> {
+fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<Option<ExportResult>, IoError> {
     match doc.mode {
         ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp | Format::Gif) => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
@@ -2370,8 +2370,12 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
             let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
                 table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != transparent_index).map(|(i, c)| (i as u8, c)).unzip();
             let opaque = photocraft_doc::ColorTable { colors, transparent: None };
+            // This route renders and encodes on its own, so it polls `ctl` itself: before the
+            // render, per band and before the encoder (#11861 review).
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
             photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 for p in &band.px {
                     let i = match table.transparent {
                         Some(t) if p[3] < 0.5 => t,
@@ -2383,6 +2387,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 Ok(())
             })?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             if format == Format::Bmp {
                 let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors)?;
                 let mut warnings = vec![format!("written as an 8-bit palette BMP ({} colours)", table.colors.len())];

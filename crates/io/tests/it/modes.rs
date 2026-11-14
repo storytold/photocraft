@@ -318,6 +318,29 @@ fn indexed_gif_pads_the_palette_through_a_transparent_index_beyond_it() {
 }
 
 #[test]
+fn indexed_gif_export_polls_the_interrupt_while_it_renders() {
+    // #11861 review: the indexed GIF route renders and encodes on its own path. `export_with`
+    // refuses an already-cancelled export up front and again at the end, so a cancel that lands
+    // while the route works used to be noticed only after the whole GIF was rendered and encoded.
+    // The route now polls between its stages: the interrupt is asked before the render, per
+    // rendered band and before the encoder, on top of `export_with`'s own two checks.
+    let mut d = doc(ColorMode::Indexed);
+    d.color_table = Some(ColorTable { colors: vec![[0, 0, 0], [255, 0, 0]], transparent: None });
+    let polls = std::sync::atomic::AtomicU32::new(0);
+    let counting = || {
+        polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        false
+    };
+    let ok = photocraft_io::export_with(&d, "x.gif", &Default::default(), &photocraft_raster::Interrupt::cancel_only(&counting));
+    assert!(ok.is_ok(), "{:?}", ok.map(|r| r.bytes.len()));
+    let n = polls.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(n >= 5, "export_with polls twice; the route adds a poll before render, per band and before encode: {n}");
+    // Cancelled from the start: the export stops with `Cancelled`.
+    let yes = || true;
+    let r = photocraft_io::export_with(&d, "x.gif", &Default::default(), &photocraft_raster::Interrupt::cancel_only(&yes));
+    assert!(matches!(r, Err(photocraft_io::IoError::Cancelled)), "{:?}", r.map(|r| r.bytes.len()));
+}
+#[test]
 fn indexed_gif_keeps_the_transparent_index() {
     let mut d = Document::with_background("m", Size::new(2, 1), ColorMode::Rgb, SampleType::U8, Color::rgba(1.0, 0.0, 0.0, 1.0));
     d.mode = ColorMode::Indexed;
