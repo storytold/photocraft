@@ -19,9 +19,11 @@
 
 pub mod area;
 pub mod cjk;
+mod color_glyphs;
 pub mod craft_fonts;
 mod embolden;
-pub mod engine_data;
+// The EngineData syntax of type layers is PSD format code: it lives in craft-psd.
+pub use craft_psd::engine_data;
 pub mod font_class;
 pub mod fonts;
 pub mod glyphs;
@@ -326,6 +328,8 @@ mod warm {
     }
 }
 
+#[cfg(test)]
+mod color_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
