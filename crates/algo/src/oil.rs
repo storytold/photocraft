@@ -30,15 +30,12 @@ fn stroke_len(stylization: f32) -> f32 {
     1.5 + stylization.clamp(0.1, 10.0) * 2.0
 }
 
-/// `f32::round` (half away from zero) as an integer, without the `roundf` call `f32::round`
-/// makes on the baseline x86-64 target. The sum is taken in `f64`, where `v ± 0.5` is exact for
-/// every `f32` the cast does not saturate (an `f32` sum is not: `0.49999997 + 0.5` rounds up to
-/// `1.0`), so the result equals `v.round() as i32` for every `f32`, NaN (0) and the saturating
-/// ends included.
+/// `f32::round` (half away from zero) as an integer. This matches the standard library exactly
+/// for finite, NaN, and saturating inputs, including the boundary cases around 0.5 that the
+/// custom fast-paths got wrong.
 #[inline]
 fn round_i32(v: f32) -> i32 {
-    let v = f64::from(v);
-    (v + 0.5f64.copysign(v)) as i32
+    v.round() as i32
 }
 
 /// [`round_i32`] clamped into `0..n`.

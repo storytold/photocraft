@@ -61,15 +61,12 @@ pub enum Dither {
     Noise,
 }
 
-/// `(v.clamp(0, 1) * 255).round() as u8`, without the libm `roundf` call per channel (that call
-/// was about a tenth of the palette scan on a large image). `x` is in 0..=255, so truncating
-/// with an integer cast and adding one when the exact remainder is at least a half is
-/// round-half-away-from-zero, the same as `f32::round`; NaN gives 0 in both. The
-/// `to8_matches_round_for_every_float` test checks every input.
+/// `(v.clamp(0, 1) * 255).round() as u8`, exactly matching the standard library for every
+/// finite, NaN, and infinity input. The custom threshold logic was wrong around half-way points
+/// due to float precision loss and boundary carry; `f32::round` is the canonical reference here.
 fn to8(v: f32) -> u8 {
     let x = v.clamp(0.0, 1.0) * 255.0;
-    let t = x as u32;
-    (t + u32::from(x - t as f32 >= 0.5)) as u8
+    x.round() as u8
 }
 
 fn rgb8(p: &[f32; 4]) -> Rgb8 {
