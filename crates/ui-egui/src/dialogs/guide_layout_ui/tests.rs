@@ -526,3 +526,137 @@ fn percent_is_of_the_selected_artboard_and_stays_percent() {
     let reopened = open(&mut app);
     assert_eq!(app.ui.dialog_mut(reopened).unwrap().fields["width"], "50 %");
 }
+
+/// A second launch on the preferences `saved` holds, with a document open.
+fn relaunched(saved: String) -> PhotocraftApp {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":1200,"height":800})).unwrap();
+    let services = crate::Services { load_prefs: Some(Box::new(move || Some(saved.clone()))), ..Default::default() };
+    let mut app = PhotocraftApp::new(session, services);
+    crate::prefs_ui::load(&mut app);
+    app
+}
+
+/// The dialog reopens with the layout the last OK applied, after a restart too (#12978).
+#[test]
+fn the_confirmed_layout_survives_a_restart() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    for (key, value) in [
+        ("columns", json!(3)),
+        ("width", json!("100 px")),
+        ("gutter", json!("12 px")),
+        ("rows", json!(2)),
+        ("rowGutter", json!("4 px")),
+        ("margin", json!(["10 px", "20 px", "30 px", "40 px"])),
+        ("centerColumns", json!(true)),
+        ("clearExisting", json!(true)),
+    ] {
+        f.insert(key.into(), value);
+    }
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let saved = app.session.prefs_value().to_string();
+
+    let mut app = relaunched(saved);
+    let id = open(&mut app);
+    let f = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!((&f["columns"], &f["rows"]), (&json!(3), &json!(2)));
+    assert_eq!((&f["width"], &f["gutter"], &f["rowGutter"]), (&json!("100 px"), &json!("12 px"), &json!("4 px")));
+    assert_eq!(f["height"], Value::Null, "a height left empty stays empty");
+    assert_eq!(f["margin"], json!(["10 px", "20 px", "30 px", "40 px"]));
+    assert_eq!((&f["centerColumns"], &f["clearExisting"]), (&json!(true), &json!(true)));
+    // Alt+Reset still gives the factory layout, not the remembered one.
+    let mut fields = f.clone();
+    reset(&app, &mut fields);
+    assert_eq!((&fields["columns"], &fields["gutter"]), (&json!(8), &json!("20 px")));
+}
+
+/// Only OK remembers: Cancel and an OK that fails leave the saved layout as it was.
+#[test]
+fn cancel_and_a_failed_ok_keep_the_saved_layout() {
+    let mut app = app();
+    let id = open(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(3));
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert!(!app.session.prefs().dialogs.contains_key(COMMAND), "Cancel saves nothing");
+
+    let id = open(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(4));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let saved = app.session.prefs().dialogs.get(COMMAND).cloned().unwrap();
+    assert_eq!(saved["columns"], 4);
+    assert!(saved.get("color").is_none() && saved.get(MARK).is_none(), "only the layout is saved: {saved}");
+
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("columns".into(), json!(5));
+    f.insert("color".into(), json!("invalid"));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert_eq!(app.session.prefs().dialogs.get(COMMAND), Some(&saved));
+}
+
+/// A hand-edited preferences file can't break the dialog: each bad value keeps its default,
+/// the good ones still load.
+#[test]
+fn a_corrupt_saved_layout_keeps_the_defaults() {
+    let bad = json!({
+        "columns": "many",
+        "rows": 5000,
+        "width": "10%",
+        "gutter": -3,
+        "rowGutter": 6,
+        "margin": [1, 2, 3],
+        "centerColumns": 1,
+        "clearExisting": true,
+        "target": "moon",
+        "__preset": "twoColumn",
+        "bogus": true,
+    });
+    let mut app = relaunched(json!({"dialogs": {COMMAND: bad}}).to_string());
+    let mut want = crate::view_cmds::default_guide_layout();
+    want["width"] = json!("10%");
+    want["rowGutter"] = json!(6);
+    want["clearExisting"] = json!(true);
+    assert_eq!(app.ui.view.guide_layout, want);
+    let id = open(&mut app);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+
+    let app = relaunched(json!({"dialogs": {COMMAND: "junk"}}).to_string());
+    assert_eq!(app.ui.view.guide_layout, crate::view_cmds::default_guide_layout());
+}
+
+/// The target and the Columns, Rows and Margin checkboxes come back after a restart too: an OK
+/// on the selected artboards with Columns and Margin off reopens that way when an artboard is
+/// selected again, and falls back to the document when none is.
+#[test]
+fn the_confirmed_target_and_sections_survive_a_restart() {
+    let board = json!({"rect": [200, 100, 140, 40]});
+    let mut app = app();
+    app.run("layer.new.artboard", board.clone()).unwrap();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    for (key, value) in [
+        ("target", json!("selectedArtboards")),
+        ("rows", json!(2)),
+        ("__columnsEnabled", json!(false)),
+        ("__rowsEnabled", json!(true)),
+        ("__marginEnabled", json!(false)),
+    ] {
+        f.insert(key.into(), value);
+    }
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let saved = app.session.prefs_value().to_string();
+
+    let mut app = relaunched(saved.clone());
+    app.run("layer.new.artboard", board).unwrap();
+    let id = open(&mut app);
+    let f = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(f["target"], json!("selectedArtboards"));
+    assert_eq!((&f["__columnsEnabled"], &f["__rowsEnabled"], &f["__marginEnabled"]), (&json!(false), &json!(true), &json!(false)));
+
+    let mut app = relaunched(saved);
+    let id = open(&mut app);
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["target"], json!("document"), "no artboard selected");
+}
