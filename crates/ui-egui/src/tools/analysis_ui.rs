@@ -81,6 +81,10 @@ pub struct AnalysisUi {
     pub dialog: Option<(String, Map<String, Value>)>,
     #[serde(skip)]
     pub drag: Option<Drag>,
+    /// Where the press of a Color Sampler drag was: ⇧ keeps the drag on its dominant axis from
+    /// there (#11730).
+    #[serde(skip)]
+    pub sampler_press: Option<[f64; 2]>,
 }
 
 impl Default for AnalysisUi {
@@ -95,6 +99,7 @@ impl Default for AnalysisUi {
             use_measurement_scale: false,
             dialog: None,
             drag: None,
+            sampler_press: None,
         }
     }
 }
@@ -415,6 +420,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         // there (a click on it moves it to the clicked pixel); Escape cancels either drag.
         (Tool::ColorSampler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
+            app.ui.analysis.sampler_press = Some(p);
             match sampler_at(app, p) {
                 // ⌥-click a point removes it.
                 Some(i) if mods.alt => {
@@ -426,12 +432,16 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             }
         }
         (Tool::ColorSampler, ToolEvent::Move { x, y, .. }) => {
+            let to = sampler_target(app, [x, y], mods.shift);
             if let Some(Drag::Sampler(_, at) | Drag::SamplerNew(at)) = &mut app.ui.analysis.drag {
-                *at = [x, y];
+                *at = to;
             }
         }
         (Tool::ColorSampler, ToolEvent::Up { x, y }) => {
+            // Where the pointer ends decides on or off the canvas; ⇧ only fixes the axis.
             let inside = (0.0..f64::from(doc.size.width)).contains(&x) && (0.0..f64::from(doc.size.height)).contains(&y);
+            let [x, y] = sampler_target(app, [x, y], mods.shift);
+            app.ui.analysis.sampler_press = None;
             let r = match app.ui.analysis.drag.take() {
                 // Released inside the canvas: move it there. Outside: remove just that point.
                 Some(Drag::Sampler(i, _)) if inside => app.run("view.colorSamplers.move", json!({"index": i, "x": x, "y": y})),
@@ -445,6 +455,26 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         _ => {}
     }
     true
+}
+
+/// Where a Color Sampler drag at `p` puts its point. With ⇧ (#11730) the drag keeps to its
+/// dominant axis, the larger of its horizontal and vertical distance from the press: the point
+/// keeps the dragged sampler's own row or column (a new point's, the press's). Equal distances
+/// (not measured) stay free, as without ⇧.
+fn sampler_target(app: &PhotocraftApp, p: [f64; 2], shift: bool) -> [f64; 2] {
+    let Some(press) = app.ui.analysis.sampler_press.filter(|_| shift) else { return p };
+    let anchor = match app.ui.analysis.drag {
+        Some(Drag::Sampler(i, _)) => app.session.active().and_then(|d| d.color_samplers.get(i).copied()).unwrap_or(press),
+        _ => press,
+    };
+    let (dx, dy) = ((p[0] - press[0]).abs(), (p[1] - press[1]).abs());
+    if dx > dy {
+        [p[0], anchor[1]]
+    } else if dy > dx {
+        [anchor[0], p[1]]
+    } else {
+        p
+    }
 }
 
 /// The nearest Color Sampler point within `tol` document pixels, or `None`.
@@ -1205,6 +1235,8 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod sampler_drag_tests;
+#[cfg(test)]
+mod sampler_shift_tests;
 
 #[cfg(test)]
 mod sampler_extras_tests;
