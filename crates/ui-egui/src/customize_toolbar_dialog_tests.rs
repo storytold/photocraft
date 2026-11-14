@@ -158,3 +158,51 @@ fn the_dialog_shows_its_lists_and_buttons_and_its_buttons_work() {
     assert!(h.state().ui.dialogs.iter().all(|d| d.id != id), "Enter closed it");
     assert!(stored(h.state()).toolbar.is_empty(), "and committed it");
 }
+
+/// CodeRabbit on #14811: a malformed field set over the control channel is an error at Done, not
+/// an empty list stored as the layout.
+#[test]
+fn done_rejects_a_malformed_list_and_keeps_the_stored_layout() {
+    let mut app = app();
+    let before = stored(&app);
+    for (key, bad) in [("toolbar", json!("Move")), ("extras", json!({"a": 1})), ("toolbar", json!([["Move"], 3]))] {
+        let id = open(&mut app);
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        *fields = serde_json::from_value(json!({"__prefsui": KIND, "toolbar": [["Move"]], "extras": []})).unwrap();
+        fields.insert(key.into(), bad.clone());
+        assert!(crate::dialogs::confirm(&mut app, id).is_err(), "{key} = {bad} is refused");
+        assert_eq!(stored(&app), before, "{key} = {bad}: the stored layout is as it was");
+        app.ui.dialogs.clear();
+    }
+    // A missing field still means no groups: Done accepts it.
+    let id = open(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.remove("extras");
+    app.ui.dialog_mut(id).unwrap().fields.insert("toolbar".into(), json!([["Move"]]));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(stored(&app).toolbar, vec![vec!["Move".to_string()]]);
+}
+
+/// CodeRabbit on #14811: in a window about 600 points high the lists shrink so the buttons stay
+/// on screen, instead of a fixed 480-point body pushing Done and Cancel below the window.
+#[test]
+fn the_buttons_stay_on_screen_in_a_short_window() {
+    let mut app = app();
+    open(&mut app);
+    let mut h = Harness::builder().with_size(vec2(1100.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(5);
+    if !h.ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+        return;
+    }
+    for label in ["Done", "Cancel", "Restore Defaults", "Clear Tools"] {
+        let bottom = h.get_by_label(label).rect().bottom();
+        assert!(bottom <= 600.0, "{label} ends at {bottom}, inside the 600-point window");
+    }
+}

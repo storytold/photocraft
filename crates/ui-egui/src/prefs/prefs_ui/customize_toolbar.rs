@@ -40,6 +40,15 @@ fn groups(f: &Map<String, Value>, key: &str) -> Vec<Vec<String>> {
     f.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
 }
 
+/// The groups in field `key` for Done: a missing field is no groups, but a value that isn't a list of
+/// lists of names is an error, not an empty list stored as the layout.
+fn groups_strict(f: &Map<String, Value>, key: &str) -> Result<Vec<Vec<String>>, String> {
+    match f.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("`{key}` must be a list of tool groups, each a list of tool names: {e}")),
+    }
+}
+
 /// Restore Defaults: the default groups and no Extra Tools (a tool the defaults leave out stays
 /// in Extra Tools, as the layout itself places it).
 pub(super) fn restore_defaults(f: &mut Map<String, Value>) {
@@ -102,10 +111,13 @@ pub(super) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     ui.add_space(8.0);
     let (toolbar, extras) = (groups(f, "toolbar"), groups(f, "extras"));
     let width = ((ui.available_width() - 12.0) / 2.0).max(160.0);
+    // The lists take what the window has left after the title, help text and button row (about
+    // 280 points), up to 440 and at least 120, so Done and Cancel stay reachable.
+    let height = (ui.ctx().content_rect().height() - 280.0).clamp(120.0, 440.0);
     ui.horizontal_top(|ui| {
-        ui.allocate_ui(egui::vec2(width, 480.0), |ui| list(app, ui, "Toolbar", &toolbar, false, "customize-toolbar-list", 440.0));
+        ui.allocate_ui(egui::vec2(width, height + 40.0), |ui| list(app, ui, "Toolbar", &toolbar, false, "customize-toolbar-list", height));
         ui.add_space(12.0);
-        ui.allocate_ui(egui::vec2(width, 480.0), |ui| list(app, ui, "Extra Tools", &extras, true, "customize-toolbar-extras", 440.0));
+        ui.allocate_ui(egui::vec2(width, height + 40.0), |ui| list(app, ui, "Extra Tools", &extras, true, "customize-toolbar-extras", height));
     });
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -121,7 +133,7 @@ pub(super) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
 /// Done: the two lists become the toolbar's layout. The single-tool `hidden` list is cleared, so
 /// the lists say everything (a tool it held is already in Extra Tools here). No history state.
 pub(super) fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    app.run("edit.toolbar", json!({"toolbar": groups(f, "toolbar"), "extras": groups(f, "extras"), "hidden": []}))
+    app.run("edit.toolbar", json!({"toolbar": groups_strict(f, "toolbar")?, "extras": groups_strict(f, "extras")?, "hidden": []}))
 }
 
 #[cfg(test)]
