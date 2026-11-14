@@ -441,6 +441,39 @@ fn content_part(state: &BoxState, at: KPoint, reach: f64, reference_point: bool)
     }
 }
 
+/// The cursor icon over document point `p`, with `reach` document units of handle slop (#13883):
+/// a selected Frame-target frame's handles resize, the frame itself is the arrow, and empty canvas
+/// has no icon (the tool's crosshair).
+fn cursor_icon(app: &PhotocraftApp, p: [f64; 2], reach: f64) -> Option<CursorIcon> {
+    if let Some(l) = selected(app)
+        && visible(app, l.id)
+        && let Some(f) = &l.frame
+        && target(app, l) == Target::Frame
+        && !app.session.active().is_some_and(|st| {
+            let locks = st.doc.effective_locks(l.id);
+            locks.all || locks.position
+        })
+    {
+        let state = frame_box(&f.transform);
+        match content_part(&state, KPoint::new(p[0], p[1]), reach, false) {
+            BoxPart::Corner(i) => {
+                // The corner's diagonal on screen, not its index: a turned frame swaps them.
+                let (a, b) = (state.quad[usize::from(i)], state.quad[(usize::from(i) + 2) % 4]);
+                let same = (b.x - a.x) * (b.y - a.y) >= 0.0;
+                return Some(if same { CursorIcon::ResizeNwSe } else { CursorIcon::ResizeNeSw });
+            }
+            BoxPart::Edge(i) => {
+                // The edge's on-screen direction, not its index: a turned frame swaps them.
+                let (a, b) = (state.quad[usize::from(i)], state.quad[(usize::from(i) + 1) % 4]);
+                let horizontal = (b.x - a.x).abs() >= (b.y - a.y).abs();
+                return Some(if horizontal { CursorIcon::ResizeVertical } else { CursorIcon::ResizeHorizontal });
+            }
+            _ => {}
+        }
+    }
+    frame_at(app, p).map(|_| CursorIcon::Default)
+}
+
 /// A drag of the open Free Transform's box, as the box's own gesture: Begin at the first move, then Updates.
 fn drag_content(app: &mut PhotocraftApp, c: &mut ContentPress, to: KPoint, mods: Mods, time: f64) {
     let Some(t) = app.ui.transform.as_mut() else { return };
@@ -649,13 +682,13 @@ impl CanvasTool for FramePass<'_> {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
-        let over = cx
-            .pointer
-            .as_ref()
-            .zip(cx.space())
-            .map(|(p, space)| space.view.to_doc(p.pos))
-            .is_some_and(|at| self.scope.with_app(|app| frame_at(app, [at.x, at.y]).is_some()));
-        if over { Cursor::System(CursorIcon::Move) } else { self.state.draw.cursor(cx) }
+        let Some((p, space)) = cx.pointer.as_ref().zip(cx.space()) else { return self.state.draw.cursor(cx) };
+        let at = space.view.to_doc(p.pos);
+        let reach = space.view.doc_len(cx.reach());
+        match self.scope.with_app(|app| cursor_icon(app, [at.x, at.y], reach)) {
+            Some(icon) => Cursor::System(icon),
+            None => self.state.draw.cursor(cx),
+        }
     }
 
     fn command_form(&self) -> ToolPath {
@@ -806,6 +839,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     true
 }
 
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod escape_commit_tests;
 #[cfg(test)]
