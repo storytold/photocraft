@@ -245,6 +245,32 @@ fn deleting_with_type_path_components_selected_keeps_the_type_layer() {
 }
 
 #[test]
+fn path_delete_uses_the_modifiers_on_the_key_press() {
+    for key in [Key::Backspace, Key::Delete] {
+        for (at_press, at_end, deletes) in [(Modifiers::NONE, Modifiers::SHIFT, true), (Modifiers::SHIFT, Modifiers::NONE, false)] {
+            let mut app = app();
+            saved(&mut app, "Path 1");
+            click(&mut app, 20.0, 20.0, Modifiers::NONE);
+            let before = saved_path(&app).clone();
+            let ctx = egui::Context::default();
+            let events = vec![
+                egui::Event::ModifiersChanged(at_press),
+                egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: at_press },
+                egui::Event::ModifiersChanged(at_end),
+            ];
+            ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+            assert_eq!(super::handle_delete_key(&mut app, &ctx), deletes, "{key:?}, {at_press:?}");
+            ctx.end_pass().textures_delta.clear();
+            if deletes {
+                assert_eq!(saved_path(&app).subpaths.len(), 1);
+            } else {
+                assert_eq!(saved_path(&app), &before);
+            }
+        }
+    }
+}
+
+#[test]
 fn a_held_path_delete_preserves_the_remaining_path_and_layers() {
     for key in [Key::Delete, Key::Backspace] {
         for target in ["saved component", "saved path", "shape"] {

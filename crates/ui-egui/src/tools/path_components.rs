@@ -106,10 +106,16 @@ pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) ->
     if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.drag.is_some() {
         return false;
     }
-    let mods = ctx.input(|i| i.modifiers);
-    if mods.command || mods.ctrl || mods.shift || mods.alt || !ctx.input(|i| i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete)) {
+    let Some(event_index) = ctx.input(|input| {
+        input.events.iter().position(|event| {
+            matches!(
+                event,
+                Event::Key { key: Key::Backspace | Key::Delete, pressed: true, modifiers, .. } if modifiers.is_none()
+            )
+        })
+    }) else {
         return false;
-    }
+    };
     let visible = app.ui.view.shows(app.ui.view.show.target_path);
     let action = match visible.then(|| selected(app)).flatten() {
         Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
@@ -132,7 +138,7 @@ pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) ->
             Some(("path.delete", PathRef::Saved(index).params(app)))
         }
     };
-    let Some(key) = ctx.input_mut(|i| [Key::Backspace, Key::Delete].into_iter().find(|key| i.consume_key(mods, *key))) else { return false };
+    let Event::Key { key, .. } = ctx.input_mut(|input| input.events.remove(event_index)) else { return false };
     ctx.data_mut(|data| data.get_temp_mut_or_default::<BTreeSet<Key>>(held_delete_id()).insert(key));
     // A stale, locked or unsupported selection still owns the key.
     if let Some((command, params)) = action {
