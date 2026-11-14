@@ -384,10 +384,13 @@ pub(super) fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
     if edits {
         let xmp = s.active().ok_or(EngineError::NoDocument)?.doc.metadata.xmp.clone();
         let new = write_file_info(xmp.as_deref(), p);
-        s.edit("File Info", |doc, _| {
-            doc.metadata.xmp = Some(new.into());
-            Ok(())
-        })?;
+        // The dialog submits every field, so OK without a change must not add a history step.
+        if read_file_info(Some(&new)) != read_file_info(xmp.as_deref()) {
+            s.edit("File Info", |doc, _| {
+                doc.metadata.xmp = Some(new.into());
+                Ok(())
+            })?;
+        }
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut info = read_file_info(d.doc.metadata.xmp.as_deref());
@@ -396,3 +399,7 @@ pub(super) fn file_info(s: &mut Session, p: &Value) -> Result<Value> {
     }
     Ok(info)
 }
+
+#[cfg(test)]
+#[path = "file_info_unchanged_ok_tests.rs"]
+mod file_info_unchanged_ok_tests;
