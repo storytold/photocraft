@@ -585,6 +585,196 @@ fn land_jobs(app: &mut PhotocraftApp) {
     panic!("the background jobs never landed");
 }
 
+#[test]
+fn closing_with_a_pending_transform_saves_the_transformed_pixels() {
+    use std::sync::Mutex;
+
+    let ctx = egui::Context::default();
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    for background in [false, true] {
+        let mut app = app_with_square(64, square);
+        let state = app.session.active_mut().unwrap();
+        let layer = state.active_layer.unwrap();
+        state.path = Some("/pics/square.psd".into());
+        state.saved_revision = state.revision;
+        let bounds = move |doc: &photocraft_doc::Document| doc.layer(layer).unwrap().surface().unwrap().content_bounds();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let inline = written.clone();
+        let worker = written.clone();
+        app.services.export = Some(Box::new(move |doc, _, _| {
+            inline.lock().unwrap().push(bounds(doc));
+            Ok((Vec::new(), Vec::new()))
+        }));
+        app.services.write = Some(Box::new(|_, _| Ok(())));
+        app.services.save_file = Some(Arc::new(move |doc, _, _, ctl| {
+            ctl.commit()?;
+            worker.lock().unwrap().push(bounds(doc));
+            Ok(Vec::new())
+        }));
+        begin(&mut app, &ctx).unwrap();
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+        app.background_jobs = background;
+
+        assert!(app.has_unsaved_work());
+        crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        assert!(app.discard.is_some(), "the visible move counts as an unsaved edit");
+        crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
+        if background {
+            assert!(committing(&app).is_some());
+            assert!(app.discard.is_some());
+            assert!(app.session.active().is_some());
+            assert!(written.lock().unwrap().is_empty());
+            assert!(crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).is_err());
+            land_jobs(&mut app);
+        }
+        assert_eq!(*written.lock().unwrap(), [square.translate(8, 0)]);
+        assert!(app.discard.is_none());
+        assert!(app.session.documents().is_empty());
+    }
+}
+
+#[test]
+fn direct_save_commands_refuse_to_write_with_an_open_transform() {
+    let ctx = egui::Context::default();
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    let mut app = app_with_square(64, square);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("copy.psd");
+    begin(&mut app, &ctx).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+    for id in ["file.save", "file.saveAs", "file.saveACopy"] {
+        assert_eq!(app.run(id, json!({"path": path})).unwrap_err(), "Commit or cancel the transform first");
+        assert!(!path.exists());
+        assert!(app.ui.transform.is_some());
+    }
+    commit(&mut app);
+    app.run("file.saveACopy", json!({"path": path})).unwrap();
+    assert!(path.exists());
+}
+
+#[test]
+fn save_waits_for_content_aware_scale_and_keeps_the_box_on_refusal() {
+    let ctx = egui::Context::default();
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    let mut app = app_with_square(64, square);
+    app.session.active_mut().unwrap().path = Some("/pics/square.psd".into());
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let capture = written.clone();
+    app.services.export = Some(Box::new(move |doc, _, _| {
+        capture.borrow_mut().push(doc.layer(layer).unwrap().surface().unwrap().content_bounds());
+        Ok((Vec::new(), Vec::new()))
+    }));
+    app.services.write = Some(Box::new(|_, _| Ok(())));
+
+    crate::cas_transform::begin(&mut app, &ctx).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = corners([8.0, 8.0, 20.0, 24.0]);
+    t.content_aware.as_mut().unwrap().protect = Some("missing alpha channel".into());
+    let result = crate::menus::invoke(&mut app, &ctx, "file.save", json!({}));
+    assert!(result.unwrap_err().contains("must name an alpha channel"));
+    assert!(written.borrow().is_empty());
+    assert!(app.ui.transform.is_some());
+    assert!(app.transform_preview.is_some());
+
+    crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    let error = crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap_err();
+    assert!(error.contains("must name an alpha channel"));
+    assert!(app.discard.is_some());
+    assert!(app.session.active().is_some());
+    assert!(written.borrow().is_empty());
+    crate::discard_ui::answer_choice(&mut app, &ctx, "cancel", false).unwrap();
+
+    app.ui.transform.as_mut().unwrap().content_aware.as_mut().unwrap().protect = None;
+    app.background_jobs = true;
+    crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert!(committing(&app).is_some());
+    assert!(written.borrow().is_empty());
+    land_jobs(&mut app);
+    assert_eq!(*written.borrow(), [photocraft_geom::Rect::new(8, 8, 20, 24)]);
+    assert!(app.ui.transform.is_none());
+}
+
+#[test]
+fn saving_a_reopened_smart_object_keeps_the_pending_rotation() {
+    for (background, already_committing, switch_tab) in [(false, false, false), (true, false, false), (true, true, false), (true, true, true)] {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 96, "height": 64})).unwrap();
+        let shape = app.session.execute("shape.create", json!({"kind": "rect", "rect": [8, 6, 45, 30], "fill": "#ae6325"})).unwrap()["layer"].as_u64().unwrap();
+        app.session.execute("type.create", json!({"text": "Hi", "size": 16, "x": 12, "y": 25})).unwrap();
+        app.session.execute("layer.select", json!({"layer": shape, "mode": "add"})).unwrap();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.session.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 12, 8]})).unwrap();
+        let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "psd", &Default::default()).unwrap().bytes;
+
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = written.clone();
+        let capture_background = written.clone();
+        let services = crate::Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|out| (out.document, out.warnings)).map_err(|e| e.to_string())
+            })),
+            export: Some(Box::new(|doc, path, settings| {
+                photocraft_io::export(doc, path, &settings.io_options()).map(|out| (out.bytes, out.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(move |_, bytes| {
+                capture.lock().unwrap().push(bytes.to_vec());
+                Ok(())
+            })),
+            save_file: Some(Arc::new(move |doc, path, settings, ctl| {
+                let out = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+                ctl.commit()?;
+                capture_background.lock().unwrap().push(out.bytes);
+                Ok(out.warnings)
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.open_bytes_from("smart.psd", &bytes, Some("smart.psd")).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layers.iter().find(|l| matches!(l.content, LayerContent::Smart(_))).unwrap().id;
+        app.run("layer.select", json!({"layer": layer.0})).unwrap();
+        begin(&mut app, &ctx).unwrap();
+        super::options_bar::rotate_about_pivot(&mut app, 25_f64.to_radians());
+        app.background_jobs = background;
+        let document = app.active_doc_id().unwrap();
+        if already_committing {
+            commit(&mut app);
+            assert!(committing(&app).is_some());
+        }
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        if background {
+            assert!(written.lock().unwrap().is_empty(), "save waits for the transform job");
+        }
+        let other = switch_tab.then(|| {
+            app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.active_doc_id().unwrap()
+        });
+        land_jobs(&mut app);
+        let writes = written.lock().unwrap();
+        assert_eq!(writes.len(), 1);
+        let saved = photocraft_io::import("smart.psd", &writes[0]).unwrap().document;
+        let placement = |doc: &photocraft_doc::Document| {
+            doc.layers
+                .iter()
+                .find_map(|l| match &l.content {
+                    LayerContent::Smart(sm) => Some(sm.transform),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let after = placement(&saved);
+        assert!((after.m[1] - 25_f64.to_radians().sin()).abs() < 1e-9, "background {background}, already committing {already_committing}: {after:?}");
+        assert!(app.ui.transform.is_none());
+        assert_eq!(app.active_doc_id().unwrap(), other.unwrap_or(document));
+        let state = app.session.documents().iter().find(|state| state.doc.id == document).unwrap();
+        assert!(!state.is_dirty());
+    }
+}
+
 /// A smart object placed the way a dropped file is (the last step made it), in Free Transform
 /// and moved 8 px right, with commits running in the background as in the desktop app:
 /// (app, the placed layer, its frame before the move, history steps before the place).
@@ -3597,6 +3787,52 @@ fn warp_on_type_takes_a_style_and_keeps_the_type_editable() {
 }
 
 #[test]
+fn closing_with_a_cleared_text_warp_prompts_and_saves_the_removal() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("type.create", json!({"x": 10, "y": 60, "text": "Hello"})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    let layer = state.active_layer.unwrap();
+    state.path = Some("/pics/warped.psd".into());
+    state.saved_revision = state.revision;
+
+    begin_warp(&mut app, &ctx).unwrap();
+    reset_warp(&mut app);
+    assert!(!app.has_unsaved_work(), "None on already unwarped text is a no-op");
+    cancel(&mut app);
+
+    app.run("type.warpText", json!({"style": "flag", "bend": 40.0})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    state.saved_revision = state.revision;
+    let writes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let capture = writes.clone();
+    app.services.export = Some(Box::new(move |doc, _, _| {
+        assert!(matches!(&doc.layer(layer).unwrap().content, LayerContent::Text(t) if t.warp.is_none()));
+        Ok((Vec::new(), Vec::new()))
+    }));
+    app.services.write = Some(Box::new(move |_, _| {
+        capture.set(capture.get() + 1);
+        Ok(())
+    }));
+
+    begin_warp(&mut app, &ctx).unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Flag);
+    assert!(!app.has_unsaved_work(), "opening the existing Flag does not change it");
+    // A preset at zero bend has identity geometry but still stores its Warp Text settings.
+    app.ui.transform.as_mut().unwrap().warp.as_mut().unwrap().bend = 0.0;
+    assert!(app.has_unsaved_work(), "changing the saved Flag's bend to zero is an unsaved edit");
+    reset_warp(&mut app);
+    assert!(app.has_unsaved_work(), "clearing the saved warp is an unsaved edit");
+    crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert!(app.discard.is_some());
+    assert!(app.session.active().is_some());
+    crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
+    assert_eq!(writes.get(), 1);
+    assert!(app.session.documents().is_empty());
+}
+
+#[test]
 fn anchor_grid_point_on_quad_and_carry_pivot() {
     let quad = [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]];
     assert_eq!(point_on_quad(quad, 0), [0.0, 0.0]);
@@ -4015,6 +4251,33 @@ fn warp_mode_previews_a_stored_smart_warp_from_the_unwarped_source() {
     for (x, y) in [(0, 0), (23, 0), (0, 23), (23, 23), (12, 12)] {
         assert_eq!(img.pixels[y * 24 + x].a(), 255, "texel {x},{y}");
     }
+}
+
+#[test]
+fn stored_smart_object_warp_stays_clean_until_edited_or_reset() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "arc", "bend": 40.0, "rect": [8, 8, 32, 32]})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    state.saved_revision = state.revision;
+    let revision = state.revision;
+    let layer = state.active_layer.unwrap();
+
+    begin_warp(&mut app, &ctx).unwrap();
+    assert!(!app.has_unsaved_work());
+    commit(&mut app);
+    assert_eq!(app.session.active().unwrap().revision, revision, "applying an untouched warp is a no-op");
+
+    begin_warp(&mut app, &ctx).unwrap();
+    leave_warp(&mut app);
+    enter_warp(&mut app, &ctx);
+    assert!(!app.has_unsaved_work());
+    reset_warp(&mut app);
+    assert!(app.has_unsaved_work(), "resetting the stored warp is an edit");
+    commit(&mut app);
+    let doc = &app.session.active().unwrap().doc;
+    assert!(matches!(&doc.layer(layer).unwrap().content, LayerContent::Smart(sm) if sm.warp.is_none()));
 }
 
 /// Leaving Warp mode, and Undo back into Free Transform, show the render with the stored warp

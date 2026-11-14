@@ -37,11 +37,11 @@ fn a_save_document_script_that_edits_the_document_keeps_the_prompt_up() {
         }];
     });
     let doc = doc_id(&app, 0);
-    assert!(!save(&mut app, &ctx, doc), "the script's layer was never written");
+    assert!(!save(&mut app, &ctx, doc, false).unwrap(), "the script's layer was never written");
     assert!(app.session.documents()[0].is_dirty());
     // Without the script the same save releases the prompt.
     app.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
-    assert!(save(&mut app, &ctx, doc));
+    assert!(save(&mut app, &ctx, doc, false).unwrap());
 }
 
 #[test]

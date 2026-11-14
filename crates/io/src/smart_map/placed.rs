@@ -48,7 +48,13 @@ pub(super) fn quad_moved(template: &Descriptor, s: &PlacedSpec<'_>, warp: Option
     let Some(Value::List(pts)) = template.get("Trnf") else { return true };
     let old: Vec<f64> = pts.iter().filter_map(|v| crate::blocks::num(Some(v))).collect();
     let new = quad_points(s, warp);
-    old.len() != 8 || old.iter().zip(new).any(|(a, b)| (a - b).abs() > 1e-6 * (1.0 + a.abs()))
+    // Allow round-off from reconstructing the placement from its corners. A tolerance based on
+    // a fraction of the document position can hide a real rotation on a small, distant layer.
+    old.len() != 8
+        || old.iter().zip(new).any(|(a, b)| {
+            let roundoff = 16.0 * f64::EPSILON * a.abs().max(b.abs());
+            (a - b).abs() > 1e-9 + roundoff
+        })
 }
 
 pub(crate) fn enumv(t: &str, v: &str) -> Value {

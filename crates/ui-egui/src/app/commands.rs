@@ -76,7 +76,7 @@ impl PhotocraftApp {
                 // needs its answer now, and a click in another tab wasn't meant for this one.
                 let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
                 let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
-                if !click || !committing_here || self.after_transform_commit.is_some() {
+                if !click || !committing_here || self.after_transform_commit.is_some() || crate::discard_ui::waiting_for_transform(self) {
                     return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
                 }
                 self.after_transform_commit = Some((id.to_string(), params));

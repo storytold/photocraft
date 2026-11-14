@@ -7,6 +7,7 @@
 
 use egui::Key;
 use photocraft_doc::DocId;
+use photocraft_engine::jobs::JobId;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -31,6 +32,8 @@ pub struct Prompt {
     auto_answered: Option<DocId>,
     /// `auto` came from a control client (`saveAll`): its Saves are judged as automation.
     auto_control: bool,
+    /// The transform that must land before the chosen Save can start.
+    transform_save: Option<JobId>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -69,7 +72,11 @@ fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, V
         Some(Reach::All) => (0..docs.len()).collect(),
         None => Vec::new(),
     };
-    let dirty = affected.into_iter().filter_map(|i| docs.get(i)).filter(|d| d.is_dirty()).map(|d| d.doc.id).collect();
+    let transform = crate::transform_tool::unsaved_transform(app);
+    let mut dirty: Vec<_> =
+        affected.into_iter().filter_map(|i| docs.get(i)).filter(|d| d.is_dirty() || Some(d.doc.id) == transform).map(|d| d.doc.id).collect();
+    // A prompt for a different tab would switch away and cancel the visible transform.
+    dirty.sort_by_key(|id| Some(*id) != transform);
     (target.and_then(|i| docs.get(i)).map(|d| d.doc.id), dirty)
 }
 
@@ -97,6 +104,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         auto: None,
         auto_answered: None,
         auto_control: false,
+        transform_save: None,
     };
     match &app.discard {
         None => ask(app, prompt),
@@ -132,7 +140,7 @@ impl PhotocraftApp {
     /// Whether closing now would lose work: a document has unsaved changes and closing wasn't
     /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
     pub fn has_unsaved_work(&self) -> bool {
-        !self.allow_close && self.session.documents().iter().any(|d| d.is_dirty())
+        !self.allow_close && (self.session.documents().iter().any(|d| d.is_dirty()) || crate::transform_tool::unsaved_transform(self).is_some())
     }
 }
 
@@ -227,10 +235,19 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Saves `doc`; true once it is saved. A document without a file to write back to asks where in
 /// the save dialog: the prompt then hides until it is answered, and moves on only if it saved.
-fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
-    let Some(i) = index_of(app, doc) else { return false };
+fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, from_control: bool) -> Result<bool, String> {
+    let Some(i) = index_of(app, doc) else { return Ok(false) };
     app.session.set_active(i);
-    let saved = crate::menus::invoke_unguarded(app, ctx, "file.save", json!({}));
+    let saved = match crate::transform_tool::commit_for_save(app, from_control) {
+        Ok(None) => crate::menus::invoke_unguarded(app, ctx, "file.save", json!({})),
+        Ok(Some(job)) => {
+            if let Some(prompt) = app.discard.as_mut() {
+                prompt.transform_save = Some(job);
+            }
+            return Ok(false);
+        }
+        Err(error) => Err(error),
+    };
     if saved.is_ok() && app.file_dialog_open() {
         let ctx = ctx.clone();
         app.after_file_dialog(move |app, saved| {
@@ -238,22 +255,34 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
             saved_document(app, &ctx, doc);
             Ok(saved)
         });
-        return false;
+        return Ok(false);
     }
     match saved {
         // A Save Document script may have edited the document after it was written: still dirty.
         // A write the platform can't confirm (a web download) leaves it dirty too, and counts.
-        Ok(_) => {
-            !app.save_options_open()
-                && !app.saving()
-                && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
-        }
+        Ok(_) => Ok(!app.save_options_open()
+            && !app.saving()
+            && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())),
         // Backing out of the file dialog is the user's choice, not an error.
-        Err(e) if e == crate::file_dialog::CANCELLED => false,
-        Err(e) => {
-            app.ui.status = couldnt_save(e);
-            app.ui.status_error = true;
-            false
+        Err(e) if e == crate::file_dialog::CANCELLED => Ok(false),
+        Err(e) => Err(couldnt_save(e)),
+    }
+}
+
+pub(crate) fn waiting_for_transform(app: &PhotocraftApp) -> bool {
+    app.discard.as_ref().is_some_and(|p| p.transform_save.is_some())
+}
+
+/// Resume the Save that this prompt requested once its transform has landed.
+pub(crate) fn transform_finished(app: &mut PhotocraftApp, ctx: &egui::Context, job: JobId, landed: bool) {
+    let Some(prompt) = app.discard.as_mut().filter(|p| p.transform_save == Some(job)) else { return };
+    prompt.transform_save = None;
+    if landed && let Some(&doc) = prompt.docs.first() {
+        match save(app, ctx, doc, false) {
+            Ok(true) => advance(app, ctx),
+            Ok(false) => {}
+            // The transform job also reports its completion in the status bar.
+            Err(error) => crate::notices::error(app, error),
         }
     }
 }
@@ -264,6 +293,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
     if !app.save_options_open()
+        && !waiting_for_transform(app)
         && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
         && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
     {
@@ -279,9 +309,9 @@ fn couldnt_save(e: String) -> String {
 /// Draws the unsaved-changes (or Revert) prompt while one is pending and acts on the button the
 /// user picks; a refused or failed answer is reported in the status bar and the prompt stays.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
-    // Wait for all three; cancellation or a failed save brings us back.
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    // Wait for the transform, any save dialogs, and the write. A refusal or cancellation
+    // brings the question back.
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || waiting_for_transform(app) {
         // Hidden meanwhile: the question takes focus again when it comes back.
         if let Some(p) = app.discard.as_mut() {
             p.focused = None;
@@ -429,7 +459,7 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answe
         Answer::Discard => advance(app, ctx),
         Answer::Save => {
             authorize_save(app, from_control)?;
-            if save(app, ctx, doc) {
+            if save(app, ctx, doc, from_control)? {
                 advance(app, ctx);
             }
         }
@@ -512,7 +542,7 @@ pub(crate) fn answer_choice(app: &mut PhotocraftApp, ctx: &egui::Context, choice
     let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
         return Err("no unsaved-changes prompt is open".into());
     };
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || waiting_for_transform(app) {
         return Err("the unsaved-changes prompt is waiting for a save to finish".into());
     }
     let reverts = app.discard.as_ref().is_some_and(|p| p.id == "file.revert");
