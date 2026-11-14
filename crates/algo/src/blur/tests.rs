@@ -111,8 +111,8 @@ fn radial_blur_samples_large_arcs_beyond_64_intervals() {
         }
     };
     let actual = radial(&img, out, &ctx, 100.0, RadialMethod::Spin, RadialQuality::Good, (0.5, 0.5))[0];
-    let expected = average_samples(&img, out, &ctx, |x, y, pts| sample_path(x, y, pts, 8192))[0];
-    let coarse = average_samples(&img, out, &ctx, |x, y, pts| sample_path(x, y, pts, 64))[0];
+    let expected = average_samples(&img, out, &ctx, (Edge::Repeat, ctx.bounds), |x, y, pts| sample_path(x, y, pts, 8192))[0];
+    let coarse = average_samples(&img, out, &ctx, (Edge::Repeat, ctx.bounds), |x, y, pts| sample_path(x, y, pts, 64))[0];
 
     assert!(actual > 0.001, "dense radial samples should resolve the bright patch, got {actual}");
     assert!((actual - expected).abs() < 0.0015, "radial result {actual} differs from dense reference {expected}");
@@ -351,7 +351,7 @@ fn motion_kernel_matches_the_per_pixel_samples() {
         for (angle, distance) in [(0.0, 1.0), (0.0, 9.0), (30.0, 7.0), (90.0, 12.0), (-45.0, 20.0), (137.0, 33.5), (200.0, 40.0)] {
             let fast = motion(&img, out, &ctx, angle, distance);
             let offs = motion_offsets(angle, distance);
-            let slow = average_samples(&img, out, &ctx, |x, y, pts| pts.extend(offs.iter().map(|&(dx, dy)| (x + dx, y + dy))));
+            let slow = average_samples(&img, out, &ctx, (Edge::Transparent, img.rect), |x, y, pts| pts.extend(offs.iter().map(|&(dx, dy)| (x + dx, y + dy))));
             let err = slow.iter().zip(&fast).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
             assert!(err < 1e-5, "alpha {alpha} angle {angle} distance {distance}: max error {err}");
         }
