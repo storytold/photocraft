@@ -86,6 +86,12 @@ impl DetailPreview {
         self.pending.is_some()
     }
 
+    /// The full-resolution layer and the part of it the filter develops with Geometry on (the
+    /// canvas), which Upright analyses ([`photocraft_engine::lens_cmds::upright_fix`]).
+    pub(crate) fn geometry_source(&self) -> (&Surface, PixelRect) {
+        (&self.source, self.canvas.unwrap_or(self.area))
+    }
+
     fn poll(&mut self, revision: u64) {
         let Some((requested_revision, rx)) = &self.pending else { return };
         let requested_revision = *requested_revision;

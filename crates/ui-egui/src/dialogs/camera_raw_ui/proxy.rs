@@ -2,6 +2,7 @@
 use super::PARALLEL_MIN_PIXELS;
 use super::open::raw_stage;
 use super::{CameraRaw, CameraRawDialog, RgbHistogram};
+use photocraft_algo::camera_raw::geometry::UprightFix;
 
 /// Everything one develop of the proxy reads, owned, so it can run off the UI thread.
 pub(super) struct ProxyJob {
@@ -20,6 +21,33 @@ pub(super) struct ProxyJob {
     pub(super) display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(super) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
     pub(super) source_key: u64,
+    /// Where Upright's analysis comes from: the full-resolution canvas, as the filter sees it.
+    pub(super) upright: Option<UprightSource>,
+}
+
+/// The full-resolution canvas Upright analyses, and the analyses done so far (one per mode; the
+/// layer does not change while the dialog is open). The proxy is a smaller copy whose lines
+/// differ, so it is handed the full canvas's analysis and shows the correction OK applies.
+#[derive(Clone)]
+pub(super) struct UprightSource {
+    pub(super) source: photocraft_raster::Surface,
+    pub(super) frame: photocraft_geom::Rect,
+    pub(super) done: std::sync::Arc<std::sync::Mutex<Vec<UprightFix>>>,
+}
+
+impl UprightSource {
+    /// The analysis `p`'s Upright mode needs, from the full canvas (cached), or `None` for the
+    /// modes that don't analyse.
+    pub(super) fn fix(&self, p: &CameraRaw) -> Option<UprightFix> {
+        let mode = photocraft_algo::camera_raw::geometry::Upright::parse(&p.perspective_upright)?;
+        let mut done = self.done.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(f) = done.iter().find(|f| f.mode == mode) {
+            return Some(*f);
+        }
+        let f = photocraft_engine::lens_cmds::upright_fix(&self.source, self.frame, p)?;
+        done.push(f);
+        Some(f)
+    }
 }
 
 /// A developed proxy, ready to show.
@@ -35,11 +63,23 @@ pub(super) struct ProxyFrame {
 }
 
 impl ProxyJob {
+    /// The settings the proxy develops with: radii scaled to the proxy, and Upright's analysis
+    /// of the full canvas rather than of the proxy.
+    pub(super) fn develop_params(&self) -> CameraRaw {
+        let mut p = self.params.clone();
+        p.pixel_scale = (self.size.0 as f32 / self.full_w.max(1) as f32).min(1.0);
+        if !p.geometry_neutral()
+            && let Some(fix) = self.upright.as_ref().and_then(|u| u.fix(&p))
+        {
+            p.upright_fix = Some(fix);
+        }
+        p
+    }
+
     pub(super) fn run(self) -> ProxyFrame {
         let t0 = crate::gpu_canvas::now_ms();
         let (pw, ph) = self.size;
-        let mut p = self.params;
-        p.pixel_scale = (pw as f32 / self.full_w.max(1) as f32).min(1.0);
+        let mut p = self.develop_params();
         // The open-time dialog re-tones the proxy for each job; otherwise the GPU reads the
         // proxy as it is and uploads it once.
         let retoned = self.raw_curve.as_ref().map(|curve| {

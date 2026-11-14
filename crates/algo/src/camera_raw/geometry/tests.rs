@@ -509,3 +509,55 @@ fn upright_debug() {
         bytes.as_chunks::<16>().0.iter().map(|c| std::array::from_fn(|k| f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]]))).collect();
     upright::debug(&px, w, h);
 }
+
+/// A window grid photographed with the camera tilted up, `w × h`.
+fn tilted_grid(w: usize, h: usize) -> Vec<[f32; 4]> {
+    let tilted = manual(&t(|t| t.vertical = -40.0), w as f64, h as f64);
+    let cell = w as f64 / 12.0;
+    let mut px = image(w, h, |x, y| if ((x / cell).floor() as i64 + (y / cell).floor() as i64) % 2 == 0 { 0.85 } else { 0.15 });
+    warp(&mut px, w, h, &tilted, false);
+    px
+}
+
+#[test]
+fn an_upright_fix_from_the_full_image_drives_a_smaller_copy() {
+    let (fw, fh, k) = (2048usize, 1536usize, 4usize);
+    let full = tilted_grid(fw, fh);
+    let (pw, ph) = (fw / k, fh / k);
+    let proxy: Vec<[f32; 4]> = (0..pw * ph).map(|i| full[(i / pw) * k * fw + (i % pw) * k]).collect();
+    for mode in [Upright::Auto, Upright::Level, Upright::Vertical, Upright::Full] {
+        let fix = UprightFix::analyse(&full, fw, fh, mode).expect("an analysing mode");
+        // Reading row by row gives exactly the same analysis.
+        assert_eq!(UprightFix::analyse_rows(fw, fh, mode, |y, row| row.copy_from_slice(&full[y * fw..(y + 1) * fw])), Some(fix));
+        let p = CameraRaw { perspective_upright: mode.id().into(), ..CameraRaw::default() };
+        let whole = homography(&full, fw, fh, &p);
+        // The full image's correction, in the copy's pixels.
+        let s = 1.0 / k as f64;
+        let want = mul(&[s, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 1.0], &mul(&whole, &[k as f64, 0.0, 0.0, 0.0, k as f64, 0.0, 0.0, 0.0, 1.0]));
+        let got = homography(&proxy, pw, ph, &CameraRaw { upright_fix: Some(fix), ..p.clone() });
+        let d = worst(&got, &want, pw as f64, ph as f64);
+        assert!(d < 1e-6, "{mode:?}: the copy's correction is {d} px off the full image's");
+        // The develop analyses what it is given only without a fix (or with one for another mode).
+        assert_eq!(pending_upright(&full, fw, fh, &p), Some(fix));
+        assert_eq!(pending_upright(&full, fw, fh, &CameraRaw { upright_fix: Some(fix), ..p.clone() }), None);
+    }
+    let level = UprightFix::analyse(&full, fw, fh, Upright::Level);
+    let p = CameraRaw { perspective_upright: "vertical".into(), upright_fix: level, ..CameraRaw::default() };
+    assert!(pending_upright(&full, fw, fh, &p).is_some_and(|f| f.mode == Upright::Vertical));
+    assert_eq!(UprightFix::analyse(&full, fw, fh, Upright::Guided), None);
+    assert_eq!(UprightFix::analyse(&[], 0, 0, Upright::Auto).map(|f| f.at(10.0, 10.0)), Some(None));
+}
+
+#[test]
+fn tone_settings_do_not_change_uprights_correction() {
+    // The develop analyses the image it is given before its first stage, so an Exposure that
+    // washes lines out leaves the correction as it is.
+    let (w, h) = (480usize, 360usize);
+    let px = tilted_grid(w, h);
+    let p = CameraRaw { perspective_upright: "vertical".into(), exposure: 3.0, ..CameraRaw::default() };
+    let fix = UprightFix::analyse(&px, w, h, Upright::Vertical);
+    let (mut a, mut b) = (px.clone(), px.clone());
+    crate::camera_raw::develop(&mut a, w, h, &p, false);
+    crate::camera_raw::develop(&mut b, w, h, &CameraRaw { upright_fix: fix, ..p.clone() }, false);
+    assert_eq!(a, b);
+}

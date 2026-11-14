@@ -126,6 +126,8 @@ pub struct CameraRawDialog {
     redo: Vec<CameraRaw>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
+    /// Upright's analyses of the full canvas, one per mode ([`proxy::UprightSource`]).
+    upright_done: std::sync::Arc<std::sync::Mutex<Vec<photocraft_algo::camera_raw::geometry::UprightFix>>>,
 }
 
 impl CameraRawDialog {
@@ -217,7 +219,18 @@ impl CameraRawDialog {
             display: self.display.clone(),
             gpu: self.gpu.clone(),
             source_key: self.source_key,
+            upright: self.upright_source(),
         }
+    }
+
+    /// Upright's analysis source for the proxy develops: the full-resolution canvas the filter
+    /// develops. The open-time dialog (a raw being opened) develops its proxy as before.
+    fn upright_source(&self) -> Option<proxy::UprightSource> {
+        if self.raw_curve.is_some() || self.raw_open.is_some() {
+            return None;
+        }
+        let (source, frame) = self.detail.geometry_source();
+        Some(proxy::UprightSource { source: source.clone(), frame, done: self.upright_done.clone() })
     }
 
     fn publish(&mut self, ctx: &egui::Context, frame: ProxyFrame) {

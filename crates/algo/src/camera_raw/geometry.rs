@@ -86,6 +86,64 @@ impl Upright {
     }
 }
 
+/// Upright's analysis of an image, done once and reused: the develop analyses the image it is
+/// given before any other stage (so tone settings never change the correction), and a preview
+/// that develops a smaller copy is handed the analysis of the full image
+/// ([`CameraRaw::upright_fix`]), so it shows the correction the full image gets.
+///
+/// The homography is kept relative to the image's size (centred coordinates divided by its
+/// width and height), so it applies to any copy of the same picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UprightFix {
+    /// The analysing mode (Auto, Level, Vertical or Full) the analysis is for.
+    pub mode: Upright,
+    /// The correction, `None` when the analysis found none.
+    relative: Option<[f64; 9]>,
+}
+
+impl UprightFix {
+    /// The analysis of a `w × h` image `px` (straight RGBA) for `mode`; `None` for the modes
+    /// that do not analyse (Off, Guided).
+    pub fn analyse(px: &[[f32; 4]], w: usize, h: usize, mode: Upright) -> Option<UprightFix> {
+        analysing(mode).then(|| UprightFix { mode, relative: upright::analyse(px, w, h, mode).map(|m| relative(&m, w as f64, h as f64)) })
+    }
+
+    /// [`UprightFix::analyse`] reading the image one row at a time (`read(y, row)` fills `row`,
+    /// `w` pixels, with row `y`): the same result without holding the whole image.
+    pub fn analyse_rows(w: usize, h: usize, mode: Upright, read: impl FnMut(usize, &mut [[f32; 4]])) -> Option<UprightFix> {
+        analysing(mode).then(|| UprightFix { mode, relative: upright::analyse_rows(w, h, mode, read).map(|m| relative(&m, w as f64, h as f64)) })
+    }
+
+    /// The correction in centred pixels of a `w × h` copy of the image.
+    pub fn at(&self, w: f64, h: f64) -> Option<[f64; 9]> {
+        let m = self.relative?;
+        let (w, h) = (w.max(1e-9), h.max(1e-9));
+        Some(mul(&[w, 0.0, 0.0, 0.0, h, 0.0, 0.0, 0.0, 1.0], &mul(&m, &[1.0 / w, 0.0, 0.0, 0.0, 1.0 / h, 0.0, 0.0, 0.0, 1.0])))
+    }
+}
+
+/// Whether `mode` analyses the image.
+fn analysing(mode: Upright) -> bool {
+    matches!(mode, Upright::Auto | Upright::Level | Upright::Vertical | Upright::Full)
+}
+
+/// `m` (centred pixels of a `w × h` image) in centred coordinates divided by `w` and `h`.
+fn relative(m: &[f64; 9], w: f64, h: f64) -> [f64; 9] {
+    let (w, h) = (w.max(1e-9), h.max(1e-9));
+    mul(&[1.0 / w, 0.0, 0.0, 0.0, 1.0 / h, 0.0, 0.0, 0.0, 1.0], &mul(m, &[w, 0.0, 0.0, 0.0, h, 0.0, 0.0, 0.0, 1.0]))
+}
+
+/// The Upright analysis `p` needs and does not carry yet: its mode analyses the image and
+/// [`CameraRaw::upright_fix`] is not an analysis for that mode. The develop runs this on the
+/// image it is given before its first stage.
+pub fn pending_upright(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> Option<UprightFix> {
+    let mode = Upright::parse(&p.perspective_upright)?;
+    if !analysing(mode) || p.upright_fix.is_some_and(|f| f.mode == mode) {
+        return None;
+    }
+    UprightFix::analyse(px, w, h, mode)
+}
+
 /// The manual Transform sliders in Camera Raw's units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
@@ -424,7 +482,10 @@ pub fn homography(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> [f64; 9
     let up = match mode {
         Upright::Off => None,
         Upright::Guided => upright::guided(&p.upright_guides, fw, fh),
-        m => upright::analyse(px, w, h, m),
+        m => match p.upright_fix {
+            Some(fix) if fix.mode == m => fix.at(fw, fh),
+            _ => upright::analyse(px, w, h, m),
+        },
     };
     // Upright's zoom, measured on Photoshop (a facade tilted 13 ways): Level fills the frame when
     // that takes at most 1.10, else stays at 100 %; the other modes fit the picture's box along

@@ -59,23 +59,42 @@ fn luminance_proxy(px: &[[f32; 4]], w: usize, h: usize) -> Option<(Vec<f32>, usi
     if w == 0 || h == 0 || px.len() < w.checked_mul(h)? {
         return None;
     }
+    luminance_proxy_by_rows(w, h, |y, row| {
+        if let Some(src) = px.get(y * w..(y + 1) * w) {
+            row.copy_from_slice(src);
+        }
+    })
+}
+
+/// The image's luminance box-filtered to at most [`lines::MAX_SIDE`] across, reading the image
+/// one row at a time (`read(y, row)` fills `row`, `w` pixels, with row `y`), so a caller with a
+/// large surface never holds it whole: the analysis sees the same values either way.
+fn luminance_proxy_by_rows(w: usize, h: usize, mut read: impl FnMut(usize, &mut [[f32; 4]])) -> Option<(Vec<f32>, usize, usize, f64)> {
+    if w == 0 || h == 0 {
+        return None;
+    }
     let f = w.max(h).div_ceil(lines::MAX_SIDE).max(1);
     let (lw, lh) = (w / f, h / f);
     if lw < 8 || lh < 8 {
         return None;
     }
     let mut out = vec![0.0f32; lw * lh];
+    let mut row = vec![[0.0f32; 4]; w];
     for y in 0..lh {
-        for x in 0..lw {
-            let mut s = 0.0f32;
-            for j in 0..f {
+        let acc = out.get_mut(y * lw..(y + 1) * lw)?;
+        for j in 0..f {
+            row.fill([0.0; 4]);
+            read(y * f + j, &mut row);
+            for (x, s) in acc.iter_mut().enumerate() {
                 for i in 0..f {
-                    let q = px.get((y * f + j) * w + x * f + i).copied().unwrap_or([0.0; 4]);
+                    let q = row.get(x * f + i).copied().unwrap_or([0.0; 4]);
                     let l = 0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2];
-                    s += if l.is_finite() { l.clamp(0.0, 1.0) * q[3].clamp(0.0, 1.0) } else { 0.0 };
+                    *s += if l.is_finite() { l.clamp(0.0, 1.0) * q[3].clamp(0.0, 1.0) } else { 0.0 };
                 }
             }
-            out[y * lw + x] = s / (f * f) as f32;
+        }
+        for s in acc.iter_mut() {
+            *s /= (f * f) as f32;
         }
     }
     Some((out, lw, lh, f as f64))
@@ -91,7 +110,12 @@ pub(super) fn along_frame(a: [f64; 2], b: [f64; 2], fw: f64, fh: f64, margin: f6
 
 /// Detected segments in centred full-image coordinates.
 pub(super) fn segments(px: &[[f32; 4]], w: usize, h: usize) -> Vec<Segment> {
-    let Some((lum, lw, lh, f)) = luminance_proxy(px, w, h) else { return Vec::new() };
+    segments_of(luminance_proxy(px, w, h), w, h)
+}
+
+/// Detected segments of a luminance proxy (see [`luminance_proxy`]) of a `w × h` image.
+fn segments_of(proxy: Option<(Vec<f32>, usize, usize, f64)>, w: usize, h: usize) -> Vec<Segment> {
+    let Some((lum, lw, lh, f)) = proxy else { return Vec::new() };
     // Long lines only: short ones come in crowds from textures (planks, rugs, fringes).
     let min_len = (lw.min(lh) as f64 * 0.07).max(16.0);
     let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
@@ -361,6 +385,13 @@ fn full_fix(vv: Option<&[f64; 3]>, vh: Option<&[f64; 3]>, w: f64, h: f64, lim_v:
 /// The Upright homography (centred pixels) for a mode that analyses the image.
 pub fn analyse(px: &[[f32; 4]], w: usize, h: usize, mode: Upright) -> Option<[f64; 9]> {
     let segs = segments(px, w, h);
+    homography_from_segments(&segs, w as f64, h as f64, mode)
+}
+
+/// [`analyse`] reading the image one row at a time: `read(y, row)` fills `row` (`w` pixels) with
+/// row `y` of straight RGBA. Gives exactly what [`analyse`] gives on the same pixels.
+pub fn analyse_rows(w: usize, h: usize, mode: Upright, read: impl FnMut(usize, &mut [[f32; 4]])) -> Option<[f64; 9]> {
+    let segs = segments_of(luminance_proxy_by_rows(w, h, read), w, h);
     homography_from_segments(&segs, w as f64, h as f64, mode)
 }
 

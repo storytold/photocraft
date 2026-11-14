@@ -1523,3 +1523,77 @@ fn geometry_preview_keeps_the_background_opaque() {
     d.render(&ctx);
     assert!(d.processed[0][3] < 0.01, "{:?}", d.processed[0]);
 }
+
+/// Upright in the preview is the correction OK applies: the proxy develops with the analysis of
+/// the full-resolution canvas (what the filter analyses), not of the proxy, whose lines differ.
+#[test]
+fn upright_preview_uses_the_full_canvas_analysis_the_filter_applies() {
+    use photocraft_algo::camera_raw::geometry::{self, Transform, homography};
+    let (w, h) = (2000usize, 1500usize);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": w, "height": h})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    // A window grid photographed with the camera tilted up.
+    let tilted = geometry::manual(&Transform { vertical: -35.0, rotate: 2.0, ..Transform::default() }, w as f64, h as f64);
+    let mut grid: Vec<[f32; 4]> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let v = if (x / 150 + y / 150) % 2 == 0 { 0.85 } else { 0.15 };
+            [v, v, v, 1.0]
+        })
+        .collect();
+    geometry::warp(&mut grid, w, h, &tilted, false);
+    let st = app.session.active_mut().unwrap();
+    let id = st.active_layer.unwrap();
+    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).map(|l| &mut l.content) else {
+        panic!("a pixel layer")
+    };
+    let format = s.format();
+    let mut data = Vec::with_capacity(w * h * format.channels());
+    for q in &grid {
+        data.extend(photocraft_raster::from_rgba(&format, *q));
+    }
+    s.write_region(Rect::new(0, 0, w as i32, h as i32), &data);
+    let full = {
+        let mut px = vec![[0.0f32; 4]; w * h];
+        s.read_rgba_into(Rect::new(0, 0, w as i32, h as i32), &mut px);
+        px
+    };
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    assert!(d.pw < w && d.canvas_frame.is_none(), "the proxy is a smaller copy of the canvas");
+    let scale = |m: &[f64; 9], sx: f64, sy: f64| {
+        let (a, b) = ([sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0], [1.0 / sx, 0.0, 0.0, 0.0, 1.0 / sy, 0.0, 0.0, 0.0, 1.0]);
+        let mul = |x: &[f64; 9], y: &[f64; 9]| -> [f64; 9] { std::array::from_fn(|i| (0..3).map(|k| x[i / 3 * 3 + k] * y[k * 3 + i % 3]).sum()) };
+        let m = mul(&a, &mul(m, &b));
+        m.map(|v| v / m[8])
+    };
+    let off = |a: &[f64; 9], b: &[f64; 9]| {
+        let pt = |m: &[f64; 9], x: f64, y: f64| {
+            let z = m[6] * x + m[7] * y + m[8];
+            [(m[0] * x + m[1] * y + m[2]) / z, (m[3] * x + m[4] * y + m[5]) / z]
+        };
+        let (pw, ph) = (d.pw as f64, d.ph as f64);
+        [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.0, 0.0)]
+            .iter()
+            .map(|(u, v)| {
+                let (p, q) = (pt(a, u * pw, v * ph), pt(b, u * pw, v * ph));
+                (p[0] - q[0]).hypot(p[1] - q[1])
+            })
+            .fold(0.0, f64::max)
+    };
+    let mut proxy_own = 0.0f64;
+    for mode in ["auto", "level", "vertical", "full"] {
+        d.params.perspective_upright = mode.into();
+        // What OK applies: the command develops the canvas, analysing it at full resolution.
+        let committed = homography(&full, w, h, &d.params);
+        let (sx, sy) = (d.pw as f64 / w as f64, d.ph as f64 / h as f64);
+        let want = scale(&committed, sx, sy);
+        let p = d.proxy_job().develop_params();
+        let shown = homography(&d.proxy, d.pw, d.ph, &p);
+        assert!(off(&shown, &want) < 1e-3, "{mode}: the preview's correction is {} px off the filter's", off(&shown, &want));
+        proxy_own = proxy_own.max(off(&homography(&d.proxy, d.pw, d.ph, &d.params), &want));
+    }
+    assert!(proxy_own > 1e-2, "analysing the proxy itself picks another correction somewhere ({proxy_own} px)");
+}

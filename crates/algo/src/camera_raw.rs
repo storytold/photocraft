@@ -294,6 +294,12 @@ pub struct CameraRaw {
     /// dialog), never stored, so saved settings and Smart Filters read as before.
     #[serde(skip)]
     pub document_primaries: Option<[[f32; 3]; 3]>,
+    /// Upright's analysis of the full image, set at run time by a preview that develops a
+    /// smaller copy, so it shows the correction the full image gets; never stored. Without one
+    /// (or with one for another mode) the develop analyses the image it is given, before its
+    /// first stage. See [`geometry::UprightFix`].
+    #[serde(skip)]
+    pub upright_fix: Option<geometry::UprightFix>,
     // Calibration (Camera Raw's Calibration panel)
     /// Shadows › Tint: −100 (green) … 100 (magenta), strongest in the darkest tones.
     pub shadow_tint: f32,
@@ -381,6 +387,7 @@ impl Default for CameraRaw {
             pixel_scale: 1.0,
             encoding_gamma: 0.0,
             document_primaries: None,
+            upright_fix: None,
             shadow_tint: 0.0,
             calibration_hue: [0.0; 3],
             calibration_sat: [0.0; 3],
@@ -816,6 +823,16 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     if px.is_empty() || p.is_identity() || px.len() != w.saturating_mul(h) {
         return Ok(());
     }
+    // Upright analyses the image as it comes in, so the tone stages never change its
+    // correction and a preview handed the full image's analysis matches it.
+    let resolved;
+    let p = match geometry::pending_upright(px, w, h, p) {
+        Some(fix) => {
+            resolved = CameraRaw { upright_fix: Some(fix), ..p.clone() };
+            &resolved
+        }
+        None => p,
+    };
     let mut skipped: Option<String> = None;
     let ps = p.pixel_scale.clamp(0.01, 1.0);
     // 1. White balance (per-channel curves, see `white_balance`), then Exposure.

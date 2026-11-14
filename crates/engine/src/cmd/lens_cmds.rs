@@ -260,6 +260,21 @@ fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, stri
     Ok(out)
 }
 
+/// Upright's analysis of `area` of `surf` for `p`'s mode: exactly what the filter's develop of
+/// that area analyses (it develops the canvas when Geometry is on), read one row at a time so a
+/// large layer is never held whole. A preview that develops a smaller copy sets it as
+/// [`CameraRaw::upright_fix`] to show the correction the filter applies. `None` for the modes
+/// that don't analyse, or an area too large to develop.
+pub fn upright_fix(surf: &Surface, area: Rect, p: &CameraRaw) -> Option<camera_raw::geometry::UprightFix> {
+    let mode = camera_raw::geometry::Upright::parse(&p.perspective_upright)?;
+    raw_pixels(area)?;
+    let (w, h) = (usize::try_from(area.width()).ok()?, usize::try_from(area.height()).ok()?);
+    camera_raw::geometry::UprightFix::analyse_rows(w, h, mode, |y, row| {
+        let y = area.y0.saturating_add(i32::try_from(y).unwrap_or(i32::MAX));
+        surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y.saturating_add(1)), row);
+    })
+}
+
 /// Mixes `new` over `old` by the selection's coverage.
 fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Surface {
     let area = old.content_bounds().union(&new.content_bounds());
