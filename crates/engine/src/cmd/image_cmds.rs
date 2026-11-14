@@ -1305,8 +1305,8 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
-mod canvas_size_noop_history_tests;
-
-#[cfg(test)]
 #[path = "image_size_drops_selection_tests.rs"]
 mod image_size_drops_selection_tests;
+
+#[cfg(test)]
+mod canvas_size_noop_history_tests;
