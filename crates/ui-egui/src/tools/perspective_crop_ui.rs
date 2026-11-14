@@ -362,11 +362,65 @@ pub(crate) fn size_params(app: &PhotocraftApp, p: &mut Value) {
 pub fn commit(app: &mut PhotocraftApp) {
     cancel_stale(app);
     let Some(q) = app.ui.perspective_crop else { return };
+    // A quad the crop can't use (its sides cross, or it has no area) gets the reference
+    // application's alert instead of the engine's reason in the status bar (#11970).
+    if !convex_quad_any_winding(&q) {
+        open_invalid_alert(app);
+        return;
+    }
     let mut p = json!({"corners": q});
     size_params(app, &mut p);
     if app.run("image.perspectiveCrop", p).is_ok() {
         cancel(app);
     }
+}
+
+/// Marks the alert a commit of a quad the crop can't use opens (#11970).
+const INVALID: &str = "__perspectiveCropInvalid";
+
+/// The reference application's text for it.
+pub const INVALID_MESSAGE: &str =
+    "Could not use the perspective crop tool because the center point is not correctly placed or the corners are not properly selected.";
+
+/// Opens the alert, once: Cancel (the default, also Enter and Esc) goes back to the quad, Don't
+/// Crop ends the session without cropping.
+fn open_invalid_alert(app: &mut PhotocraftApp) {
+    if app.ui.dialogs.iter().any(|d| owns_invalid(&d.fields)) {
+        return;
+    }
+    let mut f = serde_json::Map::new();
+    f.insert(INVALID.into(), json!(true));
+    f.insert("__label".into(), json!("PhotoCraft"));
+    f.insert("message".into(), json!(INVALID_MESSAGE));
+    f.insert("choice".into(), json!("cancel"));
+    app.ui.open_dialog(crate::state::DialogKind::Command, f);
+}
+
+/// Is this dialog the alert for a quad the crop can't use?
+pub fn owns_invalid(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(INVALID)
+}
+
+/// The alert's body: a caution mark and the reference text.
+pub fn invalid_body(ui: &mut egui::Ui, f: &serde_json::Map<String, Value>) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let text = f.get("message").and_then(Value::as_str).unwrap_or(INVALID_MESSAGE);
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        let (r, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+        crate::icons::paint(ui, r, "triangle-alert", 30.0, t.warning);
+        ui.add(egui::Label::new(egui::RichText::new(tl!(text)).color(t.text).size(13.0)).wrap());
+    });
+}
+
+/// The alert's answer, `choice` "cancel" (the default) or "dontCrop": Cancel leaves the quad for
+/// fixing, Don't Crop drops it and ends the session. Neither touches the document.
+pub fn confirm_invalid(app: &mut PhotocraftApp, f: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    let dont_crop = f.get("choice").and_then(Value::as_str) == Some("dontCrop");
+    if dont_crop {
+        cancel(app);
+    }
+    Ok(json!({"cropped": false, "ended": dont_crop}))
 }
 
 /// ↵ commits and Esc cancels while the tool has something pending. True when a key was taken.
@@ -610,6 +664,10 @@ mod perspective_crop_shield_tests;
 #[cfg(test)]
 #[path = "perspective_crop_switch_prompt_tests.rs"]
 mod perspective_crop_switch_prompt_tests;
+
+#[cfg(test)]
+#[path = "perspective_crop_invalid_alert_tests.rs"]
+mod perspective_crop_invalid_alert_tests;
 
 #[cfg(test)]
 #[path = "perspective_crop_deselect_tests.rs"]
