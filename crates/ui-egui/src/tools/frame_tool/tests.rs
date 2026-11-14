@@ -263,6 +263,7 @@ fn free_transform_on_the_frame_thumbnail_previews_and_commits_only_the_clip() {
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let original = app.session.active().unwrap().doc.layer(source).unwrap().clone();
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
@@ -362,6 +363,7 @@ fn frame_keyboard_nudges_change_only_the_selected_thumbnail() {
         .unwrap();
     drag(&mut app, [20., 30.], [120., 110.]);
     let frame = selected(&app).unwrap().id;
+    select(&mut app, frame, Target::Frame);
     let child = selected(&app).unwrap().children().unwrap()[0].clone();
     let ctx = egui::Context::default();
     for (key, mods) in [(egui::Key::ArrowRight, egui::Modifiers::NONE), (egui::Key::ArrowDown, egui::Modifiers::SHIFT)] {
