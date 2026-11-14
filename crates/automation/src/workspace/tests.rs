@@ -1048,6 +1048,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.addAnchor"
             | "path.deleteAnchor"
             | "path.deleteSegment"
+            | "path.deleteComponents"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"

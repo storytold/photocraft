@@ -87,8 +87,16 @@ fn other_tools_keep_their_delete() {
     for tool in [Tool::Pen, Tool::FreeformPen, Tool::PathSelection] {
         let mut app = with_lone_anchor_selected();
         app.ui.tool = tool;
-        let before = path1(&app);
+        let (before, layer_count, history_steps) = (path1(&app), layers(&app), steps(&app));
         press(&mut app, egui::Key::Delete);
-        assert_eq!(path1(&app), before, "{tool:?}: no anchor is deleted");
+        if tool == Tool::PathSelection {
+            // Switching tools clears the anchor selection. Delete acts on the targeted saved path.
+            let st = app.session.active().unwrap();
+            assert!(st.doc.paths.is_empty());
+            assert_eq!(layers(&app), layer_count);
+            assert_eq!((st.history.past_len(), st.history.undo_label()), (history_steps + 1, Some("Delete Path")));
+        } else {
+            assert_eq!(path1(&app), before, "{tool:?}: no anchor is deleted");
+        }
     }
 }

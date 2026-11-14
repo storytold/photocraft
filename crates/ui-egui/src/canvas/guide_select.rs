@@ -95,8 +95,8 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if selected(app).is_none() || app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
         return false;
     }
-    let mods = ctx.input(|i| i.modifiers);
-    if !mods.is_none() || !ctx.input_mut(|i| i.consume_key(mods, egui::Key::Delete) || i.consume_key(mods, egui::Key::Backspace)) {
+    let Some(event_index) = crate::shortcuts::object_delete_press(ctx) else { return false };
+    if !crate::shortcuts::consume_object_delete(ctx, event_index) {
         return false;
     }
     if let Err(e) = delete_selected(app) {
