@@ -101,7 +101,14 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // Add / Delete Anchor Point: + or − beside the crosshair, as on Photoshop's pen cursors (⌥
     // swaps them; ⌘ is Direct Selection, which shows none).
     if let Some(t) = crate::anchor_tools::effective(tool, m) {
-        return (!m.command).then_some(if t == Tool::AddAnchorPoint { Badge::Add } else { Badge::Subtract });
+        // Add Anchor Point shows its "+" only over a segment a click would split (#12729); ⌥'s
+        // swapped tools keep theirs everywhere.
+        let over_segment = || app.hover_doc.is_some_and(|p| crate::anchor_tools::adds_anchor_at(app, tool, p));
+        return (!m.command && (m.alt || tool != Tool::AddAnchorPoint || over_segment())).then_some(if t == Tool::AddAnchorPoint {
+            Badge::Add
+        } else {
+            Badge::Subtract
+        });
     }
     // The Curvature Pen over a point: + on the active path's segments (a click adds an anchor
     // there), four arrows on an anchor (a press drags it).
