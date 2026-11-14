@@ -171,3 +171,13 @@ fn the_params_doc_names_the_mode() {
         assert!(spec.params.contains(word), "{word}");
     }
 }
+
+#[test]
+fn the_folder_of_a_file_at_the_root_is_the_root() {
+    assert_eq!(folder_of("/abpdf-test.pdf"), "/");
+    assert_eq!(folder_of(r"\abpdf-test.pdf"), r"\");
+    assert_eq!(folder_of("/out/abpdf-test.pdf"), "/out");
+    assert_eq!(folder_of(r"C:\out\abpdf-test.pdf"), r"C:\out");
+    assert_eq!(folder_of("abpdf-test.pdf"), "");
+    assert_eq!(join(&folder_of("/abpdf-test.pdf"), "pre_Red Board.pdf"), "/pre_Red Board.pdf");
+}

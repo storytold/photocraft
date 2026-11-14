@@ -763,7 +763,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = match p.get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
         Some(d) => d.to_string(),
         None if per_artboard && path.is_empty() => return Err(bad(cmd, "missing \"dir\" or \"path\"")),
-        None => path.rfind(['/', '\\']).map_or(String::new(), |i| path[..i].to_string()),
+        None => folder_of(&path),
     };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
@@ -801,6 +801,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         files.push(file);
     }
     Ok(json!({"pages": pages.len(), "files": files}))
+}
+
+/// The folder part of `path`: `""` for a bare file name, and the root itself for a file at
+/// the root (`/x.pdf` gives `/`, not the working directory).
+fn folder_of(path: &str) -> String {
+    path.rfind(['/', '\\']).map_or(String::new(), |i| path[..i.max(1)].to_string())
 }
 
 /// Document Per Artboard's file names: `<prefix><artboard name>`, spaces kept and no separator
