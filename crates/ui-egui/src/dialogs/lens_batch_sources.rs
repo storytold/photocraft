@@ -24,6 +24,12 @@ fn list(f: &Map<String, Value>) -> Vec<String> {
     f.get("input").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
+/// Whether OK has something to correct: a listed file, or a folder in `input` not listed (yet, or
+/// because it cannot be read, which the command then reports).
+pub(super) fn has_sources(f: &Map<String, Value>) -> bool {
+    !list(f).is_empty() || f.get("input").and_then(Value::as_str).is_some_and(|dir| !dir.is_empty())
+}
+
 /// Every change of the list goes through here; the selection does not survive it.
 fn set_list(f: &mut Map<String, Value>, list: Vec<String>) {
     f.insert("input".into(), json!(list));
