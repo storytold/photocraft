@@ -152,7 +152,7 @@ pub(crate) const ANGLE_RANGE_MESSAGE: &str = "An integer between -180 ° and 180
 /// The Background Eraser's Angle: an angle icon and a whole-degree field on the brush tip's
 /// angle, −180…180, default 0. Returns true when a typed value was out of range and was clamped
 /// (400 → 180): the caller shows [`ANGLE_RANGE_MESSAGE`] once the entry is committed.
-fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> bool {
+pub(crate) fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> bool {
     let t = Tokens::get(ui.ctx());
     let tip = tl!("Set the brush angle");
     ui.add(icons::image("rotate-cw", 15.0, t.text_dim)).on_hover_text(tip);
