@@ -915,7 +915,8 @@ fn bounded_svg_rejects_nested_gzip_at_top_level_and_inside_data_urls() {
     let once = gz(svg);
     let twice = gz(&once);
     assert!(parse_bounded(&once, 64).is_ok(), "ordinary SVGZ remains accepted");
-    assert!(parse_bounded(&twice, 64).unwrap_err().to_string().contains("UTF-8"));
+    // craft-svg refuses gzip inside gzip when it unpacks the file, before any text is read.
+    assert!(parse_bounded(&twice, 64).unwrap_err().to_string().contains("another compressed file"));
     assert!(rasterize_bounded(&twice, 1.0, 64).is_err());
     assert!(bounded_canvas_bounds(&twice, 64).is_err());
     for mime in ["image/svg+xml", "text/plain"] {
