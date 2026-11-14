@@ -636,6 +636,11 @@ pub fn import_with_options(name: &str, bytes: &[u8], opts: &ImportOptions) -> Re
     import_with_options_and_interrupt(name, bytes, opts, &photocraft_raster::Interrupt::NONE)
 }
 
+/// [`import_with_options`] forcing the decoder named by `as_ext` when provided (`File › Open As`).
+pub fn import_with_options_as(name: &str, bytes: &[u8], as_ext: Option<&str>, opts: &ImportOptions) -> Result<ImportResult, IoError> {
+    import_for_open_with_as(name, bytes, as_ext, opts, &photocraft_raster::Interrupt::NONE).map(|(result, _)| result)
+}
+
 /// [`import_with`] with the user's import settings.
 pub fn import_with_options_and_interrupt(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
     import_for_open_with(name, bytes, opts, ctl).map(|(result, _)| result)
@@ -655,11 +660,21 @@ pub fn import_for_open(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result
 
 /// [`import_for_open`] with cancellation and progress, shared with [`import_with_options_and_interrupt`].
 pub fn import_for_open_with(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
+    import_for_open_with_as(name, bytes, None, opts, ctl)
+}
+
+fn import_for_open_with_as(
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<(ImportResult, bool), IoError> {
     photocraft_compose::discard_unreadable_pixel_caches();
     let scratch_generation = photocraft_raster::spill::read_error_generation();
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut damaged = false;
-    let result = import_stages(name, bytes, ctl, opts, &mut damaged)?;
+    let result = import_stages(name, bytes, as_ext, ctl, opts, &mut damaged)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     // The imported document's own tiles, and anything that failed or recovered meanwhile.
@@ -951,20 +966,63 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     }
 }
 
+fn route_forced(ext: &str) -> Route {
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    if ext == photocraft_format::EXTENSION {
+        Route::Pcraft
+    } else if matches!(ext.as_str(), "psd" | "psb" | "psdt") {
+        Route::Psd
+    } else if affinity::EXTENSIONS.contains(&ext.as_str()) {
+        Route::Affinity
+    } else if ext == "ora" {
+        Route::Ora
+    } else if kra::EXTENSIONS.contains(&ext.as_str()) {
+        Route::Kra
+    } else if ext == "xcf" {
+        Route::Xcf
+    } else if matches!(ext.as_str(), "xcf.gz" | "xcfgz") {
+        Route::GzippedXcf
+    } else if ext == "pdn" {
+        Route::Pdn
+    } else if ext == "raw" || raw::EXTENSIONS.contains(&ext.as_str()) {
+        Route::Raw
+    } else if matches!(ext.as_str(), "svg" | "svgz") {
+        Route::Svg
+    } else {
+        Route::Flat
+    }
+}
+
 /// Dispatches format-specific importers and propagates a structured PSD damage
 /// flag alongside the ordinary best-effort import result.
-fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
-    // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
-    // before PDF).
-    if is_svg_input(name, bytes) {
-        return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
-    }
-    // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
-    // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
-    if photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Pdf) {
-        return pdf_import::import(name, bytes, opts, ctl);
-    }
-    match route(name, bytes) {
+fn import_stages(
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    ctl: &photocraft_raster::Interrupt,
+    opts: &ImportOptions,
+    damaged: &mut bool,
+) -> Result<ImportResult, IoError> {
+    let selected = if let Some(ext) = as_ext {
+        let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+        if matches!(ext.as_str(), "pdf" | "ai") {
+            return pdf_import::import(name, bytes, opts, ctl);
+        }
+        route_forced(&ext)
+    } else {
+        // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
+        // before PDF).
+        if is_svg_input(name, bytes) {
+            return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+        }
+        // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
+        // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
+        if photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Pdf) {
+            return pdf_import::import(name, bytes, opts, ctl);
+        }
+        route(name, bytes)
+    };
+    match selected {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
