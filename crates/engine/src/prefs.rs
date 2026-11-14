@@ -1331,6 +1331,24 @@ pub struct ToolbarCustomization {
     pub order: Vec<String>,
 }
 
+/// The Count tool's values for the next new count group (#11767): the colour, Marker Size and
+/// Label Size of the last group edit, kept across documents and restarts, as in Photoshop. Reset
+/// Tool and Reset All Tools leave them alone. Before any edit: #97FBFD, 2, 8.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CountGroupDefaults {
+    /// 8-bit RGB.
+    pub color: [u8; 3],
+    pub marker_size: u32,
+    pub label_size: u32,
+}
+
+impl Default for CountGroupDefaults {
+    fn default() -> Self {
+        Self { color: [0x97, 0xFB, 0xFD], marker_size: 2, label_size: 8 }
+    }
+}
+
 /// Layer Mask Display Options (double-click the layer mask's row in the Channels panel, or Mask
 /// Options… on its Layers thumbnail): the colour and opacity of the layer mask rubylith (`\`,
 /// ⇧⌥-click the thumbnail). As in Photoshop, one setting for every mask, kept across restarts.
@@ -1402,6 +1420,8 @@ pub struct Preferences {
     pub shortcut_set: String,
     pub menus: MenuCustomization,
     pub toolbar: ToolbarCustomization,
+    /// The Count tool's next new group (#11767).
+    pub count_group: CountGroupDefaults,
     /// Edit › Check Spelling: words added to the dictionary ("Add").
     pub user_dictionary: Vec<String>,
     /// Window › Workspace › New Workspace…: saved layouts by name (JSON owned by the shell).
