@@ -1698,6 +1698,32 @@ fn upright_preview_uses_the_full_canvas_analysis_the_filter_applies() {
         let shown = homography(&d.proxy, d.pw, d.ph, &p);
         assert!(off(&shown, &want) < 1e-3, "{mode}: the preview's correction is {} px off the filter's", off(&shown, &want));
         proxy_own = proxy_own.max(off(&homography(&d.proxy, d.pw, d.ph, &d.params), &want));
+        // The White Balance tool reads through the same correction: a click at a shown point
+        // samples where the preview took that point from.
+        let inv = {
+            let m = &shown;
+            let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+            [
+                (m[4] * m[8] - m[5] * m[7]) / det,
+                (m[2] * m[7] - m[1] * m[8]) / det,
+                (m[1] * m[5] - m[2] * m[4]) / det,
+                (m[5] * m[6] - m[3] * m[8]) / det,
+                (m[0] * m[8] - m[2] * m[6]) / det,
+                (m[2] * m[3] - m[0] * m[5]) / det,
+                (m[3] * m[7] - m[4] * m[6]) / det,
+                (m[1] * m[6] - m[0] * m[7]) / det,
+                (m[0] * m[4] - m[1] * m[3]) / det,
+            ]
+        };
+        let (pw, ph) = (d.pw as f64, d.ph as f64);
+        for u in [[0.5f32, 0.5], [0.3, 0.4], [0.7, 0.6]] {
+            let (x, y) = (f64::from(u[0]) * pw - pw / 2.0, f64::from(u[1]) * ph - ph / 2.0);
+            let z = inv[6] * x + inv[7] * y + inv[8];
+            let want = [((inv[0] * x + inv[1] * y + inv[2]) / z + pw / 2.0) / pw, ((inv[3] * x + inv[4] * y + inv[5]) / z + ph / 2.0) / ph];
+            let got = super::wb_picker::source_point(d, u).expect("a covered point");
+            let px_off = (f64::from(got[0]) - want[0]).abs().max((f64::from(got[1]) - want[1]).abs()) * pw.max(ph);
+            assert!(px_off < 1e-2, "{mode}: the White Balance tool reads {px_off} px off the shown point");
+        }
     }
     assert!(proxy_own > 1e-2, "analysing the proxy itself picks another correction somewhere ({proxy_own} px)");
 }

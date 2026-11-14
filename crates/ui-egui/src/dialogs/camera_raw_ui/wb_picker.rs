@@ -13,9 +13,15 @@ use super::{CameraRawDialog, ERect, Pos2};
 /// the Geometry and Distortion that are shown (none in the Before view or with their panels
 /// hidden).
 pub(super) fn source_point(d: &CameraRawDialog, u: [f32; 2]) -> Option<[f32; 2]> {
-    let p = d.effective_params();
+    let mut p = d.effective_params();
     if d.show_before || !p.moves_pixels() {
         return Some(u);
+    }
+    // The preview shows Upright's analysis of the full canvas (what OK applies), not the proxy's.
+    if !p.geometry_neutral()
+        && let Some(fix) = d.upright_source().and_then(|s| s.fix(&p))
+    {
+        p.upright_fix = Some(fix);
     }
     unwarp(&d.proxy, d.pw, d.ph, d.canvas_frame, &p, u)
 }
