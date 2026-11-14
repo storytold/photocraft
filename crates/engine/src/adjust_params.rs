@@ -69,6 +69,18 @@ pub fn default_for(kind: &str, mode: ColorMode) -> Result<Adjustment> {
     from_params(kind, &json!({}), None, mode)
 }
 
+/// Default Gradient Map for Image > Adjustments > Gradient Map: current foreground -> background
+/// at Smoothness 100%, Classic.
+pub fn default_gradient_map(foreground: [f32; 3], background: [f32; 3]) -> Adjustment {
+    let src = photocraft_doc::adjust::GradientSource {
+        stops: vec![(0.0, foreground), (1.0, background)],
+        midpoints: vec![0.5],
+        smoothness: 1.0,
+        method: "classic".to_string(),
+    };
+    Adjustment::GradientMap { stops: photocraft_io::gradient_bake::bake_source(&src), reverse: false, dither: false, source: Some(src) }
+}
+
 /// Tone params for a gray plane target: drop RGB, CMYK and Lab component records so only the
 /// composite (or `gray` alias) can affect the plane. Hidden colour curves must stay neutral (#5335).
 pub fn gray_tone_params(p: &Value) -> Value {
@@ -1245,5 +1257,7 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod gradient_map_default_gradient_tests;
 #[cfg(test)]
 mod tests;

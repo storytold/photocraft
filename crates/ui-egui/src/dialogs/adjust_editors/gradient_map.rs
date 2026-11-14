@@ -45,7 +45,8 @@ pub(super) fn write_stops(v: &mut Value, s: &[Stop]) {
             let mut mids: Vec<Value> = src.get("midpoints").and_then(Value::as_array).cloned().unwrap_or_default();
             mids.resize(segments, json!(0.5));
             src["midpoints"] = Value::Array(mids);
-            src["stops"] = stops;
+            src["stops"] = stops.clone();
+            v["stops"] = stops;
         }
         None => v["stops"] = stops,
     }

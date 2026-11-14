@@ -291,6 +291,14 @@ pub fn resets(fields: &Map<String, Value>) -> bool {
     owns(fields)
 }
 
+fn dialog_default(app: &PhotocraftApp, kind: &str, mode: photocraft_doc::ColorMode) -> photocraft_engine::Result<photocraft_doc::Adjustment> {
+    if kind == "gradientMap" {
+        let [fg, bg] = adjust_editors::swatches(app);
+        return Ok(photocraft_engine::adjust_params::default_gradient_map(fg, bg));
+    }
+    photocraft_engine::adjust_params::default_for(kind, mode)
+}
+
 /// Alt+Cancel (Reset): engine defaults for the kind; Color Balance keeps Preserve Luminosity and
 /// shows Midtones (Photoshop 25.4). Dialog stays open.
 pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, Value>) {
@@ -304,7 +312,7 @@ pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, 
     let mode = curve_mode(app, &kind, fields);
     // Color Balance: Photoshop keeps the user's Preserve Luminosity across Reset.
     let preserve = if kind == "colorBalance" { fields.get("preserveLuminosity").cloned() } else { None };
-    let Ok(defaults) = photocraft_engine::adjust_params::default_for(&kind, mode) else { return };
+    let Ok(defaults) = dialog_default(app, &kind, mode) else { return };
     let values = photocraft_engine::adjust_params::to_params(&defaults);
     // Replace parameter keys; keep private `__` chrome (preview, command, …).
     keep_context(fields);
@@ -392,7 +400,7 @@ fn seeded_fields(app: &PhotocraftApp, command: &str, mut fields: Map<String, Val
     let spec = photocraft_engine::commands::find(command)?;
     let mode = curve_mode(app, kind, &fields);
     let valid_target = !matches!(kind, "levels" | "curves") || target_context(app, &fields).is_ok();
-    let defaults = if valid_target { Some(photocraft_engine::adjust_params::default_for(kind, mode).ok()?) } else { None };
+    let defaults = if valid_target { Some(dialog_default(app, kind, mode).ok()?) } else { None };
     let isolated = matches!(kind, "levels" | "curves").then(|| isolated(app, &fields)).flatten();
     let gray_target = isolated.as_ref().is_some_and(|c| c.gray.is_some());
     let color_set = isolated.and_then(|c| c.components);
