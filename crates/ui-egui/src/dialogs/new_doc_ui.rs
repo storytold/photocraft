@@ -565,6 +565,9 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
         })
         .collect();
     let chosen = get_s(f, "__preset", "");
+    // A Recent card's context menu: Delete takes it off the list, Clear All empties the list.
+    let mut remove_recent: Option<DocumentSettings> = None;
+    let mut clear_recent = false;
     ui.horizontal_top(|ui| {
         // Left: preset grid.
         ui.vertical(|ui| {
@@ -624,6 +627,18 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                                 Card::Builtin(_) if elided => resp.on_hover_text(tl!(c.title())),
                                 Card::Builtin(_) => resp,
                             };
+                            if let Card::Recent(settings) = c {
+                                resp.context_menu(|ui| {
+                                    if ui.button(tl!("Delete")).clicked() {
+                                        remove_recent = Some(settings.clone());
+                                        ui.close();
+                                    }
+                                    if ui.button(tl!("Clear All")).clicked() {
+                                        clear_recent = true;
+                                        ui.close();
+                                    }
+                                });
+                            }
                             if resp.clicked() {
                                 match c {
                                     Card::Builtin(p) => apply_preset(f, p, &units),
@@ -839,6 +854,15 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             save_preset(app, ui, f);
         });
     });
+    if clear_recent {
+        let _ = app.run("document.recent.clear", json!({}));
+    } else if let Some(settings) = remove_recent {
+        // The list is newest first; find the entry by what it restores, as it may have moved.
+        let recent = &app.session.presets.recent_documents;
+        if let Some(index) = recent.iter().position(|r| r.command_params() == settings.command_params()) {
+            let _ = app.run("document.recent.remove", json!({"index": index}));
+        }
+    }
     create
 }
 
