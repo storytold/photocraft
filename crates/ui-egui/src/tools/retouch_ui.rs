@@ -894,7 +894,10 @@ fn clone_sample_dropdown(ui: &mut egui::Ui, stored: &mut String, indexed: bool) 
 }
 
 /// Healing's Angle and Pressure edit the tool's own brush in one command gesture.
-fn healing_brush_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn healing_brush_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    if tool != Tool::Healing {
+        return;
+    }
     // The shell swaps in this tool's brush; both controls use the same command
     // gesture as Brush Settings and leave the other tools' brushes alone.
     let before = app.session.tools.brush.clone();
@@ -993,9 +996,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::checkbox(ui, &mut o.clone_aligned, tl!("Aligned"));
             opt(ui, tl!("Sample:"));
             clone_sample_dropdown(ui, &mut o.clone_sample, indexed);
-            if tool == Tool::Healing {
-                healing_brush_controls(app, ui);
-            }
+            healing_brush_controls(app, ui, tool);
             if app.session.presets.clone.active().source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
