@@ -2,6 +2,74 @@ use super::*;
 
 const B: [f64; 4] = [10.0, 20.0, 110.0, 70.0];
 
+/// Construction and file-data validation agree on the last allowed patch count.
+#[test]
+fn mesh_construction_and_validation_share_the_grid_limit() {
+    let max = BezierMesh::MAX_PATCHES_PER_AXIS;
+    assert_eq!(max, 64, "keep the existing serialized mesh limit");
+    for (cols, rows) in [(usize::MAX, 1), (1, usize::MAX)] {
+        let mesh = BezierMesh::identity(B, cols, rows);
+        assert_eq!((mesh.us.len(), mesh.vs.len()), (cols.min(max) + 1, rows.min(max) + 1));
+        assert!(mesh.is_valid());
+    }
+    // Bypass identity's clamp to model oversized serialized data, with otherwise
+    // valid knots and control points. Reject excess columns and rows independently.
+    for (cols, rows) in [(max + 1, 1), (1, max + 1)] {
+        let us = (0..=cols).map(|i| i as f64 / cols as f64).collect();
+        let vs = (0..=rows).map(|i| i as f64 / rows as f64).collect();
+        let mesh = BezierMesh::fit(&|s, t| [s, t], us, vs);
+        assert_eq!(mesh.points.len(), mesh.nx() * mesh.ny());
+        assert!(!mesh.is_valid());
+    }
+}
+
+/// Refused splits preserve a mesh at the 64-patch limit while the other axis stays editable.
+#[test]
+fn splitting_at_the_grid_limit_preserves_a_valid_mesh() {
+    for (cols, rows) in [(64, 2), (2, 64), (64, 64)] {
+        let mut mesh = BezierMesh::identity(B, cols, rows);
+        assert!(mesh.is_valid());
+        if cols == 64 {
+            let before = mesh.clone();
+            assert!(!mesh.split_u(0.5 / 64.0));
+            assert_eq!(mesh, before, "a refused vertical split must not change the mesh");
+        }
+        if rows == 64 {
+            let before = mesh.clone();
+            assert!(!mesh.split_v(0.5 / 64.0));
+            assert_eq!(mesh, before, "a refused horizontal split must not change the mesh");
+        }
+        // Reaching the limit on one axis must not prevent splitting the other.
+        if cols < 64 {
+            assert!(mesh.split_u(0.25));
+        }
+        if rows < 64 {
+            assert!(mesh.split_v(0.25));
+        }
+        assert!(mesh.is_valid());
+    }
+}
+
+/// Splitting from 63 to 64 patches preserves the surface, and removing a split frees capacity.
+#[test]
+fn splitting_to_the_grid_limit_and_removing_a_split_still_work() {
+    let mut mesh = BezierMesh::identity(B, 63, 63);
+    assert!(mesh.split_u(0.5 / 63.0));
+    assert!(mesh.split_v(0.5 / 63.0));
+    assert_eq!((mesh.us.len(), mesh.vs.len()), (65, 65));
+    assert!(mesh.is_valid());
+    for (s, t) in [(0.0, 0.0), (0.37, 0.61), (1.0, 1.0)] {
+        let p = mesh.eval(s, t);
+        assert!((p[0] - (B[0] + s * (B[2] - B[0]))).abs() < 1e-9);
+        assert!((p[1] - (B[1] + t * (B[3] - B[1]))).abs() < 1e-9);
+    }
+    assert!(mesh.remove_split_u(1));
+    assert!(mesh.remove_split_v(1));
+    assert!(mesh.split_u(0.5 / 63.0));
+    assert!(mesh.split_v(0.5 / 63.0));
+    assert!(mesh.is_valid());
+}
+
 /// The largest mismatch between the tangents on the two sides of any interior grid line.
 fn tangent_defect(m: &BezierMesh) -> f64 {
     let nx = m.nx();
