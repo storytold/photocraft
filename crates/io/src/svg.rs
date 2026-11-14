@@ -623,18 +623,21 @@ fn note_byte_refusal(data: &[u8], used: usize, refusals: &SvgRefusals) {
             // Plain data is only measured; compressed data is unpacked again.
             let compressed = data.starts_with(&[0x1f, 0x8b]);
             let limit = if compressed { content_left.min(budget.saturating_sub(refusals.rechecked.load(Ordering::Relaxed))) } else { content_left };
-            let unpacked = match craft_svg::svgz::inflate(data, limit) {
-                Err(craft_svg::svgz::Error::TooLarge(_)) => {
-                    refusals.over_budget.store(true, Ordering::Relaxed);
-                    return;
-                }
-                Ok(std::borrow::Cow::Borrowed(_)) => 0,
-                Ok(std::borrow::Cow::Owned(xml)) => xml.len(),
-                Err(craft_svg::svgz::Error::Nested(len)) => len,
-                Err(_) => limit,
+            // Every unpack is charged at least what it unpacked, so together they stay within one
+            // budget; plain data is only measured.
+            let (unpacked, too_large) = match craft_svg::svgz::inflate(data, limit) {
+                Ok(std::borrow::Cow::Borrowed(_)) => (0, false),
+                Ok(std::borrow::Cow::Owned(xml)) => (xml.len(), false),
+                Err(craft_svg::svgz::Error::Nested(len)) => (len, false),
+                Err(craft_svg::svgz::Error::TooLarge(_)) => (if compressed { limit } else { 0 }, true),
+                Err(_) => (limit, false),
             };
             refusals.rechecked.fetch_add(unpacked, Ordering::Relaxed);
-            refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
+            if too_large {
+                refusals.over_budget.store(true, Ordering::Relaxed);
+            } else {
+                refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
+            }
         }
         Err(_) => {
             refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
@@ -661,10 +664,13 @@ fn noting_refusals(
             if !(mime == "image/svg+xml" || (mime == "text/plain" && !raster)) {
                 return resolve_data(mime, data, options);
             }
-            if refusals.depth.load(Ordering::Relaxed) >= MAX_EMBEDDED_SVG_DEPTH {
-                refusals.over_budget.store(true, Ordering::Relaxed);
-            } else {
-                note_byte_refusal(&data, resolver.usage().embedded_svg_bytes, &refusals);
+            // Once over budget the drawing fails whatever follows, so nothing more is unpacked.
+            if !refusals.over_budget.load(Ordering::Relaxed) {
+                if refusals.depth.load(Ordering::Relaxed) >= MAX_EMBEDDED_SVG_DEPTH {
+                    refusals.over_budget.store(true, Ordering::Relaxed);
+                } else {
+                    note_byte_refusal(&data, resolver.usage().embedded_svg_bytes, &refusals);
+                }
             }
             refusals.depth.fetch_add(1, Ordering::Relaxed);
             let image = resolve_data(mime, data, options);

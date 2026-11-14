@@ -1166,6 +1166,24 @@ fn images_after_a_damaged_svgz_are_unpacked_again_within_one_budget() {
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
 }
 
+/// Each image unpacked again is charged at least what was unpacked, refused ones included, so
+/// however many follow a damaged image the unpacking adds up to one budget, not one each.
+#[test]
+fn unpacking_images_again_adds_up_to_one_budget_however_many_there_are() {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
+    let mut huge = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\">".to_vec();
+    huge.resize(budget * 2, b' ');
+    huge.extend_from_slice(b"</svg>");
+    let huge = gzip(&huge);
+    // A damaged image was charged the whole budget; every later image is refused for size.
+    let refusals = SvgRefusals { unread_charges: AtomicUsize::new(budget), ..SvgRefusals::default() };
+    for _ in 0..64 {
+        note_byte_refusal(&huge, budget, &refusals);
+        assert!(refusals.over_budget.load(Ordering::Relaxed), "too large without the charges");
+        assert_eq!(refusals.rechecked.load(Ordering::Relaxed), budget);
+    }
+}
+
 /// Only a stored display preview is strict about an embedded image it can't read; an edited SVG
 /// saved back from an external editor leaves it out, as placement does.
 #[test]
