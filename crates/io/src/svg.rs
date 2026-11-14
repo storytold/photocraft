@@ -557,7 +557,7 @@ fn parse_image_bounded_with(
         counter.svg_chain = usage.embedded_svg_depth as u64;
         if usage.raster_limit_images > 0 {
             counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
-        } else if usage.svg_limit_images > 0 {
+        } else if counter.strict && usage.svg_limit_images > 0 {
             counter.error.get_or_insert_with(|| "embedded SVG images exceed the byte or nesting budget".into());
         } else if counter.strict && (usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
             counter.error.get_or_insert_with(|| "can't parse an embedded SVG image".into());
