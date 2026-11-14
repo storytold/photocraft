@@ -63,7 +63,18 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
 }
 
 pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
-    rotate_arbitrary_with(s, p, true)
+    // #14465: with no `interpolation` param the resampling comes from Preferences ›
+    // General › Image Interpolation; the preference's own names feed `Interp::parse`, so
+    // Nearest Neighbor and Bilinear act as the `nearest`/`bilinear` params do and the
+    // *not measured* variants (Bicubic Automatic/Sharper/Smoother, Preserve Details)
+    // resample as Bicubic, as today. The param stays for scripts and actions (#7630).
+    // The direct callers keep the old default through `rotate_arbitrary_with`: the Crop
+    // tool's rotated crop and Straighten pass no param and still rotate Bicubic.
+    let mut p = p.as_object().cloned().unwrap_or_default();
+    if p.get("interpolation").and_then(Value::as_str).is_none() {
+        p.insert("interpolation".into(), json!(s.prefs().general.image_interpolation.name()));
+    }
+    rotate_arbitrary_with(s, &Value::Object(p), true)
 }
 
 /// [`rotate_arbitrary`]; `keep_counts` leaves the count points where they were (Image Rotation,
@@ -771,7 +782,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.rotation.arbitrary",
             "Arbitrary…",
             ["Image", "Image Rotation"],
-            r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest"="bicubic"}"##,
+            r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest" (absent: Preferences › General › Image Interpolation; its not-measured variants resample as bicubic)}"##,
             has_doc,
             rotate_arbitrary
         ),
@@ -830,3 +841,7 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "rotate_canvas_interpolation_pref_tests.rs"]
+mod rotate_canvas_interpolation_pref_tests;
