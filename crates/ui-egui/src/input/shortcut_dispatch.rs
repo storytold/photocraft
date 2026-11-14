@@ -110,8 +110,29 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
             all.push((id.to_string(), sc));
         }
     }
+    legacy_channel_keys(app, &mut all);
     all.sort_by_key(|(_, sc)| std::cmp::Reverse(sc.modifiers.shift as u8 + sc.modifiers.alt as u8 + sc.modifiers.command as u8));
     all
+}
+
+/// Use Legacy Channel Shortcuts (#14325): in an RGB document ⌘1…⌘7 target the channels one key
+/// lower ([`photocraft_engine::prefs::LEGACY_CHANNEL_SHORTCUTS`]). They take the ⌘-digit keys of
+/// 100%, the composite and the channel slots, never a key the user gave another command; ⌥⌘0
+/// still zooms to 100%. Only dispatch changes: the menus and Edit › Keyboard Shortcuts show the
+/// commands' own keys, as the reference application does.
+fn legacy_channel_keys(app: &PhotocraftApp, all: &mut Vec<(String, KeyboardShortcut)>) {
+    use photocraft_engine::prefs::{LEGACY_CHANNEL_SHORTCUTS, replaced_by_legacy_channel_keys};
+    let rgb = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Rgb);
+    if !app.session.prefs().use_legacy_channel_shortcuts || !rgb {
+        return;
+    }
+    let digits: Vec<KeyboardShortcut> = (1..=9).filter_map(|n| parse(&format!("Cmd+{n}"))).collect();
+    all.retain(|(id, sc)| !(replaced_by_legacy_channel_keys(id) && digits.contains(sc)));
+    for (key, id) in LEGACY_CHANNEL_SHORTCUTS {
+        if let Some(sc) = parse(key).filter(|sc| !all.iter().any(|(_, b)| b == sc)) {
+            all.push((id.to_string(), sc));
+        }
+    }
 }
 
 /// Where keyboard focus is: nowhere (the canvas), on a widget (a slider, the Curves graph, a

@@ -4,6 +4,7 @@ use super::{BTreeMap, Map, PhotocraftApp, RichText, Tokens, Value, default_short
 /// Every shortcut-bearing command (engine registry plus shell commands): (id, label, menu path,
 /// default shortcut), menu items first in Photoshop order.
 pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, Option<String>)> {
+    let legacy = app.session.prefs().legacy_undo_keys;
     let mut out: Vec<(String, String, Vec<String>, Option<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for it in crate::menus::menu_items(app) {
@@ -27,7 +28,8 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
             mixer.push((c.id.to_string(), c.label.to_string(), vec!["Tools".to_string()], c.shortcut.map(Into::into)));
             continue;
         }
-        if seen.insert(c.id.to_string()) && c.shortcut.is_some() {
+        // A run started with Use Legacy Undo Shortcuts gives Step Backward / Forward keys (#14319).
+        if seen.insert(c.id.to_string()) && prefs::undo_key(c.id, c.shortcut, legacy).is_some() {
             let item = (c.id.to_string(), c.label.to_string(), c.menu.iter().map(|s| s.to_string()).collect::<Vec<_>>(), c.shortcut.map(Into::into));
             if c.menu.is_empty() && tools_key(c.id) {
                 tools.push((item.0, item.1, vec!["Tools".to_string()], item.3));
@@ -55,7 +57,40 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
             out.push((id.to_string(), label.to_string(), vec!["Tools".into(), "Temporary".into()], Some(def.to_string())));
         }
     }
+    // A run started with Use Legacy Undo Shortcuts on lists the undo keys it uses (#14319).
+    for item in &mut out {
+        let key = prefs::undo_key(&item.0, item.3.as_deref(), legacy).map(str::to_string);
+        item.3 = key;
+    }
     out
+}
+
+/// The reference application's note when Use Legacy Undo Shortcuts is ticked.
+pub(crate) const LEGACY_UNDO_NOTE: &str = "This change will take effect the next time you start PhotoCraft.";
+
+/// Use Legacy Channel Shortcuts (#14325), below Use Legacy Undo Shortcuts: stored at once and
+/// read by the key dispatch, so it takes effect when the dialog closes. No message; the list and
+/// the set don't change (100% still shows ⌘1).
+fn legacy_channel_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let mut on = app.session.prefs().use_legacy_channel_shortcuts;
+    if crate::widgets::checkbox(ui, &mut on, tl!("Use Legacy Channel Shortcuts")).on_hover_text(tl!("Use older channel switching shortcuts")).clicked() {
+        app.session.edit_prefs(|p| p.use_legacy_channel_shortcuts = on);
+    }
+}
+
+/// Use Legacy Undo Shortcuts (#14319), below the Set row: stored at once, read at the next
+/// launch. Ticking it says so in an alert with OK; unticking says nothing. The list and the set
+/// don't change, since the keys of this run were chosen when it started.
+fn legacy_undo_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let mut on = app.session.prefs().use_legacy_undo_shortcuts;
+    if !crate::widgets::checkbox(ui, &mut on, tl!("Use Legacy Undo Shortcuts")).on_hover_text(tl!("Use legacy shortcuts for undo actions")).clicked() {
+        return;
+    }
+    app.session.edit_prefs(|p| p.use_legacy_undo_shortcuts = on);
+    if on {
+        let message = tl!(LEGACY_UNDO_NOTE).to_owned();
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
 }
 
 /// A fingerprint of the bindings a shortcut conflict describes.
@@ -232,6 +267,8 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     // The Set row, then the search (the Menus tab searches too).
     if tab == 0 {
         set_row(app, ui, f, &mut overrides, &mut alt_overrides, &items, &mut message, &mut message_warning);
+        legacy_undo_row(app, ui);
+        legacy_channel_row(app, ui);
         ui.add_space(4.0);
     }
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();

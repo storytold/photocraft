@@ -14,10 +14,19 @@ impl PrefsStore {
     pub fn get(&self) -> &Preferences {
         &self.values
     }
-    /// Change preferences; bumps the revision.
+    /// Change preferences; bumps the revision. What the launch chose for the run (the undo
+    /// keys, #14319) stays as it was: only [`PrefsStore::launch`] sets it.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
         self.rev += 1;
-        f(&mut self.values)
+        let legacy_undo_keys = self.values.legacy_undo_keys;
+        let r = f(&mut self.values);
+        self.values.legacy_undo_keys = legacy_undo_keys;
+        r
+    }
+    /// The preferences were loaded at launch: the settings read only then take effect for the
+    /// run (Use Legacy Undo Shortcuts picks the undo keys).
+    pub fn launch(&mut self) {
+        self.values.legacy_undo_keys = self.values.use_legacy_undo_shortcuts;
     }
     pub fn rev(&self) -> u64 {
         self.rev
