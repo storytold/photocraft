@@ -81,6 +81,9 @@ pub struct AnalysisUi {
     pub dialog: Option<(String, Map<String, Value>)>,
     #[serde(skip)]
     pub drag: Option<Drag>,
+    /// A note was just made with a click: the Notes panel focuses its text next frame (#11793).
+    #[serde(skip)]
+    pub focus_note_text: bool,
 }
 
 impl Default for AnalysisUi {
@@ -95,6 +98,7 @@ impl Default for AnalysisUi {
             use_measurement_scale: false,
             dialog: None,
             drag: None,
+            focus_note_text: false,
         }
     }
 }
@@ -296,6 +300,7 @@ pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Val
     let result = app.run("notes.add", params)?;
     app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
     app.ui.analysis.notes = true;
+    app.ui.analysis.focus_note_text = true;
     app.ui.view.show.notes = true;
     Ok(result)
 }
@@ -990,7 +995,9 @@ fn show_note_options(app: &mut PhotocraftApp, i: usize) {
 fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let notes = app.session.active().map(|d| d.doc.notes.clone()).unwrap_or_default();
     let n = notes.len();
-    let mut sel = app.ui.analysis.note_selected.filter(|i| *i < n).or((n > 0).then_some(0));
+    // No note selected (after Delete, Clear All, a new document) stays unselected (#11793).
+    let mut sel = app.ui.analysis.note_selected.filter(|i| *i < n);
+    let focus_text = std::mem::take(&mut app.ui.analysis.focus_note_text);
     let mut close = false;
     let mut edit: Option<Value> = None;
     let mut delete = false;
@@ -999,31 +1006,44 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     panel_window(app, ctx, "notes-panel", tl!("Notes"), vec2(-40.0, 300.0), 260.0, |ui| {
         close = title_row(ui, tl!("Notes"));
         match sel {
+            // No note selected: an empty, inactive text box with the reference's placeholder.
             None => {
-                ui.label(RichText::new(tl!("Click with the Note tool to add a note.")).color(t.text_dim).size(11.0));
+                ui.label(RichText::new(" ").size(11.0));
+                let mut empty = String::new();
+                ui.add_enabled(
+                    false,
+                    egui::TextEdit::multiline(&mut empty).desired_rows(6).desired_width(f32::INFINITY).hint_text(tl!("Click a note to view or edit")),
+                )
+                .accessible_name(tl!("Notes"));
             }
             Some(i) => {
                 let note = &notes[i];
-                ui.label(RichText::new(if note.author.is_empty() { tl!("No author").to_string() } else { note.author.clone() }).color(t.text_dim).size(11.0));
+                // The author line as stored: empty for a note without author (#11793).
+                ui.label(RichText::new(if note.author.is_empty() { " ".to_string() } else { note.author.clone() }).color(t.text_dim).size(11.0));
                 let mut text = note.text.clone();
-                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).accessible_name(tl!("Notes")).changed() {
+                let resp = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).accessible_name(tl!("Notes"));
+                // A note just made with a click: the caret goes into its text, ready to type.
+                if focus_text {
+                    resp.request_focus();
+                }
+                if resp.changed() {
                     edit = Some(json!({"index": i, "text": text, "coalesce": format!("note-{i}")}));
                 }
             }
         }
         crate::widgets::hairline(ui);
         ui.horizontal(|ui| {
-            if ui.add_enabled_ui(n > 1, |ui| crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("Previous note"))).inner.clicked() {
+            let step = n > 1 && sel.is_some();
+            if ui.add_enabled_ui(step, |ui| crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("Previous note"))).inner.clicked() {
                 sel = sel.map(|i| (i + n - 1) % n);
                 navigated = true;
             }
-            if ui.add_enabled_ui(n > 1, |ui| crate::icons::button(ui, "chevrons-right", 22.0, false, tl!("Next note"))).inner.clicked() {
+            if ui.add_enabled_ui(step, |ui| crate::icons::button(ui, "chevrons-right", 22.0, false, tl!("Next note"))).inner.clicked() {
                 sel = sel.map(|i| (i + 1) % n);
                 navigated = true;
             }
-            let template = "{index} of {total}";
-            let position = crate::i18n::fmt(tl!(template), &[("index", &sel.map_or(0, |i| i + 1).to_string()), ("total", &n.to_string())]);
-            ui.label(RichText::new(position).color(t.text_dim).size(11.0));
+            // "N / M", blank with no note selected (#11793).
+            ui.label(RichText::new(note_counter(sel, n)).color(t.text_dim).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled_ui(sel.is_some(), |ui| crate::icons::button(ui, "trash", 22.0, false, tl!("Delete note"))).inner.clicked() {
                     delete = true;
@@ -1044,6 +1064,11 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close {
         app.ui.analysis.notes = false;
     }
+}
+
+/// The Notes panel's counter: "N / M" for note N of M, blank with no note selected (#11793).
+pub(crate) fn note_counter(sel: Option<usize>, n: usize) -> String {
+    sel.filter(|i| *i < n).map_or_else(String::new, |i| format!("{} / {n}", i + 1))
 }
 
 fn num_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>, suffix: &str) {
@@ -1203,6 +1228,9 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 pub(crate) mod tests;
 
+#[cfg(test)]
+#[path = "notes_panel_layout_tests.rs"]
+mod notes_panel_layout_tests;
 #[cfg(test)]
 mod sampler_drag_tests;
 
