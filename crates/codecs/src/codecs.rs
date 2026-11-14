@@ -1,3 +1,4 @@
+pub(crate) mod bmp;
 pub(crate) mod deep_exr;
 pub(crate) mod dpx;
 pub(crate) mod exr;

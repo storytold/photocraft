@@ -56,7 +56,7 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -98,7 +98,11 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jxl => Err(CodecError::unsupported(format, "JPEG XL reading is not yet available; export is supported")),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
+        Format::Bmp => via_image::decode(format, bytes, l).map(|mut img| {
+            img.meta.dpi = bmp::resolution(bytes);
+            img
+        }),
+        Format::Gif | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
     }?;
     finish_format(format, bytes, img, opts)
 }
@@ -219,9 +223,12 @@ pub fn bmp_palette(bytes: &[u8]) -> Result<Option<Vec<[u8; 3]>>, CodecError> {
 }
 
 /// Encodes `indices` (row-major, one byte per pixel) as an 8-bit palette BMP with the colour
-/// table `palette` (1 to 256 entries). Used for Indexed Color documents; BMP has no transparency.
-pub fn encode_bmp_indexed(width: u32, height: u32, indices: &[u8], palette: &[[u8; 3]]) -> Result<Vec<u8>, CodecError> {
-    via_image::encode_bmp_indexed(width, height, indices, palette)
+/// table `palette` (1 to 256 entries) and the resolution `dpi` in its header (left unset when
+/// `None`). Used for Indexed Color documents; BMP has no transparency.
+pub fn encode_bmp_indexed(width: u32, height: u32, indices: &[u8], palette: &[[u8; 3]], dpi: Option<(f32, f32)>) -> Result<Vec<u8>, CodecError> {
+    let mut bytes = via_image::encode_bmp_indexed(width, height, indices, palette)?;
+    bmp::set_resolution(&mut bytes, dpi);
+    Ok(bytes)
 }
 
 /// Lists the pages (image directories) of a TIFF or BigTIFF file without decoding pixels: the
@@ -416,6 +423,11 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jxl => jxl::encode(image, plan),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
+        // The `image` crate leaves a BMP's resolution fields 0; Photoshop fills them in.
+        Format::Bmp => via_image::encode(format, image, plan, opts).map(|mut bytes| {
+            bmp::set_resolution(&mut bytes, image.meta.dpi);
+            bytes
+        }),
+        Format::Gif | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
 }

@@ -2349,7 +2349,9 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 Ok(())
             })?;
             if format == Format::Bmp {
-                let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors)?;
+                // The resolution is a header field, not metadata: written whatever Metadata says.
+                let dpi = Some((doc.resolution_dpi, doc.resolution_dpi));
+                let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors, dpi)?;
                 let mut warnings = vec![format!("written as an 8-bit palette BMP ({} colours)", table.colors.len())];
                 if let Some(t) = table.transparent {
                     warnings.push(format!("BMP has no transparency; transparent pixels are written in the colour of palette entry {t}"));
