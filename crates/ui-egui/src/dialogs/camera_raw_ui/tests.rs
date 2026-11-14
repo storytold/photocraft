@@ -433,14 +433,13 @@ std::thread_local! {
     static RAW_OPEN_TURN: std::cell::RefCell<Option<std::sync::MutexGuard<'static, ()>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// An app whose importer is the real one, opening a synthetic DNG.
+/// Takes the turn for raw opens that keep their decode, held until the test's thread ends.
 ///
 /// Raw opens keep their decode in one process-wide list of two (`photocraft_io::raw`), so tests
 /// that open raws take turns: a parallel test's open would otherwise evict the decode another
-/// test is about to take. The turn is held until the test's thread ends (nextest runs each test
-/// in its own process, where this costs nothing).
-fn raw_app() -> (PhotocraftApp, Vec<u8>) {
-    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+/// test is about to take. Every test that opens a raw interactively calls this (nextest runs each
+/// test in its own process, where this costs nothing).
+pub(crate) fn hold_raw_open_turn() {
     static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     RAW_OPEN_TURN.with(|held| {
         let mut held = held.borrow_mut();
@@ -448,6 +447,12 @@ fn raw_app() -> (PhotocraftApp, Vec<u8>) {
             *held = Some(TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         }
     });
+}
+
+/// An app whose importer is the real one, opening a synthetic DNG.
+fn raw_app() -> (PhotocraftApp, Vec<u8>) {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    hold_raw_open_turn();
     let services = crate::Services {
         import: Some(Box::new(|name: &str, b: &[u8], opts: &photocraft_io::ImportOptions| {
             photocraft_io::import_with_options(name, b, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
@@ -536,6 +541,41 @@ fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
     assert_eq!(decodes, 2, "without the kept decode the commit decodes again");
     assert_eq!(reused, again, "the same pixels either way");
     assert_eq!(develop(true, false).0, 1, "Cancel decodes nothing more");
+}
+
+/// A pathless raw opened as a background job keeps its bytes for Camera Raw: Open re-develops it
+/// from the sensor data (sensor-stage settings), the same pixels as the inline open gives, and not
+/// as an RGB adjustment of the default develop.
+#[test]
+fn a_pathless_background_raw_open_still_redevelops_from_the_sensor_data() {
+    let ctx = egui::Context::default();
+    let sensor_stage = json!({"set": {"exposure": 1.0, "temperature": 30}, "commit": true});
+    let (mut inline, dng) = raw_app();
+    inline.open_bytes("IMG_0008.dng", &dng).unwrap();
+    let raw = take_queued(&mut inline).unwrap();
+    open_raw(&mut inline, &ctx, raw).unwrap();
+    let r = menu(&mut inline, &ctx, "filter.cameraRaw", &json!({"ui": sensor_stage})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], true, "{r}");
+    let fresh = pixels(&inline);
+
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    app.open_bytes("IMG_0008.dng", &dng).unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !app.jobs.opens.is_empty() || app.session.has_jobs() {
+        assert!(std::time::Instant::now() < end, "the open did not finish within 20 s");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let raw = take_queued(&mut app).expect("a raw open queues the dialog");
+    assert!(raw.path.is_none() && raw.bytes.is_some(), "the bytes survive the background open");
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().raw_open.as_ref().unwrap().decoded.is_some(), "the open's decode is taken, not decoded again");
+    // The re-develop of the commit runs inline: this is about the source it has.
+    app.background_jobs = false;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": sensor_stage})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], true, "{r}");
+    assert_eq!(pixels(&app), fresh, "the same pixels as a fresh re-develop");
 }
 
 #[test]

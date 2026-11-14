@@ -343,7 +343,7 @@ fn the_opening_card_keeps_a_long_name_and_cancel_inside() {
     let long = "a7rv-test_2024_02_17_shot_30_3705_with_an_even_longer_suffix_that_never_ends.psb";
     for name in ["short.psd", long] {
         h.state_mut().jobs.opens.clear();
-        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: name.to_string(), path: None, slot: None, order: None });
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: name.to_string(), path: None, slot: None, order: None, bytes: None });
         h.state_mut().jobs.focus = Some(job);
         h.run_steps(4);
         let r = crate::jobs_ui::open_card_rects(&h.ctx).expect("the opening card was drawn");
@@ -1127,7 +1127,7 @@ fn background_open_warns_about_missing_fonts() {
     // What the open job leaves behind: the decoded document in the session, then its result.
     let (index, _) = app.session.open_document(doc, None);
     let id = app.session.documents()[index].doc.id;
-    super::finish_open(&mut app, "poster.psd", None, &json!({"document": index, "docId": id.0, "warnings": []}), None, None).unwrap();
+    super::finish_open(&mut app, "poster.psd", None, &json!({"document": index, "docId": id.0, "warnings": []}), None, None, None).unwrap();
     let want = vec!["font 'NoSuchFamily4559' is not installed; text may render using a fallback face".to_string()];
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
@@ -1209,7 +1209,7 @@ fn open_identity_survives_tab_reordering() {
     let old_index = result["document"].as_u64().unwrap() as usize;
     app.session.move_document(old_index, 0).unwrap();
     assert_eq!(app.session.documents()[old_index].doc.id, control.doc.id);
-    super::finish_open(&mut app, "imported.png", Some("imported.png"), &result, None, None).unwrap();
+    super::finish_open(&mut app, "imported.png", Some("imported.png"), &result, None, None, None).unwrap();
     control.assert_untouched(&app);
     assert_eq!(app.session.active().unwrap().doc.id, imported);
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("imported.png"));
@@ -1224,7 +1224,7 @@ fn open_identity_survives_an_earlier_tab_closing() {
     let (result, imported) = identified_result(&app, result);
     app.session.close(1).unwrap();
     app.session.set_active(0);
-    super::finish_open(&mut app, "imported.png", Some("imported.png"), &result, Some(0), None).unwrap();
+    super::finish_open(&mut app, "imported.png", Some("imported.png"), &result, Some(0), None, None).unwrap();
     control.assert_untouched(&app);
     assert_eq!(app.session.active().unwrap().doc.id, imported);
     assert_eq!(app.session.documents()[0].doc.id, imported, "the requested destination slot applies to the correct document");
@@ -1246,13 +1246,16 @@ fn open_identity_rejects_closed_missing_and_invalid_identities() {
             }
             Some(value) => result["docId"] = value,
         }
-        assert!(super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, Some(0), None).is_err(), "invalid identity was accepted: {result}");
+        assert!(
+            super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, Some(0), None, None).is_err(),
+            "invalid identity was accepted: {result}"
+        );
         control.assert_untouched(&app);
         assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
         assert_eq!(app.session.documents().len(), 1);
         result["docId"] = json!(imported.0);
         assert!(
-            super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, None, None).is_err(),
+            super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, None, None, None).is_err(),
             "a closed identity must not fall back to the old tab index"
         );
         control.assert_untouched(&app);
@@ -1273,9 +1276,9 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     let (second, second_id) = identified_result(&app, second);
     // All engine applies have finished. Handling the first ordinary result removes its tab,
     // shifting the second result before its UI callback runs.
-    super::finish_open(&mut app, "profile.png", Some("profile.png"), &prompt, None, None).unwrap();
-    super::finish_open(&mut app, "first.png", Some("first.png"), &first, None, None).unwrap();
-    super::finish_open(&mut app, "second.png", Some("second.png"), &second, None, None).unwrap();
+    super::finish_open(&mut app, "profile.png", Some("profile.png"), &prompt, None, None, None).unwrap();
+    super::finish_open(&mut app, "first.png", Some("first.png"), &first, None, None, None).unwrap();
+    super::finish_open(&mut app, "second.png", Some("second.png"), &second, None, None, None).unwrap();
     assert_eq!(app.held_opens.iter().map(|held| held.name.as_str()).collect::<Vec<_>>(), ["profile.png", "first.png", "second.png"]);
     assert_eq!(app.held_opens.iter().skip(1).map(|held| held.doc.id).collect::<Vec<_>>(), [first_id, second_id]);
     assert_eq!(app.session.documents().len(), 1, "both completed imports wait behind the profile prompt");
