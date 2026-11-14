@@ -445,7 +445,8 @@ jobs:
           persist-credentials: false
       - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          toolchain: stable
+          toolchain: nightly
+      - run: rustc -Vv
       - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
         with:
           workspaces: crates/${{ matrix.target.crate }}/fuzz
