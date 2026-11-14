@@ -342,13 +342,18 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// An SVG (or a native source's SVG preview) without Stack Mode is rendered by the bounded
 /// whole-drawing path, so its box only needs the canvas bounds: no editable layer caches are
 /// built, and a drawing whose layer caches exceed the budget still gets a warp frame. Stack Mode
-/// keeps the strict layered import it renders with.
+/// keeps the strict layered import it renders with. A VectorCraft source without Stack Mode gets
+/// its box from the carried PDF's page size, without drawing the artboard.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
+        None if photocraft_io::vectorcraft::is_vectorcraft(&bytes) => {
+            let (w, h) = photocraft_io::vectorcraft::drawn_size(&bytes).ok()?;
+            Rect::new(0, 0, i32::try_from(w).ok()?, i32::try_from(h).ok()?)
+        }
         Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
         None => source_image(&name, &bytes, fmt).ok()?.bounds,
     };
