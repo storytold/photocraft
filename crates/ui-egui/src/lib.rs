@@ -30,6 +30,7 @@ pub mod control;
 pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;
+mod fade_out;
 pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
