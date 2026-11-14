@@ -194,7 +194,8 @@ impl Cr2SrawSpec {
 // ---------------------------------------------------------------- TIFF/EP
 
 /// A synthetic uncompressed TIFF/EP raw (NEF / ARW-like): IFD0 with Make, the
-/// CFA image in a SubIFD with 16-bit samples.
+/// CFA image in a SubIFD with 16-bit samples. An explicit Make in
+/// `extra_raw_tags` overrides the `make` fallback argument.
 pub fn tiff_ep(make: &str, width: usize, height: usize, data: &[u16], cfa: [u8; 4], bits: u16, extra_raw_tags: Vec<(u16, Val)>) -> Vec<u8> {
     let mut t = TiffBuilder::default();
     let strip = t.blob(data.iter().flat_map(|v| v.to_le_bytes()).collect());
@@ -213,7 +214,16 @@ pub fn tiff_ep(make: &str, width: usize, height: usize, data: &[u16], cfa: [u8; 
         (33422, Val::Byte(cfa.to_vec())),
     ];
     // Make and Model belong to IFD0, where readers look for them; anything else is raw-IFD data.
-    let (ifd0_tags, raw_tags): (Vec<_>, Vec<_>) = extra_raw_tags.into_iter().partition(|(tag, _)| matches!(tag, 271 | 272));
+    let (mut ifd0_tags, raw_tags): (Vec<_>, Vec<_>) = extra_raw_tags.into_iter().partition(|(tag, _)| matches!(tag, 271 | 272));
+    // Write a single Make. The first explicit IFD0 Make is the caller's vendor identity;
+    // otherwise use the argument as the fixture's fallback identity.
+    let make_tag = if let Some(index) = ifd0_tags.iter().position(|(tag, _)| *tag == 271) {
+        let make_tag = ifd0_tags.remove(index);
+        ifd0_tags.retain(|(tag, _)| *tag != 271);
+        make_tag
+    } else {
+        (271, Val::Ascii(make.into()))
+    };
     raw.extend(raw_tags);
     let raw_ifd = t.ifd(raw);
     let thumb = t.blob(vec![128; 12]);
@@ -223,12 +233,12 @@ pub fn tiff_ep(make: &str, width: usize, height: usize, data: &[u16], cfa: [u8; 
         (257, Val::Long(vec![2])),
         (259, Val::Short(vec![1])),
         (262, Val::Short(vec![2])),
-        (271, Val::Ascii(make.into())),
         (273, Val::Blobs(vec![thumb])),
         (277, Val::Short(vec![3])),
         (279, Val::Long(vec![12])),
         (330, Val::Ifds(vec![raw_ifd])),
     ];
+    ifd0.push(make_tag);
     ifd0.extend(ifd0_tags);
     let ifd0 = t.ifd(ifd0);
     t.chain = vec![ifd0];
