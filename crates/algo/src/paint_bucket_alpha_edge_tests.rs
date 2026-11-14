@@ -82,6 +82,7 @@ fn opaque_seed_fringe_on_a_ramp_keeps_its_values() {
         assert_eq!(*p, GREEN, "ramp {x} fills");
     }
     for x in [94, 160] {
+        assert_ne!(after[x], GREEN, "ramp {x} blends, not a full fill");
         assert!(near(after[x], [1, 254, 1, 255]), "ramp {x} blends: {:?}", after[x]);
     }
     for x in [93, 161] {
