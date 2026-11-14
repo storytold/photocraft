@@ -151,3 +151,76 @@ fn the_note_tool_shows_a_note_sheet_with_its_hotspot_top_left() {
         assert!((hi[k] - at) as f32 >= 10.0 * scale, "axis {k}: the sheet lies right of and below the hotspot");
     }
 }
+
+/// CodeRabbit on #14783: the icon is a screen-space square at the note's screen position, so the
+/// hit test works there: flipped, rotated and with a non-unit aspect a click on the drawn icon
+/// picks the note and a click just off it does not.
+#[test]
+fn the_hit_test_follows_the_drawn_icon_when_the_view_is_flipped_rotated_or_stretched() {
+    let app = note_app(1.0);
+    let n = &app.session.active().unwrap().doc.notes;
+    for (flip, rotation, aspect) in [(true, 0.0, 1.0), (false, 30.0, 1.0), (false, 0.0, 1.5), (true, 30.0, 1.5)] {
+        let xf = ViewXform { flip, rotation, aspect, ..xform(2.0) };
+        let r = note_icon_rect(&xf, n[0].position);
+        let doc = |p: Pos2| xf.to_doc(p);
+        for p in
+            [r.center(), r.left_top() + vec2(1.0, 1.0), r.right_bottom() - vec2(1.0, 1.0), r.right_top() + vec2(-1.0, 1.0), r.left_bottom() + vec2(1.0, -1.0)]
+        {
+            assert_eq!(super::note_at_screen(n, &xf, doc(p)), Some(0), "flip {flip}, rotation {rotation}, aspect {aspect}: {p:?} is on the icon");
+        }
+        for p in [r.left_top() - vec2(2.0, 0.0), r.right_top() + vec2(2.0, 0.0), r.right_bottom() + vec2(0.0, 2.0), r.left_bottom() - vec2(0.0, -2.0)] {
+            assert_eq!(super::note_at_screen(n, &xf, doc(p)), None, "flip {flip}, rotation {rotation}, aspect {aspect}: {p:?} is off the icon");
+        }
+    }
+}
+
+/// CodeRabbit on #14783: during an animated zoom the icon is drawn at the displayed zoom, so the
+/// click is tested at that zoom too: shown at half size, the zoomed-out icon covers 40 document
+/// pixels and a click 30 px along picks the note instead of making a new one.
+#[test]
+fn a_click_during_an_animated_zoom_uses_the_displayed_zoom() {
+    let mut app = note_app(1.0);
+    let center = app.ui.views[0].center;
+    app.ui.views[0].zoom_animating = true;
+    app.ui.views[0].display_camera = Some((0.5, center));
+    click(&mut app, [130.0, 105.0]);
+    assert_eq!(notes(&app), 1, "no new note: the click is on the icon as shown");
+    assert_eq!(app.ui.analysis.note_selected, Some(0));
+}
+
+/// CodeRabbit on #14783: Preferences › Cursors › Other Cursors Precise keeps the plain crosshair
+/// for the Note tool, as before this change, and so does Caps Lock (not measured): its pointer is
+/// the marquee's.
+#[test]
+fn precise_other_cursors_and_caps_lock_keep_the_crosshair_for_the_note_tool() {
+    for caps in [false, true] {
+        let (mut note, mut marquee) = (harness(Tool::Note), harness(Tool::RectMarquee));
+        if !has_fonts(&note) {
+            return;
+        }
+        for h in [&mut note, &mut marquee] {
+            if caps {
+                h.state_mut().caps_lock = true;
+            } else {
+                h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": "precise"})).unwrap();
+            }
+            h.run_steps(2);
+            hover(h);
+        }
+        assert_eq!(note.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair, "caps {caps}");
+        assert_eq!(bitmap(&note), bitmap(&marquee), "caps {caps}: the marquee's crosshair, not the note sheet");
+    }
+}
+
+/// CodeRabbit on #14783: with the view flipped, a click on the visible icon picks the note (a
+/// document-space box made a duplicate note there).
+#[test]
+fn a_click_on_the_icon_in_a_flipped_view_selects_the_note() {
+    let mut app = note_app(1.0);
+    app.ui.view.flip_horizontal = true;
+    let xf = ViewXform::active(&app).expect("the view's mapping");
+    let r = note_icon_rect(&xf, app.session.active().unwrap().doc.notes[0].position);
+    click(&mut app, xf.to_doc(r.center()));
+    assert_eq!(notes(&app), 1, "no new note on the icon");
+    assert_eq!(app.ui.analysis.note_selected, Some(0));
+}

@@ -480,3 +480,12 @@ mod remove_cursor_tests;
 #[cfg(test)]
 #[path = "paint_bucket_cursor_tests.rs"]
 mod paint_bucket_cursor_tests;
+
+/// The Note tool's cursor (#11794): the note sheet, its hotspot on the sheet's top-left corner.
+/// Precise Other Cursors and Caps Lock keep the plain crosshair it had before (not measured).
+pub(crate) fn note_cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
+    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise || app.caps_lock {
+        return egui::CursorIcon::Crosshair;
+    }
+    crate::tool_cursor::note(painter, p)
+}

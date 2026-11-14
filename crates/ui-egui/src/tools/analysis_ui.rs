@@ -319,6 +319,14 @@ pub(crate) fn note_at(notes: &[photocraft_doc::analysis::Note], p: [f64; 2], zoo
     notes.iter().rposition(|n| (0.0..=side).contains(&(p[0] - n.position[0])) && (0.0..=side).contains(&(p[1] - n.position[1])))
 }
 
+/// [`note_at`] in screen space, where the icon is drawn: the topmost note whose icon rectangle
+/// ([`note_icon_rect`] at `xf`) holds the screen position of document point `p`. Flipped, rotated or
+/// stretched views, and the displayed zoom of an animated zoom, are all in `xf`.
+pub(crate) fn note_at_screen(notes: &[photocraft_doc::analysis::Note], xf: &ViewXform, p: [f64; 2]) -> Option<usize> {
+    let at = xf.to_screen(p[0] as f32, p[1] as f32);
+    notes.iter().rposition(|n| note_icon_rect(xf, n.position).contains(at))
+}
+
 /// A note's icon (#11794): a sheet in the note colour with a drop shadow and its bottom-right
 /// corner folded over. The open note's icon also shows text lines and a pencil, as the
 /// reference's does. Our own drawing; the shadow's offset and the pencil's exact shape were not
@@ -439,7 +447,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 let _ = app.run("count.move", json!({"group": g, "index": i, "to": [x, y]}));
             }
         }
-        (Tool::Note, ToolEvent::Down { x, y, .. }) => match note_at(&doc.notes, [x, y], f64::from(app.point_zoom())) {
+        (Tool::Note, ToolEvent::Down { x, y, .. }) => match ViewXform::active(app)
+            .map_or_else(|| note_at(&doc.notes, [x, y], f64::from(app.point_zoom())), |xf| note_at_screen(&doc.notes, &xf, [x, y]))
+        {
             Some(i) => {
                 app.ui.analysis.note_selected = Some(i);
                 app.ui.analysis.notes = true;
