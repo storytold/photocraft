@@ -449,6 +449,31 @@ fn a_layer_name_takes_every_line_and_cuts_at_63_characters() {
     assert_eq!(layer_name("a".repeat(200).as_str()), "a".repeat(63));
 }
 
+/// #12047: a layer named by the previous rule (first non-empty line, cut at 40 characters) came
+/// from its text too, so it keeps following the text after the rule changed.
+#[test]
+fn a_name_the_previous_rule_gave_still_follows_the_text() {
+    let mut s = session();
+    let multi = s.execute("type.create", json!({"x": 0, "y": 0, "text": "Hello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+    let long_text = "x".repeat(50);
+    let long = s.execute("type.create", json!({"x": 0, "y": 40, "text": long_text})).unwrap()["layer"].as_u64().unwrap();
+    // As a document saved before the rule changed has them.
+    s.execute("layer.renameLayer", json!({"layer": multi, "name": "Hello"})).unwrap();
+    s.execute("layer.renameLayer", json!({"layer": long, "name": "x".repeat(40)})).unwrap();
+    for id in [multi, long] {
+        let l = s.active().unwrap().doc.layer(LayerId(id)).unwrap();
+        assert!(is_auto_named(l, None), "layer {id}: {} was its text's name", l.name);
+    }
+    s.execute("type.edit", json!({"layer": multi, "text": "Bye"})).unwrap();
+    assert_eq!(layer_name_of(&s, multi), "Bye");
+    s.execute("type.edit", json!({"layer": long, "text": "Short"})).unwrap();
+    assert_eq!(layer_name_of(&s, long), "Short");
+    // A name that is neither rule's is still the user's.
+    let mine = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Hello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.renameLayer", json!({"layer": mine, "name": "Hell"})).unwrap();
+    assert!(!is_auto_named(s.active().unwrap().doc.layer(LayerId(mine)).unwrap(), None));
+}
+
 /// #12047: `is_auto_named` still recognises the names the new rule gives, including a
 /// Duplicate Layer copy of one, so those layers keep following their text; a name the user gave
 /// is theirs. The Type tool's generic "Layer N" name is not an automatic one: it stands while the

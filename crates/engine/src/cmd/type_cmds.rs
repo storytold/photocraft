@@ -823,7 +823,9 @@ pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
     let LayerContent::Text(t) = &l.content else { return false };
     let auto = layer_name(&t.text);
     // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
-    l.name == auto || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
+    l.name == auto
+        || l.name == previous_layer_name(&t.text)
+        || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
 }
 
 /// The name the user last gave layer `id` in the active document, if any (see
@@ -859,6 +861,14 @@ pub fn layer_name(text: &str) -> String {
     let joined: String = text.lines().map(str::trim).collect();
     let name: String = joined.chars().take(LAYER_NAME_MAX_CHARS).collect();
     if name.is_empty() { "Type Layer".into() } else { name }
+}
+
+/// The name the rule before #12047 gave a type layer: its first non-empty line, at most 40
+/// characters. Documents saved with it keep following their text, so `is_auto_named` still
+/// recognises it.
+fn previous_layer_name(text: &str) -> String {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    first.chars().take(40).collect()
 }
 
 fn info(s: &Session, p: &Value) -> Result<Value> {
