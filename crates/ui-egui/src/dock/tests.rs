@@ -192,6 +192,48 @@ fn a_single_tab_click_expands_a_collapsed_panel() {
     }
 }
 
+/// #9083: a double-click on a tab of an expanded group collapses the group to its tab strip.
+#[test]
+fn a_double_click_on_an_expanded_tab_collapses_its_group() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        for tab_index in [0, 1] {
+            let (mut app, _, _) = app_with_layers();
+            app.ui.dock_tabs.color = 0;
+            let mut h = harness(app, vec2(1200.0, 800.0), theme);
+            assert!(!h.state().ui.dock.is_collapsed(Group::Color));
+            let expanded_height = rect_of(&h, Group::Color).height();
+            let tab = probe::tab_rect(&h.ctx, panel_id(Group::Color, tab_index, is_pro(theme))).unwrap().center();
+            double_click(&mut h, tab);
+            // Collapsing goes through `window.panel.group`, which customizes the workspace and
+            // records the group's panels as collapsed there.
+            assert_eq!(h.state().ui.status, "", "{theme:?}: tab {tab_index}");
+            let collapsed = &h.state().ui.docking_collapsed;
+            assert!(
+                Group::Color.tabs(is_pro(theme)).iter().filter_map(|t| crate::panel_docking::normalize(t)).all(|id| collapsed.iter().any(|c| c == id)),
+                "{theme:?}: tab {tab_index}: {collapsed:?}"
+            );
+            assert!(rect_of(&h, Group::Color).height() < expanded_height, "{theme:?}: tab {tab_index}");
+        }
+    }
+}
+
+/// The first click of a double-click on a collapsed group expands it; the second must not
+/// collapse it again.
+#[test]
+fn a_double_click_on_a_collapsed_tab_leaves_its_group_expanded() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (mut app, _, _) = app_with_layers();
+        app.ui.dock_tabs.color = 0;
+        app.ui.dock.set_collapsed(Group::Color, true);
+        let mut h = harness(app, vec2(1200.0, 800.0), theme);
+        let collapsed_height = rect_of(&h, Group::Color).height();
+        let tab = probe::tab_rect(&h.ctx, panel_id(Group::Color, 0, is_pro(theme))).unwrap().center();
+        double_click(&mut h, tab);
+        assert!(!h.state().ui.dock.is_collapsed(Group::Color), "{theme:?}");
+        assert!(rect_of(&h, Group::Color).height() > collapsed_height, "{theme:?}");
+    }
+}
+
 /// The strip shows reordered tabs in their order; dragging one onto another group moves the
 /// panel that was dragged, and only that panel.
 #[test]
@@ -712,6 +754,20 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.step();
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+}
+
+/// Two primary clicks at `p`, one frame apart, so egui reads them as a double-click (the
+/// harness steps at 60 fps, well inside the double-click delay).
+fn double_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    for _ in 0..2 {
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+    }
     h.run_steps(3);
 }
 
