@@ -1,7 +1,7 @@
 //! Playback Options: the Actions panel menu's dialog, and the Step by Step and Pause For pacing of a
 //! person's Play.
 //!
-//! A paced Play is still one playback: after each step [`super::play_owned`] parks the rest of the
+//! A paced Play is still one playback: after each step [`super::run_owned`] parks the rest of the
 //! action like a step dialog does (a [`super::PausedPlayback`] token holding the suspended history and
 //! recording), and [`tick`] resumes it once the wait is over, so the steps share one history state
 //! and the canvas redraws between them. Esc, the panel's Stop button, an edit of the action list or a
@@ -52,35 +52,26 @@ pub(super) fn step_pause(app: &PhotocraftApp) -> Option<Duration> {
     }
 }
 
-/// Step `i` of `action` ended as `c` (`ran` steps of it before): when it simply ran and Step by
-/// Step or Pause For waits before the next enabled step, park the rest ([`super::Called::Paced`]).
-pub(super) fn paced(app: &mut PhotocraftApp, action: &super::Action, i: usize, id: &str, ran: u64, c: super::Called) -> super::Called {
-    if !matches!(c, super::Called::Done) || !action.enabled_steps().any(|(j, _)| j > i) {
-        return c;
-    }
-    match step_pause(app) {
-        Some(wait) => super::Called::Paced(pace(app, &action.name, i, id, ran.saturating_add(1), wait)),
-        None => c,
-    }
-}
-
-/// Park `action` after its step `i` (`ran` steps of it so far): it continues from the next step
-/// after `wait`. Returns the `paused` value [`super::play_owned`] reports.
-fn pace(app: &mut PhotocraftApp, action: &str, i: usize, id: &str, ran: u64, wait: Duration) -> Value {
+/// Park the immutable frame after an executed step until its pacing wait ends.
+pub(super) fn pace(app: &mut PhotocraftApp, frame: &super::Frame, i: usize, id: &str, ran: u64, wait: Duration) -> Result<Value, String> {
     let rev = app.session.actions.rev;
     let gate = app.session.authorize;
+    let doc = app.session.active().map(|doc| doc.doc.id);
+    let used = app.session.actions.playback_steps;
     let pb = &mut app.paused_playbacks;
-    let token = pb.pause(action.to_string(), i.saturating_add(1), gate);
+    let token = pb.pause(frame.after(i.saturating_add(1)), 0, gate, used, doc)?;
     if let Some(entry) = pb.paused.get_mut(&token) {
         entry.timed = true;
         entry.ran = ran;
     }
     let due = Instant::now().checked_add(wait).unwrap_or_else(Instant::now);
-    // One paced playback at a time: Play ends a waiting one before it starts (`stop`).
-    if let Some(old) = pb.timer.replace(Timer { token, due, rev }) {
-        pb.paused.remove(&old.token);
+    if let Some(old) = pb.timer.replace(Timer { token, due, rev })
+        && let Some(old) = pb.paused.remove(&old.token)
+        && let Some(owner) = old.record
+    {
+        owner.finish(&mut app.session);
     }
-    json!({"step": i, "id": id, "dialog": PLAYBACK_TIMER})
+    Ok(json!({"step": i, "id": id, "dialog": PLAYBACK_TIMER}))
 }
 
 /// The token of the paced playback that is waiting, if any.

@@ -1471,8 +1471,9 @@ pub(crate) fn needs_displace_map(command: &str, params: &Value) -> bool {
 pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields: Map<String, Value>) -> Result<Value, String> {
     use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
     let doc = app.active_doc_id()?;
+    let action_step = fields.get(crate::actions::RESUME).and_then(Value::as_u64);
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None }, move |app, answer| {
+    let result = app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None }, move |app, answer| {
         let path = match answer {
             FileDialogAnswer::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
             FileDialogAnswer::Unavailable(e) => return Err(e),
@@ -1483,15 +1484,21 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields:
         };
         let mut fields = fields;
         fields.insert("mapPath".into(), json!(path));
-        app.refocus(doc)?;
-        let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
-        let result = crate::actions::run_step_dialog(app, &fields, &cmd, params);
-        if result.is_ok() {
-            remember(app, &cmd, &fields);
-            let _ = crate::actions::resume(app, &fields);
-        }
-        result
-    })
+        crate::actions::with_step_gate_at(app, &fields, None, Some(doc), |app| {
+            app.refocus(doc)?;
+            let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
+            let result = crate::actions::run_step_dialog(app, &fields, &cmd, params);
+            if result.is_ok() {
+                remember(app, &cmd, &fields);
+                crate::actions::resume(app, &fields)?;
+            }
+            result
+        })
+    })?;
+    if let Some(pending) = app.file_dialog.as_mut() {
+        pending.action_step = action_step;
+    }
+    Ok(result)
 }
 
 /// Compute a preview document: run `command` with `params` on the proxy (scaled) copy of `doc`.

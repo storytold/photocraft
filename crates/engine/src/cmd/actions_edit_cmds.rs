@@ -36,7 +36,7 @@ fn allow_tool_recording(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
     };
     if enabled != s.actions.record_tools {
-        if s.actions.recording.is_some() && s.tool_stroke_job_running() {
+        if s.actions.recording_active() && s.tool_stroke_job_running() {
             return Err(bad(cmd, "wait for the current tool stroke before changing recording"));
         }
         flush_recording(s)?;
@@ -64,7 +64,7 @@ fn index(p: &Value, key: &str, cmd: &str) -> Result<Option<usize>> {
 
 /// Whether `id` can be a step: a registered command, a Play Action call, or one of the desktop
 /// shell's recorded save/view commands.
-fn is_step_command(id: &str) -> bool {
+pub(crate) fn is_step_command(id: &str) -> bool {
     crate::commands::find(id).is_some() || id == "actions.play" || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id)
 }
 
@@ -127,11 +127,8 @@ fn insert_step(s: &mut Session, idx: usize, at: usize, step: (String, Value)) ->
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.duplicate";
     not_playing(s, cmd)?;
-    if let Some(set) = p.get("set") {
-        if p.get("action").is_some() || p.get("step").is_some() {
-            return Err(bad(cmd, "select a set or an action step, not both"));
-        }
-        return duplicate_set(s, set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?);
+    if p.get("set").is_some() {
+        return duplicate_set(s, p);
     }
     let idx = resolve(&s.actions.list, p, cmd)?;
     if let Some(step) = index(p, "step", cmd)? {
@@ -157,57 +154,71 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         result["index"] = json!(idx);
         return Ok(result);
     }
-    if s.actions.recording.is_some() {
+    if s.actions.recording_active() {
         return Err(bad(cmd, "stop recording before duplicating an action"));
     }
     let mut copied = s.actions.list[idx].clone();
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
     copied.name = names.claim(&format!("{} copy", copied.name));
+    crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(std::iter::once(&copied))).map_err(|error| bad(cmd, error))?;
     let at = idx + 1;
     let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
-    s.actions.list.insert(at, copied);
-    crate::actions_cmds::shift_action_calls(&mut s.actions.list, at, 1);
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.insert(at, copied);
+    crate::actions_cmds::shift_action_calls(&mut proposed.list, at, 1);
+    crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
     s.actions.touch();
     Ok(result)
 }
 
-/// Copy the named group represented by main, including a session-only empty New Set.
-fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
+/// Copy a folder below its source, using the existing first-appearance order and empty-set model.
+fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.duplicate";
-    if s.actions.recording.is_some() {
+    if p.get("action").is_some() || p.get("step").is_some() {
+        return Err(bad(cmd, "select either a set or an action/step"));
+    }
+    if s.actions.recording_active() {
         return Err(bad(cmd, "stop recording before duplicating a set"));
     }
+    let source = p.get("set").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`set` must be a set name"))?;
     let sets = set_names(s);
-    if !sets.iter().any(|name| name == source) {
+    if !sets.iter().any(|n| n == source) {
         return Err(bad(cmd, "the selected set no longer exists"));
     }
-    let name = crate::atn_cmds::UniqueNames::new(sets).claim(&format!("{source} copy"));
-    if let Some(first) = s.actions.list.iter().position(|action| action.set.as_deref() == Some(source)) {
-        let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|action| action.name.clone()));
-        let copies: Vec<_> = s
-            .actions
-            .list
-            .iter()
-            .filter(|action| action.set.as_deref() == Some(source))
-            .cloned()
-            .map(|mut action| {
-                action.name = names.claim(&format!("{} copy", action.name));
-                action.set = Some(name.clone());
-                action
-            })
-            .collect();
-        // Classic groups rows by name even when a set's actions are interleaved.
-        let at = first + s.actions.list[first..].iter().take_while(|action| action.set.as_deref() == Some(source)).count();
-        let count = copies.len();
-        s.actions.list.splice(at..at, copies);
-        crate::actions_cmds::shift_action_calls(&mut s.actions.list, at, count);
-        s.actions.touch();
-        return Ok(json!({"set": name, "index": at, "actions": count}));
+    let mut set_names = crate::atn_cmds::UniqueNames::new(sets);
+    let name = set_names.claim(&format!("{source} copy"));
+    let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    let at = s.actions.list.iter().position(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).map_or(s.actions.list.len(), |first| {
+        first + s.actions.list[first..].iter().take_while(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source).count()
+    });
+    let added: Vec<_> = s
+        .actions
+        .list
+        .iter()
+        .filter(|a| crate::atn_cmds::logical_set_name(a.set.as_deref()) == source)
+        .cloned()
+        .map(|mut a| {
+            a.name = names.claim(&format!("{} copy", a.name));
+            a.set = Some(name.clone());
+            a
+        })
+        .collect();
+    let count = added.len();
+    crate::actions_cmds::library::check_action_count(&s.actions, s.actions.list.iter().chain(added.iter())).map_err(|error| bad(cmd, error))?;
+    let mut proposed = crate::actions_cmds::library::definition_copy(&s.actions);
+    proposed.list.splice(at..at, added);
+    if count != 0 {
+        crate::actions_cmds::shift_action_calls(&mut proposed.list, at, count);
     }
-    let at = s.actions.sets.iter().position(|set| set == source).ok_or_else(|| bad(cmd, "the selected set no longer exists"))? + 1;
-    s.actions.sets.insert(at, name.clone());
+    crate::atn_cmds::sidecar::duplicate_set_rows(&mut proposed, source, &name);
+    crate::actions_cmds::library::check_definition(&proposed, &s.prefs().shortcuts).map_err(|error| bad(cmd, error))?;
+    s.actions.list = proposed.list;
+    s.actions.sets = proposed.sets;
+    s.actions.library = proposed.library;
+    s.actions.atn_set_rows = proposed.atn_set_rows;
     s.actions.touch();
-    Ok(json!({"set": name, "actions": 0}))
+    Ok(json!({"set":name,"actions":count,"index":at}))
 }
 
 /// The panel's dialog toggle column. With `step`, switch one step's dialog on or off; without
@@ -256,6 +267,7 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
+    crate::atn_cmds::sidecar::assign_set_metadata(&mut s.actions, idx, set.as_deref());
     let action = &mut s.actions.list[idx];
     action.set = set;
     let result = json!({"action": action.name, "set": action.set});
@@ -267,7 +279,14 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// then the empty ones New Set made.
 pub fn set_names(s: &Session) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    s.actions.list.iter().filter_map(|a| a.set.as_ref()).chain(&s.actions.sets).filter(|set| seen.insert(set.as_str())).cloned().collect()
+    s.actions
+        .list
+        .iter()
+        .map(|action| crate::atn_cmds::logical_set_name(action.set.as_deref()))
+        .chain(s.actions.sets.iter().map(String::as_str))
+        .filter(|set| seen.insert(*set))
+        .map(str::to_string)
+        .collect()
 }
 
 /// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New
@@ -285,7 +304,7 @@ fn new_set(s: &mut Session, p: &Value) -> Result<Value> {
     if names.contains(&name) {
         return Err(bad(cmd, format!("a set named `{name}` already exists")));
     }
-    s.actions.sets.push(name.clone());
+    crate::atn_cmds::sidecar::install_row(&mut s.actions, &name, None);
     s.actions.touch();
     Ok(json!({"set": name}))
 }
@@ -397,7 +416,12 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
     let played = if holds { then } else { otherwise };
     let mut out = json!({"if": condition, "holds": holds, "played": played});
     if let Some(name) = played {
-        let r = s.execute("actions.play", json!({"action": name}))?;
+        let mut call = json!({"action": name});
+        let key = if holds { "thenSet" } else { "elseSet" };
+        if let Some(scope) = p.get(key).filter(|scope| !scope.is_null()).or_else(|| p.get("set").filter(|scope| !scope.is_null())) {
+            call["set"] = scope.clone();
+        }
+        let r = s.execute("actions.play", call)?;
         if let Some(f) = r.get("failed") {
             out["failed"] = f.clone();
         }
@@ -454,7 +478,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Duplicate Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"step":index?} or {"set":name} → {action?,index?,step?,steps?,set?,actions?}. Copy an action, step or named set below the source. Copies retain settings and flags, and leave shortcuts with the originals."##,
+            params: r##"{"action":name|index, "step":index?} or {"set":name} → {action,index,steps} or {set,actions,index}. Copies a step, action or entire folder below its source, retaining settings and flags. Whole-action/folder copies require recording to be stopped; original function keys stay with their original actions."##,
             enabled: always,
             run: duplicate,
             journal: false,
@@ -484,7 +508,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Conditional",
             menu: &[],
             shortcut: None,
-            params: r##"{"if":condition, "then":action name|null, "else":action name|null} → {if, holds, played, ran?, failed?}. Photoshop's Insert Conditional: conditions always|never|isOpen|landscape|square|portrait|modeIsRGB|modeIsCMYK|modeIsGrayscale|modeIsLab|modeIsBitmap|modeIsIndexed|modeIsDuotone|modeIsMultichannel|depth8|depth16|depth32|unsaved|hasSelection|hasLayers|hasAlphaChannels|isBackground|isPixelLayer|isAdjustmentLayer|isShapeLayer|isTypeLayer|isSmartObject|isLayerGroup|isLocked|isVisible|hasPixelMask|hasVectorMask|hasEffects (layer conditions test the active layer). The branch plays as actions.play does; its failure stops the calling action."##,
+            params: r##"{"if":condition, "then":action name|null, "else":action name|null, "set":name?, "thenSet":name?, "elseSet":name?} → {if, holds, played, ran?, failed?}. Photoshop's Insert Conditional: conditions always|never|isOpen|landscape|square|portrait|modeIsRGB|modeIsCMYK|modeIsGrayscale|modeIsLab|modeIsBitmap|modeIsIndexed|modeIsDuotone|modeIsMultichannel|depth8|depth16|depth32|unsaved|hasSelection|hasLayers|hasAlphaChannels|isBackground|isPixelLayer|isAdjustmentLayer|isShapeLayer|isTypeLayer|isSmartObject|isLayerGroup|isLocked|isVisible|hasPixelMask|hasVectorMask|hasEffects (layer conditions test the active layer). Each branch uses its explicit set or the common set, and plays as actions.play does; its failure stops the calling action."##,
             enabled: always,
             run: conditional,
             journal: true,
@@ -572,6 +596,30 @@ mod tests {
         // Deleting a step keeps the flags of the others in place.
         s.execute("actions.delete", json!({"action": "A", "step": 0})).unwrap();
         assert_eq!(s.actions.list[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
+    }
+
+    /// A malformed selected scope must not become an unscoped call or inherit a valid shared scope.
+    #[test]
+    fn conditional_rejects_malformed_selected_scopes_before_playback() {
+        for (condition, branch) in [("always", "then"), ("hasSelection", "else")] {
+            for field in ["set".to_string(), format!("{branch}Set")] {
+                let mut s = session_with(&[]);
+                s.actions.list[0].set = Some("Intended".into());
+                s.actions.list[0].steps = vec![("layer.new.layer".into(), json!({"name":"Wrong fallback"}))];
+                let before = s.active().unwrap().doc.clone();
+                let mut params = json!({"if":condition,"then":"A","else":"A","set":"Intended"});
+                params[&field] = json!(5);
+                let error = s.execute("actions.conditional", params).unwrap_err().to_string();
+                assert!(error.contains("set"), "{field}: {error}");
+                assert_eq!(s.active().unwrap().doc.as_ref(), before.as_ref(), "{field} never plays the unscoped A");
+            }
+        }
+        let mut s = session_with(&[]);
+        s.actions.list[0].set = Some("Intended".into());
+        s.actions.list[0].steps = vec![("layer.new.layer".into(), json!({"name":"Intended"}))];
+        let played = s.execute("actions.conditional", json!({"if":"always","then":"A","thenSet":null,"set":"Intended"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(s.active().unwrap().doc.layers.last().unwrap().name, "Intended");
     }
 
     #[test]

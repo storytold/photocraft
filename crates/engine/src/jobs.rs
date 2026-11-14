@@ -1652,6 +1652,11 @@ impl Session {
         !self.jobs.running.is_empty()
     }
 
+    /// A recorded step must finish before its owning editor can save or leave.
+    pub fn has_recording_job(&self) -> bool {
+        self.jobs.running.iter().any(|job| job.recorded_by == Some(self.actions.take))
+    }
+
     /// Running job `id`.
     pub fn job(&self, id: JobId) -> Option<JobInfo> {
         self.jobs.running.iter().find(|r| r.id == id).map(Running::info)
@@ -1763,6 +1768,8 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
+        // A paused action owns its capture before preparatory document effects too.
+        crate::actions_cmds::playback::admit(self, id)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
@@ -1795,12 +1802,12 @@ impl Session {
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
-        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
+        let pre_selected = if self.actions.recording_active() { self.active().map(|st| st.selected_layers()) } else { None };
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
-        let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
+        let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.take_recording() } else { None };
         let before = self.active().map(|st| (st.doc.clone(), st.revision));
         let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
@@ -1810,9 +1817,7 @@ impl Session {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
         self.live_commit = None;
-        if self.actions.recording.is_none() {
-            self.actions.recording = recording;
-        }
+        self.actions.restore_capture(recording);
         self.jobs.spawn = false;
         self.coalesce_request = None;
         self.color_restrict = None;
@@ -1844,7 +1849,7 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.started_in_take = self.actions.recording.map(|_| self.actions.take);
+                job.started_in_take = self.actions.recording_active().then_some(self.actions.take);
                 job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id));
                 job.automation = automation;
                 job.pre_selected = pre_selected.clone();
@@ -1965,7 +1970,7 @@ impl Session {
         }
         let typed = crate::actions_record::typed_layer(self, id, &params);
         let params = match id {
-            _ if self.actions.recording.is_none() => params,
+            _ if !self.actions.recording_active() => params,
             "layer.duplicate" => crate::artboard_cmds::recorded_duplicate(self, crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected)),
             "layerComp.apply" => crate::comps_cmds::recorded_apply(self, params),
             "edit.checkSpelling" if crate::type_spell_cmds::records(&params) => crate::type_spell_cmds::recorded_step(&params),
@@ -2042,7 +2047,7 @@ impl Session {
         } = job;
         // A recording started after the job (#7289) keeps what it has so far, and the job's step
         // goes into the journal past its start, so that recording doesn't get it.
-        let foreign = self.actions.recording.is_some() && *recorded_by != Some(self.actions.take);
+        let foreign = self.actions.recording_active() && *recorded_by != Some(self.actions.take);
         if foreign {
             crate::actions_cmds::flush_recording(self)?;
         }
@@ -2084,15 +2089,13 @@ impl Session {
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
-        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.take_recording() } else { None };
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
-        if self.actions.recording.is_none() {
-            self.actions.recording = recording;
-        }
+        self.actions.restore_capture(recording);
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
@@ -2104,8 +2107,8 @@ impl Session {
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.
             self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
-            if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
-                *start = self.journal.len();
+            if foreign {
+                self.actions.advance_recording(self.journal.len());
             }
         }
         // Give the user back the layers they selected while the job ran, unless the job chose a

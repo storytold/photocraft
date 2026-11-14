@@ -12,6 +12,7 @@ fn steps(app: &PhotocraftApp, action: usize) -> Vec<String> {
 
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.ui.actions_layout = crate::state::ActionsLayout::Classic;
     app.session.actions.list.push(Action {
         name: "First".into(),
         steps: vec![("view.zoomOut".into(), json!({})), ("view.fitOnScreen".into(), json!({})), ("view.actualPixels".into(), json!({}))],

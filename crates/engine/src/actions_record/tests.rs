@@ -380,3 +380,38 @@ fn recorded_edit_targets_a_named_nonactive_type_layer_on_another_document() {
     let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("expected type layer") };
     assert_eq!(text.text, "New");
 }
+
+#[test]
+fn draft_type_capture_uses_portable_position_and_folds_its_own_keystrokes() {
+    let mut s = session();
+    let draft = s.execute("actions.editor.open", json!({"name": "Type draft"})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft": draft})).unwrap();
+    let layer = s.execute("type.create", json!({"x": 8, "y": 16, "text": "Hi", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.edit", json!({"layer": layer, "replace": {"start": 2, "end": 2, "text": "!"}, "coalesce": "draft-type"})).unwrap();
+    s.execute("actions.editor.stop", json!({"draft": draft})).unwrap();
+    let value = s.execute("actions.editor.get", json!({"draft": draft})).unwrap();
+    let steps = value["action"]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1, "the draft's own typing folds into its creation: {value}");
+    assert_eq!(steps[0][0], "type.create");
+    assert_eq!(steps[0][1]["text"], "Hi!");
+    assert_eq!(steps[0][1]["xPercent"], json!(25.0));
+    assert_eq!(steps[0][1]["yPercent"], json!(50.0));
+    assert!(steps[0][1].get("x").is_none() && steps[0][1].get("y").is_none());
+    assert!(s.actions.list.is_empty(), "recording the draft does not publish it");
+}
+
+#[test]
+fn draft_type_capture_keeps_the_pre_capture_journal_entry_unchanged() {
+    let mut s = session();
+    let layer = s.execute("type.create", json!({"x": 2, "y": 20, "text": "Hi", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+    let original = last(&s).clone();
+    let original_index = s.journal.len() - 1;
+    let draft = s.execute("actions.editor.open", json!({"name": "Type more"})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft": draft})).unwrap();
+    s.execute("type.edit", json!({"layer": layer, "replace": {"start": 2, "end": 2, "text": "!"}, "coalesce": "draft-type"})).unwrap();
+    assert_eq!(s.journal[original_index], original, "capture must not rewrite earlier work");
+    s.execute("actions.editor.stop", json!({"draft": draft})).unwrap();
+    let value = s.execute("actions.editor.get", json!({"draft": draft})).unwrap();
+    assert_eq!(value["action"]["steps"], json!([["type.edit", {"replace": {"start": 2, "end": 2, "text": "!"}, "coalesce": "draft-type"}]]));
+    assert!(s.actions.list.is_empty());
+}

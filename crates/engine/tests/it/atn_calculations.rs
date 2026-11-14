@@ -262,7 +262,7 @@ fn atn_calculations_unknown_wire_forms_are_kept_and_unrepresentable_native_optio
         let mut p = valid.clone();
         p[key] = value;
         let a = Action::new("Bad", vec![("image.calculations".into(), p)]);
-        assert!(atn_cmds::export("Calculations", &[&a], &[], false).is_err(), "{key}");
+        super::atn_export::fallback("Calculations", &a);
     }
 }
 

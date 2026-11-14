@@ -251,6 +251,7 @@ fn a_paced_play_clears_an_earlier_playback_error() {
     let mut app = app_with("step", 1, true);
     app.ui.status = "Step 2 (layer.select) failed: no such layer".into();
     app.ui.status_error = true;
+    app.ui.actions_layout = crate::state::ActionsLayout::Classic;
     let mut h = Harness::builder().with_size(egui::vec2(400.0, 320.0)).build_ui_state(|ui, app| panel(app, ui), app);
     h.run_steps(3);
     h.get_by_label("Play selection").click();

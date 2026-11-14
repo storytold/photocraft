@@ -323,10 +323,19 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
+        _ => return command_body_editors(app, ui, d, fields, id),
+    }
+    outcome
+}
+
+/// Small Actions, layer and tool editors, after the library and file prompts.
+fn command_body_editors(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
+    match d.kind {
         _ if crate::actions::owns_stop_message(fields) => crate::actions::stop_message_body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
         _ if crate::actions::menu_item::owns(fields) => crate::actions::menu_item::body(ui, fields),
         _ if crate::actions::owns_new_set(fields) => crate::actions::new_set_body(ui, fields),
+        _ if crate::actions::owns_delete(fields) => crate::actions::delete_body(ui, fields),
         _ if crate::actions::playback::owns(fields) => crate::actions::playback::body(ui, fields),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
@@ -337,7 +346,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
         _ => return command_body_more(app, ui, d, fields, id),
     }
-    outcome
+    None
 }
 
 /// The rest of the command dialogs: files, colour, export, sizing, filters and forms.
@@ -923,6 +932,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::actions::menu_item::owns,
     crate::actions::record_again::owns,
     crate::actions::owns_new_set,
+    crate::actions::owns_delete,
     crate::actions::playback::owns,
     crate::new_layer_ui::owns,
     crate::new_group_ui::owns,
@@ -1115,15 +1125,23 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     Ok(())
 }
 
+/// Finish the Actions editors that can own a dialog independently of its marker.
+fn confirm_action_editor(app: &mut PhotocraftApp, d: &Dialog) -> Option<Result<Value, String>> {
+    if crate::actions::record_again::owns(&d.fields) || crate::actions::record_again::owns_dialog(app, d.id) {
+        return Some(crate::actions::record_again::confirm(app, d.id, &d.fields));
+    }
+    if crate::actions::menu_item::owns(&d.fields) || crate::actions::menu_item::owns_dialog(app, d.id) {
+        return Some(crate::actions::menu_item::confirm(app, d.id, &d.fields));
+    }
+    None
+}
+
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 /// Confirm a command dialog through the first handler whose marker its fields carry; the prompts
 /// and small editors are here, the rest in `confirm_command_more`.
 fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
-    if crate::actions::record_again::owns(&d.fields) || crate::actions::record_again::owns_dialog(app, d.id) {
-        return crate::actions::record_again::confirm(app, d.id, &d.fields);
-    }
-    if crate::actions::menu_item::owns(&d.fields) || crate::actions::menu_item::owns_dialog(app, d.id) {
-        return crate::actions::menu_item::confirm(app, d.id, &d.fields);
+    if let Some(result) = confirm_action_editor(app, &d) {
+        return result;
     }
     match d.kind {
         _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),
@@ -1142,9 +1160,17 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
+        _ => confirm_command_editors(app, d),
+    }
+}
+
+/// Finish the Actions, layer and tool editors before the remaining command dialogs.
+fn confirm_command_editors(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
+    match d.kind {
         _ if crate::actions::owns_stop_message(&d.fields) => crate::actions::stop_message_confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
         _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
+        _ if crate::actions::owns_delete(&d.fields) => crate::actions::delete_confirm(app, &d.fields),
         _ if crate::actions::playback::owns(&d.fields) => crate::actions::playback::confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
@@ -1184,6 +1210,11 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    let fields = d.fields.clone();
+    crate::actions::with_step_gate(app, &fields, Some(id), |app| confirm_closed(app, d))
+}
+
+fn confirm_closed(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));
@@ -1233,6 +1264,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     crate::actions::record_again::cancel(app, id);
     crate::actions::menu_item::cancel(app, id);
     crate::actions::stopped(app, &closed.fields);
+    crate::actions::delete_cancel(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }

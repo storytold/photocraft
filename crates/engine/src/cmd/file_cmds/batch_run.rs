@@ -770,6 +770,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let mut called_name = None;
+    let mut called_target = None;
     let mut steps = if let Some(st) = p.get("steps") {
         parse_steps(st)?
     } else if let Some(act) = p.get("action").filter(|v| v.is_array()) {
@@ -779,13 +780,14 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let index = batch_action(&s.actions.list, p)?;
         let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
         called_name = Some(action.name.clone());
+        called_target = crate::actions_cmds::playback_target(s, index);
         action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
     };
     let action_name = s
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().cloned())
+        .or_else(|| s.actions.playback_stack.first().map(|target| target.name.clone()))
         .or_else(|| called_name.clone())
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
@@ -849,11 +851,17 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut playback_stack = s.actions.playback_stack.clone();
-    playback_stack.extend(called_name);
+    playback_stack.extend(called_target);
+    let playback_namespace = if p.get("calledActions").is_some_and(|value| !value.is_null()) {
+        s.actions.playback_namespace.checked_add(1).ok_or_else(|| EngineError::BatchLimit("action playback namespaces exhausted".into()))?
+    } else {
+        s.actions.playback_namespace
+    };
     let actions = crate::actions_cmds::ActionState {
         list,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
         playback_stack,
+        playback_namespace,
         playback_steps,
         script_depth: s.actions.script_depth,
         script_steps: s.actions.script_steps,
@@ -873,6 +881,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         };
         // Swap only execution context, retaining the recorder, revision and script counters.
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
+        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
         // The nesting depth and shared budget of the levels above travel with the run too.
@@ -889,6 +898,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.actions.playing = previous_playing;
         s.actions.playback_stack = previous_stack;
+        s.actions.playback_namespace = previous_namespace;
         s.actions.budget_shared = previous_shared;
         s.actions.batch_depth = previous_depth;
         if let Some(previous) = previous_list {

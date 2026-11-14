@@ -232,12 +232,12 @@ fn stack_mode_edits_and_unrepresented_native_parameters_are_safe() {
     for command in ["layer.smartObjects.stackMode.mean", "layer.smartObjects.stackMode.none"] {
         for params in [json!(null), json!([]), json!({"layer":12}), json!({"layer":"Named"}), json!({"target":"mask"}), json!({"unknown":true})] {
             let action = Action::new("Mode", vec![(command.into(), params)]);
-            assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
+            super::atn_export::fallback("Stacks", &action);
         }
         for origin in [json!(false), json!("!invalid-base64"), json!(""), json!(unknown_class), json!(unknown_empty)] {
             let mut action = Action::new("Mode", vec![(command.into(), json!({}))]);
             action.steps[0].1[ORIGIN] = origin;
-            assert!(atn_cmds::export("Stacks", &[&action], &[], false).is_err());
+            super::atn_export::fallback("Stacks", &action);
         }
     }
 }

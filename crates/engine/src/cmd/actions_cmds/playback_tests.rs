@@ -105,3 +105,61 @@ fn headless_play_runs_the_whole_action_in_every_mode() {
         }
     }
 }
+
+#[test]
+fn classic_capture_retains_its_resolved_equal_row_at_the_same_revision() {
+    let mut s = Session::new();
+    let recorder = Action::new("Recorder", Vec::new());
+    s.actions.list = vec![recorder.clone(), recorder, Action::new("Child", Vec::new())];
+    s.execute("actions.record", json!({"action":1})).unwrap();
+    let revision = s.actions.rev;
+    let (_, _, owner) = playback::Owner::library(&mut s, &json!({"action":2})).unwrap();
+    assert_eq!(s.actions.rev, revision, "an empty capture flush preserves the known row revision");
+    assert!(s.actions.recording.is_none());
+    owner.validate(&s).unwrap();
+    owner.finish(&mut s);
+    assert!(s.actions.held_playback.is_none());
+    assert!(!s.actions.playback_yielding);
+    assert_eq!(s.actions.recording.map(|(_, row)| row), Some(1));
+    assert_eq!(s.journal.last().unwrap().0, "actions.play");
+    assert_eq!(s.journal.last().unwrap().1["action"], "Child");
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(s.actions.list[0].steps.is_empty(), "an equal neighboring row must not receive the recorded call");
+    assert_eq!(s.actions.list[1].steps.len(), 1);
+    assert_eq!(s.actions.list[1].steps[0].0, "actions.play");
+    assert_eq!(s.actions.list[1].steps[0].1["action"], "Child");
+}
+
+#[test]
+fn classic_capture_rebinds_only_to_an_unambiguous_unchanged_definition() {
+    for change in ["reorder", "ambiguous", "replaced", "same-revision-replaced"] {
+        let mut s = Session::new();
+        let recorder = Action::new("Recorder", Vec::new());
+        s.actions.list = vec![recorder.clone(), Action::new("Child", Vec::new())];
+        s.execute("actions.record", json!({"action":0})).unwrap();
+        let (_, _, owner) = playback::Owner::library(&mut s, &json!({"action":1})).unwrap();
+        let journal = s.journal.clone();
+        match change {
+            "reorder" => s.actions.list.swap(0, 1),
+            "ambiguous" => s.actions.list.push(recorder),
+            _ => s.actions.list[0].description = "A replacement definition".into(),
+        }
+        if change != "same-revision-replaced" {
+            s.actions.touch();
+        }
+        let valid = owner.validate(&s);
+        assert_eq!(valid.is_ok(), change == "reorder", "{change}: {valid:?}");
+        owner.finish(&mut s);
+        assert!(s.actions.held_playback.is_none(), "{change}: the exact lease releases on every exit");
+        assert!(!s.actions.playback_yielding);
+        if change == "reorder" {
+            assert_eq!(s.actions.recording.map(|(_, row)| row), Some(1));
+            s.execute("actions.stop", json!({})).unwrap();
+            assert_eq!(s.actions.list[1].steps[0].1["action"], "Child");
+            assert!(s.actions.list[0].steps.is_empty());
+        } else {
+            assert!(s.actions.recording.is_none(), "{change}: stale or ambiguous definitions cannot receive capture");
+            assert_eq!(s.journal, journal, "{change}: no call is journaled into a refused destination");
+        }
+    }
+}

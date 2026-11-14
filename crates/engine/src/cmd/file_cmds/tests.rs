@@ -2888,7 +2888,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         }
         s.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
         s.actions.playing = 16;
-        s.actions.playback_stack = (0..16).map(|i| format!("Parent{i}")).collect();
+        s.actions.playback_stack = (0..16).map(|i| format!("Parent{i}").into()).collect();
         let before = s.actions.clone();
         let error = s.execute("file.automate.batch", params.clone()).unwrap_err();
         assert!(error.to_string().contains("nesting exceeds 16"), "{error}");

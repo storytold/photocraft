@@ -2,6 +2,32 @@
 use photocraft_engine::{Session, actions_cmds::Action};
 use serde_json::{Value, json};
 
+#[test]
+fn a_copied_group_keeps_numeric_call_identity_through_native_store_reload() {
+    use photocraft_engine::preset_store::{self, MemBackend};
+    let store = MemBackend::default();
+    let mut s = session();
+    assert!(s.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+    let mut first = Action::new("First", vec![("layer.new.layer".into(), json!({"name":"First marker"}))]);
+    first.set = Some("Group".into());
+    let mut second = Action::new("Second", vec![("layer.new.layer".into(), json!({"name":"Second marker"}))]);
+    second.set = Some("Group".into());
+    let mut caller = Action::new("Caller", vec![("actions.play".into(), json!({"action":1}))]);
+    caller.set = Some("Other".into());
+    s.actions.list = vec![first, second, caller];
+    s.execute("actions.duplicate", json!({"set":"Group"})).unwrap();
+    assert_eq!(s.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "First copy", "Second copy", "Caller"]);
+    assert_eq!(s.actions.list[4].steps[0].1["action"], 1);
+    let mut restored = Session::new();
+    assert!(restored.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+    assert_eq!(restored.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["First", "Second", "First copy", "Second copy", "Caller"]);
+    assert_eq!(restored.actions.list[4].steps[0].1["action"], 1);
+    restored.execute("file.new", json!({"width":8,"height":6})).unwrap();
+    let result = restored.execute("actions.play", json!({"action":"Caller"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert_eq!(restored.active().unwrap().doc.layers.last().unwrap().name, "Second marker");
+}
+
 /// A tiny document to distinguish definition edits from document mutations and playback.
 fn session() -> Session {
     let mut s = Session::new();
@@ -9,6 +35,79 @@ fn session() -> Session {
     s
 }
 
+/// Whole-action and folder copies use the same encoder budget as durable storage.
+#[test]
+fn duplicate_rejects_combined_metadata_size_without_changing_rows_or_store() {
+    use photocraft_engine::preset_store::{self, ACTIONS_FILE, MAX_ACTIONS_BYTES, MemBackend, PresetBackend};
+    for set in [false, true] {
+        for admitted in [true, false] {
+            let store = MemBackend::default();
+            let mut s = Session::new();
+            assert!(s.attach_preset_store(preset_store::open(Box::new(store.clone()))).is_empty());
+            let mut source = Action::new("Source", vec![("select.all".into(), json!({}))]);
+            source.set = Some("Group".into());
+            source.description = "x".repeat(if admitted { 3 << 20 } else { 5 << 20 });
+            s.actions.list.push(source);
+            s.execute("actions.dialog", json!({"action":0,"enabled":false})).unwrap();
+            let bytes = store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap();
+            let before = s.actions.clone();
+            let prefs = s.prefs().clone();
+            let result = s.execute("actions.duplicate", if set { json!({"set":"Group"}) } else { json!({"action":0}) });
+            if admitted {
+                result.unwrap();
+                let mut restored = Session::new();
+                assert!(restored.attach_preset_store(preset_store::open(Box::new(store))).is_empty());
+                assert_eq!(restored.actions.list.len(), 2);
+                assert!(restored.actions.list.iter().all(|action| action.description.len() == 3 << 20));
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains("byte limit"), "{error}");
+                assert_eq!(s.actions, before);
+                assert_eq!(s.prefs(), &prefs);
+                assert_eq!(store.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn action_count_admission_reserves_the_metadata_carrier_before_publication() {
+    for metadata in [false, true] {
+        for operation in ["action", "set", "editor"] {
+            let mut s = Session::new();
+            let capacity = craft_psd::atn::MAX_TOTAL_ACTIONS - usize::from(metadata);
+            s.actions.list = (0..capacity - 1).map(|index| Action::new(format!("Action {index}"), vec![])).collect();
+            s.actions.list[0].set = Some("Source".into());
+            if metadata {
+                s.actions.list[0].description = "Requires the hidden metadata action".into();
+            }
+            for admitted in [true, false] {
+                let (command, params) = match operation {
+                    "action" => ("actions.duplicate", json!({"action":0})),
+                    "set" => ("actions.duplicate", json!({"set":"Source"})),
+                    _ => {
+                        let draft = s.execute("actions.editor.open", json!({"name":format!("New {admitted}")})).unwrap()["draft"].as_u64().unwrap();
+                        s.execute("actions.editor.step", json!({"draft":draft,"op":"insert","step":0,"id":"select.all","params":{}})).unwrap();
+                        ("actions.editor.save", json!({"draft":draft}))
+                    }
+                };
+                let before = s.actions.clone();
+                let result = s.execute(command, params.clone());
+                assert_eq!(result.is_ok(), admitted, "{operation}, metadata={metadata}: {result:?}");
+                if admitted {
+                    assert_eq!(s.actions.list.len(), capacity);
+                    if operation == "editor" {
+                        s.execute("actions.editor.discard", json!({"draft":params["draft"]})).unwrap();
+                    }
+                } else {
+                    assert_eq!(s.actions, before, "a full archive retains its list, rows and unpublished draft");
+                }
+            }
+        }
+    }
+}
+
+/// Copies retain metadata and call targets without taking the original function key.
 #[test]
 fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() {
     let mut s = session();
@@ -62,6 +161,7 @@ fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() 
     assert_eq!(s.actions.list[1].steps[0].1["action"], 3);
 }
 
+/// Step copies own their settings and retain both flag columns after insertion.
 #[test]
 fn step_copies_preserve_payloads_and_shift_both_flag_columns() {
     let mut s = session();
@@ -87,6 +187,7 @@ fn step_copies_preserve_payloads_and_shift_both_flag_columns() {
     assert_eq!(s.active().unwrap().revision, revision);
 }
 
+/// Refusals preserve pending recording; valid step copies keep recording usable.
 #[test]
 fn invalid_copies_do_not_flush_recording_and_valid_step_copies_keep_recording() {
     let mut s = session();

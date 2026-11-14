@@ -1,5 +1,8 @@
 //! Paste Layer Style applies group eligibility consistently and preserves the ATN flag.
 
+#[path = "support/atn_export.rs"]
+mod atn_export;
+
 use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, UnicodeString, Value as D},
@@ -261,6 +264,6 @@ fn atn_defaults_are_explicit_and_unsupported_fields_remain_whole_steps() {
         let mut params = json!({});
         params[key] = value;
         let action = Action::new("Invalid", vec![(CMD.into(), params)]);
-        assert!(atn_cmds::export("Style", &[&action], &[], false).is_err());
+        crate::atn_export::fallback("Style", &action);
     }
 }

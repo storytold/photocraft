@@ -7,6 +7,7 @@ use serde_json::json;
 #[test]
 fn duplicate_menu_selects_the_new_action_and_then_the_new_step() {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
+    app.ui.actions_layout = photocraft_ui_egui::state::ActionsLayout::Classic;
     let mut a = Action::new("Source", vec![("select.all".into(), json!({}))]);
     a.disabled.insert(0);
     a.dialogs.insert(0);

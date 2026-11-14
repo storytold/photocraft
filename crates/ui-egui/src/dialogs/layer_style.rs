@@ -709,7 +709,7 @@ pub fn pattern_list(app: &PhotocraftApp) -> Value {
 
 /// Apply the dialog: replace the layer's effects with the dialog's instances.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    apply(f, |id, p| app.run(id, p))
+    apply(f, |id, p| crate::actions::run_step_dialog(app, f, id, p))
 }
 
 /// Every parameter group is edited as an object. Validate before preview or confirmation so

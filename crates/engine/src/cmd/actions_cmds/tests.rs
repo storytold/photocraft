@@ -358,7 +358,9 @@ fn record_script_that_plays_an_action_keeps_each_step_once() {
     s.execute("file.scripts.browse", script.clone()).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     let got = s.execute("actions.get", json!({"action": "Outer"})).unwrap();
-    assert_eq!(got["steps"], script["steps"]);
+    let mut expected = script["steps"].clone();
+    expected[1][1]["set"] = json!("Ungrouped Actions");
+    assert_eq!(got["steps"], expected, "the script steps are recorded once, with the resolved action scope");
 }
 
 #[test]
@@ -869,8 +871,8 @@ fn recorded_layer_drag_replays_on_another_document() {
 }
 
 /// An Alt-drag copy records `inPlace` (#7200), which only matters for an artboard: a plain
-/// layer's recorded copy must still export to .atn, while an artboard's must be refused rather
-/// than exported as a copy beside the original.
+/// layer's recorded copy has a Photoshop event, while an artboard's uses the native
+/// carrier rather than exporting as a copy beside the original.
 #[test]
 fn recorded_in_place_duplicate_keeps_in_place_only_for_artboards() {
     let mut s = Session::new();
@@ -885,7 +887,13 @@ fn recorded_in_place_duplicate_keeps_in_place_only_for_artboards() {
     assert_eq!(s.actions.list[0].steps, vec![("layer.duplicate".to_string(), json!({}))]);
     assert_eq!(s.actions.list[1].steps, vec![("layer.duplicate".to_string(), json!({"inPlace": true}))]);
     assert!(crate::atn_cmds::export("Audit", &[&s.actions.list[0]], &[], false).is_ok());
-    assert!(crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], false).is_err());
+    let (bytes, skipped) = crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let file = craft_psd::atn::parse(&bytes).unwrap();
+    assert_eq!(file.actions[0].items[0].event, craft_psd::atn::AtnEvent::name("photocraftCommand"));
+    assert_eq!(crate::atn_cmds::import(&bytes).unwrap().actions[0].steps, s.actions.list[1].steps);
+    let (_, skipped) = crate::atn_cmds::export("Audit", &[&s.actions.list[1]], &[], true).unwrap();
+    assert_eq!(skipped.len(), 1);
     // Several selected layers are copied together: one artboard among them keeps `inPlace`.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -1201,7 +1209,7 @@ fn nested_call_records_one_named_step_and_tracks_child_edits() {
     s.execute("actions.record", json!({"name": "Parent"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Before"})).unwrap();
     s.execute("actions.play", json!({"action": 0})).unwrap();
-    assert_eq!(pending_steps(&s, 1).cloned().collect::<Vec<_>>(), [("actions.play".into(), json!({"action": "Child"}))]);
+    assert_eq!(pending_steps(&s, 1).cloned().collect::<Vec<_>>(), [("actions.play".into(), json!({"action": "Child", "set": "Ungrouped Actions"}))]);
     s.execute("layer.new.layer", json!({"name": "After"})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.actions.list[1].steps.iter().map(|st| st.0.as_str()).collect::<Vec<_>>(), ["layer.new.layer", "actions.play", "layer.new.layer"]);
@@ -1372,7 +1380,7 @@ fn actions_persist_with_the_preset_store() {
     let names: Vec<String> = early.actions.list.iter().map(|a| a.name.clone()).collect();
     assert!(names.contains(&"Early".into()) && names.contains(&"Kept".into()), "{names:?}");
 
-    std::fs::write(dir.join("actions.json"), b"{").unwrap();
+    std::fs::write(dir.join(crate::preset_store::ACTIONS_FILE), b"broken ATN").unwrap();
     let mut bad = Session::new();
     let warnings = bad.attach_preset_store(crate::preset_store::open_dir(&dir));
     assert!(warnings.iter().any(|w| w.contains("actions")), "{warnings:?}");
@@ -1570,7 +1578,7 @@ fn scoped_source_slots_do_not_bind_previously_missing_references() {
 }
 
 /// #10459 review: recording into an existing set keeps that set's exact name, even one with
-/// surrounding spaces (from an older actions.json); a new set name is trimmed.
+/// surrounding spaces (from a legacy library); a new set name is trimmed.
 #[test]
 fn record_keeps_an_existing_sets_exact_name() {
     let mut s = Session::new();
@@ -1599,6 +1607,124 @@ fn record_keeps_an_empty_loaded_sets_exact_name() {
     assert_eq!(set.as_deref(), Some(" Web "));
     assert_eq!(crate::actions_edit_cmds::set_names(&s), [" Web "], "one folder, not a trimmed second one");
     assert_eq!(s.execute("actions.save", json!({"set": " Web "})).unwrap()["actions"], json!(["First"]));
+}
+
+#[test]
+fn draft_capture_spelling_uses_classic_filter_and_dialog_offsets() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":300,"height":100,"background":"white"})).unwrap();
+    let layer = s.execute("type.create", json!({"x":10,"y":50,"text":"Teh brwon end","size":12})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name":"Spell draft"})).unwrap();
+    s.execute("layer.renameLayer", json!({"name":"Text"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("actions.toggle", json!({"action":0,"step":0,"enabled":false})).unwrap();
+    s.execute("actions.dialog", json!({"action":0,"step":0,"enabled":true})).unwrap();
+    let original = s.actions.list[0].clone();
+    let draft = s.execute("actions.editor.open", json!({"action":0})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    for params in [
+        json!({"action":"list","allLayers":true}),
+        json!({"action":"suggest","word":"recieve"}),
+        json!({"action":"change","layer":layer,"start":0,"end":3,"word":"Teh","replace":"The"}),
+        json!({"action":"changeAll","word":"brwon","replace":"brown"}),
+        json!({"action":"addToDictionary","word":"Photocraft"}),
+        json!({"action":"removeFromDictionary","word":"Photocraft"}),
+        json!({"allLayers":true}),
+        json!({"action":null,"allLayers":false}),
+    ] {
+        s.execute("edit.checkSpelling", params).unwrap();
+    }
+    assert!(matches!(
+        &s.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().content,
+        photocraft_doc::LayerContent::Text(text) if text.text == "The brown end"
+    ));
+    let journal = s.journal.clone();
+    let (take, rev) = (s.actions.take, s.actions.rev);
+    let shown = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(s.execute("actions.editor.get", json!({"draft":draft})).unwrap(), shown);
+    let mut expected = original.clone();
+    expected.steps.extend([("edit.checkSpelling".into(), json!({"allLayers":true})), ("edit.checkSpelling".into(), json!({"allLayers":false}))]);
+    expected.dialogs.extend([1, 2]);
+    assert_eq!(shown["action"], serde_json::to_value(&expected).unwrap());
+    assert_eq!(s.actions.list[0], original, "inspection must not publish");
+    assert_eq!(s.journal, journal);
+    assert_eq!((s.actions.take, s.actions.rev), (take, rev));
+    s.execute("actions.editor.stop", json!({"draft":draft})).unwrap();
+    assert_eq!(s.execute("actions.editor.get", json!({"draft":draft})).unwrap()["action"], shown["action"]);
+    s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(s.actions.list[0], expected, "Save must retain the projected steps and existing flags");
+}
+
+#[test]
+fn draft_capture_nudges_match_classic_rounding_runs_and_separators() {
+    let capture = |draft_capture: bool| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":24,"height":24,"background":"transparent"})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"Target"})).unwrap();
+        let draft = if draft_capture {
+            let id = s.execute("actions.editor.open", json!({"name":"Nudges"})).unwrap()["draft"].as_u64().unwrap();
+            s.execute("actions.editor.record", json!({"draft":id})).unwrap();
+            Some(id)
+        } else {
+            s.execute("actions.record", json!({"name":"Nudges"})).unwrap();
+            None
+        };
+        for params in
+            [json!({"dx":0.6,"dy":0,"coalesce":"nudge:1"}), json!({"dx":0.6,"dy":0,"coalesce":"nudge:1"}), json!({"dx":0,"dy":-0.6,"coalesce":"nudge:2"})]
+        {
+            s.execute("layer.translate", params).unwrap();
+        }
+        s.execute("layer.renameLayer", json!({"name":"Renamed"})).unwrap();
+        s.execute("layer.translate", json!({"dx":0,"dy":-0.6,"coalesce":"nudge:2"})).unwrap();
+        match draft {
+            Some(id) => {
+                // Save directly from capture uses the same projection as Get and Stop.
+                let shown = s.execute("actions.editor.get", json!({"draft":id})).unwrap();
+                s.execute("actions.editor.save", json!({"draft":id})).unwrap();
+                assert_eq!(serde_json::to_value(&s.actions.list[0]).unwrap(), shown["action"]);
+            }
+            None => {
+                s.execute("actions.stop", json!({})).unwrap();
+            }
+        }
+        s.actions.list[0].clone()
+    };
+    let expected: Vec<(String, Value)> = vec![
+        ("layer.translate".into(), json!({"dx":2.0,"dy":0.0})),
+        ("layer.translate".into(), json!({"dx":0.0,"dy":-1.0})),
+        ("layer.renameLayer".into(), json!({"name":"Renamed"})),
+        ("layer.translate".into(), json!({"dx":0.0,"dy":-1.0})),
+    ];
+    let (classic, draft) = (capture(false), capture(true));
+    assert_eq!(classic.steps, expected);
+    assert_eq!(draft.steps, expected, "fold within a run, never across a new run or another command");
+    assert_eq!(draft.dialogs, classic.dialogs);
+    assert!(draft.steps.iter().all(|(_, params)| params.get("coalesce").is_none()));
+}
+
+#[test]
+fn draft_capture_preview_flush_keeps_projection_and_recording_owner() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":300,"height":100,"background":"white"})).unwrap();
+    s.execute("type.create", json!({"x":10,"y":50,"text":"Teh end","size":12})).unwrap();
+    let draft = s.execute("actions.editor.open", json!({"name":"Preview"})).unwrap()["draft"].as_u64().unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    s.execute("edit.checkSpelling", json!({"action":"suggest","word":"recieve"})).unwrap();
+    s.execute("edit.checkSpelling", json!({"allLayers":true})).unwrap();
+    let shown = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    let take = s.actions.take;
+    // Acquire the existing engine snapshot API without executing its document steps.
+    let (snapshot, owner) = playback::preview(&mut s, draft, 0).unwrap();
+    assert_eq!(serde_json::to_value(snapshot.as_ref()).unwrap(), shown["action"]);
+    owner.validate(&s).unwrap();
+    owner.finish(&mut s);
+    assert_eq!(s.actions.take, take);
+    assert!(s.actions.recording_active());
+    assert!(s.actions.list.is_empty());
+    let after = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(after["action"], shown["action"], "suspend flush must not lose flags or duplicate capture");
+    assert_eq!(after["action"]["steps"], json!([["edit.checkSpelling",{"allLayers":true}]]));
+    assert_eq!(after["action"]["dialogs"], json!([0]));
 }
 
 #[test]
@@ -1732,4 +1858,240 @@ fn playback_stops_when_a_nested_batch_cannot_write_its_error_log() {
     assert!(failed["result"]["errorLogError"].is_string(), "{played}");
     assert_eq!(s.active().unwrap().doc.layers.len(), layers, "the step after the Batch must not run");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn review_scoped_recorded_calls_keep_the_selected_occurrence() {
+    for shell in [false, true] {
+        for sets in [["One", "Two"], ["Same", "Same"]] {
+            let mut s = Session::new();
+            s.actions.list = sets.iter().map(|set| Action { set: Some((*set).into()), ..Action::new("A", Vec::new()) }).collect();
+            s.execute("actions.record", json!({"name":"Recorder"})).unwrap();
+            if shell {
+                let (_, _, owner) = playback::library(&mut s, &json!({"action":1})).unwrap();
+                owner.unwrap().finish(&mut s);
+            } else {
+                s.execute("actions.play", json!({"action":1})).unwrap();
+            }
+            s.execute("actions.stop", json!({})).unwrap();
+            let (id, call) = &s.actions.list[2].steps[0];
+            assert_eq!(id, "actions.play");
+            assert_eq!(playback_index(&s.actions.list, call).unwrap(), 1, "shell={shell}: {call}");
+            assert_eq!(call["set"], sets[1]);
+        }
+    }
+}
+
+#[test]
+fn review_batch_deletion_remaps_only_caller_namespace_selectors() {
+    let mut s = Session::new();
+    let steps = vec![
+        ("file.automate.batch".into(), json!({"action":1})),
+        ("file.automate.batch".into(), json!({"action":0})),
+        ("file.automate.batch".into(), json!({"action":1,"calledActions":[{"name":"Embedded","steps":[]}]})),
+        ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":1}]]})),
+        ("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":1}]],"calledActions":[{"name":"Embedded","steps":[]}]})),
+    ];
+    s.actions.list = vec![Action::new("A", Vec::new()), Action::new("B", Vec::new()), Action::new("Runner", steps)];
+    s.execute("actions.delete", json!({"action":0})).unwrap();
+    let calls = &s.actions.list[1].steps;
+    assert_eq!(calls[0].1["action"], 0, "B survives at its new caller-list index");
+    assert!(calls[1].1["action"].is_null(), "deleted A cannot become B");
+    assert_eq!(calls[2].1["action"], 0, "named Batch selects its source from the caller list");
+    assert_eq!(calls[3].1["steps"][0][1]["action"], 0, "unscoped inline calls share that list");
+    assert_eq!(calls[4].1["steps"][0][1]["action"], 1, "embedded inline calls own another namespace");
+}
+
+#[test]
+fn review_conditional_scopes_select_rename_and_dependency_targets() {
+    let mut s = Session::new();
+    s.actions.list = ["One", "Two"].into_iter().map(|set| Action { set: Some(set.into()), ..Action::new("A", Vec::new()) }).collect();
+    let mut steps = vec![("actions.conditional".into(), json!({"if":"always","then":"A","thenSet":"Two","else":"A","set":"One"}))];
+    let captured = called_actions(&s.actions.list, &mut steps);
+    assert_eq!(captured.iter().map(|action| action.set.as_deref()).collect::<Vec<_>>(), [Some("One"), Some("Two")]);
+    s.actions.list.push(Action::new("Caller", steps));
+    s.execute("actions.rename", json!({"action":1,"name":"Second"})).unwrap();
+    assert_eq!(s.actions.list[2].steps[0].1["then"], "Second");
+    assert_eq!(s.actions.list[2].steps[0].1["else"], "A");
+    s.execute("actions.rename", json!({"action":0,"name":"First"})).unwrap();
+    assert_eq!(s.actions.list[2].steps[0].1["then"], "Second");
+    assert_eq!(s.actions.list[2].steps[0].1["else"], "First");
+}
+
+#[test]
+fn review_playback_cycles_use_rows_namespaces_and_safe_pause_rebinding() {
+    let mut s = Session::new();
+    s.actions.list = vec![Action::new("A", Vec::new()), Action::new("A", Vec::new())];
+    let target = playback_target(&s, 1).unwrap();
+    let action = s.actions.list[1].clone();
+    let recording = begin_playback_target_from(&mut s, &action, 0, target.clone()).unwrap();
+    assert!(playback_plan(&s, &json!({"action":0})).is_ok(), "another same-name occurrence is callable");
+    assert!(playback_plan(&s, &json!({"action":1})).is_err(), "the actual active row is recursive");
+    s.actions.playback_namespace += 1;
+    assert!(playback_plan(&s, &json!({"action":1})).is_ok(), "an embedded library owns its rows");
+    s.actions.playback_namespace -= 1;
+    finish_playback(&mut s, recording, &action, 0);
+    s.actions.touch();
+    assert!(refresh_playback_target(&s, &action, &target).is_err(), "changed duplicate occurrences cannot be guessed");
+    s.actions.list[0].name = "Other".into();
+    let rebound = refresh_playback_target(&s, &action, &target).unwrap();
+    assert!(rebound.matches(&s, 1, &action));
+}
+
+#[test]
+fn review_editor_scope_admission_and_noop_save_keep_projected_steps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+    s.actions.list = ["One", "Two"].into_iter().map(|set| Action { set: Some(set.into()), ..Action::new("A", Vec::new()) }).collect();
+    let draft = s.execute("actions.editor.open", json!({"action":1})).unwrap()["draft"].clone();
+    s.execute("actions.editor.step", json!({"draft":draft,"op":"insert","step":0,"id":"actions.play","params":{"action":"A","set":"One"}})).unwrap();
+    assert!(
+        s.execute(
+            "actions.editor.step",
+            json!({"draft":draft,"op":"insert","step":1,"id":"actions.conditional","params":{"if":"always","then":"A","thenSet":"Two"}})
+        )
+        .is_err()
+    );
+    s.execute("actions.editor.discard", json!({"draft":draft})).unwrap();
+    s.actions.list.push(Action::new("Capture", vec![("select.all".into(), json!({}))]));
+    let original = s.actions.list[2].clone();
+    let draft = s.execute("actions.editor.open", json!({"action":2})).unwrap()["draft"].clone();
+    s.execute("actions.editor.step", json!({"draft":draft,"op":"delete","step":0})).unwrap();
+    s.execute("actions.editor.record", json!({"draft":draft})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    let revision = s.actions.rev;
+    let saved = s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(saved["recording"], false);
+    assert_eq!(s.actions.rev, revision, "the committed definition is a no-op");
+    assert_eq!(s.actions.list[2], original);
+    let got = s.execute("actions.editor.get", json!({"draft":draft})).unwrap();
+    assert_eq!(got["action"]["steps"], json!([["select.all", {}]]), "ending capture retains its projected replacement");
+}
+
+#[test]
+fn review_editor_rename_follows_inline_batch_calls_without_crossing_embedded_libraries() {
+    let mut s = Session::new();
+    let embedded = json!({"steps":[["actions.play",{"action":"A","set":"S"}]],"calledActions":[{"name":"A","steps":[]}]});
+    let mut target = Action::new("A", vec![("file.automate.batch".into(), json!({"steps":[["actions.play",{"action":"A","set":"S"}]]}))]);
+    target.set = Some("S".into());
+    let mut other = Action::new("A", vec![]);
+    other.set = Some("T".into());
+    let caller = Action::new(
+        "Caller",
+        vec![
+            (
+                "file.automate.batch".into(),
+                json!({"steps":[["actions.play",{"action":"A","set":"S"}],{"command":"actions.play","params":{"action":"A","set":"T"}}]}),
+            ),
+            ("file.automate.batch".into(), json!({"action":[["actions.play",{"action":"A","set":"S"}]]})),
+            ("file.automate.batch".into(), embedded.clone()),
+        ],
+    );
+    s.actions.list = vec![target, other, caller];
+    let draft = s.execute("actions.editor.open", json!({"action":0})).unwrap()["draft"].clone();
+    s.execute("actions.editor.update", json!({"draft":draft,"name":"Renamed"})).unwrap();
+    s.execute("actions.editor.save", json!({"draft":draft})).unwrap();
+    assert_eq!(s.actions.list[0].steps[0].1["steps"][0][1]["action"], "Renamed", "the draft's own existing reference follows its definition");
+    let calls = &s.actions.list[2].steps;
+    assert_eq!(calls[0].1["steps"][0][1], json!({"action":"Renamed","set":"S"}));
+    assert_eq!(calls[0].1["steps"][1]["params"], json!({"action":"A","set":"T"}), "another set still owns its definition");
+    assert_eq!(calls[1].1["action"][0][1]["action"], "Renamed", "the legacy inline action-array spelling uses the same namespace");
+    assert_eq!(calls[2].1, embedded, "embedded calledActions has its own unchanged namespace");
+}
+
+#[test]
+fn deleting_named_batch_targets_cannot_revive_caller_or_inline_calls() {
+    for group in [false, true] {
+        let mut s = Session::new();
+        let embedded = json!({"steps":[["actions.play",{"action":"A"}]],"calledActions":[{"name":"A","steps":[]}]});
+        let own_actions = json!([{"name":"Inner","steps":[["actions.play",{"action":0}]]}]);
+        s.actions.list = vec![
+            Action { set: Some("Removed".into()), ..Action::new("A", Vec::new()) },
+            Action::new(
+                "Caller",
+                vec![
+                    ("file.automate.batch".into(), json!({"action":"A"})),
+                    ("file.automate.batch".into(), json!({"action":"A","calledActions":own_actions.clone()})),
+                    ("file.automate.batch".into(), json!({"steps":[["file.automate.batch",{"action":"A"}],["actions.play",{"action":"A"}]]})),
+                    ("file.automate.batch".into(), json!({"action":[["file.automate.batch",{"action":"A"}]]})),
+                    ("file.automate.batch".into(), embedded.clone()),
+                    ("file.automate.batch".into(), json!({"steps":null,"action":"A"})),
+                ],
+            ),
+        ];
+        assert_eq!(crate::file_cmds::batch_action(&s.actions.list, &s.actions.list[1].steps[0].1).unwrap(), 0);
+        s.execute("actions.delete", if group { json!({"set":"Removed"}) } else { json!({"action":0}) }).unwrap();
+        let steps = &s.actions.list[0].steps;
+        assert!(steps[0].1["action"].is_null());
+        assert!(steps[1].1["action"].is_null());
+        assert_eq!(steps[1].1["calledActions"], own_actions, "the selected source is local; its supplied internal namespace is untouched");
+        assert!(steps[2].1["steps"][0][1]["action"].is_null());
+        assert!(steps[2].1["steps"][1][1]["action"].is_null());
+        assert!(steps[3].1["action"][0][1]["action"].is_null());
+        assert_eq!(steps[4].1, embedded, "inline embedded calls own their namespace");
+        assert_eq!(steps[5].1, json!({"steps":null,"action":"A"}), "present invalid steps still take precedence");
+        s.actions.list.push(Action::new("A", Vec::new()));
+        assert!(
+            crate::file_cmds::batch_action(&s.actions.list, &s.actions.list[0].steps[0].1).is_err(),
+            "reusing the deleted name cannot revive the old Batch"
+        );
+        assert_eq!(crate::file_cmds::batch_action(&s.actions.list, &json!({"action":"A"})).unwrap(), 1, "a new explicit call can select the replacement");
+    }
+}
+
+#[test]
+fn deleting_namesakes_respects_play_batch_and_conditional_effective_scopes() {
+    for group in [false, true] {
+        let mut s = Session::new();
+        s.actions.list = vec![
+            Action { set: Some("One".into()), ..Action::new("A", Vec::new()) },
+            Action { set: Some("Two".into()), ..Action::new("A", Vec::new()) },
+            Action::new(
+                "Caller",
+                vec![
+                    ("actions.play".into(), json!({"action":"A","set":"Two"})),
+                    ("actions.play".into(), json!({"action":"A","set":"One"})),
+                    ("actions.play".into(), json!({"action":"A"})),
+                    ("actions.conditional".into(), json!({"if":"always","then":"A","else":"A","set":"Two","elseSet":"One"})),
+                    ("actions.conditional".into(), json!({"if":"always","then":"A","else":"A","set":"Two","thenSet":"One","elseSet":null})),
+                    ("file.automate.batch".into(), json!({"action":"A","set":"Two"})),
+                    ("file.automate.batch".into(), json!({"action":"A","set":"One"})),
+                    ("file.automate.batch".into(), json!({"action":"A","set":null})),
+                    ("actions.play".into(), json!({"action":1})),
+                    ("actions.play".into(), json!({"action":2})),
+                ],
+            ),
+        ];
+        s.execute("actions.delete", if group { json!({"set":"Two"}) } else { json!({"action":1}) }).unwrap();
+        let steps = &s.actions.list[1].steps;
+        for index in [0, 5, 8] {
+            assert!(steps[index].1["action"].is_null());
+        }
+        for index in [1, 2, 6, 7] {
+            assert_eq!(steps[index].1["action"], "A");
+        }
+        assert!(steps[3].1["then"].is_null());
+        assert_eq!(steps[3].1["else"], "A");
+        assert_eq!(steps[4].1["then"], "A");
+        assert!(steps[4].1["else"].is_null(), "null branch scope inherits the common scope");
+        assert_eq!(steps[9].1["action"], 1, "surviving numeric identities still follow removal");
+        s.actions.list.push(Action { set: Some("Two".into()), ..Action::new("A", Vec::new()) });
+        assert!(playback_index(&s.actions.list, &s.actions.list[1].steps[0].1).is_err());
+        assert!(crate::file_cmds::batch_action(&s.actions.list, &s.actions.list[1].steps[5].1).is_err());
+        assert_eq!(playback_index(&s.actions.list, &s.actions.list[1].steps[1].1).unwrap(), 0);
+    }
+    let mut s = Session::new();
+    let ungrouped = crate::atn_cmds::UNGROUPED_SET;
+    s.actions.list = vec![
+        Action::new("A", Vec::new()),
+        Action { set: Some(ungrouped.into()), ..Action::new("A", Vec::new()) },
+        Action::new(
+            "Caller",
+            vec![("actions.play".into(), json!({"action":"A","set":ungrouped})), ("file.automate.batch".into(), json!({"action":"A","set":ungrouped}))],
+        ),
+    ];
+    s.execute("actions.delete", json!({"action":1})).unwrap();
+    assert_eq!(s.actions.list[1].steps[0].1["action"], "A", "Play shares the logical ungrouped identity with a legacy row");
+    assert!(s.actions.list[1].steps[1].1["action"].is_null(), "Batch's explicit-set selector requires the actual stored set");
+    assert_eq!(playback_index(&s.actions.list, &s.actions.list[1].steps[0].1).unwrap(), 0);
 }

@@ -1,4 +1,38 @@
 use super::*;
+// These unchanged assertions exercise the Classic presentation explicitly.
+use super::{classic_panel as panel, classic_panel_menu as panel_menu};
+
+#[test]
+fn classic_resume_rejects_missing_group_tail_instead_of_playing_a_prefix() {
+    for missing in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width":8,"height":6})).unwrap();
+        let mut first = Action::new("First", vec![("filter.blur.gaussianBlur".into(), json!({"radius":1}))]);
+        first.dialogs.insert(0);
+        app.session.actions.list.extend([
+            first,
+            Action::new("Second", vec![("layer.new.layer".into(), json!({"name":"Second tail"}))]),
+            Action::new("Third", vec![("layer.new.layer".into(), json!({"name":"Third tail"}))]),
+        ]);
+        play_targets(&mut app, &[0, 1, 2], 0).unwrap();
+        let dialog = app.ui.dialogs.last().unwrap().id;
+        if missing {
+            app.session.actions.list.remove(2);
+        }
+        // The confirmed step succeeds; a missing group tail is reported as a controlled stop.
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let names = layer_names(&app);
+        assert_eq!(names.iter().any(|name| name == "Second tail"), !missing);
+        assert_eq!(names.iter().any(|name| name == "Third tail"), !missing);
+        if missing {
+            assert_eq!(app.ui.status, tl!("Action playback stopped"));
+            assert!(!app.ui.status_error);
+        }
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert!(app.session.actions.held_playback.is_none());
+    }
+}
 
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
@@ -102,6 +136,15 @@ fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
 
 /// Prepare a real paused spelling step with a known document and history boundary, under either grouping policy.
 fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
+    paused_history_spelling_with(single, gate, |_| {})
+}
+
+/// Configure the complete definition before its immutable playback snapshot is paused.
+fn paused_history_spelling_with(
+    single: bool,
+    gate: Option<Gate>,
+    configure: impl FnOnce(&mut Vec<Action>),
+) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":300,"height":100})).unwrap();
     app.run("type.create", json!({"x":10,"y":50,"text":"Teh brwon"})).unwrap();
@@ -118,6 +161,7 @@ fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, 
     );
     action.dialogs.insert(1);
     app.session.actions.list.push(action);
+    configure(&mut app.session.actions.list);
     app.session.authorize = gate;
     let paused = play(&mut app, &json!({"action":"Spell"})).unwrap();
     assert_eq!(paused["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{paused}");
@@ -656,7 +700,7 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
     app.run("actions.record", json!({"name":"Parent"})).unwrap();
     app.run("actions.play", json!({"action":"Child"})).unwrap();
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list[1].steps, [("actions.play".into(), json!({"action":"Child"}))]);
+    assert_eq!(app.session.actions.list[1].steps, [("actions.play".into(), json!({"action":"Child","set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]);
     assert_eq!(step_label("actions.play", &json!({"action":"Child"})), "Play Action: Child");
     app.run("view.actualPixels", json!({})).unwrap();
     let r = app.run("actions.play", json!({"action":"Parent"})).unwrap();
@@ -666,6 +710,10 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
         Some(|id, _| if id == "view.fitOnScreen" { Err(photocraft_engine::EngineError::Other("denied nested view".into())) } else { Ok(()) });
     let r = app.run("actions.play", json!({"action":"Parent"})).unwrap();
     assert!(r["failed"]["error"].as_str().unwrap().contains("denied nested view"));
+    let child = &r["failed"]["result"];
+    assert_eq!(child["action"], "Child");
+    assert_eq!(child["failed"]["id"], "view.fitOnScreen");
+    assert!(child["failed"]["error"].as_str().unwrap().contains("denied nested view"));
     assert!(app.session.actions.playback_stack.is_empty());
     assert_eq!(app.session.actions.playing, 0);
 
@@ -2088,7 +2136,7 @@ fn suffixes(app: &PhotocraftApp) -> usize {
 }
 
 fn child_call() -> Vec<(String, Value)> {
-    vec![("actions.play".to_string(), json!({"action": "Child"}))]
+    vec![("actions.play".to_string(), json!({"action": "Child", "set":photocraft_engine::atn_cmds::UNGROUPED_SET}))]
 }
 
 /// Play Child and return the id of its step dialog.
@@ -2185,6 +2233,7 @@ fn a_suspended_call_is_recorded_into_its_action_after_the_list_changes() {
     let id = pause_child(&mut app);
     // Something else puts an action where Owner was.
     app.session.actions.list.insert(1, Action::new("Bystander", vec![]));
+    app.session.actions.rev = app.session.actions.rev.saturating_add(1);
     crate::dialogs::confirm(&mut app, id).unwrap();
     app.run("actions.stop", json!({})).unwrap();
     assert!(app.session.actions.list[1].steps.is_empty(), "the action now at the old index gets nothing");
@@ -2488,11 +2537,12 @@ fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
     }
     for service in [false, true] {
         for nested in [false, true] {
-            let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
-            if nested {
-                app.session.actions.list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
-                app.session.actions.list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
-            }
+            let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |list| {
+                if nested {
+                    list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
+                    list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
+                }
+            });
             spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
             let corrected = app.session.active().unwrap().doc.clone();
             if service {
@@ -2597,8 +2647,7 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
 #[test]
 /// A policy change after the final spelling step must not discard completed edits when no tail remains to dispatch.
 fn a_changed_gate_after_the_last_spelling_step_keeps_completed_edits() {
-    let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
-    app.session.actions.list[0].steps.truncate(2);
+    let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |list| list[0].steps.truncate(2));
     spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
     let corrected = app.session.active().unwrap().doc.clone();
     app.session.authorize = Some(|_, _| Ok(()));
