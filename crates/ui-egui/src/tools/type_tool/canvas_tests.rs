@@ -186,7 +186,7 @@ mod panel_defaults {
                 app.ui.tool = tool;
                 app.session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
                 let revision = app.session.active().unwrap().revision;
-                super::super::pointer_up(&mut app, [100.0, 100.0], if paragraph { [500.0, 400.0] } else { [100.0, 100.0] });
+                super::super::pointer_up(&mut app, [100.0, 100.0], if paragraph { [500.0, 400.0] } else { [100.0, 100.0] }, egui::Modifiers::NONE);
                 let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
                 let t = text(&app, id);
                 let c = &t.char_runs()[0].style;
@@ -305,7 +305,7 @@ mod panel_defaults {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert_eq!(super::super::default_styles(&app).0.color.to_rgba8(), [51, 102, 153, 255]);
         assert_eq!(app.session.active().unwrap().revision, revision);
-        super::super::pointer_up(&mut app, [100.0, 100.0], [100.0, 100.0]);
+        super::super::pointer_up(&mut app, [100.0, 100.0], [100.0, 100.0], egui::Modifiers::NONE);
         let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
         assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255]);
     }
@@ -2087,7 +2087,7 @@ mod multi_layer_formatting {
             assert_eq!(text(h.state(), *id).paragraph_runs()[0].style.direction, TextDirection::Rtl);
         }
         assert_eq!(text(h.state(), ids[2]).paragraph_runs()[0].style.direction, TextDirection::Auto);
-        super::super::pointer_up(h.state_mut(), [40.0, 60.0], [40.0, 60.0]);
+        super::super::pointer_up(h.state_mut(), [40.0, 60.0], [40.0, 60.0], egui::Modifiers::NONE);
         let id = h.state().session.active().unwrap().active_layer.unwrap();
         assert!(!ids.contains(&id), "a new type layer");
         assert_eq!(text(h.state(), id).paragraph_runs()[0].style.direction, TextDirection::Rtl, "new type starts right to left");

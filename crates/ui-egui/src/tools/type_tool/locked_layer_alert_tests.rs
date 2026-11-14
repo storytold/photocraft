@@ -19,7 +19,7 @@ fn locked_text(lock: serde_json::Value) -> (PhotocraftApp, LayerId) {
     app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();
     app.ui.tool = crate::state::Tool::Type;
-    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+    pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0], egui::Modifiers::NONE);
     insert(&mut app, "Locked text");
     commit(&mut app);
     let id = active_layer(&app).unwrap();
@@ -94,7 +94,7 @@ fn a_click_on_empty_canvas_with_a_locked_text_layer_active_starts_new_text() {
     let (mut app, id) = locked_text(json!({"all": true}));
     app.run("layer.select", json!({"layer": id.0, "mode": "replace"})).unwrap();
     assert!(!click(&mut app, OFF_TEXT), "no text there: the press is left to start new text");
-    pointer_up(&mut app, [OFF_TEXT.0, OFF_TEXT.1], [OFF_TEXT.0, OFF_TEXT.1]);
+    pointer_up(&mut app, [OFF_TEXT.0, OFF_TEXT.1], [OFF_TEXT.0, OFF_TEXT.1], egui::Modifiers::NONE);
     assert!(error_dialogs(&app).is_empty());
     let edit = app.ui.text_edit.as_ref().expect("new text is being edited");
     assert!(edit.created);

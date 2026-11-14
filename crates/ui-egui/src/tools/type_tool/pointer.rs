@@ -319,22 +319,11 @@ fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
     w >= min && h >= min
 }
 
-/// Pointer up. `rect` is the dragged box (document px) when no edit session consumed the press.
-pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
-    crate::type_box_preview::flush(app);
-    if let Some(e) = app.ui.text_edit.as_mut() {
-        e.dragging = false;
-        e.resize = None;
-        app.ui.caret_blink_time = app.last_frame_time;
-        return;
-    }
-    let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
-    let min = 4.0 / app.point_zoom().max(0.01) as f64;
-    let o = app.ui.tool_options.clone();
-    let mask = app.ui.tool.is_type_mask();
-    // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
-    // on the path on its outline. The Type Mask tools ignore paths.
-    let target = if !mask && !makes_box(app, start, end) { path_target(app, start[0], start[1]) } else { None };
+/// The `type.create` parameters a Type-tool gesture ending now starts from: the placeholder or
+/// empty text, the tool's orientation and the options bar's styles. The caller adds the geometry
+/// (`box` for a dragged paragraph, `x`/`y` for point text), and [`create_layer`] adds the session's
+/// `coalesce` key.
+pub(crate) fn create_params(app: &PhotocraftApp) -> serde_json::Value {
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
@@ -343,54 +332,93 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let mut p = default_style_params(app);
     p["text"] = json!(text);
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
-    if w >= min && h >= min {
+    p
+}
+
+/// Create the type layer `p` describes, and finish what a released Type-tool gesture does with it:
+/// the path target of a click, the options bar's antialiasing, the Type Mask tools' hidden working
+/// layer, and the edit session with the placeholder selected. The id of the new layer, or why
+/// creating it failed (the status bar already says so, since [`PhotocraftApp::run`] reported it).
+pub(crate) fn create_layer(app: &mut PhotocraftApp, mut p: serde_json::Value, target: Option<PathClick>) -> Result<u64, String> {
+    let o = app.ui.tool_options.clone();
+    let mask = app.ui.tool.is_type_mask();
+    let n = p.get("text").and_then(serde_json::Value::as_str).unwrap_or("").chars().count();
+    let key = session_key(app);
+    p["coalesce"] = json!(key);
+    let v = app.run("type.create", p)?;
+    let Some(id) = v.get("layer").and_then(serde_json::Value::as_u64) else {
+        return Err("type.create returned no layer".to_string());
+    };
+    // A failed follow-up leaves point text; say why instead of passing over it.
+    let follow_up = match &target {
+        Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
+        Some(PathClick::OnPath { shape, subpath, start }) => {
+            app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
+        }
+        None => Ok(serde_json::Value::Null),
+    };
+    if let Err(e) = follow_up {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    if o.type_aa != "sharp" {
+        let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
+    }
+    // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
+    // instead, and committing turns it into the selection.
+    if mask {
+        let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
+    }
+    // Like Photoshop: the placeholder is selected, so typing replaces it.
+    app.ui.caret_blink_time = app.last_frame_time;
+    app.ui.text_edit = Some(TextEdit {
+        layer: id,
+        document: active_doc_id(app),
+        caret: n,
+        anchor: 0,
+        session: key,
+        created: true,
+        mask,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    app.ui.text_edit_return_tool = None;
+    Ok(id)
+}
+
+/// Pointer up. `mods` are the modifiers held at the press of the gesture (`Drag::modifiers`);
+/// `rect` is the dragged box (document px) when no edit session consumed the press.
+pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    crate::type_box_preview::flush(app);
+    if let Some(e) = app.ui.text_edit.as_mut() {
+        e.dragging = false;
+        e.resize = None;
+        app.ui.caret_blink_time = app.last_frame_time;
+        return;
+    }
+    let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
+    let box_drag = makes_box(app, start, end);
+    // Photoshop (#12044): Alt+drag with the Type tool sizes the new paragraph box in the
+    // Paragraph Text Size dialog instead of committing the drag, and its OK creates the text.
+    // Measured for the horizontal Type tool alone, so the vertical and Type Mask tools keep the
+    // plain drag; Alt+click (a drag too small for a box) stays point text.
+    if mods.alt && box_drag && app.ui.tool == crate::state::Tool::Type {
+        crate::paragraph_text_size::open(app, [start[0].min(end[0]), start[1].min(end[1])], w, h);
+        return;
+    }
+    let mask = app.ui.tool.is_type_mask();
+    // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
+    // on the path on its outline. The Type Mask tools ignore paths.
+    let target = if !mask && !box_drag { path_target(app, start[0], start[1]) } else { None };
+    let mut p = create_params(app);
+    if box_drag {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
     } else {
         p["x"] = json!(start[0].round());
         p["y"] = json!(start[1].round());
     }
-    let key = session_key(app);
-    p["coalesce"] = json!(key);
-    if let Ok(v) = app.run("type.create", p)
-        && let Some(id) = v.get("layer").and_then(serde_json::Value::as_u64)
-    {
-        // A failed follow-up leaves point text; say why instead of passing over it.
-        let follow_up = match &target {
-            Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
-            Some(PathClick::OnPath { shape, subpath, start }) => {
-                app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
-            }
-            None => Ok(serde_json::Value::Null),
-        };
-        if let Err(e) = follow_up {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-        if o.type_aa != "sharp" {
-            let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
-        }
-        // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
-        // instead, and committing turns it into the selection.
-        if mask {
-            let _ = app.run("layer.setProps", json!({"layer": id, "visible": false, "coalesce": key}));
-        }
-        // Like Photoshop: the placeholder is selected, so typing replaces it.
-        let n = text.chars().count();
-        app.ui.caret_blink_time = app.last_frame_time;
-        app.ui.text_edit = Some(TextEdit {
-            layer: id,
-            document: active_doc_id(app),
-            caret: n,
-            anchor: 0,
-            session: key,
-            created: true,
-            mask,
-            dragging: false,
-            resize: None,
-            preedit: None,
-        });
-        app.ui.text_edit_return_tool = None;
-    }
+    let _ = create_layer(app, p, target);
 }
 
 /// Character index of the previous / next word boundary (shared with `type.navigate`).

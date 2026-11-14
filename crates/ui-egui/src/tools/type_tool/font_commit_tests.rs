@@ -86,7 +86,7 @@ fn fixture_renderer(new: bool, pattern: usize, character: bool, content: &str, g
     app.ui.tool = crate::state::Tool::Type;
     app.ui.tool_options.type_font = FONTS[pattern % 2].into();
     app.ui.tool_options.type_size = 18.0;
-    super::pointer_up(app, [30.0, 70.0], [30.0, 70.0]);
+    super::pointer_up(app, [30.0, 70.0], [30.0, 70.0], egui::Modifiers::NONE);
     super::insert(app, content);
     let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
     let key = app.ui.text_edit.as_ref().unwrap().session.clone();
@@ -356,7 +356,7 @@ fn returning_focus_to_the_same_canvas_caret_keeps_the_chosen_typing_font() {
     let (x, top, bottom) = layout.caret(text.len());
     let p = aff.apply(photocraft_geom::Point::new(f64::from(x) - 0.1, f64::from((top + bottom) * 0.5)));
     assert!(super::pointer_down(&mut h.state_mut().app, p.x, p.y, Modifiers::NONE));
-    super::pointer_up(&mut h.state_mut().app, [p.x, p.y], [p.x, p.y]);
+    super::pointer_up(&mut h.state_mut().app, [p.x, p.y], [p.x, p.y], egui::Modifiers::NONE);
     assert_eq!(h.state().app.ui.text_edit.as_ref().unwrap().caret, 6);
     assert!(super::insertion_style::pending(&h.state().app).is_some());
     h.ctx.memory_mut(|m| {
