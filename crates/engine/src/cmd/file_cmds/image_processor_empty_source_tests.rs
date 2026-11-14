@@ -109,3 +109,44 @@ fn missing_paths_and_missing_open_documents_keep_their_own_errors() {
         }
     }
 }
+
+#[test]
+fn mixed_valid_and_corrupt_images_keep_the_corrupt_file_report() {
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("input");
+    let output = root.path().join("output");
+    fs::create_dir(&input).unwrap();
+    let corrupt = input.join("broken.jpg");
+    fs::write(&corrupt, b"not an image").unwrap();
+    write_image(&input.join("test.ppm"));
+    let mut session = Session::new();
+    for per_format in [false, true] {
+        let result = session.execute(COMMAND, settings(&input, &output, per_format)).unwrap();
+        let mut expected = vec![output.join("test.jpg")];
+        if per_format {
+            expected.push(output.join("test.tif"));
+        }
+        assert_eq!(result["files"], json!(expected));
+        let errors = result["errors"].as_array().unwrap();
+        assert_eq!(errors.len(), if per_format { 2 } else { 1 });
+        assert!(errors.iter().all(|error| error["file"] == json!(corrupt)));
+    }
+}
+
+#[test]
+fn empty_explicit_inputs_error_and_invalid_recursion_keeps_its_diagnostic() {
+    let root = tempfile::tempdir().unwrap();
+    let output = root.path().join("output");
+    let mut session = Session::new();
+    for per_format in [false, true] {
+        let mut params = settings(Path::new(""), &output, per_format);
+        params["includeSubfolders"] = json!("true");
+        let error = session.execute(COMMAND, params.clone()).unwrap_err();
+        assert!(matches!(error, EngineError::BadParams { msg, .. } if msg.contains("includeSubfolders")));
+        params.as_object_mut().unwrap().remove("input");
+        params["includeSubfolders"] = json!(false);
+        params["files"] = json!([]);
+        assert_eq!(session.execute(COMMAND, params), Err(EngineError::Other(NO_SOURCE.into())));
+    }
+    assert!(!output.exists());
+}

@@ -103,7 +103,8 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
 /// Resize and export folder inputs or copies of the current/all open documents.
 /// An omitted `source` keeps the folder-input contract; document sources include unsaved
 /// edits without modifying the original documents. Invalid parameters and missing documents
-/// return an error; processing failures and output-name collisions appear in per-file errors.
+/// return an error, as does a folder source with no openable images. Processing failures and
+/// output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = IMAGE_PROCESSOR;
     let source = match p.get("source") {
@@ -154,7 +155,10 @@ const IMAGE_PROCESSOR_NO_SOURCE: &str = "There were no source files that could b
 
 fn image_processor_folder_inputs(p: &Value, output: &str) -> Result<Vec<BatchInput>> {
     if p.get("input").or_else(|| p.get("files")).and_then(Value::as_str) == Some("") {
-        return Err(EngineError::Other(IMAGE_PROCESSOR_NO_SOURCE.into()));
+        // Treat the empty dialog field as an empty file list while retaining normal validation.
+        let mut params = p.clone();
+        params["input"] = json!([]);
+        return batch_inputs_tree(&params, IMAGE_PROCESSOR, output);
     }
     batch_inputs_tree(p, IMAGE_PROCESSOR, output)
 }
