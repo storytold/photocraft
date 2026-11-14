@@ -25,7 +25,7 @@ const LAYERS: [(&str, &str); 10] = [
 ];
 
 /// The issue's document with `active` the active layer.
-fn document(active: &str) -> PhotocraftApp {
+pub(super) fn document(active: &str) -> PhotocraftApp {
     let mut app = app(false);
     app.run("file.new", json!({"width": 800, "height": 500, "background": "white"})).unwrap();
     for (i, (name, text)) in LAYERS.into_iter().enumerate() {
@@ -48,7 +48,7 @@ fn document(active: &str) -> PhotocraftApp {
 }
 
 /// Opens Edit > Check Spelling... from the menu bar.
-fn open(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(super) fn open(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let mut h = harness(app);
     assert!(open_edit_menu(&mut h));
     h.get_by_label_contains("Check Spelling").click();
@@ -56,20 +56,20 @@ fn open(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, button: &str) {
+pub(super) fn click(h: &mut Harness<'static, PhotocraftApp>, button: &str) {
     h.get_by_label(button).click();
     h.run_steps(4);
 }
 
 /// The words still to come, from the current one on, as "layer: word".
-fn to_come(app: &PhotocraftApp) -> Vec<String> {
+pub(super) fn to_come(app: &PhotocraftApp) -> Vec<String> {
     let spell = app.ui.type_panels.spell.as_ref().expect("the Check Spelling dialog is open");
     let doc = &app.session.active().unwrap().doc;
     let name = |i: &serde_json::Value| i["layer"].as_u64().and_then(|id| doc.layer(photocraft_doc::LayerId(id))).map_or(String::new(), |l| l.name.clone());
     spell.items[spell.index.min(spell.items.len())..].iter().map(|i| format!("{}: {}", name(i), i["word"].as_str().unwrap_or(""))).collect()
 }
 
-fn text_of(app: &PhotocraftApp, name: &str) -> String {
+pub(super) fn text_of(app: &PhotocraftApp, name: &str) -> String {
     let doc = &app.session.active().unwrap().doc;
     let layer = doc.walk().into_iter().map(|(_, _, l)| l).find(|l| l.name == name).expect("the layer exists");
     match &layer.content {

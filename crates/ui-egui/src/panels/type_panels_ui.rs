@@ -1339,3 +1339,7 @@ mod spell_per_layer_tests;
 #[cfg(test)]
 #[path = "type_spell_selected_ui_tests.rs"]
 mod spell_selected_ui_tests;
+
+#[cfg(test)]
+#[path = "type_spell_skip_prompt_tests.rs"]
+mod spell_skip_prompt_tests;
