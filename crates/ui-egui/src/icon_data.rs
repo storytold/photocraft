@@ -27,6 +27,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("bandage", include_bytes!("../../../assets/icons/bandage.svg")),
     ("bandage-sparkle", include_bytes!("../../../assets/icons/bandage-sparkle.svg")),
     ("blend", include_bytes!("../../../assets/icons/blend.svg")),
+    ("bold", include_bytes!("../../../assets/icons/bold.svg")),
     ("brush", include_bytes!("../../../assets/icons/brush.svg")),
     ("brush-replace", include_bytes!("../../../assets/icons/brush-replace.svg")),
     ("brush-cleaning", include_bytes!("../../../assets/icons/brush-cleaning.svg")),

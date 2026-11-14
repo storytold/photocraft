@@ -1782,6 +1782,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
         // above, the stored camera wins over this frame's copy, or the write-back drops it.
         let before = app.ui.views.get(idx).cloned();
         crate::crop_task_bar::draw(app, ui, xf);
+        crate::type_tool::draw_task_bar(app, ui, xf);
         if let Some(now) = app.ui.views.get(idx)
             && Some(now) != before.as_ref()
         {

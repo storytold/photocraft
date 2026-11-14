@@ -31,6 +31,7 @@ mod options_bar;
 mod overlay;
 mod panel;
 mod pointer;
+pub mod task_bar;
 
 use defaults::apply;
 #[cfg(test)]
@@ -80,6 +81,7 @@ pub(crate) use pointer::{PathClick, box_handle_at, hover_path_target, inside_box
 #[cfg(test)]
 pub(crate) use pointer::{box_shape, click_selection, next_click_count, path_target};
 pub use pointer::{multi_click, pointer_down, pointer_move, pointer_up};
+pub use task_bar::draw as draw_task_bar;
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
 
