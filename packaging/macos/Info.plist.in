@@ -217,22 +217,23 @@
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
       <array>
-        <string>public.png</string>
-        <string>public.jpeg</string>
-        <string>public.tiff</string>
-        <string>org.webmproject.webp</string>
-        <string>com.compuserve.gif</string>
-        <string>com.microsoft.bmp</string>
-        <string>com.truevision.tga-image</string>
-        <string>com.microsoft.ico</string>
-        <string>public.pbm</string>
-        <string>com.ilm.openexr-image</string>
-        <string>public.radiance</string>
-        <string>public.avif</string>
-        <string>ai.storyteller.photocraft.qoi</string>
-        <string>ai.storyteller.photocraft.pdn</string>
-        <string>ai.storyteller.photocraft.ora</string>
         <string>ai.storyteller.photocraft.kra</string>
+        <string>ai.storyteller.photocraft.pdn</string>
+        <string>ai.storyteller.photocraft.qoi</string>
+        <string>ai.storyteller.photocraft.ora</string>
+        <string>com.compuserve.gif</string>
+        <string>com.ilm.openexr-image</string>
+        <string>com.microsoft.bmp</string>
+        <string>com.microsoft.ico</string>
+        <string>com.truevision.tga-image</string>
+        <string>org.webmproject.webp</string>
+        <string>public.avif</string>
+        <string>public.jpeg</string>
+        <string>public.pbm</string>
+        <string>public.png</string>
+        <string>public.radiance</string>
+        <string>public.svg-image</string>
+        <string>public.tiff</string>
       </array>
     </dict>
   </array>
