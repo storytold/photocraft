@@ -144,7 +144,8 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_lowercase().replace('_', "-");
     let mut parts = tag.split('-');
     let lang = parts.next()?;
-    let rest: Vec<&str> = parts.collect();
+    // RFC 5646: a singleton starts extensions/private use; their values do not choose the script.
+    let rest: Vec<&str> = parts.take_while(|part| part.len() != 1).collect();
     Some(match lang {
         "ar" | "fa" | "ur" | "ps" | "ckb" | "sd" | "ug" => "Arab",
         "he" | "iw" | "yi" => "Hebr",
@@ -156,6 +157,8 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
         "ka" => "Geor",
         "ja" => "Jpan",
         "ko" => "Kore",
+        // An explicit script takes precedence over regional defaults.
+        "zh" if rest.contains(&"hans") => "Hans",
         "zh" if rest.iter().any(|r| matches!(*r, "hant" | "tw" | "hk" | "mo")) => "Hant",
         "zh" => "Hans",
         _ => return None,
@@ -503,7 +506,19 @@ mod tests {
             ("ja-JP", Some("Jpan")),
             ("zh-CN", Some("Hans")),
             ("zh-TW", Some("Hant")),
+            ("zh-HK", Some("Hant")),
+            ("zh-MO", Some("Hant")),
+            ("zh-Hans-TW", Some("Hans")),
+            ("zh-Hans-HK", Some("Hans")),
+            ("zh-Hans-MO", Some("Hans")),
+            ("zh-Hant-CN", Some("Hant")),
             ("zh-Hant-HK", Some("Hant")),
+            ("zh-Hant-TW-u-nu-hans", Some("Hant")),
+            ("zh-TW-u-nu-hans", Some("Hant")),
+            ("zh-CN-u-nu-hant", Some("Hans")),
+            ("zh-cmn-Hans-TW", Some("Hans")),
+            ("zh-cmn-Hant-CN", Some("Hant")),
+            ("zh-TW-x-hans", Some("Hant")),
             ("ko", Some("Kore")),
             ("en-US", None),
             ("ru", None),
