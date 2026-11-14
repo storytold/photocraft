@@ -37,10 +37,36 @@ fn has_mask(s: &Session) -> std::result::Result<(), String> {
     active_layer(s)?.mask.as_ref().map(|_| ()).ok_or_else(|| "the active layer has no layer mask".into())
 }
 
+/// Paste Into and Paste Outside are enabled with something copied and a selection.
 fn has_clip_and_selection(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     s.clipboard.as_ref().ok_or("the clipboard is empty")?;
     d.doc.selection.as_ref().map(|_| ()).ok_or_else(|| "Paste Into needs a selection".into())
+}
+
+/// The layers [`paste_into_each`] pastes into: the thumbnails that built the selection, else the
+/// Layers panel's selection; never the Background, a group or an adjustment layer (no pixels of
+/// their own to paste into; a shape counts, cached pixels or not).
+fn paste_into_each_targets(d: &crate::DocState) -> Vec<LayerId> {
+    let ids = d.selection_sources().unwrap_or_else(|| d.selected_layers());
+    let has_pixels = |id: &LayerId| d.doc.layer(*id).is_some_and(|l| !matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)));
+    ids.into_iter().filter(|id| !d.doc.is_background(*id) && has_pixels(id)).collect()
+}
+
+/// The group holding layer `id` in `doc`, if any: the one a paste beside `id` lands in.
+fn parent_group(doc: &Document, id: LayerId) -> Option<LayerId> {
+    let path = doc.path_of(id)?;
+    doc.layer_at(path.split_last()?.1).map(|g| g.id)
+}
+
+/// Paste Into Each Selected Layer is enabled with something copied and a layer to paste into.
+fn has_clip_and_layers(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    s.clipboard.as_ref().ok_or("the clipboard is empty")?;
+    if paste_into_each_targets(d).is_empty() {
+        return Err("Ctrl+click a layer thumbnail and Ctrl+Shift+click the others, or select the layers".into());
+    }
+    Ok(())
 }
 
 fn has_background(s: &Session) -> std::result::Result<(), String> {
@@ -443,6 +469,79 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     // the masked paste draws is recomposited (#2901).
     r2?;
     Ok(r)
+}
+
+/// Edit › Paste Special › Paste Into Each Selected Layer: for every layer, what ⌘-clicking its
+/// thumbnail and then Paste Into gives, in one history step. The layers are the ones whose
+/// thumbnails built the current selection (⌘-click one, ⌘⇧-click the rest) while that selection
+/// is unchanged; otherwise the layers selected in the Layers panel. Each copy is a new layer just
+/// above its layer, centered on that layer's pixels at the clipboard's size, with a layer mask of
+/// that layer's transparency: one paste per storyboard frame instead of one per click. Layers
+/// with no transparency to load (the Background) or no pixels are skipped. As after Paste Into,
+/// nothing is selected afterwards; the last copy made is the active layer.
+fn paste_into_each(s: &mut Session, _p: &Value) -> Result<Value> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let targets = paste_into_each_targets(d);
+    if targets.is_empty() {
+        return Err(EngineError::Other(
+            "Paste Into Each Selected Layer needs layers: ⌘-click (Ctrl+click) one thumbnail and ⌘⇧-click (Ctrl+Shift+click) the others, or select them in the Layers panel".into(),
+        ));
+    }
+    // Everything that can refuse is checked before anything changes, so a refusal leaves the
+    // document, the selection and the targeted layers as they were. A Lock-All group refuses its
+    // layer mask (rather than leave an unmasked paste), and a layer with no pixels has no
+    // transparency to mask a copy to (loading it would only clear the selection).
+    for &id in &targets {
+        if let Some(g) = parent_group(&d.doc, id) {
+            crate::commands::check_all_unlocked(&d.doc, g)?;
+        }
+    }
+    // Several copied layers would each be pasted for every target, and only the last masked.
+    if s.clipboard.as_ref().and_then(|clip| clip.layers.as_deref()).is_some_and(|copied| copied.layers.len() > 1) {
+        return Err(EngineError::Other("Paste Into Each Selected Layer needs one copied layer: copy the layers one at a time".into()));
+    }
+    let canvas = d.doc.bounds();
+    let targets: Vec<LayerId> =
+        targets.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| !photocraft_compose::layer_bounds(l, canvas).is_empty())).collect();
+    if targets.is_empty() {
+        return Err(EngineError::Other("Could not paste: none of the selected layers has pixels".into()));
+    }
+    // One key for every sub-step, taken once: each paste moves the revision on.
+    let key = step_key(s, "pasteIntoEach");
+    let label = "Paste Into Each Selected Layer";
+    let mut made = Vec::new();
+    for id in targets {
+        s.execute("select.loadSelection", json!({"channel": "transparency", "layer": id.0, "operation": "new", "coalesce": key}))?;
+        let Some(limit) = s.active().and_then(|d| d.doc.selection.clone()) else { continue };
+        let b = limit.content_bounds();
+        if b.is_empty() {
+            continue;
+        }
+        if let Some(st) = s.active_mut() {
+            st.selected_layers = vec![id];
+            st.active_layer = Some(id);
+            st.layer_anchor = Some(id);
+            crate::fix_selection(st);
+        }
+        // Exactly Paste Into's placement: centered on the selection, not clamped to the canvas.
+        let center = [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0];
+        s.execute("edit.paste", json!({"center": center, "clampToCanvas": false, "coalesce": key, "target": "pixels"}))?;
+        let pasted = layer_param(s, &Value::Null)?;
+        s.execute("layer.layerMask.revealAll", json!({"layer": pasted.0, "coalesce": key}))?;
+        s.coalesce_request = Some(key.clone());
+        let r = s.edit(label, |doc, _| {
+            let l = doc.layer_mut(pasted).ok_or(EngineError::NoLayer(pasted))?;
+            l.mask = Some(LayerMask { surface: limit, linked: false, ..LayerMask::reveal_all() });
+            Ok(())
+        });
+        s.coalesce_request = None;
+        r?;
+        made.push(pasted.0);
+    }
+    if made.is_empty() {
+        return Err(EngineError::Other("Could not paste: none of the selected layers has pixels".into()));
+    }
+    Ok(json!({ "layers": made }))
 }
 
 /// The canvas grown to every layer's pixels: Image › Reveal All's new canvas, and what the Crop
@@ -904,6 +1003,7 @@ pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// The commands this module registers: Paste Special's items and the other extras.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -951,6 +1051,15 @@ pub fn specs() -> Vec<CommandSpec> {
             concat!(r#"{"center":[x,y]?,"#, crate::edit_cmds::paste_target!(), "}"),
             has_clip_and_selection,
             |s, p| paste_into(s, p, false)
+        ),
+        spec!(
+            "edit.pasteSpecial.pasteIntoEach",
+            "Paste Into Each Selected Layer",
+            &["Edit", "Paste Special"],
+            None,
+            r#"{} (every selected layer: its transparency loaded, then Paste Into; one history step)"#,
+            has_clip_and_layers,
+            paste_into_each
         ),
         spec!(
             "edit.pasteSpecial.pasteOutside",
