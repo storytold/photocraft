@@ -7,7 +7,7 @@
 //! point reads one composite pixel (no averaging); its values match the Info panel's pointer
 //! readout (RGB 0–255 and colour-managed CMYK percentages, as in the Color Picker).
 
-use photocraft_doc::Document;
+use photocraft_doc::{Document, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -59,11 +59,33 @@ pub fn point_json(doc: &Document, index: usize, pos: [f64; 2], size: u32) -> Val
     json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]], "rgb": rgb, "cmyk": cmyk})
 }
 
-fn list_json(doc: &Document, points: &[[f64; 2]], size: u32) -> Value {
+/// The document without `layer` when it is a visible adjustment layer: what the Info panel's
+/// "before" values read while that adjustment is selected (#11736). `None` for any other layer;
+/// a hidden adjustment layer (not measured) keeps the single values.
+fn without_adjustment(doc: &Document, layer: Option<LayerId>) -> Option<Document> {
+    let id = layer?;
+    let l = doc.layer(id)?;
+    if !l.visible || !matches!(l.content, LayerContent::Adjustment(_)) {
+        return None;
+    }
+    let mut copy = doc.clone();
+    copy.layer_mut(id)?.visible = false;
+    Some(copy)
+}
+
+fn list_json(doc: &Document, before: Option<&Document>, points: &[[f64; 2]], size: u32) -> Value {
+    let point = |(i, p): (usize, &[f64; 2])| {
+        let mut v = point_json(doc, i, *p, size);
+        if let Some(b) = before {
+            let (rgb, cmyk) = readout(b, *p, size);
+            v["before"] = json!({"rgb": rgb, "cmyk": cmyk});
+        }
+        v
+    };
     json!({
         "max": MAX_SAMPLERS,
         "size": size,
-        "samplers": points.iter().enumerate().map(|(i, p)| point_json(doc, i, *p, size)).collect::<Vec<_>>(),
+        "samplers": points.iter().enumerate().map(point).collect::<Vec<_>>(),
     })
 }
 
@@ -158,7 +180,8 @@ fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
     let size = crate::sample_cmds::size_param("view.colorSamplers.list", p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(list_json(&st.doc, &st.color_samplers, size))
+    let before = without_adjustment(&st.doc, st.active_layer);
+    Ok(list_json(&st.doc, before.as_ref(), &st.color_samplers, size))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -208,7 +231,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Color Samplers",
             menu: &[],
             shortcut: None,
-            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk}]}"##,
+            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk, before?:{rgb, cmyk}}]}; `before` (the readout without the selected adjustment layer) only while a visible adjustment layer is selected"##,
             enabled: has_doc,
             run: list,
             journal: false,
@@ -224,3 +247,6 @@ mod pixel_centre_tests;
 
 #[cfg(test)]
 mod sample_size_tests;
+
+#[cfg(test)]
+mod before_after_tests;
