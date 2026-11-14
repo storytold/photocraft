@@ -54,9 +54,17 @@ fn char_offsets(text: &str, offsets: &[usize]) -> Vec<usize> {
     result
 }
 
-/// Type layers top to bottom (Layers panel order), skipping fully locked ones.
-fn type_layers(doc: &Document) -> Vec<LayerId> {
-    doc.walk().into_iter().rev().filter(|(p, _, l)| matches!(l.content, LayerContent::Text(_)) && !doc.locks_at(p).all).map(|(_, _, l)| l.id).collect()
+/// Type layers in checking order, skipping fully locked ones: from the type layer `start` up the
+/// stack, then from the bottom up to just below it, as the reference does (#14174). Without a
+/// type layer to start at, top to bottom (Layers panel order).
+fn type_layers(doc: &Document, start: Option<LayerId>) -> Vec<LayerId> {
+    let mut layers: Vec<(LayerId, bool)> =
+        doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(p, _, l)| (l.id, doc.locks_at(&p).all)).collect();
+    match start.and_then(|id| layers.iter().position(|(l, _)| *l == id)) {
+        Some(i) => layers.rotate_left(i),
+        None => layers.reverse(),
+    }
+    layers.into_iter().filter(|(_, locked)| !locked).map(|(id, _)| id).collect()
 }
 
 fn text(doc: &Document, id: LayerId) -> Option<&str> {
@@ -77,13 +85,18 @@ fn accepted(s: &Session, p: &Value) -> HashSet<String> {
 
 fn layers_param(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let all = type_layers(&st.doc);
     if p.get("allLayers").and_then(Value::as_bool) == Some(false) || p.get("layer").is_some() {
         let active = layer_param(s, p)?;
-        Ok(all.into_iter().filter(|id| *id == active).collect())
-    } else {
-        Ok(all)
+        return Ok(type_layers(&st.doc, None).into_iter().filter(|id| *id == active).collect());
     }
+    // The dialog passes the layer it was opened on (null without one), which stays the start when
+    // the active layer changes.
+    let start = match p.get("from") {
+        None => st.active_layer,
+        Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().map(LayerId).ok_or_else(|| bad("edit.checkSpelling", "`from` must be a layer id"))?),
+    };
+    Ok(type_layers(&st.doc, start))
 }
 
 fn list(s: &Session, p: &Value) -> Result<Value> {
@@ -278,7 +291,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Check Spelling…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
+            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"from":id|null? (all layers: start at this type layer, go up and wrap; default: the active layer; null, or a `from` that is not a type layer: top to bottom),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
             // Any open document, also one without type layers, where it lists nothing.
             enabled: crate::commands::has_doc,
             journal: true,
