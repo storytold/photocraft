@@ -7,7 +7,7 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     let mut out: Vec<(String, String, Vec<String>, Option<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for it in crate::menus::menu_items(app) {
-        if it.label == "---" || !seen.insert(it.id.clone()) {
+        if it.label == "---" || it.id.starts_with("file.openRecent.") || !seen.insert(it.id.clone()) {
             continue;
         }
         let default = default_shortcut(&it.id).or(it.shortcut.clone().filter(|_| !app.session.prefs().shortcuts.contains_key(&it.id)));
