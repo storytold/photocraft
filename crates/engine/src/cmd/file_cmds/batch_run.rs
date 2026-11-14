@@ -269,7 +269,12 @@ fn process_outputs<'a>(
         let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique };
         let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
-            Ok(Some(out)) => files.push(out),
+            Ok(Some(PublishedOutput { path: out, warning })) => {
+                if let Some(warning) = warning {
+                    errors.push(json!({"file": path, "output": out, "error": warning}));
+                }
+                files.push(out);
+            }
             Ok(None) => {
                 written.record(&out, path);
                 files.push(out);
@@ -357,12 +362,12 @@ fn process_one(
     save: SaveOpts,
     options: ProcessOptions<'_>,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
-) -> std::result::Result<Option<String>, FileFailure> {
+) -> std::result::Result<Option<PublishedOutput>, FileFailure> {
     if let Some(written) = options.written {
         written.check(out).map_err(EngineError::Other)?;
     }
     let mut scratch = Session::new();
-    let result = (|| -> std::result::Result<Option<String>, FileFailure> {
+    let result = (|| -> std::result::Result<Option<PublishedOutput>, FileFailure> {
         if let Some(input) = options.input {
             (input.prepare)(&mut scratch, path)?;
         } else {
@@ -387,9 +392,9 @@ fn process_one(
         }
         let d = scratch.active().ok_or(EngineError::NoDocument)?;
         if options.unique {
-            let (bytes, mut warnings) = encode(&d.doc, out, save)?;
-            let actual = save_unique_output(out, &bytes, &mut warnings)?;
-            record_export_warnings(&mut scratch, &actual, warnings);
+            let (bytes, warnings) = encode(&d.doc, out, save)?;
+            let actual = save_unique_output(out, &bytes)?;
+            record_export_warnings(&mut scratch, &actual.path, warnings);
             return Ok(Some(actual));
         }
         let warnings = if let Some(format) = options.format {
@@ -407,11 +412,14 @@ fn process_one(
     result
 }
 
-/// Encode before the Batch write checkpoint. Esc accepted during an action or encode therefore
-/// leaves the current destination untouched; the worker owns the write once the checkpoint passes.
+struct PublishedOutput {
+    path: String,
+    warning: Option<String>,
+}
+
 /// Claim a destination atomically so another process creating it during export cannot lose its file.
 #[cfg(not(target_arch = "wasm32"))]
-fn save_unique_output(out: &str, bytes: &[u8], warnings: &mut Vec<String>) -> Result<String> {
+fn save_unique_output(out: &str, bytes: &[u8]) -> Result<PublishedOutput> {
     use std::{fs, io::ErrorKind, path::Path};
 
     let path = Path::new(out);
@@ -431,11 +439,8 @@ fn save_unique_output(out: &str, bytes: &[u8], warnings: &mut Vec<String>) -> Re
             Err(error) => return Err(EngineError::Other(format!("{candidate}: {error}"))),
         }
         match photocraft_format::write_noreplace(path, bytes) {
-            Ok(()) => return Ok(candidate),
-            Err(error) if error.published => {
-                warnings.push(error.to_string());
-                return Ok(candidate);
-            }
+            Ok(()) => return Ok(PublishedOutput { path: candidate, warning: None }),
+            Err(error) if error.published => return Ok(PublishedOutput { path: candidate, warning: Some(error.to_string()) }),
             Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {}
             Err(error) => return Err(EngineError::Other(format!("{candidate}: {error}"))),
         }
@@ -444,10 +449,12 @@ fn save_unique_output(out: &str, bytes: &[u8], warnings: &mut Vec<String>) -> Re
 }
 
 #[cfg(target_arch = "wasm32")]
-fn save_unique_output(out: &str, _bytes: &[u8], _warnings: &mut Vec<String>) -> Result<String> {
+fn save_unique_output(out: &str, _bytes: &[u8]) -> Result<PublishedOutput> {
     Err(EngineError::Other(format!("cannot write {out}: no file system on the web")))
 }
 
+/// Encode before the Batch write checkpoint. Esc accepted during an action or encode therefore
+/// leaves the current destination untouched; the worker owns the write once the checkpoint passes.
 fn save_batch_doc(doc: &Document, out: &str, format: &str, save: SaveOpts, ctx: &crate::jobs::JobCtx) -> Result<Vec<String>> {
     let (bytes, warnings) = encode(doc, format, save)?;
     ctx.batch_before_write()?;

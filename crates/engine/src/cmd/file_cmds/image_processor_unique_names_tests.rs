@@ -125,3 +125,36 @@ fn directory_and_dangling_symlink_names_stay_occupied() {
     assert_eq!(fs::read_link(output.join("example_1.png")).unwrap(), output.join("missing.png"));
     assert!(!output.join("missing.png").exists());
 }
+
+#[test]
+fn failed_input_does_not_claim_an_output_name() {
+    let root = tempfile::tempdir().unwrap();
+    let corrupt = root.path().join("broken/same.ppm");
+    let valid = root.path().join("good/same.ppm");
+    fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+    fs::create_dir_all(valid.parent().unwrap()).unwrap();
+    fs::write(&corrupt, b"not an image").unwrap();
+    fs::write(&valid, PIXELS).unwrap();
+    let output = root.path().join("out");
+    let result = Session::new().execute(COMMAND, json!({"input":[corrupt,valid],"output":output,"format":"png"})).unwrap();
+    assert_eq!(files(&result).unwrap(), [output.join("same.png")]);
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["file"], json!(corrupt));
+    assert_eq!(fs::read_dir(&output).unwrap().count(), 1);
+}
+
+#[test]
+fn current_and_open_document_sources_keep_their_output_naming() {
+    let root = tempfile::tempdir().unwrap();
+    let mut session = Session::new();
+    session.execute("file.new", json!({"name":"Current", "width":2, "height":2})).unwrap();
+    for source in ["current", "open"] {
+        let out = root.path().join("Current.png");
+        fs::write(&out, b"old output").unwrap();
+        let result = session.execute(COMMAND, json!({"source":source,"output":root.path(),"format":"png"})).unwrap();
+        assert_eq!(files(&result).unwrap(), [out.clone()]);
+        assert_eq!(result["errors"], json!([]));
+        assert!(photocraft_io::import("Current.png", &fs::read(out).unwrap()).is_ok());
+    }
+}
