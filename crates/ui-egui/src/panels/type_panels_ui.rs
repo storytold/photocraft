@@ -60,13 +60,14 @@ pub struct SpellDialog {
 /// The `dialog` that Check Spelling's results and a playback paused at its step name.
 pub const SPELLING: &str = "checkSpelling";
 
-const IDS: [&str; 6] = [
+const IDS: [&str; 7] = [
     "type.panels.characterStyles",
     "window.panel.characterStyles",
     "type.panels.paragraphStyles",
     "window.panel.paragraphStyles",
     "type.panels.glyphs",
     "window.panel.glyphs",
+    crate::panels::typer::MENU_ID,
 ];
 
 /// Menu ids handled here (live menu items).
@@ -80,6 +81,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "type.panels.characterStyles" | "window.panel.characterStyles" => p.styles && p.styles_tab == 0,
         "type.panels.paragraphStyles" | "window.panel.paragraphStyles" => p.styles && p.styles_tab == 1,
         "type.panels.glyphs" | "window.panel.glyphs" => p.glyphs,
+        crate::panels::typer::MENU_ID => app.typer.open,
         _ => return None,
     })
 }
@@ -92,6 +94,9 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     }
     if !handles(id) {
         return None;
+    }
+    if id == crate::panels::typer::MENU_ID {
+        return Some(crate::panels::typer::menu(app, params));
     }
     let want = params.get("show").and_then(Value::as_bool);
     let p = &mut app.ui.type_panels;
@@ -150,6 +155,7 @@ fn float_frame(t: &Tokens) -> egui::Frame {
 
 /// Draws the open type panels and the spelling dialog.
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    crate::panels::typer::window(app, ctx);
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     if app.ui.type_panels.styles {

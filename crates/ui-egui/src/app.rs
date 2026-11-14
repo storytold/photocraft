@@ -175,6 +175,7 @@ impl PhotocraftApp {
             nudge_bundle: Default::default(),
             style_preview: None,
             text_style_preview: None,
+            typer: Default::default(),
             solid_fill_preview: None,
             pattern_fill_preview: None,
             shape_fill_preview: None,
