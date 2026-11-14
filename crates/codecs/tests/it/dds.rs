@@ -272,6 +272,13 @@ fn rejects_huge_pitch_without_allocating() {
 }
 
 #[test]
+fn zero_dx10_array_size_is_rejected() {
+    let mut b = dx10(1, 1, 28, 3, 0, 0); // R8G8B8A8_UNORM with an invalid zero array size.
+    b.extend([1, 2, 3, 4]);
+    assert!(decode(&b).is_err());
+}
+
+#[test]
 fn decodes_dx10_headers() {
     let mut b = dx10(1, 1, 28, 3, 0, 1); // R8G8B8A8_UNORM
     b.extend([1, 2, 3, 4]);
@@ -354,7 +361,9 @@ fn source_probe_reads_dx10_array_and_cube_declarations() {
         b.extend([1, 2, 3, 4]);
         let multiple = array > 1 || misc == 4;
         assert_eq!(photocraft_codecs::has_unretained_source_data(&b).unwrap(), multiple);
-        if multiple {
+        if array == 0 {
+            assert!(matches!(decode(&b), Err(CodecError::Malformed { .. })));
+        } else if multiple {
             assert!(matches!(decode(&b), Err(CodecError::Unsupported { .. })));
         } else {
             assert_eq!(decode(&b).unwrap().data(), &[1, 2, 3, 4]);
