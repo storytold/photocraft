@@ -855,12 +855,28 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
             win.focused = focused;
-            if close {
-                win.open = false;
-            }
+        }
+        if close {
+            close_window(app, ctx, w.id);
         }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+/// Closes document window `id`, as its title bar's close button does. A floating window that is
+/// the only place its document is shown (Open Documents as Tabs off floats a new document there
+/// and not as a tab, #9728) closes the document through File › Close, asking to save unsaved
+/// changes; cancelled, the window stays. Any other window only goes, leaving its document where
+/// else it is shown (CodeRabbit on #10390).
+pub(crate) fn close_window(app: &mut PhotocraftApp, ctx: &egui::Context, id: u64) {
+    let Some(w) = app.ui.windows.iter().find(|x| x.id == id) else { return };
+    let doc = w.document;
+    let only = w.floating && !app.ui.windows.iter().any(|x| x.id != id && x.open && x.document == doc);
+    if only {
+        let _ = crate::menus::invoke(app, ctx, "file.close", json!({"document": doc}));
+    } else if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == id) {
+        win.open = false;
+    }
 }
 
 /// The canvas of document window `w` (Window › New Window), drawn in its own viewport. Returns the
@@ -894,7 +910,7 @@ pub(super) fn document_window_canvas(
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
 /// active document fills the area.
-pub(super) fn docked_document_indices(app: &PhotocraftApp) -> Vec<usize> {
+pub(crate) fn docked_document_indices(app: &PhotocraftApp) -> Vec<usize> {
     (0..app.session.documents().len()).filter(|&doc| !crate::view_cmds::document_is_floating(app, doc)).collect()
 }
 
