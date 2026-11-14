@@ -50,31 +50,40 @@ pub const MAX_SPLIT_DRAW_BYTES: u64 = if cfg!(target_arch = "wasm32") { 1 << 30 
 static CACHE_BUDGET: AtomicUsize = AtomicUsize::new(BUDGET);
 static DRAW_LIMIT: AtomicU64 = AtomicU64::new(MAX_SPLIT_DRAW_BYTES);
 
-/// The split cache's byte budget and the most a split may draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Limits {
-    cache: usize,
+/// The split cache's byte budget (read when a split is kept, under the cache's lock) and the
+/// most a split may draw.
+#[derive(Clone, Copy, Debug)]
+struct Limits<'a> {
+    cache: &'a AtomicUsize,
     draw: u64,
 }
 
-fn limits() -> Limits {
-    Limits { cache: CACHE_BUDGET.load(Ordering::Relaxed), draw: DRAW_LIMIT.load(Ordering::Relaxed) }
+fn limits() -> Limits<'static> {
+    Limits { cache: &CACHE_BUDGET, draw: DRAW_LIMIT.load(Ordering::Relaxed) }
 }
 
 /// Sets, process-wide, the split cache's byte budget (splits larger are drawn for each request,
 /// not kept) and the most pixel bytes a split may draw ([`MAX_SPLIT_DRAW_BYTES`]); returns the
 /// previous `(cache, draw)` limits. For memory preferences and tests.
 pub fn set_split_limits(cache_bytes: usize, draw_bytes: u64) -> (usize, u64) {
-    let before = (CACHE_BUDGET.swap(cache_bytes, Ordering::Relaxed), DRAW_LIMIT.swap(draw_bytes, Ordering::Relaxed));
-    // Refusals were measured against the old limit; what the cache holds may exceed the new one.
+    let draw = DRAW_LIMIT.swap(draw_bytes, Ordering::Relaxed);
+    // Refusals were measured against the old limit.
     refused().lock().unwrap_or_else(|e| e.into_inner()).clear();
-    trim(cache(), cache_bytes);
+    (set_cache_budget(cache(), &CACHE_BUDGET, cache_bytes), draw)
+}
+
+/// Sets `budget` to `bytes` and trims `c` to it, under `c`'s lock: a split kept meanwhile reads
+/// the budget under the same lock, so it either lands before (and is trimmed) or sees the new
+/// budget. Returns the previous budget.
+fn set_cache_budget(c: &Mutex<Cache>, budget: &AtomicUsize, bytes: usize) -> usize {
+    let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
+    let before = budget.swap(bytes, Ordering::Relaxed);
+    trim(&mut c, bytes);
     before
 }
 
 /// Evicts the least recently used splits until what the cache holds fits `budget`.
-fn trim(c: &Mutex<Cache>, budget: usize) {
-    let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
+fn trim(c: &mut Cache, budget: usize) {
     let mut held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).fold(0, usize::saturating_add);
     while held > budget {
         let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
@@ -133,17 +142,23 @@ fn get(c: &Mutex<Cache>, key: u64) -> Option<(Surface, Surface)> {
 /// Cache a split only when its retained pixel bytes fit the budget and are nonzero.
 #[cfg(test)]
 fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>) {
-    insert_within(c, key, parts, source, BUDGET);
+    insert_within(c, key, parts, source, &AtomicUsize::new(BUDGET));
 }
 
-/// [`insert`] with a cache budget of `budget` bytes.
-fn insert_within(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>, budget: usize) {
+/// [`insert`] within the cache budget `budget` holds when the split is kept.
+fn insert_within(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>, budget: &AtomicUsize) {
     let new_bytes = entry_bytes(parts, source);
-    // Don't cache entries that hold no pixels or exceed the byte budget.
-    if new_bytes == 0 || new_bytes > budget {
+    if new_bytes == 0 {
         return;
     }
     let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
+    // Read under the lock ([`set_cache_budget`]): a budget lowered while this split was drawn
+    // applies to it too.
+    let budget = budget.load(Ordering::Relaxed);
+    // Don't cache entries that exceed the byte budget.
+    if new_bytes > budget {
+        return;
+    }
     // Another caller may have filled this key while we rendered. Charge its replacement once.
     c.0.remove(&key);
     // Count the retained pixels once, then subtract each eviction's charge.
@@ -479,7 +494,8 @@ mod tests {
     #[test]
     fn splits_past_the_cache_budget_are_drawn_and_past_the_draw_limit_refused() {
         let (store, refusals) = (Mutex::new(Cache::default()), Mutex::new(HashSet::new()));
-        let limits = Limits { cache: 1 << 20, draw: 64 << 20 };
+        let budget = AtomicUsize::new(1 << 20);
+        let limits = Limits { cache: &budget, draw: 64 << 20 };
         let mut sh = shape(10.0);
         sh.path.inverted = true;
         // 16 RGBA8 tiles of fill (4 MiB): past the cache's budget, within the draw limit.
@@ -512,11 +528,32 @@ mod tests {
         let mut stored = Surface::new(PixelFormat::RGBA8);
         stored.fill_rect(canvas, &[0.2, 0.4, 0.6, 1.0]);
         sh.cache = Some(stored);
-        let limits = Limits { cache: 1 << 20, draw: 4 << 20 };
+        let budget = AtomicUsize::new(1 << 20);
+        let limits = Limits { cache: &budget, draw: 4 << 20 };
         assert!(split_in(&sh, canvas, SampleType::U8, &store, &refusals, limits).is_none(), "the fitted stroke would take 16 MiB");
-        let roomy = Limits { cache: 1 << 20, draw: 32 << 20 };
+        let roomy = Limits { cache: &budget, draw: 32 << 20 };
         let (_, stroke) = split_in(&sh, canvas, SampleType::U8, &store, &Mutex::new(HashSet::new()), roomy).expect("fits");
         assert!(stroke.tile_count() >= 64, "the stroke covers the stored pixels: {} tiles", stroke.tile_count());
+    }
+
+    /// A split that started before the cache's budget was lowered lands after it: it is held to
+    /// the new budget, which is read under the cache's lock when the split is kept.
+    #[test]
+    fn a_split_kept_after_the_budget_is_lowered_keeps_to_the_new_budget() {
+        let store = Mutex::new(Cache::default());
+        let budget = AtomicUsize::new(8 << 20);
+        // What the split read when it started, and what it drew (two 256 KiB tiles).
+        let limits = Limits { cache: &budget, draw: 64 << 20 };
+        let parts = (tile(SampleType::U8, 0.25), tile(SampleType::U8, 0.5));
+        // Meanwhile the budget is lowered (and the cache trimmed).
+        assert_eq!(set_cache_budget(&store, &budget, 64 << 10), 8 << 20);
+        // Then the split is kept.
+        insert_within(&store, 7, &parts, None, limits.cache);
+        assert!(store.lock().unwrap().0.is_empty(), "nothing past the lowered budget");
+        // Raised again, the same split is kept.
+        set_cache_budget(&store, &budget, 8 << 20);
+        insert_within(&store, 7, &parts, None, limits.cache);
+        assert_eq!(store.lock().unwrap().0.len(), 1);
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and

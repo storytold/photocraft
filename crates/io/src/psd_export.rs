@@ -761,28 +761,39 @@ impl Ex<'_> {
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
             let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
-                (None, Some((img, img_bounds))) => {
-                    let unfiltered = match &sm.perspective {
-                        Some(p) => {
-                            photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
-                        }
-                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
-                    };
-                    match unfiltered {
-                        Ok(unfiltered) => {
-                            let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
-                            if item.is_some() && masked(sm) {
-                                let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
-                                self.smart.unfiltered.insert(l.id, u);
+                (None, Some((img, img_bounds))) => match self.redraw_admission(sm, img_bounds, bounds) {
+                    Ok(_working) => {
+                        let unfiltered = match &sm.perspective {
+                            Some(p) => {
+                                photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
                             }
-                            item
-                        }
-                        Err(e) => {
-                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
-                            None
+                            None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
+                        };
+                        match unfiltered {
+                            Ok(unfiltered) => {
+                                let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
+                                if item.is_some() && masked(sm) {
+                                    let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
+                                    // Kept until the record is unmixed with it: what was admitted.
+                                    self.smart.fx_budget.try_charge(photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt));
+                                    self.smart.unfiltered.insert(l.id, u);
+                                }
+                                item
+                            }
+                            Err(e) => {
+                                warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                                None
+                            }
                         }
                     }
-                }
+                    Err(why) => {
+                        self.warnings.push(format!(
+                            "layer \"{}\": {why}; its smart filter cache was left out, so Photoshop renders its filters again, without the filter mask",
+                            l.name
+                        ));
+                        None
+                    }
+                },
                 _ => None,
             };
             match item {
@@ -824,6 +835,33 @@ impl Ex<'_> {
         // same frame: a custom warp's control-point box, #3677).
         let size = crate::linked::source_size_in_blocks(self.smart.globals.iter().map(|(_, k, d)| (k, d.as_slice())), &id, &photocraft_raster::Interrupt::NONE);
         blocks::plld_transform(&corners, size, warp.as_ref()) != (sm.transform, sm.perspective)
+    }
+
+    /// Admits redrawing a placed layer's filter cache from its source (`src` bounds) over
+    /// `bounds`, before anything is drawn: what it keeps until the record is unmixed (the placed
+    /// unfiltered pixels, for a mask that shows) must fit the save's smart-filter cache budget,
+    /// and its working set (the placed source, and the cache's planes over it and `bounds`, read
+    /// as floats) the process's working memory. The reservation is held while it draws.
+    fn redraw_admission(
+        &self,
+        sm: &photocraft_doc::SmartObject,
+        src: photocraft_geom::Rect,
+        bounds: photocraft_geom::Rect,
+    ) -> Result<photocraft_raster::memory::Reservation, String> {
+        let too_large = || crate::smart_map::FilterCacheError::TooLarge.to_string();
+        let placed = placed_area(src, sm).ok_or_else(too_large)?;
+        let fmt = self.fmt;
+        let kept = if masked(sm) { photocraft_raster::tile_storage_bytes(placed, &fmt) } else { 0 };
+        if !self.smart.fx_budget.fits(kept) {
+            return Err(too_large());
+        }
+        let area = placed.union(&bounds);
+        let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
+        let per_px = (fmt.channels() as u64).saturating_mul(4).saturating_add((fmt.bytes_per_pixel() as u64).saturating_mul(3));
+        let working = photocraft_raster::tile_storage_bytes(placed, &fmt)
+            .saturating_add(photocraft_raster::tile_storage_bytes(area, &fmt))
+            .saturating_add(px.saturating_mul(per_px));
+        photocraft_raster::memory::try_reserve_operation(working)
     }
 
     /// Whether an imported placed layer still says what the smart object is (transform, warp,
@@ -1177,6 +1215,35 @@ impl Ex<'_> {
             }
         }
     }
+}
+
+/// Where a placed layer's source of bounds `src` lands in the document ([`photocraft_algo::warp::place_source`]):
+/// its corners, or its warp's (sampled) output box, through the placement, two pixels wider for
+/// resampling. `None` when a corner doesn't land at a finite point inside the coordinate range.
+fn placed_area(src: photocraft_geom::Rect, sm: &photocraft_doc::SmartObject) -> Option<photocraft_geom::Rect> {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::from(src.x0), f64::from(src.y0), f64::from(src.x1), f64::from(src.y1));
+    if let Some(w) = sm.warp.as_ref().filter(|w| !w.is_identity()) {
+        let b = w.output_bounds();
+        (x0, y0, x1, y1) = (x0.min(b[0]), y0.min(b[1]), x1.max(b[2]), y1.max(b[3]));
+    }
+    let [a, b, c, d, e, f] = sm.transform.m;
+    let map = |x: f64, y: f64| match &sm.perspective {
+        Some(p) => photocraft_algo::transform::Homography(*p).apply(x, y),
+        None => (a * x + c * y + e, b * x + d * y + f),
+    };
+    let corners = [map(x0, y0), map(x1, y0), map(x1, y1), map(x0, y1)];
+    let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+    for (x, y) in corners {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        (lo, hi) = ((lo.0.min(x), lo.1.min(y)), (hi.0.max(x), hi.1.max(y)));
+    }
+    let edge = |v: f64| {
+        let v = v.round();
+        (v > f64::from(i32::MIN / 2) && v < f64::from(i32::MAX / 2)).then_some(v as i32)
+    };
+    Some(photocraft_geom::Rect::new(edge(lo.0.floor())? - 2, edge(lo.1.floor())? - 2, edge(hi.0.ceil())? + 2, edge(hi.1.ceil())? + 2))
 }
 
 /// What saving does with an imported placed layer's own blocks ([`Ex::placed_verdict`]).

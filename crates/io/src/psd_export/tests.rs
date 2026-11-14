@@ -842,3 +842,75 @@ fn a_cancelled_save_stops_between_the_bands_of_a_layer() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A 12x4 document with a smart object of an embedded 2x2 red source, a Gaussian Blur and a
+/// filter mask showing half of it everywhere.
+fn filtered_embedded_smart_object() -> Document {
+    use photocraft_doc::{LayerMask, SmartFilter, SmartObject, SmartSource};
+    let mut source = Document::new("contents", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+    let mut pixels = Surface::new(source.pixel_format());
+    pixels.fill_rect(source.bounds(), &[1.0, 0.0, 0.0, 1.0]);
+    source.layers.push(Layer::new("red", LayerContent::Raster(pixels.clone())));
+    let bytes = photocraft_format::save_to_bytes(&source, &Default::default()).unwrap();
+    let mut doc = document(12, 4);
+    let source = SmartSource::Embedded { file_name: "contents.pcraft".into(), bytes: std::sync::Arc::new(bytes) };
+    let mut sm = SmartObject::new(source, photocraft_geom::Affine::IDENTITY, Some(pixels));
+    sm.smart_filters.push(SmartFilter {
+        command: "filter.blur.gaussianBlur".into(),
+        params: serde_json::json!({ "radius": 1.0 }),
+        blend: photocraft_color::BlendMode::Normal,
+        opacity: 1.0,
+        visible: true,
+    });
+    let mut half = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &[1.0]);
+    half.fill_rect(doc.bounds(), &[0.5]);
+    sm.filter_mask = Some(LayerMask { surface: half, enabled: true, linked: false, density: 1.0, feather: 0.0 });
+    doc.layers.push(Layer::new("original", LayerContent::Smart(sm)));
+    doc
+}
+
+/// The placed ids of a saved file's `FEid` items.
+fn fx_ids(bytes: &[u8]) -> Vec<String> {
+    let file = PsdFile::from_bytes(bytes).unwrap();
+    let mut ids: Vec<String> = file
+        .global_blocks
+        .iter()
+        .filter(|b| &b.key == b"FEid")
+        .filter_map(|b| craft_psd::filter_effects::FilterEffects::parse(&b.data).ok())
+        .flat_map(|fx| fx.items.into_iter().map(|i| i.id))
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// A smart object duplicated after opening gets its own placed id, and its filter cache is
+/// redrawn from the source on save. What that redraw keeps (the unfiltered pixels its record is
+/// unmixed with) is charged to the save's smart-filter cache budget like a preserved cache:
+/// within it the cache is redrawn, past it the placement is written and the cache left out,
+/// with a warning, instead of redrawing it without a bound.
+#[test]
+fn a_redrawn_filter_cache_is_charged_to_the_save_budget() {
+    let saved = crate::export(&filtered_embedded_smart_object(), "x.psb", &crate::ExportOptions::default()).unwrap();
+    let mut doc = crate::import("x.psb", &saved.bytes).unwrap().document;
+    assert!(matches!(&doc.layers[0].content, LayerContent::Smart(sm) if sm.filter_mask.is_some()));
+    let mut duplicate = doc.layers[0].duplicate();
+    duplicate.name = "duplicate".into();
+    doc.layers.push(duplicate);
+
+    let within = crate::export(&doc, "x.psb", &crate::ExportOptions::default()).unwrap();
+    assert_eq!(fx_ids(&within.bytes).len(), 2, "both caches, the duplicate's redrawn under its own id: {:?}", within.warnings);
+
+    let spent = crate::smart_map::with_test_cache_cap(1, || crate::export(&doc, "x.psb", &crate::ExportOptions::default())).unwrap();
+    assert!(fx_ids(&spent.bytes).is_empty(), "no cache redrawn past the budget");
+    assert!(spent.warnings.iter().any(|w| w.contains("\"duplicate\"") && w.contains("smart filter cache was left out")), "{:?}", spent.warnings);
+    let file = PsdFile::from_bytes(&spent.bytes).unwrap();
+    let placed: Vec<String> = file.layers().iter().filter_map(|r| crate::smart_map::parse_sold(&r.block(b"SoLd")?.data)).map(|p| p.placed).collect();
+    assert_eq!(placed.len(), 2);
+    assert_ne!(placed[0], placed[1], "the duplicate keeps its own placement");
+    // Reopened, each shows the pixels it was saved with: no mask is applied to them again.
+    let back = crate::import("x.psb", &spent.bytes).unwrap().document;
+    for (i, layer) in back.layers.iter().enumerate() {
+        let (LayerContent::Smart(a), LayerContent::Smart(b)) = (&layer.content, &doc.layers[i].content) else { panic!("{:?}", layer.content) };
+        assert_eq!(a.cache.as_ref().unwrap().pixel(1, 1), b.cache.as_ref().unwrap().pixel(1, 1), "layer {i}");
+    }
+}
