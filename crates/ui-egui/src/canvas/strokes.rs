@@ -367,11 +367,14 @@ pub(crate) fn unsmoothed_line(p: &mut serde_json::Value, line: bool) {
     }
 }
 
-/// Tools whose strokes the engine renders while they are drawn (`LiveStroke`).
+/// Tools whose strokes the engine renders while they are drawn (`LiveStroke`), and so start on
+/// the press. The Art History Brush starts there too, with no live stroke, so a press held still
+/// keeps painting from the press on (#12625).
 pub(crate) fn strokes_live(tool: Tool) -> bool {
     matches!(
         tool,
-        Tool::Brush
+        Tool::ArtHistoryBrush
+            | Tool::Brush
             | Tool::Pencil
             | Tool::MixerBrush
             | Tool::Eraser
@@ -414,7 +417,8 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
 pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
-    let d = app.drag.as_ref()?;
+    // The Art History Brush paints on release (`retouch_ui::finish_stroke`).
+    let d = app.drag.as_ref().filter(|d| d.tool != Tool::ArtHistoryBrush)?;
     let stroke = if d.tool == Tool::MixerBrush {
         let points = app.stylus.stroke_points(&d.points);
         let p = stroke_params(app, d, points.get(..1)?);
@@ -643,9 +647,11 @@ pub(super) fn tap_at_peak_pressure(app: &mut PhotocraftApp) {
 pub(super) const HOLD_REPEAT_MS: f64 = 16.0;
 
 /// Is the live stroke one that changes while the pointer is held still (airbrush Build-up, or
-/// smoothing catching up)? Only then does a held pointer repeat its point and keep repainting.
+/// smoothing catching up), or an Art History Brush press, which keeps starting new strokes while
+/// held (`retouch_ui::art_history_points`)? Only then does a held pointer repeat its point and
+/// keep repainting.
 pub(super) fn stroke_wants_time(app: &PhotocraftApp) -> bool {
-    app.live_stroke.as_ref().is_some_and(LiveStroke::wants_time)
+    app.live_stroke.as_ref().is_some_and(LiveStroke::wants_time) || app.drag.as_ref().is_some_and(|d| d.tool == Tool::ArtHistoryBrush)
 }
 
 /// Time of sample `k` of the `n` samples a frame delivered, spread evenly after `base` (the

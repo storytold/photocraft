@@ -226,7 +226,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 /// [`finish_stroke`], with a History Brush stroke's options as they were at the press.
 pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers, line: bool, history: Option<Value>) -> bool {
     let o = app.ui.tool_options.clone();
-    let pts = json!(points);
+    let pts = if tool == Tool::ArtHistoryBrush { json!(art_history_points(app, points, &o)) } else { json!(points) };
     let (cmd, mut p): (&str, Value) = match tool {
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {
@@ -305,6 +305,91 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         }
     }
     true
+}
+
+/// A held Art History Brush press starts a new stroke this often (ms), the canvas's hold repeat.
+const ART_HISTORY_HOLD_MS: f64 = 16.0;
+/// New strokes per hold: about 4 s of them, when the reference application's growth has stopped
+/// (the Area circle is covered).
+const ART_HISTORY_HOLD_MAX: usize = 250;
+
+/// The points an Art History Brush press commits. Where the pointer was held still (its repeats,
+/// `canvas::stroke_wants_time`), new strokes keep starting inside the circle of diameter Area
+/// around it, one per `ART_HISTORY_HOLD_MS` held, as in Photoshop (#12625): the engine paints
+/// nothing for a repeated point. The R2 low-discrepancy sequence, one for the whole press, spreads
+/// them evenly over the circle at any hold length, and the same press replays the same.
+///
+/// The engine refuses a stroke of more than `MAX_DABS` points (its `MAX_POINTS` is the same) or
+/// dabs, one per `spacing_px` of the path, or whose dabs cover more than `MAX_COVERAGE`, so the
+/// holds stop adding before the press would be refused and paint nothing.
+fn art_history_points(app: &PhotocraftApp, points: &[[f64; 3]], o: &crate::state::ToolOptions) -> Vec<[f64; 3]> {
+    use photocraft_algo::art_history::{MAX_COVERAGE, MAX_DABS, Style, halo_radius, spacing_px};
+    const R2: (f64, f64) = (0.754_877_666_246_693, 0.569_840_290_998_053);
+    let dist = |a: &[f64; 3], b: &[f64; 3]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let near = |a: &[f64; 3], b: &[f64; 3]| (a[0] - b[0]).abs() + (a[1] - b[1]).abs() <= 0.25;
+    let r = f64::from(o.art_history_area.max(0.0)) / 2.0;
+    let style = Style::parse(&o.art_history_style).unwrap_or(Style::TightMedium);
+    let Some(spacing) = spacing_px(app.session.tools.brush.size, o.art_history_area, style).map(f64::from).filter(|_| r > 0.0) else {
+        // No circle to spread new strokes over: drop the held repeats, so a long hold is not
+        // refused as too many points.
+        let mut out: Vec<[f64; 3]> = Vec::new();
+        for q in points {
+            if out.last().is_none_or(|p| !near(p, q)) {
+                out.push(*q);
+            }
+        }
+        return out;
+    };
+    // What the drag alone takes: its points but the held repeats, and its dabs.
+    let mut held_points = 0;
+    let mut anchor: Option<&[f64; 3]> = None;
+    for q in points {
+        match anchor {
+            Some(h) if near(q, h) => held_points += 1,
+            _ => anchor = Some(q),
+        }
+    }
+    let mut room = MAX_DABS.saturating_sub(points.len() - held_points);
+    let mut dabs = 1.0 + points.windows(2).map(|w| dist(&w[0], &w[1])).sum::<f64>() / spacing;
+    // Every dab lies within `halo` of the points' box, and the engine adds one pixel around the
+    // dabs' bounds, so a new start that keeps this estimate under `MAX_COVERAGE` cannot get the
+    // press refused.
+    let halo = halo_radius(app.session.tools.brush.size, style).map_or(f64::INFINITY, |h| f64::from(h) + 1.0);
+    let grow = |b: [f64; 4], q: &[f64; 3]| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])];
+    let fits = |b: [f64; 4]| (b[2] - b[0] + 2.0 * halo).ceil() * (b[3] - b[1] + 2.0 * halo).ceil() <= MAX_COVERAGE as f64;
+    let mut bounds = points.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], grow);
+    let mut out: Vec<[f64; 3]> = Vec::with_capacity(points.len());
+    let mut k = 0usize;
+    // The held point, when the hold began, and the strokes it started.
+    let mut hold: Option<([f64; 3], f64, usize)> = None;
+    for (i, q) in points.iter().enumerate() {
+        let t = app.stylus.point_ms(i);
+        match &mut hold {
+            Some((h, since, n)) if near(q, h) => {
+                let due = (((t - *since) / ART_HISTORY_HOLD_MS) as usize).min(ART_HISTORY_HOLD_MAX);
+                while *n < due && room > 0 {
+                    let kf = (k + 1) as f64;
+                    let (a, d) = ((kf * R2.0).fract() * std::f64::consts::TAU, r * (kf * R2.1).fract().sqrt());
+                    let p = [h[0] + d * a.cos(), h[1] + d * a.sin(), h[2]];
+                    // The first new start also lengthens the way on to the next drag point, by r at most.
+                    let cost = (out.last().map_or(0.0, |l| dist(l, &p)) + if *n == 0 { r } else { 0.0 }) / spacing;
+                    let grown = grow(bounds, &p);
+                    if dabs + cost > MAX_DABS as f64 || (grown != bounds && !fits(grown)) {
+                        room = 0;
+                        break;
+                    }
+                    bounds = grown;
+                    (dabs, room, k, *n) = (dabs + cost, room - 1, k + 1, *n + 1);
+                    out.push(p);
+                }
+            }
+            _ => {
+                hold = Some((*q, t, 0));
+                out.push(*q);
+            }
+        }
+    }
+    out
 }
 
 /// `paint.remove` params from the options bar (without the strokes).
@@ -1241,3 +1326,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "art_history_hold_tests.rs"]
+mod art_history_hold_tests;
