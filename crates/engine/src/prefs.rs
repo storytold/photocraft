@@ -525,6 +525,8 @@ pub use photocraft_paint::ResponseCurve as PressureCurve;
 mod cmds;
 mod customize;
 mod files;
+#[cfg(test)]
+mod legacy_undo_tests;
 mod shortcuts;
 mod store;
 mod validate;
@@ -533,8 +535,8 @@ pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{
-    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates,
-    normalize_shortcut, reserved_shortcut,
+    ALTERNATE_SHORTCUTS, BindKind, LEGACY_UNDO_SHORTCUTS, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts,
+    default_alternates, normalize_shortcut, reserved_shortcut, undo_key,
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
@@ -1400,6 +1402,14 @@ pub struct Preferences {
     pub shortcut_sets: BTreeMap<String, crate::shortcut_sets::ShortcutSet>,
     /// The saved set in use ("" for the defaults).
     pub shortcut_set: String,
+    /// Edit › Keyboard Shortcuts › Use Legacy Undo Shortcuts (#14319). Read when the
+    /// preferences load at launch, where it picks the undo keys of the run
+    /// ([`Preferences::legacy_undo_keys`]); a change takes effect at the next start.
+    pub use_legacy_undo_shortcuts: bool,
+    /// The undo keys this run uses: [`Preferences::use_legacy_undo_shortcuts`] as it was at
+    /// launch ([`PrefsStore::launch`]). Not saved, and no later edit changes it.
+    #[serde(skip)]
+    pub legacy_undo_keys: bool,
     pub menus: MenuCustomization,
     pub toolbar: ToolbarCustomization,
     /// Edit › Check Spelling: words added to the dictionary ("Add").
@@ -1561,7 +1571,7 @@ impl Preferences {
         match self.shortcuts.get(id) {
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.as_str()),
-            None => default,
+            None => shortcuts::undo_key(id, default, self.legacy_undo_keys),
         }
     }
 
@@ -1726,6 +1736,8 @@ impl Session {
             photocraft_compose::multichannel::set_spot_dot_gain(self.color.settings.spot_dot_gain);
         }
         self.prefs.edit(|p| *p = prefs);
+        // Loading the preferences is the launch: the settings read only then take effect.
+        self.prefs.launch();
         if let Some(v) = presets {
             self.load_presets_json(v);
         }
