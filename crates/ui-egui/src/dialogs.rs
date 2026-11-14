@@ -374,7 +374,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
                 egui::ScrollArea::vertical().id_salt(("file-info-body", d.id)).max_height(room).show(ui, |ui| crate::view_cmds::form_body(ui, fields));
             } else if lens_batch_ui::owns(fields) {
-                lens_batch_ui::body(ui, fields);
+                lens_batch_ui::body(app, ui, fields, d.id);
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
@@ -1391,6 +1391,7 @@ pub mod jpeg_options_ui;
 mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
+mod lens_batch_sources;
 pub(crate) mod lens_batch_ui;
 pub mod liquify_ui;
 pub mod live_shape_prompt;

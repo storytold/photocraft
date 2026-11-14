@@ -7,7 +7,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::lens_cmds::{LENS, LENS_BATCH};
 use serde_json::json;
 
-use super::lens_batch_layout_tests::{H, entry, fields, fixture, harness, type_into};
+use super::lens_batch_layout_tests::{H, entry, fields, fixture, harness, set, type_into};
 
 /// Whether the checkbox `label` is ticked.
 fn ticked(h: &H, label: &str) -> bool {
@@ -80,7 +80,7 @@ fn ok_on_the_defaults_saves_psd() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let mut h = harness();
         let dir = fixture("defaults");
-        type_into(&mut h, "Input", &dir.to_string_lossy());
+        set(&mut h, "input", json!([dir.join("a.png")]));
         type_into(&mut h, "Output", &dir.join("out").to_string_lossy());
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);
