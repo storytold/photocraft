@@ -23,7 +23,8 @@ fn tolerance_ignores_fully_transparent_samples() {
                 }
             });
             let dab = Dab { x: 1.0, y: 0.5, theta: 0.0, radius: 2.0, pressure: 1.0 };
-            for tolerance in [0.6, 0.3] {
+            // Mean difference 0.4: under the 0.6 x Tolerance threshold at 1.0, over it at 0.3.
+            for tolerance in [1.0, 0.3] {
                 let mut dest = before.clone();
                 let written = stamp(&mut StampParams {
                     dest: &mut dest,
@@ -46,7 +47,7 @@ fn tolerance_ignores_fully_transparent_samples() {
                     alpha: Some(ch - 1),
                 })
                 .unwrap();
-                if tolerance == 0.6 {
+                if tolerance == 1.0 {
                     assert_eq!(written, 0, "channels={ch}, hidden={hidden}");
                     assert_eq!(dest, before);
                 } else {
@@ -377,12 +378,13 @@ fn tolerance_zero_writes_where_history_differs() {
 
 #[test]
 fn tolerance_ignores_unchanged_alpha() {
-    // Colour moved by 0.3 and alpha did not: the 0.25 threshold must not see a 0.225 average.
+    // Colour moved by 0.3 and alpha did not: the 0.27 threshold (Tolerance 45 %) must not see a
+    // 0.225 average.
     let (w, h, ch) = (48usize, 48usize, 4);
     let src = fill(w, h, ch, |_, _, c| if c == 3 { 1.0 } else { 0.6 });
     let dest0 = fill(w, h, ch, |_, _, c| if c == 3 { 1.0 } else { 0.3 });
     let dab = Dab { x: 24.0, y: 24.0, theta: 0.0, radius: 8.0, pressure: 1.0 };
-    for (tolerance, paints) in [(0.25, true), (0.35, false)] {
+    for (tolerance, paints) in [(0.45, true), (0.55, false)] {
         let mut dest = dest0.clone();
         let mut p = StampParams {
             dest: &mut dest,

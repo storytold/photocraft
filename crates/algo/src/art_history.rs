@@ -442,6 +442,7 @@ pub struct StampParams<'a> {
     pub hardness: f32,
     pub opacity: f32,
     pub flow: f32,
+    /// Tolerance as a fraction (Tolerance 50 % is `0.5`).
     pub tolerance: f32,
     /// Destination tile edge; `0` processes the whole buffer as one tile.
     pub tile: i32,
@@ -581,26 +582,41 @@ fn dab_intersects(dab: &Dab, tile: (i32, i32, i32, i32)) -> bool {
     x0 < tile.2 && x1 > tile.0 && y0 < tile.3 && y1 > tile.1
 }
 
-/// Mean difference between `src` and `dest` over the dab's covered pixels (working-space peak is
-/// 1, so a tolerance of 50% is `0.5`). Per pixel it is the larger of the mean colour change and the
-/// alpha change: an opaque pixel's unchanged alpha must not water a colour change down, and the
-/// Eraser keeps the colour and lowers only the alpha. Fully transparent source samples are left
-/// out; a dab whose samples are all transparent has a mean of `0.0`. `None` if nothing is covered.
-fn dab_mean_diff(p: &StampParams<'_>, dab: &Dab) -> Option<f32> {
-    let (x0, y0, x1, y1) = dab_bounds(dab)?;
+/// Radius, in pixels, of the neighbourhood around a stroke's start that Tolerance measures.
+const START_RADIUS: f32 = 2.5;
+
+/// Difference, in working-space units, that 100 % Tolerance asks for. The reference application
+/// starts strokes on a 20-level change (about 8 %) at Tolerance 10 but not 20, and on red over grey
+/// (about 50 %) at 80 but not 90, which a linear threshold of `0.6 × Tolerance` reproduces.
+const TOLERANCE_SCALE: f32 = 0.6;
+
+/// Mean difference between `src` and `dest` around the dab's centre, where its stroke starts
+/// (working-space peak is 1). Per pixel it is the larger of the mean colour change and the alpha
+/// change: an opaque pixel's unchanged alpha must not water a colour change down, and the Eraser
+/// keeps the colour and lowers only the alpha. Fully transparent source samples are left out; a
+/// start whose samples are all transparent has a mean of `0.0`. `None` if nothing is there.
+fn start_diff(p: &StampParams<'_>, dab: &Dab) -> Option<f32> {
+    if !(dab.x.is_finite() && dab.y.is_finite()) {
+        return None;
+    }
+    let x0 = floor_i32(dab.x - START_RADIUS);
+    let y0 = floor_i32(dab.y - START_RADIUS);
+    let x1 = floor_i32(dab.x + START_RADIUS).saturating_add(1);
+    let y1 = floor_i32(dab.y + START_RADIUS).saturating_add(1);
     let mut sampled = vec![0.0f32; p.ch];
     let mut sum = 0.0f32;
     let mut count = 0u32;
     let mut transparent = 0u32;
     for y in y0..y1 {
         for x in x0..x1 {
-            if coverage_at(dab, x, y, p.hardness) <= 0.0 {
+            // The history state at the same position, not the dab's rotated read.
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            if (cx - dab.x).hypot(cy - dab.y) > START_RADIUS {
                 continue;
             }
             let Some(di) = origin_index(p.dest_origin, x, y, p.dest_w, p.dest_h, p.ch) else { continue };
             let Some(dst) = p.dest.get(di..di.saturating_add(p.ch)) else { continue };
-            let (sx, sy) = rotated_source(dab, x, y);
-            if !sample_bilinear(SrcView { data: p.src, w: p.src_w, h: p.src_h, origin: p.src_origin, ch: p.ch, alpha: p.alpha }, sx, sy, &mut sampled) {
+            if !sample_bilinear(SrcView { data: p.src, w: p.src_w, h: p.src_h, origin: p.src_origin, ch: p.ch, alpha: p.alpha }, cx, cy, &mut sampled) {
                 continue;
             }
             let nch = p.ch.min(dst.len()).min(sampled.len());
@@ -636,8 +652,10 @@ fn dab_mean_diff(p: &StampParams<'_>, dab: &Dab) -> Option<f32> {
 
 /// Stamp posed dabs into `dest`, tile by tile, reading `src` at each dab's rotated positions.
 ///
-/// Sequential dabs overlap: dab *n* sees dab *n − 1*. Returns how many destination pixels were
-/// written (tolerance-skipped dabs count as zero).
+/// Sequential dabs overlap: dab *n* sees dab *n − 1*. Tolerance is decided where a dab starts
+/// (around its centre), so a dab that starts on a changed area also paints the unchanged pixels
+/// it reaches. Returns how many destination pixels were written (tolerance-skipped dabs count as
+/// zero).
 pub fn stamp(p: &mut StampParams<'_>) -> Result<u32, StampError> {
     dest_pixels(p)?;
     if p.src_w == 0 || p.src_h == 0 {
@@ -653,9 +671,10 @@ pub fn stamp(p: &mut StampParams<'_>) -> Result<u32, StampError> {
     let tiles = tile_grid(p.dest_w, p.dest_h, p.dest_origin, p.tile);
     let mut written = 0u32;
     let dabs: Vec<Dab> = p.dabs.to_vec();
+    let threshold = p.tolerance * TOLERANCE_SCALE;
     for dab in &dabs {
         let Some(bounds) = dab_bounds(dab) else { continue };
-        if p.tolerance > 0.0 && dab_mean_diff(p, dab).is_some_and(|m| m < p.tolerance) {
+        if p.tolerance > 0.0 && start_diff(p, dab).is_some_and(|m| m < threshold) {
             continue;
         }
         let overlapping: Vec<(i32, i32, i32, i32)> = tiles.iter().copied().filter(|t| dab_intersects(dab, *t)).collect();
@@ -676,3 +695,5 @@ pub fn stamp(p: &mut StampParams<'_>) -> Result<u32, StampError> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tolerance_tests;
