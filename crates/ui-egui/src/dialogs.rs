@@ -1184,6 +1184,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    crate::adjust_dialog::remember_preview(app, &d.fields);
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));
@@ -1210,6 +1211,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    crate::adjust_dialog::remember_preview(app, &closed.fields);
     dont_show_again::closed(app, &closed);
     crate::guide_edit::cancel(app, id);
     // A Color Picker puts back what its live preview showed in its target.

@@ -19,6 +19,9 @@ const CURVE_PICKER: &str = "__curvePicker";
 const CURVE_PICKER_BASE: &str = "__curvePickerBase";
 /// Set once a Photo Filter dialog has drawn: its editor memory was refreshed for this opening.
 const PHOTO_FILTER_FRESH: &str = "__photoFilterFresh";
+const COLOR_BALANCE_MEM: &str = "__colorBalanceDialog";
+const COLOR_BALANCE_PREVIEW: &str = "ui.colorBalancePreview";
+const COLOR_BALANCE_COMMAND: &str = "image.adjustments.colorBalance";
 
 fn picker(value: Option<&Value>) -> Option<photocraft_engine::adjust_params::CurvesEyedropper> {
     use photocraft_engine::adjust_params::CurvesEyedropper;
@@ -286,6 +289,16 @@ pub(crate) fn dialog_mem(kind: &str) -> egui::Id {
     egui::Id::unique(("adjust-dialog", kind))
 }
 
+fn editor_mem(kind: &str, fields: &Map<String, Value>) -> egui::Id {
+    let mem = dialog_mem(kind);
+    if kind == "colorBalance"
+        && let Some(id) = fields.get(COLOR_BALANCE_MEM).and_then(Value::as_u64)
+    {
+        return mem.with(id);
+    }
+    mem
+}
+
 /// Whether holding Alt turns Cancel into Reset for this adjustment dialog (every kind).
 pub fn resets(fields: &Map<String, Value>) -> bool {
     owns(fields)
@@ -315,7 +328,7 @@ pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, 
         fields.insert("preserveLuminosity".into(), p);
     }
     let mut values = crate::filter_dialog::params_of(fields);
-    adjust_editors::reset_adjustment_editor(ctx, &kind, dialog_mem(&kind), &mut values);
+    adjust_editors::reset_adjustment_editor(ctx, &kind, editor_mem(&kind, fields), &mut values);
     if let Value::Object(v) = values {
         fields.extend(v);
     }
@@ -326,7 +339,7 @@ pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, 
 /// the reference application's Photo Filter reopens at Warming Filter (85) and 25 % every time,
 /// but with Preserve Luminosity as last confirmed (measured 2026-11-08, #9879). ⌥ still reopens
 /// at all the last settings ([`open_last`]).
-const KEEPS_LAST: &[(&str, &str)] = &[("photoFilter", "preserveLuminosity")];
+const KEEPS_LAST: &[(&str, &str)] = &[("photoFilter", "preserveLuminosity"), ("colorBalance", "preserveLuminosity")];
 
 /// Opens the dialog for `command` at the kind's neutral settings, except the [`KEEPS_LAST`] ones,
 /// which keep their last confirmed value.
@@ -349,7 +362,12 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
 
 /// Opens a neutral adjustment dialog using the current edit target.
 pub fn open_neutral(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
-    open_with_params(app, command, &json!({}))
+    let params = if command == COLOR_BALANCE_COMMAND { json!({"__preview": color_balance_preview(app)}) } else { json!({}) };
+    open_with_params(app, command, &params)
+}
+
+fn color_balance_preview(app: &PhotocraftApp) -> bool {
+    app.session.prefs().dialogs.get(COLOR_BALANCE_PREVIEW).and_then(Value::as_bool).unwrap_or(true)
 }
 
 /// Seed an Action's dialog only after resolving its recorded target, so document-space
@@ -377,13 +395,39 @@ pub(crate) fn open_smart_filter(app: &mut PhotocraftApp, command: &str, params: 
     let mut fields = seeded_fields(app, command, fields)?;
     let mode = app.session.active()?.doc.mode;
     seed_from_recorded(&mut fields, params, mode);
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
+    Some(open_editor(app, command, fields))
 }
 
 /// Merge target-aware defaults with supplied parameters while preserving trusted modal metadata.
 fn open_fields(app: &mut PhotocraftApp, command: &str, fields: Map<String, Value>) -> Option<u64> {
     let fields = seeded_fields(app, command, fields)?;
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
+    Some(open_editor(app, command, fields))
+}
+
+/// Color Balance's selected tone belongs to this modal instance, including when modals stack.
+fn open_editor(app: &mut PhotocraftApp, command: &str, fields: Map<String, Value>) -> u64 {
+    let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+    if command == COLOR_BALANCE_COMMAND
+        && let Some(dialog) = app.ui.dialog_mut(id)
+    {
+        dialog.fields.insert(COLOR_BALANCE_MEM.into(), json!(id));
+    }
+    id
+}
+
+/// Preview is saved on close independently of whether the adjustment was accepted.
+pub(super) fn remember_preview(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
+    if fields.get("__command").and_then(Value::as_str) != Some(COLOR_BALANCE_COMMAND)
+        || fields.contains_key("__smartFilter")
+        || fields.contains_key(crate::actions::RESUME)
+    {
+        return;
+    }
+    if let Some(preview) = fields.get("__preview").and_then(Value::as_bool)
+        && color_balance_preview(app) != preview
+    {
+        app.session.prefs.edit(|prefs| prefs.dialogs.insert(COLOR_BALANCE_PREVIEW.into(), json!(preview)));
+    }
 }
 
 /// Normalize recorded settings once their target resolves, retaining modal addressing/chrome.
@@ -655,7 +699,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         _ => None,
     };
     let cx = EditorCx {
-        mem: dialog_mem(&kind),
+        mem: editor_mem(&kind, fields),
         hist,
         gray,
         swatches: adjust_editors::swatches(app),
@@ -694,3 +738,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "color_balance_sticky_options_tests.rs"]
+mod color_balance_sticky_options_tests;
