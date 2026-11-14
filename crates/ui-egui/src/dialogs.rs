@@ -1219,6 +1219,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     dont_show_again::closed(app, &closed);
     crate::guide_edit::cancel(app, id);
+    crate::panels::apply_data_set_ui::cancel(app, &closed.fields);
     // A Color Picker puts back what its live preview showed in its target.
     crate::color_picker_ui::live_preview::end(app, id);
     // A field Color Picker of this dialog has no target left: it closes with the dialog.
