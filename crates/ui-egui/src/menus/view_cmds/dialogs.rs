@@ -185,6 +185,18 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.end_row();
                 continue;
             }
+            if k == "mode" && f.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToPdf") {
+                // Artboards to PDF's page mode (#13649): a radio pair, Multi-Page Document first.
+                ui.label("");
+                let mut mode = v.as_str().unwrap_or("multiPage").to_owned();
+                ui.vertical(|ui| {
+                    ui.radio_value(&mut mode, "multiPage".to_owned(), tl!("Multi-Page Document"));
+                    ui.radio_value(&mut mode, "perArtboard".to_owned(), tl!("Document Per Artboard"));
+                });
+                f.insert(k, json!(mode));
+                ui.end_row();
+                continue;
+            }
             if k == "quality" && f.contains_key(JPEG_QUALITY) {
                 ui.label(label(&k));
                 jpeg_quality_field(ui, f);
@@ -514,7 +526,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
+            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10, "mode": "multiPage", "__order": ["path", "quality", "mode"]}), json!({}))
         }
         "file.export.dataSetsAsFiles" => {
             #[cfg(target_arch = "wasm32")]
@@ -765,3 +777,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "artboards_to_pdf_mode_tests.rs"]
+mod artboards_to_pdf_mode_tests;
