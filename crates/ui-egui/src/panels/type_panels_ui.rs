@@ -40,6 +40,9 @@ pub struct TypePanelsUi {
     pub(crate) color_target: Option<color_picker::Target>,
     /// Edit › Check Spelling dialog.
     pub spell: Option<spelling::SpellDialog>,
+    /// Check All Layers as the dialog was last closed in this session; Edit › Check Spelling… opens
+    /// with it when no `allLayers` is given (#14183).
+    pub spell_all_layers: Option<bool>,
 }
 
 /// Edit › Check Spelling… (opens the dialog when run without an `action`), and Character/Paragraph Styles with an
@@ -51,7 +54,13 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         if app.session.active().is_some_and(|st| !photocraft_engine::type_extra_cmds::has_type_layers(&st.doc)) {
             return Some(app.session.execute("edit.checkSpelling", json!({"action": "list"})).map_err(|e| e.to_string()));
         }
-        return Some(open_spelling(app, params.get("allLayers").and_then(Value::as_bool).unwrap_or(true)));
+        // An open dialog keeps its own state. Off needs a layer to check, so without one the
+        // dialog opens on, as before.
+        let p = &app.ui.type_panels;
+        let has_layer = app.session.active().is_some_and(|st| st.active_layer.is_some());
+        let last = p.spell.as_ref().map(|d| d.all_layers).or(p.spell_all_layers).filter(|all| *all || has_layer);
+        let all_layers = params.get("allLayers").and_then(Value::as_bool).or(last).unwrap_or(true);
+        return Some(open_spelling(app, all_layers));
     }
     let paragraph = match id {
         "type.panels.characterStyles" | "window.panel.characterStyles" => false,

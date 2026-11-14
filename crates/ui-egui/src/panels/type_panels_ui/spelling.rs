@@ -117,13 +117,17 @@ pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value,
 /// Done: an action being recorded gets one Check Spelling step with Check All Layers as the dialog
 /// has it, and an action paused at a Check Spelling step continues on the document it was playing
 /// on. When recording the step fails, the status keeps that error with the playback's outcome.
-/// A dialog still open is cancelled through the host, which releases its layers.
+/// A dialog still open is cancelled through the host, which releases its layers. Check All Layers is remembered for
+/// the next open, except from a played step, which has its own.
 pub(crate) fn close_spelling(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.framework.dialogs.is_open::<CheckSpellingDialog>() {
         app.framework.dialogs.cancel::<CheckSpellingDialog>(ctx);
         let _ = app.framework.dialogs.take::<CheckSpellingDialog>();
     }
     let Some(d) = app.ui.type_panels.spell.take() else { return };
+    if d.resume.is_none() {
+        app.ui.type_panels.spell_all_layers = Some(d.all_layers);
+    }
     let mut recording_error = None;
     if app.session.recording.target.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
         recording_error = Some(app.ui.status.clone());
