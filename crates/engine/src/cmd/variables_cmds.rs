@@ -368,11 +368,18 @@ fn csv_records(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Minimal CSV field splitter with double-quote support.
+/// Minimal CSV field splitter with double-quote support. An unquoted field loses the spaces around
+/// it, so a header `Title , Badge` names the variables `Title` and `Badge` (#13930); a quoted one
+/// is kept as it is.
 fn split_csv(line: &str, delim: u8) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_q = false;
+    let mut quoted = false;
+    let field = |cur: &mut String, quoted: bool| {
+        let text = std::mem::take(cur);
+        if quoted { text } else { text.trim_matches(' ').to_string() }
+    };
     let delim = char::from(delim);
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
@@ -389,13 +396,15 @@ fn split_csv(line: &str, delim: u8) -> Vec<String> {
             }
         } else if c == '"' {
             in_q = true;
+            quoted = true;
         } else if c == delim {
-            out.push(std::mem::take(&mut cur));
+            out.push(field(&mut cur, quoted));
+            quoted = false;
         } else {
             cur.push(c);
         }
     }
-    out.push(cur);
+    out.push(field(&mut cur, quoted));
     out
 }
 
@@ -566,6 +575,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "variables_cmds/import_trim_tests.rs"]
+mod import_trim_tests;
 
 #[cfg(test)]
 mod import_enabled_tests;
