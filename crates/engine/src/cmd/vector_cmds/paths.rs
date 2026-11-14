@@ -73,6 +73,16 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
     }))
 }
 
+/// A saved path's name cannot be `layer`: the path commands resolve `"layer"` as the active
+/// layer's shape path or vector mask, so a saved path by that name would be unaddressable (and
+/// the Paths panel's row for it would target the layer), like `work` for path.rename.
+pub(super) fn reject_layer_name(cmd: &str, name: &str) -> Result<()> {
+    if name.eq_ignore_ascii_case("layer") {
+        return Err(bad(cmd, "\"layer\" is reserved for the active layer's path; choose another name"));
+    }
+    Ok(())
+}
+
 /// The tools that override these shared commands' normal History labels with their own name:
 /// Freeform Pen (#12829) and the Line tool (#13244).
 const TOOL_HISTORY_NAMES: [&str; 2] = ["Freeform Pen", "Line Tool"];
@@ -94,6 +104,9 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    if let Some(n) = name.as_deref().filter(|n| !is_work(Some(n))) {
+        reject_layer_name(CMD, n)?;
+    }
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
     let label = pen_history_name(p, CMD, if is_work(name.as_deref()) { "Work Path" } else { "Save Path" })?;
     s.edit(label, |doc, _| {
@@ -347,6 +360,7 @@ pub(super) fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
     if is_work(Some(&to)) {
         return Err(bad(CMD, "`to` cannot name the work path"));
     }
+    reject_layer_name(CMD, &to)?;
     s.edit(if is_work(name.as_deref()) { "Save Path" } else { "Rename Path" }, |doc, _| {
         if doc.paths.iter().any(|q| q.name == to) {
             return Err(EngineError::Other(format!("a path named \"{to}\" already exists")));
