@@ -850,9 +850,8 @@ mod tests {
         let data = crate::testgen::mosaic(&cam, w, [0, 1, 1, 2], 0, 4095);
         let b = crate::testgen::tiff_ep("NIKON CORPORATION", w, h, &data, [0, 1, 1, 2], 12, vec![]);
         let mut s = crate::decode(&b, &crate::Limits::default()).unwrap();
-        // Repeated synthetic patches can look like a saturation plateau to the
-        // metadata-free NEF white-level estimator. This fixture has a known
-        // 12-bit saturation level, matching the JPEG generated below.
+        // The fixture uses a 12-bit encoding scale. craft-raw's NEF reader takes no WhiteLevel
+        // tag and reads the brightest flat, noiseless patch as a saturation plateau.
         s.white = [4095.0; 3];
         let to_srgb = color::invert(&color::srgb_to_xyz_d50()).unwrap();
         let pro_to_srgb = color::mul(&to_srgb, &color::rgb_to_xyz(color::ROMM, color::D50_XY));
