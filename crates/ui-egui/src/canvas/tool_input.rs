@@ -465,7 +465,13 @@ fn bucket_click(app: &mut PhotocraftApp, x: f64, y: f64) {
     use photocraft_engine::paint_cmds::BITMAP_REFUSAL;
     let o = app.ui.tool_options.clone();
     let contents = if o.bucket_fill_pattern { "pattern" } else { "foreground" };
-    let mode = if o.bucket_clear { "clear" } else { o.bucket_blend_mode.label() };
+    let mode = if o.bucket_clear {
+        "clear"
+    } else if o.bucket_behind {
+        "behind"
+    } else {
+        o.bucket_blend_mode.label()
+    };
     let r = app.run("paint.bucket", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.paint_bucket, "opacity": o.fill_opacity, "contents": contents, "mode": mode, "target": paint_target(app)}));
     if r.is_err_and(|e| e == BITMAP_REFUSAL) {
         app.ui.status.clear();

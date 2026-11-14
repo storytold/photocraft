@@ -167,6 +167,8 @@ pub(crate) fn current(app: &PhotocraftApp, tool: Tool) -> Option<Item> {
         Tool::CloneStamp | Tool::HistoryBrush | Tool::Healing => Item::Blend(crate::blend_keys::brush_tool_mode(tool, brush.mode)),
         Tool::Gradient => Item::Blend(o.gradient_blend_mode),
         Tool::PaintBucket if o.bucket_clear => Item::Clear,
+        // This menu has no Behind row for the bucket yet, so no row is checked rather than Normal.
+        Tool::PaintBucket if o.bucket_behind => Item::Behind,
         Tool::PaintBucket => Item::Blend(o.bucket_blend_mode),
         _ => return items(tool).into_iter().find(|i| ui_value(app, *i).is_some_and(|v| v)),
     };
@@ -375,9 +377,13 @@ pub(crate) fn choose(app: &mut PhotocraftApp, ctx: &Context, item: Item) {
         Item::Blend(m) if tool == Tool::Gradient => crate::blend_keys::set_gradient_mode(app, m),
         Item::Blend(m) if tool == Tool::PaintBucket => {
             app.ui.tool_options.bucket_clear = false;
+            app.ui.tool_options.bucket_behind = false;
             app.ui.tool_options.bucket_blend_mode = m;
         }
-        Item::Clear if tool == Tool::PaintBucket => app.ui.tool_options.bucket_clear = true,
+        Item::Clear if tool == Tool::PaintBucket => {
+            app.ui.tool_options.bucket_clear = true;
+            app.ui.tool_options.bucket_behind = false;
+        }
         _ => {}
     }
 }

@@ -221,6 +221,13 @@ fn paint_bucket_mode_reaches_the_fill() {
     click(&mut app);
     assert_eq!(app.session.journal.last().unwrap().1["mode"], "clear");
     assert!(active(&app).surface().unwrap().rgba(20, 20)[3] < 0.01, "cleared");
+    // Behind (#12531) fills the cleared transparency as Normal would.
+    app.ui.tool_options.bucket_clear = false;
+    app.ui.tool_options.bucket_behind = true;
+    click(&mut app);
+    assert_eq!(app.session.journal.last().unwrap().1["mode"], "behind");
+    let px = active(&app).surface().unwrap().rgba(20, 20);
+    assert!(px[0] > 0.98 && px[3] > 0.98, "filled behind: {px:?}");
 }
 
 #[test]

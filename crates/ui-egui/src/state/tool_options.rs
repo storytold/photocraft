@@ -36,6 +36,10 @@ pub struct ToolOptions {
     pub bucket_blend_mode: photocraft_color::BlendMode,
     /// Paint Bucket › Mode: Clear, which erases the filled area (see `brush_clear`).
     pub bucket_clear: bool,
+    /// Paint Bucket › Mode: Behind, which fills only the pixels' transparency (#12531). Picking
+    /// it sets `bucket_blend_mode` to Normal, as the Brush's Behind does; picking any other mode
+    /// leaves it.
+    pub bucket_behind: bool,
     /// Type tool: family, style name, size (pt), anti-aliasing and paragraph alignment.
     pub type_font: String,
     pub type_style: String,
@@ -490,6 +494,7 @@ impl Default for ToolOptions {
             bucket_fill_pattern: false,
             bucket_blend_mode: photocraft_color::BlendMode::Normal,
             bucket_clear: false,
+            bucket_behind: false,
             type_font: "Inter".into(),
             type_style: "Regular".into(),
             type_size: 50.0,

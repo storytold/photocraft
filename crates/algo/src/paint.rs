@@ -5,12 +5,16 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde::{Deserialize, Serialize};
 
-/// How a fill lays down its colour: blended with a mode, or Clear, which erases what it covers
-/// (the Paint Bucket's Mode › Clear).
+/// How a fill lays down its colour: blended with a mode, Clear, which erases what it covers
+/// (the Paint Bucket's Mode › Clear), or Behind, which paints only into the pixels' transparency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FillMode {
     Blend(BlendMode),
     Clear,
+    /// The fill goes under each pixel at `fill α × coverage × (1 − α)`, as the Brush's Behind
+    /// lays it: opaque pixels keep what they have, transparent ones take the fill as in Normal
+    /// (#12531). Locked transparency leaves the layer as it is.
+    Behind,
 }
 
 /// Gradient tool shape.
@@ -93,7 +97,7 @@ fn composite_area(
             for x in r.x0..r.x1 {
                 let mut k = coverage(x, y);
                 let on_rim = match rim {
-                    Some(rim) if k <= 0.0 && !lock_transparency && matches!(mode, FillMode::Blend(_)) => rim(x, y),
+                    Some(rim) if k <= 0.0 && !lock_transparency && matches!(mode, FillMode::Blend(_) | FillMode::Behind) => rim(x, y),
                     _ => 0.0,
                 };
                 if k <= 0.0 && on_rim <= 0.0 {
@@ -119,12 +123,14 @@ fn composite_area(
                     // Locked transparency keeps the alpha, so Clear leaves the pixel as it is.
                     FillMode::Clear if lock_transparency => d,
                     FillMode::Clear => [d[0], d[1], d[2], d[3] * (1.0 - k.min(1.0))],
+                    FillMode::Behind if lock_transparency => d,
+                    FillMode::Behind => behind(d, color(x, y), k),
                 };
                 from_rgba_into(&fmt, o, &mut enc);
                 // A colour picked as CMYK inks replaces fully covered pixels of a CMYK target as it is.
                 if let Some(i) = inks
                     && fmt.mode == photocraft_color::ColorMode::Cmyk
-                    && mode == FillMode::Blend(BlendMode::Normal)
+                    && (mode == FillMode::Blend(BlendMode::Normal) || (mode == FillMode::Behind && d[3] <= 0.0))
                     && k >= 1.0
                 {
                     enc[..4].copy_from_slice(&i);
@@ -144,6 +150,19 @@ fn composite_area(
     for (r, region) in done {
         s.write_region(r, &region);
     }
+}
+
+/// [`FillMode::Behind`] for one pixel: `src` laid under `d` at coverage `k`, with the Brush's
+/// Behind formula (`photocraft_paint`'s render): the fill's share is `src α × k × (1 − d α)`.
+fn behind(d: [f32; 4], src: [f32; 4], k: f32) -> [f32; 4] {
+    let da = d[3].clamp(0.0, 1.0);
+    let underneath = src[3].clamp(0.0, 1.0) * k.clamp(0.0, 1.0) * (1.0 - da);
+    let alpha = da + underneath;
+    if da >= 1.0 || alpha <= 0.0 || alpha.is_nan() {
+        return d;
+    }
+    let mix = |c: usize| (d[c] * da + src[c] * underneath) / alpha;
+    [mix(0), mix(1), mix(2), alpha]
 }
 
 /// Gradient tool over `area` (the selection bounds or canvas).
@@ -312,7 +331,7 @@ fn fill_region(
     // The ring is only ever read for an unlocked Blend fill (see composite_area), and it is
     // empty when the region covers every pixel, so do not build it in those cases: on a large
     // canvas it is a bool per pixel plus a full scan of the mask.
-    let use_rim = rim && !lock_transparency && matches!(mode, FillMode::Blend(_)) && region.mask.contains(&0);
+    let use_rim = rim && !lock_transparency && matches!(mode, FillMode::Blend(_) | FillMode::Behind) && region.mask.contains(&0);
     let ring = if use_rim { rim_ring(region) } else { Vec::new() };
     let on_ring = |x: i32, y: i32| {
         let at = usize::try_from(y - b.y0).ok().zip(usize::try_from(x - b.x0).ok()).filter(|_| b.contains(x, y));

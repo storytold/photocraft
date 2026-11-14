@@ -496,7 +496,7 @@ fn lasso_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// Selection and paint tools expose their controls as a family of options rows.
-fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, _tool: Tool) {
     match app.ui.tool {
         Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {
             marquee_options(app, ui);
@@ -526,14 +526,23 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 app.ui.tool_options.bucket_fill_pattern = src == 1;
             }
             opt_label(ui, tl!("Mode"));
-            if let Some(modes) = crate::blend_keys::tool_modes(tool) {
-                let o = &mut app.ui.tool_options;
-                let current = if o.bucket_clear { None } else { Some(o.bucket_blend_mode) };
-                if let Some(m) = tool_mode_dropdown(ui, "bucket-mode", &modes, current, false) {
-                    o.bucket_clear = m.is_none();
-                    if let Some(m) = m {
-                        o.bucket_blend_mode = m;
-                    }
+            // Behind and Clear are greyed on the Background, as in the Shift+right-click menu (#12531).
+            let special = crate::brush_mode_menu::enabled(app, crate::brush_mode_menu::Item::Behind);
+            let o = &mut app.ui.tool_options;
+            let current = if o.bucket_clear {
+                (None, false)
+            } else if o.bucket_behind {
+                (None, true)
+            } else {
+                (Some(o.bucket_blend_mode), false)
+            };
+            if let Some(m) = super::brush_controls::bucket_mode_dropdown(ui, "bucket-mode", current, special) {
+                o.bucket_clear = m == (None, false);
+                o.bucket_behind = m.1;
+                match m {
+                    (Some(mode), _) => o.bucket_blend_mode = mode,
+                    (None, true) => o.bucket_blend_mode = BlendMode::Normal,
+                    (None, false) => {}
                 }
             }
             opt_label(ui, tl!("Opacity"));

@@ -148,15 +148,30 @@ fn the_pattern_stamp_mode_reads_threshold_in_an_indexed_document() {
     assert!(combo(&h, "Threshold").is_some());
 }
 
-/// The Paint Bucket's Mode dropdown has Clear after Dissolve, as the Brush's does.
+/// The Paint Bucket's Mode dropdown has Behind and Clear after Dissolve, as the Brush's does; on
+/// the Background both are greyed and the wheel steps past them (#12531).
 #[test]
-fn the_paint_bucket_mode_dropdown_has_clear() {
+fn the_paint_bucket_mode_dropdown_has_behind_and_clear() {
     let mut h = harness(Tool::PaintBucket);
+    let at = mode_dropdown(&h).center();
+    // The new document's Background is active.
+    wheel(&mut h, at, -1.0);
+    assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Dissolve);
+    wheel(&mut h, at, -1.0);
+    assert!(!h.state().ui.tool_options.bucket_behind && !h.state().ui.tool_options.bucket_clear, "greyed on the Background");
+    assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Darken);
+
+    let mut h = harness(Tool::PaintBucket);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(4);
     let at = mode_dropdown(&h).center();
     wheel(&mut h, at, -1.0);
     assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Dissolve);
     wheel(&mut h, at, -1.0);
-    assert!(h.state().ui.tool_options.bucket_clear);
+    assert!(h.state().ui.tool_options.bucket_behind);
+    assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Normal);
+    wheel(&mut h, at, -1.0);
+    assert!(h.state().ui.tool_options.bucket_clear && !h.state().ui.tool_options.bucket_behind);
     wheel(&mut h, at, -1.0);
     assert!(!h.state().ui.tool_options.bucket_clear);
     assert_eq!(h.state().ui.tool_options.bucket_blend_mode, BlendMode::Darken);
