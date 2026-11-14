@@ -2179,6 +2179,11 @@ live_coordinate_regression!(
 fn live_dodge_matches_the_commit_across_cells() {
     let mut s = session(200, 90, 32, "rgb");
     paint_layer(&mut s, texture);
+    // About the cells' summation order, not smoothing: the live stroke is compared before its
+    // release, and with the brush's default smoothing lag (#11888) the commit's end catch-up runs
+    // from the trailing brush along most of the last segment. Live against commit with smoothing
+    // is the hand-off tests' "smoothing" case.
+    s.tools.brush.smoothing.enabled = false;
     let all = [[10.0, 40.0], [100.0, 60.0], [180.0, 40.0], [60.0, 30.0], [150.0, 70.0]];
     let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
     let opts = |p: &[[f64; 2]]| json!({"points": p, "size": 40, "hardness": 30, "exposure": 60, "range": "midtones"});
@@ -2308,7 +2313,7 @@ fn live_dab_batches_match_the_accumulating_renderer() {
         });
         let id = s.active().unwrap().active_layer.unwrap();
         let pre = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
-        for case in ["soft", "hard", "sampled", "dynamics", "smoothing"] {
+        for case in ["soft", "hard", "sampled", "dynamics", "smoothing", "smoothing_catch_up"] {
             s.tools.brush = BrushSettings::default();
             match case {
                 "sampled" => s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(9, 7, |x, y| ((x * 3 + y) % 11) as f32 / 10.0)),
@@ -2329,6 +2334,10 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                     b.texture.pattern = photocraft_paint::Pattern::Tile(GrayTile::from_fn(3, 3, |x, y| (x + y) as f32 / 4.0));
                 }
                 "smoothing" => s.tools.brush.smoothing.amount = 0.65,
+                "smoothing_catch_up" => {
+                    s.tools.brush.smoothing.amount = 0.65;
+                    s.tools.brush.smoothing.catch_up_on_end = true;
+                }
                 _ => {}
             }
             let points = [
