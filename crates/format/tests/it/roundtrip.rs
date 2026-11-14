@@ -696,7 +696,12 @@ fn directory_save_rejects_manifest_symlink_without_overwriting_target() {
     assert!(PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).is_err());
     assert_eq!(std::fs::read(&external_manifest).unwrap(), b"keep manifest");
     // Refused before any object is written: `tiles/` is missing or empty.
-    assert_eq!(std::fs::read_dir(dir.join("tiles")).map_or(0, |entries| entries.count()), 0);
+    let tile_count = match std::fs::read_dir(dir.join("tiles")) {
+        Ok(entries) => entries.count(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => panic!("could not inspect the refused save's tiles: {error}"),
+    };
+    assert_eq!(tile_count, 0);
 
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(outside).unwrap();
