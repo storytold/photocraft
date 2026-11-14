@@ -770,6 +770,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let mut called_name = None;
+    let mut called_key: Option<(String, Option<String>)> = None;
     let mut steps = if let Some(st) = p.get("steps") {
         parse_steps(st)?
     } else if let Some(act) = p.get("action").filter(|v| v.is_array()) {
@@ -779,13 +780,14 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let index = batch_action(&s.actions.list, p)?;
         let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
         called_name = Some(action.name.clone());
+        called_key = Some((action.name.clone(), action.set.clone()));
         action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
     };
     let action_name = s
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().cloned())
+        .or_else(|| s.actions.playback_stack.first().map(|(name, _)| name.clone()))
         .or_else(|| called_name.clone())
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
@@ -849,7 +851,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut playback_stack = s.actions.playback_stack.clone();
-    playback_stack.extend(called_name);
+    // The Batch's own action joins the stack as its `(name, set)`, so a step calling back into it
+    // is the cycle it looks like while a same-named child of another set is not (#11523).
+    playback_stack.extend(called_key);
     let actions = crate::actions_cmds::ActionState {
         list,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },

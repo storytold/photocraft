@@ -153,9 +153,11 @@ pub struct ActionState {
     /// Nesting depth of `actions.play`, bounded by the playback stack limit.
     #[serde(skip)]
     pub playing: u8,
-    /// Active action names, for cycle detection in engine and desktop playback.
+    /// The calls in flight, each its target's `(name, set)`, for cycle detection in engine and
+    /// desktop playback: one set's child calling another set's child of the same name is not a
+    /// cycle, so the set the call resolved against belongs in the key (#11523).
     #[serde(skip)]
-    pub playback_stack: Vec<String>,
+    pub playback_stack: Vec<(String, Option<String>)>,
     /// Number of steps executed by the current top-level playback tree.
     #[serde(skip)]
     pub playback_steps: u64,
@@ -341,7 +343,9 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
     if s.actions.playing > 0 && s.actions.playback_stack.is_empty() {
         return Err(bad("actions.play", "an action is already playing"));
     }
-    let idx = resolve(&s.actions.list, p, "actions.play")?;
+    // A recorded call resolves in the set it names, so the budget below is charged to the action
+    // that call actually means and not to a same-named child of another set (#11523).
+    let idx = resolve_call(&s.actions.list, p, "actions.play")?;
     // Every stored step of the call is charged to the playback tree (run, disabled or skipped),
     // so refuse a call whose steps no longer fit before copying it: repeated calls to a large
     // action would otherwise copy and walk it each time for free.
@@ -351,7 +355,9 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
         return Err(EngineError::BatchLimit(format!("invalid parameters for `actions.play`: action playback exceeded the {MAX_PLAYBACK_STEPS}-step limit")));
     }
     let action = s.actions.list.get(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
-    if s.actions.playback_stack.iter().any(|name| name == &action.name) || s.actions.recording.is_some_and(|(_, i)| i == idx) {
+    if s.actions.playback_stack.iter().any(|(name, set)| name == &action.name && set.as_deref() == action.set.as_deref())
+        || s.actions.recording.is_some_and(|(_, i)| i == idx)
+    {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
     }
     if s.actions.playback_stack.len() >= 16 {
@@ -426,7 +432,7 @@ pub(crate) fn shift_action_calls(list: &mut [Action], at: usize, count: usize) {
 pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Action> {
     /// Resolve in the current namespace before capture rewrites the reference.
     fn target(list: &[Action], params: &Value, id: &str) -> Result<usize> {
-        if id == "file.automate.batch" { crate::file_cmds::batch_action(list, params) } else { resolve(list, params, id) }
+        if id == "file.automate.batch" { crate::file_cmds::batch_action(list, params) } else { resolve_call(list, params, id) }
     }
     /// Capture ordinary calls transitively, but retain an untouched source for scoped named Batch.
     fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut VecDeque<(usize, usize)>, scoped: &mut BTreeSet<usize>) {
@@ -525,6 +531,16 @@ pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Act
         {
             params["action"] = json!(final_len);
         }
+        // The same for a call qualified with an action set that could not be resolved here - its
+        // set holds no such child, or two children of the renamed form: the exported list may keep
+        // only one of the candidates, and picking one would play steps nobody chose. It stays a
+        // failure naming a target past the end, as a missing numeric target does.
+        if !scoped && params.get("set").is_some_and(|set| !set.is_null()) && params.get("action").is_some_and(Value::is_string) {
+            params["action"] = json!(final_len);
+            if let Some(object) = params.as_object_mut() {
+                object.remove("set");
+            }
+        }
     };
     visit_calls(steps, &mut remap);
     for action in &mut found {
@@ -563,6 +579,56 @@ pub(crate) fn resolve(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
         Some(_) => Err(bad(cmd, "action name is empty")),
         None => Err(bad(cmd, "\"action\" must be a name or an index")),
     }
+}
+
+/// Resolve the target of a recorded call (`actions.play`, a droplet's captured Play step).
+///
+/// A call qualified with an action set resolves inside that set and nowhere else: a loaded
+/// library can hold one child name in two sets, and reaching the other set's action silently
+/// plays the wrong steps (#11523). A child the loader renamed is still found in its own set; a set
+/// holding no such child is an error, as Photoshop reports it, not a fallback to a same-named
+/// action elsewhere. A malformed qualifier is refused the same way: falling back to the name alone
+/// is exactly how a call ends up in the wrong set. Only an absent (or null) `set` keeps the
+/// unqualified lookup the Actions panel and a recorded call use, and a call by list index resolves
+/// as before.
+pub(crate) fn resolve_call(list: &[Action], p: &Value, cmd: &str) -> Result<usize> {
+    let set = match p.get("set") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(set)) if !set.is_empty() => Some(set.clone()),
+        Some(Value::String(_)) => return Err(bad(cmd, "\"set\" is empty; leave it out to call the action by name alone")),
+        Some(_) => return Err(bad(cmd, "\"set\" must be an action set name or null")),
+    };
+    let Some(set) = set else { return resolve(list, p, cmd) };
+    // An index names one row of the list outright: no set can move it.
+    if p.get("action").is_some_and(|v| num(v).is_some()) {
+        return resolve(list, p, cmd);
+    }
+    let Some(name) = p.get("action").and_then(Value::as_str) else {
+        return Err(bad(cmd, format!("\"set\" `{set}` needs a named \"action\"")));
+    };
+    if name.is_empty() {
+        return Err(bad(cmd, "action name is empty"));
+    }
+    qualified_target(list, name, &set).ok_or_else(|| bad(cmd, format!("no action named `{name}` in set `{set}`")))
+}
+
+/// The action a call qualified with an action set means: that set's child of this name, or, when a
+/// Load Actions name collision renamed the child, the set's one child whose name is that rename
+/// (`"Child 2"` of `"Child"`). The set is the truth, whatever the loaded name became (#11523); a set
+/// holding no such child, or two children of the renamed form, gives `None` so the call is reported.
+pub(crate) fn qualified_target(list: &[Action], name: &str, set: &str) -> Option<usize> {
+    let in_set = |a: &Action| a.set.as_deref() == Some(set);
+    if let Some(index) = list.iter().position(|a| in_set(a) && a.name == name) {
+        return Some(index);
+    }
+    let mut hits = list.iter().enumerate().filter(|(_, a)| in_set(a) && is_renamed_form(&a.name, name)).map(|(i, _)| i);
+    let first = hits.next()?;
+    hits.next().is_none().then_some(first)
+}
+
+/// Whether `child` is `name` with a Load Actions suffix: `"Child 2"` is a renamed `"Child"`.
+fn is_renamed_form(child: &str, name: &str) -> bool {
+    child.strip_prefix(name).and_then(|rest| rest.strip_prefix(' ')).and_then(|suffix| suffix.parse::<u32>().ok()).is_some_and(|n| n >= 2)
 }
 
 fn from_step(p: &Value, len: usize) -> Result<usize> {
@@ -865,7 +931,7 @@ pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Res
     }
     let recording = s.actions.recording.take();
     s.actions.playing = s.actions.playing.saturating_add(1);
-    s.actions.playback_stack.push(action.name.clone());
+    s.actions.playback_stack.push((action.name.clone(), action.set.clone()));
     Ok(recording)
 }
 
@@ -877,16 +943,24 @@ pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, actio
         history::finish_playback(s);
     }
     if let Some((_, idx)) = recording {
-        restore_recording(s, idx, &action.name, from);
+        restore_recording(s, idx, &action.name, action.set.as_deref(), from);
     }
 }
 
 /// Resume recording into action `idx` and journal the named call that suspended it.
-pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize) {
+///
+/// The call keeps its action set when the library holds one name in two sets: recorded without the
+/// qualifier it could replay the other set's child after the recording (#11523). A name no other
+/// action shares is journaled bare, as it always was, so a recording does not grow a qualifier that
+/// says nothing.
+pub fn restore_recording(s: &mut Session, idx: usize, action: &str, set: Option<&str>, from: usize) {
     s.actions.recording = Some((s.journal.len(), idx));
     let mut params = json!({"action": action});
     if from > 0 {
         params["from"] = json!(from);
+    }
+    if let Some(set) = set.filter(|set| !set.is_empty()).filter(|_| s.actions.list.iter().filter(|a| a.name == action).count() > 1) {
+        params["set"] = json!(set);
     }
     s.journal.push(("actions.play".into(), params));
 }
@@ -1149,8 +1223,15 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     let by_name = resolve(&before, &json!({"action": old}), "actions.rename").ok() == Some(idx);
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
     for (id, params) in calls {
+        // A Play call that reached this action takes the new name. The name the call recorded need
+        // not be the action's current one: a `.atn` call names the child the file gave it, and the
+        // load renamed it to keep names unique, so the call is followed by what it resolves to and
+        // not by matching text (#11523). A call by list index names the row outright and stays.
+        if id == "actions.play" && params.get("action").is_some_and(Value::is_string) && resolve_call(&before, params, "actions.rename").ok() == Some(idx) {
+            params["action"] = json!(name);
+            continue;
+        }
         let keys: &[&str] = match id.as_str() {
-            "actions.play" if by_name => &["action"],
             "actions.conditional" if by_name => &["then", "else"],
             // A named Batch selects from the caller's list, by name alone or within its set;
             // explicit `steps` run instead of any named action, so those are left alone.
@@ -1333,7 +1414,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Play Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and groups document edits in one Action: <name> history entry by default; actions.setHistory can retain per-step history. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
+            params: r##"{"action":name|index, "set":name?, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. A "set" qualifies the name: the call plays that action set's child and fails when the set holds no action of that name, rather than reaching a same-named child of another set; a "set" that is not a name, or an empty one, is refused instead of ignored; a numeric "action" names a row of the list outright. Stops at the first error (the command still returns ok, with failed set) and groups document edits in one Action: <name> history entry by default; actions.setHistory can retain per-step history. Nested calls are supported up to 16 levels; a cycle (the same name and set already playing) is rejected. Recording stores a named call rather than its expanded commands, with its set when the library holds that name in two sets. Each step is checked with Session::authorize when one is installed."##,
             enabled: always,
             run: play,
             journal: false,

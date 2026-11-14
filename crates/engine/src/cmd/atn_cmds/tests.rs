@@ -508,6 +508,142 @@ fn load_renames_play_targets_longer_than_the_name_limit() {
     assert_eq!(caller.steps[0].1["action"], renamed.as_str());
 }
 
+/// #11523: the report's three sets, as the reference application serializes them. Red and Blue each
+/// hold a `Child` filling with their own colour; Runner's `Outer` plays `Child` **in Blue**, and its
+/// reference carries both the `Actn` child name and the `ASet` set name. Action Manager descriptors
+/// in a v16 `.atn` envelope, base64'd — the issue's own files (sha256 `3a13e0a1…`, `5e5233e8…`,
+/// `c4ac8a1e…`), so these are the bytes the report played.
+const RED_ATN: &str = "AAAAEAAAABwAQQBUAE4AUABhAHIAaQB0AHkAXwBSAGUAZABfADEANwA5ADMAOQAwADEANgA0ADAAMAA5ADYAAAEAAAABAAAAAAAAAAAABgBDAGgAaQBsAGQAAAEAAAABAAEAAFRFWFQAAAAEZmlsbAAAAARmaWxs/////wAAAAEAAAAAAABudWxsAAAABAAAAABVc25nZW51bQAAAABGbENuAAAAAENsciAAAAAAQ2xyIE9iamMAAAABAAAAAAAAUkdCQwAAAAMAAAAAUmQgIGRvdWJAb+AAAAAAAAAAAABHcm4gZG91YgAAAAAAAAAAAAAAAEJsICBkb3ViAAAAAAAAAAAAAAAAT3BjdFVudEYjUHJjQFkAAAAAAAAAAAAATWQgIGVudW0AAAAAQmxuTQAAAAZub3JtYWw=";
+const BLUE_ATN: &str = "AAAAEAAAAB0AQQBUAE4AUABhAHIAaQB0AHkAXwBCAGwAdQBlAF8AMQA3ADkAMwA5ADAAMQA2ADQAMAAwADkANgAAAQAAAAEAAAAAAAAAAAAGAEMAaABpAGwAZAAAAQAAAAEAAQAAVEVYVAAAAARmaWxsAAAABGZpbGz/////AAAAAQAAAAAAAG51bGwAAAAEAAAAAFVzbmdlbnVtAAAAAEZsQ24AAAAAQ2xyIAAAAABDbHIgT2JqYwAAAAEAAAAAAABSR0JDAAAAAwAAAABSZCAgZG91YgAAAAAAAAAAAAAAAEdybiBkb3ViAAAAAAAAAAAAAAAAQmwgIGRvdWJAb+AAAAAAAAAAAABPcGN0VW50RiNQcmNAWQAAAAAAAAAAAABNZCAgZW51bQAAAABCbG5NAAAABm5vcm1hbA==";
+const RUNNER_ATN: &str = "AAAAEAAAAB8AQQBUAE4AUABhAHIAaQB0AHkAXwBSAHUAbgBuAGUAcgBfADEANwA5ADMAOQAwADEANgA0ADAAMAA5ADYAAAEAAAABAAAAAAAAAAAABgBPAHUAdABlAHIAAAEAAAABAAEAAFRFWFQAAAAEcGxheQAAAARwbGF5/////wAAAAEAAAAAAABudWxsAAAAAQAAAABudWxsb2JqIAAAAAJuYW1lAAAAAQAAAAAAAEFjdG4AAAAGAEMAaABpAGwAZAAAbmFtZQAAAAEAAAAAAABBU2V0AAAAHQBBAFQATgBQAGEAcgBpAHQAeQBfAEIAbAB1AGUAXwAxADcAOQAzADkAMAAxADYANAAwADAAOQA2AAA=";
+const RED_SET: &str = "ATNParity_Red_1793901640096";
+const BLUE_SET: &str = "ATNParity_Blue_1793901640096";
+
+/// The set qualifier of a Play step survives the import, so `Outer` plays the Blue child in either
+/// load order: the Red-first order renames the Blue child to `Child 2`, and the call still reaches
+/// it instead of the Red child of the same name (#11523).
+#[test]
+fn a_play_step_qualified_with_another_set_targets_that_sets_child() {
+    for order in [[RED_ATN, BLUE_ATN], [BLUE_ATN, RED_ATN]] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+        for data in order {
+            let r = s.execute("actions.load", json!({"data": data})).unwrap();
+            assert_eq!(r["unsupported"], json!([]), "{r}");
+            assert_eq!(r["warnings"], json!([]), "{r}");
+        }
+        let r = s.execute("actions.load", json!({"data": RUNNER_ATN})).unwrap();
+        assert_eq!(r["unsupported"], json!([]), "{r}");
+        assert_eq!(r["warnings"], json!([]), "{r}");
+
+        let outer = s.actions.list.iter().find(|a| a.name == "Outer").unwrap();
+        assert_eq!(outer.steps, [("actions.play".to_string(), json!({"action": "Child", "set": BLUE_SET}))]);
+        let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+        assert!(played.get("failed").is_none(), "{order:?}: {played}");
+        assert_eq!(pixel(&mut s), [0.0, 0.0, 1.0, 1.0], "{order:?}: Outer must play the Blue child");
+
+        // The direct controls keep working: each child fills with its own colour, and the
+        // unqualified call still reaches the child the first load left under the plain name.
+        let red_first = order[0] == RED_ATN;
+        let (red, blue) = ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]);
+        let controls = if red_first { [("Child", RED_SET, red), ("Child 2", BLUE_SET, blue)] } else { [("Child", BLUE_SET, blue), ("Child 2", RED_SET, red)] };
+        for (action, set, want) in controls {
+            for params in [json!({"action": action}), json!({"action": action, "set": set})] {
+                s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+                let played = s.execute("actions.play", params.clone()).unwrap();
+                assert!(played.get("failed").is_none(), "{order:?} {params}: {played}");
+                assert_eq!(pixel(&mut s), want, "{order:?} {params}");
+            }
+        }
+    }
+}
+
+/// A Play step whose set the session does not hold is reported when its file loads, and playback
+/// says which qualified action it could not find instead of playing a same-named child of the Red
+/// set (#11523). Loading the set it asked for makes the very same step play the Blue child.
+#[test]
+fn a_play_step_naming_an_unloaded_set_is_reported() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+    s.execute("actions.load", json!({"data": RED_ATN})).unwrap();
+    let r = s.execute("actions.load", json!({"data": RUNNER_ATN})).unwrap();
+    let warnings = r["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.contains("Child") && w.contains(BLUE_SET))), "{r}");
+    let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+    let error = played["failed"]["error"].as_str().unwrap_or_default();
+    assert!(error.contains("Child") && error.contains(BLUE_SET), "{played}");
+    assert_eq!(pixel(&mut s), [1.0, 1.0, 1.0, 1.0], "an unresolvable call plays nothing, not the Red child");
+
+    s.execute("actions.load", json!({"data": BLUE_ATN})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(pixel(&mut s), [0.0, 0.0, 1.0, 1.0]);
+}
+
+/// A Play step qualified with the file's own set names a child that set does not hold, while
+/// another loaded set has a child of that name: the step must not play the other set's action. The
+/// load reports the lost target and playback refuses it (#11523).
+#[test]
+fn a_play_step_naming_a_missing_child_of_its_own_set_does_not_play_another_sets_child() {
+    // A `set` override renames the set the file's actions land in; the lost target is still the
+    // set's, not an unloaded one.
+    for (over, set) in [(None, "Own"), (Some("Renamed"), "Renamed")] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+        s.execute("actions.load", json!({"data": RED_ATN})).unwrap();
+        let caller = Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "Child", "set": "Own"}))], ..Default::default() };
+        let (bytes, _) = export("Own", &[&caller], &[], false).unwrap();
+        let params = match over {
+            Some(name) => json!({"data": b64(&bytes), "set": name}),
+            None => json!({"data": b64(&bytes)}),
+        };
+        let r = s.execute("actions.load", params).unwrap();
+        let warnings: Vec<&str> = r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        assert!(warnings.iter().any(|w| w.contains("Child") && w.contains(set) && w.contains("does not hold")), "{r}");
+        let played = s.execute("actions.play", json!({"action": "Outer"})).unwrap();
+        let error = played["failed"]["error"].as_str().unwrap_or_default();
+        assert!(error.contains("Child") && error.contains(set), "{played}");
+        assert_eq!(pixel(&mut s), [1.0, 1.0, 1.0, 1.0], "an unresolvable call plays nothing, not the Red child");
+    }
+}
+/// The same step with the child present in its own set keeps the bare form and plays that child,
+/// whichever other set holds a child of the name.
+#[test]
+fn a_play_step_naming_a_child_of_its_own_set_stays_bare_and_plays_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
+    s.execute("actions.load", json!({"data": RED_ATN})).unwrap();
+    let child = Action { name: "Child".into(), steps: vec![("image.adjustments.invert".into(), json!({}))], ..Default::default() };
+    let caller = Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "Child", "set": "Own"}))], ..Default::default() };
+    let (bytes, _) = export("Own", &[&child, &caller], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    assert_eq!(r["warnings"], json!([]), "{r}");
+    let outer = s.actions.list.iter().find(|a| a.name == "Outer").unwrap();
+    assert_eq!(outer.steps, [("actions.play".to_string(), json!({"action": "Child 2"}))]);
+}
+/// The load warning tells the two reasons apart: a set the session has not loaded at all, and a
+/// loaded set that simply does not hold the child the call names (#11523).
+#[test]
+fn a_play_step_warning_names_whether_the_set_or_the_child_is_missing() {
+    let warnings_of =
+        |r: &Value| r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
+
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": BLUE_ATN})).unwrap();
+    let caller =
+        Action { name: "Outer".into(), steps: vec![("actions.play".into(), json!({"action": "No such child", "set": BLUE_SET}))], ..Default::default() };
+    let (bytes, _) = export("ATNParity_Other", &[&caller], &[], false).unwrap();
+    let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    let warnings = warnings_of(&r);
+    assert!(warnings.iter().any(|w| w.contains("does not hold") && w.contains("No such child")), "{r}");
+    assert!(!warnings.iter().any(|w| w.contains("not loaded")), "{r}: the set is loaded");
+
+    let mut t = Session::new();
+    let r = t.execute("actions.load", json!({"data": RUNNER_ATN})).unwrap();
+    let warnings = warnings_of(&r);
+    assert!(warnings.iter().any(|w| w.contains("is not loaded") && w.contains(BLUE_SET)), "{r}");
+}
+
 /// The `set` override is copied into every loaded action, so it is held to the same limit as a
 /// set name read from the file.
 #[test]
@@ -3060,10 +3196,12 @@ fn partial_play_action_is_not_exported_as_whole_action_call() {
     assert_eq!(skipped, vec![Skipped { action: "Parent".into(), step: 0, id: "actions.play".into() }]);
     for params in [json!({"action": "Child"}), json!({"action": "Child", "from": 0})] {
         let whole = Action { name: "Parent".into(), steps: vec![("actions.play".into(), params)], ..Default::default() };
-        let (bytes, skipped) = export("Set", &[&whole], &[], false).unwrap();
+        // The called action is in the file, so the call keeps its bare form (#11523).
+        let child = Action { name: "Child".into(), ..Default::default() };
+        let (bytes, skipped) = export("Set", &[&child, &whole], &[], false).unwrap();
         assert!(skipped.is_empty());
         let imported = import(&bytes).unwrap();
-        assert_eq!(imported.actions[0].steps, vec![("actions.play".to_string(), json!({"action": "Child"}))]);
+        assert_eq!(imported.actions[1].steps, vec![("actions.play".to_string(), json!({"action": "Child"}))]);
     }
 }
 

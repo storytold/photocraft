@@ -109,6 +109,21 @@ pub(super) fn target(r: &[ReferenceItem]) -> Target {
     }
 }
 
+/// The action a Play Action or named Batch reference points at: the child's name and, when
+/// Photoshop recorded the qualifier, its action set (`Actn`, then `ASet`). Anything else
+/// (an ordinal, an index, another class) is not an action call.
+pub(super) fn action_reference(items: &[ReferenceItem]) -> Option<(String, Option<String>)> {
+    match items {
+        [ReferenceItem::Name { class: action, name }] if action.class_id.is("Actn") => Some((name.to_string_lossy(), None)),
+        [ReferenceItem::Name { class: action, name }, ReferenceItem::Name { class: set, name: set_name }]
+            if action.class_id.is("Actn") && set.class_id.is("ASet") =>
+        {
+            Some((name.to_string_lossy(), Some(set_name.to_string_lossy())))
+        }
+        _ => None,
+    }
+}
+
 /// `{"layer": name}` for a reference that names a layer, `{}` for the target layer, `None`
 /// for anything else (an index: meaningless in another document). A layer id reference
 /// (`Idnt`) comes back as the id the engine's `layer` param takes.
