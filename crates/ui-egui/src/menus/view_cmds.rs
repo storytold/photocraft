@@ -20,10 +20,10 @@ mod options;
 
 pub use arrange::{Border, borders, cells, drag_border};
 pub(crate) use arrange::{document_is_floating, float_window};
-pub(crate) use dialogs::write_copy;
 #[cfg(test)]
 use dialogs::{form, front, label_of};
 pub use dialogs::{form_body, form_keys, reset_form};
+pub(crate) use dialogs::{remember_artboard_export_options, write_copy};
 #[cfg(test)]
 use dispatch::is_enabled_with_engine;
 pub use dispatch::{checked, handles, invoke, is_enabled, leave_full_screen_without_document};

@@ -1,5 +1,6 @@
-//! #11481: File › Export › Artboards to Files (and Layers / Layer Comps to Files) has a JPEG
-//! Quality field behind a Custom checkbox, as Batch has (#3956). The quality reaches the command
+//! #11481: File › Export › Layers / Layer Comps to Files have a JPEG Quality field behind a
+//! Custom checkbox, as Batch has (#3956). Artboards to Files has its quality in its Export
+//! Options instead (#13636, `artboards_export_options_dialog_tests`). The quality reaches the command
 //! only for a JPEG with Custom on: left alone, an export writes what the command writes with no
 //! quality (the source JPEG's own quality, else the encoder default), a WebP stays lossless and
 //! PNG has none.
@@ -10,8 +11,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
-const ARTBOARDS: &str = "file.export.artboardsToFiles";
-const EXPORTS: [&str; 3] = [ARTBOARDS, "file.export.layersToFiles", "file.export.layerCompsToFiles"];
+const COMPS: &str = "file.export.layerCompsToFiles";
+const EXPORTS: [&str; 2] = [COMPS, "file.export.layersToFiles"];
 
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
@@ -56,7 +57,7 @@ fn direct(h: &mut Harness<'_, PhotocraftApp>, dir: &str, format: &str, quality: 
     if let Some(q) = quality {
         p["quality"] = json!(q);
     }
-    let r = h.state_mut().run(ARTBOARDS, p).unwrap();
+    let r = h.state_mut().run(COMPS, p).unwrap();
     std::fs::read(r["files"][0].as_str().unwrap()).unwrap()
 }
 
@@ -121,13 +122,13 @@ fn tmp() -> (tempfile::TempDir, String) {
 }
 
 #[test]
-fn artboards_to_files_sends_a_custom_jpeg_quality() {
+fn layer_comps_to_files_sends_a_custom_jpeg_quality() {
     let mut h = harness();
     let (_a, via_dialog) = tmp();
     let (_b, via_command) = tmp();
     let mut sizes = Vec::new();
     for quality in [0, 3, 12] {
-        let dialog = open(&mut h, ARTBOARDS, &via_dialog, "jpg");
+        let dialog = open(&mut h, COMPS, &via_dialog, "jpg");
         assert!(!custom_ticked(&h) && !quality_enabled(&h), "JPEG with Custom off: the field is greyed out");
         tick_custom(&mut h);
         assert!(custom_ticked(&h) && quality_enabled(&h), "JPEG with Custom on: the field takes input");
@@ -147,7 +148,7 @@ fn an_untouched_jpeg_export_writes_what_the_command_writes_with_no_quality() {
     let mut h = harness();
     let (_a, via_dialog) = tmp();
     let (_b, via_command) = tmp();
-    let dialog = open(&mut h, ARTBOARDS, &via_dialog, "jpg");
+    let dialog = open(&mut h, COMPS, &via_dialog, "jpg");
     assert!(params(&mut h, dialog).get("quality").is_none_or(Value::is_null), "no quality is sent");
     let bytes = exported(&mut h, dialog);
     assert!(bytes == direct(&mut h, &via_command, "jpg", None), "the untouched dialog keeps the command's own JPEG quality");
@@ -186,7 +187,7 @@ fn export_to_files_quality_leaves_png_and_webp_as_they_were() {
 fn the_custom_quality_survives_a_format_round_trip() {
     let mut h = harness();
     let (_a, dir) = tmp();
-    let dialog = open(&mut h, ARTBOARDS, &dir, "jpg");
+    let dialog = open(&mut h, COMPS, &dir, "jpg");
     tick_custom(&mut h);
     type_quality(&mut h, "4");
     assert_eq!(params(&mut h, dialog)["quality"], json!(4));
@@ -209,7 +210,7 @@ fn the_custom_quality_survives_a_format_round_trip() {
 fn alt_reset_restores_the_custom_quality() {
     let mut h = harness();
     let ctx = h.ctx.clone();
-    let dialog = crate::menus::invoke(h.state_mut(), &ctx, ARTBOARDS, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let dialog = crate::menus::invoke(h.state_mut(), &ctx, COMPS, json!({})).unwrap()["dialog"].as_u64().unwrap();
     // JPEG chosen in the dialog, after it opened: Reset puts the format back too.
     h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!("jpg"));
     h.run_steps(4);
