@@ -32,6 +32,89 @@ fn points_and_picas_use_the_points_per_inch() {
     assert_eq!(pt_per_in(&f), 72.27);
 }
 
+/// A translated label wider than the English column ("Dimensione immagine:" in Italian) widens
+/// the column instead of running out of the dialog on the left; one too long for the widest
+/// column elides, and the fields the wider column pushes right (Resample's list, in Georgian)
+/// still fit the dialog's 440 px maximum width.
+#[test]
+fn translated_labels_stay_inside_the_dialog() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let mut failures = Vec::new();
+    for command in ["image.imageSize", "image.canvasSize"] {
+        let id = open(&mut app, command).unwrap();
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        for lang in crate::i18n::Lang::all() {
+            let _language = crate::i18n::language_scope(lang);
+            // The test fonts have no CJK, Indic or Arabic faces: tofu boxes stand in for
+            // those glyphs, laid out and measured like any other.
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(440.0, 400.0)).allow_missing_glyphs().build_ui_state(
+                |ui, (f, room): &mut (Map<String, Value>, Rect)| {
+                    *room = ui.max_rect();
+                    body(ui, f);
+                },
+                (fields.clone(), Rect::NOTHING),
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(2);
+            let room = h.state().1;
+            let shapes = &h.output().shapes;
+            let texts: Vec<Rect> = shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Text(_))).map(|s| s.shape.visual_bounding_rect()).collect();
+            assert!(!texts.is_empty(), "{command} {}: draws its labels", lang.code());
+            if let Some(r) = texts.iter().find(|r| r.left() < room.left() - 0.5) {
+                failures.push(format!("{command} {}: text at {r:?} starts left of the dialog's {room:?}", lang.code()));
+            }
+            // Every field, list and label ends inside the dialog's right edge.
+            if let Some(r) = shapes.iter().map(|s| s.shape.visual_bounding_rect()).find(|r| r.is_finite() && r.right() > room.right() + 0.5) {
+                failures.push(format!("{command} {}: shape at {r:?} ends right of the dialog's {room:?}", lang.code()));
+            }
+        }
+        app.ui.close_dialog(id);
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Resample's list elides its value where a long translation leaves it little room (Georgian):
+/// hovering it then shows the full method, as an elided label does; in English it fits and
+/// shows no tooltip.
+#[test]
+fn an_elided_resample_value_shows_in_full_on_hover() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let id = open(&mut app, "image.imageSize").unwrap();
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    let mut checked = 0;
+    for lang in crate::i18n::Lang::all().filter(|l| ["en", "ka"].contains(&l.code())) {
+        let _language = crate::i18n::language_scope(lang);
+        let (name, full) = (tl!("Resample"), tl!("Automatic"));
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(440.0, 400.0))
+            .allow_missing_glyphs()
+            .build_ui_state(|ui, f: &mut Map<String, Value>| body(ui, f), fields.clone());
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(2);
+        let rect = h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some(name)).map(|n| n.rect()).unwrap();
+        assert!(h.query_all_by_role(Role::Label).all(|n| n.accesskit_node().value().as_deref() != Some(full)), "{}: no tooltip before hover", lang.code());
+        h.hover_at(rect.center());
+        h.run_steps(60);
+        let shown = h.query_all_by_role(Role::Label).any(|n| n.accesskit_node().value().as_deref() == Some(full));
+        assert_eq!(shown, lang.code() == "ka", "{}: the full value shows on hover only when it is elided", lang.code());
+        // The tooltip only senses hover: a click there still opens the list.
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: rect.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(2);
+        }
+        h.run_steps(4);
+        assert!(h.query_by_label(tl!("Bilinear")).is_some(), "{}: a click opens the list", lang.code());
+        checked += 1;
+    }
+    // Without CRAFT_I18N_DIR only English is registered.
+    assert!(checked >= 1);
+    app.ui.close_dialog(id);
+}
+
 /// #6214: `n` columns are `n × width + (n − 1) × gutter` points. Photoshop's default Column
 /// Size (180 pt, 12 pt gutter) at 300 ppi: 1 column is 2.5 in (750 px), 2 are 372 pt
 /// (1550 px), 3 are 564 pt (2350 px).
