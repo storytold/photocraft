@@ -203,6 +203,39 @@ pub fn apply_coverage(
     paint: &Region,
     blend: BlendMode,
 ) -> Rect {
+    composite_coverage(target, rect, cov, opacity, selection, lock_transparency, paint, blend, false)
+}
+
+/// [`apply_coverage`] for the History Brush (#14701): in Normal mode the paint image *replaces*
+/// the pixels at the per-pixel weight (a premultiplied mix, alpha included), so a transparent
+/// source pixel clears what is there instead of leaving it under the restored pixels. Other
+/// modes, locked transparency and targets without alpha composite as [`apply_coverage`] does.
+#[allow(clippy::too_many_arguments)]
+pub fn restore_coverage(
+    target: &mut Surface,
+    rect: Rect,
+    cov: &[f32],
+    opacity: f32,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    paint: &Region,
+    blend: BlendMode,
+) -> Rect {
+    composite_coverage(target, rect, cov, opacity, selection, lock_transparency, paint, blend, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn composite_coverage(
+    target: &mut Surface,
+    rect: Rect,
+    cov: &[f32],
+    opacity: f32,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    paint: &Region,
+    blend: BlendMode,
+    replace: bool,
+) -> Rect {
     if rect.is_empty() {
         return Rect::EMPTY;
     }
@@ -237,7 +270,10 @@ pub fn apply_coverage(
         }
         let src = paint.px(x, y);
         if blend == BlendMode::Normal {
-            over_native(&fmt, px, src, k, lock_transparency);
+            match a {
+                Some(a) if replace && !lock_transparency => mix_premultiplied(px, src, a, k),
+                _ => over_native(&fmt, px, src, k, lock_transparency),
+            }
         } else {
             // A transparent source cannot paint. Skip it before an RGB round trip changes
             // untouched native CMYK/Lab values; Normal handles zero weight in over_native.
@@ -371,7 +407,9 @@ pub fn mix_premultiplied(dst: &mut [f32], src: &[f32], a: usize, k: f32) {
         if c == a {
             continue;
         }
-        *d = if oa > 1e-6 { (*d * da + (*s * sa - *d * da) * k) / oa } else { *d + (*s - *d) * k };
+        // Weighted, not `d + (s - d) * k`: at k = 1 the destination drops out exactly, even for
+        // large 32-bit values where the difference would round away the source.
+        *d = if oa > 1e-6 { (*d * da * (1.0 - k) + *s * sa * k) / oa } else { *d * (1.0 - k) + *s * k };
     }
     if let Some(d) = dst.get_mut(a) {
         *d = oa;
@@ -990,6 +1028,13 @@ mod tests {
         let mut d = [0.5, 0.5];
         mix_premultiplied(&mut d, &[1.0, 1.0], 7, 0.5);
         assert_eq!(d, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn premultiplied_mix_at_full_weight_keeps_the_source_exactly() {
+        let mut d = [67_108_864.0, 0.0, 0.0, 1.0];
+        mix_premultiplied(&mut d, &[1.0, 0.0, 0.0, 1.0], 3, 1.0);
+        assert_eq!(d, [1.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]

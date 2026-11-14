@@ -4,7 +4,7 @@ use super::sampling::{SampleLayers, sample_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface, Value,
     alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic, point,
-    reject_huge_stroke, run_stroke, to_rgba,
+    reject_huge_stroke, restore_coverage, run_stroke, to_rgba,
 };
 
 /// Where a clone stroke samples: `offset` / `source` params, else the active Clone Source slot,
@@ -512,10 +512,14 @@ impl LiveRetouch {
         // The Pattern Stamp's Behind goes beneath the pixels, as its commit lays it.
         let behind = matches!(self.paint, LivePaint::Pattern { behind: true, .. });
         let clone = matches!(self.paint, LivePaint::Clone { .. });
+        let history = matches!(self.paint, LivePaint::History(_));
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
         let damage = if clone {
             apply_clone_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode)
+        } else if history {
+            // As the commit paints it (`heal::history_brush`): the source state replaces the pixels.
+            restore_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode)
         } else {
             pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind)
         };
