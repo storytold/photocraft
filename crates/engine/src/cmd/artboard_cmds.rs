@@ -673,16 +673,19 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
             continue;
         }
         let mut group = l.clone();
+        // The board's own shadow or glow is built from all its layers, so they stay whole.
+        let fx = photocraft_compose::effects::has_effects(&group);
         if let LayerContent::Group(g) = &mut group.content {
             g.artboard = None;
-            cut_pixels(&mut g.children, overlap, 0);
+            if !fx {
+                cut_pixels(&mut g.children, overlap, 0);
+            }
         }
         let reach = photocraft_compose::change_bounds(&group, doc.bounds());
         if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
-            let mut mask = photocraft_doc::LayerMask::reveal_all();
-            mask.surface = Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.0]);
-            mask.surface.fill_rect(ab.rect, &[1.0]);
-            group.mask = Some(mask);
+            group.mask = Some(board_mask(group.mask.take(), ab.rect));
+            // The artboard clipped its own effects too; a plain mask would only shape them.
+            group.advanced.layer_mask_hides_effects |= fx;
         }
         if let (Some(bg), Some(children)) = (ab.background.rgba(), group.children_mut()) {
             let fmt = doc.pixel_format();
@@ -691,6 +694,25 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
             children.insert(0, Layer::new(format!("Background for {}", l.name), LayerContent::Raster(surf)));
         }
         out.push(group);
+    }
+    out
+}
+
+/// A mask that hides everything outside `board` and, inside it, what the board's own `mask` hid
+/// (its density baked in), so a board clipped to its rect keeps the mask the user painted.
+fn board_mask(mask: Option<photocraft_doc::LayerMask>, board: Rect) -> photocraft_doc::LayerMask {
+    let own = mask.filter(|m| m.enabled);
+    let mut out = own.clone().unwrap_or_else(photocraft_doc::LayerMask::reveal_all);
+    out.surface = Surface::with_default(out.surface.format(), &[0.0]);
+    out.density = 1.0;
+    let kept = own.and_then(|m| {
+        let mut px = m.surface.try_read_region(board).ok()?;
+        px.iter_mut().for_each(|v| *v = 1.0 - m.density * (1.0 - *v));
+        out.surface.try_write_region(board, &px).ok()
+    });
+    if kept.is_none() {
+        out.surface = Surface::with_default(out.surface.format(), &[0.0]);
+        out.surface.fill_rect(board, &[1.0]);
     }
     out
 }

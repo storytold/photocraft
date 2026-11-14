@@ -188,3 +188,63 @@ fn a_bad_content_value_is_an_error_and_writes_nothing() {
         assert!(!std::path::Path::new(&out.pdf()).exists(), "{bad}");
     }
 }
+
+/// A drop shadow on the board above itself is built from all its layers, so a layer outside the
+/// exported board still casts it into the page, as it does in the document.
+#[test]
+fn a_shadow_on_the_board_above_still_comes_from_layers_outside_the_page() {
+    use photocraft_doc::effects::{Contour, FxCommon, Shadow};
+    let (mut s, [red, blue, _]) = session(8);
+    s.execute("layer.artboard.set", json!({"layer": blue, "background": "transparent"})).unwrap();
+    // Caster at 160..170 x 180..190 (in Blue Board, below Red Board); its shadow, 40 px up and to
+    // the left, falls on 120..130 x 140..150, inside both boards and clear of Blue's pixels.
+    paint(&mut s, blue, "Caster", Rect::new(160, 180, 170, 190), [0, 160, 0]);
+    s.edit("Shadow", |doc, _| {
+        doc.layer_mut(LayerId(blue)).unwrap().effects.items.push(photocraft_doc::Effect::DropShadow(Shadow {
+            common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            color: Color::rgb(0.0, 0.0, 0.0),
+            angle: -45.0,
+            use_global_light: false,
+            distance: 40.0_f32.hypot(40.0),
+            spread: 0.0,
+            size: 0.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            noise: 0.0,
+            knocks_out: true,
+        }));
+        Ok(())
+    })
+    .unwrap();
+    let source = s.active().unwrap().doc.clone();
+    let flat = photocraft_compose::flatten(&source);
+    let at = flat.px[145 * 800 + 125].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    assert_eq!([at[0], at[1], at[2]], [0, 0, 0], "the shadow lands there in the document");
+    let out = Out::new("board-shadow");
+    let page = export(&mut s, &out, red, json!({}));
+    assert!(near(px(&page, 125, 145), [0, 0, 0]), "got {:?}", px(&page, 125, 145));
+    let src = flat.px[50 * 800 + 110].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    assert!(near(px(&page, 110, 50), RED), "got {:?}, source {src:?}", px(&page, 110, 50));
+}
+
+/// A mask on the board above keeps hiding what it hid when the board is clipped to its rect.
+#[test]
+fn a_mask_on_the_board_above_still_hides_its_part() {
+    let (mut s, [red, blue, _]) = session(8);
+    s.edit("Mask", |doc, _| {
+        let board = doc.layer_mut(LayerId(blue)).unwrap();
+        // A canvas-wide fill reaches past the board, so the export clips the board to its rect.
+        let fill = Layer::new("Green", LayerContent::Fill(photocraft_doc::Fill::Solid(Color::rgb(0.0, 1.0, 0.0))));
+        board.children_mut().unwrap().insert(0, fill);
+        let mut mask = photocraft_doc::LayerMask::reveal_all();
+        mask.surface.fill_rect(Rect::new(140, 50, 160, 70), &[0.0]);
+        board.mask = Some(mask);
+        Ok(())
+    })
+    .unwrap();
+    let out = Out::new("board-mask");
+    let page = export(&mut s, &out, red, json!({}));
+    assert!(near(px(&page, 150, 60), WHITE), "masked out: Red Board's background, got {:?}", px(&page, 150, 60));
+    assert!(near(px(&page, 170, 60), BLUE), "got {:?}", px(&page, 170, 60));
+    assert!(near(px(&page, 110, 50), RED), "outside Blue Board, got {:?}", px(&page, 110, 50));
+}
