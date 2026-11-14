@@ -551,3 +551,59 @@ fn nudging_away_and_back_keeps_the_moved_pixels_selection() {
     assert_eq!(st.doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(2, 2, 42, 42)), "a click keeps the marquee");
     assert_eq!(st.history.past_len(), steps, "and adds no step");
 }
+
+/// After a refused command the piece of [`session`], floated 15 px right, still floats: the
+/// document, its selection and its History are as they were before the command (#13169).
+fn assert_still_floating(s: &Session, id: LayerId, steps: usize, what: &str) {
+    let st = s.active().unwrap();
+    assert_eq!(floating(st).map(|f| f.offset), Some((15, 0)), "{what}: the piece still floats");
+    assert!(alpha(&st.doc, id, 12, 12) == 1.0 && alpha(&st.doc, id, 35, 12) == 0.0, "{what}: nothing dropped");
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(10, 10, 30, 30), "{what}: the selection did not move");
+    assert_eq!(st.history.past_len(), steps, "{what}: no History step");
+}
+
+#[test]
+fn a_disabled_command_leaves_the_piece_floating() {
+    let (mut s, id) = session();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let refused = s.execute("layer.ungroupLayers", json!({}));
+    assert!(matches!(refused, Err(EngineError::Disabled(..))), "a pixel layer is not a group: {refused:?}");
+    assert_still_floating(&s, id, steps, "Ungroup Layers");
+    // The piece drops as before once a command may run.
+    s.execute("select.drop", json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert!(floating(st).is_none() && alpha(&st.doc, id, 12, 12) == 0.0 && alpha(&st.doc, id, 35, 12) == 1.0);
+    assert_eq!(st.history.past_len(), steps + 1);
+}
+
+#[test]
+fn a_command_refused_on_a_hidden_layer_leaves_the_piece_floating() {
+    let (mut s, id) = session();
+    s.edit("hide", |doc, _| {
+        doc.layer_mut(id).unwrap().visible = false;
+        Ok(())
+    })
+    .unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let refused = s.execute("paint.stroke", json!({"points": [[40, 40], [50, 50]], "color": "#00ff00"}));
+    assert!(refused.unwrap_err().to_string().contains(crate::hidden_target::HIDDEN));
+    assert_still_floating(&s, id, steps, "Brush on a hidden layer");
+}
+
+#[test]
+fn a_command_refused_for_the_colour_mode_leaves_the_piece_floating() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 5, "dy": 0})).unwrap();
+    let refused = s.execute("filter.other.colorToAlpha", json!({}));
+    assert!(matches!(refused, Err(EngineError::Disabled(..))), "no Color to Alpha in Indexed Color: {refused:?}");
+    let st = s.active().unwrap();
+    assert_eq!(floating(st).map(|f| f.offset), Some((5, 0)), "the piece still floats");
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(5, 5, 15, 15));
+    assert_eq!(st.history.past_len(), steps, "no History step");
+}
