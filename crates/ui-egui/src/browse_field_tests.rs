@@ -93,7 +93,7 @@ fn data_sets_as_files_folder_is_chosen_with_browse() {
     h.run_steps(4);
     assert!(field(&h, "dir").is_some(), "the dialog has a Dir field");
     assert_eq!(field(&h, "naming"), Some(json!("{name}")));
-    assert_eq!(field(&h, "format"), Some(json!("png")));
+    assert_eq!(field(&h, "extension"), Some(json!(".psd")));
     h.get_by_label("Browse…").click();
     h.run_steps(4);
     assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }]));

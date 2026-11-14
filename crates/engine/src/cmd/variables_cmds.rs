@@ -409,12 +409,23 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The bodies of `file.export.dataSetsAsFiles`, streamed to `write` as a single-component
-/// filename plus its bytes: one flattened file per data set. The whole batch is planned first,
+/// filename plus its bytes: one layered PSD per data set (`extension` only changes the case of
+/// `.psd`). The whole batch is planned first,
 /// so colliding names are rejected before any file is written, and automation writes exactly
 /// these bytes beneath its write root (#3216) — the two paths cannot drift. Returns the
 /// filenames written, in order.
 pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<Vec<String>> {
-    let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
+    // Only PSD is written; an old script that names `psd` still works (#13754).
+    if p.get("format").and_then(Value::as_str).is_some_and(|f| !f.eq_ignore_ascii_case("psd")) {
+        return Err(bad("file.export.dataSetsAsFiles", "Data Sets as Files writes PSD files"));
+    }
+    // `.psd` (default) or `.PSD`: only the case of the extension of a PSD changes (#13754).
+    let upper = match p.get("extension").and_then(Value::as_str) {
+        None | Some(".psd" | "psd") => false,
+        Some(".PSD" | "PSD") => true,
+        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("`extension` is `.psd` or `.PSD`, not `{other}`"))),
+    };
+    let extension = if upper { "PSD" } else { "psd" };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let original = st.doc.clone();
     let vars = original.variables.clone();
@@ -448,7 +459,7 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
         // Each folder the template makes is checked too: `{document}/{name}` of `nul.psd` would
         // otherwise write into the `nul` device.
-        let name: String = format!("{stem}.{format}")
+        let name: String = format!("{stem}.{extension}")
             .split_inclusive(['/', '\\'])
             .map(|part| {
                 let sep = ["/", "\\"].into_iter().find(|s| part.ends_with(s)).unwrap_or("");
@@ -469,7 +480,7 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         apply_to_doc(&mut doc, &vars, set)?;
         // An untrusted session's PSD export embeds no file a linked smart object names.
         let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
-        let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
+        let bytes = photocraft_io::export(&doc, "psd", &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
         write(name, &bytes)?;
         written.push(name.clone());
     }
@@ -536,7 +547,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.dataSetsAsFiles",
             "Data Sets as Files…",
             &["File", "Export"],
-            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document; colliding filenames are rejected before writing (include {index} to disambiguate)",
+            "{dir, extension?:\".psd\"|\".PSD\", dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and write it as a layered PSD (a `format` other than psd is an error); colliding filenames are rejected before writing (include {index} to disambiguate)",
             has_data_sets,
             |s, p| export_as_files(s, p)
         ),

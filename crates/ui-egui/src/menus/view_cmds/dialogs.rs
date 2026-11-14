@@ -511,7 +511,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let (_, _, _) = doc?;
-                dialog(app, json!({"dir": dir, "naming": "{name}", "format": "png"}), json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
+                dialog(app, json!({"dir": dir, "naming": "{name}", "extension": ".psd"}), json!({"extension": [".psd", ".PSD"]}))
             }
         }
         "layer.new.artboard" => {

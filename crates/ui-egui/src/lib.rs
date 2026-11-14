@@ -1056,6 +1056,8 @@ mod window_frame_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
+mod export_data_sets_extension_tests;
+#[cfg(test)]
 mod export_quality_tests;
 #[cfg(test)]
 mod options_hit_area_tests;

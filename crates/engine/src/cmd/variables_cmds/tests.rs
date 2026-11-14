@@ -265,7 +265,7 @@ fn csv_multiline_values_apply_persist_and_export_as_two_data_sets() {
         reopened.execute("image.applyDataSet", json!({"name": "one"})).unwrap();
         assert_eq!(text_of(&reopened, title), first);
         let before_export = doc(&reopened).clone();
-        let out = reopened.execute("file.export.dataSetsAsFiles", json!({"dir": format!("{dir}/out"), "format": "png"})).unwrap();
+        let out = reopened.execute("file.export.dataSetsAsFiles", json!({"dir": format!("{dir}/out")})).unwrap();
         assert_eq!(out["count"], 2);
         let files = out["files"].as_array().unwrap();
         assert_eq!(files.len(), 2);
@@ -277,7 +277,16 @@ fn csv_multiline_values_apply_persist_and_export_as_two_data_sets() {
             })
             .collect();
         assert!(images.iter().all(|image| image.size == doc(&reopened).size));
-        assert_ne!(images[0].layers[0].surface(), images[1].layers[0].surface(), "the exported rows have different content");
+        let texts: Vec<_> = images
+            .iter()
+            .map(|image| {
+                image.layers.iter().find_map(|l| match &l.content {
+                    LayerContent::Text(t) => Some(t.text.clone()),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_ne!(texts[0], texts[1], "the exported rows have different content");
         assert_eq!(*doc(&reopened), before_export, "export keeps the live document unchanged");
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -358,15 +367,15 @@ fn export_data_sets_as_files() {
     )
     .unwrap();
     let dir = tmp("out");
-    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": "png"})).unwrap();
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir})).unwrap();
     assert_eq!(r["count"], 2);
-    assert!(std::path::Path::new(&format!("{dir}/one.png")).exists());
-    assert!(std::path::Path::new(&format!("{dir}/two.png")).exists());
+    assert!(std::path::Path::new(&format!("{dir}/one.psd")).exists());
+    assert!(std::path::Path::new(&format!("{dir}/two.psd")).exists());
     // Filename template with {index}.
     let d2 = tmp("tmpl");
-    s.execute("file.export.dataSetsAsFiles", json!({"dir": d2, "format": "png", "naming": "row-{index}"})).unwrap();
-    assert!(std::path::Path::new(&format!("{d2}/row-001.png")).exists());
-    assert!(std::path::Path::new(&format!("{d2}/row-002.png")).exists());
+    s.execute("file.export.dataSetsAsFiles", json!({"dir": d2, "naming": "row-{index}"})).unwrap();
+    assert!(std::path::Path::new(&format!("{d2}/row-001.psd")).exists());
+    assert!(std::path::Path::new(&format!("{d2}/row-002.psd")).exists());
     // Exporting doesn't mutate the live document.
     assert!(doc(&s).layer(badge).unwrap().visible);
     assert_eq!(text_of(&s, title), "Old");
@@ -386,9 +395,9 @@ fn visibility_export_session(names: &[&str]) -> Session {
 #[test]
 fn export_data_sets_rejects_collisions_before_writing() {
     for (label, names, naming, collision) in [
-        ("sanitized", ["unique", "a b", "a_b"], "{name}", "a_b.png"),
-        ("constant", ["unique", "a b", "a_b"], "{document}", "card.png"),
-        ("case", ["unique", "Card", "card"], "{name}", "card.png"),
+        ("sanitized", ["unique", "a b", "a_b"], "{name}", "a_b.psd"),
+        ("constant", ["unique", "a b", "a_b"], "{document}", "card.psd"),
+        ("case", ["unique", "Card", "card"], "{name}", "card.psd"),
     ] {
         let mut s = visibility_export_session(&names);
         let before = s.active().unwrap().doc.clone();
@@ -397,7 +406,7 @@ fn export_data_sets_rejects_collisions_before_writing() {
         let past = s.active().unwrap().history.past_len();
         let redo = s.active().unwrap().history.can_redo();
         let dir = tmp(&format!("collision-{label}"));
-        let first = format!("{dir}/unique.png");
+        let first = format!("{dir}/unique.psd");
         let collided = format!("{dir}/{collision}");
         std::fs::write(&first, b"keep earlier export").unwrap();
         std::fs::write(&collided, b"keep colliding export").unwrap();
@@ -431,35 +440,35 @@ fn export_data_sets_keeps_document_derived_names_inside_the_folder() {
     let mut s = visibility_export_session(&["nul", "b"]);
     s.execute("image.duplicate", json!({"name": "../esc/aped.psd"})).unwrap();
     let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": "{document}_{index}"})).unwrap();
-    assert_eq!(r["files"], json!([format!("{dir}/.._esc_aped_001.png"), format!("{dir}/.._esc_aped_002.png")]));
+    assert_eq!(r["files"], json!([format!("{dir}/.._esc_aped_001.psd"), format!("{dir}/.._esc_aped_002.psd")]));
     let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["nul"]})).unwrap();
-    assert_eq!(r["files"], json!([format!("{dir}/nul_.png")]));
+    assert_eq!(r["files"], json!([format!("{dir}/nul_.psd")]));
     // `...` has the stem `..`: before a folder in the caller's template it would climb out too.
     s.execute("image.duplicate", json!({"name": "..."})).unwrap();
     let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["b"], "naming": "{document}/{name}"})).unwrap();
-    assert_eq!(r["files"], json!([format!("{dir}/_/b.png")]));
-    // `.` has an empty stem: `{document}` alone would be a nameless `.png`.
+    assert_eq!(r["files"], json!([format!("{dir}/_/b.psd")]));
+    // `.` has an empty stem: `{document}` alone would be a nameless `.psd`.
     s.execute("image.duplicate", json!({"name": "."})).unwrap();
     let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["b"], "naming": "{document}"})).unwrap();
-    assert_eq!(r["files"], json!([format!("{dir}/_.png")]));
+    assert_eq!(r["files"], json!([format!("{dir}/_.psd")]));
     // A folder the template makes from a device-named document gets the `_` as well.
     s.execute("image.duplicate", json!({"name": "nul.psd"})).unwrap();
     let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["b"], "naming": "{document}/{name}"})).unwrap();
-    assert_eq!(r["files"], json!([format!("{dir}/nul_/b.png")]));
+    assert_eq!(r["files"], json!([format!("{dir}/nul_/b.psd")]));
     let mut written: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     written.sort();
-    assert_eq!(written, [".._esc_aped_001.png", ".._esc_aped_002.png", "_", "_.png", "nul_", "nul_.png"]);
-    assert!(std::path::Path::new(&format!("{dir}/nul_/b.png")).is_file());
+    assert_eq!(written, [".._esc_aped_001.psd", ".._esc_aped_002.psd", "_", "_.psd", "nul_", "nul_.psd"]);
+    assert!(std::path::Path::new(&format!("{dir}/nul_/b.psd")).is_file());
     assert!(!std::path::Path::new(&format!("{root}/esc")).exists());
-    assert!(!std::path::Path::new(&format!("{root}/b.png")).exists());
+    assert!(!std::path::Path::new(&format!("{root}/b.psd")).exists());
 }
 
 #[test]
 fn export_data_sets_unique_paths_preserve_variations_and_document() {
     for (label, names, naming, selected, expected) in [
-        ("indexed", ["a b", "a_b"], "card-{index}", None, vec!["card-001.png", "card-002.png"]),
-        ("distinct", ["a-b", "a_b"], "{name}", None, vec!["a-b.png", "a_b.png"]),
-        ("subset", ["a b", "a_b"], "{name}", Some(vec!["a b"]), vec!["a_b.png"]),
+        ("indexed", ["a b", "a_b"], "card-{index}", None, vec!["card-001.psd", "card-002.psd"]),
+        ("distinct", ["a-b", "a_b"], "{name}", None, vec!["a-b.psd", "a_b.psd"]),
+        ("subset", ["a b", "a_b"], "{name}", Some(vec!["a b"]), vec!["a_b.psd"]),
     ] {
         let mut s = visibility_export_session(&names);
         let before = s.active().unwrap().doc.clone();
@@ -540,7 +549,7 @@ fn applied_text_is_rendered_in_the_document_and_in_exports() {
     s.execute("image.variables.dataSets", json!({"dataSets": [{"name": "row1", "values": [{"variable": "headline", "kind": "text", "value": "BYE"}]}]}))
         .unwrap();
     let dir = tmp("text-export");
-    let out = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": "png"})).unwrap();
+    let out = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir})).unwrap();
     let path = out["files"][0].as_str().unwrap();
     let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
     assert!(dark(&exported) > 0, "the exported row keeps its text");
@@ -668,4 +677,84 @@ fn data_set_commands_require_data_sets_to_be_enabled() {
     s.execute("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
     assert!(s.is_enabled("file.export.dataSetsAsFiles"));
     assert!(s.is_enabled("image.applyDataSet"));
+}
+
+/// The `session()` document with three data sets: text Alpha/Beta/Gamma, the badge hidden in the second.
+fn psd_export_session() -> (Session, LayerId, LayerId) {
+    let (mut s, _photo, badge, title) = session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "showBadge", "layer": badge.0, "type": "visibility"},
+            {"name": "headline", "layer": title.0, "type": "textReplacement"},
+        ]}),
+    )
+    .unwrap();
+    let sets: Vec<Value> = [("Data Set 1", "Alpha", true), ("Data Set 2", "Beta", false), ("Data Set 3", "Gamma", true)]
+        .iter()
+        .map(|(name, text, shown)| {
+            json!({"name": name, "values": [
+                {"variable": "showBadge", "kind": "visibility", "value": shown},
+                {"variable": "headline", "kind": "text", "value": text},
+            ]})
+        })
+        .collect();
+    s.execute("image.variables.dataSets", json!({ "dataSets": sets })).unwrap();
+    (s, badge, title)
+}
+
+#[test]
+fn data_sets_as_files_writes_one_layered_psd_per_data_set_by_default() {
+    // #13754: no format param means a layered PSD per data set, not a flattened PNG.
+    let (mut s, _badge, _title) = psd_export_session();
+    let source: Vec<String> = doc(&s).layers.iter().map(|l| l.name.clone()).collect();
+    let dir = tmp("psd-default");
+    let out = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir})).unwrap();
+    assert_eq!(out["count"], 3);
+    let files: Vec<String> = out["files"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+    assert_eq!(files, [format!("{dir}/Data_Set_1.psd"), format!("{dir}/Data_Set_2.psd"), format!("{dir}/Data_Set_3.psd")]);
+    for (path, (text, badge_visible)) in files.iter().zip([("Alpha", true), ("Beta", false), ("Gamma", true)]) {
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(&bytes[..4], b"8BPS", "{path} is a PSD");
+        let back = photocraft_io::import(path, &bytes).unwrap().document;
+        let names: Vec<String> = back.layers.iter().map(|l| l.name.clone()).collect();
+        assert_eq!(names, source, "{path} keeps every layer and name");
+        let title = back.layers.iter().find(|l| l.name == "title").unwrap();
+        assert!(matches!(&title.content, LayerContent::Text(t) if t.text == text), "{path} carries the data set's text");
+        assert_eq!(back.layers.iter().find(|l| l.name == "badge").unwrap().visible, badge_visible, "{path} badge visibility");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn data_sets_as_files_extension_changes_only_the_case() {
+    let (mut s, _, _) = psd_export_session();
+    let dir = tmp("psd-upper");
+    let out = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "extension": ".PSD", "naming": "{index}-{name}"})).unwrap();
+    assert_eq!(out["files"][1], json!(format!("{dir}/002-Data_Set_2.PSD")));
+    let bytes = std::fs::read(out["files"][1].as_str().unwrap()).unwrap();
+    assert_eq!(&bytes[..4], b"8BPS");
+    let lower = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "extension": ".psd", "dataSets": ["Data Set 1"]})).unwrap();
+    assert_eq!(lower["files"], json!([format!("{dir}/Data_Set_1.psd")]));
+    // Nothing else is accepted, and nothing is written for it.
+    let other = tmp("psd-bad-extension");
+    assert!(s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "extension": ".png"})).is_err());
+    assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
+#[test]
+fn data_sets_as_files_only_writes_psd() {
+    let (mut s, _, _) = psd_export_session();
+    let dir = tmp("psd-png");
+    // An old script naming `psd` still works; any other format is a clear error and writes nothing.
+    let ok = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": "psd", "dataSets": ["Data Set 1"]})).unwrap();
+    assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
+    let other = tmp("psd-png-none");
+    let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "format": "png"})).unwrap_err();
+    assert!(err.to_string().contains("Data Sets as Files writes PSD files"), "{err}");
+    assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
 }
