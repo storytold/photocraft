@@ -6,10 +6,10 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     paint_dots(ui, area, app.session.prefs().interface.show_canvas_dots);
     open_on_double_click(app, ui, area);
 
-    // File › Open Recent, newest first (on the web there are no paths to reopen).
+    // File › Open Recent, newest first, as many as Preferences › File Handling › Recent File
+    // List Contains keeps (on the web there are no paths to reopen).
     let show_recent = app.session.prefs().interface.show_home_recent_files;
-    let recent: Vec<String> =
-        if cfg!(target_arch = "wasm32") || !show_recent { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
+    let recent: Vec<String> = if cfg!(target_arch = "wasm32") || !show_recent { Vec::new() } else { app.ui.recent_files.clone() };
 
     let is_narrow = area.width() < 640.0;
     let pad_x = if is_narrow { 16.0 } else { 36.0 };
@@ -278,6 +278,3 @@ fn render_first_run_content(app: &mut PhotocraftApp, ui: &mut egui::Ui, content_
 pub(crate) fn start_screen_drop_hint(_app: &PhotocraftApp) -> std::borrow::Cow<'static, str> {
     tl!("Drop an image or PSD anywhere to open it.").into()
 }
-
-/// Recent files listed on the Home screen.
-const HOME_RECENT: usize = 11;
