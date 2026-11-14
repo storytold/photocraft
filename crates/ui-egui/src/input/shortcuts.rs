@@ -1,6 +1,8 @@
 //! Keyboard shortcuts: Photoshop defaults from the command registry, plus single-key tools.
 
-use egui::{Key, KeyboardShortcut, Modifiers};
+use std::collections::BTreeSet;
+
+use egui::{Event, Key, KeyboardShortcut, Modifiers};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -685,10 +687,64 @@ fn handle_lasso_vertex_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> boo
     false
 }
 
+fn held_delete_id() -> egui::Id {
+    egui::Id::unique("canvas_object_held_delete")
+}
+
+/// Keep a held key with the canvas object that owned its first press, even after deletion.
+fn discard_owned_delete_repeats(ctx: &egui::Context) {
+    let id = held_delete_id();
+    let Some(mut held) = ctx.data(|data| data.get_temp::<BTreeSet<Key>>(id)) else { return };
+    ctx.input_mut(|input| {
+        input.events.retain(|event| {
+            let Event::Key { key, pressed, repeat, .. } = event else { return true };
+            if *pressed && *repeat {
+                return !held.contains(key);
+            }
+            held.remove(key);
+            true
+        });
+        held.retain(|key| input.key_down(*key));
+    });
+    ctx.data_mut(|data| {
+        if held.is_empty() {
+            data.remove_temp::<BTreeSet<Key>>(id);
+        } else {
+            data.insert_temp(id, held);
+        }
+    });
+}
+
+/// Find a plain Delete or Backspace using the modifiers from the key event.
+pub(crate) fn object_delete_press(ctx: &egui::Context) -> Option<usize> {
+    ctx.input(|input| {
+        input.events.iter().position(|event| {
+            matches!(
+                event,
+                Event::Key { key: Key::Backspace | Key::Delete, pressed: true, modifiers, .. } if modifiers.is_none()
+            )
+        })
+    })
+}
+
+/// Consume a Delete or Backspace press and suppress its repeats until release.
+pub(crate) fn consume_object_delete(ctx: &egui::Context, index: usize) -> bool {
+    let key = ctx.input_mut(|input| {
+        let Event::Key { key, .. } = input.events.get(index)? else { return None };
+        let key = *key;
+        input.events.remove(index);
+        Some(key)
+    });
+    let Some(key) = key else { return false };
+    ctx.data_mut(|data| data.get_temp_mut_or_default::<BTreeSet<Key>>(held_delete_id()).insert(key));
+    true
+}
+
 fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !preflight_keys(app, ctx) {
         return;
     }
+    discard_owned_delete_repeats(ctx);
     let focus = crate::shortcut_dispatch::Focus::of(ctx);
     if handle_modal_canvas_keys(app, ctx, focus) || handle_pen_and_work_path_keys(app, ctx, focus) || handle_object_tool_keys(app, ctx) {
         return;

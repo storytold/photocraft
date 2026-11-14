@@ -110,6 +110,48 @@ fn without_components_delete_removes_only_the_targeted_saved_path() {
 }
 
 #[test]
+fn selected_guide_owns_delete_before_the_saved_path() {
+    for key in [Key::Delete, Key::Backspace] {
+        for component_selected in [false, true] {
+            let mut app = app();
+            saved(&mut app, "Path 1");
+            if component_selected {
+                click(&mut app, 20.0, 20.0, Modifiers::NONE);
+                assert_eq!(super::selected(&app).unwrap().2, [0]);
+            }
+            app.run("view.newGuide", json!({"orientation": "vertical", "position": 100})).unwrap();
+            crate::guide_select::select(&mut app, true, 0);
+            assert_eq!(crate::guide_select::selected(&app), Some((true, 0)));
+            let active = app.session.active().unwrap();
+            let (path, layers, steps) = (saved_path(&app).clone(), active.doc.layers.clone(), active.history.past_len());
+            let ctx = egui::Context::default();
+
+            // The initial press deletes the guide. A repeat must not reach the saved path.
+            for _ in 0..2 {
+                key_event(&mut app, &ctx, key, true);
+                let active = app.session.active().unwrap();
+                assert!(active.doc.guides.vertical.is_empty(), "{key:?}, component={component_selected}");
+                assert_eq!(crate::guide_select::selected(&app), None);
+                assert_eq!(saved_path(&app), &path);
+                assert_eq!(active.doc.layers, layers);
+                assert_eq!((active.history.past_len(), active.history.undo_label()), (steps + 1, Some("Delete Guide")));
+            }
+            assert_eq!(super::selected(&app).is_some(), component_selected);
+
+            key_event(&mut app, &ctx, key, false);
+            key_event(&mut app, &ctx, key, true);
+            let active = app.session.active().unwrap();
+            if component_selected {
+                assert_eq!(saved_path(&app).subpaths, path.subpaths[2..]);
+            } else {
+                assert!(active.doc.paths.is_empty());
+            }
+            assert_eq!(active.doc.layers, layers);
+        }
+    }
+}
+
+#[test]
 fn shape_paths_and_vector_masks_keep_the_layer_and_unselected_components() {
     for mask in [false, true] {
         let mut app = app();

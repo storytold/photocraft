@@ -7,9 +7,7 @@
 //! combines, so it keeps its operation. The selection is Direct Selection's: every anchor of a
 //! selected component.
 
-use std::collections::BTreeSet;
-
-use egui::{Event, Id, Key};
+use egui::{Event, Key};
 use photocraft_doc::{Path, PathOp};
 use photocraft_geom::Point;
 use serde_json::json;
@@ -72,50 +70,12 @@ pub(crate) fn deselect_components(app: &mut PhotocraftApp) {
     app.ui.direct_selection = DirectSelection::default();
 }
 
-fn held_delete_id() -> Id {
-    Id::unique("path_selection_held_delete")
-}
-
-/// Keep a held key with the path action that owned its first press, even after the selection clears.
-fn discard_owned_delete_repeats(ctx: &egui::Context) {
-    let id = held_delete_id();
-    let Some(mut held) = ctx.data(|data| data.get_temp::<BTreeSet<Key>>(id)) else { return };
-    ctx.input_mut(|input| {
-        input.events.retain(|event| {
-            let Event::Key { key, pressed, repeat, .. } = event else { return true };
-            if *pressed && *repeat {
-                return !held.contains(key);
-            }
-            held.remove(key);
-            true
-        });
-        held.retain(|key| input.key_down(*key));
-    });
-    ctx.data_mut(|data| {
-        if held.is_empty() {
-            data.remove_temp::<BTreeSet<Key>>(id);
-        } else {
-            data.insert_temp(id, held);
-        }
-    });
-}
-
 /// Delete the Path Selection tool's saved path or selected components before Edit › Clear can run.
 pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    discard_owned_delete_repeats(ctx);
     if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.drag.is_some() {
         return false;
     }
-    let Some(event_index) = ctx.input(|input| {
-        input.events.iter().position(|event| {
-            matches!(
-                event,
-                Event::Key { key: Key::Backspace | Key::Delete, pressed: true, modifiers, .. } if modifiers.is_none()
-            )
-        })
-    }) else {
-        return false;
-    };
+    let Some(event_index) = crate::shortcuts::object_delete_press(ctx) else { return false };
     let visible = app.ui.view.shows(app.ui.view.show.target_path);
     let action = match visible.then(|| selected(app)).flatten() {
         Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
@@ -138,8 +98,13 @@ pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) ->
             Some(("path.delete", PathRef::Saved(index).params(app)))
         }
     };
-    let Event::Key { key, .. } = ctx.input_mut(|input| input.events.remove(event_index)) else { return false };
-    ctx.data_mut(|data| data.get_temp_mut_or_default::<BTreeSet<Key>>(held_delete_id()).insert(key));
+    // A guide can stay selected when switching tools and keeps priority over this path.
+    if crate::guide_select::keys(app, ctx) {
+        return true;
+    }
+    if !crate::shortcuts::consume_object_delete(ctx, event_index) {
+        return false;
+    }
     // A stale, locked or unsupported selection still owns the key.
     if let Some((command, params)) = action {
         match app.run(command, params) {
