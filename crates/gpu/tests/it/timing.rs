@@ -17,7 +17,7 @@ use std::time::Instant;
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, Size};
 use photocraft_geom::Rect;
-use photocraft_gpu::{Compositor, DeviceHealth, GpuTiming, timing};
+use photocraft_gpu::{Compositor, DeviceHealth, GpuTiming, Stats, timing};
 
 /// Pixels in `r`, as the compositor counts them.
 fn area(r: Rect) -> u64 {
@@ -38,7 +38,7 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// A real GPU with timestamp queries, or `None` with the reason printed.
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue, Compositor)> {
     let options = wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() };
-    let Ok(adapter) = block_on(wgpu::Instance::default().request_adapter(&options)) else {
+    let Ok(adapter) = block_on(wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&options)) else {
         eprintln!("SKIP gpu timing: no adapter");
         return None;
     };
@@ -92,8 +92,14 @@ fn document(size: Size) -> Document {
 
 /// Render `region` and return (submit ms, waited-for wall ms, the measurement).
 fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>) {
+    let (submit_ms, wall_ms, timing, _) = measure_with_stats(device, queue, comp, doc, region);
+    (submit_ms, wall_ms, timing)
+}
+
+/// [`measure`], also returning the render's [`Stats`].
+fn measure_with_stats(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>, Stats) {
     let t0 = Instant::now();
-    comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
+    let stats = comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
     let submit_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -106,7 +112,7 @@ fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, do
         }
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     }
-    (submit_ms, wall_ms, timing)
+    (submit_ms, wall_ms, timing, stats)
 }
 
 #[test]
@@ -139,9 +145,11 @@ fn gpu_time_tracks_execution_not_submission() {
     assert_eq!(t.px, area(full), "the measurement carries the pixels of the refresh it measured");
     assert!(t.spans >= 1, "at least one command buffer was timed");
 
-    // The premise: on this adapter the refresh really is dominated by GPU execution. A machine
-    // fast enough that it isn't cannot tell the two timings apart, so say so instead of failing.
-    if wall_ms < 3.0 * submit_ms {
+    // The premise: on this adapter the refresh really is dominated by GPU execution. `wall_ms`
+    // includes `submit_ms`, so the GPU execution window is `wall_ms - submit_ms`; a machine fast
+    // enough that this window isn't well above `3.0 * submit_ms` cannot tell the two timings
+    // apart, so say so instead of failing.
+    if wall_ms - submit_ms < 3.0 * submit_ms {
         eprintln!("SKIP the comparison: this GPU finishes a 6 MP composite in {wall_ms:.1} ms against {submit_ms:.1} ms of encoding");
         return;
     }
@@ -187,26 +195,97 @@ fn a_refresh_that_submits_several_times_is_one_measurement() {
     let full = Rect::from_xywh(0, 0, size.width, size.height);
 
     let _ = measure(&device, &queue, &mut comp, &doc, full);
-    let (submit_ms, wall_ms, timing) = measure(&device, &queue, &mut comp, &doc, full);
+    let (submit_ms, wall_ms, timing, stats) = measure_with_stats(&device, &queue, &mut comp, &doc, full);
     let t = timing.expect("a batched refresh is measured like any other");
-    eprintln!("batched: {} command buffers, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms", t.spans, t.ms);
-    assert_eq!(t.px, area(full));
-    if t.spans < 2 {
-        eprintln!("SKIP the sum: this refresh still fit one command buffer");
-        return;
-    }
-    assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
-    // What this bound excludes is summing only the last command buffer. A correct sum measures
-    // ~85 % of the waited-for GPU time here; the flush thresholds split on accumulated work, so
-    // no single buffer of the several carries much over half of it, and timing only the last
-    // would land near 40 %. 0.6 sits between the two with room on both sides for a machine
-    // whose split is less even than this one's.
-    assert!(
-        t.ms >= (wall_ms - submit_ms) * 0.6,
-        "summed gpu time {:.1} ms is far below the {:.1} ms the refresh waited: is only the last command buffer timed?",
-        t.ms,
-        wall_ms - submit_ms
+    eprintln!(
+        "batched: {} flushes, {} command buffers timed, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms",
+        stats.flushes, t.spans, t.ms
     );
+    assert_eq!(t.px, area(full));
+    assert!(stats.flushes >= 1, "a refresh over a 24 MiB budget submits in batches");
+    // Each flush closes the span of the command buffer it submits and opens one in the next, so the
+    // one measurement holds a span for every command buffer the refresh submitted.
+    assert_eq!(t.spans as usize, stats.flushes + 1, "the measurement spans every command buffer of the refresh");
+    assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
+}
+
+/// Submit `buffers` command buffers as one measurement, each copying `src` into `dst` `copies`
+/// times, through `start`, `split` and `finish` as a refresh that flushes does.
+fn time_copies(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    timer: &mut timing::GpuTimer,
+    src: &wgpu::Buffer,
+    dst: &wgpu::Buffer,
+    buffers: usize,
+    copies: u32,
+) -> GpuTiming {
+    let mut encoder = device.create_command_encoder(&Default::default());
+    timer.start(&mut encoder, buffers as u64);
+    for i in 0..buffers {
+        for _ in 0..copies {
+            encoder.copy_buffer_to_buffer(src, 0, dst, 0, src.size());
+        }
+        if i + 1 < buffers {
+            let mut next = device.create_command_encoder(&Default::default());
+            timer.split(&mut encoder, &mut next);
+            queue.submit([std::mem::replace(&mut encoder, next).finish()]);
+        }
+    }
+    timer.finish(&mut encoder);
+    queue.submit([encoder.finish()]);
+    timer.submitted();
+    let mut timing = None;
+    for _ in 0..8 {
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        timing = timer.take();
+        if timing.is_some() {
+            break;
+        }
+    }
+    let t = timing.expect("the copies are measured");
+    assert_eq!(t.spans as usize, buffers, "one span per command buffer");
+    t
+}
+
+/// The measurement of several command buffers is the sum of their spans. This compares GPU time
+/// with GPU time only: the same copies timed as one command buffer, and four times over in four.
+#[test]
+fn several_command_buffers_sum_their_gpu_time() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((device, queue, _)) = gpu() else { return };
+    let mut timer = timing::GpuTimer::new(&device, &queue).expect("the device has timestamp queries");
+    let buffer = |label| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: 64 << 20,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    let (src, dst) = (buffer("timing_src"), buffer("timing_dst"));
+
+    // Double the copies until one command buffer takes at least 2 ms.
+    let mut copies = 1;
+    loop {
+        let t = time_copies(&device, &queue, &mut timer, &src, &dst, 1, copies);
+        if t.ms >= 2.0 {
+            break;
+        }
+        if copies >= 1024 {
+            eprintln!("SKIP the sum: {copies} copies of 64 MiB take {:.2} ms in one command buffer", t.ms);
+            return;
+        }
+        copies *= 2;
+    }
+
+    let before = time_copies(&device, &queue, &mut timer, &src, &dst, 1, copies);
+    let four = time_copies(&device, &queue, &mut timer, &src, &dst, 4, copies);
+    let after = time_copies(&device, &queue, &mut timer, &src, &dst, 1, copies);
+    let one = before.ms.max(after.ms);
+    eprintln!("{copies} copies: one command buffer {:.2} / {:.2} ms, four {:.2} ms ({:.2}x)", before.ms, after.ms, four.ms, four.ms / one);
+    // A sum of the four spans reads about 4x; timing only the last command buffer reads about 1x.
+    assert!(four.ms >= 2.5 * one, "four command buffers measured {:.2} ms against {one:.2} ms for one: is only one span counted?", four.ms);
 }
 
 #[test]
@@ -284,4 +363,26 @@ fn a_failed_refresh_that_recorded_nothing_keeps_the_timer_alive() {
     }
     let after = after.expect("the timer still measures after a refresh that recorded nothing");
     assert_eq!(after.px, 4096, "the measurement belongs to the refresh that produced it");
+}
+
+/// A refresh whose layer pages ran out of GPU memory even after the submit-and-retry ends on the
+/// CPU (#6563), but measuring goes on: the retry waited for the GPU, so none of the dropped
+/// measurement's timestamps were still in flight.
+#[test]
+fn an_out_of_memory_refresh_does_not_stop_gpu_timing() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((device, queue, mut comp)) = gpu() else { return };
+    let doc = document(Size::new(640, 480));
+    let full = doc.bounds();
+    // The first page texture fails twice, and twice more in the retry after the submit.
+    comp.fail_layer_allocs(4);
+    assert!(comp.render(&device, &queue, &doc, full, |_, _| {}).is_err(), "every try failed");
+    let mut timing = None;
+    for _ in 0..4 {
+        timing = measure(&device, &queue, &mut comp, &doc, full).2;
+        if timing.is_some() {
+            break;
+        }
+    }
+    assert!(timing.is_some(), "GPU timing stopped for good after one out-of-memory refresh");
 }
