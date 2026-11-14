@@ -43,13 +43,17 @@ pub struct SpellDialog {
     /// Misspellings from `edit.checkSpelling` (layer, start, end, word, suggestions).
     pub items: Vec<Value>,
     pub index: usize,
-    /// Ignore All words for this check.
-    pub ignore: Vec<String>,
+    /// Ignore All words for this check as [`ignore_key`]s, each skipped only in the layer it was
+    /// ignored in (#14176).
+    pub ignore: Vec<(photocraft_doc::LayerId, String)>,
     pub change_to: String,
     pub all_layers: bool,
     /// Single-layer checks remain bound to their opening layer across refreshes and toggles.
     #[serde(skip)]
     pub layer: Option<photocraft_doc::LayerId>,
+    /// The layers selected when it opened, which Check All Layers off checks (#14184).
+    #[serde(skip)]
+    pub layers: Vec<photocraft_doc::LayerId>,
     pub message: String,
     /// The token of the action playback that opened the dialog at a Check Spelling step: Done
     /// continues it ([`crate::actions::resume`]).
@@ -88,6 +92,10 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// `action`). `params.show` forces a panel open or closed.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "edit.checkSpelling" && params.get("action").is_none() && params.get("ui").is_none_or(|u| u.as_bool() != Some(false)) {
+        // A document without any type layer opens no dialog and shows nothing, as in the reference (#14172).
+        if app.session.active().is_some_and(|st| !photocraft_engine::type_extra_cmds::has_type_layers(&st.doc)) {
+            return Some(app.session.execute("edit.checkSpelling", json!({"action": "list"})).map_err(|e| e.to_string()));
+        }
         return Some(open_spelling(app, params.get("allLayers").and_then(Value::as_bool).unwrap_or(true)));
     }
     if !handles(id) {
@@ -766,35 +774,63 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ------------------------------------------------------------------ spelling
 
-/// Refresh the opening layer when checking one layer; an absent opening receiver must not adopt the newly active layer.
+/// Refresh the opening layer when checking one layer, and start Check All Layers at it; an absent
+/// opening receiver must not adopt the newly active layer.
 fn refresh_spelling(app: &mut PhotocraftApp) {
     let Some(d) = app.ui.type_panels.spell.clone() else { return };
-    let mut p = json!({ "action": "list", "allLayers": d.all_layers, "ignore": d.ignore, "suggestions": 8 });
-    if let Some(layer) = d.layer.filter(|_| !d.all_layers) {
-        p["layer"] = json!(layer.0);
+    let mut p = json!({ "action": "list", "allLayers": d.all_layers, "suggestions": 8 });
+    // Check All Layers starts at the opening layer, or top to bottom (null) without one (#14174).
+    if d.all_layers {
+        p["from"] = json!(d.layer.map(|l| l.0));
+    } else if let Some(layer) = d.layer {
+        // A selected layer deleted while the dialog is open is dropped, so the others stay listed.
+        let doc = app.session.active().map(|st| &st.doc);
+        p["layers"] = json!(d.layers.iter().filter(|l| doc.is_some_and(|doc| doc.layer(**l).is_some())).map(|l| l.0).collect::<Vec<_>>());
+        p["from"] = json!(layer.0);
     }
     let items = if !d.all_layers && d.layer.is_none() {
         Vec::new()
     } else {
         run(app, "edit.checkSpelling", p).and_then(|r| r["misspellings"].as_array().cloned()).unwrap_or_default()
     };
+    let ignored = |i: &Value| {
+        let key = ignore_key(i["word"].as_str().unwrap_or(""));
+        d.ignore.iter().any(|(layer, k)| i["layer"] == layer.0 && *k == key)
+    };
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
-        s.items = items;
+        s.items = items.into_iter().filter(|i| !ignored(i)).collect();
         s.change_to = s.items.get(s.index).and_then(|i| i["suggestions"][0].as_str()).unwrap_or("").to_string();
     }
+}
+
+/// The word as the dictionary compares it with accepted words (`Dictionary::check`), so Ignore All
+/// matches what the engine's `ignore` did: typographic apostrophes as `'`, no `'s`, lowercased.
+fn ignore_key(word: &str) -> String {
+    let w = word.replace(['\u{2019}', '\u{2018}', '\u{02BC}'], "'");
+    let w = w.strip_suffix("'s").or_else(|| w.strip_suffix("'S")).filter(|b| !b.is_empty()).unwrap_or(&w);
+    w.trim_matches('\'').to_lowercase()
+}
+
+/// Moves the index back over the passed words that `gone` drops from the next list, so the word
+/// after the current one comes up instead of skipping some.
+fn step_back(s: &mut SpellDialog, gone: impl Fn(&Value) -> bool) {
+    s.index -= s.items[..s.index.min(s.items.len())].iter().filter(|j| gone(j)).count();
 }
 
 /// Opens Edit › Check Spelling (returns the misspellings). Opening it again while an action waits
 /// at a Check Spelling step keeps that action's token, so Done still continues it.
 pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value, String> {
     let resume = app.ui.type_panels.spell.as_ref().and_then(|d| d.resume);
-    let layer = if resume.is_some() { app.ui.type_panels.spell.as_ref().and_then(|d| d.layer) } else { app.session.active().and_then(|st| st.active_layer) };
+    let (layer, layers) = match app.ui.type_panels.spell.as_ref().filter(|_| resume.is_some()) {
+        Some(d) => (d.layer, d.layers.clone()),
+        None => app.session.active().map_or((None, Vec::new()), |st| (st.active_layer, st.selected_layers())),
+    };
     let mut params = json!({"action":"list","allLayers":all_layers});
     if !all_layers {
         params["layer"] = json!(layer.ok_or("no layer was selected for this spelling check")?.0);
     }
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
-    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume, ..Default::default() });
+    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, layers, resume, ..Default::default() });
     refresh_spelling(app);
     let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
     Ok(json!({ "dialog": SPELLING, "misspellings": d }))
@@ -818,13 +854,10 @@ pub fn close_spelling(app: &mut PhotocraftApp) {
     }
 }
 
-/// Bind single-layer Change All to the listed item; all-layer corrections intentionally omit a layer restriction.
-fn spelling_change_all_params(item: &Value, word: &str, replace: &str, all_layers: bool) -> Value {
-    let mut params = json!({"action":"changeAll", "word":word, "replace":replace, "allLayers":all_layers});
-    if !all_layers {
-        params["layer"] = item["layer"].clone();
-    }
-    params
+/// Change All replaces the word in the listed item's layer only, also with Check All Layers on:
+/// the same word in another layer is flagged when the check gets there (#14176).
+fn spelling_change_all_params(item: &Value, word: &str, replace: &str) -> Value {
+    json!({"action":"changeAll", "word":word, "replace":replace, "layer":item["layer"]})
 }
 
 /// Render spelling navigation and corrections using the retained opening receiver and paused-action continuation.
@@ -942,8 +975,10 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
         "ignoreAll" => {
-            if let Some(s) = app.ui.type_panels.spell.as_mut() {
-                s.ignore.push(word);
+            if let (Some(s), Some(layer)) = (app.ui.type_panels.spell.as_mut(), item.as_ref().and_then(|i| i["layer"].as_u64())) {
+                let key = ignore_key(&word);
+                step_back(s, |j| j["layer"] == layer && ignore_key(j["word"].as_str().unwrap_or("")) == key);
+                s.ignore.push((photocraft_doc::LayerId(layer), key));
             }
             refresh_spelling(app);
         }
@@ -956,11 +991,20 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 let p = if a == "change" {
                     json!({ "action": "change", "layer": i["layer"], "start": i["start"], "end": i["end"], "word": word, "replace": change_to })
                 } else {
-                    spelling_change_all_params(i, &word, &change_to, all_layers)
+                    spelling_change_all_params(i, &word, &change_to)
                 };
-                if let Err(error) = crate::actions::spelling_change(app, p) {
-                    app.ui.status = error;
-                    app.ui.status_error = true;
+                match crate::actions::spelling_change(app, p) {
+                    // The engine also replaced the passed occurrences in this layer.
+                    Ok(_) if a == "changeAll" => {
+                        if let Some(s) = app.ui.type_panels.spell.as_mut() {
+                            step_back(s, |j| j["layer"] == i["layer"] && j["word"] == word);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        app.ui.status = error;
+                        app.ui.status_error = true;
+                    }
                 }
                 refresh_spelling(app);
             }
@@ -998,7 +1042,8 @@ mod tests {
     }
 
     #[test]
-    /// Single-layer Change All edits the listed text layer even after the host selects another layer.
+    /// Change All edits only the listed text layer, with Check All Layers off or on, even after the
+    /// host selects another layer (#14176).
     fn change_all_keeps_the_listed_layer_after_a_session_selection_change() {
         for all_layers in [false, true] {
             let mut app = app_with_text("Teh cat");
@@ -1006,20 +1051,19 @@ mod tests {
             app.run("type.create", json!({"x":10,"y":90,"text":"Teh dog"})).unwrap();
             let other = app.session.active().unwrap().active_layer.unwrap();
             app.session.select_layer(listed).unwrap();
-            menu(&mut app, "edit.checkSpelling", &json!({"allLayers":false})).unwrap().unwrap();
+            menu(&mut app, "edit.checkSpelling", &json!({"allLayers":all_layers})).unwrap().unwrap();
             app.session.select_layer(other).unwrap();
             refresh_spelling(&mut app);
             let item = app.ui.type_panels.spell.as_ref().unwrap().items[0].clone();
             assert_eq!(item["layer"], listed.0);
-            let params = spelling_change_all_params(&item, "Teh", "The", all_layers);
-            if all_layers {
-                assert!(params.get("layer").is_none());
-            }
+            let params = spelling_change_all_params(&item, "Teh", "The");
+            assert_eq!(params["layer"], listed.0);
             crate::actions::spelling_change(&mut app, params).unwrap();
             refresh_spelling(&mut app);
-            assert!(app.ui.type_panels.spell.as_ref().unwrap().items.is_empty());
+            let left: Vec<Value> = app.ui.type_panels.spell.as_ref().unwrap().items.iter().map(|i| i["layer"].clone()).collect();
+            assert_eq!(left, if all_layers { vec![json!(other.0)] } else { vec![] });
             let doc = &app.session.active().unwrap().doc;
-            for (id, expected) in [(listed, "The cat"), (other, if all_layers { "The dog" } else { "Teh dog" })] {
+            for (id, expected) in [(listed, "The cat"), (other, "Teh dog")] {
                 let photocraft_doc::LayerContent::Text(text) = &doc.layer(id).unwrap().content else { panic!("not text") };
                 assert_eq!(text.text, expected);
             }
@@ -1144,3 +1188,19 @@ mod tests {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_enabled_ui_tests.rs"]
+mod spell_enabled_ui_tests;
+
+#[cfg(test)]
+#[path = "type_spell_order_ui_tests.rs"]
+mod spell_order_ui_tests;
+
+#[cfg(test)]
+#[path = "type_spell_per_layer_tests.rs"]
+mod spell_per_layer_tests;
+
+#[cfg(test)]
+#[path = "type_spell_selected_ui_tests.rs"]
+mod spell_selected_ui_tests;
