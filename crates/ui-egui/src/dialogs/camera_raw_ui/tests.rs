@@ -922,7 +922,7 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
         d.processed.iter().zip(&before).any(|(a, b)| (a[0] - b[0]).abs() > 0.01 || (a[1] - b[1]).abs() > 0.01),
         "the Calibration panel changes the preview"
     );
-    let xmp = photocraft_io::camera_raw_xmp::save(&d.params);
+    let xmp = photocraft_io::camera_raw_xmp::save(&d.params).unwrap();
     assert!(xmp.contains("crs:ShadowTint=\"+100\"") && xmp.contains("crs:RedHue=\"+100\"") && xmp.contains("crs:BlueSaturation=\"-100\""), "{xmp}");
     let mut back = CameraRaw::default();
     photocraft_io::camera_raw_xmp::load(&mut back, xmp.as_bytes()).unwrap();
@@ -1170,7 +1170,7 @@ fn a_sidecar_crop_crops_the_opened_raw() {
     assert_eq!(size(&app), Some((48, 32)));
     // PhotoCraft's own sidecar: a changed setting rewrites it, with the crop it was opened with.
     let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
-    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop))).unwrap();
+    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop)).unwrap()).unwrap();
     open_dialog_at(&mut app, &ctx, &dng, &raw_path);
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
     assert_eq!(size(&app), Some((24, 16)));
@@ -1486,4 +1486,134 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn geometry_previews_the_canvas_blocks_of_the_proxy() {
+    use super::convert::canvas_in_proxy;
+    // A layer 20 px past a 64 × 48 canvas, proxy blocks of 1 and of 3 pixels.
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 84, 48), 1, 84, 48), Some([0, 0, 64, 48]));
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(-20, 0, 64, 48), 3, 28, 16), Some([6, 0, 28, 16]));
+    // The canvas is the whole proxy: nothing to frame.
+    assert_eq!(canvas_in_proxy(Rect::new(0, 0, 64, 48), Rect::new(0, 0, 64, 48), 1, 64, 48), None);
+}
+
+/// What Geometry uncovers shows white on the Background, as the filter makes it there, and
+/// transparent on a pixel layer.
+#[test]
+fn geometry_preview_keeps_the_background_opaque() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    let (corner, middle) = (d.processed[0], d.processed[d.ph / 2 * d.pw + d.pw / 2]);
+    assert!(corner[3] > 0.99 && corner[..3].iter().all(|v| *v > 0.99), "{corner:?}");
+    assert!(middle[0] < 0.01, "{middle:?}");
+    // A pixel layer: the corner turns transparent.
+    let (mut app, ctx) = (PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()), egui::Context::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    assert!(d.processed[0][3] < 0.01, "{:?}", d.processed[0]);
+}
+
+/// Upright in the preview is the correction OK applies: the proxy develops with the analysis of
+/// the full-resolution canvas (what the filter analyses), not of the proxy, whose lines differ.
+#[test]
+fn upright_preview_uses_the_full_canvas_analysis_the_filter_applies() {
+    use photocraft_algo::camera_raw::geometry::{self, Transform, homography};
+    let (w, h) = (2000usize, 1500usize);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": w, "height": h})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    // A window grid photographed with the camera tilted up.
+    let tilted = geometry::manual(&Transform { vertical: -35.0, rotate: 2.0, ..Transform::default() }, w as f64, h as f64);
+    let mut grid: Vec<[f32; 4]> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let v = if (x / 150 + y / 150) % 2 == 0 { 0.85 } else { 0.15 };
+            [v, v, v, 1.0]
+        })
+        .collect();
+    geometry::warp(&mut grid, w, h, &tilted, false);
+    let st = app.session.active_mut().unwrap();
+    let id = st.active_layer.unwrap();
+    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).map(|l| &mut l.content) else {
+        panic!("a pixel layer")
+    };
+    let format = s.format();
+    let mut data = Vec::with_capacity(w * h * format.channels());
+    for q in &grid {
+        data.extend(photocraft_raster::from_rgba(&format, *q));
+    }
+    s.write_region(Rect::new(0, 0, w as i32, h as i32), &data);
+    let full = {
+        let mut px = vec![[0.0f32; 4]; w * h];
+        s.read_rgba_into(Rect::new(0, 0, w as i32, h as i32), &mut px);
+        px
+    };
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    assert!(d.pw < w && d.canvas_frame.is_none(), "the proxy is a smaller copy of the canvas");
+    let scale = |m: &[f64; 9], sx: f64, sy: f64| {
+        let (a, b) = ([sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0], [1.0 / sx, 0.0, 0.0, 0.0, 1.0 / sy, 0.0, 0.0, 0.0, 1.0]);
+        let mul = |x: &[f64; 9], y: &[f64; 9]| -> [f64; 9] { std::array::from_fn(|i| (0..3).map(|k| x[i / 3 * 3 + k] * y[k * 3 + i % 3]).sum()) };
+        let m = mul(&a, &mul(m, &b));
+        m.map(|v| v / m[8])
+    };
+    let off = |a: &[f64; 9], b: &[f64; 9]| {
+        let pt = |m: &[f64; 9], x: f64, y: f64| {
+            let z = m[6] * x + m[7] * y + m[8];
+            [(m[0] * x + m[1] * y + m[2]) / z, (m[3] * x + m[4] * y + m[5]) / z]
+        };
+        let (pw, ph) = (d.pw as f64, d.ph as f64);
+        [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5), (0.0, 0.0)]
+            .iter()
+            .map(|(u, v)| {
+                let (p, q) = (pt(a, u * pw, v * ph), pt(b, u * pw, v * ph));
+                (p[0] - q[0]).hypot(p[1] - q[1])
+            })
+            .fold(0.0, f64::max)
+    };
+    let mut proxy_own = 0.0f64;
+    for mode in ["auto", "level", "vertical", "full"] {
+        d.params.perspective_upright = mode.into();
+        // What OK applies: the command develops the canvas, analysing it at full resolution.
+        let committed = homography(&full, w, h, &d.params);
+        let (sx, sy) = (d.pw as f64 / w as f64, d.ph as f64 / h as f64);
+        let want = scale(&committed, sx, sy);
+        let p = d.proxy_job().develop_params();
+        let shown = homography(&d.proxy, d.pw, d.ph, &p);
+        assert!(off(&shown, &want) < 1e-3, "{mode}: the preview's correction is {} px off the filter's", off(&shown, &want));
+        proxy_own = proxy_own.max(off(&homography(&d.proxy, d.pw, d.ph, &d.params), &want));
+    }
+    assert!(proxy_own > 1e-2, "analysing the proxy itself picks another correction somewhere ({proxy_own} px)");
+}
+
+/// The proxy mixes the result by the selection as the filter does, by alpha: in the corner
+/// Geometry uncovers, a half selection keeps the layer's colour at half its alpha.
+#[test]
+fn geometry_preview_mixes_the_selection_by_alpha() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let d = app.camera_raw.as_mut().unwrap();
+    let original = d.proxy[0];
+    d.selection = Some(std::sync::Arc::new(vec![0.5; d.pw * d.ph]));
+    d.params.perspective_rotate = 10.0;
+    d.render(&ctx);
+    let corner = d.processed[0];
+    let want = [original[0], original[1], original[2], original[3] * 0.5];
+    assert!(corner.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{corner:?} != {want:?}");
 }

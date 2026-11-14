@@ -75,6 +75,21 @@ const CURVES: &[(&str, &str)] = &[("pointCurve", "Crv "), ("pointCurveRed", "Crv
 // retained in the template; active values must keep the entire filter opaque.
 const NEUTRAL_ONLY: &[(&str, i32)] = &[("LNRC", 0), ("CNRS", 50), ("MDis", 0), ("VigA", 0), ("VigM", 50), ("crfs", 100), ("TMMs", 0), ("PGTM", 0), ("RGBt", 0)];
 
+/// Geometry and Masks settings, which no observed descriptor carries yet.
+const GEOMETRY: &[&str] = &[
+    "perspectiveUpright",
+    "uprightGuides",
+    "perspectiveVertical",
+    "perspectiveHorizontal",
+    "perspectiveRotate",
+    "perspectiveAspect",
+    "perspectiveScale",
+    "perspectiveX",
+    "perspectiveY",
+    "constrainCrop",
+    "masks",
+];
+
 fn default_params() -> Option<J> {
     serde_json::to_value(CameraRaw::default()).ok()
 }
@@ -240,6 +255,16 @@ pub(super) fn export_item(params: &J) -> Result<Descriptor, String> {
     for key in object.keys() {
         if key != "layer" && !key.starts_with("__") && defaults.get(key).is_none() {
             return Err(format!("Camera Raw setting `{key}` has no verified PSD mapping"));
+        }
+    }
+    // Geometry (Upright, Transform, Constrain Crop) has no observed descriptor keys yet: refuse
+    // rather than write a PSD whose filter silently loses it.
+    for key in GEOMETRY {
+        if let (Some(v), Some(d)) = (object.get(*key), defaults.get(*key))
+            && v != d
+            && !(v.is_number() && d.is_number() && v.as_f64() == d.as_f64())
+        {
+            return Err(format!("Camera Raw setting `{key}` (Geometry / Masks) has no verified PSD mapping"));
         }
     }
     for wheel in ["gradeShadows", "gradeMidtones", "gradeHighlights", "gradeGlobal"] {

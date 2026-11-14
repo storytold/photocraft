@@ -3,8 +3,8 @@
 //! `x:xmpmeta/rdf:RDF/rdf:Description`, as attributes or as child elements.
 //!
 //! Loading applies only the settings the file holds, over the current ones, as Camera Raw's
-//! Load Settings does; settings PhotoCraft has no control for (lens corrections, geometry,
-//! defringe, …) are ignored and named in the report. The same reader fills the dialog from a
+//! Load Settings does; settings PhotoCraft has no control for (lens corrections, defringe, …)
+//! are ignored and named in the report. Geometry and masks (see `masks`) are read and written. The same reader fills the dialog from a
 //! raw file's sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`), and the writer keeps it. Saving writes every supported
 //! control, so loading the file in Photoshop reproduces the dialog.
 //!
@@ -20,9 +20,15 @@
 //! Filter has none). Without `HasCrop`, or with `HasCrop="False"`, the crop keys are stale and
 //! mean nothing. A straightened crop (`CropAngle` other than 0) isn't applied.
 
+#[cfg(test)]
+use craft_crs::RDF_NS;
 pub use craft_crs::{CROP_KEYS, CRS_NS, Crop, MAX_XMP_BYTES};
 use craft_crs::{CropState, Settings, Value, number, points, signed, toolkit};
+use craft_metadata::{XmpNamespace, XmpValue};
+use photocraft_algo::camera_raw::geometry::{MAX_GUIDES, Upright};
 use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
+
+mod masks;
 
 type Field = fn(&mut CameraRaw) -> &mut f32;
 
@@ -81,6 +87,14 @@ const SCALARS: &[(&str, Field, f32, f32)] = &[
     ("ColorGradeMidtoneSat", |p| &mut p.grade_midtones.sat, 0.0, 100.0),
     ("ColorGradeMidtoneLum", |p| &mut p.grade_midtones.lum, -100.0, 100.0),
     ("SplitToningHighlightHue", |p| &mut p.grade_highlights.hue, 0.0, 360.0),
+    // Geometry › Transform.
+    ("PerspectiveVertical", |p| &mut p.perspective_vertical, -100.0, 100.0),
+    ("PerspectiveHorizontal", |p| &mut p.perspective_horizontal, -100.0, 100.0),
+    ("PerspectiveRotate", |p| &mut p.perspective_rotate, -10.0, 10.0),
+    ("PerspectiveAspect", |p| &mut p.perspective_aspect, -100.0, 100.0),
+    ("PerspectiveScale", |p| &mut p.perspective_scale, 50.0, 150.0),
+    ("PerspectiveX", |p| &mut p.perspective_x, -100.0, 100.0),
+    ("PerspectiveY", |p| &mut p.perspective_y, -100.0, 100.0),
     ("SplitToningHighlightSaturation", |p| &mut p.grade_highlights.sat, 0.0, 100.0),
     ("ColorGradeHighlightLum", |p| &mut p.grade_highlights.lum, -100.0, 100.0),
     ("ColorGradeGlobalHue", |p| &mut p.grade_global.hue, 0.0, 360.0),
@@ -153,6 +167,9 @@ const METADATA: &[&str] = &[
     "RawFileName",
 ];
 
+/// `crs:PerspectiveUpright` values (observed on Photoshop 2026) and PhotoCraft's Upright modes.
+const UPRIGHT: &[(u8, &str)] = &[(0, "off"), (1, "auto"), (2, "full"), (3, "level"), (4, "vertical"), (5, "guided")];
+
 /// What [`load`] applied.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LoadReport {
@@ -205,6 +222,22 @@ fn apply_text(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value
             }
             None => report.ignored.push(name.to_string()),
         }
+    } else if name == "PerspectiveUpright" {
+        match number(value).filter(|v| v.fract() == 0.0).and_then(|v| UPRIGHT.iter().find(|(n, _)| f32::from(*n) == v)) {
+            Some((_, mode)) => {
+                params.perspective_upright = (*mode).into();
+                report.applied += 1;
+            }
+            None => report.ignored.push(name.to_string()),
+        }
+    } else if name == "CropConstrainToWarp" {
+        match number(value) {
+            Some(v) => {
+                params.constrain_crop = v != 0.0;
+                report.applied += 1;
+            }
+            None => report.ignored.push(name.to_string()),
+        }
     } else if name == "PostCropVignetteStyle" {
         match STYLES.iter().find(|(n, _)| *n == value.trim()) {
             Some((_, style)) => {
@@ -221,11 +254,63 @@ fn apply_text(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value
 /// Apply a Camera Raw settings file over `params`. Fails on input that isn't XMP or holds no
 /// Camera Raw settings; never panics on malformed input.
 pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> {
-    let settings = Settings::parse(bytes).map_err(|e| e.to_string())?;
+    // As `Settings::parse` reads a file, and PhotoCraft's namespace with it.
+    if bytes.len() > MAX_XMP_BYTES {
+        return Err(craft_crs::Error::TooLarge.to_string());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| craft_crs::Error::NotText.to_string())?;
+    let xmp = craft_metadata::parse_xmp_with(text, &[XmpNamespace { prefix: "pcraft", uri: masks::PCRAFT_NS }])
+        .map_err(|e| craft_crs::Error::Xml(e.to_string()).to_string())?;
+    let settings = Settings::from_xmp(&xmp);
+    let own = |name: &str| xmp.values.get(&format!("pcraft:{name}")).and_then(XmpValue::text);
+    let (own_masks_text, guides_text) = (own("CameraRawMasks"), own("UprightGuides"));
+    if settings.entries.is_empty() && own_masks_text.is_none() && guides_text.is_none() {
+        return Err(craft_crs::Error::NoSettings.to_string());
+    }
     let mut next = params.clone();
     let mut report = LoadReport::default();
+    let mut own_masks = None;
+    if let Some(json) = own_masks_text {
+        match masks::read_own(json) {
+            Some(m) => own_masks = Some(m),
+            None => report.ignored.push("CameraRawMasks".into()),
+        }
+    }
+    if let Some(json) = guides_text {
+        match guides(json) {
+            Some(g) => {
+                next.upright_guides = g;
+                report.applied += 1;
+            }
+            None => report.ignored.push("UprightGuides".into()),
+        }
+    }
+    let mut xmp_masks = Vec::new();
+    // Whether the file holds Camera Raw's corrections at all (an empty list clears the masks),
+    // and whether one of them was an empty list.
+    let (mut corrections_seen, mut corrections_empty) = (false, false);
+    // In a fixed order (the settings come sorted by name), so the masks keep theirs.
+    for name in masks::correction_names() {
+        let Some(val) = settings.get(name) else { continue };
+        corrections_seen = true;
+        match val {
+            Value::Structured(v) => {
+                let before = xmp_masks.len();
+                let held = masks::read(v, &mut xmp_masks, &mut report.ignored);
+                corrections_empty |= held == 0;
+                if held > 0 && xmp_masks.len() == before {
+                    report.ignored.push(name.to_string());
+                }
+            }
+            // An empty `rdf:Seq` reads as a sequence of no text items.
+            Value::Seq(items) if items.is_empty() => corrections_empty = true,
+            _ => report.ignored.push(name.to_string()),
+        }
+    }
     for (name, val) in &settings.entries {
-        if let Some((_, field)) = CURVES.iter().find(|(n, _)| *n == name.as_str()) {
+        if masks::is_corrections(name) {
+            // Read above.
+        } else if let Some((_, field)) = CURVES.iter().find(|(n, _)| *n == name.as_str()) {
             match val {
                 Value::Seq(items) => match curve(items) {
                     Some(pts) => {
@@ -257,8 +342,36 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
             report.ignored.extend(keys.into_iter().map(str::to_string));
         }
     }
+    // PhotoCraft's own copy of the masks is exact; Camera Raw's layout is read otherwise.
+    if let Some(m) = own_masks {
+        next.masks = m;
+        report.applied += 1;
+    } else if corrections_seen && (!xmp_masks.is_empty() || corrections_empty) {
+        // Each correction is bounded on its own; together they may still hold more brush work
+        // than a develop can paint, which would stall the first preview.
+        match photocraft_algo::camera_raw::masks::validate(&xmp_masks) {
+            Ok(()) => {
+                next.masks = xmp_masks;
+                report.applied += 1;
+            }
+            Err(_) => report.ignored.push("CorrectionMasks".into()),
+        }
+    }
+    // Otherwise every correction was rejected (and reported): the current masks stay.
     *params = next;
     Ok(report)
+}
+
+/// `pcraft:UprightGuides` (JSON), checked as the Geometry settings are: at most [`MAX_GUIDES`]
+/// guides of finite points in 0 … 1.
+fn guides(json: &str) -> Option<Vec<[[f32; 2]; 2]>> {
+    let g: Vec<[[f32; 2]; 2]> = serde_json::from_str(json).ok()?;
+    (g.len() <= MAX_GUIDES && g.iter().flatten().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(g)
+}
+
+/// Text as an XML attribute value.
+fn escape(s: &str) -> String {
+    craft_xml::esc_attr(s)
 }
 
 /// The XMP toolkit [`save`] names on `x:xmpmeta`.
@@ -271,13 +384,14 @@ pub fn is_photocraft_xmp(bytes: &[u8]) -> bool {
     toolkit(bytes).as_deref() == Some(TOOLKIT)
 }
 
-/// Write `params` as a Camera Raw settings file Photoshop's Load Settings… reads.
-pub fn save(params: &CameraRaw) -> String {
+/// Write `params` as a Camera Raw settings file Photoshop's Load Settings… reads. Fails when the
+/// file would be larger than [`load`] reads ([`MAX_XMP_BYTES`]: masks with many brush dabs).
+pub fn save(params: &CameraRaw) -> Result<String, String> {
     save_with_crop(params, None)
 }
 
 /// [`save`] with a raw file's crop, so rewriting a sidecar keeps the crop it was opened with.
-pub fn save_with_crop(params: &CameraRaw, crop: Option<Crop>) -> String {
+pub fn save_with_crop(params: &CameraRaw, crop: Option<Crop>) -> Result<String, String> {
     let mut p = params.clone();
     let wb = if p.temperature != 0.0 || p.tint != 0.0 { "Custom" } else { "As Shot" };
     let mut settings = Settings::default();
@@ -288,12 +402,16 @@ pub fn save_with_crop(params: &CameraRaw, crop: Option<Crop>) -> String {
         let v = *field(&mut p);
         let text = match *name {
             "Exposure2012" => signed(v, 2),
-            "SharpenRadius" => signed(v, 1),
+            "SharpenRadius" | "PerspectiveRotate" | "PerspectiveX" | "PerspectiveY" => signed(v, 1),
             _ if *lo < 0.0 => signed(v.round(), 0),
             _ => format!("{:.0}", v.round()),
         };
         settings.set(name, text);
     }
+    // As the develop reads it (`Upright::parse` trims and ignores case).
+    let upright = Upright::parse(&p.perspective_upright).and_then(|u| UPRIGHT.iter().find(|(_, m)| *m == u.id())).map_or(0, |(n, _)| *n);
+    settings.set("PerspectiveUpright", upright.to_string());
+    settings.set("CropConstrainToWarp", u8::from(p.constrain_crop).to_string());
     let style = STYLES.iter().find(|(_, s)| *s == p.vignette_style).map_or("1", |(n, _)| n);
     settings.set("PostCropVignetteStyle", style);
     if let Some(c) = crop {
@@ -307,7 +425,27 @@ pub fn save_with_crop(params: &CameraRaw, crop: Option<Crop>) -> String {
         let items = pts.into_iter().map(|[x, y]| format!("{}, {}", x.round(), y.round())).collect();
         settings.set_seq(name, items);
     }
-    settings.to_xmp(TOOLKIT)
+    let mut out = settings.to_xmp(TOOLKIT);
+    // `Settings` writes the `crs:` namespace only. PhotoCraft's attributes (Camera Raw's own
+    // guide keys have not been observed) and the masks, in the attribute layout Photoshop was
+    // checked to read, go into the same description.
+    let guides = serde_json::to_string(&p.upright_guides).unwrap_or_else(|_| "[]".into());
+    let own = format!("\n    xmlns:pcraft=\"{}\"\n   pcraft:UprightGuides=\"{}\"{}", masks::PCRAFT_NS, escape(&guides), masks::own_attribute(&p.masks));
+    let unexpected = || "the settings writer laid the file out unexpectedly".to_string();
+    let ns = format!("\n    xmlns:crs=\"{CRS_NS}\"");
+    let at = out.find(&ns).map(|i| i + ns.len()).ok_or_else(unexpected)?;
+    out.insert_str(at, &own);
+    let end = out.rfind("  </rdf:Description>").ok_or_else(unexpected)?;
+    out.insert_str(end, &masks::write(&p.masks));
+    // `load` refuses anything larger: never write a file it cannot read back.
+    if out.len() > MAX_XMP_BYTES {
+        return Err(format!(
+            "the settings are too large to save ({} MB, at most {} MB): the masks hold too many brush dabs",
+            out.len().div_ceil(1 << 20),
+            MAX_XMP_BYTES >> 20
+        ));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -381,6 +519,69 @@ mod tests {
     }
 
     #[test]
+    fn geometry_round_trips_and_reads_camera_raws_numbers() {
+        let p = CameraRaw {
+            perspective_upright: "vertical".into(),
+            perspective_vertical: -25.0,
+            perspective_rotate: 2.5,
+            perspective_scale: 90.0,
+            perspective_x: -3.5,
+            constrain_crop: true,
+            ..CameraRaw::default()
+        };
+        let mut back = CameraRaw::default();
+        load(&mut back, save(&p).unwrap().as_bytes()).unwrap();
+        assert_eq!(back, p);
+        // Camera Raw's numbers: 2 is Full; 9 isn't a mode and is reported, not applied.
+        let xml = |v: &str| {
+            format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"{RDF_NS}\"><rdf:Description xmlns:crs=\"{CRS_NS}\" crs:PerspectiveUpright=\"{v}\" crs:PerspectiveRotate=\"+40\"/></rdf:RDF></x:xmpmeta>"
+            )
+        };
+        let mut q = CameraRaw::default();
+        load(&mut q, xml("2").as_bytes()).unwrap();
+        assert_eq!(q.perspective_upright, "full");
+        assert_eq!(q.perspective_rotate, 10.0, "clamped to the slider");
+        let r = load(&mut q, xml("9").as_bytes()).unwrap();
+        assert!(r.ignored.contains(&"PerspectiveUpright".to_string()));
+        assert!(load(&mut q, xml("1.5").as_bytes()).unwrap().ignored.contains(&"PerspectiveUpright".to_string()));
+    }
+
+    #[test]
+    fn upright_is_saved_as_the_develop_reads_it() {
+        // The develop trims and ignores case: " Full " is Full, and must not be saved as Off.
+        let p = CameraRaw { perspective_upright: " Full ".into(), ..CameraRaw::default() };
+        let mut back = CameraRaw::default();
+        load(&mut back, save(&p).unwrap().as_bytes()).unwrap();
+        assert_eq!(back.perspective_upright, "full");
+    }
+
+    #[test]
+    fn guided_upright_keeps_its_guides() {
+        let p = CameraRaw {
+            perspective_upright: "guided".into(),
+            upright_guides: vec![[[0.2, 0.1], [0.25, 0.9]], [[0.1, 0.5], [0.9, 0.55]]],
+            ..CameraRaw::default()
+        };
+        let mut back = CameraRaw::default();
+        let r = load(&mut back, save(&p).unwrap().as_bytes()).unwrap();
+        assert!(r.ignored.is_empty(), "{:?}", r.ignored);
+        assert_eq!(back, p);
+        // Guides outside the image, or too many, are reported and not applied.
+        let xml = |g: &str| {
+            format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"{RDF_NS}\"><rdf:Description xmlns:crs=\"{CRS_NS}\" xmlns:pcraft=\"http://ns.photocraft.app/camera-raw/1.0/\" crs:PerspectiveUpright=\"5\" pcraft:UprightGuides=\"{g}\"/></rdf:RDF></x:xmpmeta>"
+            )
+        };
+        for bad in ["[[[2,0],[0,1]]]", "[[[0,0],[1,1]],[[0,0],[1,1]],[[0,0],[1,1]],[[0,0],[1,1]],[[0,0],[1,1]]]", "nope"] {
+            let mut q = p.clone();
+            let r = load(&mut q, xml(bad).as_bytes()).unwrap();
+            assert!(r.ignored.contains(&"UprightGuides".to_string()), "{bad}");
+            assert_eq!(q.upright_guides, p.upright_guides);
+        }
+    }
+
+    #[test]
     fn save_then_load_round_trips() {
         let mut p = CameraRaw {
             temperature: -12.0,
@@ -397,7 +598,7 @@ mod tests {
         p.grade_shadows.hue = 210.0;
         p.grade_shadows.sat = 40.0;
         p.grade_global.lum = 7.0;
-        let text = save(&p);
+        let text = save(&p).unwrap();
         assert!(text.contains("crs:Exposure2012=\"+1.25\""));
         assert!(text.contains("crs:WhiteBalance=\"Custom\""));
         let mut back = CameraRaw::default();
@@ -443,7 +644,7 @@ mod tests {
 
     #[test]
     fn is_photocraft_xmp_reads_the_toolkit_marker() {
-        let own = save(&CameraRaw { contrast: 15.0, ..CameraRaw::default() });
+        let own = save(&CameraRaw { contrast: 15.0, ..CameraRaw::default() }).unwrap();
         assert!(is_photocraft_xmp(own.as_bytes()));
         let wrapped = format!("\u{feff}<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n{own}<?xpacket end=\"w\"?>");
         assert!(is_photocraft_xmp(wrapped.as_bytes()), "an xpacket wrapper and a byte order mark");
@@ -559,12 +760,12 @@ mod tests {
     fn save_with_crop_round_trips() {
         let p = CameraRaw { contrast: 20.0, ..CameraRaw::default() };
         let crop = Crop { top: 0.125, left: 0.25, bottom: 0.875, right: 0.5 };
-        let text = save_with_crop(&p, Some(crop));
+        let text = save_with_crop(&p, Some(crop)).unwrap();
         assert!(is_photocraft_xmp(text.as_bytes()));
         let mut back = CameraRaw::default();
         let r = load(&mut back, text.as_bytes()).unwrap();
         assert_eq!((back, r.crop), (p.clone(), Some(crop)));
         assert!(r.ignored.is_empty(), "{:?}", r.ignored);
-        assert_eq!(load(&mut CameraRaw::default(), save(&p).as_bytes()).unwrap().crop, None);
+        assert_eq!(load(&mut CameraRaw::default(), save(&p).unwrap().as_bytes()).unwrap().crop, None);
     }
 }
