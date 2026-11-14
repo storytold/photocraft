@@ -69,11 +69,12 @@ impl Action {
 }
 
 /// Adobe Camera Raw's keys for what the develop view has: E Edit, B Heal (Camera Raw's Remove),
-/// M Masking, ⇧E Red Eye; `[` `]` brush size and ⇧`[` ⇧`]` feather; ⇧T Guided Upright; ⌘1 … ⌘9
+/// K or M Masking (K is listed first, so it is the one tooltips show), ⇧E Red Eye; `[` `]` brush size and ⇧`[` ⇧`]` feather; ⇧T Guided Upright; ⌘1 … ⌘9
 /// the Edit sections; Delete the selection.
 pub(crate) const CAMERA_RAW: &[(&str, &str)] = &[
     ("tool.edit", "E"),
     ("tool.heal", "B"),
+    ("tool.masking", "K"),
     ("tool.masking", "M"),
     ("tool.redEye", "Shift+E"),
     ("brush.smaller", "["),
@@ -123,7 +124,7 @@ impl Keymap {
         self.chord(action).map(crate::shortcuts::pretty)
     }
 
-    /// `name` followed by `action`'s chord in parentheses (`Masking (M)`); bare `name` unbound.
+    /// `name` followed by `action`'s chord in parentheses (`Masking (K)`); bare `name` unbound.
     pub(crate) fn tip(&self, name: &str, action: Action) -> String {
         self.label(action).map_or_else(|| name.to_string(), |k| format!("{name} ({k})"))
     }
@@ -178,6 +179,7 @@ mod tests {
         let cases = [
             (Key::E, Modifiers::NONE, Action::Tool(Tool::Edit)),
             (Key::B, Modifiers::NONE, Action::Tool(Tool::Heal)),
+            (Key::K, Modifiers::NONE, Action::Tool(Tool::Masking)),
             (Key::M, Modifiers::NONE, Action::Tool(Tool::Masking)),
             (Key::E, Modifiers::SHIFT, Action::Tool(Tool::RedEye)),
             (Key::OpenBracket, Modifiers::NONE, Action::BrushSmaller),
@@ -226,7 +228,7 @@ mod tests {
         let mac = cfg!(target_os = "macos");
         assert_eq!(map.label(Action::Section(2)).as_deref(), Some(if mac { "⌘2" } else { "Ctrl+2" }));
         assert_eq!(map.label(Action::GuidedUpright).as_deref(), Some(if mac { "⇧T" } else { "Shift+T" }));
-        assert_eq!(map.tip("Masking", Action::Tool(Tool::Masking)), "Masking (M)");
+        assert_eq!(map.tip("Masking", Action::Tool(Tool::Masking)), "Masking (K)");
         assert!(Action::from_id("edit.section.0").is_none() && Action::from_id("edit.section.10").is_none());
     }
 }

@@ -86,7 +86,7 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2) {
 /// Masking: a radial drawn with the pointer, a brush mask painted, the overlay, undo, Before.
 fn masking(h: &mut Harness<'_, PhotocraftApp>) {
     // Masking: the rail's button, then a radial from its tile
-    h.get_by_label("Masking (M)").click();
+    h.get_by_label("Masking (K)").click();
     settle(h);
     assert_eq!(inspect(h)["tool"], "masking");
     for absent in ["Subject", "Sky", "Background", "Object", "Describe", "People"] {
@@ -203,7 +203,7 @@ fn the_develop_view_edits_masks_spots_and_red_eyes() {
     assert_eq!(r["tool"], "edit");
     // LightCraft's Edit panel: its header buttons and the rail's tools
     let red_eye = format!("Red Eye ({})", photocraft_ui_egui::shortcuts::pretty("Shift+E"));
-    for label in ["Auto", "B&W", "Reset", "Edit (E)", "Heal (B)", "Masking (M)", red_eye.as_str()] {
+    for label in ["Auto", "B&W", "Reset", "Edit (E)", "Heal (B)", "Masking (K)", red_eye.as_str()] {
         assert!(h.query_by_label(label).is_some(), "{label}");
     }
     assert!(h.query_by_label("Crop").is_none(), "no rail button for a tool that doesn't work here");

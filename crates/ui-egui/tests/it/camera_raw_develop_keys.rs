@@ -98,7 +98,7 @@ fn dialog_on(gpu: bool) -> Harness<'static, PhotocraftApp> {
 fn camera_raw_tool_keys_pick_the_rails_tools() {
     let mut h = dialog();
     let behind = app_state(&h);
-    for label in ["Edit (E)", "Heal (B)", "Masking (M)", &format!("Red Eye ({})", pretty("Shift+E"))] {
+    for label in ["Edit (E)", "Heal (B)", "Masking (K)", &format!("Red Eye ({})", pretty("Shift+E"))] {
         assert!(h.query_by_label(label).is_some(), "the rail button's label names its key: {label}");
     }
     assert_eq!(inspect(&h)["shortcuts"]["tool.heal"], "B", "{}", inspect(&h)["shortcuts"]);
