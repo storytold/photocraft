@@ -467,6 +467,12 @@ pub const HAND_MENU: &[Row] = &[
 /// the view itself.
 pub const FILL_SCREEN: &str = "view.fillScreen";
 
+/// Generative Fill and Remove are listed, greyed, until a server is set up in Preferences ›
+/// Integrations.
+fn needs_genfill_setup(app: &PhotocraftApp, command: &str) -> bool {
+    matches!(command, "edit.generativeFill" | "edit.generativeRemove") && !photocraft_engine::generative_fill_cmds::is_configured(&app.session)
+}
+
 /// A selection menu: the rows every selection menu shares, with `$fills` (the rows between
 /// Transform Selection and Last Filter) in its own order.
 macro_rules! selection_menu {
@@ -495,13 +501,15 @@ macro_rules! selection_menu {
     };
 }
 
-/// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
-/// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
+/// Photoshop's selection-tool context menu with an active selection, in its order. Generative
+/// Fill runs a locally hosted inpainting model (`generative_fill_cmds`). Rows stay visible and grey out exactly like
 /// their menu-bar twins.
 pub const SELECTION_MENU: &[Row] = selection_menu![
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
     None,
+    Some(("Generative Fill…", "edit.generativeFill")),
+    Some(("Generative Remove", "edit.generativeRemove")),
     Some(("Delete and Fill Selection", "edit.deleteAndFillSelection")),
     Some(("Fill…", "edit.fill")),
     Some(("Stroke…", "edit.stroke")),
@@ -1188,6 +1196,9 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if needs_genfill_setup(app, command) {
+        return false;
+    }
     if menu.crop.is_some() {
         return crop_enabled(app, menu, command);
     }
@@ -1781,13 +1792,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         ui.separator();
                         continue;
                     };
-                    let text = match row_label(app, &menu, label, command) {
+                    let setup = needs_genfill_setup(app, command);
+                    let label_text = match row_label(app, &menu, label, command) {
                         // Spelled out so `cargo xtask i18n-coverage` lists the new label.
                         "Free Transform Points" => tl!("Free Transform Points"),
                         key => tl!(key),
                     };
+                    let text = if setup { format!("{} {}", label_text, tl!("(not configured)")) } else { label_text.to_string() };
                     let item = egui::Button::selectable(mode_checked(app, &menu, command), text).min_size(egui::vec2(200.0, 20.0));
-                    if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
+                    let response = ui.add_enabled(entry_enabled(app, &menu, command), item);
+                    if setup {
+                        response.on_disabled_hover_text(tl!("Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first."));
+                    } else if response.clicked() {
                         selected = Some((*command).to_string());
                     }
                 }

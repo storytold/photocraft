@@ -100,6 +100,7 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+pub mod generative_fill_cmds;
 #[cfg(test)]
 mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
@@ -1402,6 +1403,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::prefs::specs());
     v.extend(crate::updates_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
+    v.extend(crate::generative_fill_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());
     v.extend(crate::face_cmds::specs());

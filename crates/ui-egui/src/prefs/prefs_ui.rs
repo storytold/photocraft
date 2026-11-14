@@ -73,6 +73,7 @@ mod agents;
 mod appearance;
 mod dialogs;
 mod fields;
+mod generative_fill;
 mod graphics;
 mod save;
 mod shortcuts;
