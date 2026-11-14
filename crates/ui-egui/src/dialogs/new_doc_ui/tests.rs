@@ -211,7 +211,7 @@ fn preset_card_titles_fit_the_card_in_every_language() {
 }
 
 #[test]
-fn recent_category_lists_clipboard_then_created_documents_then_uncovered_defaults() {
+fn recent_category_lists_clipboard_then_created_documents() {
     let settings = |w, h, ppi| DocumentSettings {
         width: w,
         height: h,
@@ -226,7 +226,7 @@ fn recent_category_lists_clipboard_then_created_documents_then_uncovered_default
     };
     let mut f = Map::new();
     set_clipboard(&mut f, 20, 30);
-    let cards = recent_cards(&f, &[settings(800, 600, 72.0), settings(1920, 1080, 72.0)], &UnitsAndRulers::default());
+    let cards = recent_cards(&f, &[settings(800, 600, 72.0), settings(1920, 1080, 72.0)]);
     let titles: Vec<(&str, String)> = cards.iter().map(|c| (c.title(), c.size_line(&UnitsAndRulers::default(), &f))).collect();
     assert_eq!(
         titles,
@@ -234,7 +234,6 @@ fn recent_category_lists_clipboard_then_created_documents_then_uncovered_default
             (CLIPBOARD, "20 x 30 px @ 72 ppi".to_string()),
             ("Custom", "800 x 600 px @ 72 ppi".to_string()),
             ("HDTV 1080p", "1920 x 1080 px @ 72 ppi".to_string()),
-            ("Default PhotoCraft Size", "7 x 5 in @ 300 ppi".to_string()),
         ]
     );
     assert!(holds(&f, &settings(20, 30, 72.0)) && !holds(&f, &settings(800, 600, 72.0)));
