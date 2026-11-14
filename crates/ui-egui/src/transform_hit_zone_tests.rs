@@ -270,8 +270,11 @@ fn outside_reference_point_owns_the_pointer_only_when_shown() {
         let quad = t.quad;
         app.ui.tool_options.transform_reference_point = shown;
         assert_eq!(rotate_cursor_dir(&app, p).is_some(), !shown);
-        let icon = if shown { CursorIcon::Crosshair } else { CursorIcon::None };
-        assert_eq!(cursor(&app, &view(1.0), p, Modifiers::NONE), Some(icon));
+        // Both states hand the OS pointer over to a canvas-painted one (`None`): the reference
+        // point's arrow-and-target art when shown, the rotate cursor otherwise. What differs is
+        // who owns the press - `shows_reference_pointer` is the canvas's answer.
+        assert_eq!(cursor(&app, &view(1.0), p, Modifiers::NONE), Some(CursorIcon::None));
+        assert_eq!(crate::transform_tool::shows_reference_pointer(&app, p, Modifiers::NONE), shown);
 
         let down = crate::canvas::ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 };
         crate::transform_tool::pointer(&mut app, down, Modifiers::NONE);
