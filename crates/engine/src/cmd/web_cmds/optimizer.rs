@@ -3,15 +3,22 @@ use super::{Dither, Document, EngineError, Forced, PaletteKind, Rect, Result, Se
 
 // ---------- the image ----------
 
-/// The document as Save for Web sees it: RGB, resized by `"width"`/`"height"`/`"percent"`, and,
-/// when converting to sRGB, flattened (transparency kept) first so the blend happens before the
-/// conversion. Returns the document and the scale factors.
+/// The document as Save for Web sees it: RGB, resized by `"width"`/`"height"`/`"percent"`, and
+/// converted to sRGB unless told otherwise: flattened first (transparency kept) in the measured
+/// case of [`flattens_before_srgb`], so the blend happens before the conversion, and layer by
+/// layer otherwise. Returns the document and the scale factors.
 pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Document, f64, f64)> {
     let mut tmp = Session::new();
     tmp.add_document(doc.clone(), None);
     let mode = doc.mode;
     if mode != photocraft_color::ColorMode::Rgb {
         tmp.execute("image.mode.rgb", json!({}))?;
+    }
+    let flatten_first = st.convert_to_srgb && flattens_before_srgb(doc);
+    if st.convert_to_srgb && doc.icc_profile.is_some() && !flatten_first {
+        // Documents without a profile are treated as sRGB already. Unmeasured cases keep the
+        // per-layer conversion (#13796).
+        tmp.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"}))?;
     }
     let (w0, h0) = (f64::from(doc.size.width), f64::from(doc.size.height));
     let pct = p.get("percent").and_then(Value::as_f64).filter(|v| *v > 0.0);
@@ -29,10 +36,10 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
         let resample = p.get("resample").and_then(Value::as_str).unwrap_or("bicubic");
         tmp.execute("image.imageSize", json!({"width": nw, "height": nh, "resample": resample}))?;
     }
-    if st.convert_to_srgb && doc.icc_profile.is_some() {
-        // Documents without a profile are treated as sRGB already. The layers are blended in the
-        // document's own space and the flattened image is converted, not each layer (#13796).
-        // The same flatten every export uses (no matte, so transparency survives).
+    if flatten_first {
+        // The layers are blended in the document's own space and the flattened image is
+        // converted, not each layer (#13796). The same flatten every export uses (no matte, so
+        // transparency survives).
         tmp.edit("Flatten for export", |d, active| {
             let bounds = d.bounds();
             if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
@@ -49,6 +56,24 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
     }
     let out = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     Ok((out, nw / w0, nh / h0))
+}
+
+/// Whether Convert to sRGB blends first and converts the flattened image (#13796). Only the
+/// measured case: an 8-bit RGB document tagged with an Adobe RGB (1998)-compatible profile whose
+/// layers all blend Normal (groups may pass through). Documents without a profile are sRGB already;
+/// every other document keeps the per-layer conversion until it is measured too.
+pub(super) fn flattens_before_srgb(doc: &Document) -> bool {
+    use photocraft_doc::BlendMode;
+    if doc.mode != photocraft_color::ColorMode::Rgb || doc.depth != photocraft_color::SampleType::U8 {
+        return false;
+    }
+    let Some(profile) = doc.icc_profile.as_deref().and_then(|b| photocraft_cms::Profile::parse(b).ok()) else {
+        return false;
+    };
+    if !profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()) {
+        return false;
+    }
+    doc.walk().iter().all(|(_, _, l)| l.blend == BlendMode::Normal || (l.blend == BlendMode::PassThrough && l.children().is_some()))
 }
 
 /// An optimised image.

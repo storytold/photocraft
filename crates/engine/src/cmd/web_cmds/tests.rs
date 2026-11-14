@@ -1705,3 +1705,91 @@ fn save_for_web_converts_the_flattened_image_to_srgb() {
     near(rgb_at(&img, 25, 125), [102, 95, 0], 2, "blend of red and half green");
     near(rgb_at(&img, 25, 75), [233, 24, 24], 2, "red");
 }
+
+/// The Quick Export PNG of `s` (convert to sRGB as asked), straight RGBA8.
+fn quick_png(s: &mut Session, dir: &str, name: &str, srgb: bool) -> Vec<u8> {
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": srgb})).unwrap();
+    let path = format!("{dir}/{name}.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    decode(&path).to_rgba8().to_vec()
+}
+
+/// The previous order: every layer converted to sRGB, then blended (what unmeasured documents keep).
+fn per_layer_png(mut s: Session, dir: &str, name: &str) -> Vec<u8> {
+    s.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"})).unwrap();
+    quick_png(&mut s, dir, name, false)
+}
+
+/// Only the measured case (8-bit RGB, Adobe RGB-compatible profile, Normal blending) flattens before
+/// converting; every other document keeps the per-layer conversion (#13796).
+#[test]
+fn flatten_before_srgb_is_only_the_measured_case() {
+    let doc = |s: &Session| (*s.active().unwrap().doc).clone();
+    assert!(optimizer::flattens_before_srgb(&doc(&wide_gamut_session())));
+
+    let mut grouped = wide_gamut_session();
+    grouped
+        .edit("group", |d, _| {
+            let kids = std::mem::take(&mut d.layers);
+            d.layers = vec![Layer::group("G", kids)];
+            Ok(())
+        })
+        .unwrap();
+    assert!(optimizer::flattens_before_srgb(&doc(&grouped)), "a pass-through group is still Normal blending");
+
+    let mut deep = wide_gamut_session();
+    deep.execute("image.mode.bits16", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&deep)), "16-bit");
+    let mut float = wide_gamut_session();
+    float.execute("image.mode.bits32", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&float)), "32-bit");
+    let mut p3 = wide_gamut_session();
+    p3.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&p3)), "another profile");
+    let mut untagged = wide_gamut_session();
+    untagged.execute("edit.assignProfile", json!({"profile": "none"})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&untagged)), "no profile");
+    let mut multiply = wide_gamut_session();
+    multiply
+        .edit("blend", |d, _| {
+            d.layers.last_mut().unwrap().blend = photocraft_doc::BlendMode::Multiply;
+            Ok(())
+        })
+        .unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&multiply)), "a colour-space-dependent blend mode");
+}
+
+/// The unmeasured cases export exactly as before: each layer converted, then blended.
+#[test]
+fn unmeasured_documents_keep_the_per_layer_srgb_conversion() {
+    let dir = tmp("srgb_unmeasured");
+    let multiply = || {
+        let mut s = wide_gamut_session();
+        s.edit("blend", |d, _| {
+            d.layers.last_mut().unwrap().blend = photocraft_doc::BlendMode::Multiply;
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+    let deep = || {
+        let mut s = wide_gamut_session();
+        s.execute("image.mode.bits16", json!({})).unwrap();
+        s
+    };
+    let p3 = || {
+        let mut s = wide_gamut_session();
+        s.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+        s
+    };
+    for (name, make) in [("multiply", &multiply as &dyn Fn() -> Session), ("deep", &deep), ("p3", &p3)] {
+        let got = quick_png(&mut make(), &dir, &format!("{name}_got"), true);
+        let want = per_layer_png(make(), &dir, &format!("{name}_want"));
+        assert_eq!(got, want, "{name}: per-layer conversion");
+        let raw = quick_png(&mut make(), &dir, &format!("{name}_raw"), false);
+        assert_ne!(got, raw, "{name}: still converted to sRGB");
+    }
+    // The measured case does differ from the per-layer order at the half-opacity blend.
+    let flat = quick_png(&mut wide_gamut_session(), &dir, "measured", true);
+    assert_ne!(flat, per_layer_png(wide_gamut_session(), &dir, "measured_per_layer"));
+}
