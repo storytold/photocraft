@@ -40,6 +40,9 @@ pub(super) struct Resources {
     pub(super) canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// How that budget is split between the open documents (see [`super::residency`]).
     pub(super) residency: super::residency::Residency,
+    /// The adapter's own memory is known (a discrete card, `video_memory`): large background
+    /// canvases may then stay a quarter over [`canvas_budget`] ([`Resources::make_room`]).
+    pub(super) card_memory_known: bool,
     pub(super) encode_bgl: wgpu::BindGroupLayout,
     encode_pipeline: wgpu::RenderPipeline,
     pub(super) lut_bgl: wgpu::BindGroupLayout,
@@ -376,6 +379,7 @@ impl Resources {
             compositor_focus: None,
             canvas_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(canvas_budget(physical_memory(), None))),
             residency: Default::default(),
+            card_memory_known: false,
             encode_bgl,
             encode_pipeline,
         }
