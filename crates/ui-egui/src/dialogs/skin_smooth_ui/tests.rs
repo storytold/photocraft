@@ -11,7 +11,7 @@ fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
     app.run("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
-    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::builtin::Builtin::Srgb.profile().to_bytes());
+    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = Some(craft_cms::builtin::Builtin::Srgb.profile().to_bytes());
     crate::menus::invoke(&mut app, &egui::Context::default(), MENU, json!({})).unwrap();
     assert!(owns(&app.ui.dialogs[0].fields));
     app
@@ -419,7 +419,7 @@ fn non_srgb_sources_disable_sampling_and_mask() {
     let mut app = app();
     field(&mut app, "__skinTool", json!("sample"));
     let layer = app.session.active().unwrap().active_layer.unwrap();
-    for profile in [Some(photocraft_cms::builtin::Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
+    for profile in [Some(craft_cms::builtin::Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
         Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = profile;
         assert!(supported(&app).is_err());
         assert!(!pick(&mut app, [2.0, 3.0], egui::Modifiers::default()));
@@ -444,7 +444,7 @@ fn untagged_skin_sampling_and_mask_follow_the_host_default_profile() {
 /// Quick Mask's target warning must not hide a profile rejection before OK.
 #[test]
 fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
-    for profile in [photocraft_cms::builtin::Builtin::DisplayP3.profile().to_bytes(), Arc::new(vec![0; 128])] {
+    for profile in [craft_cms::builtin::Builtin::DisplayP3.profile().to_bytes(), Arc::new(vec![0; 128])] {
         let mut state = app();
         state.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         state.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
@@ -457,7 +457,7 @@ fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
         h.run_steps(6);
         h.get_by_label(expected);
         assert_eq!(h.state().ui.dialogs.len(), 1, "the error is visible before confirmation");
-        Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::builtin::Builtin::Srgb.profile().to_bytes());
+        Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).icc_profile = Some(craft_cms::builtin::Builtin::Srgb.profile().to_bytes());
         h.run_steps(3);
         assert!(h.query_by_label(expected).is_none(), "a corrected profile must clear the error");
         h.get_by_label("Skin sampling and Mask require the RGB composite view, with layer pixels targeted.");

@@ -20,7 +20,7 @@ Samples survive preset switches and Reset, but clear on OK, Cancel or source inv
 
 Mask weight is skin weight × document selection coverage × source alpha. With Skin Only off, skin weight is one. It describes the input's potential contribution, not final composite visibility or effect strength. Preview and Show Mask are independent; OK applies smoothing, never the Mask.
 
-Mask/sampling support unmasked, unclipped RGB raster layers in Composite view at 8/16/32-bit SDR. Unsupported targets, including channels, Quick Mask, masks and Smart Objects, show an explanation. The filter itself has its separately validated scope. The engine checks the effective document profile with `photocraft-cms::Profile::same_colors` before filtering (including previews and Smart Filter cache hits); sampling and Mask use the same check. Untagged images use the same CMS document-profile policy as the compositor; the filter does not assign a profile. Invalid ICC data and non-sRGB spaces return an error. Assign sRGB only when the pixels are already sRGB; otherwise use Convert to Profile first. No implicit colour conversion is performed. The low-level plug-in ABI still requires its caller to supply sRGB pixels because ABI v1 carries no profile.
+Mask/sampling support unmasked, unclipped RGB raster layers in Composite view at 8/16/32-bit SDR. Unsupported targets, including channels, Quick Mask, masks and Smart Objects, show an explanation. The filter itself has its separately validated scope. The engine checks the effective document profile with `craft_cms::Profile::same_colors` before filtering (including previews and Smart Filter cache hits); sampling and Mask use the same check. Untagged images use the same CMS document-profile policy as the compositor; the filter does not assign a profile. Invalid ICC data and non-sRGB spaces return an error. Assign sRGB only when the pixels are already sRGB; otherwise use Convert to Profile first. No implicit colour conversion is performed. The low-level plug-in ABI still requires its caller to supply sRGB pixels because ABI v1 carries no profile.
 
 ## Preview and invalidation
 
@@ -34,8 +34,8 @@ Native GPU waits and lock contention observe the plug-in operation's cancellatio
 
 ## Verification
 
+Build UI tests with both optional release inputs: `CRAFT_FONTS_DIR` from the CI-pinned craft-fonts checkout and `CRAFT_I18N_DIR` from the craft-i18n checkout at `craft-i18n.rev`. Set `CRAFT_FONTS_REQUIRED=1` and `CRAFT_I18N_REQUIRED=1` so missing inputs fail at build time. Without the catalogs the app builds English-only; non-English UI tests do not establish a language regression in that configuration.
+
 Relevant sources: [GPU adapter](../crates/ui-egui/src/skin_smooth_gpu.rs), [compute implementation](../crates/gpu/src/skin_smooth.rs), [plug-in band processing](../crates/plugins/src/apply.rs), [preview worker](../crates/ui-egui/src/dialogs/filter_preview_worker.rs) and [Mask UI](../crates/ui-egui/src/dialogs/skin_smooth_ui.rs).
 
 Regression coverage includes depths, alpha/transparent colour, selection, offsets, seams, preset overrides, cancellation and fallback. Real-photo appearance, low-end UI latency and Alt+Tab still require manual acceptance; synthetic events or kernel parity do not prove them. The historical focus-loss report is distinct from the removed implicit Enter confirmation.
-
-Historical recovery archives and their original JSON evidence remain in the development workspace and are excluded from this review bundle. They do not establish validation for later source revisions.

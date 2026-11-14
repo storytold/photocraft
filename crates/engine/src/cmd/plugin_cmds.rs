@@ -113,7 +113,7 @@ fn requires_srgb(plugin: &Plugin) -> bool {
 /// ABI v1 carries no ICC profile. Use the host CMS policy for untagged documents,
 /// and reject unsupported or malformed embedded profiles before sampling or filtering.
 pub fn skin_smooth_color_supported(doc: &photocraft_doc::Document) -> std::result::Result<(), &'static str> {
-    use photocraft_cms::{builtin::Builtin, profile::Profile};
+    use craft_cms::{builtin::Builtin, profile::Profile};
     use std::sync::Arc;
     if doc.mode != photocraft_color::ColorMode::Rgb {
         return Err("Skin Smooth requires an RGB document.");

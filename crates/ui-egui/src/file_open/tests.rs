@@ -1864,13 +1864,17 @@ fn error_titles(app: &PhotocraftApp) -> Vec<String> {
 /// document, in drop order, whatever the type, and nothing is placed.
 #[test]
 fn files_dropped_with_no_document_open_all_open() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+    // TIFF uses the typed importer, so its fixture must be a real image.
+    let image = Image::from_u8(1, 1, ChannelLayout::Rgb, vec![0, 0, 0]).unwrap();
+    let tiff = photocraft_codecs::encode(&image, Format::Tiff, &EncodeOptions::default()).unwrap();
     let dir = scratch("home");
     let names = ["a.png", "b.jpg", "c.psd", "d.tif"];
     let files: Vec<_> = names
         .iter()
         .map(|n| {
             let p = dir.join(n);
-            std::fs::write(&p, b"x").unwrap();
+            std::fs::write(&p, if *n == "d.tif" { tiff.as_slice() } else { b"x" }).unwrap();
             dropped(p, Err("read from the path".into()))
         })
         .collect();

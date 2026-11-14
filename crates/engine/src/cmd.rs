@@ -100,6 +100,8 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+#[cfg(test)]
+mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod history_cmds;
@@ -125,6 +127,8 @@ pub mod mask_view_cmds;
 pub(super) mod migrate_cmds;
 pub mod mode_cmds;
 pub mod multichannel_cmds;
+#[cfg(test)]
+mod new_document_history_name_tests;
 pub mod notes_cmds;
 #[cfg(test)]
 mod notes_stored_values_tests;
@@ -333,6 +337,10 @@ fn build() -> Vec<CommandSpec> {
                     doc.icc_profile = Some(prof.to_bytes());
                 }
                 let i = s.add_document(doc, None);
+                // A new document's first History state is "New"; opened files keep "Open" (#14029).
+                if let Some(st) = s.active_mut() {
+                    st.history.set_current_label("New");
+                }
                 Ok(json!({ "document": i }))
             }
         ),
@@ -346,11 +354,10 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
                 match p.get("save").filter(|v| !v.is_null()) {
-                    Some(v) if v == "ask" => {
-                        if s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() {
-                            return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
-                        }
+                    Some(v) if v == "ask" && s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() => {
+                        return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
                     }
+                    Some(v) if v == "ask" => {}
                     // `false` (don't save) is the older spelling of discard.
                     Some(Value::Bool(false)) => {}
                     Some(v) if v != "discard" => return Err(bad("file.close", "`save` must be ask, discard or false")),

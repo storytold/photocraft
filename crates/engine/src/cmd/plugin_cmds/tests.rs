@@ -425,7 +425,7 @@ fn skin_smooth_preset_load_preserves_session_samples() {
 /// Checks that rejected profiles leave no edit, while sRGB filtering preserves alpha, selection bounds and undo/redo.
 #[test]
 fn skin_smooth_checks_icc_before_editing_at_every_depth() {
-    use photocraft_cms::builtin::Builtin;
+    use craft_cms::builtin::Builtin;
     use std::sync::Arc;
     registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
     for depth in [8, 16, 32] {
@@ -531,7 +531,7 @@ fn skin_smooth_selection_matches_independent_exposure_oracle_at_every_depth() {
 
 #[test]
 fn skin_smooth_smart_rerender_checks_profile_before_using_cached_stages() {
-    use photocraft_cms::builtin::Builtin;
+    use craft_cms::builtin::Builtin;
     use std::sync::Arc;
     registry::install_bytes(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm")).unwrap();
     let mut s = doc(8);
