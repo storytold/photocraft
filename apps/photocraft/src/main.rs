@@ -571,6 +571,8 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
+            // Lets the update check tell a release this copy just installed from a new one.
+            services.update_installed = Some(updates::installed_a_moment_ago);
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
             #[cfg(target_os = "linux")]

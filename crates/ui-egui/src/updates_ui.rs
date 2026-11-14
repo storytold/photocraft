@@ -95,8 +95,21 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     {
         app.updates_rt.notified_version = Some(release.version.clone());
         app.ui.updates_open = true;
+        // This copy installed that very release a moment ago and still is not it: the install did
+        // not take effect here, so offering it again would only loop (update, restart, the same
+        // prompt). Say so in the result window instead (#10477).
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if app.services.update_installed.is_some_and(|installed| installed(&format!("v{}", release.version))) {
+            let args = [("version", release.version.as_str()), ("running", photocraft_engine::build_info::VERSION)];
+            let message = crate::i18n::fmt(
+                crate::i18n::t(
+                    "PhotoCraft {version} was installed a moment ago, but the copy that is running still reports {running}, so the installer did not replace it.",
+                ),
+                &args,
+            );
+            app.updates_rt.last_update = craft_update::updater::Status::InstallFailed(message);
+            app.updates_rt.requested = false;
+        } else {
             let updater = &mut app.updates_rt.updater;
             updater.offer(release_of(release));
             // While an update installs or waits for the app to close, or while the launcher keeps
@@ -433,5 +446,50 @@ mod tests {
         assert!(app.ui.updates_open);
         assert_eq!(call(&mut app, "ui.set", serde_json::json!({"updatesOpen": false}))["ok"], true);
         assert!(!app.ui.updates_open);
+    }
+
+    /// An app whose automatic check has found `version`, with `installed` saying which tag this
+    /// copy installed itself a moment ago.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn app_offered(version: &str, installed: Option<fn(&str) -> bool>) -> PhotocraftApp {
+        let found = Release { version: version.into(), url: format!("https://github.com/storytold/photocraft/releases/tag/v{version}") };
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                check_updates: Some(Box::new(move || {
+                    let (sender, receiver) = mpsc::channel();
+                    sender.send(Ok(Some(found.clone()))).unwrap();
+                    Ok(receiver)
+                })),
+                update_installed: installed,
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        at(&mut app, &ctx, 0.0);
+        at(&mut app, &ctx, 1.0);
+        app
+    }
+
+    /// The install of a release did not take effect: offering it again would loop (update, restart,
+    /// the same prompt), so the result window says so (#10477).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_release_that_was_just_installed_is_explained_instead_of_offered_again() {
+        let app = app_offered("99.0.0", Some(|tag| tag == "v99.0.0"));
+        assert!(app.ui.updates_open);
+        assert!(!app.updates_rt.updater.prompt_open(), "no install that would fail the same way");
+        let craft_update::updater::Status::InstallFailed(message) = shown_status(&app) else { panic!("the result window shows the loop") };
+        assert!(message.contains("99.0.0") && message.contains(photocraft_engine::build_info::VERSION), "{message}");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_release_that_was_not_installed_here_is_offered_as_before() {
+        for installed in [None, Some((|_: &str| false) as fn(&str) -> bool), Some(|tag: &str| tag == "v98.0.0")] {
+            let app = app_offered("99.0.0", installed);
+            assert!(app.updates_rt.last_update == craft_update::updater::Status::Idle);
+            assert!(app.updates_rt.updater.prompt_open());
+        }
     }
 }

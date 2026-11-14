@@ -607,6 +607,10 @@ pub struct Services {
     /// What the last self-update came to, read once at the first frame: `Ok` with the version it
     /// installed, `Err` with the reason it could not be installed (desktop).
     pub last_update: Option<LastUpdateFn>,
+    /// Whether the release with this tag (`v0.18.0`) is the one this copy installed itself a moment
+    /// ago (desktop). If that release is offered again the install did not take effect here, and
+    /// installing it again would loop.
+    pub update_installed: Option<fn(&str) -> bool>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
