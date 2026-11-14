@@ -405,6 +405,10 @@ fn consumes_cancelled_vector_event(app: &mut PhotocraftApp, ev: ToolEvent) -> bo
 }
 
 fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    // Whichever tool gets it, a button release ends the press the flag is about.
+    if matches!(ev, ToolEvent::Up { .. }) {
+        SAMPLER_PRESS.set(false);
+    }
     if tool != Tool::Eyedropper {
         return false;
     }
