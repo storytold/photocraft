@@ -50,8 +50,11 @@ pub struct ToolOptions {
     /// Type tool: paragraph direction of new type, "auto" (from the first strong character),
     /// "ltr" or "rtl" (TYPE-218-2).
     pub type_direction: String,
-    /// Clone Stamp / Healing Brush.
+    /// Clone Stamp.
     pub clone_aligned: bool,
+    /// Healing Brush keeps Aligned separately; preferences from before this field start with it off.
+    #[serde(default)]
+    pub healing_aligned: bool,
     /// Pattern Stamp: lock the tile origin in document space across strokes.
     pub pattern_stamp_aligned: bool,
     /// Pattern Stamp: jitter each dab's phase (seeded, replayable).
@@ -498,6 +501,7 @@ impl Default for ToolOptions {
             type_style_defaults: serde_json::Map::new(),
             type_direction: "auto".into(),
             clone_aligned: true,
+            healing_aligned: false,
             pattern_stamp_aligned: true,
             pattern_stamp_impressionist: false,
             pattern_stamp_scale: 100.0,
