@@ -14,10 +14,12 @@ Remote automation paths are untrusted names resolved beneath explicitly granted 
 - Absolute paths beneath the canonical or configured spelling of the applicable granted root
   are translated to relative paths and resolved through the held directory capability. Absolute
   paths outside that root are rejected.
-- The relative path rejects parent traversal, alternate separators, drive/device/stream prefixes,
-  reserved Windows device names, empty or dot components, and link escapes before file effects.
-- Non-existent output files are supported when their parent already exists beneath the write
-  root. Automation does not create caller-selected directory trees.
+- Relative requests reject empty or `.` components and alternate separators. Absolute requests
+  are split into native path components before checking the root-relative remainder, so repeated
+  separators and interior `.` components are normalized. Both forms reject parent traversal in
+  the remainder, disallowed component names and link escapes before file effects.
+- Ordinary single-file writes support non-existent output files when their parent already exists
+  beneath the write root; they do not create caller-selected directory trees.
 - Filesystem-bearing engine commands that have not migrated to capability I/O fail closed for
   automation. Trusted local CLI subcommands and user-driven desktop file pickers keep their
   intended ambient authority.
@@ -44,8 +46,9 @@ AuthorizedWorkspace
 The handle is created from an explicit launch-time grant, preserves separate read/write
 permissions, checks absolute paths against the granted root and rejects escaping paths. Operations
 use the held directory capability; the requested path is never resolved with ambient authority.
-New files require an existing in-root parent because a non-existent target cannot be canonicalized
-safely.
+Ordinary single-file writes require an existing in-root parent. Capability-scoped multi-file
+exports create their required export directory and missing ancestors beneath the write root
+before writing files.
 
 ## Design requirements
 
