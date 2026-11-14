@@ -1133,6 +1133,39 @@ fn a_damaged_embedded_svgz_is_left_out() {
     assert!(parse_bounded_work_with(image_svg(&damaged).as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err());
 }
 
+/// craft-svg limits an embedded SVG's bytes before decoding, so a Latin-1 one fits and is
+/// charged its longer UTF-8 text: past the byte budget, the drawing is refused, not drawn with
+/// the next image left out.
+#[test]
+fn a_latin1_embedded_svg_that_decodes_past_the_budget_is_refused() {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap();
+    let mut latin1 = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><!--".to_vec();
+    latin1.resize(budget * 5 / 8, 0xe9);
+    latin1.extend_from_slice(b"--></svg>");
+    let wide = embedded_image("image/svg+xml", &gzip(&latin1));
+    let small = embedded_image("image/svg+xml", b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>");
+    assert!(parse_bounded(image_svg(&wide).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "on its own it parses");
+    let error = parse_bounded(image_svg(&format!("{wide}{small}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+}
+
+/// After a damaged image spent the budget, images refused for bytes are unpacked again to tell
+/// whether they are too large themselves, but at most one budget's worth in all: past that the
+/// drawing is refused rather than unpacking each one.
+#[test]
+fn images_after_a_damaged_svgz_are_unpacked_again_within_one_budget() {
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>";
+    let compressed = gzip(svg.as_bytes());
+    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
+    let mut large = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\">".to_vec();
+    large.resize(usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap() * 5 / 8, b' ');
+    large.extend_from_slice(b"</svg>");
+    let large = embedded_image("image/svg+xml", &gzip(&large));
+    assert!(parse_bounded(image_svg(&format!("{damaged}{large}")).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "one is left out");
+    let error = parse_bounded(image_svg(&format!("{damaged}{large}{large}")).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+}
+
 /// Only a stored display preview is strict about an embedded image it can't read; an edited SVG
 /// saved back from an external editor leaves it out, as placement does.
 #[test]

@@ -601,12 +601,51 @@ struct SvgRefusals {
     /// everything the byte budget had left, and so does a readable image that fits the budget
     /// only without those charges. Neither is the drawing's content.
     unread_charges: AtomicUsize,
+    /// Bytes unpacked again to tell those images apart, at most one byte budget per drawing.
+    rechecked: AtomicUsize,
+}
+
+/// Note in `refusals` what craft-svg will do with an embedded SVG's `data` when its images have
+/// `used` bytes of the budget: it unpacks the data within what is left, accepts it and charges
+/// its text (decoded Latin-1 can be longer), or refuses it and charges everything left. Refused
+/// for size after unreadable images were charged, the data is unpacked once more within the
+/// budget less only the drawing's content; past that, or past what may be unpacked again, the
+/// drawing is over budget.
+fn note_byte_refusal(data: &[u8], used: usize, refusals: &SvgRefusals) {
+    let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX);
+    let left = budget.saturating_sub(used);
+    let unread = refusals.unread_charges.load(Ordering::Relaxed);
+    match craft_svg::svgz::text(data, left) {
+        Ok(_) => {}
+        Err(craft_svg::svgz::Error::TooLarge(_)) if unread == 0 => refusals.over_budget.store(true, Ordering::Relaxed),
+        Err(craft_svg::svgz::Error::TooLarge(_)) => {
+            let content_left = budget.saturating_sub(used.saturating_sub(unread));
+            // Plain data is only measured; compressed data is unpacked again.
+            let compressed = data.starts_with(&[0x1f, 0x8b]);
+            let limit = if compressed { content_left.min(budget.saturating_sub(refusals.rechecked.load(Ordering::Relaxed))) } else { content_left };
+            let unpacked = match craft_svg::svgz::inflate(data, limit) {
+                Err(craft_svg::svgz::Error::TooLarge(_)) => {
+                    refusals.over_budget.store(true, Ordering::Relaxed);
+                    return;
+                }
+                Ok(std::borrow::Cow::Borrowed(_)) => 0,
+                Ok(std::borrow::Cow::Owned(xml)) => xml.len(),
+                Err(craft_svg::svgz::Error::Nested(len)) => len,
+                Err(_) => limit,
+            };
+            refusals.rechecked.fetch_add(unpacked, Ordering::Relaxed);
+            refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
+        }
+        Err(_) => {
+            refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
+        }
+    }
 }
 
 /// `resolve`, also noting in `refusals` why craft-svg is about to refuse each embedded SVG. It
 /// repeats craft-svg's first two checks in their order: the chain depth, then unpacking within
-/// the byte budget, less only what the drawing's own images used (`text/plain` data is an SVG
-/// unless it is a raster craft-svg draws).
+/// what the byte budget has left (`text/plain` data is an SVG unless it is a raster craft-svg
+/// draws).
 fn noting_refusals(
     resolve: usvg::ImageHrefResolver<'static>,
     resolver: Arc<craft_svg::tree::ImageResolver>,
@@ -625,17 +664,7 @@ fn noting_refusals(
             if refusals.depth.load(Ordering::Relaxed) >= MAX_EMBEDDED_SVG_DEPTH {
                 refusals.over_budget.store(true, Ordering::Relaxed);
             } else {
-                let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX);
-                let used = resolver.usage().embedded_svg_bytes;
-                let left = budget.saturating_sub(used);
-                let content_left = budget.saturating_sub(used.saturating_sub(refusals.unread_charges.load(Ordering::Relaxed)));
-                match craft_svg::svgz::text(&data, content_left) {
-                    Ok(text) if text.len() <= left => {}
-                    Err(craft_svg::svgz::Error::TooLarge(_)) => refusals.over_budget.store(true, Ordering::Relaxed),
-                    _ => {
-                        refusals.unread_charges.fetch_add(left, Ordering::Relaxed);
-                    }
-                }
+                note_byte_refusal(&data, resolver.usage().embedded_svg_bytes, &refusals);
             }
             refusals.depth.fetch_add(1, Ordering::Relaxed);
             let image = resolve_data(mime, data, options);
