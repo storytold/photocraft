@@ -2246,6 +2246,37 @@ fn file_info_reads_declarations_the_way_an_xml_reader_does() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+/// A prefix bound to the RDF namespace in one element and rebound to another namespace in a later
+/// sibling is two different names: only the closing tag that resolves to the RDF namespace in its
+/// own scope is the RDF end tag, so the edit never lands in the foreign element (#11116).
+#[test]
+fn file_info_resolves_the_rdf_end_tag_in_namespace_scope() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    // The prefix is rebound to a foreign namespace on a later sibling `r:RDF`.
+    let rebound = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF><r:RDF xmlns:r="urn:other"></r:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&rebound), &json!({"authorTitle": "Artist"}));
+    let (edit, real, foreign) = (out.find("AuthorsPosition").unwrap(), out.find("</r:RDF>").unwrap(), out.rfind("</r:RDF>").unwrap());
+    assert!(edit < real && real < foreign, "the edit sits in the RDF-namespace element, not the foreign one: {out}");
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "{out}");
+    // The same through a default namespace: `<RDF>` is foreign where `xmlns` is rebound.
+    let default_rebound = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF xmlns="{NS}"><Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></RDF><RDF xmlns="urn:other"></RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&default_rebound), &json!({"authorTitle": "Artist"}));
+    let (edit, real) = (out.find("AuthorsPosition").unwrap(), out.find("</RDF>").unwrap());
+    assert!(edit < real, "the edit sits in the RDF-namespace element: {out}");
+    // An inner rebinding does not leak out of its element: the outer `r:RDF` still closes the RDF.
+    let nested = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about=""><f:g xmlns:f="urn:f" xmlns:r="urn:other"><r:RDF></r:RDF></f:g></r:Description></r:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&nested), &json!({"authorTitle": "Artist"}));
+    let inner = out.find("<r:RDF></r:RDF>").unwrap();
+    assert!(out.find("AuthorsPosition").unwrap() > inner, "the edit is after the foreign element, in the real RDF: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.rfind("</r:RDF>").unwrap(), "{out}");
+}
+
 fn camera_exif() -> Vec<u8> {
     photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
         make: Some("SONY".into()),

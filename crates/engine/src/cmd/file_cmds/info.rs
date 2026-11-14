@@ -318,26 +318,34 @@ const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// The byte range of the packet's RDF end tag, or `None` when it has none. XML allows
 /// whitespace around a declaration's `=` and before a closing tag's `>` (REC-xml 2.4), and RDF
 /// allows any prefix — or none — bound for its namespace (RDF XML Syntax 5.1), so `</rdf:RDF >`,
-/// `</r:RDF>` and `</RDF>` match just like `</rdf:RDF>`. One forward pass collects the RDF
-/// namespace bindings and the end tag, skipping `<!-- -->` comments and `<![CDATA[ ]]>` sections
-/// so nothing inside them is read as markup (#11116).
+/// `</r:RDF>` and `</RDF>` match just like `</rdf:RDF>`. One forward pass keeps a stack of the
+/// open elements' namespace declarations and resolves each closing tag's prefix in the scope of
+/// the element it closes, so a prefix rebound to another namespace (on a sibling or a nested
+/// element) never makes a foreign `</r:RDF>` the end tag (Namespaces in XML 1.0, section 6). The
+/// pass skips `<!-- -->` comments, `<![CDATA[ ]]>` sections, processing instructions and
+/// declarations, so nothing inside them is read as markup, and it reads declarations only inside
+/// start tags and outside quoted attribute values (#11116). The last RDF end tag wins.
 fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
     let b = x.as_bytes();
-    // Names that can close the RDF element, learned as the scan goes: `P:RDF` for every prefix
-    // bound to the RDF namespace, plus the bare `RDF` when it is bound as the default. A prefix
-    // must be declared before its end tag, so it is known by the time the end tag is reached.
-    // Bindings are collected document-wide rather than per element scope: a packet that rebinds
-    // an RDF prefix to another namespace on a nested element exists in no known producer, and
-    // the worst that could then happen is the edit inserting before a lookalike end tag of the
-    // same spelling — a well-formed placement the reader still finds. Per-scope tracking would
-    // need a full XML parser for a case the admission filter already survives.
-    let mut names: Vec<String> = Vec::new();
+    let is_ws = |c: u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n');
+    // One entry per open element: the `(prefix, binds the RDF namespace)` pairs its start tag
+    // declares; the default namespace is the empty prefix.
+    let mut scopes: Vec<Vec<(String, bool)>> = Vec::new();
+    let resolves_to_rdf = |scopes: &[Vec<(String, bool)>], name: &str| {
+        let (prefix, local) = name.split_once(':').unwrap_or(("", name));
+        local == "RDF" && scopes.iter().rev().flatten().rev().find(|(p, _)| p == prefix).is_some_and(|(_, rdf)| *rdf)
+    };
     let mut found: Option<(usize, usize)> = None;
     let mut i = 0usize;
     while i < b.len() {
-        // Skip a comment or CDATA in one step: its contents are character data, never a
-        // declaration or a real end tag, and a hidden or fake `</rdf:RDF>` inside one must not
-        // hide the true end tag or trick the writer into inserting there (#11116).
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        // Skip a comment, CDATA section, processing instruction or declaration in one step: its
+        // contents are character data, never a declaration or a real end tag, and a hidden or
+        // fake `</rdf:RDF>` inside one must not hide the true end tag or trick the writer into
+        // inserting there (#11116).
         if b[i..].starts_with(b"<!--") {
             i = x[i + 4..].find("-->").map_or(b.len(), |e| i + 7 + e);
             continue;
@@ -346,68 +354,91 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
             i = x[i + 9..].find("]]>").map_or(b.len(), |e| i + 12 + e);
             continue;
         }
-        if b[i..].starts_with(b"xmlns")
-            && in_start_tag(x, i)
-            && let Some((name, next)) = parse_rdf_xmlns(x, i)
-        {
-            if let Some(n) = name.filter(|n| !names.contains(n)) {
-                names.push(n);
-            }
-            i = next;
+        if b[i..].starts_with(b"<?") {
+            i = x[i + 2..].find("?>").map_or(b.len(), |e| i + 4 + e);
+            continue;
+        }
+        if b[i..].starts_with(b"<!") {
+            i = x[i + 2..].find('>').map_or(b.len(), |e| i + 3 + e);
             continue;
         }
         if b[i..].starts_with(b"</") {
-            for name in &names {
-                let Some(after) = x[i + 2..].strip_prefix(name.as_str()) else { continue };
-                let tail = after.trim_start_matches([' ', '\t', '\r', '\n']);
-                if tail.starts_with('>') {
-                    found = Some((i, x.len() - tail.len() + 1));
-                    break;
+            let name_start = i + 2;
+            let name_end = x[name_start..].find(|c: char| c.is_ascii() && (is_ws(c as u8) || c == '>')).map_or(b.len(), |e| name_start + e);
+            let tail = x[name_end..].trim_start_matches([' ', '\t', '\r', '\n']);
+            if tail.starts_with('>') {
+                let end = x.len() - tail.len() + 1;
+                if resolves_to_rdf(&scopes, &x[name_start..name_end]) {
+                    found = Some((i, end));
                 }
+                scopes.pop();
+                i = end;
+            } else {
+                i = name_end.max(i + 2);
             }
-            i += 2;
             continue;
         }
-        i += 1;
+        // A start tag: the element name, then attributes up to the closing `>`.
+        let name_start = i + 1;
+        let name_end = x[name_start..].find(|c: char| c.is_ascii() && (is_ws(c as u8) || c == '/' || c == '>')).map_or(b.len(), |e| name_start + e);
+        if name_end == name_start {
+            // A lone `<` (not followed by a name) opens nothing.
+            i += 1;
+            continue;
+        }
+        let mut decls: Vec<(String, bool)> = Vec::new();
+        let mut quote: Option<u8> = None;
+        let mut self_closed = false;
+        let mut closed = false;
+        let mut j = name_end;
+        while let Some(&c) = b.get(j) {
+            match quote {
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                    j += 1;
+                }
+                None if c == b'"' || c == b'\'' => {
+                    quote = Some(c);
+                    j += 1;
+                }
+                None if c == b'>' => {
+                    self_closed = b.get(j - 1) == Some(&b'/');
+                    closed = true;
+                    j += 1;
+                    break;
+                }
+                // A declaration starts an attribute: after whitespace, never inside a longer name.
+                None if b[j..].starts_with(b"xmlns") && b.get(j - 1).is_some_and(|&p| is_ws(p)) => match parse_xmlns(x, j) {
+                    Some((prefix, rdf, next)) => {
+                        decls.push((prefix, rdf));
+                        j = next;
+                    }
+                    None => j += 1,
+                },
+                None => j += 1,
+            }
+        }
+        if !closed {
+            // A truncated start tag: nothing after it is markup.
+            break;
+        }
+        if !self_closed {
+            scopes.push(decls);
+        }
+        i = j;
     }
     found
 }
-
-/// The `xmlns` token at `at` sits inside an element's start tag — not in character data, where a
-/// File Info text value could mention `xmlns:x="…"` and bind nothing at all; not in a processing
-/// instruction or doctype, whose pseudo-attributes bind nothing either; and not inside another
-/// attribute's quoted value, where `xmlns:` is plain text (#11116).
-fn in_start_tag(x: &str, at: usize) -> bool {
-    let Some(lt) = x[..at].rfind('<') else { return false };
-    // A start tag's `<` is followed by the element name; `</`, `<?` and `<!` open an end tag, a
-    // processing instruction or a comment/doctype/CDATA, none of which carries a declaration.
-    // (An element name may start with a non-ASCII XML letter, so only these three leads reject.)
-    if matches!(x.as_bytes().get(lt + 1), Some(b'/') | Some(b'?') | Some(b'!')) {
-        return false;
-    }
-    let mut quote: Option<char> = None;
-    for c in x[lt + 1..at].chars() {
-        match quote {
-            Some(q) if c == q => quote = None,
-            Some(_) => {}
-            None if c == '"' || c == '\'' => quote = Some(c),
-            None if c == '>' => return false,
-            None => {}
-        }
-    }
-    // A token still inside quotes is text of an attribute value, not a declaration.
-    quote.is_none()
-}
-
 /// Parse the `xmlns[:prefix] = "uri"` namespace declaration starting at `i` in `x` (`x[i..]` is
-/// known to begin with `xmlns`, inside a start tag). Returns the RDF element name the
-/// declaration binds — `P:RDF`, or the bare `RDF` for a default binding — when the URI is the
-/// RDF namespace, or `None` when it binds another namespace, together with the byte index just
-/// past the declaration. Whitespace around `=` and either quote style are accepted (REC-xml 3.1,
+/// known to begin with `xmlns`, inside a start tag). Returns the declared prefix (empty for the
+/// default namespace), whether the URI is the RDF namespace, and the byte index just past the
+/// declaration, or `None` when the text is no declaration. Whitespace around `=` and either quote style are accepted (REC-xml 3.1,
 /// 2.3); a prefix may contain any XML Name character, Unicode letters included (Namespaces in
 /// XML 1.0, NCName); and a URI written with character references binds what its decoded form
 /// names (REC-xml 4.1 attribute-value normalization).
-fn parse_rdf_xmlns(x: &str, i: usize) -> Option<(Option<String>, usize)> {
+fn parse_xmlns(x: &str, i: usize) -> Option<(String, bool, usize)> {
     let b = x.as_bytes();
     let ws = |j: &mut usize| {
         while matches!(b.get(*j), Some(b' ') | Some(b'\t') | Some(b'\r') | Some(b'\n')) {
@@ -449,10 +480,7 @@ fn parse_rdf_xmlns(x: &str, i: usize) -> Option<(Option<String>, usize)> {
     }
     let uri = &x[s..j];
     j += 1;
-    if decode_char_refs(uri).as_deref() != Some(RDF_NS) {
-        return Some((None, j));
-    }
-    Some((Some(if prefix.is_empty() { "RDF".to_string() } else { format!("{prefix}:RDF") }), j))
+    Some((prefix, decode_char_refs(uri).as_deref() == Some(RDF_NS), j))
 }
 
 /// The value of an attribute after replacing its numeric character references (`&#35;`, `&#x23;`)
