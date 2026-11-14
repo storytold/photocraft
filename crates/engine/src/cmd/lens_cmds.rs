@@ -187,7 +187,8 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
     v
 }
 
-/// Camera Raw on a surface over `area` (RGB / Gray via RGBA, at the surface's depth).
+/// Camera Raw on a surface over `area`, the canvas (RGB / Gray via RGBA, at the surface's depth):
+/// without Geometry the content past it is developed too. The masks' coordinates are the canvas's.
 ///
 /// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
 /// error first, and this keeps the preview and Smart Filter paths from overflowing. A stage
@@ -214,11 +215,13 @@ pub fn try_camera_raw_surface_on(surf: &Surface, area: Rect, p: &CameraRaw, opaq
     develop_surface(surf, area, p, opaque, true)
 }
 
+/// `area` is the canvas: the frame the masks' coordinates refer to.
 fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, strict: bool) -> std::result::Result<Surface, String> {
     // Geometry turns the image about its centre: the canvas's, not that of content past its edge.
     // Without it every pixel of the content is developed, also what an earlier Smart Filter moved
     // past `area` (when that would exceed what one pass can develop, `area` alone still is).
     let geometry = !p.geometry_neutral();
+    let canvas = area;
     let area = if geometry {
         area
     } else {
@@ -233,6 +236,13 @@ fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, stri
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
     let float = fmt.sample == SampleType::F32;
+    // The masks were drawn on the canvas: past it they keep their place on it, whether or not
+    // Geometry (which develops the canvas only) is on.
+    let reframed = (!p.masks.is_empty() && area != canvas).then(|| {
+        let f = [canvas.x0 - area.x0, canvas.y0 - area.y0, canvas.x1 - area.x0, canvas.y1 - area.y0].map(|v| v as f32);
+        CameraRaw { masks: camera_raw::masks::reframed(&p.masks, f, w, h), ..p.clone() }
+    });
+    let p = reframed.as_ref().unwrap_or(p);
     if strict {
         camera_raw::try_develop(&mut px, w, h, p, float)?;
     } else {
@@ -553,7 +563,8 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let t0 = Stopwatch::start();
     let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
-        try_camera_raw_surface_on(surf, if geometry { canvas } else { canvas.union(&surf.content_bounds()) }, &cr, background).map_err(|e| bad(RAW, e))
+        // Without Geometry the content past the canvas is developed too (`develop_surface`).
+        try_camera_raw_surface_on(surf, canvas, &cr, background).map_err(|e| bad(RAW, e))
     })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
@@ -609,7 +620,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase":false,"auto":false (Auto Mask: only over colours like the one under the dab's centre)}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the result}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise","colorHue":0..360 deg,"colorSat":0..100 (the Color swatch),"moire":0..100,"defringe":0..100}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase":false,"auto":false (Auto Mask: only over colours like the one under the dab's centre)}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the canvas}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise","colorHue":0..360 deg,"colorSat":0..100 (the Color swatch),"moire":0..100,"defringe":0..100}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -841,6 +852,34 @@ mod tests {
         let (inside, past) = (out.sample_channel(10, 10, 0), out.sample_channel(30, 10, 0));
         assert!(inside > 0.3, "{inside}");
         assert!((past - inside).abs() < 1e-3, "content past the area was not developed: {past} vs {inside}");
+    }
+
+    /// Masks are drawn on the canvas: with the layer reaching past it they cover the same canvas
+    /// pixels as on a layer that ends at it, so turning Geometry on (which develops only the
+    /// canvas) doesn't move them.
+    #[test]
+    fn camera_raw_masks_keep_their_place_on_the_canvas_past_its_edge() {
+        let canvas = Rect::from_xywh(0, 0, 40, 20);
+        let (mut fits, mut wide) = (Surface::new(photocraft_color::PixelFormat::RGBA8), Surface::new(photocraft_color::PixelFormat::RGBA8));
+        fits.fill_rect(canvas, &[0.25, 0.25, 0.25, 1.0]);
+        wide.fill_rect(Rect::from_xywh(-20, 0, 80, 20), &[0.25, 0.25, 0.25, 1.0]);
+        // The left half of the canvas brightened by a linear gradient, and a dab on the right.
+        let masks = json!([
+            {"components": [{"kind": "linear", "zero": [0.6, 0.5], "full": [0.4, 0.5]}], "adjust": {"exposure": 1}},
+            {"components": [{"kind": "brush", "dabs": [{"x": 0.8, "y": 0.5, "size": 0.1}]}], "adjust": {"exposure": -1}}
+        ]);
+        let cr = raw_params(RAW, &json!({"masks": masks})).unwrap();
+        let (a, b) = (camera_raw_surface(&fits, canvas, &cr), camera_raw_surface(&wide, canvas, &cr));
+        for x in 0..40 {
+            let (fa, fb) = (a.sample_channel(x, 10, 0), b.sample_channel(x, 10, 0));
+            assert!((fa - fb).abs() < 2.0 / 255.0, "x {x}: {fa} on a layer that fits, {fb} on one past the canvas");
+        }
+        assert!(a.sample_channel(5, 10, 0) > 0.3 && a.sample_channel(32, 10, 0) < 0.2);
+        // With Geometry, which develops the canvas only, the masks stay where they were.
+        let turned = raw_params(RAW, &json!({"masks": masks, "perspectiveScale": 100.5})).unwrap();
+        let c = camera_raw_surface(&wide, canvas, &turned);
+        assert!(c.sample_channel(5, 10, 0) > 0.3 && c.sample_channel(32, 10, 0) < 0.2);
+        assert!(c.sample_channel(5, 10, 0) - b.sample_channel(5, 10, 0) < 0.05);
     }
 
     #[test]

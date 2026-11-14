@@ -343,6 +343,44 @@ pub fn coverage_for(m: &Mask, px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw
     coverage_with(m, px, w, h, crate::faces::AVAILABLE, p.encoding())
 }
 
+/// `masks` drawn on `frame` (`[x0, y0, x1, y1]`, pixels of a `w × h` image: the canvas inside a
+/// larger area being developed) in that image's own 0 … 1 coordinates. Positions move into the
+/// frame and sizes keep their size in pixels, so a mask covers the same pixels whatever area
+/// around the canvas is developed with it. The kinds that read the pixels (colour, luminance,
+/// depth and the AI ones) don't change.
+pub fn reframed(masks: &[Mask], frame: [f32; 4], w: usize, h: usize) -> Vec<Mask> {
+    let (iw, ih) = (w.max(1) as f32, h.max(1) as f32);
+    let (fw, fh) = ((frame[2] - frame[0]).max(0.0), (frame[3] - frame[1]).max(0.0));
+    let (sx, sy) = (fw / iw, fh / ih);
+    let long = fw.max(fh) / iw.max(ih);
+    let at = |q: [f32; 2]| [(frame[0] + q[0] * fw) / iw, (frame[1] + q[1] * fh) / ih];
+    let mut out = masks.to_vec();
+    for c in out.iter_mut().flat_map(|m| m.components.iter_mut()) {
+        match &mut c.shape {
+            Shape::Brush { dabs } => {
+                for d in dabs.iter_mut() {
+                    [d.x, d.y] = at([d.x, d.y]);
+                    d.size *= long;
+                }
+            }
+            Shape::Linear { zero, full } => {
+                *zero = at(*zero);
+                *full = at(*full);
+            }
+            Shape::Radial { center, radius, .. } => {
+                *center = at(*center);
+                *radius = [radius[0] * sx, radius[1] * sy];
+            }
+            Shape::Objects { rect } => {
+                let ([x0, y0], [x1, y1]) = (at([rect[0], rect[1]]), at([rect[2], rect[3]]));
+                *rect = [x0, y0, x1, y1];
+            }
+            Shape::Color { .. } | Shape::Luminance { .. } | Shape::Depth { .. } | Shape::Subject | Shape::Sky | Shape::Background | Shape::People { .. } => {}
+        }
+    }
+    out
+}
+
 fn coverage_with(m: &Mask, px: &[[f32; 4]], w: usize, h: usize, faces_available: bool, enc: Encoding) -> Vec<f32> {
     let n = w.saturating_mul(h);
     if !faces_available && m.components.iter().any(|c| matches!(c.shape, Shape::People { .. })) {

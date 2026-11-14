@@ -96,6 +96,31 @@ fn components_add_subtract_and_intersect() {
     assert!(none.iter().all(|v| *v == 0.0));
 }
 
+/// Masks drawn on a frame (the canvas) and reframed to a larger image around it cover, inside
+/// the frame, what they cover on the frame alone: positions and sizes in pixels are kept.
+#[test]
+fn reframed_masks_cover_the_frame_as_on_it_alone() {
+    let (fw, fh, w, h, ox, oy) = (60usize, 40usize, 100usize, 52usize, 30usize, 7usize);
+    let shapes = [
+        Shape::Linear { zero: [0.7, 0.2], full: [0.3, 0.6] },
+        Shape::Radial { center: [0.4, 0.55], radius: [0.2, 0.3], angle: 25.0, feather: 50.0 },
+        Shape::Brush { dabs: vec![Dab { x: 0.3, y: 0.4, size: 0.12, ..Dab::default() }, Dab { x: 0.75, y: 0.7, size: 0.05, feather: 0.0, ..Dab::default() }] },
+    ];
+    for shape in shapes {
+        let m = Mask { components: vec![comp(shape.clone())], ..Mask::default() };
+        let alone = coverage(&m, &flat(fw, fh, |_, _| [0.5; 3]), fw, fh);
+        let frame = [ox, oy, ox + fw, oy + fh].map(|v| v as f32);
+        let moved = reframed(std::slice::from_ref(&m), frame, w, h);
+        let big = coverage(&moved[0], &flat(w, h, |_, _| [0.5; 3]), w, h);
+        for y in 0..fh {
+            for x in 0..fw {
+                let (a, b) = (at(&alone, fw, x, y), at(&big, w, x + ox, y + oy));
+                assert!((a - b).abs() < 0.02, "{shape:?} at {x},{y}: {a} alone, {b} reframed");
+            }
+        }
+    }
+}
+
 #[test]
 fn local_exposure_brightens_only_under_the_mask() {
     let (w, h) = (64, 32);
