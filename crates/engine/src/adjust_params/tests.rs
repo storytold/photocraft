@@ -706,3 +706,21 @@ fn gradient_map_source_params() {
         assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");
     }
 }
+
+/// #14414: the reference application mixes with whole percentages. Scripted values round to the
+/// nearest whole percent before clamping; the dialog already sends whole percents.
+#[test]
+fn channel_mixer_percentages_are_whole_numbers() {
+    let a = from_params(
+        "channelMixer",
+        &json!({"red": [0.4, 0.5, 50.6, -0.5], "green": [33.3, 33.3, 33.3, 0.0], "blue": [-300.0, 300.0, 0.0, 0.0]}),
+        None,
+        ColorMode::Rgb,
+    )
+    .unwrap();
+    let Adjustment::ChannelMixer { matrix, .. } = a else { panic!("wrong kind") };
+    assert_eq!(matrix[0], [0.0, 0.01, 0.51, -0.01], "0.4 to 0, 0.5 to 1, 50.6 to 51, halves away from zero");
+    assert_eq!(matrix[1], [0.33, 0.33, 0.33, 0.0], "33.3 stores as 33");
+    assert_eq!(matrix[2], [-2.0, 2.0, 0.0, 0.0], "clamps stay -200 and 200");
+    assert_eq!(to_params(&a)["red"], json!([0.0, 1.0, 51.0, -1.0]), "the stored step reads back whole");
+}
