@@ -2171,6 +2171,8 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         // here: it makes the Ruler the temporary Move tool (`hold_keys::cmd_moves`), so this match
         // runs with `Tool::Move` and shows its pointer, on the ruler and off it.
         Tool::Ruler => crate::tool_cursor::ruler(app, painter, p, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))),
+        // The Note tool's note sheet, its hotspot on the sheet's top-left corner (#11794).
+        Tool::Note => crate::tool_cursor::note(painter, p),
         _ => egui::CursorIcon::Crosshair,
     };
     let icon = visible_crosshair(icon, painter, p, cfg!(not(target_arch = "wasm32")));
