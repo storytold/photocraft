@@ -291,7 +291,8 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         HistSource::Channel { .. } | HistSource::Colors { .. } => {}
     }
     // An adjustment layer's masks limit what the adjustment touches, so only the pixels they reveal
-    // (effective value above one half) are counted, read the way the compositor reads them: a
+    // are counted: any effective value above zero, since the compositor blends the adjustment in
+    // wherever the mask is not fully black. They are read the way the compositor reads them: a
     // feather blurs across the canvas, so a feathered layer reads the compositor's (cached)
     // canvas-wide combined mask; otherwise each band takes the pixel mask (with density) times the
     // vector mask rendered for that band.
@@ -373,10 +374,10 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, scope: H
         if masked {
             if let Some(pass) = &mut sel_pass {
                 for (keep, value) in pass.iter_mut().zip(&revealed) {
-                    *keep &= *value > 0.5;
+                    *keep &= *value > 0.0;
                 }
             } else {
-                sel_pass = Some(revealed.iter().map(|&value| value > 0.5).collect());
+                sel_pass = Some(revealed.iter().map(|&value| value > 0.0).collect());
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -436,11 +437,11 @@ fn sampled_vector_values(mask: &photocraft_vector::CompiledVectorMask, rect: pho
     out
 }
 
-/// Whether a pixel mask reveals every pixel: no painted tiles and a default above one half after
+/// Whether a pixel mask reveals every pixel: no painted tiles and a default above zero after
 /// density (counting it then changes nothing, so the per-band pass is skipped).
 fn reveals_all(m: &photocraft_doc::LayerMask) -> bool {
     let d = m.surface.default_pixel().first().copied().unwrap_or(1.0);
-    m.surface.tile_count() == 0 && 1.0 - m.density * (1.0 - d) > 0.5
+    m.surface.tile_count() == 0 && 1.0 - m.density * (1.0 - d) > 0.0
 }
 
 /// Bin- and pixel-wise sum of two partial counts (saturating: a hostile canvas can exceed
@@ -1157,8 +1158,8 @@ mod tests {
     }
 
     /// #12325 review: a pixel mask that reveals on its own (0.6) is still multiplied by an enabled
-    /// vector mask (0.6 here), so 0.36 is hidden and nothing is counted; without the vector mask
-    /// the same pixel mask counts everything.
+    /// vector mask: one reading 0.6 outside its path leaves 0.36, which the compositor still blends
+    /// in, so everything counts; one at full density reads 0 outside its path and hides everything.
     #[test]
     fn a_pixel_mask_that_reveals_alone_still_counts_with_an_enabled_vector_mask() {
         let (mut s, id) = masked_adjustment(64, 64, 32, true);
@@ -1181,7 +1182,14 @@ mod tests {
         })
         .unwrap();
         let both = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
-        assert_eq!(both.pixel_count, 0, "0.6 x 0.6 = 0.36 is hidden");
+        assert_eq!(both.pixel_count, 64 * 64, "0.6 x 0.6 = 0.36 still blends the adjustment in");
+        s.edit("opaque-vector-mask", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().vector_mask.as_mut().unwrap().density = 1.0;
+            Ok(())
+        })
+        .unwrap();
+        let hidden = compute_histograms(&s.active().unwrap().doc, source, ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!(hidden.pixel_count, 0, "0.6 x 0 is hidden");
     }
     #[test]
     fn vector_mask_limits_the_counted_area() {
@@ -1235,8 +1243,10 @@ mod tests {
         .unwrap();
         let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
         assert!(hist.level > 1, "level {}", hist.level);
-        assert_eq!(hist[0][0], 0);
-        assert!(hist[0][255] > 0);
+        // Factor 7 (858 × 429 proxy): a 2-pixel feather reaches at most the proxy column at the
+        // edge on the black side, which the compositor faintly adjusts too.
+        assert!(hist[0][0] <= 429, "only the edge column of the black half: {}", hist[0][0]);
+        assert!(hist[0][255] >= 429 * 429, "the whole white half: {}", hist[0][255]);
     }
 
     /// Editing the mask of a hidden adjustment changes no pixels, yet changes what is counted.
@@ -1354,7 +1364,7 @@ mod tests {
     }
 
     /// A feathered mask is counted as the compositor blurs it: a two-pixel revealed stripe is
-    /// counted as painted, but a feather spreads it so thin that nothing stays above one half.
+    /// counted as painted, and a feather spreads it over more pixels, each partly revealed.
     #[test]
     fn feathered_mask_is_counted_as_rendered() {
         let stripe = |feather: f32| {
@@ -1373,8 +1383,23 @@ mod tests {
         assert_eq!((sharp[0][0], sharp[0][255]), (0, 2 * 64));
         let soft = stripe(8.0);
         assert_eq!(soft.level, 1);
-        assert_eq!(soft[0][0], 0, "the hidden black half stays hidden");
-        assert!(soft[0][255] < 2 * 64, "the feather thins the stripe: {}", soft[0][255]);
+        assert!(soft.pixel_count < 64 * 64, "far from the stripe the mask still hides: {}", soft.pixel_count);
+        assert!(soft[0][255] > 2 * 64, "the feather widens the stripe: {}", soft[0][255]);
+    }
+
+    /// Partial coverage still counts: the compositor applies the adjustment at a quarter strength
+    /// under a 25% mask, so Auto must measure that area, not treat it as hidden.
+    #[test]
+    fn a_partly_revealing_mask_counts_its_area() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("quarter", |doc, active| {
+            let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+            m.surface.fill_rect(photocraft_geom::Rect::new(32, 0, 64, 64), &[0.25]);
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb, HistScope::WholeInput);
+        assert_eq!((hist[0][0], hist[0][255]), (0, 32 * 64), "the 25% white half counts, the black half stays hidden");
     }
 
     #[test]
