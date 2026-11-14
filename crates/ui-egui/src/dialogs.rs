@@ -357,7 +357,15 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::color_range_ui::owns(fields) => crate::color_range_ui::body(app, ui, fields),
         _ if crate::prefs_ui::owns(fields) => crate::prefs_ui::body(app, ui, fields, d.id),
         _ if fields.contains_key("__export") => crate::export_dialog::body(app, ui, fields),
-        // Image Size and Canvas Size open on Width, selected (#2329).
+        // Canvas Size opens on Width, selected (#2329). Image Size from the menu or its shortcut
+        // opens with no field focused, so typing doesn't replace the width; shown by an action
+        // (playback or Record Again) it opens on Width like Canvas Size (#14800).
+        _ if fields.contains_key("__sizing")
+            && fields.get("__command").and_then(Value::as_str) == Some("image.imageSize")
+            && !fields.contains_key(crate::actions::RESUME) =>
+        {
+            crate::sizing::body(ui, fields)
+        }
         _ if fields.contains_key("__sizing") => first_field_focused(ui, id, |ui| crate::sizing::body(ui, fields)),
         _ if crate::smart_filter_dialog::owns(fields) => crate::smart_filter_dialog::body(app, ui, fields),
         _ if crate::adjust_dialog::owns(fields) => crate::adjust_dialog::body(app, ui, fields),
@@ -1339,6 +1347,8 @@ pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
 mod image_processor_ui;
+#[cfg(test)]
+mod image_size_focus_tests;
 pub mod jpeg_options_ui;
 #[cfg(test)]
 mod label_column_tests;

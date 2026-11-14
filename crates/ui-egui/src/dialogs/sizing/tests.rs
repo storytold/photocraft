@@ -306,8 +306,11 @@ fn typed_zero_width_shows_the_applied_size() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let id = open(h.state_mut(), "image.imageSize").unwrap();
     h.run_steps(3);
-    // The dialog opens on Width, selected (#2329): the typed 0 replaces the 4.
-    assert!(h.query_all_by_role(Role::SpinButton).next().expect("the Width field").is_focused());
+    // Image Size opens with no field focused (#14800): select Width so the typed 0 replaces the 4.
+    h.query_all_by_role(Role::SpinButton).next().expect("the Width field").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
     h.event(egui::Event::Text("0".into()));
     h.run_steps(1);
     h.key_press(egui::Key::Tab);
@@ -500,27 +503,26 @@ fn large_documents_in_physical_units_open_unchanged() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
-/// #2329: Image Size and Canvas Size open on Width with its value selected, as in Photoshop:
-/// typing replaces it and Enter applies it.
+/// #2329: Canvas Size opens on Width with its value selected: typing replaces it and Enter
+/// applies it. Image Size opens with no field focused (#14800, `image_size_focus_tests`).
 #[test]
 fn sizing_dialogs_open_on_width_selected() {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
-    for command in ["image.imageSize", "image.canvasSize"] {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        open(h.state_mut(), command).unwrap();
-        h.run_steps(3);
-        assert!(h.query_all_by_role(Role::SpinButton).next().expect("the Width field").is_focused(), "{command}: Width has focus");
-        h.event(egui::Event::Text("50".into()));
-        h.run_steps(1);
-        let f = h.state().ui.dialogs.first().map(|d| d.fields.clone()).expect("the dialog is open");
-        assert_eq!(num(&f, "width"), 50.0, "{command}: typing replaced the selected 200");
-        h.key_press(egui::Key::Enter);
-        h.run_steps(3);
-        assert!(h.state().ui.dialogs.is_empty(), "{command}: Enter is OK");
-        assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
-    }
+    let command = "image.canvasSize";
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open(h.state_mut(), command).unwrap();
+    h.run_steps(3);
+    assert!(h.query_all_by_role(Role::SpinButton).next().expect("the Width field").is_focused(), "{command}: Width has focus");
+    h.event(egui::Event::Text("50".into()));
+    h.run_steps(1);
+    let f = h.state().ui.dialogs.first().map(|d| d.fields.clone()).expect("the dialog is open");
+    assert_eq!(num(&f, "width"), 50.0, "{command}: typing replaced the selected 200");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.is_empty(), "{command}: Enter is OK");
+    assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
 }
