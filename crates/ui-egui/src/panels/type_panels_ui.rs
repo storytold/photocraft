@@ -1013,7 +1013,7 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    fn app_with_text(text: &str) -> PhotocraftApp {
+    pub(super) fn app_with_text(text: &str) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 300, "height": 120, "background": "white"})).unwrap();
         app.run("type.create", json!({"x": 10, "y": 60, "text": text})).unwrap();
@@ -1184,3 +1184,7 @@ mod tests {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_complete_tests.rs"]
+mod spell_complete_tests;
