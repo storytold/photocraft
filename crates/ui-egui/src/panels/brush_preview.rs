@@ -78,7 +78,10 @@ fn tip_shape_sig(h: &mut DefaultHasher, t: &TipShape) {
 /// Cheap signature of everything that changes a brush's stroke preview.
 pub fn preview_sig(b: &BrushSettings) -> u64 {
     let mut h = DefaultHasher::new();
-    js(&mut h, &(b.size, b.hardness, b.spacing, b.opacity, b.flow, b.pressure_size, b.pressure_opacity, b.erase, b.mode, b.angle, b.roundness));
+    js(
+        &mut h,
+        &(b.size, b.hardness, b.spacing, b.spacing_enabled, b.opacity, b.flow, b.pressure_size, b.pressure_opacity, b.erase, b.mode, b.angle, b.roundness),
+    );
     js(&mut h, &(b.flip_x, b.flip_y, b.aliased, b.noise, b.wet_edges, b.build_up, b.build_up_rate, b.protect_texture, b.seed));
     js(&mut h, &(&b.shape_dynamics, &b.scattering, &b.color_dynamics, &b.transfer, &b.pose, &b.smoothing));
     tip_shape_sig(&mut h, &b.tip);
@@ -103,6 +106,43 @@ pub fn tip_sig(tip: &TipShape, hardness: f32, angle: f32, roundness: f32, flip: 
     h.finish()
 }
 
+/// Times `points` as a stroke that starts slowly and speeds up: its speed grows with the distance
+/// along it, from dabs [`START_GAP`] tip widths apart to [`END_GAP`]. With Spacing
+/// off, dabs follow the pointer's speed ([`paint::dynamics::SPEED_SPACING_MS`] apart), so the
+/// preview runs from overlapping to separate dabs, as Photoshop's does. Untimed, the engine spaced
+/// it by distance: a solid stroke (#9916).
+fn accelerate(points: &mut [StrokePoint], size: f64) {
+    let mut len = 0.0;
+    for w in points.windows(2) {
+        if let [q, p] = w {
+            len += (p.x - q.x).hypot(p.y - q.y);
+        }
+    }
+    if len <= 0.0 || size <= 0.0 {
+        return;
+    }
+    let interval = paint::dynamics::SPEED_SPACING_MS;
+    // A speed in px/ms whose dabs land `gap` tip widths apart.
+    let speed = |gap: f64| gap * size / interval;
+    let (mut at, mut t) = (0.0, 0.0);
+    let mut last: Option<(f64, f64)> = None;
+    for p in points.iter_mut() {
+        if let Some((x, y)) = last {
+            let d = (p.x - x).hypot(p.y - y);
+            // The segment's mid-point speed.
+            let f = (at + d / 2.0) / len;
+            t += d / speed(START_GAP + (END_GAP - START_GAP) * f);
+            at += d;
+        }
+        p.time = t;
+        last = Some((p.x, p.y));
+    }
+}
+
+/// The gaps between the first and last dabs of the Spacing-off preview, in tip widths.
+const START_GAP: f64 = 0.1;
+const END_GAP: f64 = 2.5;
+
 /// A stroke rendered with the brush (scaled down to fit), as straight RGBA8: Photoshop's preview
 /// S-curve with pressure tapering in and out.
 pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec<u8> {
@@ -117,7 +157,7 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
     // Build-up adds dabs over (simulated) time: the preview has none.
     brush.build_up = false;
     let n = 64;
-    let points: Vec<StrokePoint> = (0..=n)
+    let mut points: Vec<StrokePoint> = (0..=n)
         .map(|i| {
             let s = i as f64 / n as f64;
             let x = 10.0 + s * (w as f64 - 20.0);
@@ -125,6 +165,15 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
             StrokePoint::new(x, y, (s * std::f64::consts::PI).sin().max(0.05) as f32)
         })
         .collect();
+    if !brush.spacing_enabled {
+        // Smoothed here rather than in the stroke, so the timing follows the path the dabs take:
+        // the smoother moves points and can give several the same time.
+        if brush.smoothing.enabled && brush.smoothing.amount > 0.0 {
+            points = paint::dynamics::smooth_points(&brush.smoothing, 1.0, &points);
+            brush.smoothing.enabled = false;
+        }
+        accelerate(&mut points, f64::from(brush.size));
+    }
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let mut s = photocraft_raster::Surface::new(fmt);
     paint::apply_stroke(&mut s, &paint::Stroke { brush, points }, None, false);
@@ -292,6 +341,44 @@ mod tests {
         assert_ne!(base, preview_sig(&BrushSettings { texture: paint::Texture { enabled: true, ..Default::default() }, ..Default::default() }));
         c.retain(|_| false);
         assert!(c.is_empty());
+    }
+
+    /// #9916: with Spacing off the preview runs from overlapping dabs (slow) to separate ones
+    /// (fast), as Photoshop's does, instead of the solid stroke of Spacing on; toggling Spacing
+    /// re-renders it.
+    #[test]
+    fn spacing_off_previews_dabs_spreading_with_speed() {
+        let (w, h) = (343u32, 100u32);
+        let covered = |px: &[u8], cols: std::ops::Range<u32>| {
+            let n = cols.len() as f64;
+            let hit = cols.filter(|&x| (0..h).any(|y| px[((y * w + x) * 4 + 3) as usize] > 32)).count() as f64;
+            hit / n
+        };
+        let on = BrushSettings { size: 10.0, hardness: 1.0, ..Default::default() };
+        let off = BrushSettings { spacing_enabled: false, ..on.clone() };
+        assert_ne!(preview_sig(&on), preview_sig(&off));
+        let (a, b) = (preview_pixels(&on, w, h, [1.0; 4]), preview_pixels(&off, w, h, [1.0; 4]));
+        let (left, right) = (20..90, w - 90..w - 20);
+        assert!(covered(&a, left.clone()) > 0.95 && covered(&a, right.clone()) > 0.95, "Spacing on is a solid stroke");
+        let slow = covered(&b, left);
+        let fast = covered(&b, right);
+        assert!(slow > 0.95, "slow start: overlapping dabs ({slow})");
+        assert!(fast > 0.1 && fast < 0.6, "fast end: separate dabs ({fast})");
+        // Smoothing doesn't undo the spread: the preview is timed after it smooths.
+        for amount in [0.5, 0.95] {
+            let smoothed = BrushSettings { smoothing: paint::Smoothing { amount, ..Default::default() }, ..off.clone() };
+            let px = preview_pixels(&smoothed, w, h, [1.0; 4]);
+            let (slow, fast) = (covered(&px, 20..90), covered(&px, w - 90..w - 20));
+            assert!(slow > 0.95 && fast > 0.1 && fast < 0.6, "smoothing {amount}: slow {slow}, fast {fast}");
+        }
+        // Through the panel's cached texture, the toggle re-renders the preview in the same slot.
+        let ctx = egui::Context::default();
+        let _ = stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
+        let n = render_count(&ctx);
+        let _ = stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
+        assert_eq!(render_count(&ctx), n, "unchanged settings reuse the texture");
+        let _ = stroke_texture(&ctx, "spacing", &off, 120, 40, Color32::WHITE);
+        assert_eq!(render_count(&ctx), n + 1, "turning Spacing off re-renders the preview");
     }
 
     #[test]
