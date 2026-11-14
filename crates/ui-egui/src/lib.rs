@@ -906,6 +906,9 @@ mod transform_type_tests;
 mod transform_reference_point_tests;
 
 #[cfg(test)]
+mod transform_reference_pointer_tests;
+
+#[cfg(test)]
 mod transform_relative_position_tests;
 
 #[cfg(test)]
