@@ -14,6 +14,7 @@ use crate::{PhotocraftApp, icons, widgets};
 pub mod actions;
 pub mod adjust_ui;
 pub mod apply_color;
+pub mod apply_data_set_ui;
 pub(crate) mod blend_preview;
 pub(super) mod brand;
 mod brush_controls;

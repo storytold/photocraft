@@ -4,6 +4,8 @@ mod actions_duplicate;
 mod actions_panel_menu;
 mod actions_record_again;
 mod adjust_preview_gpu;
+mod apply_data_set_dialog;
+mod apply_data_set_preview;
 mod arbitrary_rotation_preview;
 mod background_eraser_reset_tip;
 mod batch_export_options;

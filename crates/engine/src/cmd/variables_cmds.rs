@@ -283,6 +283,21 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"applied": set.name, "index": idx}))
 }
 
+/// The document as `image.applyDataSet {"index": index}` would leave it, built without touching the
+/// session: the Apply Data Set dialog's Preview (#14496). It reads replacement images as the
+/// command does (the same path gate, relative to the document) and fails as a whole, so a set
+/// that can't be applied never gives a partly applied preview.
+pub fn data_set_preview(s: &Session, index: usize) -> Result<Document> {
+    let (set, _) = resolve_set(s, &json!({"index": index}), "image.applyDataSet")?;
+    authorize_pixel_paths(s, &set)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
+    let mut doc = (*st.doc).clone();
+    apply_to_doc(&mut doc, &st.doc.variables, &set)?;
+    Ok(doc)
+}
+
 /// Resolve a data set from `{name}` or `{index}`.
 fn resolve_set(s: &Session, p: &Value, cmd: &str) -> Result<(DataSet, usize)> {
     let vars = &s.active().ok_or(EngineError::NoDocument)?.doc.variables;

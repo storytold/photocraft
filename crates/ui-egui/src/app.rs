@@ -75,6 +75,7 @@ impl PhotocraftApp {
             reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
+            data_set_preview: Default::default(),
             magnetic: Default::default(),
             secondary_erase: false,
             held_erase: false,

@@ -1,7 +1,7 @@
-//! Front end for Image › Variables (Define… / Data Sets…) and Apply Data Set — Photoshop's
-//! data-driven graphics dialog. All editing drives the headless engine commands
-//! (`image.variables.define`, `image.variables.dataSets`, `image.applyDataSet`), so the control
-//! channel can drive this with `ui.dialog.set` / `confirm` exactly like a human.
+//! Front end for Image › Variables (Define… / Data Sets…), the data-driven graphics dialog.
+//! Image › Apply Data Set… has its own small dialog (`apply_data_set_ui`). All editing drives the
+//! headless engine commands (`image.variables.define`, `image.variables.dataSets`,
+//! `image.applyDataSet`), so the control channel can drive this with `ui.dialog.set` / `confirm` exactly like a human.
 //!
 //! The dialog keeps its working state as JSON in the `__variables` field, shaped like the engine
 //! command params, so `confirm` passes it straight through.
@@ -48,17 +48,8 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             f.insert("__label".into(), json!("Variables"));
             Some(Ok(json!({"dialog": app.ui.open_dialog(DialogKind::Command, f)})))
         }
-        "image.applyDataSet" if !has_params => {
-            // No data set named: open the dialog on the Data Sets page to pick one.
-            let mut f = Map::new();
-            f.insert("__command".into(), json!(id));
-            let state = app.session.active().map(|st| crate::variables_ui::to_state(&st.doc.variables)).unwrap_or_else(|| json!({"defs": [], "dataSets": []}));
-            f.insert("__variablesOrig".into(), state.clone());
-            f.insert("__variables".into(), state);
-            f.insert("__page".into(), json!("dataSets"));
-            f.insert("__label".into(), json!("Variables"));
-            Some(Ok(json!({"dialog": app.ui.open_dialog(DialogKind::Command, f)})))
-        }
+        // No data set named: the Apply Data Set dialog picks one from the list.
+        "image.applyDataSet" if !has_params => Some(Ok(json!({"dialog": crate::panels::apply_data_set_ui::open(app)}))),
         _ => None,
     }
 }
@@ -152,16 +143,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     fields.insert("__variables".into(), state);
     fields.insert("__page".into(), json!(page));
     if apply {
-        fields.remove("__appliedAt");
         let result = confirm(app, fields);
         fields.remove("__apply");
-        if result.is_ok()
-            && fields.get("__command").and_then(Value::as_str) == Some("image.applyDataSet")
-            && let Some(st) = app.session.active()
-        {
-            fields.insert("__variables".into(), to_state(&st.doc.variables));
-            fields.insert("__appliedAt".into(), json!([st.doc.id.0, st.revision]));
-        }
         if let Err(error) = result {
             app.ui.status = error;
         }
@@ -367,32 +350,18 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
     apply
 }
 
-/// Save the edited definitions and data sets. Apply Data Set OK also applies the selected row.
+/// Save the edited definitions and data sets, then apply the row the page's Apply asked for.
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let empty = json!([]);
     let state = fields.get("__variables").unwrap_or(&Value::Null);
     let defs = state.get("defs").unwrap_or(&empty);
     let sets = state.get("dataSets").unwrap_or(&empty);
-    let selected = if fields.get("__command").and_then(Value::as_str) == Some("image.applyDataSet") && !fields.contains_key("__apply") {
-        sets.as_array().filter(|rows| !rows.is_empty()).map(|rows| data_set_index(fields, rows.len()))
-    } else {
-        None
-    };
-    // An unchanged OK after Apply closes without another application or history entry.
-    if let Some(index) = selected
-        && let Some(st) = app.session.active()
-        && fields.get("__appliedAt") == Some(&json!([st.doc.id.0, st.revision]))
-        && st.doc.variables.active == Some(index)
-        && state == &to_state(&st.doc.variables)
-    {
-        return Ok(json!({"defined": true}));
-    }
     app.run("image.variables.define", json!({"defs": defs}))?;
     app.run("image.variables.dataSets", json!({"dataSets": sets}))?;
     let request = match fields.get("__apply") {
         Some(Value::String(name)) => Some(json!({"name": name})),
         Some(value) => value.as_u64().map(|index| json!({"index": index})),
-        None => selected.map(|index| json!({"index": index})),
+        None => None,
     };
     match request {
         Some(params) => app.run("image.applyDataSet", params),
