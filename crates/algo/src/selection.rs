@@ -456,7 +456,39 @@ pub fn wand_region_by(
     distance: ColorDistance,
 ) -> Option<Region> {
     let how = WandMatch { tolerance, contiguous, anti_alias, bound: WandBound::AtMost, within, distance };
-    wand_region_on(&WandPixels::rgba(area, img.as_flattened()), seed, &how)
+    wand_region_rule(&WandPixels::rgba(area, img.as_flattened()), seed, &how, MatchRule::Wand)
+}
+
+/// Which pixels count as "similar" to the clicked one.
+#[derive(Clone, Copy)]
+enum MatchRule {
+    /// The Magic Wand / Magic Eraser rule: colour and alpha each within Tolerance, except that
+    /// two fully transparent pixels always match.
+    Wand,
+    /// The Paint Bucket rule, see [`wand_region_bucket`]. Only RGBA pictures have it; any other
+    /// picture is compared by the wand rule.
+    Bucket,
+}
+
+/// [`wand_region`] with the Paint Bucket's match rule (measured on the reference, #12529).
+///
+/// It differs from the wand rule only when the clicked pixel is not opaque. The wand lets any
+/// pixel whose alpha is within Tolerance of the seed's match, so a bucket click on transparent
+/// pixels leaked into the anti-aliased edge of a shape and, at Tolerance 255, filled the whole
+/// layer (#6183). The bucket rule is:
+/// - seed alpha 0: only pixels with alpha 0 match; Tolerance plays no role;
+/// - seed alpha 255: unchanged (colour and alpha each within Tolerance);
+/// - seed alpha in between: a pixel of the seed's own colour matches when its alpha is
+///   above 0 — there is no alpha band for that case (alpha 40, 197 and 253 of one colour
+///   were measured to fill together). A pixel of any other colour must also sit within
+///   Tolerance of the seed's alpha, as before: that case was not measured, and unmeasured
+///   cases keep today's behaviour. Alpha-0 pixels are never taken.
+///
+/// Only that one semi-transparent case was measured; unmeasured cases keep the previous
+/// behaviour. [`wand_region`] and [`wand_region_within`] are unchanged.
+pub(crate) fn wand_region_bucket(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
+    let how = WandMatch::new(tolerance, contiguous, anti_alias, WandBound::AtMost);
+    wand_region_rule(&WandPixels::rgba(area, img.as_flattened()), seed, &how, MatchRule::Bucket)
 }
 
 /// How [`wand_region_on`] matches pixels against the clicked one.
@@ -496,6 +528,11 @@ impl WandMatch<'_> {
 /// Tolerance 5 to x 100-140 and Tolerance 32 to x 100-340 — fall out either way, so the document
 /// channels share this one bound.
 pub fn wand_region_on(px: &WandPixels, seed: (i32, i32), how: &WandMatch) -> Option<Region> {
+    wand_region_rule(px, seed, how, MatchRule::Wand)
+}
+
+/// [`wand_region_on`] under a [`MatchRule`].
+fn wand_region_rule(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: MatchRule) -> Option<Region> {
     if !px.area.contains(seed.0, seed.1) || px.channels == 0 || px.channels > MAX_WAND_CHANNELS {
         return None;
     }
@@ -544,8 +581,19 @@ fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch
     let similar = |i: usize| -> bool {
         let o = i * CH;
         let Some(v) = px.data.get(o..o + CH) else { return false };
-        let alpha_ok = alpha.is_none_or(|a| (v[a] as i32 - target[a] as i32).abs() <= tol);
-        alpha.is_some_and(|a| target[a] == 0 && v[a] == 0) || (alpha_ok && colour_diff(i).is_some_and(|(d, _)| d <= tol))
+        let d = colour_diff(i).map_or(i32::MAX, |(d, _)| d);
+        match (rule, alpha) {
+            // The Paint Bucket rule is measured on RGBA pictures only.
+            (MatchRule::Bucket, Some(a)) if rgba => match target[a] {
+                0 => v[a] == 0,
+                255 => d <= tol && (v[a] as i32 - 255).abs() <= tol,
+                _ => v[a] != 0 && d <= tol && (v[..a] == target[..a] || (v[a] as i32 - target[a] as i32).abs() <= tol),
+            },
+            _ => {
+                let alpha_ok = alpha.is_none_or(|a| (v[a] as i32 - target[a] as i32).abs() <= tol);
+                alpha.is_some_and(|a| target[a] == 0 && v[a] == 0) || (alpha_ok && d <= tol)
+            }
+        }
     };
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);

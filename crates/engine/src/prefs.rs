@@ -120,6 +120,11 @@ choice!(
     /// fastest and softest. Photoshop's Camera Raw has no such choice.
     RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
 );
+choice!(
+    /// MCP › When PhotoCraft Is Closed: what `photocraft-cli mcp` does when an
+    /// agent calls a tool and the app isn't running.
+    WhenAppClosed { Launch = "launch", Headless = "headless", Error = "error" } default Launch
+);
 
 impl Unit {
     /// Document pixels → this unit. `dpi` is the document resolution, `extent` the 100% length
@@ -1169,18 +1174,62 @@ impl Default for RawDefaults {
     }
 }
 
+/// Before the agents switch, a Control Port other than 0 started the control server by itself.
+/// A saved `integrations` section like that keeps its connection: the port now means "on, at this
+/// port". Every reader of the saved section applies this (the app, its launch read, and
+/// `photocraft-cli mcp`), so they agree.
+pub fn migrate_integrations(section: &mut Value) {
+    if let Some(integrations) = section.as_object_mut()
+        && !integrations.contains_key("connectAgents")
+        && integrations.get("controlPort").and_then(Value::as_u64).is_some_and(|p| (1..=65535).contains(&p))
+    {
+        integrations.insert("connectAgents".into(), json!(true));
+    }
+}
+
+/// A saved `integrations` section read as the app's preference load reads it: migrated, and
+/// leniently (a value of the wrong type keeps its default, the rest still loads). The desktop
+/// app's launch read and `photocraft-cli mcp` use it, so a bad value can't reset, say, When
+/// PhotoCraft Is Closed for them alone.
+pub fn read_integrations_section(mut section: Value) -> Integrations {
+    migrate_integrations(&mut section);
+    read_section(section)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Integrations {
     /// Allow agents to drive the app over the loopback control channel / MCP bridge.
     pub allow_agent_control: bool,
-    /// Default control port (0 = only when `--control` is given).
+    /// Port agents connect to (0 = any free port, published in the connection file).
     pub control_port: u32,
+    /// The folder automation may read from when no `--automation-read-root` is given (empty =
+    /// none). Applied at once while agents are connected.
+    pub read_root: String,
+    /// The folder automation may write to when no `--automation-write-root` is given (empty =
+    /// none). Applied at once while agents are connected.
+    pub write_root: String,
+    /// Without the suite's `AI-MCP` flag, agents may connect: the desktop app serves the control
+    /// protocol on loopback for `photocraft-cli mcp` without `--control`, and starts or stops it at
+    /// once when this changes (off by default; launch flags still win). Set from a saved Control
+    /// Port ([`migrate_integrations`]); not in the dialog. With the flag the ArtCraft Launcher's
+    /// switch decides instead. After the older fields, so a
+    /// section saved as a list still reads them where they were.
+    pub connect_agents: bool,
+    /// What `photocraft-cli mcp` does while agents may use the app but it is closed.
+    pub when_app_closed: WhenAppClosed,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            read_root: String::new(),
+            write_root: String::new(),
+            connect_agents: false,
+            when_app_closed: WhenAppClosed::Launch,
+        }
     }
 }
 
@@ -1423,6 +1472,11 @@ impl Preferences {
 
     /// Set a value by dotted path, validating it. Unknown paths and wrong types are errors.
     pub fn set(&mut self, path: &str, value: Value) -> std::result::Result<(), String> {
+        // `set_path` skips empty segments, so `.alternateShortcuts.x` would reach the typed state
+        // below the per-path validators above; refuse such paths instead.
+        if path.split('.').any(str::is_empty) {
+            return Err(format!("invalid preference path `{path}`"));
+        }
         if path == "alternateShortcuts" {
             let obj = value.as_object().ok_or("`alternateShortcuts` maps command ids to lists of shortcuts")?;
             let mut map = BTreeMap::new();
@@ -1517,7 +1571,8 @@ impl Preferences {
     pub fn alternates(&self, id: &str, primary: Option<&str>) -> Vec<String> {
         let main = primary.and_then(normalize_shortcut);
         let keys: Vec<String> = match self.alternate_shortcuts.get(id) {
-            Some(list) => list.iter().filter_map(|s| normalize_shortcut(s)).collect(),
+            // A hand-edited settings file can hold more than `alternate_keys` admits.
+            Some(list) => list.iter().take(MAX_ALTERNATES).filter_map(|s| normalize_shortcut(s)).collect(),
             None => default_alternates(id).filter_map(normalize_shortcut).collect(),
         };
         let mut out: Vec<String> = Vec::with_capacity(keys.len());
@@ -1646,6 +1701,9 @@ impl Session {
             && language.as_str().is_some_and(|code| code.eq_ignore_ascii_case("sr"))
         {
             *language = json!("sr-latn");
+        }
+        if let Some(integrations) = v.get_mut("integrations") {
+            migrate_integrations(integrations);
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
