@@ -571,7 +571,8 @@ fn dechunk(mut b: &[u8]) -> Result<Vec<u8>> {
         if out.len() > MAX_REPLY {
             return Err(Error::Protocol("the reply is larger than 16 MiB".into()));
         }
-        b = b.get(size + 2..).ok_or_else(|| Error::Protocol("cut chunk end".into()))?;
+        // RFC 9112 requires a CRLF separator after each nonempty chunk.
+        b = b.get(size..).and_then(|rest| rest.strip_prefix(b"\r\n")).ok_or_else(|| Error::Protocol("invalid chunk end".into()))?;
     }
 }
 
