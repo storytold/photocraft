@@ -82,6 +82,19 @@ pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     add(&mut bar_ui)
 }
 
+/// Pin a footer inside the panel's original body bounds, even if its content needs more room.
+/// The normal bar extends over the bottom margin, but never outside the panel at tiny heights.
+pub fn panel_footer_in<R>(ui: &mut Ui, body: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let top = (body.bottom() - footer_height(ui)).max(body.top());
+    let rect = Rect::from_min_max(pos2(body.left(), top), body.max);
+    let bounds = (body + body_margin(Tokens::get(ui.ctx()).pro)).intersect(ui.clip_rect());
+    let mut footer_ui = ui.new_child(egui::UiBuilder::new().id_salt("fixed-panel-footer").max_rect(rect));
+    panel_footer(&mut footer_ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(bounds));
+        add(ui)
+    })
+}
+
 /// The panel menu button (hamburger in Pro, ellipsis in Studio), matching the dock and cards.
 pub fn panel_menu_button(ui: &mut Ui) -> Response {
     let t = Tokens::get(ui.ctx());
