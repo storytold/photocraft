@@ -59,10 +59,7 @@ fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::
             }
             let (_parent, _title, options): (String, String, HashMap<String, OwnedValue>) = msg.body().deserialize().unwrap();
             let text = |key: &str| options.get(key).and_then(|v| String::try_from(v.try_clone().ok()?).ok());
-            let filter = options.get("current_filter").and_then(|v| {
-                let (label, _): (String, Vec<(u32, String)>) = v.try_clone().ok()?.try_into().ok()?;
-                Some(label)
-            });
+            let filter = options.get("current_filter").and_then(|v| filter_label(v));
             log.lock().unwrap().push((text("current_name"), filter));
             let sender = header.sender().unwrap().as_str().trim_start_matches(':').replace('.', "_");
             let token = if own_paths { format!("old{}", log.lock().unwrap().len()) } else { text("handle_token").unwrap() };
@@ -248,6 +245,39 @@ fn a_single_file_type_gives_the_bare_name_its_extension() {
     let req = SaveRequest { filters: vec![("Color Swatches".into(), vec!["aco".into()])], ..request("Swatches.aco") };
     assert_eq!(save_as(&conn, req).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.aco")));
     daemon.kill().ok();
+}
+
+/// A `current_filter` of another shape than `(sa(us))` (a structure with fewer, other or more
+/// fields, a string) gives the path alone; `uris` of another shape is an error. Needs no
+/// `dbus-daemon`.
+#[test]
+fn an_answer_of_another_shape_is_not_read() {
+    let malformed = [
+        Value::from(("PNG".to_string(),)),
+        Value::from(("PNG".to_string(), vec![(0u32,)])),
+        Value::from(("PNG".to_string(), vec![("*.png".to_string(), 0u32)])),
+        Value::from((1u32, vec![(0u32, "*.png".to_string())])),
+        Value::from(("PNG".to_string(), vec![(0u32, "*.png".to_string())], 1u32)),
+        Value::from("PNG"),
+    ];
+    for filter in malformed {
+        let mut r = HashMap::new();
+        r.insert("uris".to_string(), OwnedValue::try_from(Value::from(vec!["file:///tmp/card".to_string()])).unwrap());
+        r.insert("current_filter".to_string(), OwnedValue::try_from(filter).unwrap());
+        assert_eq!(answer(0, &r), Ok(Some(Saved { path: "/tmp/card".into(), filter: None })));
+    }
+    // The shape the portal defines is still read.
+    let mut r = HashMap::new();
+    r.insert("uris".to_string(), OwnedValue::try_from(Value::from(vec!["file:///tmp/card".to_string()])).unwrap());
+    r.insert("current_filter".to_string(), OwnedValue::try_from(Value::from(("PNG".to_string(), vec![(0u32, "*.png".to_string())]))).unwrap());
+    assert_eq!(answer(0, &r), Ok(Some(Saved { path: "/tmp/card".into(), filter: Some("PNG".into()) })));
+    let malformed =
+        [Value::from(vec![1u32]), Value::from(vec![("file:///tmp/card".to_string(),)]), Value::from(Vec::<String>::new()), Value::from("file:///tmp/card")];
+    for uris in malformed {
+        let mut r = HashMap::new();
+        r.insert("uris".to_string(), OwnedValue::try_from(uris).unwrap());
+        assert!(answer(0, &r).is_err());
+    }
 }
 
 /// Which type's extensions the returned name gets. The portal cases above need a `dbus-daemon`,
