@@ -398,7 +398,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     if app.distort.perspective.is_some() {
         if enter(ctx) {
-            crate::perspective_ui::commit(app);
+            crate::perspective_ui::commit_from_ui(app);
         } else if esc(ctx) {
             app.distort.perspective = None;
         }
@@ -583,6 +583,29 @@ mod tests {
         let layers = app.session.active().unwrap().doc.layers.len();
         app.session.execute("layer.delete", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1);
+    }
+
+    /// #8498 regression: a stale Perspective session must never consume a pointer
+    /// event or modify the newly active document. Modern cancel_stale clears it.
+    #[test]
+    fn foreign_perspective_session_passes_pointer_to_active_document() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        paint_bar(&mut app);
+        app.sync_views();
+        menu(&mut app, &ctx, "edit.perspectiveWarp", &json!({})).unwrap().unwrap();
+        let original = app.session.active().unwrap().doc.id;
+        assert!(app.distort.perspective.is_some());
+        assert!(pointer(&mut app, ToolEvent::Move { x: 15.0, y: 15.0, pressure: 1.0 }, egui::Modifiers::NONE));
+
+        app.session.execute("file.new", json!({"width": 60, "height": 40, "depth": 8})).unwrap();
+        assert_ne!(app.session.active().unwrap().doc.id, original);
+        let before = app.session.active().unwrap().history.past_len();
+        assert!(!pointer(&mut app, ToolEvent::Down { x: 15.0, y: 15.0, pressure: 1.0 }, egui::Modifiers::NONE));
+        assert!(app.distort.perspective.is_none(), "a foreign editor is cancelled before taking input");
+        assert_eq!(app.session.active().unwrap().history.past_len(), before);
     }
 
     #[test]
