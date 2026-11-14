@@ -33,15 +33,35 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
-    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+    let (r, out_of_range, _) = value_field_alerting_in(ui, name, value, range, suffix, width, true, false);
+    (r, out_of_range)
 }
 
 /// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
 /// typed value past `range` becomes the closest end, unrounded.
 pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
-    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+    let (r, out_of_range, _) = value_field_alerting_checked(ui, name, value, range, suffix, width);
+    (r, out_of_range)
 }
 
+/// [`value_field_alerting`] that also says when the field was left after text that is no number
+/// was typed (`abc`, #13619): the value stays as it was, and the caller shows the reference's
+/// invalid-entry alert. A field left empty is not that. Returns the field, whether a typed value
+/// was out of range, and whether no number was typed. A field that wants the invalid-entry alert
+/// calls this one, the Rectangle tool's Radius first.
+pub fn value_field_alerting_checked(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+) -> (Response, bool, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, false, true)
+}
+
+// The shared body takes the whole-number and invalid-entry switches beside the field's parameters.
+#[expect(clippy::too_many_arguments)]
 fn value_field_alerting_in(
     ui: &mut Ui,
     name: &str,
@@ -50,7 +70,8 @@ fn value_field_alerting_in(
     suffix: &str,
     width: f32,
     whole: bool,
-) -> (Response, bool) {
+    checked: bool,
+) -> (Response, bool, bool) {
     let (lo, hi) = (*range.start(), *range.end());
     let fit = |v: f32| {
         if !v.is_finite() {
@@ -75,8 +96,14 @@ fn value_field_alerting_in(
     // typed.
     let stepped = stepped_this_pass(ui.ctx(), r.id);
     let out_id = r.id.with("out-of-range");
+    let invalid_id = r.id.with("no-number-typed");
     if r.gained_focus() {
-        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+        ui.ctx().data_mut(|d| {
+            d.remove_temp::<bool>(out_id);
+            d.remove_temp::<bool>(invalid_id);
+            d.remove_temp::<bool>(r.id.with("parses"));
+            d.remove_temp::<bool>(r.id.with("blank"));
+        });
     }
     if r.changed() && typed.is_finite() {
         *value = fit(typed);
@@ -92,8 +119,29 @@ fn value_field_alerting_in(
     if !r.has_focus() {
         ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32, Option<egui::Id>)>(draft_id));
     }
+    // Text that is no number leaves the value as it was; an emptied field is left as before.
+    // Only a `checked` field takes the invalid entry; the others keep a pending range alert.
+    if checked && (r.has_focus() || r.lost_focus()) {
+        let blank = ui.ctx().data(|d| d.get_temp::<bool>(r.id.with("blank"))).unwrap_or(false);
+        match crate::widgets::typed_text_parses(ui.ctx(), r.id) {
+            Some(false) if !blank => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(out_id);
+                d.insert_temp(invalid_id, true);
+            }),
+            // A number typed after text that was none owes its own range alert: the value may not
+            // have changed (`200000`, `abc`, `200000` again), so `changed()` cannot say. An emptied
+            // field owes none: `typed` is still the number from before the text that was none.
+            Some(_) => ui.ctx().data_mut(|d| {
+                if d.remove_temp::<bool>(invalid_id).unwrap_or(false) && !blank && typed.is_finite() {
+                    d.insert_temp(out_id, !(lo..=hi).contains(&typed));
+                }
+            }),
+            None => {}
+        }
+    }
     let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
-    (r, alert)
+    let invalid = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(invalid_id)).unwrap_or(false);
+    (r, alert, invalid)
 }
 
 /// A [`value_field`] whose visible caption was drawn apart from it (an options-bar caption in a
@@ -591,6 +639,11 @@ fn number_edit(
             .custom_parser(move |s| {
                 // Short events can accumulate: reject before either parser normalizes the text.
                 if s.chars().nth(NUMERIC_INPUT_LIMIT).is_some() {
+                    // An over-long entry is no number, so a checked field leaving it says so.
+                    ctx.data_mut(|d| {
+                        d.insert_temp(id.with("parses"), false);
+                        d.insert_temp(id.with("blank"), false);
+                    });
                     return None;
                 }
                 // A zoom field takes `,` or `.` as its decimal point (`100,90` is `100.90`) and reads
@@ -620,7 +673,10 @@ fn number_edit(
                     parse_num_in(s, units)
                 };
                 // Whether the text being typed is a number at all, for [`typed_text_parses`].
-                ctx.data_mut(|d| d.insert_temp(id.with("parses"), v.is_some()));
+                ctx.data_mut(|d| {
+                    d.insert_temp(id.with("parses"), v.is_some());
+                    d.insert_temp(id.with("blank"), s.trim().is_empty());
+                });
                 if ctx.memory(|m| m.has_focus(id)) && !blank && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));

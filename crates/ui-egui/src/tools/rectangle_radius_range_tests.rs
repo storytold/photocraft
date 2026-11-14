@@ -8,7 +8,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::RADIUS_RANGE_ALERT;
+use super::{RADIUS_INVALID_ALERT, RADIUS_RANGE_ALERT};
 use crate::PhotocraftApp;
 use crate::state::{DialogKind, Tool};
 
@@ -80,6 +80,110 @@ fn radius_past_the_range_takes_the_closest_value_and_alerts() {
         assert!(alerts(&h).is_empty(), "{typed}: OK closes the alert");
         assert_eq!(radius(&h), want, "{typed}: the closest value is kept");
     }
+}
+
+/// #13619: text that is no number keeps the last value and says so; an emptied field does not alert.
+#[test]
+fn radius_with_no_number_keeps_the_value_and_shows_the_invalid_entry_alert() {
+    let mut h = bar();
+    type_radius(&mut h, "12");
+    assert_eq!(radius(&h), 12.0);
+    type_radius(&mut h, "abc");
+    assert_eq!(radius(&h), 12.0, "the last valid value is kept");
+    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()]);
+    assert_eq!(RADIUS_INVALID_ALERT, "Invalid numeric entry. A number between 0.000 pixel and 150000.000 Pixels is required. Restored last valid value.");
+    ok(&mut h);
+    assert!(alerts(&h).is_empty());
+    type_radius(&mut h, "7");
+    assert_eq!(radius(&h), 7.0);
+    assert!(alerts(&h).is_empty(), "a number after it alerts nothing");
+}
+
+#[test]
+fn radius_with_a_number_then_no_number_alerts_the_invalid_entry_not_the_range() {
+    let mut h = bar();
+    type_radius(&mut h, "5");
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("200000".into()));
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("abc".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()]);
+}
+
+/// Valid text, then a paste that takes the text past the numeric input limit, then leave: no number.
+#[test]
+fn an_oversized_paste_after_valid_text_is_an_invalid_entry_and_keeps_the_value() {
+    let mut h = bar();
+    type_radius(&mut h, "12");
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("1".into()));
+    h.run_steps(1);
+    h.event(egui::Event::Paste("1".repeat(128)));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alerts(&h), vec![RADIUS_INVALID_ALERT.to_string()]);
+    assert_eq!(radius(&h), 1.0, "the last valid value (the `1` applied as typed) is kept");
+}
+
+/// The same out-of-range number typed again after text that was no number: the value does not
+/// change, but the range alert is still owed.
+#[test]
+fn the_same_out_of_range_number_after_a_non_number_still_alerts_the_range() {
+    let mut h = bar();
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    for text in ["200000", "abc", "200000"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(alerts(&h), vec![RADIUS_RANGE_ALERT.to_string()]);
+    assert_eq!(radius(&h), 150_000.0);
+}
+
+#[test]
+fn an_emptied_radius_shows_no_invalid_entry_alert() {
+    let mut h = bar();
+    type_radius(&mut h, "12");
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(alerts(&h).is_empty(), "{:?}", alerts(&h));
+}
+
+/// An out-of-range number, then text that is no number, then an emptied field: the empty field owes
+/// no alert, and the range alert of the number typed before it does not come back.
+#[test]
+fn an_emptied_radius_after_a_non_number_shows_no_range_alert() {
+    let mut h = bar();
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+    h.run_steps(1);
+    for text in ["200000", "abc"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+    }
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(alerts(&h).is_empty(), "{:?}", alerts(&h));
 }
 
 #[test]
