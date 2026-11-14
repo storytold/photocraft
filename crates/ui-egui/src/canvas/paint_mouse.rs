@@ -40,13 +40,17 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
-        // The Art History Brush also starts at full opacity (#10263), and the Pattern Stamp at full
-        // opacity and flow (#12616): those fields are their own.
+        // The Pattern Stamp also starts at full opacity and flow (#12616): those fields are its own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
-        // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
-        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
+        // Stamp, the Smudge tool and the Art History Brush start with their own measured tips
+        // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684,
+        // #13029, #12601, #12964, #12631); the Art History Brush's is at full opacity (#10263).
         None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
             fresh_brush(tool, &current)
+        }
+        // Its pressure toggles are not measured, so its first use keeps the outgoing ones (#12631).
+        None if tool == Tool::ArtHistoryBrush => {
+            BrushSettings { pressure_size: current.pressure_size, pressure_opacity: current.pressure_opacity, ..fresh_brush(tool, &current) }
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.
@@ -54,7 +58,6 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         None => {
             let fresh = BrushSettings::default();
             let (opacity, flow) = match tool {
-                Tool::ArtHistoryBrush => (fresh.opacity, current.flow),
                 Tool::PatternStamp => (fresh.opacity, fresh.flow),
                 _ => (current.opacity, current.flow),
             };
@@ -99,6 +102,8 @@ const PENCIL_TOOL_TIP: (f32, f32, f32) = (1.0, 1.0, 0.25);
 const TONING_TOOL_TIP: (f32, f32, f32) = (65.0, 0.0, 0.25);
 /// The Clone Stamp's tip after Reset Tool (#12601): a 21 px soft round at 25 % spacing.
 const CLONE_STAMP_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
+/// The Art History Brush's tip after Reset Tool (#12631): a 21 px soft round at 25 % spacing.
+const ART_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 /// The Remove tool's size after Reset Tool (#12548): 19 px. Its hardness and spacing are not
 /// measured, so they stay the default brush's.
 const REMOVE_TOOL_SIZE: f32 = 19.0;
@@ -109,7 +114,8 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
-/// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
+/// [`CLONE_STAMP_TIP`] and the Art History Brush's [`ART_HISTORY_BRUSH_TIP`], both with no
+/// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
 /// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
 /// default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
@@ -123,6 +129,10 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,
         Tool::CloneStamp => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
+            brush.smoothing.amount = 0.0;
+        }
+        Tool::ArtHistoryBrush => {
+            (brush.size, brush.hardness, brush.spacing) = ART_HISTORY_BRUSH_TIP;
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
