@@ -532,7 +532,7 @@ async fn headless_doc_save_takes_maximize_compatibility() {
         let r = call(&client, tool, params.clone()).await;
         assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
         let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
-        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
     }
     let r = call(&client, "doc_export", json!({"path": "bad.psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
@@ -555,7 +555,7 @@ async fn headless_doc_export_layers_takes_maximize_compatibility() {
         let file = result["files"][0].as_str().unwrap();
         assert!(file.starts_with(sub), "{file}");
         let bytes = std::fs::read(dir.join(file)).unwrap();
-        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
     }
     let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
@@ -577,6 +577,8 @@ async fn bridge_doc_save_forwards_maximize_compatibility() {
     app.abort();
 }
 
+/// An oversized app reply drops the connection with a budget error and never retries the
+/// operation on a fresh, authenticated connection.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_response_budget_drops_connection_without_retrying_the_operation() {
     use photocraft_automation::{BridgeClient, budgets::MAX_RESPONSE_BYTES};
@@ -586,12 +588,8 @@ async fn bridge_response_budget_drops_connection_without_retrying_the_operation(
         let (sock, _) = listener.accept().await.unwrap();
         let (read, mut write) = sock.into_split();
         let mut reader = BufReader::new(read);
+        crate::bridge::serve_handshake(&mut reader, &mut write).await;
         let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        let auth: Value = serde_json::from_str(&line).unwrap();
-        let reply = json!({"id": auth["id"], "ok": true, "result": {"authenticated": true}});
-        write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
-        line.clear();
         reader.read_line(&mut line).await.unwrap();
         let request: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(request["method"], "engine.execute");
@@ -1068,11 +1066,16 @@ async fn fake_app() -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     fake_app_with_screenshot(None).await
 }
 
+/// A fake app on one connection: it authenticates with the real [`ServerHandshake`], then
+/// answers the control methods the bridge tests use, returning the requests it saw.
+///
+/// [`ServerHandshake`]: photocraft_automation::security::ServerHandshake
 async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     let h = tokio::spawn(async move {
         let mut seen = Vec::new();
+        let mut handshake = photocraft_automation::security::ServerHandshake::new();
         let mut authenticated = false;
         let (sock, _) = listener.accept().await.unwrap();
         let (r, mut w) = sock.into_split();
@@ -1082,12 +1085,10 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
             let id = req["id"].clone();
             let method = req["method"].as_str().unwrap_or("").to_owned();
             let reply = match method.as_str() {
-                "auth" if req["params"]["token"] == CONTROL_TOKEN => {
-                    authenticated = true;
-                    json!({"id": id, "ok": true, "result": {"authenticated": true}})
-                }
                 _ if !authenticated => {
-                    json!({"id": id, "ok": false, "error": "authentication required"})
+                    let (reply, step) = handshake.reply(&line, CONTROL_TOKEN);
+                    authenticated = step == photocraft_automation::security::AuthStep::Authenticated;
+                    reply
                 }
                 "ui.inspect" => {
                     json!({"id": id, "ok": true, "result": {"tool": "brush", "panels": ["layers"]}})
@@ -1148,6 +1149,8 @@ async fn bridge_forwards_to_control_protocol() {
     app.abort();
 }
 
+/// #1007: an edit whose reply is lost is not resent, and the next call reconnects and
+/// authenticates again.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_lost_reply_does_not_replay_an_edit_and_next_call_reconnects() {
     use photocraft_automation::{BridgeClient, Headless};
@@ -1166,12 +1169,8 @@ async fn bridge_lost_reply_does_not_replay_an_edit_and_next_call_reconnects() {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (read, mut write) = socket.into_split();
                 let mut reader = BufReader::new(read);
+                crate::bridge::serve_handshake(&mut reader, &mut write).await;
                 let mut line = String::new();
-                reader.read_line(&mut line).await.unwrap();
-                let (auth, authenticated) = photocraft_automation::security::authentication_reply(&line, CONTROL_TOKEN);
-                assert!(authenticated, "each connection must authenticate");
-                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
-                line.clear();
                 reader.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
                 seen.push(request["params"]["command"].as_str().unwrap().to_owned());
@@ -1321,6 +1320,7 @@ fn bridge_rejects_non_loopback() {
     assert!(PhotocraftMcp::bridge("localhost:1", "short").is_err());
 }
 
+/// A bridge with the wrong token stops at the app's challenge proof, before any control method.
 #[tokio::test(flavor = "multi_thread")]
 async fn bridge_rejects_wrong_token_before_control_methods() {
     let (addr, app) = fake_app().await;
@@ -1328,7 +1328,8 @@ async fn bridge_rejects_wrong_token_before_control_methods() {
     let client = connect(PhotocraftMcp::bridge(&addr, wrong).unwrap()).await;
     let r = call(&client, "ui_inspect", json!({})).await;
     assert_eq!(r.is_error, Some(true));
-    assert!(text(&r).contains("authentication required"), "{}", text(&r));
+    // The app's challenge proof does not match the client's token, so nothing more is sent.
+    assert!(text(&r).contains("did not prove it holds this control token"), "{}", text(&r));
     client.cancel().await.unwrap();
     app.abort();
 }

@@ -3,7 +3,7 @@ use super::cursors::{alt_eyedropper, sample_eyedropper};
 use super::drag::Drag;
 use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
-use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
+use super::strokes::{HOLD_REPEAT_MS, LiveStroke, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
 use super::{PhotocraftApp, Tool, json, multiple_color_target};
 
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
@@ -45,7 +45,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         let moved = d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25);
         // A held pen repeats its point now and then, so the stroke's time keeps advancing.
         let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
-            && app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time());
+            && app.live_stroke.as_ref().is_some_and(LiveStroke::wants_time);
         if moved || held {
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
@@ -207,6 +207,13 @@ fn filter_event_before_tool(
     if crate::type_path_placement::pointer_with_context(app, raw, xf, viewport) {
         return None;
     }
+    // Pen + ⌥ on a straight segment of the active path adds an anchor and drags out its handles
+    // (#12899); anywhere else ⌥ stays Convert Point, below.
+    if let ToolEvent::Down { x, y, .. } = ev
+        && crate::anchor_tools::pen_alt_segment_press(app, mods, [x, y])
+    {
+        return None;
+    }
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
     }
@@ -271,7 +278,7 @@ fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc:
 /// Handle Move-specific pointer events and report whether the event was consumed. Auto-Select
 /// picks on press so snapping and dragging use the resulting layer selection. When a locked-only
 /// hit starts a marquee, Shift preserves the selection that the marquee adds to.
-fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
+fn handle_move_pointer(app: &mut PhotocraftApp, raw: ToolEvent, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
             if let Some((vertical, i)) = crate::rulers::guide_at(app, x, y) {
@@ -363,15 +370,16 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             }
         }
         ToolEvent::Move { x, y, .. } => {
-            if let Some(d) = app.guide_drag.as_mut().filter(|d| d.index.is_some()) {
-                d.track([x, y], mods.alt);
+            if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
+                d.follow_pointer(app, unsnapped(raw), [x, y], mods);
+                app.guide_drag = Some(d);
                 return true;
             }
         }
         ToolEvent::Up { x, y } => {
             if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
                 app.guide_drag = None;
-                d.track([x, y], mods.alt);
+                d.follow_pointer(app, unsnapped(raw), [x, y], mods);
                 crate::rulers::finish_drag(app, d);
                 return true;
             }
@@ -422,6 +430,51 @@ fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
     } else {
         app.ui.status = message;
         app.ui.status_error = true;
+    }
+}
+
+/// A Red Eye click. CMYK, Grayscale and Indexed Color documents get the reference's alert
+/// (#12575), once even if more clicks arrive while it is open (`ui.pointer` can send them).
+fn red_eye_click(app: &mut PhotocraftApp, x: f64, y: f64) {
+    use photocraft_engine::redeye_cmds::MODE_REFUSAL;
+    let o = app.ui.tool_options.clone();
+    let r = app.run(
+        "paint.redEye",
+        json!({
+            "x": x.floor(),
+            "y": y.floor(),
+            "pupilSize": o.red_eye_pupil_size.clamp(1.0, 100.0),
+            "darken": o.red_eye_darken.clamp(0.0, 100.0),
+            "target": paint_target(app),
+        }),
+    );
+    if r.is_err_and(|e| e == MODE_REFUSAL) {
+        app.ui.status.clear();
+        app.ui.status_error = false;
+        let message = tl!(MODE_REFUSAL);
+        let kind = crate::state::DialogKind::Error;
+        if !app.ui.dialogs.iter().any(|d| d.kind == kind && d.fields.get("message").and_then(|m| m.as_str()) == Some(message)) {
+            app.ui.open_dialog(kind, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+        }
+    }
+}
+
+/// A Paint Bucket click. A Bitmap document gets the reference's alert (#12536), once even if
+/// more clicks arrive while it is open (`ui.pointer` can send them).
+fn bucket_click(app: &mut PhotocraftApp, x: f64, y: f64) {
+    use photocraft_engine::paint_cmds::BITMAP_REFUSAL;
+    let o = app.ui.tool_options.clone();
+    let contents = if o.bucket_fill_pattern { "pattern" } else { "foreground" };
+    let mode = if o.bucket_clear { "clear" } else { o.bucket_blend_mode.label() };
+    let r = app.run("paint.bucket", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.paint_bucket, "opacity": o.fill_opacity, "contents": contents, "mode": mode, "target": paint_target(app)}));
+    if r.is_err_and(|e| e == BITMAP_REFUSAL) {
+        app.ui.status.clear();
+        app.ui.status_error = false;
+        let message = tl!(BITMAP_REFUSAL);
+        let kind = crate::state::DialogKind::Error;
+        if !app.ui.dialogs.iter().any(|d| d.kind == kind && d.fields.get("message").and_then(|m| m.as_str()) == Some(message)) {
+            app.ui.open_dialog(kind, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+        }
     }
 }
 
@@ -478,7 +531,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
         }
         _ => {}
     }
-    if handle_move_pointer(app, ev, tool, mods) {
+    if handle_move_pointer(app, raw, ev, tool, mods) {
         return;
     }
 
@@ -491,7 +544,12 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
             if !sets_source && press_refused(app, tool) {
                 return;
             }
-            if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
+            // The Clone Stamp's no-source alert opens at the press, after any rasterize prompt.
+            if !sets_source
+                && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure)
+                    || refuse_group(app, tool)
+                    || crate::retouch_ui::clone_stamp_without_source(app, tool))
+            {
                 return;
             }
             // ⌘ with a selection tool is the Move tool for the drag: outside the selection (or
@@ -544,6 +602,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     if let Some(st) = app.session.active()
                         && let Some(id) = crate::vector_ui::pick_shape_at(&st.doc, [x, y], tol)
                     {
+                        crate::path_components::untarget_saved_path_off(app, [x, y], tol);
                         let _ = app.run("layer.select", json!({"layer": id.0}));
                     }
                     // The component pressed is selected, so the drag moves it (and the others selected).
@@ -566,6 +625,9 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                 Tool::MagicWand => {
                     let o = app.ui.tool_options.clone();
                     let mode = selection_mode(app, mods);
+                    if wand_pasteboard_click(app, x, y, mode) {
+                        return;
+                    }
                     let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
                     return;
                 }
@@ -574,24 +636,11 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::PaintBucket => {
-                    let o = app.ui.tool_options.clone();
-                    let contents = if o.bucket_fill_pattern { "pattern" } else { "foreground" };
-                    let mode = if o.bucket_clear { "clear" } else { o.bucket_blend_mode.label() };
-                    let _ = app.run("paint.bucket", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.paint_bucket, "opacity": o.fill_opacity, "contents": contents, "mode": mode, "target": paint_target(app)}));
+                    bucket_click(app, x, y);
                     return;
                 }
                 Tool::RedEye => {
-                    let o = app.ui.tool_options.clone();
-                    let _ = app.run(
-                        "paint.redEye",
-                        json!({
-                            "x": x.floor(),
-                            "y": y.floor(),
-                            "pupilSize": o.red_eye_pupil_size.clamp(1.0, 100.0),
-                            "darken": o.red_eye_darken.clamp(0.0, 100.0),
-                            "target": paint_target(app),
-                        }),
-                    );
+                    red_eye_click(app, x, y);
                     return;
                 }
                 Tool::PolygonLasso => {
@@ -773,9 +822,10 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     photocraft_engine::hidden_target::refusal(&app.session, cmd, &json!({}))
 }
 
-/// The press-time refusals: a hidden target layer (#571), and for the Brush a locked layer or a
-/// group's pixels. The Brush says why in an alert, as in Photoshop (#11898); the other tools say
-/// a hidden target in the status bar. True when the press is refused.
+/// The press-time refusals: a hidden target layer (#571), and for the tools with an alert in
+/// `brush_refusal` (the Brush, #11898, and others) a locked layer or a group's pixels. Those tools
+/// say why in an alert, as in Photoshop; the other tools say a hidden target in the status bar
+/// (the Remove tool mostly says nothing: [`quiet_hidden_refusal`]). True when the press is refused.
 fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
     let hidden = hidden_target(app, tool);
     if let Some(message) = crate::brush_refusal::alert(app, tool, hidden.is_some()) {
@@ -783,11 +833,44 @@ fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
         return true;
     }
     if let Some(why) = hidden {
-        app.ui.status = why.into();
-        app.ui.status_error = true;
+        if !quiet_hidden_refusal(app, tool) {
+            app.ui.status = why.into();
+            app.ui.status_error = true;
+        }
         return true;
     }
     false
+}
+
+/// A press with `tool` that would paint the pixels of a group (the active layer, with neither its
+/// mask, an alpha channel nor the Quick Mask targeted): a group has none, so refuse it with
+/// Photoshop's message instead of drawing a stroke that vanishes on release with only a
+/// status-bar note (#10074). Returns whether it was refused.
+fn refuse_group(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    let group = crate::rasterize_prompt::paints_pixels(app, tool)
+        && paint_target(app) == json!("pixels")
+        && app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(photocraft_doc::Layer::is_group);
+    if group {
+        let message = crate::i18n::fmt(tl!("Could not use the {tool} because the target layer is a group."), &[("tool", tl!(tool.label()))]);
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": message}).as_object().cloned().unwrap_or_default());
+    }
+    group
+}
+
+/// A Remove press on a hidden active pixel layer does nothing and says nothing, as in Photoshop
+/// (#12554). Only that case was measured: a layer inside a hidden group, a targeted mask, Sample
+/// All Layers and the other layer kinds keep the status-bar error. Hidden is checked before the
+/// lock, so a hidden layer with Lock All is quiet too.
+fn quiet_hidden_refusal(app: &PhotocraftApp, tool: Tool) -> bool {
+    if tool != Tool::Remove || app.ui.tool_options.sample_all.remove || paint_target(app) != json!("pixels") {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    let Some(id) = st.active_layer.filter(|&id| st.doc.layer(id).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_)))) else {
+        return false;
+    };
+    let Some(path) = st.doc.path_of(id) else { return false };
+    (1..path.len()).all(|n| path.get(..n).and_then(|p| st.doc.layer_at(p)).is_some_and(|l| l.visible))
 }
 
 /// Is document point `p` inside the active document's selection?
@@ -802,6 +885,19 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
     v[0] > 0.0
 }
 
+/// A New-mode Magic Wand click on the pasteboard deselects, as Photoshop's step "Deselect"
+/// (#11782), instead of a "Magic Wand" step that selects nothing. True when it handled the click.
+fn wand_pasteboard_click(app: &mut PhotocraftApp, x: f64, y: f64, mode: &str) -> bool {
+    let on_canvas = app.session.active().is_some_and(|st| st.doc.bounds().contains(x.floor() as i32, y.floor() as i32));
+    if mode != "replace" || on_canvas {
+        return false;
+    }
+    if app.session.is_enabled("select.deselect") {
+        let _ = app.run("select.deselect", json!({}));
+    }
+    true
+}
+
 /// Does a press with `tool` at `p` drag the selection rather than draw a new one? `Some(true)`
 /// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; the Polygonal Lasso and Magic Wand need
 /// ⌘, as a plain press there places or samples), `Some(false)` just the outline (no ⇧ / ⌥ and the
@@ -814,7 +910,21 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
     let clicky = matches!(tool, Tool::PolygonLasso | Tool::MagicWand);
-    let marquee = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee);
+    // Object Selection with Object Finder on drags the outline like a marquee in New mode (#12853).
+    // With Object Finder off a press stays a Quick Selection dab or a rectangle, as before (the
+    // issue measured only Finder on). Unlike the marquees, ⌘ with it is the Move tool
+    // (`hold_keys::cmd_moves`), which moves the pixels itself: a ⌘ press must not start a cut here
+    // first.
+    let marquee = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee)
+        || (tool == Tool::ObjectSelection && app.ui.tool_options.object_finder);
+    if tool == Tool::ObjectSelection && mods.command {
+        return None;
+    }
+    // In Indexed Color and Bitmap the press must reach `finish_object_selection` for the tool's
+    // alert (#12867) rather than deselect or move the outline.
+    if tool == Tool::ObjectSelection && app.session.active().is_some_and(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode).is_some()) {
+        return None;
+    }
     if !(clicky || marquee || tool == Tool::Lasso) || (clicky && !app.ui.polygon.is_empty()) {
         return None;
     }
@@ -840,7 +950,10 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     if cut {
         return Some(true);
     }
-    (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
+    // The Magic Wand in New mode drags the outline like a marquee: a click deselects, a drag
+    // moves the outline (#11782).
+    let outline = !clicky || tool == Tool::MagicWand;
+    (outline && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
 }
 
 /// The tool a pointer event with `mods` goes to: ⌘ held is the Move tool (`hold_keys::cmd_moves`).
