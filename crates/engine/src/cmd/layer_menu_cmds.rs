@@ -719,10 +719,8 @@ fn blend_range(v: &Value) -> Option<BlendRange> {
 /// layer it is available, even with the Background active and no effects.
 fn global_light_enabled(s: &Session) -> Enabled {
     has_doc(s)?;
-    match s.active().map(|d| (&d.doc, d.doc.layers.as_slice())) {
-        Some((doc, [only])) if doc.is_background(only.id) => Err("the document has only the Background layer".into()),
-        _ => Ok(()),
-    }
+    let background_only = s.active().is_some_and(|d| matches!(d.doc.layers.as_slice(), [only] if d.doc.is_background(only.id)));
+    if background_only { Err("the document has only the Background layer".into()) } else { Ok(()) }
 }
 
 fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
