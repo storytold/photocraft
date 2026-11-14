@@ -67,8 +67,8 @@ pub mod zoom_window_fit;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{
-    alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
-    precise_other_cursor, sampler_hover_cursor,
+    alt_picks, alt_samples, color_sampler_cursor, composite_color, note_cursor, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round,
+    pipette_cursor, precise_other_cursor, sampler_hover_cursor,
 };
 use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
@@ -2171,8 +2171,8 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         // here: it makes the Ruler the temporary Move tool (`hold_keys::cmd_moves`), so this match
         // runs with `Tool::Move` and shows its pointer, on the ruler and off it.
         Tool::Ruler => crate::tool_cursor::ruler(app, painter, p, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))),
-        // The Note tool's note sheet, its hotspot on the sheet's top-left corner (#11794).
-        Tool::Note => crate::tool_cursor::note(painter, p),
+        // The Note tool's note sheet (#11794); the plain crosshair with Precise Other Cursors or Caps Lock.
+        Tool::Note => note_cursor(app, painter, p),
         _ => egui::CursorIcon::Crosshair,
     };
     let icon = visible_crosshair(icon, painter, p, cfg!(not(target_arch = "wasm32")));
