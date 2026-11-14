@@ -140,3 +140,50 @@ fn nonoverlap_drag_makes_one_empty_frame_even_with_a_raster_active() {
     assert_eq!(st.history.entries().len(), before + 1);
     assert_eq!(st.history.entries().last().map(String::as_str), Some("New Frame"));
 }
+
+
+#[test]
+fn a_large_selection_does_not_make_upper_raster_pixels_overlap_the_drag() {
+    let (mut app, red, blue, _) = scene();
+    app.run("select.rect", json!({"x":0,"y":0,"width":600,"height":400})).unwrap();
+    assert_eq!(content_layer(&app, [80, 60, 200, 160]), Some(red.0), "Blue's selection rectangle is not its content");
+    assert_eq!(content_layer(&app, [40, 40, 450, 300]), Some(blue.0));
+    assert_eq!(content_layer(&app, [450, 300, 550, 350]), None, "unpainted selected space is not a candidate");
+    let history = app.session.active().unwrap().history.entries();
+    drag(&mut app, [80., 60.], [200., 160.]);
+    let st = app.session.active().unwrap();
+    let frame = st.doc.walk().into_iter().find_map(|(_, _, l)| l.frame.as_ref().map(|_| l)).unwrap();
+    assert_eq!(frame.children().unwrap()[0].id, red);
+    assert!(matches!(st.doc.layer(blue).unwrap().content, LayerContent::Raster(_)));
+    assert_eq!(st.history.entries().len(), history.len() + 1);
+    assert_eq!(st.history.entries().last().map(String::as_str), Some("New Frame"));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().history.entries(), history);
+}
+
+#[test]
+fn raster_selection_limits_content_without_replacing_its_offset_bounds() {
+    let (mut app, red, blue, _) = scene();
+    app.run("select.rect", json!({"x":80,"y":60,"width":30,"height":30})).unwrap();
+    assert_eq!(content_layer(&app, [80, 60, 100, 80]), Some(red.0));
+    assert_eq!(content_layer(&app, [50, 50, 70, 70]), None, "unselected pixels are outside the raster candidate bounds");
+    assert_eq!(content_layer(&app, [310, 210, 350, 250]), None);
+    app.run("select.rect", json!({"x":500,"y":350,"width":40,"height":40})).unwrap();
+    assert_eq!(content_layer(&app, [500, 350, 540, 390]), None);
+    app.run("select.deselect", json!({})).unwrap();
+    assert_eq!(content_layer(&app, [80, 60, 100, 80]), Some(red.0));
+    assert_eq!(content_layer(&app, [310, 210, 350, 250]), Some(blue.0));
+}
+
+#[test]
+fn smart_candidate_bounds_remain_whole_when_a_pixel_selection_is_elsewhere() {
+    let (mut app, red, blue, empty) = scene();
+    app.run("layer.select", json!({"layer":blue.0})).unwrap();
+    let result = app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let smart = LayerId(result["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer":empty.0})).unwrap();
+    app.run("select.rect", json!({"x":80,"y":60,"width":30,"height":30})).unwrap();
+    assert_eq!(content_layer(&app, [310, 210, 350, 250]), Some(smart.0));
+    assert_eq!(content_layer(&app, [80, 60, 100, 80]), Some(red.0));
+    assert_eq!(content_layer(&app, [500, 350, 550, 390]), None);
+}

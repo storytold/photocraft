@@ -94,7 +94,7 @@ fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
         if locks.position || locks.all || photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
             return None;
         }
-        let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, l);
+        let b = photocraft_engine::transform_cmds::transform_bounds(&st.doc, l);
         (!b.is_empty() && i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
     })
 }
