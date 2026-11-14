@@ -269,3 +269,27 @@ gives `90`. Shared value fields apply plain numbers live and arithmetic when edi
 finishes, preserving rounded/integer workflows. Field limits and integer rounding
 still apply; invalid expressions, division by zero, and non-finite results are rejected.
 Expressions are evaluated locally as arithmetic, never as scripts.
+
+OpenType controls (2026-11-13) use the GSUB feature list of each matched face, including its
+named style and PostScript identity. Character and Properties retain saved pressed states but
+disable a feature unless every face in the formatting target supports it. Type › OpenType,
+Numerals and Stylistic Sets use the same rule; Numerals › Default remains a reset. Availability
+describes advertised font capabilities, not whether the current string triggers a substitution.
+
+While editing, the target is the selected characters, or the whole layer at a collapsed caret
+(the existing OpenType command scope). Otherwise it is every selected type layer; Character
+without a target edits the saved defaults. Pressed states still follow the selection start.
+Disabled-button hover text distinguishes unsupported features from unknown availability while
+a requested font is missing, unreadable or loading. No fallback face is presented as that font.
+Capability queries borrow normalized run identities, stop before admitting oversized targets, and
+share one snapshot across a complete menu build; unrelated style payloads are not copied.
+If a worker holds the font engine, controls are temporarily disabled and capability inspection
+retries without waiting on the UI thread. If a native click arrives during that hold, a notice
+asks the user to try the command again. Refreshing the menu leaves the document untouched.
+Font changes never clear feature flags, and engine/automation formatting can still store any
+supported feature parameter for fonts installed elsewhere. Capability metadata is runtime state
+and is rebuilt after restart or font registration; saved styles and defaults retain their flags.
+
+Optional font inspection also bounds imported name and working-set storage. Oversized requests
+remain unknown, preserving formatting data and engine commands. Each complete target reserves
+its raw-request working set, while resolved source-face metadata stays cached across eviction.

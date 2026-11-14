@@ -2,7 +2,8 @@
 use super::*;
 use photocraft_doc::text::CharStyle;
 
-fn numeric_font(source: &[u8], style: &str, ps: &str) -> Vec<u8> {
+/// Build deterministic numeric subfamilies with identical CSS attributes from bundled OFL data.
+pub(super) fn numeric_font(source: &[u8], style: &str, ps: &str) -> Vec<u8> {
     let mut bytes = source.to_vec();
     let count = u16::from_be_bytes(bytes[4..6].try_into().unwrap()) as usize;
     let mut name_record = 0;
@@ -195,7 +196,7 @@ fn craft(family: &'static str, scripts: &'static [&'static str], bytes: Vec<u8>)
 }
 
 /// A TrueType collection of single-face fonts.
-fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = b"ttcf\0\x01\0\0".to_vec();
     bytes.extend((faces.len() as u32).to_be_bytes());
     let mut start = 12 + 4 * faces.len();
@@ -262,12 +263,19 @@ fn fixed(v: f32) -> [u8; 4] {
 /// PostScript name of its own, so its name is derived as `InstanceTest-LightCondensed`;
 /// "Heavy" (900, 100) names itself `InstanceTest-Black`. Outlines do not vary, but an `HVAR` table
 /// (see [`width_hvar`]) narrows every advance on `wdth`, so layout width shows which instance drew.
-fn instance_font(source: &[u8]) -> Vec<u8> {
+pub(super) fn instance_font(source: &[u8]) -> Vec<u8> {
+    variable_sibling(source, "InstanceTest", "InstanceTest-Regular")
+}
+
+/// Give variable siblings distinct PostScript identities while keeping their family and
+/// instance subfamily names equal, so suffix collisions are reproducible in one catalog.
+pub(super) fn variable_sibling(source: &[u8], prefix: &str, postscript: &str) -> Vec<u8> {
     let names = [
         (1u16, "Instance Test"),
         (2, "Regular"),
-        (6, "InstanceTest-Regular"),
+        (6, postscript),
         (16, "Instance Test"),
+        (25, prefix),
         (256, "Weight"),
         (257, "Width"),
         (258, "Light Condensed"),

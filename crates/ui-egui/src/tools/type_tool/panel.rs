@@ -21,28 +21,42 @@ pub(crate) const OPENTYPE_BUTTONS: [(&str, &str, &str); 8] = [
 
 /// Photoshop's OpenType button row: each shows pressed while its feature is on at the type
 /// target (the selection start, else the layer) and toggles it through the Type › OpenType
-/// command, on the same scope as the other Character controls.
+/// command, on the same scope as the other Character controls. Disabled buttons retain their
+/// saved pressed state; a font switch must never erase styling.
 fn opentype_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photocraft_doc::text::CharStyle, full: f32) {
     let cw = cell_width(full, OPENTYPE_BUTTONS.len());
+    let features = super::opentype::target_features_with_defaults(app, Some(c));
+    if features.busy() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
     let mut clicked = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (tag, id, tip) in OPENTYPE_BUTTONS {
             let on = photocraft_engine::type_extra_cmds::feature_on(c, tag);
-            if toggle_cell(ui, cw, on, tip, |ui, r, col| opentype_glyph(ui.painter(), r, tag, col)) {
+            let availability = features.availability(id).unwrap_or(super::opentype::Availability::Unknown);
+            let button = ui.add_enabled_ui(availability.enabled(), |ui| toggle_cell(ui, cw, on, tip, |ui, r, col| opentype_glyph(ui.painter(), r, tag, col)));
+            if !availability.enabled() {
+                button.response.on_disabled_hover_text(format!("{}: {}", tl!(tip), tl!(availability.explanation())));
+            }
+            if button.inner {
                 clicked = Some((id, on));
             }
         }
     });
     if let Some((id, on)) = clicked {
-        toggle_opentype(app, id, on);
+        toggle_opentype(app, id, on, &features);
     }
 }
 
 /// Runs an OpenType toggle command on the Character panel's scope: the edited layer's selected
 /// characters (or its whole text) while typing, else every selected type layer. The new state
 /// is explicit, so it follows the button the user saw rather than the layer's first run.
-pub(crate) fn toggle_opentype(app: &mut PhotocraftApp, id: &str, shown_on: bool) {
+/// Reuse that frame's capability snapshot, even if a render acquires the engine afterward.
+pub(crate) fn toggle_opentype(app: &mut PhotocraftApp, id: &str, shown_on: bool, features: &super::opentype::TargetFeatures) {
+    if !features.availability(id).is_some_and(|availability| availability.enabled()) {
+        return;
+    }
     let Some(mut p) = formatting_params(app) else {
         if let Some((tag, _, _)) = OPENTYPE_BUTTONS.iter().find(|(_, command, _)| *command == id) {
             let props = match *tag {

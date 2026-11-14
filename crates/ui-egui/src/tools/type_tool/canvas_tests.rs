@@ -161,6 +161,8 @@ mod panel_defaults {
         h.run();
     }
 
+    /// Supported OpenType choices become saved defaults for every Type tool, without changing
+    /// existing documents. Inter lacks liga, so exercise its advertised calt/frac/dlig features.
     #[test]
     fn panel_defaults_are_editable_and_reach_every_type_tool() {
         let mut h = panels(new_app());
@@ -170,12 +172,12 @@ mod panel_defaults {
         number(&mut h, "Tracking (1/1000 em)", "80");
         number(&mut h, "Leading (set to the font size × auto-leading when Auto)", "44");
         number(&mut h, "Indent left margin", "9");
-        for label in ["Faux Bold", "Fractions", "Standard Ligatures", "Discretionary Ligatures", "Center text"] {
+        for label in ["Faux Bold", "Fractions", "Contextual Alternates", "Discretionary Ligatures", "Center text"] {
             h.get_by_label(label).click();
             h.run();
         }
         assert_eq!(h.get_by_label("Fractions").accesskit_node().toggled(), Some(Toggled::True));
-        assert_eq!(h.get_by_label("Standard Ligatures").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.get_by_label("Contextual Alternates").accesskit_node().toggled(), Some(Toggled::True));
         assert_eq!(h.state().session.active().unwrap().revision, revision, "pre-styling does not create document history");
         assert_eq!(h.state().session.active().unwrap().doc.walk().len(), layers);
         let options = h.state().ui.tool_options.clone();
@@ -194,8 +196,9 @@ mod panel_defaults {
                 assert_eq!(c.size_pt, 36.0);
                 assert_eq!(c.tracking, 80.0);
                 assert_eq!(c.leading_pt, Some(44.0));
-                assert!(c.faux_bold && c.discretionary_ligatures && !c.ligatures);
+                assert!(c.faux_bold && c.discretionary_ligatures && c.ligatures);
                 assert!(photocraft_engine::type_extra_cmds::feature_on(c, "frac"));
+                assert!(photocraft_engine::type_extra_cmds::feature_on(c, "calt"));
                 assert_eq!(c.color.to_rgba8(), [51, 102, 153, 255]);
                 assert_eq!(p.align, TextAlign::Center);
                 assert_eq!(p.start_indent_pt, 9.0);
@@ -280,7 +283,8 @@ mod panel_defaults {
             preedit: None,
         });
         super::super::apply(&mut app, &ctx, json!({"tracking": 15}));
-        super::super::toggle_opentype(&mut app, "type.openType.fractions", false);
+        let features = super::super::opentype::target_features(&app);
+        super::super::toggle_opentype(&mut app, "type.openType.fractions", false, &features);
         let runs = text(&app, id).char_runs();
         assert_eq!(runs.iter().map(|r| (r.len, r.style.tracking)).collect::<Vec<_>>(), [(1, 0.0), (2, 15.0), (2, 0.0)]);
         assert!(photocraft_engine::type_extra_cmds::feature_on(&runs[1].style, "frac"));
@@ -2506,20 +2510,20 @@ mod multi_layer_formatting {
         assert_eq!(style(h.state(), ids[2], 0), untouched, "an unselected layer is untouched");
         h.run();
         assert_eq!(shown(&h, "Fractions"), Some(Toggled::True), "the button shows the feature on");
-        h.get_by_label("Standard Ligatures").click();
+        h.get_by_label("Contextual Alternates").click();
         h.run();
         h.run();
-        assert!(!style(h.state(), ids[0], 0).ligatures && !style(h.state(), ids[1], 0).ligatures);
-        assert_eq!(shown(&h, "Standard Ligatures"), Some(Toggled::False));
+        assert!(feature_on(&style(h.state(), ids[0], 0), "calt") && feature_on(&style(h.state(), ids[1], 0), "calt"));
+        assert_eq!(shown(&h, "Contextual Alternates"), Some(Toggled::True));
         // While typing, only the selected characters (1..3) change.
         editing(h.state_mut(), ids[0]);
         h.run();
-        h.get_by_label("Swash").click();
+        h.get_by_label("Ordinals").click();
         h.run();
-        let swash = |h: &Harness<'static, PhotocraftApp>, ci| feature_on(&style(h.state(), ids[0], ci), "swsh");
+        let swash = |h: &Harness<'static, PhotocraftApp>, ci| feature_on(&style(h.state(), ids[0], ci), "ordn");
         assert!(!swash(&h, 0) && swash(&h, 1) && swash(&h, 2) && !swash(&h, 3));
         h.run();
-        assert_eq!(shown(&h, "Swash"), Some(Toggled::True), "shown at the selection start");
+        assert_eq!(shown(&h, "Ordinals"), Some(Toggled::True), "shown at the selection start");
     }
 
     /// Type › Anti-Alias and Type › Orientation check the edited (else selected) layer's value.

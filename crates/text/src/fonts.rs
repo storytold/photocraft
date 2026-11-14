@@ -3,16 +3,14 @@
 //! system fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
 //! user-registered font data, and PostScript-name lookup for PSD import.
 
-use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
 #[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
 use parley::fontique::SourceKind;
-use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
+use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache, SourceId};
 use skrifa::raw::{FileRef, TableProvider, types::Tag};
 use skrifa::{MetadataProvider, string::StringId};
 
@@ -165,6 +163,14 @@ pub fn shared_generation() -> u64 {
     SHARED_GENERATION.load(Ordering::Relaxed)
 }
 
+static SHARED_POSTSCRIPT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Changes when shaping resolves a new PostScript name in the shared database. A cold
+/// catalog search can change an existing name's resolved face when the catalog has duplicates.
+pub fn shared_postscript_generation() -> u64 {
+    SHARED_POSTSCRIPT_GENERATION.load(Ordering::Relaxed)
+}
+
 /// One face in the database (for font menus).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaceInfo {
@@ -180,6 +186,14 @@ pub struct FaceInfo {
     pub axes: Vec<(String, f32, f32, f32)>,
 }
 
+/// A variable font instance selected by name, with the axes shaping will apply.
+struct NamedInstance {
+    face_index: usize,
+    axes: Vec<(String, f32)>,
+    /// Whether the full name matched. A suffix-only match is a shaping fallback.
+    exact: bool,
+}
+
 /// Result of a PostScript-name lookup.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedFont {
@@ -188,6 +202,90 @@ pub struct ResolvedFont {
     pub italic: bool,
     /// True when the exact face was found; false for a heuristic family guess.
     pub exact: bool,
+}
+
+/// Borrowed face identity for optional capability inspection. Styling payloads such as
+/// feature arrays, variations and language are deliberately excluded; names are bounded
+/// before the query retains an owned request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FaceRequest<'a> {
+    pub family: &'a str,
+    pub style: &'a str,
+    pub postscript: Option<&'a str>,
+    pub weight: u16,
+    pub italic: bool,
+}
+
+impl<'a> From<&'a photocraft_doc::text::CharStyle> for FaceRequest<'a> {
+    /// Borrow only fields that participate in layout's face selection.
+    fn from(style: &'a photocraft_doc::text::CharStyle) -> Self {
+        Self { family: &style.font_family, style: &style.font_style, postscript: style.postscript_name.as_deref(), weight: style.weight, italic: style.italic }
+    }
+}
+
+impl FaceRequest<'_> {
+    /// Reject oversized imported identities before hashing or copying any name bytes.
+    fn bounded_bytes(self) -> Option<usize> {
+        let bytes = self.family.len().checked_add(self.style.len())?.checked_add(self.postscript.map_or(0, str::len))?;
+        (bytes <= MAX_FEATURE_KEY_BYTES).then_some(bytes)
+    }
+}
+
+/// GSUB feature tags of one resolved face, independent of a character's saved feature flags.
+/// Presence describes font capability, not whether a particular string uses a substitution.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FaceFeatures {
+    tags: Vec<String>,
+}
+
+impl FaceFeatures {
+    /// Whether the face advertises `tag` in its GSUB feature list.
+    pub fn contains(&self, tag: &str) -> bool {
+        self.tags.binary_search_by(|candidate| candidate.as_str().cmp(tag)).is_ok()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Cold face resolutions, so cache-admission regressions can assert work without timing.
+    static FEATURE_RESOLUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Optional UI inspection must not retain arbitrary imported request identities forever.
+const MAX_FEATURE_REQUESTS: usize = 4096;
+const MAX_FEATURE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_FEATURE_KEY_BYTES: usize = 4096;
+
+/// A font request's identity; all fields participate in layout's named-face selection.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct FeatureRequest {
+    family: String,
+    style: String,
+    postscript: Option<String>,
+    weight: u16,
+    italic: bool,
+}
+
+impl FeatureRequest {
+    /// Bound imported name storage before cloning it; oversized requests remain unknown.
+    fn of(style: &photocraft_doc::text::CharStyle) -> Option<Self> {
+        let bytes = style.font_family.len().checked_add(style.font_style.len())?.checked_add(style.postscript_name.as_ref().map_or(0, String::len))?;
+        if bytes > MAX_FEATURE_KEY_BYTES {
+            return None;
+        }
+        Some(Self {
+            family: style.font_family.clone(),
+            style: style.font_style.clone(),
+            postscript: style.postscript_name.clone(),
+            weight: style.weight,
+            italic: style.italic,
+        })
+    }
+
+    /// Name bytes charged to the bounded request cache, including negative lookups.
+    fn bytes(&self) -> usize {
+        self.family.len().saturating_add(self.style.len()).saturating_add(self.postscript.as_ref().map_or(0, String::len))
+    }
 }
 
 pub struct FontDb {
@@ -203,6 +301,12 @@ pub struct FontDb {
     /// Each family's [`crate::FamilyTraits`] (font menu filters), filled lazily; `None` for a
     /// family whose fonts can't be read.
     traits_cache: HashMap<String, Option<crate::FamilyTraits>>,
+    /// Per-database requests, including unknown results. Registration and cold shaping
+    /// PostScript resolution invalidate this cache.
+    feature_cache: HashMap<FeatureRequest, Option<Arc<FaceFeatures>>>,
+    feature_request_bytes: usize,
+    /// Real source plus collection face index; distinct requests can match the same face.
+    feature_faces: HashMap<(SourceId, u32), Option<Arc<FaceFeatures>>>,
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
@@ -226,6 +330,9 @@ impl FontDb {
             missing_glyph_protection: true,
             face_cache: HashMap::new(),
             traits_cache: HashMap::new(),
+            feature_cache: HashMap::new(),
+            feature_request_bytes: 0,
+            feature_faces: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
         };
@@ -290,6 +397,8 @@ impl FontDb {
             self.ps_cache.clear();
             self.face_cache.clear();
             self.traits_cache.clear();
+            self.clear_feature_requests();
+            self.feature_faces.clear();
             self.refresh_generics();
         }
     }
@@ -332,6 +441,8 @@ impl FontDb {
         self.ps_cache.clear();
         self.face_cache.clear();
         self.traits_cache.clear();
+        self.clear_feature_requests();
+        self.feature_faces.clear();
         self.refresh_generics();
         GENERATION.fetch_add(1, Ordering::Relaxed);
         if self.shared {
@@ -459,6 +570,186 @@ impl FontDb {
             .is_some_and(|features| features.feature_records().iter().any(|record| record.feature_tag() == feature))
     }
 
+    /// GSUB capabilities of the face selected by the same named-face/CSS matching as layout.
+    ///
+    /// An empty family uses the documented default family. Unlike shaping's fallback probe,
+    /// an unknown named family remains unknown (`None`): UI must never advertise Inter's
+    /// features as a missing font's. An exact PostScript match can
+    /// recover a face whose family name differs, as layout does. A readable face with no GSUB
+    /// has a known empty feature set; unreadable tables remain unknown. An unresolved explicit
+    /// PostScript face is also unknown, even when a nearby face exists in the named family.
+    ///
+    /// Cached by the full face request within this database/catalog, including unknown results.
+    /// Font registration, system discovery and cold shaping PostScript resolution invalidate it.
+    /// No font load or table parse occurs on a cache hit. Variations do not change advertised tags.
+    /// Raw request storage is bounded separately from source-face tables. For a complete UI
+    /// target use [`Self::face_features_for_styles`] to reserve its working set before eviction.
+    pub fn face_features(&mut self, style: &photocraft_doc::text::CharStyle) -> Option<Arc<FaceFeatures>> {
+        let key = FeatureRequest::of(style)?;
+        if let Some(features) = self.feature_cache.get(&key) {
+            return features.clone();
+        }
+        if self.feature_cache.len() >= MAX_FEATURE_REQUESTS || self.feature_request_bytes.saturating_add(key.bytes()) > MAX_FEATURE_REQUEST_BYTES {
+            self.clear_feature_requests();
+        }
+        let features = self.read_face_features(style);
+        self.feature_request_bytes = self.feature_request_bytes.saturating_add(key.bytes());
+        self.feature_cache.insert(key, features.clone());
+        features
+    }
+
+    /// Capabilities for an entire formatting working set, with bounded optional request storage.
+    /// Reserve all distinct requests before resolving any, so historical entries cannot evict
+    /// half of the current target and repeat named-instance/table resolution on the next frame.
+    /// Return one record per distinct request, in first-appearance order, so repeated style
+    /// spans neither clone request names nor allocate a result per character run. Oversized
+    /// requests/sets remain unknown; engine formatting is unaffected.
+    pub fn face_features_for_styles(&mut self, styles: &[photocraft_doc::text::CharStyle]) -> Option<Vec<Arc<FaceFeatures>>> {
+        self.face_features_for_requests(styles.iter().map(FaceRequest::from))
+    }
+
+    /// Consume borrowed identities lazily, stopping at the complete-target resource limit.
+    /// Duplicate runs retain no extra request, and unrelated styling payloads are never cloned.
+    /// Admission reserves the entire bounded target before resolution, preserving hot requests.
+    pub fn face_features_for_requests<'a>(&mut self, requests: impl IntoIterator<Item = FaceRequest<'a>>) -> Option<Vec<Arc<FaceFeatures>>> {
+        let mut seen = HashSet::new();
+        let mut keys = Vec::new();
+        let mut bytes = 0usize;
+        for request in requests {
+            let name_bytes = request.bounded_bytes()?;
+            if !seen.contains(&request) {
+                bytes = bytes.saturating_add(name_bytes);
+                if keys.len() >= MAX_FEATURE_REQUESTS || bytes > MAX_FEATURE_REQUEST_BYTES {
+                    return None;
+                }
+                seen.insert(request);
+                keys.push(FeatureRequest {
+                    family: request.family.into(),
+                    style: request.style.into(),
+                    postscript: request.postscript.map(str::to_owned),
+                    weight: request.weight,
+                    italic: request.italic,
+                });
+            }
+        }
+        let missing: Vec<_> = keys.iter().filter(|key| !self.feature_cache.contains_key(*key)).collect();
+        let missing_bytes = missing.iter().fold(0usize, |bytes, key| bytes.saturating_add(key.bytes()));
+        if self.feature_cache.len().saturating_add(missing.len()) > MAX_FEATURE_REQUESTS
+            || self.feature_request_bytes.saturating_add(missing_bytes) > MAX_FEATURE_REQUEST_BYTES
+        {
+            self.clear_feature_requests();
+        }
+        keys.into_iter()
+            .map(|key| {
+                if let Some(features) = self.feature_cache.get(&key) {
+                    return features.clone();
+                }
+                let style = photocraft_doc::text::CharStyle {
+                    font_family: key.family,
+                    font_style: key.style,
+                    postscript_name: key.postscript,
+                    weight: key.weight,
+                    italic: key.italic,
+                    ..Default::default()
+                };
+                self.face_features(&style)
+            })
+            .collect()
+    }
+
+    /// Evict raw requests without discarding immutable metadata keyed by actual source/face.
+    fn clear_feature_requests(&mut self) {
+        self.feature_cache.clear();
+        self.feature_request_bytes = 0;
+    }
+
+    /// Editable PDF imports use the PostScript name plus a hexadecimal content key as the
+    /// family. A name match alone cannot identify the requested bytes of one of these subsets.
+    fn is_pdf_subset_family(family: &str, postscript: &str) -> bool {
+        family
+            .strip_prefix(postscript)
+            .and_then(|rest| rest.strip_prefix(' '))
+            .is_some_and(|key| (16..=32).contains(&key.len()) && key.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    }
+
+    /// Resolve a request once before reading its matched face. A heuristic PostScript-family
+    /// guess is insufficient evidence that a missing requested font has any particular feature.
+    fn read_face_features(&mut self, style: &photocraft_doc::text::CharStyle) -> Option<Arc<FaceFeatures>> {
+        #[cfg(test)]
+        FEATURE_RESOLUTIONS.with(|count| count.set(count.get().saturating_add(1)));
+        // Face matching ignores saved feature flags and other formatting payloads. Copy only
+        // its identity fields, rather than cloning input-sized feature/variation data.
+        let mut style = photocraft_doc::text::CharStyle {
+            font_family: style.font_family.clone(),
+            font_style: style.font_style.clone(),
+            postscript_name: style.postscript_name.as_ref().filter(|name| !name.is_empty()).cloned(),
+            weight: style.weight,
+            italic: style.italic,
+            ..Default::default()
+        };
+        if style.font_family.is_empty() && style.postscript_name.is_none() {
+            style.font_family = DEFAULT_FAMILY.into();
+        }
+        if let Some(ps) = style.postscript_name.as_deref() {
+            let faces = self.faces(&style.font_family);
+            if !faces.iter().any(|face| face.postscript_name.as_deref() == Some(ps)) {
+                if Self::is_pdf_subset_family(&style.font_family, ps) {
+                    return None;
+                }
+                // Reuse shaping's exact match or search in the same order. An inspection must
+                // not replace the shaping cache's choice when several faces share a name.
+                let resolved = self
+                    .ps_cache
+                    .get(ps)
+                    .and_then(Option::as_ref)
+                    .filter(|resolved| resolved.exact)
+                    .cloned()
+                    .or_else(|| self.find_exact(ps, &guess_from_postscript(ps).family, false))
+                    .filter(|resolved| !Self::is_pdf_subset_family(&resolved.family, ps));
+                if let Some(resolved) = resolved {
+                    style.font_family = resolved.family;
+                    style.weight = resolved.weight;
+                    style.italic = resolved.italic;
+                } else if self.named_instance(&style.font_family, &faces, ps).is_none_or(|instance| !instance.exact) {
+                    // Rendering may still use a nearby/fallback face, but that is not evidence
+                    // that the explicitly requested face supports any feature.
+                    return None;
+                }
+            }
+        }
+        let faces = self.faces(&style.font_family);
+        let (named_index, _) = self.named_face_selection(&style, &faces);
+        let info = self.fcx.collection.family_by_name(&style.font_family)?;
+        // Inspect the original face. A shaping alias can copy a complete TTC for each face,
+        // and an unreadable named face must not fall back to a different readable sibling.
+        let face = if let Some(index) = named_index {
+            info.fonts().get(index)?
+        } else {
+            let slant = if style.italic { FontStyle::Italic } else { FontStyle::Normal };
+            info.match_font(FontWidth::default(), slant, FontWeight::new(style.weight.clamp(1, 1000) as f32), true)?
+        }
+        .clone();
+        let key = (face.source().id(), face.index());
+        if let Some(features) = self.feature_faces.get(&key) {
+            return features.clone();
+        }
+        let features = (|| {
+            let blob = face.load(Some(&mut self.fcx.source_cache))?;
+            let font = skrifa::FontRef::from_index(blob.as_ref(), face.index()).ok()?;
+            // A present but unreadable directory record is unknown, not a font without GSUB.
+            if !font.table_directory.table_records().iter().any(|record| record.tag() == Tag::new(b"GSUB")) {
+                return Some(Arc::new(FaceFeatures::default()));
+            }
+            let list = font.gsub().ok()?.feature_list().ok()?;
+            let mut tags: Vec<_> = list.feature_records().iter().map(|record| record.feature_tag().to_string()).collect();
+            tags.sort();
+            tags.dedup();
+            Some(Arc::new(FaceFeatures { tags }))
+        })();
+        self.feature_faces.insert(key, features.clone());
+        features
+    }
+
     /// Faces of a family, preserving names even when multiple faces share CSS attributes.
     pub fn faces(&mut self, family: &str) -> Vec<FaceInfo> {
         if let Some(faces) = self.face_cache.get(family) {
@@ -525,28 +816,14 @@ impl FontDb {
     pub(crate) fn select_named_face(&mut self, style: &mut photocraft_doc::text::CharStyle) {
         let family = style.font_family.clone();
         let faces = self.faces(&family);
-        let index = style.postscript_name.as_ref().and_then(|ps| faces.iter().position(|f| f.postscript_name.as_ref() == Some(ps)));
-        // The named instance is tried before the style-and-weight fallback: a variable face's own
-        // style ("Regular") can match a populated `font_style` and would drop the instance's axes.
-        let instance = match (index, &style.postscript_name) {
-            (None, Some(ps)) => self.named_instance(&family, &faces, ps),
-            _ => None,
-        };
-        if let Some((_, axes)) = &instance {
-            for (axis, value) in axes {
-                if !style.variations.iter().any(|v| &v.axis == axis) {
-                    style.variations.push(photocraft_doc::text::FontVariation { axis: axis.clone(), value: *value });
+        let (index, instance) = self.named_face_selection(style, &faces);
+        if let Some(instance) = instance {
+            for (axis, value) in instance.axes {
+                if !style.variations.iter().any(|v| v.axis == axis) {
+                    style.variations.push(photocraft_doc::text::FontVariation { axis, value });
                 }
             }
         }
-        let index = index.or(instance.map(|(i, _)| i)).or_else(|| {
-            faces.iter().position(|f| {
-                !style.font_style.is_empty()
-                    && f.style.eq_ignore_ascii_case(&style.font_style)
-                    && f.weight.round() as u16 == style.weight
-                    && f.italic == style.italic
-            })
-        });
         let Some(index) = index else { return };
         let Some(face) = faces.get(index) else { return };
         let key = (family.clone(), index);
@@ -567,17 +844,40 @@ impl FontDb {
         style.italic = face.italic;
     }
 
+    /// Resolve a named family face before CSS fallback. Inspection and shaping share the
+    /// same name precedence; only shaping applies the returned instance's axis values.
+    fn named_face_selection(&mut self, style: &photocraft_doc::text::CharStyle, faces: &[FaceInfo]) -> (Option<usize>, Option<NamedInstance>) {
+        let index = style.postscript_name.as_ref().and_then(|ps| faces.iter().position(|f| f.postscript_name.as_ref() == Some(ps)));
+        // A named instance precedes the face style, which can match the variable face's
+        // own style ("Regular") and would otherwise lose the instance's axes.
+        let instance = match (index, &style.postscript_name) {
+            (None, Some(ps)) => self.named_instance(&style.font_family, faces, ps),
+            _ => None,
+        };
+        let index = index.or(instance.as_ref().map(|instance| instance.face_index)).or_else(|| {
+            faces.iter().position(|f| {
+                !style.font_style.is_empty()
+                    && f.style.eq_ignore_ascii_case(&style.font_style)
+                    && f.weight.round() as u16 == style.weight
+                    && f.italic == style.italic
+            })
+        });
+        (index, instance)
+    }
+
     /// The variable face of `family` (index into `faces`) with a named instance whose PostScript
     /// name is `ps`, and that instance's axis values. An instance without a PostScript name of its
     /// own is named as Adobe Technical Note #5902 derives it: the variations prefix (name 25, else
     /// the family name) and the subfamily name without spaces, joined by a hyphen. Names compare
     /// without punctuation or case, and the subfamily alone matches the part of `ps` after the
-    /// first hyphen, since the prefix a document stored can differ from the font's.
-    fn named_instance(&mut self, family: &str, faces: &[FaceInfo], ps: &str) -> Option<(usize, Vec<(String, f32)>)> {
+    /// first hyphen, since the prefix a document stored can differ from the font's. Prefer a
+    /// full match anywhere in the family to the first suffix match, which only shaping accepts.
+    fn named_instance(&mut self, family: &str, faces: &[FaceInfo], ps: &str) -> Option<NamedInstance> {
         let key = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
         let wanted = key(ps);
         let wanted_style = ps.split_once('-').map(|(_, s)| key(s));
         let info = self.fcx.collection.family_by_name(family)?;
+        let mut fallback = None;
         for (index, face) in info.fonts().iter().enumerate() {
             if faces.get(index).is_none_or(|f| f.axes.is_empty()) {
                 continue;
@@ -592,27 +892,34 @@ impl FontDb {
             for instance in font.named_instances().iter() {
                 let subfamily = name(instance.subfamily_name_id()).unwrap_or_default();
                 let own = instance.postscript_name_id().and_then(name);
-                let matches = match own {
-                    Some(own) => key(&own) == wanted,
-                    None => key(&prefix) + &key(&subfamily) == wanted || (!subfamily.is_empty() && wanted_style.as_deref() == Some(key(&subfamily).as_str())),
+                let exact = match own.as_deref() {
+                    Some(own) => key(own) == wanted,
+                    None => key(&prefix) + &key(&subfamily) == wanted,
                 };
-                if matches {
+                let style_only = fallback.is_none() && own.is_none() && !subfamily.is_empty() && wanted_style.as_deref() == Some(key(&subfamily).as_str());
+                if exact || style_only {
                     let axes = font.axes().iter().map(|a| a.tag().to_string()).zip(instance.user_coords()).collect();
-                    return Some((index, axes));
+                    let instance = NamedInstance { face_index: index, axes, exact };
+                    if exact {
+                        return Some(instance);
+                    }
+                    fallback = Some(instance);
                 }
             }
         }
-        None
+        fallback
     }
 
     /// Finds a face by PostScript name (as stored in PSD files): exact match by reading the
     /// `name` table of candidate faces, else a heuristic split (`Arial-BoldMT` → Arial, 700).
+    /// Cold searches may change existing exact mappings, so feature requests are re-evaluated
+    /// while source-face tables stay cached.
     pub fn resolve_postscript(&mut self, ps: &str) -> ResolvedFont {
         if let Some(Some(r)) = self.ps_cache.get(ps) {
             return r.clone();
         }
         let guess = guess_from_postscript(ps);
-        let exact = self.find_exact(ps, &guess.family);
+        let exact = self.find_exact(ps, &guess.family, true);
         let r = exact.unwrap_or_else(|| {
             // Keep the guessed family only if we have it; otherwise let fallback pick.
             let mut g = guess.clone();
@@ -624,18 +931,29 @@ impl FontDb {
             g
         });
         self.ps_cache.insert(ps.to_string(), Some(r.clone()));
+        self.clear_feature_requests();
+        if self.shared {
+            SHARED_POSTSCRIPT_GENERATION.fetch_add(1, Ordering::Relaxed);
+        }
         r
     }
 
-    fn find_exact(&mut self, ps: &str, family_guess: &str) -> Option<ResolvedFont> {
+    /// Find the first actual PostScript match in the resolver's catalog order. Shaping can
+    /// prime its cache as it scans. Capability inspection leaves that cache untouched.
+    fn find_exact(&mut self, ps: &str, family_guess: &str, cache_catalog: bool) -> Option<ResolvedFont> {
         let first_word = family_guess.split(' ').next().unwrap_or(family_guess).to_lowercase();
         let mut candidates = self.families();
         candidates.sort_by_key(|f| !f.to_lowercase().replace(' ', "").starts_with(&first_word));
         for fam in candidates {
             for face in self.faces(&fam) {
                 let Some(name) = face.postscript_name else { continue };
+                if name != ps && !cache_catalog {
+                    continue;
+                }
                 let resolved = ResolvedFont { family: face.family, weight: face.weight.round() as u16, italic: face.italic, exact: true };
-                self.ps_cache.insert(name.clone(), Some(resolved.clone()));
+                if cache_catalog {
+                    self.ps_cache.insert(name.clone(), Some(resolved.clone()));
+                }
                 if name == ps {
                     return Some(resolved);
                 }
@@ -1182,3 +1500,6 @@ mod tests {
 
 #[cfg(test)]
 mod font_names_tests;
+
+#[cfg(test)]
+mod feature_tests;
