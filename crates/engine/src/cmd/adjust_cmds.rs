@@ -335,6 +335,18 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments › Exposure: [`has_adjustable`], refused in the CMYK, Lab, Indexed Color and
+/// Multichannel documents measured in #14630 (Bitmap is refused for every adjustment but Invert
+/// before this runs). Duotone was not measured and keeps today's behaviour.
+pub(crate) fn exposure_enabled(s: &Session) -> std::result::Result<(), String> {
+    use photocraft_color::ColorMode;
+    let d = s.active().ok_or("no document open")?;
+    if let m @ (ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed | ColorMode::Multichannel) = d.doc.mode {
+        return Err(format!("Exposure needs an RGB or Grayscale document (this one is {m:?})"));
+    }
+    has_adjustable(s)
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.

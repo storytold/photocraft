@@ -88,6 +88,8 @@ pub mod edit_menu_cmds;
 mod enabled;
 pub mod eraser_cmds;
 pub mod export_preset_cmds;
+#[cfg(test)]
+mod exposure_mode_refusal_tests;
 pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod face_cmds;
@@ -1301,7 +1303,10 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            enabled: match kind {
+                "exposure" => crate::adjust_cmds::exposure_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 if matches!(kind.as_str(), "levels" | "curves") {
