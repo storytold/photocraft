@@ -67,6 +67,8 @@ mod gradient_mode_greyed_tests;
 mod line_live_handles_tests;
 
 #[cfg(test)]
+mod object_selection_gear_tests;
+#[cfg(test)]
 mod object_selection_mode_tests;
 
 #[cfg(test)]

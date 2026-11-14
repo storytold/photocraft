@@ -1161,10 +1161,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::ObjectSelection => {
             crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
             crate::widgets::vline(ui, 22.0);
-            crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));
             crate::widgets::checkbox(ui, &mut o.sample_all.object_selection, tl!("Sample All Layers"));
-            opt(ui, tl!("Drag a rectangle around the object"));
+            let refresh = crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Click to refresh object finder.")).clicked();
+            crate::object_finder::gear(o, ui);
             crate::widgets::vline(ui, 22.0);
+            if refresh {
+                crate::object_finder::refresh(app);
+            }
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
