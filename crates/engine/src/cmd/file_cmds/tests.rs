@@ -3394,10 +3394,7 @@ fn batch_reports_inputs_that_share_an_output_name() {
     save_doc(doc(&s), &join(&input, "a.jpg"), None).unwrap();
     png(&input, "B.png", 8, 8, "#00ff00");
     png(&input, "b.tif", 8, 8, "#00ff00");
-    for (cmd, extra) in [
-        ("file.automate.batch", json!({"steps": [], "format": "jpg"})),
-        ("file.automate.lensCorrection", json!({"format": "jpg"})),
-    ] {
+    for (cmd, extra) in [("file.automate.batch", json!({"steps": [], "format": "jpg"})), ("file.automate.lensCorrection", json!({"format": "jpg"}))] {
         let out = join(&dir, cmd);
         let mut p = extra;
         p["input"] = json!(input);
