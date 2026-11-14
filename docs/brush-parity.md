@@ -119,16 +119,17 @@ not blend modes, and are stored with each tool's brush. Tracked as
 
 | Feature | Status | Evidence |
 |---|---|---|
-| Surface Color: scales the paint per pixel by the photo's shading (luma over a blurred luma); options Strength (0..1), Detail (blur radius 1..512 px) and Sample (All Layers or Current Layer) | done | `crates/algo/src/surface.rs`, `crates/paint/src/surface.rs`; banded 16-bit square-root-coded luma, about 72 MB at 36 MP; no perf numbers yet |
-| Follow Perspective: dabs are sized and foreshortened by the saved Vanishing Point plane under them | done | `crates/paint/src/render.rs`, `dynamics.rs`; a stroke across planes uses one anchor scale, so sizes on different planes are only approximately comparable; a plane seen edge-on (squash below 1e-4) draws a plain dab |
-| Planes saved with the document (`filter.vanishingPoint` `keepPlanes`), with canvas-size staleness | done | `crates/doc/src/lib.rs`, `.pcraft` round trip; a same-size canvas change (rotate 180, flip) is not detected as stale; tear-off parent links are lost on reload; the PSD vanishing point resource stays opaque |
-| Adaptive brush cursor: the outline shows the dab the brush will paint on the plane under the pointer | done | `brush.cursorShape`, `crates/ui-egui/src/canvas.rs`; not yet checked visually |
+| Surface Color: scales the paint per pixel by the photo's shading (luma over a blurred luma); options Strength (0..1), Detail (blur radius 1..512 px) and Sample (All Layers, which leaves out the layer being painted, or Current Layer) | done | `crates/algo/src/surface.rs`, `crates/paint/src/surface.rs`; banded 16-bit square-root-coded luma, about 72 MB at 36 MP, cached on the sampled layers' content so strokes on the paint layer keep it |
+| Estimate Depth (`image.estimateDepth`): Depth Anything V2 Small writes a Depth alpha channel (white = near); Fast is one whole-image pass, High Quality adds up to 16 overlapping tiles aligned to it by least squares | done | `crates/depth`, `crates/engine/src/cmd/depth_cmds.rs`; about 2 s (Fast) and 27 s (High, 13 passes) for 1600 x 1200 on a laptop CPU in a dev build |
+| Depth model download on first use, after asking (`depth.downloadModel`), or from local files (`depth.loadModelFiles`); sha256-pinned, cached in the platform cache folder | done | `crates/depth/src/lib.rs` `WEIGHTS`, `apps/photocraft/src/depth.rs`; the web build has no estimator |
+| Follow Depth: dabs are foreshortened by the depth slope (scale-free, normalised by the photo's 90th-percentile slope; Relief 0..1), sized by depth (brush size is the size at the median depth) and, for round tips, drawn inside a 32-ray outline traced along the surface that stops at depth edges | done | `crates/algo/src/surface.rs` `DepthGeometry`, `crates/engine/src/cmd/brush_cmds/surface_wire.rs`; full-precision depth while the channel is unchanged; folds narrower than about 4 px blur out; sampled tips keep an ellipse |
+| Follow Perspective: dabs are sized and foreshortened by the saved Vanishing Point plane under them; brush size is the size at the first plane's centre | done | `crates/paint/src/render.rs`, `dynamics.rs`; a plane seen edge-on (squash below 1e-4) draws a plain dab |
+| Planes saved with the document (`filter.vanishingPoint` `keepPlanes`, `perspective.setPlanes`), with canvas-size staleness | done | `crates/doc/src/lib.rs`, `.pcraft` round trip; a same-size canvas change (rotate 180, flip) is not detected as stale; tear-off parent links are lost on reload; the PSD vanishing point resource stays opaque |
+| Adaptive brush cursor: from the first hover, the outline shows the dab the brush will paint at that point (size, squash, depth outline) | done | `brush.cursorShape`, `crates/ui-egui/src/tools/brush_cursor.rs` |
 | Vanishing Point paste shade (`shade`, `shadeDetail`): pasted colour takes the photo's shading | done | `crates/engine/src/cmd/vp_cmds.rs` |
-| Tools wired | partial | Brush, Pencil and the painting tools that share the brush renderer; Mixer Brush and the retouch tools are not wired |
-| Phase 2: depth from a channel or layer (curved surfaces, light painting) | open | |
-| Phase 3: single-photo depth inference through a plug-in | open | blocked on the model licence |
+| Tools wired | partial | Brush and Pencil; Mixer Brush and the retouch tools are not wired |
+| Light painting from depth normals | open | |
 
-Compiled and tested on fork CI only; no local run, no performance measurement and no visual check yet.
 
 ## Presets
 
@@ -144,7 +145,7 @@ Compiled and tested on fork CI only; no local run, no performance measurement an
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-14 | minor | Surface-aware brush, beyond parity: Surface Color (strength, detail, sample), Follow Perspective on saved Vanishing Point planes, adaptive cursor, Vanishing Point paste shade (storytold/photocraft#14341). Phases 2 and 3 open. No brush-feel estimate changed. |
+| 2026-11-14 | minor | Surface-aware brush, beyond parity: Surface Color (strength, detail, sample), Estimate Depth (Depth Anything V2 Small, Fast and High Quality), Follow Depth, Follow Perspective on saved Vanishing Point planes, adaptive cursor, Vanishing Point paste shade (storytold/photocraft#14341). Light painting open. No brush-feel estimate changed. |
 | 2026-11-06 | minor | Eraser end of the pen switches to the Eraser on Windows with Windows Ink on (#2285); row stays partial (X11, web); no estimate changed |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
