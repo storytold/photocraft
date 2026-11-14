@@ -242,6 +242,73 @@ fn function_key_with_modifiers(key: egui::Key, m: egui::Modifiers) -> bool {
     function && (m.ctrl || m.command || m.alt || m.shift || m.mac_cmd)
 }
 
+/// The commands a committed key touches: the one it went to and every one that held it.
+fn touched(command: &str, conflict: Option<&Value>) -> Vec<String> {
+    let holders = conflict.and_then(|c| serde_json::from_value::<Vec<String>>(c["holders"].clone()).ok()).unwrap_or_default();
+    std::iter::once(command.to_string()).chain(holders).collect()
+}
+
+/// The dialog's entries for `ids`: each one's main key and further keys (`null` when unedited).
+fn keys_of(overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, ids: &[String]) -> Value {
+    Value::Object(ids.iter().map(|id| (id.clone(), json!({"main": overrides.get(id), "alternates": alternates.get(id)}))).collect())
+}
+
+/// Puts back entries saved by [`keys_of`].
+fn put_keys(keys: &Value, overrides: &mut BTreeMap<String, String>, alternates: &mut BTreeMap<String, Vec<String>>) {
+    for (id, k) in keys.as_object().into_iter().flatten() {
+        match k["main"].as_str() {
+            Some(m) => overrides.insert(id.clone(), m.to_string()),
+            None => overrides.remove(id),
+        };
+        match serde_json::from_value::<Vec<String>>(k["alternates"].clone()) {
+            Ok(list) => alternates.insert(id.clone(), list),
+            Err(_) => alternates.remove(id),
+        };
+    }
+}
+
+/// A committed change for Undo: the touched commands' keys before and after it.
+fn change(before: Value, overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, ids: &[String]) -> Value {
+    json!({"before": before, "after": keys_of(overrides, alternates, ids), "undone": false})
+}
+
+/// Is the change still what the bindings show? A change not stamped yet (this frame's) is.
+fn fresh(change: &Value, overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, set: Option<&Value>) -> bool {
+    change.get("state").is_none_or(|s| s.as_u64() == Some(conflict_state(overrides, alternates, "", set)))
+}
+
+/// The Undo / Redo button (#14314): enabled while there is a change to step; a click puts back
+/// the keys from before the change (Undo) or after it (Redo) and flips the label. True when clicked.
+fn undo_button(
+    ui: &mut egui::Ui,
+    last_change: &mut Option<Value>,
+    overrides: &mut BTreeMap<String, String>,
+    alternates: &mut BTreeMap<String, Vec<String>>,
+    set: Option<&Value>,
+) -> bool {
+    *last_change = last_change.take().filter(|c| fresh(c, overrides, alternates, set));
+    let undone = last_change.as_ref().is_some_and(|c| c["undone"] == json!(true));
+    let label = if undone { tl!("Redo") } else { tl!("Undo") };
+    let clicked = ui.add_enabled(last_change.is_some(), egui::Button::new(label)).clicked();
+    let Some(c) = last_change.as_mut().filter(|_| clicked) else { return false };
+    put_keys(&c[if undone { "after" } else { "before" }], overrides, alternates);
+    c["undone"] = json!(!undone);
+    if let Some(o) = c.as_object_mut() {
+        o.remove("state");
+    }
+    true
+}
+
+/// The change Undo keeps, as the frame leaves the bindings: gone when any other change to them
+/// (Use Default, Delete, Reset All, a set) made it stale, and stamped when it is new.
+fn settle_change(change: Option<Value>, overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, set: Option<&Value>) -> Value {
+    let mut change = change.filter(|c| fresh(c, overrides, alternates, set));
+    if let Some(c) = change.as_mut().and_then(Value::as_object_mut).filter(|c| !c.contains_key("state")) {
+        c.insert("state".into(), json!(conflict_state(overrides, alternates, "", set)));
+    }
+    change.unwrap_or(Value::Null)
+}
+
 /// The message once a field's key is in the set: a conflict keeps its warning (and its Accept
 /// and Go to Conflict / Undo Changes, re-stamped with the new bindings); any other key is assigned.
 fn commit_message(message: &mut String, warning: &mut bool, conflict: Option<&mut Value>, sc: &str) {
@@ -295,6 +362,8 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     // The field open when this frame began: the row (and main key or one more) a pending key belongs to.
     let editing = (capture && tab == 0 && !selected.is_empty()).then(|| (selected.clone(), capture_alt));
     let mut reopened = false;
+    // The last committed key change, for the Undo / Redo button (one level, #14314).
+    let mut last_change: Option<Value> = f.get("lastChange").filter(|c| c.is_object()).cloned();
     let items = shortcut_items(app);
     // The Set row, then the search (the Menus tab searches too).
     if tab == 0 {
@@ -429,7 +498,10 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     }
     if commit {
         if let Some(sc) = pending.take() {
+            let ids = touched(&selected, conflict.as_ref());
+            let before = keys_of(&overrides, &alt_overrides, &ids);
             assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
+            last_change = Some(change(before, &overrides, &alt_overrides, &ids));
             commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
         }
         capture = false;
@@ -546,6 +618,10 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     if tab == 0 {
         ui.horizontal(|ui| {
             let has_sel = !selected.is_empty();
+            if undo_button(ui, &mut last_change, &mut overrides, &mut alt_overrides, f.get("activeSet")) {
+                message.clear();
+                message_warning = false;
+            }
             if ui.add_enabled(has_sel, egui::Button::new(tl!("Add Shortcut"))).clicked() {
                 capture = true;
                 capture_alt = true;
@@ -586,7 +662,10 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     // where it was opened; a click on another row's key opens that row's field instead.
     if let Some((row, alt)) = editing.as_ref().filter(|(row, alt)| *row != selected || *alt != capture_alt) {
         if let Some(sc) = pending.take() {
+            let ids = touched(row, conflict.as_ref());
+            let before = keys_of(&overrides, &alt_overrides, &ids);
             assign(&mut overrides, &mut alt_overrides, row, &sc, *alt);
+            last_change = Some(change(before, &overrides, &alt_overrides, &ids));
             commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
         }
         if *row != selected {
@@ -614,7 +693,10 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             // Accept: enabled while a field is open; commits it like Enter.
             if ui.add_enabled(capture, egui::Button::new(tl!("Accept"))).on_hover_text(tl!("Enter the selected shortcut into the set")).clicked() {
                 if let Some(sc) = pending.take() {
+                    let ids = touched(&selected, conflict.as_ref());
+                    let before = keys_of(&overrides, &alt_overrides, &ids);
                     assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
+                    last_change = Some(change(before, &overrides, &alt_overrides, &ids));
                     commit_message(&mut message, &mut message_warning, conflict.as_mut(), &sc);
                 }
                 capture = false;
@@ -634,6 +716,9 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             let (key, with, command) =
                 (c["shortcut"].as_str().unwrap_or_default(), c["with"].as_str().unwrap_or_default(), c["command"].as_str().unwrap_or_default());
             if ui.button(tl!("Accept and Go to Conflict")).on_hover_text(tl!("Take the shortcut from the other command and select it")).clicked() {
+                // One change for Undo: the key joining this command and leaving the others.
+                let ids = touched(command, Some(&c));
+                let before = keys_of(&overrides, &alt_overrides, &ids);
                 // A key still in the field joins the set first.
                 if let Some(sc) = pending.take() {
                     assign(&mut overrides, &mut alt_overrides, &selected, &sc, capture_alt);
@@ -651,6 +736,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                         alt_overrides.insert(holder.clone(), keys.into_iter().filter(|k| k != key).collect());
                     }
                 }
+                last_change = Some(change(before, &overrides, &alt_overrides, &ids));
                 selected = with.to_string();
                 filter.clear();
                 message = tl!("Choose a new shortcut for this command, or leave it without one.").into();
@@ -694,6 +780,10 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         c["state"] = json!(conflict_state(&overrides, &alt_overrides, &selected, f.get("activeSet")));
     }
     f.insert("conflict".into(), conflict.unwrap_or(Value::Null));
+    // Opening a field starts a new edit, which Undo can't cross.
+    let opened = capture && (editing.is_none() || reopened);
+    let last_change = settle_change(last_change.filter(|_| !opened), &overrides, &alt_overrides, f.get("activeSet"));
+    f.insert("lastChange".into(), last_change);
     f.insert("hidden".into(), json!(hidden));
     f.insert("colors".into(), json!(colors));
     f.insert("selected".into(), json!(selected));
@@ -872,3 +962,7 @@ fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<V
 #[cfg(test)]
 #[path = "shortcut_pending_edit_tests.rs"]
 mod shortcut_pending_edit_tests;
+
+#[cfg(test)]
+#[path = "shortcut_undo_tests.rs"]
+mod shortcut_undo_tests;
