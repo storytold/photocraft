@@ -407,7 +407,9 @@ pub fn mix_premultiplied(dst: &mut [f32], src: &[f32], a: usize, k: f32) {
         if c == a {
             continue;
         }
-        *d = if oa > 1e-6 { (*d * da + (*s * sa - *d * da) * k) / oa } else { *d + (*s - *d) * k };
+        // Weighted, not `d + (s - d) * k`: at k = 1 the destination drops out exactly, even for
+        // large 32-bit values where the difference would round away the source.
+        *d = if oa > 1e-6 { (*d * da * (1.0 - k) + *s * sa * k) / oa } else { *d * (1.0 - k) + *s * k };
     }
     if let Some(d) = dst.get_mut(a) {
         *d = oa;
@@ -1026,6 +1028,13 @@ mod tests {
         let mut d = [0.5, 0.5];
         mix_premultiplied(&mut d, &[1.0, 1.0], 7, 0.5);
         assert_eq!(d, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn premultiplied_mix_at_full_weight_keeps_the_source_exactly() {
+        let mut d = [67_108_864.0, 0.0, 0.0, 1.0];
+        mix_premultiplied(&mut d, &[1.0, 0.0, 0.0, 1.0], 3, 1.0);
+        assert_eq!(d, [1.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
