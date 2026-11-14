@@ -22,6 +22,15 @@ pub(crate) struct SaveOpts {
     /// Targa: 24 or 32 bits per pixel (`"tgaBits"`); unset, 32 with an alpha channel or
     /// transparency, else 24.
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    /// BMP: 16, 24 or 32 bits per pixel; unset, 32 with transparency, else 24. Set by Artboards to
+    /// Files' BMP options (`"bmpBits"`).
+    pub bmp_bits: Option<photocraft_io::BmpBits>,
+    /// Embed the ICC profile in a flat file; unset, embed it. Artboards to Files' Include ICC
+    /// Profile (`"iccProfile"`).
+    pub embed_icc: Option<bool>,
+    /// PNG: write it interlaced (Adam7); unset, not. Artboards to Files' PNG Interlaced
+    /// (`"pngInterlaced"`).
+    pub png_interlaced: Option<bool>,
     /// DPX: 8, 10, 12 or 16 bits per sample (`"dpxBits"`); unset, 8 for an 8-bit document, else 16.
     pub dpx_bits: Option<photocraft_io::DpxBits>,
     /// TIFF: the image compression (`"tiffCompression": "none" | "lzw" | "zip"`); unset, none.
@@ -57,6 +66,9 @@ impl Default for SaveOpts {
             jpeg_format: None,
             tiff_layers: false,
             tga_bits: None,
+            bmp_bits: None,
+            embed_icc: None,
+            png_interlaced: None,
             dpx_bits: None,
             tiff_compression: None,
             tiff_transparency: None,
@@ -86,6 +98,9 @@ impl SaveOpts {
             jpeg_format: jpeg_format_param(p, cmd)?,
             tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
             tga_bits: tga_bits_param(p, cmd)?,
+            bmp_bits: None,
+            embed_icc: None,
+            png_interlaced: None,
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
             tiff_transparency: tiff_bool_param(p, "tiffTransparency", cmd)?,
@@ -250,6 +265,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         tiff_transparency: save.tiff_transparency,
         preserve_alpha: save.preserve_alpha,
         tga_bits: save.tga_bits,
+        bmp_bits: save.bmp_bits,
         pdf_spot_plates: save.pdf_spot_plates,
         image_previews: save.image_previews,
         psd_maximize_compatibility: save.psd_maximize_compatibility,
@@ -268,6 +284,12 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         opts.encode.tiff_compression = c;
     }
     opts.encode.tiff_pyramid = save.tiff_pyramid;
+    if let Some(embed) = save.embed_icc {
+        opts.encode.embed_icc = embed;
+    }
+    if let Some(interlaced) = save.png_interlaced {
+        opts.encode.png_interlaced = interlaced;
+    }
     opts.encode.dds = save.dds;
     if let Some(q) = save.quality {
         let q = jpeg_quality(q);

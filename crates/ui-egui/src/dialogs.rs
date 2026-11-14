@@ -1066,6 +1066,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         } else {
             crate::filter_dialog::remember(app, &cmd, &d.fields);
         }
+        crate::menus::view_cmds::remember_artboard_export_options(app, &cmd, &d.fields);
         // A step dialog of a playing action: the action continues after it.
         crate::actions::resume(app, &d.fields)?;
     } else {

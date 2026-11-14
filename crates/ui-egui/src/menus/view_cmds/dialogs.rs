@@ -1,6 +1,10 @@
 use super::dispatch::no_params;
 use super::{DialogKind, Map, PhotocraftApp, Value, json};
 
+#[path = "artboard_export_options.rs"]
+mod artboard_export_options;
+pub(crate) use artboard_export_options::remember as remember_artboard_export_options;
+
 // ---------- dialogs and pickers in front of engine commands ----------
 
 /// A generic form dialog that runs `command` with its fields on OK (rendered by [`form_body`]).
@@ -141,6 +145,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let command = f.get("__command").and_then(Value::as_str);
     let file_info = command == Some("file.fileInfo");
     let image_processor = command == Some("file.scripts.imageProcessor");
+    let artboards = command == Some(artboard_export_options::COMMAND);
     let label = |k: &str| {
         if file_info {
             match k {
@@ -161,6 +166,17 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 && matches!(k.as_str(), "input" | "includeSubfolders")
             {
                 continue;
+            }
+            if artboards {
+                if artboard_export_options::PARAMS.contains(&k.as_str()) {
+                    continue;
+                }
+                if k == artboard_export_options::CHECKBOX {
+                    ui.label("");
+                    artboard_export_options::group(ui, f);
+                    ui.end_row();
+                    continue;
+                }
             }
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
@@ -278,7 +294,7 @@ const BATCH_QUALITY: &str = "__batchQuality";
 const JPEG_CUSTOM: &str = "__jpegCustom";
 const JPEG_QUALITY: &str = "__jpegQuality";
 /// The shell keys Alt+Reset restores along with a form's params.
-const RESET_SHELL_KEYS: [&str; 3] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY];
+const RESET_SHELL_KEYS: [&str; 4] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY, artboard_export_options::OPTS];
 
 /// A Custom checkbox and the 0..12 Quality field it enables (Batch, the exports to files). Off,
 /// the command gets no quality and keeps its own defaults; `usable` false greys out both.
@@ -507,7 +523,11 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
                     "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
             } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
+                // The JPEG quality is one of the Export Options here (#13636).
+                let mut fields =
+                    json!({"dir": dir, "prefix": prefix, "format": "png", "__order": ["dir", "prefix", "format", artboard_export_options::CHECKBOX]});
+                artboard_export_options::insert_fields(app, &mut fields);
+                fields
             };
             dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
         }

@@ -14,7 +14,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, color_param, int, int_i32};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
+use crate::file_cmds::{encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
@@ -680,12 +680,13 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
-    let save = SaveOpts::from_params(s, p, cmd)?;
+    let (save, board) = export_options::parse(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
     let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
+    for (i, mut one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
+        board.apply(&mut one, &format);
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
@@ -829,7 +830,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12? (JPEG),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false,"transparency":bool=true (PNG; false: over white, no alpha),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group)} → {files}"##,
             export_artboards,
             artboards_to_files
         ),
@@ -844,6 +845,12 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[path = "artboard_cmds/export_options.rs"]
+mod export_options;
+
+#[cfg(test)]
+#[path = "artboard_cmds/export_options_tests.rs"]
+mod export_options_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;

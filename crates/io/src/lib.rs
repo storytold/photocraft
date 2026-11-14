@@ -417,6 +417,10 @@ pub struct ExportOptions {
     /// Targa: bits per pixel of an RGB file. `None` writes 32 when the document has an alpha
     /// channel or transparency, else 24; Save As asks, starting at [`tga_default_bits`].
     pub tga_bits: Option<TgaBits>,
+    /// BMP: bits per pixel of an RGB file. `None` writes 32 when the composite has transparency,
+    /// else 24; `Some(24)` composites over white, `Some(32)` adds an opaque alpha to an opaque
+    /// image. 16 bits is refused as unsupported: the encoder writes 24 and 32 only.
+    pub bmp_bits: Option<BmpBits>,
     /// PSD/PSB: embed the thumbnail image resource (1036), Preferences › File Handling › Image
     /// Previews. On by default, as Photoshop's Always Save.
     pub image_previews: bool,
@@ -455,6 +459,7 @@ impl Default for ExportOptions {
             preserve_alpha: false,
             xmp: XmpEmbed::All,
             tga_bits: None,
+            bmp_bits: None,
             image_previews: true,
             psd_maximize_compatibility: true,
             document_path: None,
@@ -490,6 +495,38 @@ impl TgaBits {
         match self {
             TgaBits::Bits24 => 24,
             TgaBits::Bits32 => 32,
+        }
+    }
+}
+
+/// Bits per pixel of an RGB BMP (the Depth of Artboards to Files' BMP options).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BmpBits {
+    /// 5 bits per colour.
+    Bits16,
+    /// The colours alone, no alpha.
+    Bits24,
+    /// The colours and an 8-bit alpha.
+    Bits32,
+}
+
+impl BmpBits {
+    /// `16`, `24` or `32` as [`BmpBits`]; any other number is `None`.
+    pub fn from_bits(bits: u64) -> Option<Self> {
+        match bits {
+            16 => Some(BmpBits::Bits16),
+            24 => Some(BmpBits::Bits24),
+            32 => Some(BmpBits::Bits32),
+            _ => None,
+        }
+    }
+
+    /// The bits per pixel.
+    pub fn bits(self) -> u8 {
+        match self {
+            BmpBits::Bits16 => 16,
+            BmpBits::Bits24 => 24,
+            BmpBits::Bits32 => 32,
         }
     }
 }
