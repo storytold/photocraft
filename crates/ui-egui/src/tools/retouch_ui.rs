@@ -525,9 +525,32 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     }
     let p = content_aware_move_params(app, [i64::from(off[0]), i64::from(off[1])]);
     if let Err(e) = app.run("paint.contentAwareMove", p) {
+        content_aware_move_failed(app, e);
+    }
+}
+
+/// A `paint.contentAwareMove` error from a drag or a Transform On Drop commit: the four measured
+/// refusals are an alert with one OK button. Other engine errors (too large, a zero offset that
+/// reached the command) stay on the status bar.
+pub(crate) fn content_aware_move_failed(app: &mut PhotocraftApp, e: String) {
+    if content_aware_move_alert(&e) {
+        let params = json!({ "message": e }).as_object().cloned().unwrap_or_default();
+        app.ui.open_dialog(crate::state::DialogKind::Error, params);
+    } else {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+/// The four alerts `paint.contentAwareMove` returns word for word (#12181).
+fn content_aware_move_alert(message: &str) -> bool {
+    matches!(
+        message,
+        "Could not use the Content-Aware Move tool because the selected area is empty."
+            | "Could not use the Content-Aware Move tool because the layer is locked."
+            | "Could not use the Content-Aware Move tool because the target layer is hidden."
+            | "Could not use the Content-Aware Move tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."
+    )
 }
 
 /// The Content-Aware Move tool's "Don't show again" for [`content_aware_move_no_pixels`].
@@ -826,8 +849,12 @@ fn content_aware_move_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if cam_integer_popup(ui, "cam-color", "Color", &mut app.ui.tool_options.cam_color, 0.0, 10.0, COLOR_TIP) {
             open_alert_once(app, COLOR_RANGE_ALERT);
         }
-        crate::widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.content_aware_move, tl!("Sample All Layers"))
-            .on_hover_text(tl!("Enable to remix all layers"));
+        // Indexed Color refuses the move, so Sample All Layers is off there (#12181).
+        let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
+        ui.add_enabled_ui(!indexed, |ui| {
+            crate::widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.content_aware_move, tl!("Sample All Layers"))
+                .on_hover_text(tl!("Enable to remix all layers"));
+        });
         crate::widgets::checkbox(ui, &mut app.ui.tool_options.cam_transform_on_drop, tl!("Transform On Drop"))
             .on_hover_text(tl!("Allows rotation and scaling of selection"));
     });
