@@ -51,6 +51,9 @@ pub struct SpellDialog {
     /// Single-layer checks remain bound to their opening layer across refreshes and toggles.
     #[serde(skip)]
     pub layer: Option<photocraft_doc::LayerId>,
+    /// The layers selected when it opened, which Check All Layers off checks (#14184).
+    #[serde(skip)]
+    pub layers: Vec<photocraft_doc::LayerId>,
     pub message: String,
     /// The token of the action playback that opened the dialog at a Check Spelling step: Done
     /// continues it ([`crate::actions::resume`]).
@@ -780,7 +783,10 @@ fn refresh_spelling(app: &mut PhotocraftApp) {
     if d.all_layers {
         p["from"] = json!(d.layer.map(|l| l.0));
     } else if let Some(layer) = d.layer {
-        p["layer"] = json!(layer.0);
+        // A selected layer deleted while the dialog is open is dropped, so the others stay listed.
+        let doc = app.session.active().map(|st| &st.doc);
+        p["layers"] = json!(d.layers.iter().filter(|l| doc.is_some_and(|doc| doc.layer(**l).is_some())).map(|l| l.0).collect::<Vec<_>>());
+        p["from"] = json!(layer.0);
     }
     let items = if !d.all_layers && d.layer.is_none() {
         Vec::new()
@@ -815,13 +821,16 @@ fn step_back(s: &mut SpellDialog, gone: impl Fn(&Value) -> bool) {
 /// at a Check Spelling step keeps that action's token, so Done still continues it.
 pub fn open_spelling(app: &mut PhotocraftApp, all_layers: bool) -> Result<Value, String> {
     let resume = app.ui.type_panels.spell.as_ref().and_then(|d| d.resume);
-    let layer = if resume.is_some() { app.ui.type_panels.spell.as_ref().and_then(|d| d.layer) } else { app.session.active().and_then(|st| st.active_layer) };
+    let (layer, layers) = match app.ui.type_panels.spell.as_ref().filter(|_| resume.is_some()) {
+        Some(d) => (d.layer, d.layers.clone()),
+        None => app.session.active().map_or((None, Vec::new()), |st| (st.active_layer, st.selected_layers())),
+    };
     let mut params = json!({"action":"list","allLayers":all_layers});
     if !all_layers {
         params["layer"] = json!(layer.ok_or("no layer was selected for this spelling check")?.0);
     }
     app.session.execute("edit.checkSpelling", params).map_err(|e| e.to_string())?;
-    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, resume, ..Default::default() });
+    app.ui.type_panels.spell = Some(SpellDialog { all_layers, layer, layers, resume, ..Default::default() });
     refresh_spelling(app);
     let d = app.ui.type_panels.spell.as_ref().map(|d| d.items.clone()).unwrap_or_default();
     Ok(json!({ "dialog": SPELLING, "misspellings": d }))
