@@ -14,7 +14,8 @@
 //! - Colours elsewhere in the image make no difference (no global colour model).
 //! - It works on the whole document when it has at most 512 x 512 pixels and at exactly half
 //!   resolution above (any size, any brush), aligned to the document's corner; the mask is then
-//!   scaled up bilinearly (edges show a 25 % / 75 % step).
+//!   scaled up bilinearly inside the selected working pixels only, so a hard edge ends where the
+//!   shape does, with a 75 % rim inside it and nothing outside (#12920).
 //!
 //! The model reproducing this is one min cut (Boykov & Jolly, ICCV 2001; max-flow by Boykov &
 //! Kolmogorov, PAMI 2004) over the working image minimising
@@ -343,8 +344,11 @@ pub fn stroke_mask(pts: &[(f32, f32)], radius: f32, w: usize, h: usize) -> Vec<b
     m
 }
 
-/// Bilinear upsampling (pixel centres aligned, edges clamped) of a working-resolution selection
-/// to 8-bit coverage, as Photoshop scales its half-resolution result.
+/// Upsampling of a working-resolution selection to 8-bit coverage, as Photoshop scales its
+/// half-resolution result: bilinear (pixel centres aligned, edges clamped) inside the selected
+/// working pixels, and nothing in the unselected ones. So the soft rim of an edge lies inside
+/// the shape (75 % on its edge pixels, 56 % at a corner) and no ring of 25 % lies outside it
+/// (#12920, measured on hard-edged rectangles in RGB, Lab, CMYK and Grayscale documents).
 pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: usize) -> Vec<u8> {
     if step == 1 {
         return low.iter().map(|b| if *b { 255 } else { 0 }).collect();
@@ -356,6 +360,10 @@ pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: us
         let fy = (y as f32 + 0.5) / s - 0.5;
         let (iy, ty) = (fy.floor() as i64, fy - fy.floor());
         for x in 0..w {
+            // The working pixel this pixel lies in (`low` covers `w` x `h` in `step` cells).
+            if !low[(y / step).min(lh - 1) * lw + (x / step).min(lw - 1)] {
+                continue;
+            }
             let fx = (x as f32 + 0.5) / s - 0.5;
             let (ix, tx) = (fx.floor() as i64, fx - fx.floor());
             let v = (at(ix, iy) * (1.0 - tx) + at(ix + 1, iy) * tx) * (1.0 - ty) + (at(ix, iy + 1) * (1.0 - tx) + at(ix + 1, iy + 1) * tx) * ty;
@@ -364,3 +372,7 @@ pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: us
     }
     out
 }
+
+#[cfg(test)]
+#[path = "quick_edge_ring_tests.rs"]
+mod edge_ring_tests;
