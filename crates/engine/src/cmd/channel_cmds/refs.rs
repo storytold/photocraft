@@ -330,6 +330,25 @@ impl Blending {
         }
         .clamp(0.0, 1.0)
     }
+
+    /// The same blend for Apply Image's 8-bit path, where the reference application divides in
+    /// whole levels and drops the remainder: (50 + 255) / 2 = 152.5 becomes 152, not 153 (#14490).
+    /// Only that case is measured, so Calculations, 16 and 32-bit targets, a blend mode and every
+    /// attenuated blend keep [`Blending::apply`].
+    pub fn apply_truncated_at_8bit(self, base: f32, top: f32) -> f32 {
+        let v = self.apply(base, top);
+        match self {
+            Blending::Add { .. } | Blending::Subtract { .. } => {
+                // `apply` already clamped to 0..=1, so this keeps the whole levels at or below the
+                // quotient. The 1e-3 of a level is tolerance, not a bias: `base` and `top` are whole
+                // levels already, so a quotient that is one too (328 / 2 = 164) only misses it by
+                // f32 noise and must not drop to the level below.
+                ((f64::from(v) * 255.0 + 1e-3).trunc() / 255.0) as f32
+            }
+            // A blend mode divides nothing, so there is nothing to truncate.
+            Blending::Mode(_) => v,
+        }
+    }
 }
 
 /// A source spec from `p[key]`, or from flat `<prefix>Document` / `<prefix>Layer` /

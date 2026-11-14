@@ -24,6 +24,8 @@ use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 
 #[cfg(test)]
+mod apply_image_scale_rounding_tests;
+#[cfg(test)]
 mod tests;
 
 // ---------------------------------------------------------------------------------------------
