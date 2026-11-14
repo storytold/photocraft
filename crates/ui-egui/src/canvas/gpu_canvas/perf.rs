@@ -98,6 +98,11 @@ pub struct GpuInfo {
     pub adapters: Vec<String>,
     /// The backend startup chose ("auto", "dx12", "cpu", …, or "env" for `WGPU_BACKEND`).
     pub selected: String,
+    /// The adapter this launch asked for by name (Preferences › Performance › Graphics Adapter or
+    /// `PHOTOCRAFT_GPU_ADAPTER`), when the request applies; `None` lets startup choose.
+    pub requested_adapter: Option<String>,
+    /// `requested_adapter` came from `PHOTOCRAFT_GPU_ADAPTER`, not the preference.
+    pub requested_adapter_env: bool,
     /// Why startup didn't use the preference as is (previous start crashed, `--safe-gpu`,
     /// `WGPU_BACKEND`, Intel on Windows).
     pub fallback: Option<String>,
@@ -197,6 +202,33 @@ impl GpuInfo {
                 let template = "This session: {reason}";
                 crate::i18n::fmt(tl!(template), &[("reason", l)])
             });
+        }
+        // Why this adapter: the adapter request it matched (the Graphics Adapter preference or
+        // `PHOTOCRAFT_GPU_ADAPTER`), even beside a fallback note (`WGPU_BACKEND` chose the backend,
+        // the request still chose the adapter), or else, when no fallback note already says, the
+        // automatic pick (within the chosen backend). A missed request is a fallback note. Then
+        // the ones it could have used instead (#8332: the wrong adapter picked).
+        if !self.adapter.is_empty() {
+            let requested = self.requested_adapter.as_deref().filter(|w| photocraft_engine::prefs::gpu_adapter_matches(&self.adapter, w));
+            let why = match requested {
+                Some(name) if self.requested_adapter_env => {
+                    Some(crate::i18n::fmt(tl!("the PHOTOCRAFT_GPU_ADAPTER environment override (\"{name}\")"), &[("name", name)]))
+                }
+                Some(name) => Some(crate::i18n::fmt(tl!("the Graphics Adapter preference (\"{name}\")"), &[("name", name)])),
+                None if self.fallback.is_some() => None,
+                None if self.selected.is_empty() || self.selected == "auto" => Some(tl!("the automatic choice").to_string()),
+                None => Some(crate::i18n::fmt(tl!("the automatic choice, {backend} only"), &[("backend", &self.selected)])),
+            };
+            if let Some(why) = why {
+                let template = "Why this adapter: {reason}";
+                v.push(crate::i18n::fmt(tl!(template), &[("reason", &why)]));
+            }
+        }
+        if !self.adapters.is_empty() {
+            let others: Vec<&str> = self.adapters.iter().map(String::as_str).filter(|a| *a != self.adapter).collect();
+            let list = if others.is_empty() { tl!("none").to_string() } else { others.join(", ") };
+            let template = "Other graphics adapters: {adapters}";
+            v.push(crate::i18n::fmt(tl!(template), &[("adapters", &list)]));
         }
         v
     }

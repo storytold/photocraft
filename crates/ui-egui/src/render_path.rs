@@ -120,6 +120,9 @@ pub struct Change {
     /// A change of the adjustment preview's slot: `reason` None means the preview stopped using
     /// the CPU proxy, not that the canvas is back on the GPU.
     pub preview: bool,
+    /// The window had a GPU canvas then: a software adapter's reason was the GPU path, drawn in
+    /// software.
+    pub gpu_canvas: bool,
 }
 
 /// The current reasons and their history.
@@ -160,15 +163,15 @@ impl RenderPath {
     }
 
     /// The changes, oldest first.
-    pub fn history(&self) -> impl Iterator<Item = &Change> {
+    pub fn history(&self) -> impl DoubleEndedIterator<Item = &Change> {
         self.history.iter()
     }
 
-    fn push(&mut self, doc: u64, reason: Option<CpuReason>, preview: bool) {
+    fn push(&mut self, doc: u64, reason: Option<CpuReason>, preview: bool, gpu_canvas: bool) {
         if self.history.len() == HISTORY {
             self.history.pop_front();
         }
-        self.history.push_back(Change { t_ms: crate::gpu_canvas::now_ms(), doc, reason, preview });
+        self.history.push_back(Change { t_ms: crate::gpu_canvas::now_ms(), doc, reason, preview, gpu_canvas });
     }
 }
 
@@ -202,7 +205,8 @@ pub fn note(app: &mut PhotocraftApp, doc: u64, path: Path) {
     sync_perf(app);
     if changed {
         log_change(&doc_name(app, doc), next.as_ref());
-        app.render_path.push(doc, next, false);
+        let gpu = has_gpu_canvas(app);
+        app.render_path.push(doc, next, false, gpu);
     }
 }
 
@@ -218,7 +222,8 @@ pub fn note_app(app: &mut PhotocraftApp, reason: Option<CpuReason>) {
     sync_perf(app);
     if changed {
         log_change("all documents", reason.as_ref());
-        app.render_path.push(0, reason, false);
+        let gpu = has_gpu_canvas(app);
+        app.render_path.push(0, reason, false, gpu);
     }
 }
 
@@ -244,7 +249,8 @@ pub fn view_ok(app: &mut PhotocraftApp, doc: u64) {
 fn view_changed(app: &mut PhotocraftApp, doc: u64, reason: Option<CpuReason>) {
     sync_perf(app);
     log_change(&doc_name(app, doc), reason.as_ref());
-    app.render_path.push(doc, reason, false);
+    let gpu = has_gpu_canvas(app);
+    app.render_path.push(doc, reason, false, gpu);
 }
 
 /// GPU Memory, Memory Usage or a switch of document measured whether `fit`'s layers fit the GPU
@@ -285,7 +291,8 @@ pub fn adjust_preview_cpu(app: &mut PhotocraftApp, doc: u64, why: &'static str) 
     sync_perf(app);
     if changed {
         log::info!("render path: {}: adjustment preview uses the CPU proxy: {why}", doc_name(app, doc));
-        app.render_path.push(doc, Some(reason), true);
+        let gpu = has_gpu_canvas(app);
+        app.render_path.push(doc, Some(reason), true, gpu);
     }
 }
 
@@ -295,7 +302,8 @@ pub fn adjust_preview_ok(app: &mut PhotocraftApp) {
     let Some((doc, _)) = app.render_path.preview.take() else { return };
     sync_perf(app);
     log::info!("render path: {}: adjustment preview no longer uses the CPU proxy", doc_name(app, doc));
-    app.render_path.push(doc, None, true);
+    let gpu = has_gpu_canvas(app);
+    app.render_path.push(doc, None, true, gpu);
 }
 
 /// `perf.gpu_fallback`: the active document's reason as text, the same as `perf.renderPath`'s
@@ -353,6 +361,53 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
     let current = active.and_then(|d| app.render_path.current(d).map(|r| reason_json(d, Some(r))));
     let history: Vec<Value> = app.render_path.history().map(change_json).collect();
     json!({"current": current, "history": history})
+}
+
+/// The diagnostics report's render-path lines (Help › System Info, `gpu_status`): the active
+/// document's path, then the history, newest first. History entries name their document only
+/// with `names` (on screen); the copied report says `document {id}`, as it goes into issues.
+pub fn report_lines(app: &PhotocraftApp, names: bool) -> Vec<String> {
+    let doc = app.session.active().map_or(0, |st| st.doc.id.0);
+    let mut v = vec![match app.render_path.current(doc) {
+        // A software adapter still runs the GPU canvas: the GPU path, drawn in software. Without
+        // a GPU canvas (CPU mode on one), it is the CPU path.
+        Some(r @ CpuReason::SoftwareAdapter) if has_gpu_canvas(app) => {
+            let template = "Render path: GPU ({kind}: {detail})";
+            crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+        }
+        Some(r) => {
+            let template = "Render path: CPU ({kind}: {detail})";
+            crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+        }
+        None => tl!("Render path: GPU").to_string(),
+    }];
+    let n = app.render_path.history.len().to_string();
+    let template = "Render path changes: {count}";
+    v.push(crate::i18n::fmt(tl!(template), &[("count", &n)]));
+    // In the UI language on screen; the reasons' own text stays as the log has it.
+    for c in app.render_path.history().rev() {
+        let who = match c.doc {
+            0 => tl!("all documents").to_string(),
+            doc if names => doc_name(app, doc),
+            doc => format!("document {doc}"),
+        };
+        let what = match (&c.reason, c.preview) {
+            (Some(r), true) => r.to_string(),
+            (None, true) => tl!("adjustment preview no longer uses the CPU proxy").to_string(),
+            // As the current path above: a software adapter running the GPU canvas then.
+            (Some(r @ CpuReason::SoftwareAdapter), false) if c.gpu_canvas => {
+                let template = "GPU ({kind}: {detail})";
+                crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+            }
+            (Some(r), false) => {
+                let template = "CPU ({kind}: {detail})";
+                crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+            }
+            (None, false) => tl!("back on the GPU").to_string(),
+        };
+        v.push(format!("  {:.0} ms: {who}: {what}", c.t_ms));
+    }
+    v
 }
 
 #[cfg(test)]
@@ -524,6 +579,29 @@ mod tests {
         note_app(&mut app, None);
         frame(&mut app);
         assert_eq!(app.render_path.current(1), Some(&CpuReason::SoftwareAdapter), "after Retry GPU");
+    }
+
+    /// The report names a software adapter running the GPU canvas as the GPU path, qualified;
+    /// without a GPU canvas (CPU mode on a software adapter) it is the CPU path.
+    #[test]
+    fn report_lines_name_a_software_adapter_gpu_canvas_as_gpu() {
+        let mut app = app();
+        app.render_path.assume_gpu = true;
+        app.perf.gpu_info.device_type = "cpu".into();
+        app.perf.gpu_info.canvas = "gpu".into();
+        frame(&mut app);
+        let lines = report_lines(&app, false);
+        assert_eq!(lines[0], "Render path: GPU (softwareAdapter: the graphics adapter is a software renderer)");
+        // The history says the same of the change, as the canvas was then.
+        assert!(lines[2].ends_with(" ms: all documents: GPU (softwareAdapter: the graphics adapter is a software renderer)"), "{lines:?}");
+
+        let mut app = self::app();
+        app.perf.gpu_info.device_type = "cpu".into();
+        app.perf.gpu_info.canvas = "cpu".into();
+        frame(&mut app);
+        let lines = report_lines(&app, false);
+        assert_eq!(lines[0], "Render path: CPU (softwareAdapter: the graphics adapter is a software renderer)");
+        assert!(lines[2].ends_with(" ms: all documents: CPU (softwareAdapter: the graphics adapter is a software renderer)"), "{lines:?}");
     }
 
     /// A software adapter still runs the GPU canvas, so a document that left even that names its

@@ -63,6 +63,12 @@ impl PhotocraftApp {
         // Finish or expire outstanding captures first, so a new request admitted in this pass
         // sees their released budget.
         self.drain_captures(ctx);
+        // Report an Issue's page, once the call that copied the report has delivered it. Here in
+        // `logic`, which a hidden window still runs, and before control commands can queue one.
+        crate::links::open_pending(self, ctx);
+        // The startup reason (a software adapter, CPU mode) before control commands, so a
+        // hidden window's `help.systemInfo` before its first UI pass reports it.
+        crate::render_path::frame(self);
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         view_cmds::leave_full_screen_without_document(self, ctx);

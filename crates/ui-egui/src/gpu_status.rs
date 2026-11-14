@@ -171,24 +171,168 @@ pub fn fall_back(app: &mut PhotocraftApp, fault: &photocraft_gpu::Fault) {
     app.ui.status_error = true;
 }
 
-/// English diagnostics for issue reports (Copy and the control API), independent of UI language.
-pub fn system_info(app: &PhotocraftApp) -> Vec<String> {
-    crate::i18n::with_language(crate::i18n::Lang::EN, || system_info_ui(app))
+/// What the GPU memory budgets were computed from (#9010, #9331): physical memory, the card's own
+/// memory, Preferences › Performance › Memory Usage and GPU Memory, and the results.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BudgetInputs {
+    /// Physical memory in bytes (`None`: unknown, 16 GB assumed).
+    pub ram: Option<u64>,
+    /// The card's own memory in bytes (`None`: not reported, as for integrated GPUs, and discrete
+    /// cards the platform doesn't report, such as NVIDIA on Linux; the budgets then come from
+    /// system memory).
+    pub vram: Option<u64>,
+    /// Whether the adapter is a discrete card (`GpuInfo::device_type`), so an unreported `vram`
+    /// isn't described as shared memory.
+    pub discrete: bool,
+    /// Memory Usage, bytes.
+    pub memory_usage: u64,
+    /// GPU Memory, bytes (0: follow Memory Usage).
+    pub gpu_memory: u64,
+    /// The compositor's layer budget in bytes (0 before the first GPU refresh).
+    pub gpu_budget: u64,
+    /// The display texture budget the open documents share, in bytes (`None` without a GPU
+    /// canvas).
+    pub canvas_budget: Option<u64>,
 }
 
-/// Help › System Info's on-screen text: version, platform and the graphics state.
-pub fn system_info_ui(app: &PhotocraftApp) -> Vec<String> {
+impl BudgetInputs {
+    pub fn of(app: &PhotocraftApp) -> Self {
+        let performance = &app.session.prefs().performance;
+        Self {
+            ram: crate::gpu_canvas::physical_memory(),
+            vram: app.perf.gpu_info.video_memory_mb.map(|mb| mb.saturating_mul(1 << 20)),
+            discrete: app.perf.gpu_info.device_type == "discreteGpu",
+            memory_usage: u64::from(performance.memory_usage_mb).saturating_mul(1 << 20),
+            gpu_memory: u64::from(performance.gpu_memory_mb).saturating_mul(1 << 20),
+            gpu_budget: app.perf.gpu_budget_mb.saturating_mul(1 << 20),
+            canvas_budget: app.gpu.as_ref().map(crate::gpu_canvas::GpuCanvas::canvas_budget),
+        }
+    }
+}
+
+/// The budget inputs and results, one per line (System Info, the log and Preferences ›
+/// Performance), in the current UI language.
+pub fn budget_lines(b: &BudgetInputs) -> Vec<String> {
+    let size = crate::chrome_ui::fmt_bytes;
+    let mut v = vec![match b.ram {
+        Some(ram) => crate::i18n::fmt(tl!("System memory: {size}"), &[("size", &size(ram))]),
+        None => tl!("System memory: unknown (16 GB assumed)").to_string(),
+    }];
+    // A card that reports its memory has a "Graphics memory" line already ([`GpuInfo::lines`]).
+    if b.vram.is_none() {
+        v.push(
+            if b.discrete {
+                tl!("Graphics memory: not reported (budgeted from system memory)")
+            } else {
+                tl!("Graphics memory: not reported (shares system memory)")
+            }
+            .to_string(),
+        );
+    }
+    v.push(crate::i18n::fmt(tl!("Memory Usage: {size}"), &[("size", &size(b.memory_usage))]));
+    v.push(if b.gpu_memory > 0 {
+        crate::i18n::fmt(tl!("GPU Memory: {size}"), &[("size", &size(b.gpu_memory))])
+    } else {
+        tl!("GPU Memory: automatic (from Memory Usage)").to_string()
+    });
+    if b.gpu_budget > 0 {
+        v.push(crate::i18n::fmt(tl!("GPU memory budget: {budget}"), &[("budget", &size(b.gpu_budget))]));
+    }
+    if let Some(c) = b.canvas_budget {
+        v.push(crate::i18n::fmt(tl!("Canvas texture budget: {size}"), &[("size", &size(c))]));
+    }
+    v
+}
+
+/// The adapter report in the current UI language: version, platform, the adapter and why, the
+/// other adapters, the budget inputs and the monitor profiles.
+fn adapter_report_ui(app: &PhotocraftApp) -> Vec<String> {
     let mut v = vec![format!("PhotoCraft {}", photocraft_engine::build_info::long_version()), {
         let template = "Platform: {os} {arch}";
         crate::i18n::fmt(tl!(template), &[("os", std::env::consts::OS), ("arch", std::env::consts::ARCH)])
     }];
     v.extend(app.perf.gpu_info.lines());
+    v.extend(budget_lines(&BudgetInputs::of(app)));
     v.extend(crate::monitor_status::summary_lines(app));
     v
 }
 
-/// The `help.systemInfo` result: the same facts as JSON.
+/// The adapter report, the render path and its history, and the slow frames; history entries
+/// name their documents with `names`.
+fn report(app: &PhotocraftApp, names: bool) -> Vec<String> {
+    let mut v = adapter_report_ui(app);
+    v.extend(crate::render_path::report_lines(app, names));
+    v.extend(crate::frame_stages::report_lines(&app.slow_frames));
+    v
+}
+
+/// Help › System Info's on-screen report, in the current UI language, documents by name.
+pub fn diagnostics_report_ui(app: &PhotocraftApp) -> Vec<String> {
+    report(app, true)
+}
+
+/// The diagnostics report in English, whatever the UI language: the one source for Help › System
+/// Info ▸ Copy, `help.systemInfo`, Help › Report an Issue and the log. It is pasted into public
+/// issues, so documents are `document {id}` and the home folder is `~` (a monitor profile's path
+/// in its reason names the user).
+pub fn diagnostics_report(app: &PhotocraftApp) -> Vec<String> {
+    let home = home();
+    crate::i18n::with_language(crate::i18n::Lang::EN, || report(app, false)).iter().map(|l| without_home(l, home.as_deref())).collect()
+}
+
+/// The adapter part of [`diagnostics_report`] as one English log line, the home folder as `~`.
+pub fn adapter_report_line(app: &PhotocraftApp) -> String {
+    let lines = crate::i18n::with_language(crate::i18n::Lang::EN, || adapter_report_ui(app));
+    without_home(&format!("adapter report: {}", lines.join("; ").replace(['\n', '\r'], " ")), home().as_deref())
+}
+
+fn home() -> Option<String> {
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()
+}
+
+/// `text` with each path inside `home` starting at `~` instead. `/` and `\` match each other, and
+/// a Windows-style home (a `\` or a drive letter) also matches in any ASCII case.
+fn without_home(text: &str, home: Option<&str>) -> String {
+    let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| !h.is_empty()) else { return text.to_string() };
+    let windows = home.contains('\\') || home.as_bytes().get(1) == Some(&b':');
+    let is_sep = |b: u8| b == b'/' || b == b'\\';
+    let same = |a: u8, b: u8| a == b || (is_sep(a) && is_sep(b)) || (windows && a.eq_ignore_ascii_case(&b));
+    let (t, h) = (text.as_bytes(), home.as_bytes());
+    let (mut out, mut kept, mut i) = (String::with_capacity(text.len()), 0, 0);
+    // Only ASCII bytes match loosely, so a match starts and ends on a char boundary.
+    while i + h.len() < t.len() {
+        if is_sep(t[i + h.len()]) && t[i..i + h.len()].iter().zip(h).all(|(&a, &b)| same(a, b)) {
+            out.push_str(&text[kept..i]);
+            out.push('~');
+            i += h.len();
+            kept = i;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&text[kept..]);
+    out
+}
+
+/// Log the adapter report once at `info`: at startup, once the window's adapter is known, and
+/// when Retry GPU rebuilds the canvas.
+pub fn log_adapter_report(app: &PhotocraftApp) {
+    log::info!("{}", adapter_report_line(app));
+}
+
+/// English diagnostics for issue reports (Copy and the control API): [`diagnostics_report`].
+pub fn system_info(app: &PhotocraftApp) -> Vec<String> {
+    diagnostics_report(app)
+}
+
+/// Help › System Info's on-screen text: [`diagnostics_report_ui`].
+pub fn system_info_ui(app: &PhotocraftApp) -> Vec<String> {
+    diagnostics_report_ui(app)
+}
+
+/// The `help.systemInfo` result: the same facts as JSON, plus the report's parts as data.
 pub fn system_info_json(app: &PhotocraftApp) -> serde_json::Value {
+    let b = BudgetInputs::of(app);
     json!({
         "version": photocraft_engine::build_info::long_version(),
         "os": std::env::consts::OS,
@@ -197,6 +341,18 @@ pub fn system_info_json(app: &PhotocraftApp) -> serde_json::Value {
         "monitor": app.session.color.monitor_status(),
         "displays": app.session.color.display_statuses(),
         "lines": system_info(app),
+        "diagnostics": {
+            "budget": {
+                "ramBytes": b.ram,
+                "vramBytes": b.vram,
+                "memoryUsageBytes": b.memory_usage,
+                "gpuMemoryBytes": b.gpu_memory,
+                "gpuBudgetBytes": b.gpu_budget,
+                "canvasBudgetBytes": b.canvas_budget,
+            },
+            "renderPath": crate::render_path::inspect(app),
+            "slowFrames": app.slow_frames,
+        },
     })
 }
 
@@ -227,6 +383,7 @@ fn retry_now(app: &mut PhotocraftApp) -> bool {
     app.proxy_uploaded = None;
     crate::render_path::note_app(app, None);
     app.perf.gpu_info.lost = None;
+    log_adapter_report(app);
     app.ui.status = tl!("GPU acceleration resumed.").to_string();
     app.ui.status_error = false;
     true
@@ -327,7 +484,179 @@ mod tests {
             let profile = crate::i18n::tr(cs, "Monitor profile: {profile}").split('{').next().unwrap_or_default();
             assert!(screen.iter().any(|line| line.starts_with(profile)), "{screen:?}");
             assert!(english.iter().any(|line| line == "GPU backend preference: auto"));
+            // The report's newer parts are English in the copy and the API too.
+            for part in ["System memory: ", "Memory Usage: ", "Render path: GPU", "Slow frames (over 50 ms): 0"] {
+                assert!(english.iter().any(|line| line.starts_with(part)), "{part}: {english:?}");
+            }
+            assert!(result["info"]["diagnostics"]["budget"].is_object(), "{result}");
         });
+    }
+
+    fn en<T>(f: impl FnOnce() -> T) -> T {
+        crate::i18n::with_language(crate::i18n::Lang::EN, f)
+    }
+
+    #[test]
+    fn diagnostics_report_names_the_budget_inputs() {
+        const G: u64 = 1 << 30;
+        // An integrated GPU (#9010): no memory of its own, GPU Memory following Memory Usage.
+        let shared =
+            BudgetInputs { ram: Some(16 * G), vram: None, discrete: false, memory_usage: 8 * G, gpu_memory: 0, gpu_budget: 2 * G, canvas_budget: Some(4 * G) };
+        assert_eq!(
+            en(|| budget_lines(&shared)),
+            [
+                "System memory: 16.0G",
+                "Graphics memory: not reported (shares system memory)",
+                "Memory Usage: 8.0G",
+                "GPU Memory: automatic (from Memory Usage)",
+                "GPU memory budget: 2.0G",
+                "Canvas texture budget: 4.0G",
+            ]
+        );
+        // A discrete card names its memory in the adapter lines; a fixed GPU Memory; nothing
+        // computed yet, and no GPU canvas.
+        let card = BudgetInputs { ram: None, vram: Some(8 * G), discrete: true, memory_usage: 4 * G, gpu_memory: G, gpu_budget: 0, canvas_budget: None };
+        assert_eq!(en(|| budget_lines(&card)), ["System memory: unknown (16 GB assumed)", "Memory Usage: 4.0G", "GPU Memory: 1.0G"]);
+        // A discrete card the platform doesn't report (NVIDIA on Linux) doesn't share system
+        // memory: its budgets are only taken from it.
+        let unreported = BudgetInputs { vram: None, ..card };
+        assert_eq!(en(|| budget_lines(&unreported))[1], "Graphics memory: not reported (budgeted from system memory)");
+        // The app's report carries them, from the preferences and the computed budget.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.perf.gpu_budget_mb = 512;
+        let report = diagnostics_report(&app);
+        let b = BudgetInputs::of(&app);
+        assert_eq!(b.gpu_budget, 512 << 20);
+        for line in en(|| budget_lines(&b)) {
+            assert!(report.contains(&line), "{line}: {report:?}");
+        }
+        assert!(report.iter().any(|l| l == "GPU memory budget: 512.0M"), "{report:?}");
+        let json = system_info_json(&app);
+        assert_eq!(json["diagnostics"]["budget"]["gpuBudgetBytes"], 512u64 << 20);
+        assert_eq!(json["diagnostics"]["budget"]["memoryUsageBytes"], b.memory_usage);
+    }
+
+    #[test]
+    fn diagnostics_report_lists_other_adapters_and_why_picked() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let info = &mut app.perf.gpu_info;
+        info.adapter = "Intel UHD".into();
+        info.selected = "auto".into();
+        info.adapters = vec!["NVIDIA RTX".into(), "Intel UHD".into(), "Microsoft Basic Render Driver".into()];
+        let report = diagnostics_report(&app);
+        assert!(report.iter().any(|l| l == "Why this adapter: the automatic choice"), "{report:?}");
+        assert!(report.iter().any(|l| l == "Other graphics adapters: NVIDIA RTX, Microsoft Basic Render Driver"), "{report:?}");
+        // Picked by Preferences › Performance › Graphics Adapter: the request names it.
+        app.perf.gpu_info.requested_adapter = Some("intel uhd".into());
+        assert!(diagnostics_report(&app).iter().any(|l| l == "Why this adapter: the Graphics Adapter preference (\"intel uhd\")"));
+        // Picked by PHOTOCRAFT_GPU_ADAPTER for this launch: the override, not the preference.
+        app.perf.gpu_info.requested_adapter_env = true;
+        let report = diagnostics_report(&app);
+        assert!(report.iter().any(|l| l == "Why this adapter: the PHOTOCRAFT_GPU_ADAPTER environment override (\"intel uhd\")"), "{report:?}");
+        app.perf.gpu_info.requested_adapter_env = false;
+        // A request this adapter doesn't match isn't the reason (a missed one is a fallback note);
+        // the automatic choice within a chosen backend says so.
+        app.perf.gpu_info.requested_adapter = Some("nvidia".into());
+        app.perf.gpu_info.selected = "vulkan".into();
+        assert!(diagnostics_report(&app).iter().any(|l| l == "Why this adapter: the automatic choice, vulkan only"));
+        app.perf.gpu_info.requested_adapter = None;
+        assert_eq!(serde_json::to_value(&app.perf.gpu_info).unwrap()["requestedAdapter"], serde_json::Value::Null);
+        // A startup note explains the pick instead (gpu_startup's note lands in `fallback`).
+        let note = "Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)";
+        app.perf.gpu_info.fallback = Some(note.into());
+        app.perf.gpu_info.selected = "dx12".into();
+        let report = diagnostics_report(&app);
+        assert!(report.contains(&format!("Fallback: {note}")), "{report:?}");
+        assert!(report.iter().all(|l| !l.starts_with("Why this adapter")), "{report:?}");
+        assert!(report.iter().any(|l| l == "Selected at launch: dx12"), "{report:?}");
+        // A backend note beside a request the adapter matched (`WGPU_BACKEND` on Linux): both.
+        let note = "WGPU_BACKEND=vulkan overrides the backend";
+        app.perf.gpu_info.fallback = Some(note.into());
+        app.perf.gpu_info.selected = "env".into();
+        app.perf.gpu_info.requested_adapter = Some("intel".into());
+        let report = diagnostics_report(&app);
+        assert!(report.contains(&format!("Fallback: {note}")), "{report:?}");
+        assert!(report.iter().any(|l| l == "Why this adapter: the Graphics Adapter preference (\"intel\")"), "{report:?}");
+        app.perf.gpu_info.requested_adapter = None;
+        // The only adapter: nothing else to pick.
+        app.perf.gpu_info.adapters = vec!["Intel UHD".into()];
+        assert!(diagnostics_report(&app).iter().any(|l| l == "Other graphics adapters: none"));
+    }
+
+    #[test]
+    fn diagnostics_report_includes_fallback_history_and_slow_frames() {
+        use crate::render_path::{CpuReason, Path, note};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        note(&mut app, 7, Path::Cpu(CpuReason::Unsupported("Advanced Blending on Layer 1".into())));
+        note(&mut app, 7, Path::Gpu { full: true });
+        let mut slow = crate::frame_stages::FrameStages::default();
+        slow.refresh("full", 24_000_000, 80.0, 2.0);
+        app.slow_frames.finish(slow, crate::gpu_canvas::now_ms(), false, None);
+        let report = diagnostics_report(&app);
+        let at = |p: &str| report.iter().position(|l| l.contains(p)).unwrap_or_else(|| panic!("{p}: {report:?}"));
+        assert!(report.iter().any(|l| l == "Render path: GPU"), "{report:?}");
+        assert!(report.iter().any(|l| l == "Render path changes: 2"), "{report:?}");
+        // Newest first: back on the GPU, then why it left.
+        assert!(at("document 7: back on the GPU") < at("document 7: CPU (unsupported: Advanced Blending on Layer 1)"));
+        assert!(report.iter().any(|l| l == "Slow frames (over 50 ms): 1"), "{report:?}");
+        assert!(at("slow frame: 82.0 ms on the cpu path") > at("Slow frames (over 50 ms): 1"));
+        // A current reason names its kind and detail.
+        note(&mut app, 0, Path::Cpu(CpuReason::ViewTransform));
+        assert!(diagnostics_report(&app).iter().any(|l| l.starts_with("Render path: CPU (viewTransform: ")));
+        let json = system_info_json(&app);
+        assert_eq!(json["diagnostics"]["slowFrames"].as_array().map(Vec::len), Some(1));
+        assert_eq!(json["diagnostics"]["renderPath"]["history"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn copied_report_keeps_the_home_folder_and_document_names_out() {
+        use crate::render_path::{CpuReason, Path, note};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let Some(home) = home().filter(|h| h.trim_end_matches(['/', '\\']).len() > 1) else { return };
+        let profile = format!("{}/Profiles/Mine.icc", home.trim_end_matches(['/', '\\']));
+        // A display read before, then a re-read that fails on a profile in the home folder.
+        let display =
+            photocraft_engine::display_color::Display { id: 1, name: "Display".into(), frame: [0.0, 0.0, 800.0, 600.0], profile_name: None, icc: None };
+        app.session.color.set_displays(Ok(vec![display]));
+        app.session.color.set_displays(Err(format!("cannot read profile `{profile}`: not found")));
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Jane_Smith_wedding_proofs.psd"})).unwrap();
+        let doc = app.session.active().unwrap().doc.id.0;
+        note(&mut app, doc, Path::Cpu(CpuReason::ViewTransform));
+        let copied = diagnostics_report(&app).join("\n");
+        assert!(copied.contains("cannot read profile `~/Profiles/Mine.icc`"), "{copied}");
+        assert!(!copied.contains(&profile) && !copied.contains("Jane_Smith"), "{copied}");
+        assert!(copied.contains(&format!("document {doc}: CPU (viewTransform: ")), "{copied}");
+        // Help › System Info on screen still names the document.
+        assert!(diagnostics_report_ui(&app).iter().any(|l| l.contains("Jane_Smith_wedding_proofs.psd: CPU (")));
+    }
+
+    #[test]
+    fn adapter_report_log_line_is_one_line() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.perf.gpu_info.adapter = "Test GPU".into();
+        app.perf.gpu_info.driver = "Driver 1\nbuild 2".into();
+        crate::i18n::with_language(crate::i18n::Lang::from_code("cs").unwrap(), || {
+            let line = adapter_report_line(&app);
+            assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
+            assert!(line.starts_with("adapter report: PhotoCraft "), "{line}");
+            for part in ["Graphics adapter: Test GPU", "Driver: Driver 1 build 2", "System memory: ", "Memory Usage: "] {
+                assert!(line.contains(part), "{part}: {line}");
+            }
+            // The adapter part of the report, not the render path or the slow frames.
+            assert!(!line.contains("Render path"), "{line}");
+        });
+    }
+
+    #[test]
+    fn adapter_report_log_line_keeps_the_home_folder_out() {
+        let reason = "cannot read profile `/home/ann/Profiles/Mine.icc`: not found; /home/annex/x.icc";
+        assert_eq!(without_home(reason, Some("/home/ann/")), "cannot read profile `~/Profiles/Mine.icc`: not found; /home/annex/x.icc");
+        assert_eq!(without_home(r"C:\Users\Ann\p.icc", Some(r"C:\Users\Ann")), r"~\p.icc");
+        assert_eq!(without_home("cannot read profile `C:/Users/Ann/p.icc`", Some(r"C:\Users\Ann")), "cannot read profile `~/p.icc`");
+        assert_eq!(without_home(r"c:\users\ann\p.icc; C:\Users\Annex\x.icc", Some(r"C:\Users\Ann")), r"~\p.icc; C:\Users\Annex\x.icc");
+        assert_eq!(without_home("/home/Ann/p.icc", Some("/home/ann")), "/home/Ann/p.icc", "a Unix home stays case-sensitive");
+        assert_eq!(without_home(reason, Some("/")), reason, "a root home redacts nothing");
+        assert_eq!(without_home(reason, None), reason);
     }
 
     #[test]
