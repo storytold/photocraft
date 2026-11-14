@@ -1,5 +1,7 @@
 use super::edit::{TEMPLATE_NODES, edited_object, fits, is_stub, names_one_frame, new_object, pad_frames, td_edited_object, with_modes};
-use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
+use super::import::{
+    MAX_ENGINE_RUNS, OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real,
+};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
     TySh, UnicodeString, ed, engine_data, enum_value, enumv, parse_tysh, write_tysh,
@@ -938,21 +940,48 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         sruns.push(E::Dict(vec![("StyleSheet".into(), E::Dict(vec![("StyleSheetData".into(), data)]))]));
         slens.push(E::Int(n as i64));
     }
-    let mut pruns = Vec::new();
-    let mut plens = Vec::new();
+    let mut psplit = Vec::new();
     let mut at = 0usize;
     for (i, p) in paras.iter().enumerate() {
-        let piece = &text[at..at + p.len];
-        at += p.len;
-        let mut n = utf16_len(piece);
-        if i + 1 == paras.len() {
-            n += 1;
-        }
-        pruns.push(E::Dict(vec![(
+        // The last run also covers the terminal `\r`.
+        let end = if i + 1 == paras.len() { ed_text.len() } else { at.saturating_add(p.len) };
+        let piece = ed_text.get(at..end).unwrap_or("");
+        let starts_paragraph = at == 0 || ed_text.get(..at).is_some_and(|s| s.ends_with('\r'));
+        at = end;
+        let sheet = E::Dict(vec![(
             "ParagraphSheet".into(),
             E::Dict(vec![("DefaultStyleSheet".into(), E::Int(0)), ("Properties".into(), paragraph_properties(&p.style, k))]),
-        )]));
-        plens.push(E::Int(n));
+        )]);
+        // One run per paragraph, as Photoshop writes them: a run spanning several paragraphs
+        // makes Photoshop join their lines when the text is edited (#12420).
+        let mut lens: Vec<i64> = piece.split_inclusive('\r').map(utf16_len).collect();
+        // A run that starts inside a paragraph: the rest of that paragraph stays in the run the
+        // paragraph started in (its style is the one shown), so no run spans a break.
+        if !starts_paragraph && !lens.is_empty() {
+            let head = lens.remove(0);
+            match psplit.iter_mut().rev().find_map(|(_, l): &mut (E, Vec<i64>)| l.last_mut()) {
+                Some(prev) => *prev += head,
+                None => lens.insert(0, head),
+            }
+        }
+        psplit.push((sheet, lens));
+    }
+    // Past the importer's run limit, later runs would be dropped on reopen; keep one run per
+    // model run then, so every paragraph style survives.
+    if psplit.iter().map(|(_, l)| l.len()).sum::<usize>() > MAX_ENGINE_RUNS {
+        for (_, lens) in &mut psplit {
+            if !lens.is_empty() {
+                *lens = vec![lens.iter().sum()];
+            }
+        }
+    }
+    let mut pruns = Vec::new();
+    let mut plens = Vec::new();
+    for (sheet, lens) in psplit {
+        for n in lens {
+            pruns.push(sheet.clone());
+            plens.push(E::Int(n));
+        }
     }
 
     let Some(dict) = e.get_mut("EngineDict") else {

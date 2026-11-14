@@ -292,3 +292,176 @@ mod nonfinite_tests {
         assert!(out.contains("/FontSize 12.0"), "{out}");
     }
 }
+
+#[cfg(test)]
+mod paragraph_run_tests {
+    use super::*;
+
+    fn layer(text: &str, shape: TextShape) -> TextLayer {
+        TextLayer {
+            text: text.into(),
+            runs: vec![TextRun { len: text.len(), style: CharStyle { size_pt: 12.0, ..Default::default() } }],
+            paragraphs: vec![ParagraphRun { len: text.len(), style: ParagraphStyle { align: TextAlign::Center, ..Default::default() } }],
+            shape,
+            ..Default::default()
+        }
+    }
+
+    fn paragraph_runs(layer: &TextLayer) -> (Vec<i64>, Vec<E>) {
+        let e = build_engine_data(layer, None, 72.0);
+        let lens = e.path(&["EngineDict", "ParagraphRun", "RunLengthArray"]).and_then(E::as_array).unwrap().iter().map(|n| n.as_i64().unwrap()).collect();
+        let sheets = e.path(&["EngineDict", "ParagraphRun", "RunArray"]).and_then(E::as_array).unwrap().to_vec();
+        (lens, sheets)
+    }
+
+    fn para(len: usize, align: TextAlign) -> ParagraphRun {
+        ParagraphRun { len, style: ParagraphStyle { align, ..Default::default() } }
+    }
+
+    /// The written lengths, after checking they cover the text and its terminal `\r` in UTF-16
+    /// units with no empty run, and that the text reads back unchanged.
+    fn checked_runs(l: &TextLayer) -> Vec<i64> {
+        let (lens, sheets) = paragraph_runs(l);
+        assert_eq!(lens.len(), sheets.len());
+        assert!(lens.iter().all(|&n| n > 0), "{lens:?}");
+        assert_eq!(lens.iter().sum::<i64>(), l.text.encode_utf16().count() as i64 + 1);
+        let back = text_layer_from_tysh(&build_tysh(l, 72.0, None), 72.0).unwrap();
+        assert_eq!(back.text.replace('\r', "\n"), l.text.replace('\r', "\n"));
+        lens
+    }
+
+    /// Each paragraph's alignment: the paragraph run at its start, as layout picks it.
+    fn model_aligns(l: &TextLayer) -> Vec<TextAlign> {
+        let runs = l.paragraph_runs();
+        let starts = std::iter::once(0).chain(l.text.match_indices(['\n', '\r']).map(|(i, _)| i + 1));
+        starts
+            .map(|s| {
+                let mut at = 0;
+                runs.iter().find(|r| {
+                    at += r.len;
+                    s < at
+                })
+            })
+            .map(|r| r.or(runs.last()).unwrap().style.align)
+            .collect()
+    }
+
+    fn read_back_aligns(l: &TextLayer) -> Vec<TextAlign> {
+        model_aligns(&text_layer_from_tysh(&build_tysh(l, 72.0, None), 72.0).unwrap())
+    }
+
+    /// #12420: a run spanning several paragraphs is written as one paragraph run per paragraph,
+    /// as Photoshop writes it, or Photoshop joins the lines when the text is edited.
+    #[test]
+    fn multi_paragraph_text_writes_one_paragraph_run_per_paragraph() {
+        let boxed = TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 };
+        for text in ["Line one\nLine two\nLine three", "Line one\rLine two\rLine three"] {
+            for shape in [TextShape::Point, boxed.clone()] {
+                let l = layer(text, shape);
+                let (lens, sheets) = paragraph_runs(&l);
+                assert_eq!(lens, [9, 9, 11]);
+                assert_eq!(sheets.len(), 3);
+                assert!(sheets.iter().all(|s| s.get("ParagraphSheet").is_some() && *s == sheets[0]), "{sheets:?}");
+                // Read back: same text, every paragraph keeps its style.
+                let back = text_layer_from_tysh(&build_tysh(&l, 72.0, None), 72.0).unwrap();
+                assert_eq!(back.text.replace('\r', "\n"), text.replace('\r', "\n"));
+                assert_eq!(back.paragraphs.len(), 3);
+                assert!(back.paragraphs.iter().all(|p| p.style.align == TextAlign::Center));
+            }
+        }
+    }
+
+    /// Past the importer's run limit, one run per paragraph would drop later styles on reopen;
+    /// the model's runs are written as they are instead.
+    #[test]
+    fn paragraph_runs_over_the_import_limit_keep_every_style() {
+        let first = "x\n".repeat(MAX_ENGINE_RUNS);
+        let mut l = layer(&format!("{first}last"), TextShape::Point);
+        l.paragraphs = vec![para(first.len(), TextAlign::Center), para(4, TextAlign::Right)];
+        let (lens, sheets) = paragraph_runs(&l);
+        assert_eq!(lens, [2 * MAX_ENGINE_RUNS as i64, 5]);
+        assert_eq!(sheets.len(), 2);
+        let back = text_layer_from_tysh(&build_tysh(&l, 72.0, None), 72.0).unwrap();
+        assert_eq!(back.paragraphs.len(), 2);
+        assert_eq!(back.paragraphs.first().map(|p| p.style.align), Some(TextAlign::Center));
+        assert_eq!(back.paragraphs.last().map(|p| p.style.align), Some(TextAlign::Right));
+    }
+
+    /// At exactly the limit, every paragraph still gets its own run.
+    #[test]
+    fn paragraph_runs_at_the_import_limit_stay_one_per_paragraph() {
+        let first = "x\n".repeat(MAX_ENGINE_RUNS - 1);
+        let mut l = layer(&format!("{first}last"), TextShape::Point);
+        l.paragraphs = vec![para(first.len(), TextAlign::Center), para(4, TextAlign::Right)];
+        let (lens, sheets) = paragraph_runs(&l);
+        assert_eq!(lens.len(), MAX_ENGINE_RUNS);
+        assert!(lens[..MAX_ENGINE_RUNS - 1].iter().all(|&n| n == 2));
+        assert_eq!(lens.last(), Some(&5));
+        assert_eq!(sheets.len(), MAX_ENGINE_RUNS);
+        let back = text_layer_from_tysh(&build_tysh(&l, 72.0, None), 72.0).unwrap();
+        assert_eq!(back.paragraphs.len(), MAX_ENGINE_RUNS);
+        assert_eq!(back.paragraphs.first().map(|p| p.style.align), Some(TextAlign::Center));
+        assert_eq!(back.paragraphs.last().map(|p| p.style.align), Some(TextAlign::Right));
+    }
+
+    #[test]
+    fn single_paragraph_text_writes_one_paragraph_run() {
+        let l = layer("Line one", TextShape::Point);
+        assert_eq!(checked_runs(&l), [9]);
+        assert_eq!(paragraph_runs(&l).1.len(), 1);
+    }
+
+    #[test]
+    fn trailing_break_writes_a_final_empty_paragraph_run() {
+        let l = layer("Line one\n", TextShape::Point);
+        assert_eq!(checked_runs(&l), [9, 1]);
+        assert_eq!(paragraph_runs(&l).1.len(), 2);
+    }
+
+    #[test]
+    fn breaks_and_empty_text_write_no_empty_runs() {
+        assert_eq!(checked_runs(&layer("a\n\nb", TextShape::Point)), [2, 1, 2]);
+        assert_eq!(checked_runs(&layer("a\nb\rc", TextShape::Point)), [2, 2, 2]);
+        assert_eq!(checked_runs(&layer("", TextShape::Point)), [1]);
+    }
+
+    /// Two model paragraphs, each spanning two lines: sheets follow them in order.
+    #[test]
+    fn differently_aligned_paragraphs_keep_their_order() {
+        let mut l = layer("a\nb\nc\nd", TextShape::Point);
+        l.paragraphs = vec![para(4, TextAlign::Center), para(3, TextAlign::Right)];
+        assert_eq!(checked_runs(&l), [2, 2, 2, 2]);
+        let (_, sheets) = paragraph_runs(&l);
+        assert!(sheets[0] == sheets[1] && sheets[2] == sheets[3] && sheets[1] != sheets[2], "{sheets:?}");
+        assert_eq!(read_back_aligns(&l), [TextAlign::Center, TextAlign::Center, TextAlign::Right, TextAlign::Right]);
+    }
+
+    /// A model run starting mid-line: the rest of that line stays with the run the line started
+    /// in (whose style it shows), so no written run spans a break.
+    #[test]
+    fn paragraph_starting_mid_line_writes_no_run_across_a_break() {
+        let mut l = layer("one\ntwo\nthree\nfour", TextShape::Point);
+        // "one\nt" | "wo\nthree\nfour"
+        l.paragraphs = vec![para(5, TextAlign::Center), para(13, TextAlign::Right)];
+        assert_eq!(checked_runs(&l), [4, 4, 6, 5]);
+        let (_, sheets) = paragraph_runs(&l);
+        assert!(sheets[0] == sheets[1] && sheets[2] == sheets[3] && sheets[1] != sheets[2], "{sheets:?}");
+        let aligns = [TextAlign::Center, TextAlign::Center, TextAlign::Right, TextAlign::Right];
+        assert_eq!(model_aligns(&l), aligns);
+        assert_eq!(read_back_aligns(&l), aligns);
+    }
+
+    /// Lengths are UTF-16 units, not bytes.
+    #[test]
+    fn multibyte_paragraphs_write_utf16_lengths() {
+        let first = "héllo 😀\nwörld\n";
+        let mut l = layer(&format!("{first}日本語"), TextShape::Point);
+        l.paragraphs = vec![para(first.len(), TextAlign::Center), para("日本語".len(), TextAlign::Right)];
+        assert_eq!(checked_runs(&l), [9, 6, 4]);
+        assert_eq!(read_back_aligns(&l), [TextAlign::Center, TextAlign::Center, TextAlign::Right]);
+        // Mid-line inside multibyte text too: "héllo 😀\nwö" | "rld\n日本語".
+        l.paragraphs = vec![para(first.len() - 4, TextAlign::Center), para(4 + "日本語".len(), TextAlign::Right)];
+        assert_eq!(checked_runs(&l), [9, 6, 4]);
+        assert_eq!(read_back_aligns(&l), [TextAlign::Center, TextAlign::Center, TextAlign::Right]);
+    }
+}
