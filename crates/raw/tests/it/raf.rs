@@ -48,7 +48,11 @@ fn xtrans_metadata() {
     assert!((s.baseline_exposure - 0.72).abs() < 1e-9);
     assert_eq!(s.orientation, 6);
     assert_eq!((s.make.as_deref(), s.model.as_deref()), (Some("FUJIFILM"), Some("X-Synthetic")));
-    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    // This RAF records black/WB but no white tag; the full 14-bit range is an
+    // explicit fallback, not a missing-CFA or missing-black warning.
+    assert_eq!(s.white, [16383.; 3]);
+    assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+    assert!(s.warnings[0].contains("white level") && s.warnings[0].contains("full sample range"), "{:?}", s.warnings);
 }
 
 #[test]
@@ -152,7 +156,7 @@ fn compressed_variants_that_cannot_be_decoded_fail_cleanly() {
     for cfa in [other.as_slice(), &[1, 0, 2, 1]] {
         let b = compressed(cfa, 14, false).build();
         match decode(&b, &Limits::default()) {
-            Err(RawError::Unsupported(m)) => assert!(m.contains("CFA"), "{m}"),
+            Err(RawError::Unsupported(m)) => assert!(m.contains("layout"), "{m}"),
             other => panic!("expected unsupported, got {other:?}"),
         }
     }
