@@ -209,7 +209,9 @@ fn atn_calculations_unsupported_targets_and_missing_sources_leave_history_unchan
 #[test]
 fn atn_calculations_group_transparency_uses_the_canvas_and_undoes() {
     let mut group = fixture(32);
+    let base = group.active().unwrap().active_layer.unwrap();
     group.execute("layer.new.group", json!({"name":"source"})).unwrap();
+    group.execute("layer.select", json!({"layer": base.0})).unwrap();
     let before = saved(&group);
     let label = group.active().unwrap().history.undo_label().map(str::to_owned);
     group
