@@ -349,6 +349,17 @@ pub(crate) fn damage_since(
     if seen.1 == now.1 ^ display_key && in_span {
         return last_damage;
     }
+    // A Move drag's release when the canvas last showed one of its previews: only what differs
+    // from that preview (`move_ui::drop_damage`). Without this the whole canvas recomposited
+    // (2.6 GP over 17 s on a storyboard).
+    if seen.0 + 1 == now.0
+        && now.1 == 0
+        && crate::move_ui::is_preview_key(seen.1 ^ display_key)
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::move_ui::drop_damage(app, st.doc.id, now.0, seen.1 ^ display_key, last_damage, effect_reach(&st.doc.layers))
+    {
+        return Some(r);
+    }
     // Opening, canceling or committing a Free Transform box: the moving layer and the layers
     // drawn over the box, not the whole document (a gigapixel canvas took over a second).
     if let Some(st) = app.session.documents().get(idx)

@@ -161,8 +161,181 @@ pub(crate) struct MovePreview {
     /// The moving layers hold more pixels than [`LIVE_LIMIT`]: they aren't copied for every frame
     /// of the drag, which shows its outline and arrow alone (#6114, #6163).
     too_big: bool,
+    /// A drag too costly to show live ([`costly_to_redraw`], [`LIVE_LIMIT`]): a reduced picture
+    /// of the moving layers follows the pointer instead, over the canvas with them hidden.
+    snapshot: Option<Snapshot>,
     /// View › Pattern Preview: pixels wrap, so a partial damage rect would leave the far edge stale.
     pattern: bool,
+}
+
+/// The reduced picture of the moving layers a costly drag shows at the pointer ([`draw_snapshot`]).
+pub(crate) struct Snapshot {
+    /// The document area it shows, at offset (0, 0).
+    rect: Rect,
+    /// The render, until it arrives from its thread.
+    rx: Option<std::sync::mpsc::Receiver<photocraft_compose::Buffer>>,
+    /// The render once arrived, as composited: each display converts its own texture from it.
+    picture: Option<photocraft_compose::Buffer>,
+    /// Its textures, by display (`CanvasDisplay::key`; 0 unconverted): two views on monitors
+    /// with different profiles each show it in their own colours, and a profile changed
+    /// mid-drag converts it again.
+    textures: Vec<(u64, egui::TextureHandle)>,
+}
+
+/// Displays a snapshot keeps textures for at once (the oldest is dropped past that).
+const SNAPSHOT_DISPLAYS: usize = 2;
+
+/// Longest side of a drag snapshot: enough for the zooms at which a costly drag happens.
+const SNAPSHOT_SIDE: u32 = 2048;
+
+/// Starts rendering the layers `moving` of `doc` (and nothing else) over `rect`, reduced, on a
+/// thread. `None` (the drag shows its outline and arrow) when the area is empty, the thread can't
+/// start, another drag's render is still running ([`SnapshotSlot`]), or on the web, which has no
+/// thread to render it on without stopping the pointer.
+fn start_snapshot(doc: &Document, moving: &[LayerId], rect: Rect) -> Option<Snapshot> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (doc, moving, rect);
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    start_snapshot_thread(doc, moving, rect)
+}
+
+/// [`start_snapshot`] off the web.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_snapshot_thread(doc: &Document, moving: &[LayerId], rect: Rect) -> Option<Snapshot> {
+    if rect.is_empty() {
+        return None;
+    }
+    let slot = SnapshotSlot::take()?;
+    // The moving layers and the groups holding them stay visible; every other layer is hidden.
+    let walk = doc.walk();
+    let paths: Vec<_> = walk.iter().filter(|(_, _, l)| moving.contains(&l.id)).map(|(p, _, _)| p.clone()).collect();
+    let keep = |path: &[usize]| paths.iter().any(|m| m.starts_with(path) || path.starts_with(m));
+    let hide: Vec<LayerId> = walk.iter().filter(|(p, _, _)| !keep(p)).map(|(_, _, l)| l.id).collect();
+    let mut only = doc.clone();
+    for id in hide {
+        if let Some(l) = only.layer_mut(id) {
+            l.visible = false;
+        }
+    }
+    let longest = rect.width().max(rect.height()).max(1);
+    let k = longest.div_ceil(SNAPSHOT_SIDE).max(1);
+    let (w, h) = (rect.width().div_ceil(k).max(1), rect.height().div_ceil(k).max(1));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = std::thread::Builder::new().name("photocraft-drag-snapshot".into()).spawn(move || {
+        // On a small pool of its own: in the shared one its tiles queued ahead of the redraw
+        // thread's uploads, and the canvas blocks drawn meanwhile took 100–260 ms each.
+        let picture = match snapshot_pool() {
+            Some(pool) => pool.install(|| photocraft_compose::render_reduced_rect(&only, rect, w, h)),
+            None => photocraft_compose::render_reduced_rect(&only, rect, w, h),
+        };
+        // Freed once rendered, whether or not its drag still wants it.
+        drop(slot);
+        let _ = tx.send(picture);
+    });
+    started.ok()?;
+    Some(Snapshot { rect, rx: Some(rx), picture: None, textures: Vec::new() })
+}
+
+/// One drag snapshot renders at a time: a drag released before its picture arrived leaves the
+/// render running to its end, and repeated short drags would otherwise stack renders of the whole
+/// area nobody will see. A drag starting meanwhile shows its outline and arrow. Per UI thread
+/// (each test runs its own).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct SnapshotSlot(Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SnapshotSlot {
+    /// The slot, unless a render holds it.
+    pub(super) fn take() -> Option<Self> {
+        thread_local! {
+            static BUSY: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        }
+        BUSY.with(|busy| (!busy.swap(true, std::sync::atomic::Ordering::AcqRel)).then(|| SnapshotSlot(Arc::clone(busy))))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for SnapshotSlot {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// The thread pool drag snapshots render on: half the cores, so the redraw thread's work on the
+/// shared pool goes on meanwhile. `None` if it couldn't be built (the shared pool is used).
+#[cfg(not(target_arch = "wasm32"))]
+fn snapshot_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).max(1));
+        rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("photocraft-snapshot-{i}")).build().ok()
+    })
+    .as_ref()
+}
+
+/// Draws a costly drag's snapshot at the pointer, once its render has arrived (taking it).
+pub(crate) fn draw_snapshot(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &crate::canvas::ViewXform) {
+    let offset = drag_offset(app);
+    // Converted for the monitor the way the canvas is, so the layers keep their colours in the drag.
+    let doc = app.move_preview.as_ref().and_then(|p| app.session.documents().iter().find(|st| st.doc.id == p.doc)).map(|st| st.doc.clone());
+    let display = doc.and_then(|d| super::display::canvas_display(app, &d, crate::monitor_status::view_display(app, painter.ctx())).0);
+    let Some(p) = app.move_preview.as_mut() else { return };
+    let canvas = p.canvas;
+    let Some(s) = p.snapshot.as_mut() else { return };
+    if let Some(rx) = &s.rx {
+        match rx.try_recv() {
+            Ok(buf) => {
+                let size = [buf.rect.width() as usize, buf.rect.height() as usize];
+                if buf.px.len() == size[0] * size[1] {
+                    s.picture = Some(buf);
+                    // The next frame hides the layers under it (`display_doc`), with or without input.
+                    painter.ctx().request_repaint();
+                }
+                s.rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => s.rx = None,
+            // The render thread can't wake the UI: look again soon, even if the pointer rests.
+            Err(std::sync::mpsc::TryRecvError::Empty) => painter.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
+        }
+    }
+    let key = display.as_ref().map_or(0, |d| d.key);
+    if let Some(picture) = &s.picture
+        && !s.textures.iter().any(|(k, _)| *k == key)
+    {
+        // Straight alpha, as the canvas's own textures take it.
+        let image = super::display::display_image(display.as_deref(), picture);
+        if s.textures.len() >= SNAPSHOT_DISPLAYS {
+            drop(s.textures.remove(0));
+        }
+        s.textures.push((key, painter.ctx().load_texture("move-drag-snapshot", image, egui::TextureOptions::LINEAR)));
+    }
+    let texture = s.textures.iter().find(|(k, _)| *k == key).map(|(_, t)| t);
+    let (Some(texture), Some((dx, dy))) = (texture, offset) else { return };
+    let Some((r, uvs)) = snapshot_quad(s.rect.translate(dx, dy), canvas) else { return };
+    let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)];
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    for ((x, y), uv) in corners.into_iter().zip(uvs) {
+        mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv, color: egui::Color32::WHITE });
+    }
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// The part of a snapshot drawn at `full` that lies on `canvas`, and the texture coordinates of its
+/// corners (clockwise from the top left): the layers' pixels beyond the canvas stay hidden, as
+/// in the live preview and the result. In document space, so rotated views clip it too.
+fn snapshot_quad(full: Rect, canvas: Rect) -> Option<(Rect, [egui::Pos2; 4])> {
+    let r = full.intersect(&canvas);
+    if r.is_empty() || full.is_empty() {
+        return None;
+    }
+    let (w, h) = (full.width() as f32, full.height() as f32);
+    let (u0, v0) = ((r.x0 - full.x0) as f32 / w, (r.y0 - full.y0) as f32 / h);
+    let (u1, v1) = ((r.x1 - full.x0) as f32 / w, (r.y1 - full.y0) as f32 / h);
+    Some((r, [egui::pos2(u0, v0), egui::pos2(u1, v0), egui::pos2(u1, v1), egui::pos2(u0, v1)]))
 }
 
 impl MovePreview {
@@ -255,14 +428,52 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
         let moving = with_descendants(&doc, &ids);
-        let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
-        app.move_preview =
-            Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, too_big, pattern });
+        let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target) || costly_to_redraw(&doc, bounds);
+        // The drag's snapshot: the layers' area as they paint it, wherever it reaches. Pattern
+        // Preview tiles the canvas, which one picture can't follow: those drags keep the outline.
+        let snapshot = if too_big && !mask_target && !pattern { bounds.and_then(|b| start_snapshot(&doc, &moving, b)) } else { None };
+        if too_big {
+            let shown = if snapshot.is_some() { "as a snapshot of the layers" } else { "as an outline" };
+            log::info!("move: dragging {} layer(s) {shown} (too costly to redraw live), the release redraws once", ids.len());
+        }
+        app.move_preview = Some(MovePreview {
+            doc: doc_id,
+            revision,
+            ids,
+            moving,
+            bounds,
+            canvas,
+            offsets: Vec::new(),
+            shown: None,
+            floating: false,
+            too_big,
+            snapshot,
+            pattern,
+        });
     }
     let p = app.move_preview.as_mut()?;
     if p.too_big {
-        return None;
+        // Once its snapshot is ready (and the pointer has moved), the canvas shows the document
+        // with the moving layers hidden, at one preview key: hiding them redraws where they were,
+        // once; the snapshot follows the pointer; the release redraws where they were and are.
+        let ready = p.snapshot.as_ref().is_some_and(|s| s.picture.is_some());
+        if !ready || offset == (0, 0) && p.offsets.is_empty() {
+            return None;
+        }
+        if p.shown.is_none() {
+            let mut hidden = (*doc).clone();
+            for id in &p.ids {
+                if let Some(l) = hidden.layer_mut(*id) {
+                    l.visible = false;
+                }
+            }
+            let hidden = photocraft_engine::mode_cmds::display_document(&hidden).unwrap_or(hidden);
+            p.shown = Some(Arc::new(hidden));
+            // The key's offset is (0, 0): its damage is where the layers were.
+            p.offsets = vec![(0, 0)];
+        }
+        return Some((p.shown.clone()?, p.key()));
     }
     if offset == (0, 0) && p.offsets.is_empty() {
         return None;
@@ -286,6 +497,24 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     let p = app.move_preview.as_ref()?;
     Some((p.shown.clone()?, p.key()))
+}
+
+/// Fewest layers in a document for [`costly_to_redraw`] to count it as many-layered.
+const MANY_LAYERS: usize = 64;
+/// Smallest area (pixels) the moving layers cover for [`costly_to_redraw`].
+const LARGE_AREA_PX: u64 = 16 << 20;
+
+/// Whether showing a drag live would redraw a large area of a many-layered document every frame:
+/// every pointer move recomposites where the layers were and are through the whole stack, which
+/// on a storyboard of hundreds of layers took about 100 ms a frame and seconds of redrawing after
+/// it. Such a drag shows its outline and arrow instead (as Preferences › Interface › Show
+/// bounding box when dragging layer does) and the release redraws once.
+fn costly_to_redraw(doc: &Document, bounds: Option<Rect>) -> bool {
+    let area = bounds.map_or(u64::MAX, |b| {
+        let b = b.intersect(&doc.bounds());
+        if b.is_empty() { 0 } else { u64::from(b.width()) * u64::from(b.height()) }
+    });
+    area >= LARGE_AREA_PX && doc.walk().len() >= MANY_LAYERS
 }
 
 /// Where shape layer `l` paints, effects included, not cut at the canvas as its rendered pixels
@@ -312,6 +541,10 @@ pub(crate) fn shown_layer_offset(app: &PhotocraftApp, doc: DocId, revision: u64,
     let p = app.move_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision && !p.floating && p.shown.is_some())?;
     if !p.moving.contains(&id) {
         return None;
+    }
+    // A snapshot drag's canvas shows the layers hidden; their outline follows the snapshot.
+    if p.snapshot.is_some() {
+        return drag_offset(app);
     }
     p.offsets.last().copied()
 }
@@ -346,6 +579,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             shown: None,
             floating: true,
             too_big: false,
+            snapshot: None,
             pattern: false,
         });
     }
@@ -385,6 +619,47 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, 
     })
 }
 
+/// A Move drag's release, which made revision `revision` of document `doc`: what the canvas
+/// showed at each of the drag's preview keys, so a cache that last drew one redraws only what
+/// differs from the result ([`drop_damage`]).
+pub(crate) struct MoveDrop {
+    doc: DocId,
+    revision: u64,
+    /// Where preview key `BASE + 1 + i` drew the moving layers, at `areas[i]`.
+    areas: Vec<Option<Rect>>,
+    /// A snapshot drag's: the key that showed the document with the layers hidden where they were,
+    /// and where they landed, the only area that differs from it.
+    landed: Option<(u64, Rect)>,
+}
+
+/// What a cache that last drew Move preview key `key` must redraw to show revision `revision` of
+/// document `doc`, made by the drag's release: for a snapshot drag's hidden-layers key, where the
+/// layers landed (widened by `reach` for their effects); for another preview, where it drew the
+/// layers plus `moved`, the move's own damage (where they were and are), since the pointer may
+/// have gone beyond both before the release. `None` when unknown: the caller redraws everything.
+pub(crate) fn drop_damage(app: &PhotocraftApp, doc: DocId, revision: u64, key: u64, moved: Option<Rect>, reach: i32) -> Option<Rect> {
+    let d = app.move_drop.as_ref().filter(|d| d.doc == doc && d.revision == revision)?;
+    if let Some((k, r)) = d.landed
+        && k == key
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(reach) });
+    }
+    let shown = (*d.areas.get(usize::try_from(key.checked_sub(BASE + 1)?).ok()?)?)?;
+    let moved = moved?;
+    Some(if shown.is_empty() {
+        moved
+    } else if moved.is_empty() {
+        shown
+    } else {
+        moved.union(&shown)
+    })
+}
+
+/// Whether a Move drag shows (or is about to show) a snapshot of its layers rather than an arrow.
+pub(crate) fn snapshot_drag(app: &PhotocraftApp) -> bool {
+    app.move_preview.as_ref().is_some_and(|p| p.snapshot.is_some())
+}
+
 /// Whether the canvas shows a Move drag's layers at the pointer.
 pub(crate) fn showing(app: &PhotocraftApp) -> bool {
     app.move_preview.as_ref().is_some_and(|p| p.shown.is_some())
@@ -412,7 +687,15 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // when every target is raster samples folding back onto themselves.
     let at = (dx as i32, dy as i32);
     let pattern = app.ui.view.pattern_preview;
-    let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at) && p.pattern == pattern);
+    let preview = app.move_preview.take();
+    // A snapshot drag's canvas shows the layers hidden, drawn where they were: after the move it
+    // differs only where they land, so that is all the drop redraws (not one rectangle around
+    // both places: up to 585 MP for a 108 MP photo moved across a storyboard).
+    let landed = preview.as_ref().filter(|p| p.snapshot.is_some() && p.shown.is_some() && p.offsets == [(0, 0)]).and_then(|p| Some((p.key(), p.area(at)?)));
+    // Where each preview the canvas may still show drew the layers.
+    // Not under Pattern Preview: its pixels wrap, so a partial redraw would leave the far edge stale.
+    let drawn = preview.as_ref().filter(|p| !p.pattern && !pattern).map(|p| (p.doc, p.offsets.iter().map(|o| p.area(*o)).collect::<Vec<_>>()));
+    let shown = preview.filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at) && p.pattern == pattern);
     if dx == 0.0 && dy == 0.0 {
         return;
     }
@@ -422,6 +705,14 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     else {
         return;
     };
+    if let Some((doc, areas)) = drawn
+        && let Some(st) = app.session.active().filter(|st| st.doc.id == doc)
+    {
+        if let Some((_, rect)) = landed {
+            log::info!("move: the drop redraws only where the layers landed ({:.0} MP)", rect.size().area() as f64 / 1_048_576.0);
+        }
+        app.move_drop = Some(MoveDrop { doc, revision: st.revision, areas, landed });
+    }
     // A layer that changed board is clipped by its new board, not the old one the preview showed,
     // so the canvas recomposites instead of keeping the preview.
     let Some(p) = shown.filter(|_| result.get("nested").is_none()) else { return };

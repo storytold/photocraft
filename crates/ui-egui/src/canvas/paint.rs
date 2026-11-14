@@ -703,7 +703,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, Color32::BLACK), 3.0, 3.0));
         }
         // The layers themselves follow the pointer (`move_ui`); the arrow only when they can't.
-        Tool::Move if !crate::move_ui::showing(app) => {
+        Tool::Move if !crate::move_ui::showing(app) && !crate::move_ui::snapshot_drag(app) => {
             let from = xf.to_screen(d.start[0] as f32, d.start[1] as f32);
             let off = xf.to_screen(last[0] as f32, last[1] as f32) - from;
             painter.arrow(from, off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));

@@ -2,7 +2,7 @@ use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ToolEvent;
+use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::Tool;
 
 #[test]
@@ -655,6 +655,220 @@ fn move_tool_drag_onto_another_artboard_nests_the_layer_there() {
     assert_eq!(board(&app, red), Some(b), "the original stayed on board B");
 }
 
+/// A document with at least [`super::MANY_LAYERS`] layers, `side` px square.
+fn many_layers(side: u32) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": side, "height": side})).unwrap();
+    app.sync_views();
+    while app.session.active().unwrap().doc.walk().len() < super::MANY_LAYERS {
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+    }
+    app
+}
+
+fn costly(app: &PhotocraftApp, bounds: Option<Rect>) -> bool {
+    super::costly_to_redraw(&app.session.active().unwrap().doc, bounds)
+}
+
+/// A document costly to drag in, the Move tool picked: many layers, and on the active one two
+/// bands, top and bottom, between which the white background shows unless it's hidden.
+fn banded() -> PhotocraftApp {
+    let mut app = many_layers(4096);
+    app.session
+        .edit("paint", |doc, a| {
+            let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+            s.fill_rect(Rect::new(0, 0, 4096, 128), &[1.0, 0.0, 0.0, 1.0]);
+            s.fill_rect(Rect::new(0, 3968, 4096, 4096), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    app
+}
+
+/// Starts a costly drag of the band layer.
+fn start_costly_drag(app: &mut PhotocraftApp) {
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(app, ToolEvent::Down { x: 2048.0, y: 64.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Move { x: 2148.0, y: 94.0, pressure: 1.0 }, m);
+    let _ = super::display_doc(app, 0);
+}
+
+/// Pattern Preview tiles the canvas, which one picture can't follow: a costly drag there keeps its
+/// outline and arrow, and the layers stay in every copy.
+#[test]
+fn a_costly_drag_under_pattern_preview_keeps_its_outline() {
+    let mut app = banded();
+    app.ui.view.pattern_preview = true;
+    start_costly_drag(&mut app);
+    assert!(app.move_preview.as_ref().is_some_and(|p| p.too_big), "too costly to follow live");
+    assert!(!super::snapshot_drag(&app), "no snapshot: the outline and arrow");
+}
+
+/// One snapshot renders at a time: a costly drag started while another's render still runs keeps
+/// its outline, and once that render is done the next drag gets its snapshot again.
+// Native only: the web build keeps the outline (no thread to render a snapshot on).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_costly_drag_while_a_snapshot_renders_keeps_its_outline() {
+    let mut app = banded();
+    let held = super::SnapshotSlot::take().expect("no render running");
+    start_costly_drag(&mut app);
+    assert!(!super::snapshot_drag(&app), "another render runs: the outline and arrow");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 2148.0, y: 94.0 }, egui::Modifiers::NONE);
+    drop(held);
+    app.session.execute("edit.undo", json!({})).unwrap();
+    start_costly_drag(&mut app);
+    assert!(super::snapshot_drag(&app), "free again: a snapshot");
+}
+
+/// The picture arrives as straight alpha, converted for the canvas display like the canvas itself:
+/// a half-opaque red texel uploads as half-bright premultiplied red, not full red over half alpha.
+// Native only: the web build keeps the outline (no thread to render a snapshot on).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_snapshot_uploads_straight_alpha_the_way_the_canvas_does() {
+    let mut app = banded();
+    start_costly_drag(&mut app);
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()).expect("a snapshot").rx = Some(rx);
+    let mut px = photocraft_raster::scratch::take(1, [0.0; 4]);
+    px[0] = [1.0, 0.0, 0.0, 0.5];
+    tx.send(photocraft_compose::Buffer { rect: Rect::new(0, 0, 1, 1), px }).unwrap();
+    let ctx = egui::Context::default();
+    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)),
+        zoom: 0.1,
+        center: [2048.0, 2048.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    super::draw_snapshot(&mut app, &painter, &xf);
+    let mut delta = ctx.tex_manager().write().take_delta();
+    let texel = delta
+        .set
+        .values()
+        .flatten()
+        .find_map(|d| {
+            let egui::ImageData::Color(img) = &d.image;
+            (img.size == [1, 1]).then(|| img.pixels[0])
+        })
+        .expect("the snapshot uploaded");
+    // Handled here, as a renderer would.
+    delta.clear();
+    assert!(texel.a().abs_diff(128) <= 1 && texel.r().abs_diff(128) <= 1, "premultiplied half red: {texel:?}");
+}
+
+/// Only a drag over a large area of a document with many layers is too costly to redraw live:
+/// a storyboard's photo (#12841), not an ordinary photo or a small layer.
+#[test]
+fn only_large_moves_in_documents_with_many_layers_are_too_costly_to_redraw_live() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 4096, "height": 4096})).unwrap();
+    app.sync_views();
+    let full = Rect::new(0, 0, 4096, 4096);
+    assert!(!costly(&app, Some(full)), "few layers");
+    let app = many_layers(4096);
+    assert!(costly(&app, Some(full)), "16 MP under many layers");
+    assert!(!costly(&app, Some(Rect::new(0, 0, 4096, 4095))), "under 16 MP");
+    assert!(!costly(&app, Some(Rect::new(-8192, 0, 1, 4096))), "the area on the canvas counts");
+    assert!(costly(&app, None), "an unbounded layer");
+}
+
+/// A costly drag shows a reduced picture of the moving layers alone at the pointer, over the
+/// canvas with them hidden; the drop redraws only where they landed, not where they were too.
+// Native only: the web build keeps the outline (no thread to render a snapshot on).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_costly_drag_shows_a_snapshot_and_its_drop_redraws_where_the_layers_land() {
+    let mut app = banded();
+    let moving = app.session.active().unwrap().active_layer.unwrap();
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 2048.0, y: 64.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 2148.0, y: 94.0, pressure: 1.0 }, m);
+    assert!(super::display_doc(&mut app, 0).is_none(), "the canvas is unchanged until the snapshot arrives");
+    assert!(super::snapshot_drag(&app), "no arrow: a snapshot is on its way");
+
+    let s = app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()).expect("a snapshot");
+    let rect = s.rect;
+    let buf = s.rx.take().unwrap().recv_timeout(std::time::Duration::from_secs(120)).expect("the snapshot render");
+    let (w, h) = (buf.rect.width() as usize, buf.rect.height() as usize);
+    assert!(w <= super::SNAPSHOT_SIDE as usize && h <= super::SNAPSHOT_SIDE as usize, "reduced: {w}×{h}");
+    let at = |x: i32, y: i32| {
+        let bx = (x - rect.x0) as usize * w / rect.width() as usize;
+        let by = (y - rect.y0) as usize * h / rect.height() as usize;
+        buf.px[by * w + bx]
+    };
+    assert!(at(2048, 32)[3] > 0.99, "the moving layer's band");
+    assert!(at(2048, 2048)[3] < 0.01, "the background and the other layers aren't in it");
+    // Arrived: the next frame hides the layers under it.
+    s.picture = Some(buf);
+
+    let (shown, key) = super::display_doc(&mut app, 0).expect("the canvas with the moving layers hidden");
+    assert!(super::is_preview_key(key));
+    assert!(!shown.layer(moving).unwrap().visible, "hidden while its snapshot follows the pointer");
+
+    let before = app.session.active().unwrap().revision;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 2148.0, y: 94.0 }, m);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.revision, before + 1, "one move");
+    let (hidden, landed) = app.move_drop.as_ref().and_then(|d| d.landed).expect("a snapshot drop");
+    assert_eq!(hidden, key);
+    let canvas = Rect::new(0, 0, 4096, 4096);
+    assert_eq!(landed, rect.translate(100, 30).inflate(1).intersect(&canvas), "where the layers landed");
+    // The move's own damage: where the layers were and are.
+    let both = Some(canvas);
+    let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, both));
+    let reach = crate::canvas::textures::effect_reach(&st.doc.layers);
+    assert_eq!(r, Some(landed.inflate(reach)));
+}
+
+/// A release after the canvas showed one of the drag's previews, but not its final offset,
+/// redraws the move's own damage and where that preview drew the layers, not the whole canvas:
+/// the pointer went past both places before coming back.
+#[test]
+fn a_release_after_an_overshooting_preview_redraws_the_move_and_that_preview() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.session.execute("select.deselect", json!({})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 96.0, y: 96.0, pressure: 1.0 }, m);
+    let (_, key) = super::display_doc(&mut app, 0).expect("a live drag");
+    assert!(super::is_preview_key(key));
+    let before = app.session.active().unwrap().revision;
+    // Released at (20, 9), far from the (80, 80) the canvas showed.
+    super::finish(&mut app, 20.0, 9.0);
+    let st = app.session.active().unwrap();
+    // Where the layer was and is.
+    let moved = Rect::new(8, 8, 44, 33);
+    let r = crate::canvas::textures::damage_since(&app, 0, (before, key), (st.revision, 0), 0, (before, Some(moved))).expect("bounded");
+    assert_eq!(r.union(&moved), r, "where the layer was and is");
+    assert_eq!(r.union(&Rect::new(90, 90, 102, 102)), r, "where the preview drew it");
+    assert_ne!(r, Rect::new(0, 0, 128, 128), "not the whole canvas");
+}
+
+/// A snapshot shows only what lies on the canvas, sampling the matching part of its texture.
+#[test]
+fn a_snapshot_is_cut_at_the_canvas() {
+    let canvas = Rect::new(0, 0, 50, 50);
+    let (r, uv) = super::snapshot_quad(Rect::new(-100, 0, 100, 100), canvas).unwrap();
+    assert_eq!(r, canvas);
+    assert_eq!(uv, [egui::pos2(0.5, 0.0), egui::pos2(0.75, 0.0), egui::pos2(0.75, 0.5), egui::pos2(0.5, 0.5)]);
+    assert!(super::snapshot_quad(Rect::new(60, 0, 80, 20), canvas).is_none(), "off the canvas");
+}
+
 /// View › Pattern Preview: dragging a block off the right edge shows it coming in on the left,
 /// and the release commits that wrap (#10293).
 #[test]
@@ -695,4 +909,41 @@ fn pattern_preview_drag_wraps_pixels_across_the_canvas_edge() {
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, m);
     let committed = &app.session.active().unwrap().doc;
     assert!(blue(committed, 2) && !blue(committed, 30), "release commits the wrap");
+}
+
+/// Two views on monitors with different profiles each show the snapshot in their own colours,
+/// and a profile changed mid-drag converts it again: the picture is kept, and each display gets a
+/// texture of its own.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn each_display_converts_the_snapshot_itself() {
+    let mut app = banded();
+    start_costly_drag(&mut app);
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.move_preview.as_mut().and_then(|p| p.snapshot.as_mut()).expect("a snapshot").rx = Some(rx);
+    let mut px = photocraft_raster::scratch::take(1, [0.0; 4]);
+    px[0] = [1.0, 0.0, 0.0, 1.0];
+    tx.send(photocraft_compose::Buffer { rect: Rect::new(0, 0, 1, 1), px }).unwrap();
+    let ctx = egui::Context::default();
+    let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 800.0)),
+        zoom: 0.1,
+        center: [2048.0, 2048.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let keys = |app: &PhotocraftApp| {
+        app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).map(|s| s.textures.iter().map(|(k, _)| *k).collect::<Vec<_>>()).unwrap()
+    };
+    super::draw_snapshot(&mut app, &painter, &xf);
+    let first = keys(&app);
+    assert_eq!(first.len(), 1, "the first display's texture");
+    app.session.color.settings.monitor_profile = "display-p3".into();
+    super::draw_snapshot(&mut app, &painter, &xf);
+    let both = keys(&app);
+    assert!(both.len() == 2 && both[1] != first[0], "the P3 monitor converts its own: {both:?}");
+    assert!(app.move_preview.as_ref().and_then(|p| p.snapshot.as_ref()).is_some_and(|s| s.picture.is_some()), "the picture is kept for the next display");
+    ctx.tex_manager().write().take_delta().clear();
 }
