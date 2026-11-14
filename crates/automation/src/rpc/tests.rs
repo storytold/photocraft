@@ -4,6 +4,23 @@ fn session() -> Mutex<Headless> {
     Mutex::new(Headless::trusted_local())
 }
 
+/// Authenticate a TCP test client with the challenge handshake, never sending the token.
+fn authenticate_tcp(reader: &mut impl std::io::BufRead, writer: &mut impl std::io::Write, token: &str) -> Value {
+    let client_nonce = crate::security::generate_nonce().unwrap();
+    writeln!(writer, "{}", json!({"id": 1, "method": crate::security::CHALLENGE_METHOD, "params": {"clientNonce": client_nonce}})).unwrap();
+    writer.flush().unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let challenge: Value = serde_json::from_str(&line).unwrap();
+    let server_nonce = challenge["result"]["serverNonce"].as_str().unwrap();
+    let proof = crate::security::handshake_proof(token, crate::security::ProofRole::Client, &client_nonce, server_nonce).unwrap();
+    writeln!(writer, "{}", json!({"id": 2, "method": crate::security::AUTH_METHOD, "params": {"proof": proof}})).unwrap();
+    writer.flush().unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
 #[test]
 fn document_activation_reply_survives_engine_rpc() {
     let h = session();
@@ -915,10 +932,7 @@ fn idle_tcp_daemon_releases_its_port_but_keeps_active_clients() {
     let mut client = std::net::TcpStream::connect(addr).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let mut reader = BufReader::new(client.try_clone().unwrap());
-    writeln!(client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let auth: Value = serde_json::from_str(&line).unwrap();
+    let auth = authenticate_tcp(&mut reader, &mut client, TOKEN);
     assert_eq!(auth["result"]["authenticated"], true);
     // The port stays owned well past the idle limit while a client is connected.
     assert!(matches!(done_rx.recv_timeout(Duration::from_millis(450)), Err(std::sync::mpsc::RecvTimeoutError::Timeout)), "daemon exited with a live client");
@@ -940,11 +954,8 @@ fn tcp_serves_loopback() {
     });
     let addr = rx.recv().unwrap();
     let mut s = std::net::TcpStream::connect(addr).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
     let mut reader = BufReader::new(s.try_clone().unwrap());
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let auth: Value = serde_json::from_str(&line).unwrap();
+    let auth = authenticate_tcp(&mut reader, &mut s, TOKEN);
     assert_eq!(auth["result"]["authenticated"], true);
     writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
@@ -988,11 +999,10 @@ fn tcp_connections_must_authenticate_before_the_deadline_whatever_they_send() {
     // Authenticates at once, then asks again 300 ms after the deadline.
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
     let mut reader = BufReader::new(s.try_clone().unwrap());
+    let auth = authenticate_tcp(&mut reader, &mut s, TOKEN);
+    assert_eq!(auth["result"]["authenticated"], true);
     let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"]["authenticated"], true);
     std::thread::sleep(Duration::from_millis(600));
     writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
@@ -1020,12 +1030,11 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
     let addr = rx.recv().unwrap();
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     let mut reader = BufReader::new(s.try_clone().unwrap());
+    let auth = authenticate_tcp(&mut reader, &mut s, TOKEN);
+    assert_eq!(auth["result"]["authenticated"], true);
     let mut line = String::new();
-    for id in ["auth", "again"] {
-        writeln!(s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-        line.clear();
-        reader.read_line(&mut line).unwrap();
-    }
+    writeln!(s, r#"{{"id":"again","method":"auth"}}"#).unwrap();
+    reader.read_line(&mut line).unwrap();
     let again: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(again["id"], "again");
     assert_eq!(again["ok"], false);

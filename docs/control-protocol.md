@@ -50,7 +50,7 @@ A local client reads that file, then the token from `tokenFile`, connects to `12
 
 On Windows and Linux the app removes the file when it quits. On macOS (quitting ends the process inside AppKit) and after a crash the file stays behind, naming a `port` nothing listens on: a client should treat a refused connection as "not running", and the next launch replaces or removes the file. Until then, another local program could be listening on that port. A program running as the same user can read the token file anyway, so this matters only against one that can listen on a loopback port but can't read that `0600` file (another user's, or a sandboxed app). A client must check that the process `pid` names is still running before it sends the token, and treat the file as stale otherwise. That check narrows the gap but doesn't close it: the pid can be reused, and the app can quit between the check and the connection. A client that must rule this out should not send the token on the strength of this file at all; it should use challenge authentication (below), which never sends the token to the listener, with no fallback to sending the token. `version` changes only with an incompatible format. The settings folder is the one that holds `preferences.json` (see [Preferences](#preferences); `PHOTOCRAFT_CONFIG_DIR` moves it).
 
-The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds. There are two ways; a refused frame gets `{"ok": false, "error": "authentication required"}` and the connection is closed.
+The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds. Challenge authentication is the only accepted form: a frame carrying the token itself is refused. A refused frame gets `{"ok": false, "error": "authentication required"}` and the connection is closed.
 
 **Challenge authentication** (what `photocraft-cli mcp --bridge` uses) never sends the token, and the server proves it holds the token before the client reveals anything derived from it, so a process that took the port (the app is not running yet, or has exited) learns nothing:
 
@@ -61,15 +61,7 @@ The first request on every TCP connection must authenticate. No other method is 
 {"id": 2, "ok": true, "result": {"authenticated": true}}
 ```
 
-Both proofs are lowercase hex HMAC-SHA256, keyed by the token's 64 lowercase hex characters (as ASCII), over `<label>\n<clientNonce>\n<serverNonce>` with both nonces lowercase and `\n` a newline byte (0x0A). The label is `photocraft-control-v1 server` for `serverProof` and `photocraft-control-v1 client` for `proof`. The client checks `serverProof` and, when it does not match, closes the connection without sending `auth`. After a challenge only `auth {proof}` is accepted.
-
-**Token authentication** is the original single frame, still accepted for scripts:
-
-```json
-{"id": "auth", "method": "auth", "params": {"token": "<64 hexadecimal characters>"}}
-```
-
-It sends the token to whatever holds the port, so a client should use it only when it knows the app is the listener. PhotoCraft's own bridge never falls back to it.
+Both proofs are lowercase hex HMAC-SHA256, keyed by the token's 64 lowercase hex characters (as ASCII), over `<label>\n<clientNonce>\n<serverNonce>` with both nonces lowercase and `\n` a newline byte (0x0A). The label is `photocraft-control-v1 server` for `serverProof` and `photocraft-control-v1 client` for `proof`. The client checks `serverProof` and, when it does not match, closes the connection without sending `auth`. After a challenge only `auth {proof}` is accepted. Scripts that authenticated with the token in one frame must switch to this handshake; there is no fallback that sends the token.
 
 Authenticate once per connection. A later `auth` or `auth.challenge` frame on the same connection gets `{"ok": false, "error": "already authenticated"}` and the connection keeps serving.
 

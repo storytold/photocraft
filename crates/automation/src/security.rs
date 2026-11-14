@@ -13,8 +13,8 @@ use sha2::Sha256;
 
 use crate::AutomationError;
 
-/// The request that authenticates a TCP connection: with the token itself (the original form),
-/// or with the client's proof after [`CHALLENGE_METHOD`].
+/// The request that completes authentication: the client's proof after [`CHALLENGE_METHOD`].
+/// The token itself is never accepted on the wire.
 pub const AUTH_METHOD: &str = "auth";
 /// The first frame of challenge authentication: it carries a client nonce, never the token (NV-6).
 pub const CHALLENGE_METHOD: &str = "auth.challenge";
@@ -172,13 +172,11 @@ pub enum AuthStep {
     Rejected,
 }
 
-/// Server side of connection authentication, one per connection. It accepts either
-///
-/// - challenge authentication (NV-6): `auth.challenge {clientNonce}` is answered with
-///   `{serverNonce, serverProof}`, then `auth {proof}` authenticates. The token never crosses the
-///   wire, and the client learns that the server holds the token before revealing anything
-///   derived from it; or
-/// - the original one-frame `auth {token}`, kept so existing clients and scripts keep working.
+/// Server side of connection authentication, one per connection. It accepts only challenge
+/// authentication (NV-6): `auth.challenge {clientNonce}` is answered with
+/// `{serverNonce, serverProof}`, then `auth {proof}` authenticates. The token never crosses the
+/// wire, and the client learns that the server holds the token before revealing anything derived
+/// from it. A frame carrying the token itself is refused.
 ///
 /// No control method is answered before authentication.
 #[derive(Debug, Default)]
@@ -222,7 +220,6 @@ impl ServerHandshake {
                 Some(proof) if proof_matches(token, ProofRole::Client, &client_nonce, &server_nonce, proof) => authenticated(id),
                 _ => refused(id),
             },
-            (Some(AUTH_METHOD), None) if token_matches(token, param("token").unwrap_or("")) => authenticated(id),
             _ => refused(id),
         }
     }
@@ -444,6 +441,20 @@ mod tests {
         json!({"id": 2, "method": AUTH_METHOD, "params": {"proof": proof}}).to_string()
     }
 
+    /// Complete the challenge handshake, with the client using `client_token` and the server
+    /// holding `server_token`; true when it authenticates.
+    fn challenge_authenticates_as(client_token: &str, server_token: &str) -> bool {
+        let client_nonce = generate_nonce().unwrap();
+        let mut server = ServerHandshake::new();
+        let (reply, step) = server.reply(&challenge_line(&client_nonce), server_token);
+        if step != AuthStep::Challenged {
+            return false;
+        }
+        let server_nonce = reply["result"]["serverNonce"].as_str().unwrap();
+        let proof = handshake_proof(client_token, ProofRole::Client, &client_nonce, server_nonce).unwrap();
+        server.reply(&proof_line(&proof), server_token).1 == AuthStep::Authenticated
+    }
+
     /// NV-6: a client proves it holds the token, and learns that the server does, without the
     /// token crossing the wire.
     #[test]
@@ -558,42 +569,45 @@ mod tests {
     }
 
     #[test]
-    fn authentication_does_not_dispatch_without_the_token() {
+    fn authentication_requires_the_challenge_and_never_accepts_the_token() {
         let token = generate_token().unwrap();
         let (reply, authenticated) = authentication_reply(r#"{"id":1,"method":"methods","params":{}}"#, &token);
         assert!(!authenticated);
         assert_eq!(reply["error"], "authentication required");
         assert!(reply.get("result").is_none());
 
-        let line = json!({"id": 2, "method": AUTH_METHOD, "params": {"token": token}}).to_string();
+        // The token itself is refused: it must never cross the wire.
+        let line = auth_line(&token);
         let (reply, authenticated) = authentication_reply(&line, &token);
-        assert!(authenticated);
-        assert_eq!(reply["result"]["authenticated"], true);
+        assert!(!authenticated, "{reply}");
+        assert_eq!(reply["error"], "authentication required");
+        assert!(reply.get("result").is_none());
+
+        // The challenge handshake with that same token authenticates.
+        assert!(challenge_authenticates_as(&token, &token));
     }
 
     fn auth_line(token: &str) -> String {
         json!({"id": 1, "method": AUTH_METHOD, "params": {"token": token}}).to_string()
     }
 
-    /// #6425: `validate_token` accepts uppercase hex and the server keeps the token lowercased, so a
-    /// client sending the token exactly as it was configured was refused.
+    /// #6425: `validate_token` accepts uppercase hex and the server keeps the token lowercased, so
+    /// the challenge proof must work with the token exactly as it was configured.
     #[test]
-    fn a_token_authenticates_in_any_letter_case() {
+    fn challenge_authentication_ignores_letter_case() {
         let configured = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
         let mixed = "0123456789AbCdEf0123456789aBcDeF0123456789ABCDEF0123456789abcdef";
         let expected = server_token(Some(configured), None).unwrap();
         for supplied in [configured, &configured.to_ascii_lowercase(), mixed] {
-            let (reply, authenticated) = authentication_reply(&auth_line(supplied), &expected);
-            assert!(authenticated, "{supplied}: {reply}");
-            assert_eq!(reply["result"]["authenticated"], true);
+            assert!(challenge_authenticates_as(supplied, &expected), "{supplied}");
         }
-        // The comparison is case-insensitive in both directions.
-        assert!(token_matches(configured, &configured.to_ascii_lowercase()));
+        // The token itself is still refused, whatever its case.
+        let (_, authenticated) = authentication_reply(&auth_line(configured), &expected);
+        assert!(!authenticated);
 
         // A different token, or a non-hex character that only folds to a hex one, still fails.
         let other = "1123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-        let (_, authenticated) = authentication_reply(&auth_line(other), &expected);
-        assert!(!authenticated);
+        assert!(!challenge_authenticates_as(other, &expected));
         let not_hex = "0123456789ABCDEG0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
         assert!(!token_matches(&expected, not_hex));
     }
@@ -606,8 +620,7 @@ mod tests {
         create_token_file(&path, &contents).unwrap();
         let expected = server_token(None, Some(&path));
         std::fs::remove_file(&path).unwrap();
-        let (reply, authenticated) = authentication_reply(&auth_line(&contents), &expected.unwrap());
-        assert!(authenticated, "{reply}");
+        assert!(challenge_authenticates_as(&contents, &expected.unwrap()));
     }
 
     /// A repeat `auth` or `auth.challenge` on an authenticated connection is answered "already
