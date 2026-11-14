@@ -22,11 +22,13 @@ impl PhotocraftApp {
 
 impl PhotocraftApp {
     /// Whether the Home screen is what the canvas area shows this frame. Files opening in the
-    /// background (#210) have tabs before they have documents, so they win over Home. The frame
-    /// draws no tool strip, options bar, status bar or docks under Home, and the canvas area
-    /// draws Home itself; both ask here so they cannot disagree.
+    /// background (#210) have tabs before they have documents, so they win over Home, and so does
+    /// a file waiting on its open prompt (high memory, damage, colour profile): the workspace the
+    /// open switched to stays up under the prompt rather than flashing back to Home between the
+    /// read and the open. The frame draws no tool strip, options bar, status bar or docks under
+    /// Home, and the canvas area draws Home itself; both ask here so they cannot disagree.
     pub(crate) fn home_screen_up(&mut self) -> bool {
-        let opening = !self.jobs.opens.is_empty();
+        let opening = !self.jobs.opens.is_empty() || crate::open_prompt::waiting(self);
         let n = self.session.documents().len();
         !opening && self.ui.chrome.shows_home(n, self.session.prefs().general.auto_show_home_screen)
     }
