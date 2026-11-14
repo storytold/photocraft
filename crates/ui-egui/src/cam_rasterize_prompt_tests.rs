@@ -168,6 +168,8 @@ fn content_aware_move_on_shape_smart_object_and_fill_layers_keeps_refusal_path()
         app.run("select.rect", json!({"x": 8, "y": 16, "width": 40, "height": 30})).unwrap();
         app.ui.tool = Tool::ContentAwareMove;
         app.ui.tool_options.sample_all.content_aware_move = false;
+        // Transform On Drop is on by default now; off, the drop runs the move and its refusal.
+        app.ui.tool_options.cam_transform_on_drop = false;
 
         drag(&mut app, [20.0, 30.0], [45.0, 35.0]);
         assert!(prompt(&app).is_none(), "{kind:?} must not open the rasterize prompt for Content-Aware Move");
