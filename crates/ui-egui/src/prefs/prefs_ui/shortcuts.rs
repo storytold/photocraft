@@ -600,13 +600,14 @@ fn set_row(
     let now = ShortcutSet::from_bindings(overrides, alternates);
     let modified = shortcut_sets::differs(&sets, &active, overrides, alternates);
     let defaults = tl!("PhotoCraft Defaults").to_string();
-    let shown = |name: &str| -> String {
+    let shown = |name: &str, selected: &str| -> String {
         let base = if name.is_empty() { defaults.clone() } else { name.to_string() };
-        if name == active && modified { crate::i18n::fmt(tl!("{set} (modified)"), &[("set", &base)]) } else { base }
+        if name == selected && modified { crate::i18n::fmt(tl!("{set} (modified)"), &[("set", &base)]) } else { base }
     };
-    let names: Vec<(String, String)> = std::iter::once(String::new()).chain(sets.keys().cloned()).map(|n| (n.clone(), shown(&n))).collect();
+    let names: Vec<(String, String)> = std::iter::once(String::new()).chain(sets.keys().cloned()).map(|n| (n.clone(), shown(&n, &active))).collect();
     let mut new_name: Option<String> = f.get("newSetName").and_then(Value::as_str).map(str::to_string);
     let set_label = if active.is_empty() { defaults.clone() } else { active.clone() };
+    let copy_name = format!("{} Copy", shown(&active, &active));
     let mut export = false;
     let mut summarize = false;
     ui.horizontal(|ui| {
@@ -620,12 +621,16 @@ fn set_row(
             message.clear();
         }
         if ui.button(tl!("New Set…")).on_hover_text(tl!("Save these shortcuts as a new set")).clicked() {
-            new_name = Some(String::new());
+            new_name = Some(copy_name.clone());
         }
-        if ui.add_enabled(!active.is_empty() && modified, egui::Button::new(tl!("Save"))).on_hover_text(tl!("Save the changes to this set")).clicked() {
-            sets.insert(active.clone(), now.clone());
-            *message = tl!("Set saved.").into();
-            *warning = false;
+        if ui.add_enabled(modified, egui::Button::new(tl!("Save"))).on_hover_text(tl!("Save the changes to this set")).clicked() {
+            if active.is_empty() {
+                new_name = Some(copy_name.clone());
+            } else {
+                sets.insert(active.clone(), now.clone());
+                *message = tl!("Set saved.").into();
+                *warning = false;
+            }
         }
         if ui.add_enabled(!active.is_empty(), egui::Button::new(tl!("Delete"))).on_hover_text(tl!("Delete this set")).clicked() {
             sets.remove(&active);
