@@ -195,9 +195,14 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             Ok(doc) => app.pick_file_bytes(move |app, name, bytes| {
                 app.refocus(doc)?;
                 let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
-                if r.is_ok() {
+                if let Ok(v) = &r {
                     app.ui.analysis.notes = true;
                     app.sync_views();
+                    // Notes whose icon landed off the canvas stay there; the alert says so (#13914).
+                    if v["outside"] == json!(true) {
+                        let params = json!({"message": tl!("Some notes are placed outside the canvas.")}).as_object().cloned().unwrap_or_default();
+                        app.ui.open_dialog(crate::state::DialogKind::Error, params);
+                    }
                 }
                 r
             }),

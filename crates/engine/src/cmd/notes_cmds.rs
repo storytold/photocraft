@@ -184,7 +184,7 @@ fn read(path: &str) -> Result<Vec<u8>> {
 /// canvas are pulled inside, as Photoshop does when sizes differ.
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.import.notes";
-    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.psd, .psb or .pcraft)"))?;
+    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.pdf, .psd, .psb or .pcraft)"))?;
     let bytes = read(path)?;
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     import_notes_from(s, &name, &bytes)
@@ -192,19 +192,22 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// File › Import › Notes… from file bytes (what a file picker returns).
 pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Value> {
-    let src = crate::file_cmds::import(name, bytes)?;
-    if src.notes.is_empty() {
+    // A PDF's notes are its first page's text annotations, placed by the page's height and dated
+    // with the import, as the reference application does (#11796). PSD, PSB and .pcraft keep
+    // their own dates.
+    let target_height = f64::from(s.active().ok_or(EngineError::NoDocument)?.doc.size.height);
+    let (src_notes, source_height) = if is_pdf(name, bytes) {
+        let (notes, height) = photocraft_io::pdf::read_notes(bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+        (pdf_notes_for_canvas(notes, &pdf_date(), target_height / height), height)
+    } else {
+        let src = crate::file_cmds::import(name, bytes)?;
+        (src.notes, f64::from(src.size.height))
+    };
+    if src_notes.is_empty() {
         return Err(EngineError::Other(format!("{name} has no notes")));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let (w, h) = (f64::from(d.size.width), f64::from(d.size.height));
-    let mut notes = src.notes;
-    for n in &mut notes {
-        let (nx, ny) = (n.position[0].clamp(0.0, (w - 16.0).max(0.0)), n.position[1].clamp(0.0, (h - 20.0).max(0.0)));
-        let (dx, dy) = (nx - n.position[0], ny - n.position[1]);
-        n.position = [nx, ny];
-        n.popup = [n.popup[0] + dx, n.popup[1] + dy, n.popup[2] + dx, n.popup[3] + dy];
-    }
+    let (notes, outside) = place_notes_from(src_notes, [d.size.width, d.size.height], source_height)?;
     let count = notes.len();
     s.edit("Import Notes", |d, _| {
         d.notes.extend(notes);
@@ -212,7 +215,73 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
     })?;
     let mut r = list_json(&s.active().ok_or(EngineError::NoDocument)?.doc);
     r["imported"] = json!(count);
+    // Some icon's top-left landed off the canvas: the shell says so (#13914).
+    r["outside"] = json!(outside);
     Ok(r)
+}
+
+/// A PDF's notes ready to place on a canvas `scale` canvas pixels per page point high: each popup's
+/// size in canvas pixels (the page's own is in points; the placement keeps sizes as they are), and
+/// the import's date on each note (`now`, empty where the build has no clock: the notes then keep
+/// their own).
+fn pdf_notes_for_canvas(notes: Vec<Note>, now: &str, scale: f64) -> Vec<Note> {
+    notes
+        .into_iter()
+        .map(|mut n| {
+            if scale.is_finite() && scale > 0.0 {
+                n.popup[2] = n.popup[0] + (n.popup[2] - n.popup[0]) * scale;
+                n.popup[3] = n.popup[1] + (n.popup[3] - n.popup[1]) * scale;
+            }
+            if !now.is_empty() {
+                n.modified = now.to_string();
+            }
+            n
+        })
+        .collect()
+}
+
+/// Where imported notes land on a `target` (width, height) canvas, as the reference application
+/// places them (#13914): each icon's top-left and its popup's top-left are multiplied by
+/// s = target height / `source_height` (one factor for x and y; the width ratio plays no part),
+/// the icon and popup keep their sizes, and nothing is clamped or rounded. Also returns whether
+/// any icon's top-left lies outside the canvas. A zero source height, or a scale or position that
+/// overflows, is an error.
+#[cfg(test)]
+pub(crate) fn place_notes(notes: Vec<Note>, target: [u32; 2], source_height: u32) -> Result<(Vec<Note>, bool)> {
+    place_notes_from(notes, target, f64::from(source_height))
+}
+
+/// Where imported notes land (`place_notes` is its whole-pixel form, for the tests), for a
+/// source height that need not be whole: a PDF page's, in points (#11796).
+fn place_notes_from(mut notes: Vec<Note>, target: [u32; 2], source_height: f64) -> Result<(Vec<Note>, bool)> {
+    if !(source_height.is_finite() && source_height > 0.0) {
+        return Err(EngineError::Other("the notes' source has no height".into()));
+    }
+    let scale = f64::from(target[1]) / source_height;
+    let (w, h) = (f64::from(target[0]), f64::from(target[1]));
+    let mut outside = false;
+    for n in &mut notes {
+        let [px, py] = [n.position[0] * scale, n.position[1] * scale];
+        let [l, t] = [n.popup[0] * scale, n.popup[1] * scale];
+        let [r, b] = [l + (n.popup[2] - n.popup[0]), t + (n.popup[3] - n.popup[1])];
+        if ![scale, px, py, l, t, r, b].iter().all(|v| v.is_finite()) {
+            return Err(EngineError::Other("the notes' positions overflow on this canvas".into()));
+        }
+        n.position = [px, py];
+        n.popup = [l, t, r, b];
+        outside |= !((0.0..w).contains(&px) && (0.0..h).contains(&py));
+    }
+    Ok((notes, outside))
+}
+
+/// Whether `bytes` are a PDF: its header at the very start, or, for a file named `.pdf`, within
+/// the first KiB where readers accept it. A PSD or another format that happens to hold `%PDF-` in
+/// its first bytes is not one.
+fn is_pdf(name: &str, bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"%PDF-") {
+        return true;
+    }
+    name.to_ascii_lowercase().ends_with(".pdf") && bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -262,13 +331,17 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Notes…",
             menu: &["File", "Import"],
             shortcut: None,
-            params: r##"{"path":".psd|.psb|.pcraft with notes"}"##,
+            params: r##"{"path":".pdf|.psd|.psb|.pcraft with notes"}"##,
             enabled: has_doc,
             run: import,
             journal: true,
         },
     ]
 }
+
+#[cfg(test)]
+#[path = "notes_import_placement_tests.rs"]
+mod notes_import_placement_tests;
 
 #[cfg(test)]
 mod tests {
