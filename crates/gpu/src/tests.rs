@@ -448,7 +448,12 @@ fn gl_builds_its_pipelines_on_one_thread() {
 #[test]
 fn the_vertex_shaders_return_the_position_directly() {
     let generated = super::kit::vertex_shader(&super::kit::build_jobs(super::consts::ACC_FORMAT));
-    for (name, src) in [("compose (generated)", generated.as_str()), ("camera raw", super::camera_raw::CAMERA_RAW_SHADER)] {
+    // The tone pass compiles the tone and the filters shaders as one module, so the vertex entry
+    // point that module has is the tone shader's.
+    let assembled_tone = format!("{}\n{}", super::camera_raw_tone::CAMERA_RAW_TONE_SHADER, super::camera_raw_tone::CAMERA_RAW_FILTERS_SHADER);
+    for (name, src) in
+        [("compose (generated)", generated.as_str()), ("camera raw", super::camera_raw::CAMERA_RAW_SHADER), ("camera raw tone", assembled_tone.as_str())]
+    {
         let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
         let vs: Vec<_> = module.entry_points.iter().filter(|ep| ep.stage == wgpu::naga::ShaderStage::Vertex).collect();
         assert!(!vs.is_empty(), "{name}: no vertex entry point");
