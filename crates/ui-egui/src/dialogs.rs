@@ -372,6 +372,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
                 egui::ScrollArea::vertical().id_salt(("file-info-body", d.id)).max_height(room).show(ui, |ui| crate::view_cmds::form_body(ui, fields));
+            } else if crate::file_ui::contact_sheet::owns(fields) {
+                crate::file_ui::contact_sheet::body(app, ui, fields, d.id);
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
@@ -498,7 +500,7 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
-        } else if crate::analysis_ui::owns_delete_note(fields) || live_shape_prompt::owns(fields) {
+        } else if crate::analysis_ui::owns_delete_note(fields) || live_shape_prompt::owns(fields) || crate::file_ui::contact_sheet::owns_reset(fields) {
             tl!("No")
         } else {
             tl!("Cancel")
@@ -1060,6 +1062,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }
+    if result.is_ok() && crate::file_ui::contact_sheet::owns(&d.fields) {
+        crate::file_ui::contact_sheet::remember(app, &d.fields);
+    }
     if result.is_ok() {
         if crate::adjust_dialog::owns(&d.fields) {
             crate::adjust_dialog::remember(app, &d.fields);
@@ -1109,6 +1114,7 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
+    crate::file_ui::contact_sheet::preflight(app, id)?;
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
         crate::preset_group_prompt::replace_choice(&d.fields)?;
     }

@@ -14,6 +14,8 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 
+#[path = "contact_sheet_ui.rs"]
+pub(crate) mod contact_sheet;
 mod print;
 mod web;
 
@@ -96,19 +98,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             json!({"dialog": open_print(app)})
         }
         "file.export.exportPreferences" => return crate::prefs_ui::invoke(app, ctx, "edit.preferences.export", &json!({})),
-        "file.automate.contactSheetII" => form(
-            app,
-            id,
-            tl!("Contact Sheet II"),
-            json!({"input": dir, "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false,
-                // Source Images: the folder, then Include Subfolders (on) and, right below it,
-                // Group Images by Folder (off, greyed while Include Subfolders is off).
-                "includeSubfolders": true, "groupByFolder": false, "__order": ["input", "includeSubfolders", "groupByFolder"],
-                "__labels": {"includeSubfolders": tl!("Include Subfolders"), "groupByFolder": tl!("Group Images by Folder")},
-                "__enabledBy": {"groupByFolder": "includeSubfolders"},
-                "__tooltips": {"groupByFolder": tl!("Images in subfolders will start on a new Contact Sheet")}}),
-            json!({"units": ["inches", "cm", "pixels"], "mode": ["rgb", "gray", "cmyk", "lab"]}),
-        ),
+        contact_sheet::COMMAND => form(app, id, tl!("Contact Sheet II"), contact_sheet::opening(app, contact_sheet::defaults()), json!({})),
         "file.automate.createDroplet" => {
             let dir = droplet_default_dir(app);
             let Some(action) = crate::actions::selected_action(app) else {
@@ -173,7 +163,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 
 /// Dialogs whose body and confirm live here.
 pub fn owns(f: &Map<String, Value>) -> bool {
-    f.contains_key("__web") || f.contains_key("__print")
+    f.contains_key("__web") || f.contains_key("__print") || contact_sheet::owns_reset(f)
 }
 
 pub fn dialog_width(f: &Map<String, Value>) -> Option<f32> {
@@ -191,22 +181,32 @@ pub fn ok_label(f: &Map<String, Value>) -> Option<&'static str> {
         Some(tl!("Save…"))
     } else if f.contains_key("__print") {
         Some(tl!("Print"))
+    } else if contact_sheet::owns_reset(f) {
+        Some(tl!("Yes"))
     } else {
         None
     }
 }
 
-/// The body of Save for Web or Print (dialog `id`).
+/// The body of Save for Web, Print (dialog `id`) or Contact Sheet II's Reset… question.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     if f.contains_key("__web") {
         web_body(app, ui, f);
+    } else if contact_sheet::owns_reset(f) {
+        contact_sheet::reset_body(ui);
     } else {
         print_body(app, ui, f, id);
     }
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    if f.contains_key("__web") { web_confirm(app, f) } else { print_confirm(app, f) }
+    if f.contains_key("__web") {
+        web_confirm(app, f)
+    } else if contact_sheet::owns_reset(f) {
+        contact_sheet::confirm_reset(app, f)
+    } else {
+        print_confirm(app, f)
+    }
 }
 
 fn params(f: &Map<String, Value>) -> Value {

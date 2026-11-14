@@ -624,7 +624,14 @@ fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::Atomi
     PhotocraftApp::new(photocraft_engine::Session::new(), services)
 }
 
-fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
+/// An app launched on the preferences in `store`: its first frame has loaded them.
+pub(crate) fn launched_on(store: &Arc<Mutex<Option<String>>>) -> PhotocraftApp {
+    let mut app = app_on(store, Arc::default());
+    tick(&mut app, &egui::Context::default());
+    app
+}
+
+pub(crate) fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
     serde_json::from_str(store.lock().unwrap().as_deref().unwrap_or("null")).unwrap()
 }
 
