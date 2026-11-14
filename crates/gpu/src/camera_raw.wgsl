@@ -1,21 +1,17 @@
 // Camera Raw's per-pixel develop stages (`photocraft_algo::camera_raw::develop`, constants from
 // `camera_raw::per_pixel`), one fragment per pixel. Each function mirrors the CPU code it is
-// named after, in the same order of operations; `camera_raw.rs` holds the bindings. The spatial
-// stages' filters (`camera_raw_tone.wgsl`, `camera_raw_filters.wgsl`) start from passes here
-// (`fs_log`, `fs_luma`, `fs_points`; Dehaze from a copy the CPU makes) and end here: Dehaze in `fs_dehaze`, Shadows
-// and Highlights as a gain per pixel, Clarity and Texture in `tonal`.
+// named after, in the same order of operations; `camera_raw.rs` holds the bindings.
 
 struct Params {
     size: vec2<u32>,
     flags: u32,
     // The document's transfer curve: 0 for sRGB's, else a power-law gamma.
     encoding: f32,
-    // White balance gains (rgb), Contrast's strength (w).
+    // White balance gains (rgb).
     gains: vec4<f32>,
-    // Vibrance, Saturation.
-    presence: vec4<f32>,
-    // Color Mixer bands 0-3 and 4-7: hue, saturation, luminance.
-    hsl: array<vec4<f32>, 6>,
+    // Linear RGB to linear ProPhoto (rows) and back.
+    to_prophoto: array<vec4<f32>, 3>,
+    from_prophoto: array<vec4<f32>, 3>,
     // Color Grading wheels: tint (rgb), luminance (w).
     tints: array<vec4<f32>, 4>,
     // Blending, Balance.
@@ -26,40 +22,22 @@ struct Params {
     grain: vec4<f32>,
     // The two octaves' seeds as (low, high) words.
     seeds: vec4<u32>,
-    // Shadows and Highlights: the last pass's statistics slots (input, output); the Whites and
-    // Blacks cells' edge.
-    tone: vec4<u32>,
-    // The log luminance's floor.
-    floor_: vec4<f32>,
-    // Dehaze, Clarity and Texture's strengths, Texture's limit.
-    spatial: vec4<f32>,
-    // Dehaze's and Clarity's subsampling, the transmission's floor.
-    spatial2: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var src: texture_2d<f32>;
-// R32Float rows of `LUT_WIDTH`: parametric, master, red, green, blue curves; Whites, Blacks rows.
+// R32Float rows of `LUT_WIDTH`: parametric, master, red, green, blue curves; Whites, Blacks rows;
+// the Exposure and Contrast rows; from row `WHITES_FIX_ROW` on, Whites down's correction grid (RGB
+// per node, nodes one after another across the rows); from `MIXER_ROW` the Color Mixer's
+// Luminance, Saturation and Hue tables and from `PRESENCE_ROW` Saturation's and Vibrance's (hue
+// shift, saturation and log-value change per node of hue x saturation x value).
 @group(0) @binding(2) var luts: texture_2d<f32>;
-// Shadows and Highlights: the log luminance before and after, and the order statistics.
-@group(0) @binding(3) var log_in: texture_2d<f32>;
-@group(0) @binding(4) var log_out: texture_2d<f32>;
-@group(0) @binding(5) var stats: texture_2d<u32>;
-// Dehaze: stages 1 and 2 (read instead of `src` once rendered), the transmission (red) on the
-// copy, the atmospheric light (one texel).
-@group(0) @binding(6) var base: texture_2d<f32>;
-@group(0) @binding(7) var haze: texture_2d<f32>;
-@group(0) @binding(8) var air: texture_2d<f32>;
-// Clarity's coefficients (a, b) on its copy; Texture's blur (red).
-@group(0) @binding(9) var clarity: texture_2d<f32>;
-@group(0) @binding(10) var blur: texture_2d<f32>;
 
 const GAINS: u32 = 0u;
-// The luminance stage: Contrast, Clarity or Texture.
-const LUMINANCE: u32 = 1u;
+const CONTRAST: u32 = 1u;
 const WHITES: u32 = 2u;
 const BLACKS: u32 = 3u;
-const PER_CHANNEL: u32 = 4u;
+const WHITES_CHANNELS: u32 = 4u;
 const PRESENCE: u32 = 5u;
 const PARAMETRIC: u32 = 6u;
 const MASTER: u32 = 7u;
@@ -69,14 +47,23 @@ const GRADE: u32 = 12u;
 const VIGNETTE: u32 = 13u;
 const GRAIN: u32 = 14u;
 const CLAMP: u32 = 15u;
-const LOCAL_TONE: u32 = 16u;
-const DEHAZE: u32 = 17u;
-const CLARITY: u32 = 18u;
-const TEXTURE: u32 = 19u;
+const EXPOSURE: u32 = 16u;
+const BLACKS_CHANNELS: u32 = 17u;
+const WHITES_FIX: u32 = 19u;
+
+const WHITES_FIX_ROW: i32 = 9;
+const MIXER_ROW: i32 = 24;
+const PRESENCE_ROW: i32 = 76;
+const PRESENCE_H: i32 = 48;
+const PRESENCE_S: i32 = 21;
+const PRESENCE_V: i32 = 21;
+const MIXER_H: i32 = 72;
+const MIXER_S: i32 = 9;
+const MIXER_V: i32 = 9;
+const FIX_N: i32 = 17;
 
 const CURVE_LUT: i32 = 1024;
-const WB_STEPS: i32 = 33;
-const TAU: f32 = 6.2831855;
+const TONE_STEPS: i32 = 65;
 
 struct VOut {
     @builtin(position) pos: vec4<f32>,
@@ -139,6 +126,56 @@ fn lut_at(row: i32, i: i32) -> f32 {
 }
 
 // `lut_eval`: linear inside 0..1, extended linearly outside (float documents).
+// Value `k` of the correction grid starting at `row`.
+fn fix_at(row: i32, k: i32) -> f32 {
+    return lut_at(row + k / CURVE_LUT, k % CURVE_LUT);
+}
+
+fn to_srgb(v: f32) -> f32 {
+    return select(v, linear_to_srgb(decode(v)), P.encoding > 0.0);
+}
+
+fn from_srgb(v: f32) -> f32 {
+    return select(v, encode(srgb_to_linear(v)), P.encoding > 0.0);
+}
+
+// `base` with the correction grid at `row` looked up at `input` added, as the CPU's
+// `colour_lut::Correction::apply`.
+fn grid_fix(row: i32, input: vec3<f32>, base: vec3<f32>) -> vec3<f32> {
+    let m = f32(FIX_N - 1);
+    var i = vec3<i32>(0);
+    var t = vec3(0.0);
+    for (var k = 0; k < 3; k++) {
+        let f = clamp(to_srgb(input[k]), 0.0, 1.0) * m;
+        i[k] = min(i32(f), FIX_N - 2);
+        t[k] = f - f32(i[k]);
+    }
+    var d = vec3(0.0);
+    for (var corner = 0; corner < 8; corner++) {
+        let dr = (corner >> 2u) & 1;
+        let dg = (corner >> 1u) & 1;
+        let db = corner & 1;
+        let w = select(1.0 - t.x, t.x, dr == 1) * select(1.0 - t.y, t.y, dg == 1) * select(1.0 - t.z, t.z, db == 1);
+        let node = (((i.x + dr) * FIX_N + i.y + dg) * FIX_N + i.z + db) * 3;
+        d += w * vec3(fix_at(row, node), fix_at(row, node + 1), fix_at(row, node + 2));
+    }
+    if max(max(base.x, base.y), base.z) - min(min(base.x, base.y), base.z) < 1e-5 {
+        d = vec3((d.x + d.y + d.z) / 3.0);
+    }
+    let inside = all(input >= vec3(0.0)) && all(input <= vec3(1.0));
+    var o = vec3(0.0);
+    for (var k = 0; k < 3; k++) {
+        var s = to_srgb(base[k]);
+        if inside {
+            s = clamp(clamp(s, 0.0, 1.0) + d[k], 0.0, 1.0);
+        } else {
+            s += d[k];
+        }
+        o[k] = from_srgb(s);
+    }
+    return o;
+}
+
 fn lut_eval(row: i32, v: f32) -> f32 {
     if v < 0.0 {
         return v + lut_at(row, 0);
@@ -153,50 +190,76 @@ fn lut_eval(row: i32, v: f32) -> f32 {
     return a + (lut_at(row, i + 1) - a) * t;
 }
 
-// `whites_blacks::curve` on one row.
-fn wb_curve(row: i32, v: f32) -> f32 {
-    if v >= 1.0 {
-        return 1.0;
+// `exposure::curve`: the curve in table row `row` at linear level `v`, in linear light.
+fn tone_curve(row: i32, v: f32) -> f32 {
+    if v <= 0.0 {
+        return v;
     }
-    let p = max(v, 0.0) * f32(WB_STEPS - 1);
-    let j = min(i32(p), WB_STEPS - 2);
+    if v >= 1.0 {
+        return srgb_to_linear(lut_at(row, TONE_STEPS - 1)) + (v - 1.0);
+    }
+    let p = linear_to_srgb(v) * f32(TONE_STEPS - 1);
+    let j = min(i32(p), TONE_STEPS - 2);
     let s = p - f32(j);
     let a = lut_at(row, j);
-    return a + (lut_at(row, j + 1) - a) * s;
+    return srgb_to_linear(a + (lut_at(row, j + 1) - a) * s);
 }
 
-fn grey(v: f32) -> f32 {
-    var g = v;
-    if on(WHITES) {
-        g = wb_curve(5, g);
-    }
-    if on(BLACKS) {
-        g = wb_curve(6, g);
-    }
-    return g;
-}
-
-// `whites_blacks::apply`.
-fn whites_blacks(q: vec3<f32>) -> vec3<f32> {
-    let lin = vec3(decode(q.x), decode(q.y), decode(q.z));
-    var out = q;
-    if on(PER_CHANNEL) {
-        for (var c = 0; c < 3; c++) {
-            let over = max(lin[c] - 1.0, 0.0);
-            out[c] = encode(srgb_to_linear(grey(linear_to_srgb(min(lin[c], 1.0)))) + over);
+// `exposure::tone`: the largest and smallest channels through the curve, the middle one kept
+// at its fraction of the way between them.
+fn tone_rgb(row: i32, c: vec3<f32>) -> vec3<f32> {
+    var hi = 0;
+    var lo = 0;
+    for (var k = 1; k < 3; k++) {
+        if c[k] > c[hi] {
+            hi = k;
         }
-        return out;
+        if c[k] < c[lo] {
+            lo = k;
+        }
     }
+    if hi == lo {
+        return vec3(tone_curve(row, c.x), tone_curve(row, c.y), tone_curve(row, c.z));
+    }
+    let mid = 3 - hi - lo;
+    let fh = tone_curve(row, c[hi]);
+    let fl = tone_curve(row, c[lo]);
+    var out = vec3(0.0);
+    out[hi] = fh;
+    out[lo] = fl;
+    out[mid] = fl + (fh - fl) * (c[mid] - c[lo]) / (c[hi] - c[lo]);
+    return out;
+}
+
+fn rows_times(m: array<vec4<f32>, 3>, v: vec3<f32>) -> vec3<f32> {
+    return vec3(dot(m[0].xyz, v), dot(m[1].xyz, v), dot(m[2].xyz, v));
+}
+
+// `exposure::pixel` with table row `row` (7 Exposure, 8 Contrast).
+fn tone_pixel(row: i32, q: vec3<f32>) -> vec3<f32> {
+    let lin = vec3(decode(q.x), decode(q.y), decode(q.z));
+    let o = rows_times(P.from_prophoto, tone_rgb(row, rows_times(P.to_prophoto, lin)));
+    return vec3(encode(o.x), encode(o.y), encode(o.z));
+}
+
+// `whites_blacks::row_pixel` with `RowOn::Luminance`: the pixel scaled by the change of its
+// luminance through table row `row`.
+fn luminance_pixel(row: i32, q: vec3<f32>) -> vec3<f32> {
+    let lin = vec3(decode(q.x), decode(q.y), decode(q.z));
     let y = max(luma(lin), 0.0);
     if y <= 1e-7 {
         return q;
     }
-    let y2 = srgb_to_linear(grey(linear_to_srgb(min(y, 1.0)))) + max(y - 1.0, 0.0);
-    let k = y2 / y;
-    for (var c = 0; c < 3; c++) {
-        out[c] = encode(lin[c] * k);
+    let k = tone_curve(row, y) / y;
+    return vec3(encode(lin.x * k), encode(lin.y * k), encode(lin.z * k));
+}
+
+// `whites_blacks::row_pixel`: row 5 Whites, 6 Blacks, on each channel or the luminance.
+fn white_black_pixel(row: i32, channels: bool, q: vec3<f32>) -> vec3<f32> {
+    if channels {
+        return tone_pixel(row, q);
     }
-    return out;
+    return luminance_pixel(row, q);
 }
 
 fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
@@ -233,26 +296,81 @@ fn hsv_to_rgb(hue: f32, s: f32, v: f32) -> vec3<f32> {
     return rgb + vec3(m);
 }
 
-const HSL_BANDS = array<f32, 8>(0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0);
-
-fn band(k: i32, row: i32) -> f32 {
-    return P.hsl[row * 2 + k / 4][k % 4];
+// A table grid (`hsv_table::Grid`): table rows start at `row`; `g` = (hues, sats, vals).
+struct HsvGrid {
+    row: i32,
+    h: i32,
+    s: i32,
+    v: i32,
 }
 
-// `band_weights` folded into the three sums.
-fn hsl_shift(h: f32) -> vec3<f32> {
-    var bands = HSL_BANDS;
+// `hsv_table::Steps::lookup`: table `k` at (h, s, v), trilinear, hue wrapping round.
+fn hsv_lookup(g: HsvGrid, k: i32, h: f32, s: f32, v: f32) -> vec3<f32> {
+    let fh = clamp(rem_euclid(h, 360.0) / 360.0 * f32(g.h), 0.0, f32(g.h));
+    let fs = clamp(s, 0.0, 1.0) * f32(g.s - 1);
+    let fv = clamp(v, 0.0, 1.0) * f32(g.v - 1);
+    let ih = min(i32(fh), g.h - 1);
+    let isat = min(i32(fs), g.s - 2);
+    let iv = min(i32(fv), g.v - 2);
+    let t = vec3(fh - f32(ih), fs - f32(isat), fv - f32(iv));
     var d = vec3(0.0);
-    for (var k = 0; k < 8; k++) {
-        let c = bands[k];
-        let prev = bands[(k + 7) % 8];
-        let next = bands[(k + 1) % 8];
-        let diff = ((h - c + 540.0) % 360.0) - 180.0;
-        let span = select(rem_euclid(c - prev, 360.0), rem_euclid(next - c, 360.0), diff >= 0.0);
-        let w = max(1.0 - abs(diff) / max(span, 1e-3), 0.0);
-        d += w * vec3(band(k, 0), band(k, 1), band(k, 2));
+    for (var corner = 0; corner < 8; corner++) {
+        let dh = (corner >> 2u) & 1;
+        let ds = (corner >> 1u) & 1;
+        let dv = corner & 1;
+        let w = select(1.0 - t.x, t.x, dh == 1) * select(1.0 - t.y, t.y, ds == 1) * select(1.0 - t.z, t.z, dv == 1);
+        let node = (k * g.h * g.s * g.v + (((ih + dh) % g.h) * g.s + isat + ds) * g.v + iv + dv) * 3;
+        d += w * vec3(fix_at(g.row, node), fix_at(g.row, node + 1), fix_at(g.row, node + 2));
     }
     return d;
+}
+
+// Every component is a finite number: NaN fails the comparison, and so does infinity. WGSL
+// has no isinf / isnan.
+fn finite3(v: vec3<f32>) -> bool {
+    return all(abs(v) <= vec3(3.4028235e38));
+}
+
+// `hsv_table::Steps::apply_encoded`: `kinds` tables one after the other in HSV of linear
+// ProPhoto, each at the input's hue and the previous one's saturation and value.
+fn hsv_steps(g: HsvGrid, kinds: i32, c: vec3<f32>) -> vec3<f32> {
+    let lin = vec3(decode(c.x), decode(c.y), decode(c.z));
+    let x = rows_times(P.to_prophoto, lin);
+    let hsv = rgb_to_hsv(max(x, vec3(0.0)));
+    // `hsv_table::GREY`.
+    if hsv.z <= 1e-6 || hsv.y <= 1e-4 {
+        return c;
+    }
+    var h = hsv.x;
+    var s = hsv.y;
+    var v = hsv.z;
+    var changed = false;
+    for (var k = 0; k < kinds; k++) {
+        let d = hsv_lookup(g, k, hsv.x, s, v);
+        if all(d == vec3(0.0)) {
+            continue;
+        }
+        changed = true;
+        h += d.x;
+        s = clamp(s + d.y, 0.0, 1.0);
+        v *= exp(clamp(d.z, -20.0, 20.0));
+    }
+    if !changed {
+        return c;
+    }
+    let y = hsv_to_rgb(h, s, v);
+    // As `hsv_table::Steps::apply`: a value scaled past the f32 range (a float image's
+    // highlight) keeps the original colour.
+    if !finite3(y) {
+        return c;
+    }
+    let back = rows_times(P.from_prophoto, y);
+    let inside = all(c >= vec3(0.0)) && all(c <= vec3(1.0));
+    var o = vec3(encode(back.x), encode(back.y), encode(back.z));
+    if inside {
+        o = clamp(o, vec3(0.0), vec3(1.0));
+    }
+    return o;
 }
 
 // `photo_util::hash01`: 64-bit words as (low, high).
@@ -308,174 +426,37 @@ fn value_noise(x: f32, y: f32, seed: vec2<u32>) -> f32 {
     return top + (bot - top) * sy;
 }
 
-fn gained(v: f32, g: f32) -> f32 {
-    return linear_to_srgb(max(srgb_to_linear(v) * g, 0.0));
-}
-
-// 1. White balance and exposure. (Whole vectors: FXC unrolls any loop around a component written
-// by index, and `fs_points` loops over this.)
-fn balance(q: vec3<f32>) -> vec3<f32> {
-    if on(GAINS) {
-        return vec3(gained(q.x, P.gains.x), gained(q.y, P.gains.y), gained(q.z, P.gains.z));
-    }
-    return q;
-}
-
-// `camera_raw_tone.wgsl`'s `unkey`.
-fn unkey(k: u32) -> f32 {
-    return bitcast<f32>(select(~k, k ^ 0x80000000u, (k & 0x80000000u) != 0u));
-}
-
-// `photo_util::bilinear` of texture `t` at (x, y), edges clamped.
-fn bilinear(t: texture_2d<f32>, x_: f32, y_: f32) -> vec4<f32> {
-    let n = vec2<i32>(textureDimensions(t));
-    let x = clamp(x_, 0.0, f32(n.x - 1));
-    let y = clamp(y_, 0.0, f32(n.y - 1));
-    let x0 = i32(floor(x));
-    let y0 = i32(floor(y));
-    let x1 = min(x0 + 1, n.x - 1);
-    let y1 = min(y0 + 1, n.y - 1);
-    let tx = x - f32(x0);
-    let ty = y - f32(y0);
-    let p00 = textureLoad(t, vec2(x0, y0), 0);
-    let p10 = textureLoad(t, vec2(x1, y0), 0);
-    let p01 = textureLoad(t, vec2(x0, y1), 0);
-    let p11 = textureLoad(t, vec2(x1, y1), 0);
-    let top = p00 + (p10 - p00) * tx;
-    let bot = p01 + (p11 - p01) * tx;
-    return top + (bot - top) * ty;
-}
-
-// Where pixel `p` of a copy subsampled `s` times sits: develop's `(x + 0.5) / s - 0.5`.
-fn subsampled(p: vec2<i32>, s: f32) -> vec2<f32> {
-    return (vec2<f32>(p) + vec2(0.5)) / s - vec2(0.5);
-}
-
-// Stages 1 and 2 at `p`: the dehazed frame once `fs_dehaze` rendered it.
-fn source(p: vec2<i32>) -> vec3<f32> {
-    if on(DEHAZE) {
-        return textureLoad(base, p, 0).rgb;
-    }
-    return balance(textureLoad(src, p, 0).rgb);
-}
-
-// Stages 1 to 3 up to Shadows and Highlights at `p`.
-fn lit(p: vec2<i32>) -> vec3<f32> {
-    var c = source(p);
-    // 3. Shadows and Highlights: the light scaled by the change of the log luminance, the last
-    // pass's kept quantile put back.
-    if on(LOCAL_TONE) {
-        let shift = unkey(textureLoad(stats, vec2(i32(P.tone.x), 0), 0).y) - unkey(textureLoad(stats, vec2(i32(P.tone.y), 0), 0).x);
-        let change = (textureLoad(log_out, p, 0).r + shift) - textureLoad(log_in, p, 0).r;
-        let gain = exp2(change);
-        c = vec3(encode(decode(c.x) * gain), encode(decode(c.y) * gain), encode(decode(c.z) * gain));
-    }
-    return c;
-}
-
-// Stages 1 to 3 on the pixel at `p`: what Whites and Blacks measure and apply to.
-fn tonal(p: vec2<i32>) -> vec3<f32> {
-    var c = lit(p);
-    // 3. Clarity, Texture and Contrast on the luminance (develop's `tone`).
-    if on(LUMINANCE) {
-        let l0 = max(luma(c), 0.0);
-        let lc = min(l0, 1.0);
-        var lv = lc;
-        if on(CLARITY) {
-            let at = subsampled(p, P.spatial2.y);
-            let ab = bilinear(clarity, at.x, at.y);
-            let base_ = ab.x * lc + ab.y;
-            let d = 2.0 * clamp(lv, 0.0, 1.0) - 1.0;
-            let mw = 1.0 - d * d;
-            lv += P.spatial.y * (lc - base_) * mw;
-        }
-        if on(TEXTURE) {
-            lv += P.spatial.z * clamp(lc - textureLoad(blur, p, 0).r, -P.spatial.w, P.spatial.w);
-        }
-        if P.gains.w != 0.0 {
-            let xx = clamp(lv, 0.0, 1.0);
-            lv += -P.gains.w * sin(TAU * xx) / TAU;
-        }
-        lv = max(lv, 0.0) + (l0 - lc);
-        if l0 > 1e-5 {
-            c = c * (lv / l0);
-        } else {
-            c = c + vec3(lv - l0);
-        }
-    }
-    return c;
-}
-
-// 2. Dehaze: each pixel moved away from the atmospheric light by the transmission (brought up
-// from the copy), or toward it for negative amounts.
-@fragment
-fn fs_dehaze(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(floor(pos.xy));
-    let q = textureLoad(src, p, 0);
-    let i = balance(q.rgb);
-    let at = subsampled(p, P.spatial2.x);
-    let tv = clamp(bilinear(haze, at.x, at.y).r, P.spatial2.z, 1.0);
-    let a = textureLoad(air, vec2(0, 0), 0).rgb;
-    let amount = P.spatial.x;
-    if amount >= 0.0 {
-        let j = (i - a) / tv + a;
-        return vec4(i + (j - i) * amount, q.a);
-    }
-    return vec4(i + (a - i) * (-amount) * 0.5 * (1.0 - tv * 0.5), q.a);
-}
-
-// The log luminance Shadows and Highlights filter (`local_tone::apply`).
-@fragment
-fn fs_log(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let c = source(vec2<i32>(floor(pos.xy)));
-    let l = max(luma(vec3(decode(c.x), decode(c.y), decode(c.z))), 0.0);
-    return vec4(log2(l + P.floor_.x), 0.0, 0.0, 1.0);
-}
-
-// Clarity and Texture's input: the luminance after Shadows and Highlights, clipped to 0 … 1.
-@fragment
-fn fs_luma(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let c = lit(vec2<i32>(floor(pos.xy)));
-    return vec4(min(max(luma(c), 0.0), 1.0), 0.0, 0.0, 1.0);
-}
-
-// `luminance_points`' cells after Shadows and Highlights: the luminance and the brightest
-// channel of each `edge × edge` block's mean light (clipped to 0 … 1).
-@fragment
-fn fs_points(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let t = vec2<i32>(floor(pos.xy));
-    let f = i32(P.tone.z);
-    let end = min((t + vec2(1)) * f, vec2<i32>(P.size));
-    var sum = vec3(0.0);
-    for (var y = t.y * f; y < end.y; y++) {
-        for (var x = t.x * f; x < end.x; x++) {
-            let c = tonal(vec2(x, y));
-            sum += clamp(vec3(decode(c.x), decode(c.y), decode(c.z)), vec3(0.0), vec3(1.0));
-        }
-    }
-    let m = sum / f32((end.x - t.x * f) * (end.y - t.y * f));
-    return vec4(luma(m), max(max(m.x, m.y), m.z), 0.0, 1.0);
-}
-
 @fragment
 fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let p = vec2<i32>(floor(pos.xy));
     let q = textureLoad(src, p, 0);
-    var c = tonal(p);
-    // 3b. Whites and Blacks.
-    if on(WHITES) || on(BLACKS) {
-        c = whites_blacks(c);
+    var c = q.rgb;
+    // 1. White balance, then Exposure and Contrast.
+    if on(GAINS) {
+        for (var i = 0; i < 3; i++) {
+            c[i] = linear_to_srgb(max(srgb_to_linear(c[i]) * P.gains[i], 0.0));
+        }
     }
-    // 4. Vibrance and Saturation.
+    if on(EXPOSURE) {
+        c = tone_pixel(7, c);
+    }
+    if on(CONTRAST) {
+        c = tone_pixel(8, c);
+    }
+    // 3b. Whites and Blacks.
+    if on(WHITES) {
+        let input = c;
+        c = white_black_pixel(5, on(WHITES_CHANNELS), c);
+        if on(WHITES_FIX) {
+            c = grid_fix(WHITES_FIX_ROW, input, c);
+        }
+    }
+    if on(BLACKS) {
+        c = white_black_pixel(6, on(BLACKS_CHANNELS), c);
+    }
+    // 4. Vibrance and Saturation: Saturation's table, then Vibrance's.
     if on(PRESENCE) {
-        let l = luma(c);
-        let mx = max(max(c.x, c.y), c.z);
-        let mn = min(min(c.x, c.y), c.z);
-        let sat = select(0.0, (mx - mn) / mx, mx > 1e-6);
-        let hue = rgb_to_hsv(c).x;
-        let skin = clamp(1.0 - (abs(hue - 25.0) / 25.0), 0.0, 1.0) * 0.5;
-        let k = 1.0 + P.presence.y + P.presence.x * (1.0 - sat) * (1.0 - skin);
-        c = vec3(l) + (c - vec3(l)) * max(k, 0.0);
+        c = hsv_steps(HsvGrid(PRESENCE_ROW, PRESENCE_H, PRESENCE_S, PRESENCE_V), 2, c);
     }
     // 5. Tone curves.
     if on(PARAMETRIC) {
@@ -491,21 +472,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     // 6. Color Mixer.
     if on(HSL) {
-        let hsv = rgb_to_hsv(max(c, vec3(0.0)));
-        let s = hsv.y;
-        if s > 1e-4 {
-            let d = hsl_shift(hsv.x);
-            let nh = hsv.x + d.x / 100.0 * 30.0;
-            let ns = clamp(s * (1.0 + d.y / 100.0), 0.0, 1.0);
-            var out = hsv_to_rgb(nh, ns, hsv.z);
-            let l0 = luma(c);
-            let l1 = luma(out);
-            if l1 > 1e-6 {
-                out = out * l0 / l1;
-            }
-            let k = exp2(d.z / 100.0 * 1.0 * s);
-            c = out * k;
-        }
+        c = hsv_steps(HsvGrid(MIXER_ROW, MIXER_H, MIXER_S, MIXER_V), 3, c);
     }
     // 7. Color Grading.
     if on(GRADE) {
