@@ -918,7 +918,7 @@ fn paste_into_each_refuses_several_copied_layers() {
     s.execute("layer.new.layer", json!({})).unwrap();
     let second = active(&s).id;
     paint_square(&mut s, Rect::new(20, 10, 30, 20), [0.0, 1.0, 0.0, 1.0]);
-    s.execute("select.deselect", json!({})).unwrap();
+    assert!(doc(&s).selection.is_none(), "no pixel selection: Copy takes the layers");
     {
         let st = s.active_mut().unwrap();
         st.selected_layers = vec![first, second];
