@@ -41,7 +41,7 @@ use editing::selected_styles;
 #[cfg(test)]
 pub(crate) use editing::{CharToggle, step_char_metric, toggle_char_style, toggle_hyphenate};
 pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left};
-pub(crate) use editing::{commit_shortcut, copy_selection, cut_selection, request_paste, select_all};
+pub(crate) use editing::{commit_before_selecting, commit_shortcut, copy_selection, cut_selection, request_paste, select_all};
 #[cfg(test)]
 use editing::{insert, insert_typed, smart_quotes};
 #[cfg(test)]
@@ -162,3 +162,6 @@ mod locked_layer_alert_tests;
 mod ime_tests;
 #[cfg(test)]
 mod mask_escape_tests;
+
+#[cfg(test)]
+mod unchanged_edit_history_tests;

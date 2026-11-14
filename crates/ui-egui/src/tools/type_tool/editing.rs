@@ -214,7 +214,9 @@ fn opens_quote(prev: Option<char>) -> bool {
 }
 
 /// Alt+←/→: kern the pair before the caret by `by` (1/1000 em). No pair (caret at a text or line
-/// edge): nothing happens, like Photoshop. Not coalesced: one history step per press.
+/// edge): nothing happens, like Photoshop. One history step per press: the press takes a fresh
+/// key of its own ([`session_step_key`]) rather than no key, so it stays its own state and still
+/// says which session opened it (#12050).
 pub(super) fn kern_pair(app: &mut PhotocraftApp, id: LayerId, caret: usize, by: f32) {
     let Some(text) = current_text(app, id) else { return };
     let before = caret.checked_sub(1).and_then(|i| text.chars().nth(i));
@@ -223,7 +225,11 @@ pub(super) fn kern_pair(app: &mut PhotocraftApp, id: LayerId, caret: usize, by: 
         return;
     }
     crate::type_transform::finish(app);
-    let _ = app.run("type.edit", json!({"layer": id.0, "kernPair": {"at": caret, "by": by}}));
+    let mut p = json!({"layer": id.0, "kernPair": {"at": caret, "by": by}});
+    if let Some(session) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()) {
+        p["coalesce"] = json!(session_step_key(app, &session));
+    }
+    let _ = app.run("type.edit", p);
 }
 
 /// A character style the type editor's ⇧⌘ keys toggle (Photoshop: ⇧⌘K All Caps, ⇧⌘U
@@ -296,6 +302,7 @@ fn set_style(app: &mut PhotocraftApp, ed: &TextEdit, range: (usize, usize), mut 
     crate::type_transform::finish(app);
     p["layer"] = json!(ed.layer);
     p["range"] = json!([range.0, range.1]);
+    p["coalesce"] = json!(session_step_key(app, &ed.session));
     if let Err(e) = app.run("type.setStyle", p) {
         app.ui.status = e;
         app.ui.status_error = true;
@@ -409,24 +416,41 @@ pub(crate) fn commit_shortcut(app: &mut PhotocraftApp, ctx: &egui::Context) -> b
 /// result, since a Type Mask always replaces the selection (#12073); the parameter stays so its
 /// callers don't change.
 pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
+    commit_ending(app, true);
+}
+
+/// The commit a Layers panel row click makes before it selects `layer` (#5584): a click on another
+/// layer's row is a layer switch (#6483), so an unchanged session records nothing (#12050); a click
+/// on the edited layer's own row ends the edit like any other commit.
+pub(crate) fn commit_before_selecting(app: &mut PhotocraftApp, layer: Option<u64>) {
+    let switches = app.ui.text_edit.as_ref().is_some_and(|ed| layer.is_some_and(|l| l != ed.layer));
+    commit_ending(app, !switches);
+}
+
+/// [`commit_with`]'s body. `by_user`: the user ended the edit (a commit gesture), rather than a
+/// switch to another layer or document taking the work over, which records nothing for an
+/// unchanged session (#12050).
+fn commit_ending(app: &mut PhotocraftApp, by_user: bool) {
     app.ui.type_insertion_style = None;
     // A box drag in progress keeps the box it reached, as when every move was applied.
     crate::type_box_preview::flush(app);
     crate::type_font_preview::clear(app);
     let current = app.session.active_index();
     let Some(home) = app.ui.text_edit.as_ref().map(|ed| edit_home(app, ed)) else {
-        return commit_here(app);
+        return commit_here(app, by_user);
     };
     match home {
         Some(home) if Some(home) != current => {
             // An edit left in a background document commits there, in its own history (#6483).
+            // Another document is active, so a document switch ended the edit: an unchanged
+            // session records nothing there, even though its own document is active now.
             app.session.set_active(home);
-            commit_here(app);
+            commit_here(app, false);
             if let Some(i) = current {
                 app.session.set_active(i);
             }
         }
-        Some(_) => commit_here(app),
+        Some(_) => commit_here(app, by_user),
         // Its document closed: there is nothing to commit into, and the layer id may name a
         // layer of another document.
         None => {
@@ -447,7 +471,11 @@ pub(super) fn edit_home(app: &PhotocraftApp, ed: &TextEdit) -> Option<usize> {
 }
 
 /// [`commit_with`] in the active document, which is the edit's own.
-fn commit_here(app: &mut PhotocraftApp) {
+fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
+    // Read before the tool and the layer move on below: #12050 measures the commits the user
+    // makes, and an unchanged edit that ends because a tool switch or another layer took the
+    // work over (#6483) keeps today's behaviour of recording nothing.
+    let ends_an_edit = by_user && user_ends_the_edit(app);
     if app.ui.tool.is_type() {
         crate::type_transform::finish(app);
     }
@@ -508,7 +536,48 @@ fn commit_here(app: &mut PhotocraftApp) {
     } else if ed.created {
         let name = photocraft_engine::type_cmds::layer_name(&text);
         let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
+    } else if ends_an_edit && worked_on_layer(app, &ed) && !session_recorded(app, &ed) {
+        // Ending an edit of an existing layer is a step of its own even when the session changed
+        // nothing (#12050), so the History list shows the edit the user just ended. The Cancel
+        // button ends through `cancel`, which never runs this.
+        let _ = app.run("type.edit", json!({"layer": ed.layer, "coalesce": ed.session}));
     }
+}
+
+/// A coalesce key for one deliberate step inside a typing session: the ⇧⌘ style keys, the ⌥
+/// metric steps and Alt+←/→ kerning are one history step per press, so each press takes a fresh
+/// key and no two presses share a state. The key still names the session, which is how
+/// [`session_recorded`] knows the session already opened a state and must not add an empty one
+/// when the edit ends (#12050).
+fn session_step_key(app: &mut PhotocraftApp, session: &str) -> String {
+    format!("{session}-{}", app.ui.alloc_id())
+}
+
+/// Has this session opened a history state of its own? Its typing carries the session's key, and
+/// its one-step-per-press keys ([`session_step_key`]) carry that key with a press number, so the
+/// state they leave names the session that made it. Ending such a session adds nothing: the undo
+/// step the user just made is already there, and an empty state behind it would be a History row
+/// that undoes nothing. A state left by an *earlier* session carries that session's key, so a
+/// later unchanged edit of the same layer still records its own (#12050).
+fn session_recorded(app: &PhotocraftApp, ed: &TextEdit) -> bool {
+    let pressed = format!("{}-", ed.session);
+    app.session.active().is_some_and(|st| st.coalesce.as_deref().is_some_and(|k| k == ed.session || k.starts_with(pressed.as_str())))
+}
+
+/// Is a Type tool still the tool holding this session? The frame commits the edit when a tool
+/// switch takes the work on (#6483), also between the Type tools and the Type Mask tools; that is
+/// not an edit of the layer, so #12050's state is not opened for it.
+fn user_ends_the_edit(app: &PhotocraftApp) -> bool {
+    app.ui.tool.is_type() && app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask == app.ui.tool.is_type_mask())
+}
+
+/// Is the session's layer still the one worked on? Selecting another layer or document commits the
+/// session (#6483); #12050 does not measure that, so it records nothing. A background document's
+/// edit is checked in its own document, where `commit_with` has just made it active - which is why
+/// a document switch cannot be told from an in-place commit here, and still records (#12050 review
+/// c4502824764).
+fn worked_on_layer(app: &PhotocraftApp, ed: &TextEdit) -> bool {
+    app.session.active().is_some_and(|st| st.active_layer == Some(LayerId(ed.layer)))
 }
 
 /// Commit the edit once its layer is no longer the one worked on (#6483): another layer became
