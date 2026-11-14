@@ -126,3 +126,17 @@ fn command_with_shift_off_a_point_keeps_the_sampler_handler() {
     assert_eq!(samplers(&app).len(), 2, "a new point where the drag ends");
     assert!(alpha(&app, 105, 105) > 0.5, "the layer stays");
 }
+
+/// CodeRabbit on #14684: over `ui.pointer` the modifiers belong to each call, so a ⌘ Down off a
+/// point can be followed by a Move and Up sent without ⌘. The Move drag the Down began still gets
+/// them and completes: the layer moves and the sampler handler doesn't swallow the release.
+#[test]
+fn a_move_drag_begun_with_command_finishes_when_the_later_events_come_without_it() {
+    let mut app = app();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 120.0, y: 120.0, pressure: 1.0 }, CMD);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 150.0, y: 140.0, pressure: 1.0 }, Modifiers::NONE);
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 150.0, y: 140.0 }, Modifiers::NONE);
+    assert!(alpha(&app, 105, 105) < 0.5 && alpha(&app, 175, 165) > 0.5, "the layer moved by 30,20");
+    assert_eq!(samplers(&app), vec![[300.5, 200.5]], "no point added");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"));
+}
