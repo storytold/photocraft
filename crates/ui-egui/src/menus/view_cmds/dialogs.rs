@@ -141,6 +141,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let command = f.get("__command").and_then(Value::as_str);
     let file_info = command == Some("file.fileInfo");
     let image_processor = command == Some("file.scripts.imageProcessor");
+    let calculations = command == Some("image.calculations");
     let label = |k: &str| {
         if file_info {
             match k {
@@ -218,6 +219,10 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
                             if action_names {
                                 crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            } else if calculations && k == "blending" {
+                                crate::widgets::dropdown_wheel_grouped(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0, |v| {
+                                    matches!(v.as_str(), "darken" | "lighten" | "overlay" | "add" | "difference")
+                                });
                             } else {
                                 crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
                             }
@@ -675,11 +680,57 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                         json!({"sourceLayer": layers, "sourceChannel": load, "blending": blends, "maskChannel": masks}),
                     )
                 }
-                _ => dialog(
-                    app,
-                    json!({"source1Channel": chans[0], "source1Invert": false, "source2Channel": chans[0], "source2Invert": false, "blending": "multiply", "opacity": 100.0, "result": "newChannel"}),
-                    json!({"source1Channel": load.clone(), "source2Channel": load, "blending": blends, "result": ["newChannel", "newDocument", "selection"]}),
-                ),
+                _ => {
+                    // Darker Color and Lighter Color are omitted until the engine accepts them (#14513).
+                    const CALCULATIONS_BLENDS: [&str; 21] = [
+                        "normal",
+                        "darken",
+                        "multiply",
+                        "colorBurn",
+                        "linearBurn",
+                        "lighten",
+                        "screen",
+                        "colorDodge",
+                        "linearDodge",
+                        "overlay",
+                        "softLight",
+                        "hardLight",
+                        "vividLight",
+                        "linearLight",
+                        "pinLight",
+                        "hardMix",
+                        "add",
+                        "subtract",
+                        "difference",
+                        "exclusion",
+                        "divide",
+                    ];
+                    let labels: Map<String, Value> = CALCULATIONS_BLENDS
+                        .iter()
+                        .filter_map(|&k| {
+                            let text = match k {
+                                "add" => "Add",
+                                "subtract" => "Subtract",
+                                _ => photocraft_engine::commands::blend_from_str(k)?.label(),
+                            };
+                            Some((k.to_string(), json!(text)))
+                        })
+                        .collect();
+                    dialog(
+                        app,
+                        json!({
+                            "source1Channel": chans[0],
+                            "source1Invert": false,
+                            "source2Channel": chans[0],
+                            "source2Invert": false,
+                            "blending": "multiply",
+                            "opacity": 100.0,
+                            "result": "newChannel",
+                            "__labels": labels,
+                        }),
+                        json!({"source1Channel": load.clone(), "source2Channel": load, "blending": CALCULATIONS_BLENDS, "result": ["newChannel", "newDocument", "selection"]}),
+                    )
+                }
             }
         }
         _ => None,
@@ -765,3 +816,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "calculations_blending_list_tests.rs"]
+mod calculations_blending_list_tests;
