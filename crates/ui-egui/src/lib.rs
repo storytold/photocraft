@@ -506,6 +506,13 @@ pub struct PhotocraftApp {
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
+    /// The Layers panel last frame: files dropped on its rows are placed above them.
+    pub(crate) drop_layers: Option<file_open::DropLayers>,
+    /// The last drop on the Layers panel (ids count up), the layer its latest placed file made,
+    /// and the drop whose file is being placed now.
+    pub(crate) drop_group: u64,
+    pub(crate) drop_chain: Option<(u64, photocraft_doc::LayerId)>,
+    pub(crate) placing_group: Option<u64>,
     /// The document tab strip last frame: a drop there opens the file at the slot under it.
     pub(crate) tab_strip: Option<canvas::TabStrip>,
     pub(crate) frame_tool_ctx: Option<egui::Context>,

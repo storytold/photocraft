@@ -16,6 +16,7 @@ use wasm_bindgen::JsCast as _;
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 type PlaceInbox = photocraft_ui_egui::PlaceInbox;
+use photocraft_ui_egui::file_open::DropDest;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl) and swatches (.aco, .act, .ase), which go to the preset libraries.
@@ -424,6 +425,7 @@ impl eframe::App for WebShell {
         eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
     }
 
+    /// Capture drop destinations before asynchronously reading files in drop order.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         if !dropped.is_empty() {
@@ -431,7 +433,7 @@ impl eframe::App for WebShell {
                 dropped.iter().map(|f| f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into())).collect();
             // Decided now, where the drop landed: on the document's canvas the files are placed
             // as layers (as on the desktop), elsewhere opened.
-            let places = self.app.dropped_on_canvas(ctx, &names);
+            let places = self.app.dropped_destinations(ctx, &names);
             let target_doc = self.app.session.active().map(|st| st.doc.id);
             let files: Vec<_> = dropped.into_iter().zip(names).zip(places).map(|((f, name), place)| (f, name, place, target_doc)).collect();
             let (inbox, place_inbox) = (self.inbox.clone(), self.place_inbox.clone());
@@ -441,14 +443,14 @@ impl eframe::App for WebShell {
                 for (f, name, place, target_doc) in files {
                     match f.bytes_async().await {
                         Ok(bytes) => {
-                            if place {
+                            if place != DropDest::Open {
                                 if let Some(doc) = target_doc {
                                     let mut queued = place_inbox.lock().unwrap_or_else(PoisonError::into_inner);
-                                    let held = queued.iter().fold(0usize, |sum, (_, _, b)| sum.saturating_add(b.len()));
+                                    let held = queued.iter().fold(0usize, |sum, (_, _, b, _)| sum.saturating_add(b.len()));
                                     // Reads that finish before the next frame drains the inbox are
                                     // bounded like the app's own drop queue.
                                     if photocraft_ui_egui::file_open::place_inbox_takes(queued.len(), held, bytes.len()) {
-                                        queued.push((doc, name, bytes));
+                                        queued.push((doc, name, bytes, if let DropDest::Row(row) = place { Some(row) } else { None }));
                                     } else {
                                         log::warn!("dropped file {name} wasn't placed: too many dropped files are waiting");
                                     }

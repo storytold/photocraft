@@ -240,7 +240,8 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
-/// Register File-menu commands with their parameter contracts and enablement predicates.
+/// Register File-menu commands with their parameter contracts and enablement predicates,
+/// including the shared parameters for embedded and linked placement.
 /// Filesystem operations are native-only; document operations remain available on the web.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
@@ -323,7 +324,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame),"above":id? (insert directly above this layer; default: the active layer),"below":id? (directly below it instead)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),

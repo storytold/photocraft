@@ -106,6 +106,7 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
     ui.add_space(2.0);
 }
 
+/// Draw the active document's Layers panel and record visible rows for drop targeting.
 pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
@@ -335,6 +336,20 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     let response = ui.interact(empty, ui.scope_id().with("layers-empty-space"), Sense::click());
                     response.context_menu(|ui| super::layers_empty_menu::show(app, ui));
                 }
+            }
+            // Files dropped from the OS go directly above the row under the pointer, or the row
+            // below the gap it is in, like a layer dropped from inside the list.
+            if ctx.viewport_id() == egui::ViewportId::ROOT && ui.layer_id().order == egui::Order::Background {
+                let mut top = None;
+                let slots = drawn
+                    .iter()
+                    .map(|&(id, r)| {
+                        let zone = Rect::from_min_max(pos2(r.left(), top.unwrap_or(r.top())), r.right_bottom());
+                        top = Some(r.bottom());
+                        (zone, id)
+                    })
+                    .collect();
+                app.drop_layers = Some(crate::file_open::DropLayers { doc: doc.id, frame: ctx.cumulative_frame_nr(), list: ui.clip_rect(), slots });
             }
             // Tab / ⇧Tab in a rename: rename the layer below / above next, as in Photoshop. The
             // Background isn't renamed in place (double-clicking it converts it), so it ends there.
