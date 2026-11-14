@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind, ParamResult};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -81,6 +81,25 @@ pub(crate) fn derive(fields: &mut DialogFields) {
     if fields.bool(HAD_SOURCES) != Some(first.is_some()) {
         fields.set(HAD_SOURCES, first.is_some());
     }
+}
+
+/// Why OK is greyed, as in the reference application (#13986): no source file, or no profile (Match Best Profile off
+/// and no profile file: today `profile` `none`). The corrections do not count.
+pub(crate) fn missing(fields: &DialogFields) -> Option<&'static str> {
+    let listed = fields.list("input").is_some_and(|list| !list.is_empty());
+    let folder = fields.bool("input.useFolder") == Some(true) && fields.text("input.folder").is_some_and(|dir| !dir.is_empty());
+    if !listed && !folder {
+        Some(tl!("Lens Correction needs at least one source file"))
+    } else if matches!(fields.text("profile").unwrap_or("none"), "none" | "") {
+        Some(tl!("Lens Correction needs a lens profile: auto or generic"))
+    } else {
+        None
+    }
+}
+
+/// The `ParamFamily::check` of the dialog: `ui.dialog.confirm` refuses what the greyed OK does.
+pub(crate) fn check(_app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    missing(&result.fields).map_or(Ok(()), |why| Err(Label::from(why)))
 }
 
 /// Source Files as the command's `input`: the folder in Folder mode, else the listed paths in list order.

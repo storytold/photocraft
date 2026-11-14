@@ -64,7 +64,9 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
-        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        // Lens Correction greys OK while it has nothing to correct (#13986).
+        let ready = key != crate::dialogs::lens_batch_ui::COMMAND || crate::dialogs::lens_batch_ui::missing(fields).is_none();
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields)).ok_enabled(ready);
         if image_processor {
             image_processor_ui::settings_footer(dialog)
         } else if calculations {
