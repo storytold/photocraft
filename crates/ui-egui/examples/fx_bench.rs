@@ -148,6 +148,14 @@ fn gpu() -> Option<Gpu> {
     Some(Gpu { device, queue, comp, adapter: adapter.get_info().name })
 }
 
+/// Most canvas pixels the benchmark renders in one piece (4 GiB of RGBA32F per buffer): a sparse
+/// document can declare far more than it holds.
+const MAX_BENCH_PIXELS: u64 = 1 << 28;
+
+fn fits(doc: &Document) -> bool {
+    u64::from(doc.size.width) * u64::from(doc.size.height) <= MAX_BENCH_PIXELS
+}
+
 fn gpu_time(g: &mut Gpu, doc: &Document, region: Rect) -> Result<f64, String> {
     let t = Instant::now();
     g.comp.render(&g.device, &g.queue, doc, region, |_, _| {}).map_err(|e| e.to_string())?;
@@ -173,6 +181,10 @@ fn compare(files: &[String]) {
             continue;
         };
         let doc = r.document;
+        if !fits(&doc) {
+            println!("{p}: canvas {}x{} is over {MAX_BENCH_PIXELS} pixels, skipped", doc.size.width, doc.size.height);
+            continue;
+        }
         let fx = doc.walk().iter().filter(|(_, _, l)| photocraft_compose::effects::has_effects(l)).count();
         let cpu = photocraft_compose::flatten(&doc);
         match photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()) {
@@ -227,6 +239,10 @@ fn main() {
         let (w, h) = arg(&args, "--size").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))).unwrap_or((7360, 4912));
         synthetic(w, h)
     };
+    if !fits(&doc) {
+        eprintln!("canvas {}x{} is over {MAX_BENCH_PIXELS} pixels", doc.size.width, doc.size.height);
+        return;
+    }
     let full = doc.bounds();
     println!("document {}x{} ({} layers)", doc.size.width, doc.size.height, doc.walk().len());
     let mut g = gpu();

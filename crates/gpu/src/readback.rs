@@ -38,6 +38,9 @@ pub const DEFAULT_MAX_STAGING_BYTES: usize = 32 << 20;
 /// headless export has no user to cancel a wedged GPU, so it must never block forever.
 pub const READBACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Most pixels [`render_to_vec`] reads back in one piece (4 GiB of RGBA32F).
+pub const MAX_VEC_READBACK_PIXELS: u64 = 1 << 28;
+
 /// Blocking readback of a composite (native tests and tools).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_to_vec(comp: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue, doc: &Document, rect: Rect) -> Result<Vec<[f32; 4]>, Unsupported> {
@@ -54,6 +57,16 @@ pub fn render_to_vec_stats(
     rect: Rect,
 ) -> Result<(Vec<[f32; 4]>, Stats), Unsupported> {
     let rect = rect.intersect(&doc.bounds());
+    // This helper holds every staging buffer and the whole result at once (tests and tools): refuse
+    // a rectangle whose pixel vector alone would pass 4 GiB. Use `render_bands` for larger ones.
+    let max_pixels = MAX_VEC_READBACK_PIXELS.min(isize::MAX as u64 / std::mem::size_of::<[f32; 4]>() as u64);
+    if u64::from(rect.width()) * u64::from(rect.height()) > max_pixels {
+        return Err(Unsupported(format!(
+            "{}x{} is too large to read back in one piece; use render_bands (8-bit documents) or the CPU compositor",
+            rect.width(),
+            rect.height()
+        )));
+    }
     let mut staging: Vec<(Rect, wgpu::Buffer, u32)> = Vec::new();
     let mut bpp = 16u32;
     let stats = comp.render(device, queue, doc, rect, |enc, out| {

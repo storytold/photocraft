@@ -212,7 +212,9 @@ fn main() {
         let (jw, jh) = (jpeg.width() as usize, jpeg.height() as usize);
         let jpx: Vec<f32> = jpeg.data().iter().map(|v| f32::from(*v) / 255.0).collect();
         let (dw, dh) = (before.width as usize, before.height as usize);
-        let (gw, gh) = (300, (300 * dh).div_ceil(dw));
+        // At most 300 px on the long side, never upscaled: a narrow image can't ask for a huge grid.
+        let f = dw.max(dh).div_ceil(300).max(1);
+        let (gw, gh) = ((dw / f).max(1), (dh / f).max(1));
         let jref = resample(&jpx, jw, jh, gw, gh);
         let b = to_srgb(&before.rgb);
         let de_before = mean_de(&resample(&b, dw, dh, gw, gh), &jref);
