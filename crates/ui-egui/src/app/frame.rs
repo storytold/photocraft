@@ -153,6 +153,7 @@ impl PhotocraftApp {
     /// including when this body returns early without drawing an editor.
     pub fn ui_frame(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let had_text_edit = self.ui.text_edit.is_some();
         // One control owner even when this callback cannot draw the custom editor.
         if !self.fonts_ready
             || !self.ui.dialogs.is_empty()
@@ -234,6 +235,11 @@ impl PhotocraftApp {
         jobs_ui::keep_polling(self, &ctx);
         // Menus and buttons in this frame may have asked for a file dialog.
         self.poll_file_dialog(&ctx, Some(frame));
+        // If a canvas click during `ui_body` opened inline Type editing, deliver any trailing keys
+        // or IME input from the same frame before syncing the IME descriptor.
+        if !had_text_edit && self.ui.text_edit.is_some() {
+            type_tool::handle_opened_edit_keys(self, &ctx);
+        }
         // The Type tool's IME descriptor is the last writer of this pass: every panel and the
         // canvas have finished mutating the model, and an absent/focus-moved editor ends here.
         type_tool::sync_ime(self, &ctx);

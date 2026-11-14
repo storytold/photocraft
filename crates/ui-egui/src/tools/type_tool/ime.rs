@@ -387,6 +387,10 @@ pub(super) fn claim_raw_pass(app: &mut PhotocraftApp, ctx: &egui::Context) -> bo
     app.type_ime.raw_pass.insert(viewport, pass) != Some(pass)
 }
 
+pub(super) fn reset_raw_pass(app: &mut PhotocraftApp, viewport: egui::ViewportId) {
+    app.type_ime.raw_pass.remove(&viewport);
+}
+
 /// The exclusive route when no custom editor may mutate. Do not consume stock text/keys.
 pub(crate) fn controls_only(app: &mut PhotocraftApp, ctx: &egui::Context) {
     bind_reset_context(app, ctx);
