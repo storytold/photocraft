@@ -1024,7 +1024,12 @@ fn import_stages(
     };
     match selected {
         Route::Pcraft => {
-            let document = photocraft_format::load_from_bytes(bytes)?;
+            let mut document = photocraft_format::load_from_bytes(bytes)?;
+            // The file's own name, as every other format gives it: a renamed or copied bundle
+            // still carries the name it was saved under (#13412).
+            if let Some(file) = file_name_of(name) {
+                document.name = file.to_string();
+            }
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
@@ -1066,15 +1071,20 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// session adopts on the save that wrote it, and the name every other format gives the document
 /// when it is opened (#3312). A bare extension ("pcraft") names no file and changes nothing.
 pub fn named_for_file<'a>(doc: &'a Document, name: &str) -> std::borrow::Cow<'a, Document> {
-    let file = name.contains(['/', '\\', '.']).then(|| name.rsplit(['/', '\\']).next().unwrap_or(name));
-    match file {
-        Some(file) if !file.is_empty() && doc.name != file => {
+    match file_name_of(name) {
+        Some(file) if doc.name != file => {
             let mut owned = (*doc).clone();
             owned.name = file.to_string();
             std::borrow::Cow::Owned(owned)
         }
         _ => std::borrow::Cow::Borrowed(doc),
     }
+}
+
+/// The file name in `name` (a file name, path or bare extension); `None` for a bare extension.
+fn file_name_of(name: &str) -> Option<&str> {
+    let file = name.contains(['/', '\\', '.']).then(|| name.rsplit(['/', '\\']).next().unwrap_or(name))?;
+    (!file.is_empty()).then_some(file)
 }
 
 /// Exports `doc` to the format named by `name_or_ext` (a file name, path or
