@@ -305,9 +305,16 @@ impl PhotocraftApp {
     pub fn open_paths(&mut self, paths: &[String]) -> usize {
         // The command line's files open before the first frame, which otherwise applies the
         // interface language: their status lines and notices would come out in English.
-        crate::i18n::set_current(crate::i18n::Lang::from_pref(&self.session.prefs().interface.language));
         let mut paths: Vec<String> = paths.iter().map(|p| absolute(p)).collect();
         paths.sort_by(|a, b| natural_cmp(a, b));
+        self.open_paths_in_order(&paths)
+    }
+
+    /// [`Self::open_paths`] without the name sort: the files open in the order given and the last
+    /// one is the active document. File › Open uses it, so files picked together open as picked.
+    pub fn open_paths_in_order(&mut self, paths: &[String]) -> usize {
+        crate::i18n::set_current(crate::i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        let paths: Vec<String> = paths.iter().map(|p| absolute(p)).collect();
         let batch = crate::jobs_ui::begin_batch(self);
         let mut opened = 0;
         for (seq, abs) in paths.iter().enumerate() {
@@ -700,5 +707,7 @@ fn same_file(p: &str, path: &str, canon: Option<&std::path::Path>) -> bool {
     p == path || canon.is_some_and(|c| std::path::Path::new(p) == c || canonical(p).is_some_and(|q| q == c))
 }
 
+#[cfg(test)]
+mod dialog_order_tests;
 #[cfg(test)]
 mod tests;
