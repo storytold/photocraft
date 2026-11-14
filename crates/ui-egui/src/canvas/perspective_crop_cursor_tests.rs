@@ -37,7 +37,8 @@ fn acts_on(drag: Option<Drag>) -> Zone {
         Some(Drag::New { .. }) => Zone::Idle,
         Some(Drag::Corner { index, .. }) => Zone::Corner(index),
         Some(Drag::Move { .. }) => Zone::Inside,
-        None => Zone::Outside,
+        Some(Drag::Edge { index, .. }) => Zone::Edge(index),
+        Some(Drag::Rotate { .. }) | None => Zone::Outside,
     }
 }
 
