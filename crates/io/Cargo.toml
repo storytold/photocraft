@@ -46,6 +46,8 @@ craft-pdn = { workspace = true }
 craft-svg = { workspace = true }
 craft-tiff = { workspace = true }
 craft-crs = { workspace = true }
+# Reads Camera Raw settings with PhotoCraft's own namespace beside crs: (masks, Upright guides).
+craft-metadata = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
 ttf-parser = "0.25.1"

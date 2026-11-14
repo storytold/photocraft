@@ -455,7 +455,7 @@ fn curve_drag_moves_the_existing_point_without_creating_another() {
     let ctx = h.ctx.clone();
     menu(h.state_mut(), &ctx, json!({"ui":{"set":{"pointCurve":[[0,0],[128,128],[255,255]]}}})).unwrap();
     h.run_steps(3);
-    let a = pos2(graph.left() + 128.0 / 255.0 * 260.0, graph.bottom() - 128.0 / 255.0 * 260.0);
+    let a = curve_at(graph, [128.0, 128.0]);
     let b = a + vec2(40.0, -32.0);
     drag(&mut h, a, b);
     let points = inspect(&h)["params"]["pointCurve"].clone();
@@ -469,6 +469,9 @@ fn open_curve(h: &mut Harness<'_, PhotocraftApp>) -> Rect {
     h.get_by_label(photocraft_ui_egui::i18n::tr_ctx(lang, "cameraRaw", "Light")).click();
     h.run_steps(16);
     h.get_by_label(photocraft_ui_egui::i18n::tr(lang, "Curve")).click();
+    h.run_steps(16);
+    // The Curve panel opens on the parametric curve, as Camera Raw's; the point curve is a chip.
+    h.get_by_label(photocraft_ui_egui::i18n::tr(lang, "Point Curve")).click();
     h.run_steps(16);
     rect(h, "curveRect")
 }
@@ -701,14 +704,14 @@ fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_theme
         h.hover_at(image.center());
         h.run_steps(3);
         let hovered = h.render().unwrap();
-        // RGB text/badge occupies the top centre; one tone marker crosses the histogram.
+        // The RGB readout fills the line under the histogram; one tone marker crosses the histogram.
         let area_changed = |r: Rect| {
             (r.top().ceil() as u32..r.bottom().floor() as u32)
                 .any(|y| (r.left().ceil() as u32..r.right().floor() as u32).any(|x| no_hover.get_pixel(x, y) != hovered.get_pixel(x, y)))
         };
-        let badge = Rect::from_center_size(pos2(histogram.center().x, histogram.top() + 13.0), vec2(140.0, 18.0));
+        let badge = Rect::from_min_size(pos2(histogram.left(), histogram.bottom() + 1.0), vec2(histogram.width(), 16.0));
         let bands = Rect::from_min_max(pos2(histogram.left() + 4.0, histogram.center().y), pos2(histogram.right() - 4.0, histogram.bottom() - 4.0));
-        assert!(area_changed(badge), "{theme:?}: RGB badge");
+        assert!(area_changed(badge), "{theme:?}: RGB readout");
         assert!(area_changed(bands), "{theme:?}: translucent tone band");
         let y = histogram.center().y as u32;
         let changed: Vec<_> =
@@ -739,7 +742,7 @@ fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_theme
         h.hover_at(pos2(500.0, 20.0));
         h.run_steps(3);
         let cleared = h.render().unwrap();
-        for r in [histogram, scope] {
+        for r in [histogram, badge, scope] {
             for y in r.top().ceil() as u32..r.bottom().floor() as u32 {
                 for x in r.left().ceil() as u32..r.right().floor() as u32 {
                     assert_eq!(no_hover.get_pixel(x, y), cleared.get_pixel(x, y), "overlay must clear: {theme:?}");

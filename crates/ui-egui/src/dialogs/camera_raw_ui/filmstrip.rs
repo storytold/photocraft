@@ -3,6 +3,7 @@
 //! shown, Open develops every one and Cancel closes every one.
 
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
+use super::panels::PanelState;
 use super::sidecar::read_sidecar;
 use super::{
     Align2, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PhotocraftApp, RawOpen, Rect, Sense, Stroke, Tokens, Value, json, pos2, vec2, widgets,
@@ -92,15 +93,29 @@ pub(super) fn show_raw(app: &mut PhotocraftApp, ctx: &egui::Context, to: usize) 
     if d.target != Target::OpenRaw || app.raw_shelf.get(to).is_none_or(|h| Some(h.raw.document) == current) {
         return Ok(());
     }
+    // The panels (open, hidden by their eye button, Before/After view) are the dialog's, not one
+    // raw's: they stay as they are, so every raw is shown, opened and saved without the same
+    // hidden panels.
+    let panels = d.panels.clone();
     keep_settings(app);
     // On success this replaces the dialog. On failure the dialog stays on the raw being left, and
     // the other keeps its place in the filmstrip.
     let active = app.session.active_index();
     let shown = open_held(app, ctx, to);
-    if shown.is_err()
-        && let Some(i) = active
-    {
-        app.session.set_active(i);
+    match &shown {
+        Ok(()) => {
+            if let Some(d) = app.camera_raw.as_mut()
+                && d.panels != panels
+            {
+                d.panels = panels;
+                d.render(ctx);
+            }
+        }
+        Err(_) => {
+            if let Some(i) = active {
+                app.session.set_active(i);
+            }
+        }
     }
     shown
 }
@@ -146,7 +161,8 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
 /// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
 /// filmstrip once it has opened or its background develop has started: one that fails stays or
 /// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
-pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
+/// `panels`: the dialog's panels; those hidden by their eye button apply to no raw.
+pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw, panels: &PanelState) -> Result<Value, String> {
     keep_settings(app);
     let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
     let first = commit_open_raw(app, params, raw, Some(original));
@@ -170,7 +186,7 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
             Some((p, original)) => (p, Some(original)),
             None => first_settings(app, &held_raw),
         };
-        match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
+        match commit_open_raw(app, &panels.effective(&p), &held_raw, loaded.as_ref()) {
             Ok(v) => {
                 return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
                 opened.push(v);
@@ -196,13 +212,15 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     keep_settings(app);
     let Some(d) = app.camera_raw.as_ref() else { return Value::Null };
     let Some(raw) = d.raw_open.clone() else { return Value::Null };
-    let mut raws = vec![(raw.clone(), d.params.clone())];
+    // What the preview shows: panels hidden by their eye button save nothing, for every raw, so
+    // the next dialog does not bring their settings back as active.
+    let mut raws = vec![(raw.clone(), d.effective_params())];
     for held in app.raw_shelf.iter().filter(|h| h.raw.document != raw.document) {
         let p = match &held.kept {
             Some((p, _)) => p.clone(),
             None => first_settings(app, &held.raw).0,
         };
-        raws.push((held.raw.clone(), p));
+        raws.push((held.raw.clone(), d.panels.effective(&p)));
     }
     let stored: Vec<Stored> = raws.iter().map(|(raw, p)| super::sidecar::store_sidecar(app, raw, p)).collect();
     let saved: Vec<&String> = stored.iter().filter_map(|s| if let Stored::Written(name) = s { Some(name) } else { None }).collect();

@@ -155,6 +155,16 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     // `exposure` becomes `2^exposure`, which overflows f32 to infinity from 128 up (and then
     // writes inf/NaN into 32-bit layers). Clamp to the documented -5..5.
     cr.exposure = cr.exposure.clamp(-5.0, 5.0);
+    if camera_raw::geometry::Upright::parse(&cr.perspective_upright).is_none() {
+        return Err(bad(cmd, "perspectiveUpright must be off, auto, level, vertical, full or guided"));
+    }
+    if cr.upright_guides.len() > camera_raw::geometry::MAX_GUIDES {
+        return Err(bad(cmd, format!("at most {} upright guides", camera_raw::geometry::MAX_GUIDES)));
+    }
+    if cr.upright_guides.iter().flatten().flatten().any(|v| !v.is_finite()) {
+        return Err(bad(cmd, "upright guide coordinates must be finite"));
+    }
+    camera_raw::masks::validate(&cr.masks).map_err(|e| bad(cmd, e))?;
     Ok(cr)
 }
 
@@ -177,34 +187,102 @@ fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
     v
 }
 
-/// Camera Raw on a surface over `area` (RGB / Gray via RGBA, at the surface's depth).
+/// Camera Raw on a surface over `area`, the canvas (RGB / Gray via RGBA, at the surface's depth):
+/// without Geometry the content past it is developed too. The masks' coordinates are the canvas's.
 ///
 /// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
-/// error first, and this keeps the preview and Smart Filter paths from overflowing.
+/// error first, and this keeps the preview and Smart Filter paths from overflowing. A stage
+/// that can't get its memory is skipped; [`try_camera_raw_surface`] reports it instead.
 pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
-    let area = area.intersect(&surf.content_bounds().union(&area));
+    camera_raw_surface_on(surf, area, p, false)
+}
+
+/// [`camera_raw_surface`] for a layer that must stay opaque when `opaque` (the Background, which
+/// may still store an alpha channel): what Geometry uncovers turns white there, as it does on a
+/// surface without alpha.
+pub fn camera_raw_surface_on(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool) -> Surface {
+    develop_surface(surf, area, p, opaque, false).unwrap_or_else(|_| surf.clone())
+}
+
+/// [`camera_raw_surface`], failing when a develop stage can't get the memory it needs, so the
+/// command doesn't commit an incomplete result.
+pub fn try_camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> std::result::Result<Surface, String> {
+    try_camera_raw_surface_on(surf, area, p, false)
+}
+
+/// [`camera_raw_surface_on`], failing as [`try_camera_raw_surface`] does.
+pub fn try_camera_raw_surface_on(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool) -> std::result::Result<Surface, String> {
+    develop_surface(surf, area, p, opaque, true)
+}
+
+/// `area` is the canvas: the frame the masks' coordinates refer to.
+fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, strict: bool) -> std::result::Result<Surface, String> {
+    // Geometry turns the image about its centre: the canvas's, not that of content past its edge.
+    // Without it every pixel of the content is developed, also what an earlier Smart Filter moved
+    // past `area` (when that would exceed what one pass can develop, `area` alone still is).
+    let geometry = !p.geometry_neutral();
+    let canvas = area;
+    let area = if geometry {
+        area
+    } else {
+        let all = area.union(&surf.content_bounds());
+        if raw_pixels(all).is_some() { all } else { area }
+    };
     if area.is_empty() || p.is_identity() {
-        return surf.clone();
+        return Ok(surf.clone());
     }
-    let Some(len) = raw_pixels(area) else { return surf.clone() };
+    let Some(len) = raw_pixels(area) else { return Ok(surf.clone()) };
     let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
-    camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
+    let float = fmt.sample == SampleType::F32;
+    // The masks were drawn on the canvas: past it they keep their place on it, whether or not
+    // Geometry (which develops the canvas only) is on.
+    let reframed = (!p.masks.is_empty() && area != canvas).then(|| {
+        let f = [canvas.x0 - area.x0, canvas.y0 - area.y0, canvas.x1 - area.x0, canvas.y1 - area.y0].map(|v| v as f32);
+        CameraRaw { masks: camera_raw::masks::reframed(&p.masks, f, w, h), ..p.clone() }
+    });
+    let p = reframed.as_ref().unwrap_or(p);
+    if strict {
+        camera_raw::try_develop(&mut px, w, h, p, float)?;
+    } else {
+        camera_raw::develop(&mut px, w, h, p, float);
+    }
     let n = fmt.channels();
     let orig = surf.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
     for (i, (q, o)) in px.iter().zip(data.chunks_exact_mut(n)).enumerate() {
+        if geometry && (opaque || !fmt.alpha) {
+            // No transparency to leave: what the warp uncovers turns white.
+            let a = q[3].clamp(0.0, 1.0);
+            from_rgba_into(&fmt, [q[0] * a + 1.0 - a, q[1] * a + 1.0 - a, q[2] * a + 1.0 - a, 1.0], o);
+            continue;
+        }
         from_rgba_into(&fmt, *q, o);
-        if fmt.alpha {
-            // Alpha is untouched.
+        if fmt.alpha && !geometry {
+            // Alpha is untouched (Geometry moves it with the pixels).
             o[n - 1] = orig[i * n + n - 1];
         }
     }
     let mut out = surf.clone();
     out.write_region(area, &data);
     out.prune();
-    out
+    Ok(out)
+}
+
+/// Upright's analysis of `area` of `surf` for `p`'s mode: exactly what the filter's develop of
+/// that area analyses (it develops the canvas when Geometry is on), read one row at a time so a
+/// large layer is never held whole. A preview that develops a smaller copy sets it as
+/// [`CameraRaw::upright_fix`] to show the correction the filter applies. `None` for the modes
+/// that don't analyse, or an area too large to develop.
+pub fn upright_fix(surf: &Surface, area: Rect, p: &CameraRaw) -> Option<camera_raw::geometry::UprightFix> {
+    let mode = camera_raw::geometry::Upright::parse(&p.perspective_upright)?;
+    raw_pixels(area)?;
+    let (w, h) = (usize::try_from(area.width()).ok()?, usize::try_from(area.height()).ok()?);
+    camera_raw::geometry::UprightFix::analyse_rows(w, h, mode, |y, row| {
+        let y = area.y0.saturating_add(i32::try_from(y).unwrap_or(i32::MAX));
+        surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y.saturating_add(1)), row);
+    })
 }
 
 /// Mixes `new` over `old` by the selection's coverage.
@@ -217,28 +295,38 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Surface {
         return out;
     }
     let n = fmt.channels();
-    let (o, w) = (old.read_region(area), new.read_region(area));
+    let (o, mut r) = (old.read_region(area), new.read_region(area));
     let aw = area.width() as usize;
-    let mut r = vec![0.0f32; o.len()];
-    for (i, ((op, np), rp)) in o.chunks_exact(n).zip(w.chunks_exact(n)).zip(r.chunks_exact_mut(n)).enumerate() {
-        let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0).clamp(0.0, 1.0);
-        if !fmt.alpha {
-            for c in 0..n {
-                rp[c] = op[c] + (np[c] - op[c]) * k;
-            }
-            continue;
-        }
-        let a = n - 1;
-        let oa = op[a] + (np[a] - op[a]) * k;
-        rp[a] = oa;
-        for c in 0..a {
-            let pm = op[c] * op[a] + (np[c] * np[a] - op[c] * op[a]) * k;
-            rp[c] = if oa > 0.0 { pm / oa } else { 0.0 };
-        }
+    for (i, (op, rp)) in o.chunks_exact(n).zip(r.chunks_exact_mut(n)).enumerate() {
+        let k = sel.sample_channel(area.x0 + (i % aw) as i32, area.y0 + (i / aw) as i32, 0);
+        mix_by_coverage(rp, op, k, fmt.alpha);
     }
     out.write_region(area, &r);
     out.prune();
     out
+}
+
+/// One pixel of a filter's result (`out`, channels as a surface stores them, alpha last when
+/// `alpha`) mixed over the `old` pixel by coverage `k` (0 … 1), in place. With alpha the colour
+/// mixes premultiplied, so a pixel the filter made transparent (Geometry's uncovered corners)
+/// lends no colour to what stays of the old one. The filter's selection mix and the RAW Develop
+/// dialog's previews both use it, so they agree.
+pub fn mix_by_coverage(out: &mut [f32], old: &[f32], k: f32, alpha: bool) {
+    let k = if k.is_finite() { k.clamp(0.0, 1.0) } else { 0.0 };
+    let n = out.len().min(old.len());
+    let (Some(a), true) = (n.checked_sub(1), alpha) else {
+        for (o, p) in out.iter_mut().zip(old) {
+            *o = *p + (*o - *p) * k;
+        }
+        return;
+    };
+    let (oa, na) = (old[a], out[a]);
+    let ma = oa + (na - oa) * k;
+    for c in 0..a {
+        let pm = old[c] * oa + (out[c] * na - old[c] * oa) * k;
+        out[c] = if ma > 0.0 { pm / ma } else { 0.0 };
+    }
+    out[a] = ma;
 }
 
 /// Smart-filter hook: re-applies a stored filter of this module (`None` for other ids).
@@ -282,7 +370,15 @@ fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// Runs `f` on the target layer (pixel layer edited in place inside the selection; smart object
 /// gets a smart filter with `stored` params).
-fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value, float_bg: bool, f: &dyn Fn(&Surface, Rect) -> Surface) -> Result<LayerId> {
+fn run_filter(
+    s: &mut Session,
+    cmd: &str,
+    label: &str,
+    p: &Value,
+    stored: Value,
+    float_bg: bool,
+    f: &dyn Fn(&Surface, Rect) -> Result<Surface>,
+) -> Result<LayerId> {
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let _working = photocraft_raster::memory::try_reserve_operation(state.doc.size.area().saturating_mul(64)).map_err(EngineError::Other)?;
     let id = target(s, p)?;
@@ -314,7 +410,7 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value,
         let LayerContent::Raster(surf) = &mut l.content else {
             return Err(EngineError::Other(format!("{label} needs a pixel layer")));
         };
-        let out = f(surf, canvas);
+        let out = f(surf, canvas)?;
         *surf = match &selection {
             Some(sel) => mix_by_selection(surf, &out, sel),
             None => out,
@@ -331,8 +427,9 @@ fn lens_correction(s: &mut Session, p: &Value) -> Result<Value> {
     let lc = lens_params(LENS, p, frame, info.as_ref())?;
     let stored = resolved_lens_params(p, &lc, profile_focal(LENS, p, info.as_ref())?);
     let t0 = Stopwatch::start();
-    let id =
-        run_filter(s, LENS, "Lens Correction", p, stored.clone(), matches!(lc.edge, EdgeMode::Transparency), &|surf, canvas| lens::correct(surf, canvas, &lc))?;
+    let id = run_filter(s, LENS, "Lens Correction", p, stored.clone(), matches!(lc.edge, EdgeMode::Transparency), &|surf, canvas| {
+        Ok(lens::correct(surf, canvas, &lc))
+    })?;
     Ok(json!({"layer": id.0, "profile": lc.profile.as_ref().map(|p| p.name.clone()), "angle": lc.angle, "scale": lc.scale, "params": stored, "ms": t0.ms()}))
 }
 
@@ -351,11 +448,11 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let id = run_filter(s, WIDE, "Adaptive Wide Angle", p, stored.clone(), true, &|surf, canvas| {
         let tris = mesh.triangles();
-        if canvas == frame {
+        Ok(if canvas == frame {
             photocraft_algo::warp::warp_triangles(surf, canvas, &mesh.verts, &tris, interp)
         } else {
             wideangle::apply(surf, canvas, &wa, interp)
-        }
+        })
     })?;
     let model = match cam.model {
         wideangle::WideModel::Fisheye => "fisheye",
@@ -390,6 +487,23 @@ pub fn encoding_gamma(doc: &Document) -> f32 {
         .map_or(0.0, |(_, g)| g)
 }
 
+/// `doc`'s primaries for Camera Raw ([`CameraRaw::document_primaries`]): its linear RGB to
+/// linear ProPhoto RGB, from the colour profile's colorants. `None` when the primaries are the
+/// ones [`encoding_gamma`] implies (sRGB, linear sRGB, ProPhoto, Adobe RGB), or the profile is
+/// not an RGB matrix profile (its pixels then develop as sRGB, as before).
+pub fn document_primaries(doc: &Document) -> Option<[[f32; 3]; 3]> {
+    use craft_cms::{Builtin, ColorSpace, math};
+    let profile = crate::color_cmds::document_profile(doc);
+    let implied = [Builtin::Srgb, Builtin::LinearSrgb, Builtin::ProPhotoCompat, Builtin::AdobeRgbCompat];
+    if profile.color_space != ColorSpace::Rgb || implied.iter().any(|b| profile.same_colors(b.profile())) {
+        return None;
+    }
+    let to_xyz = profile.matrix.as_ref()?;
+    let from_prophoto_xyz = math::invert(Builtin::ProPhotoCompat.profile().matrix.as_ref()?)?;
+    let m = math::mul(&from_prophoto_xyz, to_xyz).map(|r| r.map(|v| v as f32));
+    m.iter().flatten().all(|v| v.is_finite()).then_some(m)
+}
+
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     // The document's transfer curve goes with the settings, so a Smart Filter keeps it.
     let mut p = p.clone();
@@ -400,15 +514,24 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         m.insert("encodingGamma".into(), json!((f64::from(g) * 1e4).round() / 1e4));
     }
     let p = &p;
-    let cr = raw_params(RAW, p)?;
+    let mut cr = raw_params(RAW, p)?;
     // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
     cr.validate().map_err(|e| bad(RAW, e))?;
+    // The document's primaries, when its profile's aren't the ones the transfer curve implies.
+    cr.document_primaries = s.active().and_then(|d| document_primaries(&d.doc));
+    let geometry = !cr.geometry_neutral();
     // The pixel path works on the canvas plus the layer's content in one buffer; a legal
     // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
     if !cr.is_identity() {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let id = target(s, p)?;
-        let area = d.doc.layer(id).and_then(Layer::surface).map_or(d.doc.bounds(), |sf| d.doc.bounds().union(&sf.content_bounds()));
+        // Geometry develops the canvas only (below), so content past it must not refuse a canvas
+        // that fits; with a selection the result is mixed over the content's whole extent.
+        let area = match d.doc.layer(id).and_then(Layer::surface) {
+            Some(_) if geometry && d.doc.selection.is_none() => d.doc.bounds(),
+            Some(sf) => d.doc.bounds().union(&sf.content_bounds()),
+            None => d.doc.bounds(),
+        };
         if raw_pixels(area).is_none() {
             return Err(bad(
                 RAW,
@@ -416,9 +539,33 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     }
+    // Geometry moves alpha with the pixels (uncovered corners turn transparent), which a
+    // transparency lock forbids, as it does for other filters that make transparency. A
+    // Background has no transparency to make: uncovered pixels turn white there instead, even
+    // when its surface stores an alpha channel. A Smart Object gets the filter as a Smart Filter,
+    // which makes transparency in its (transparent) cache just the same.
+    let mut background = false;
+    if geometry {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let id = target(s, p)?;
+        background = d.doc.is_background(id);
+        if !background
+            && d.doc.effective_locks(id).transparency
+            && let Some(l) = d.doc.layer(id)
+            && match &l.content {
+                LayerContent::Raster(surf) => surf.format().alpha,
+                LayerContent::Smart(_) => l.surface().is_none_or(|c| c.format().alpha),
+                _ => false,
+            }
+        {
+            return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", l.name)));
+        }
+    }
     let t0 = Stopwatch::start();
-    let id =
-        run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
+        // Without Geometry the content past the canvas is developed too (`develop_surface`).
+        try_camera_raw_surface_on(surf, canvas, &cr, background).map_err(|e| bad(RAW, e))
+    })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
@@ -477,7 +624,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase":false,"auto":false (Auto Mask: only over colours like the one under the dab's centre)}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the canvas}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise","colorHue":0..360 deg,"colorSat":0..100 (the Color swatch),"moire":0..100,"defringe":0..100}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -500,6 +647,22 @@ pub fn specs() -> Vec<CommandSpec> {
 mod lens_batch_gray_tests;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mixing_by_coverage_is_premultiplied() {
+        // A half-transparent pixel the filter made transparent, half selected: the old colour
+        // stays (the transparent result lends none), at half the old alpha.
+        let mut out = [1.0, 1.0, 1.0, 0.0];
+        mix_by_coverage(&mut out, &[0.8, 0.4, 0.6, 0.5], 0.5, true);
+        assert!(out.iter().zip([0.8, 0.4, 0.6, 0.25]).all(|(a, b)| (a - b).abs() < 1e-6), "{out:?}");
+        // Without alpha, and with hostile coverage, it stays a plain mix.
+        let mut out = [1.0, 0.0, 0.5];
+        mix_by_coverage(&mut out, &[0.0, 1.0, 0.5], 0.25, false);
+        assert_eq!(out, [0.25, 0.75, 0.5]);
+        let mut out = [1.0, 1.0, 1.0, 1.0];
+        mix_by_coverage(&mut out, &[0.0, 0.0, 0.0, 0.0], f32::NAN, true);
+        assert_eq!(out, [0.0; 4]);
+        mix_by_coverage(&mut [], &[0.5], 1.0, true);
+    }
 
     #[test]
     fn raw_develop_filter_keeps_its_automation_id() {
@@ -686,6 +849,47 @@ mod tests {
     }
 
     #[test]
+    fn camera_raw_without_geometry_develops_content_past_the_given_area() {
+        // A Smart Filter replay passes the canvas ∪ placed extent; an earlier filter may have
+        // moved content past it, and that content must be developed too.
+        let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        surf.fill_rect(Rect::from_xywh(0, 0, 40, 20), &[0.25, 0.25, 0.25, 1.0]);
+        let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
+        let out = camera_raw_surface(&surf, Rect::from_xywh(0, 0, 20, 20), &cr);
+        let (inside, past) = (out.sample_channel(10, 10, 0), out.sample_channel(30, 10, 0));
+        assert!(inside > 0.3, "{inside}");
+        assert!((past - inside).abs() < 1e-3, "content past the area was not developed: {past} vs {inside}");
+    }
+
+    /// Masks are drawn on the canvas: with the layer reaching past it they cover the same canvas
+    /// pixels as on a layer that ends at it, so turning Geometry on (which develops only the
+    /// canvas) doesn't move them.
+    #[test]
+    fn camera_raw_masks_keep_their_place_on_the_canvas_past_its_edge() {
+        let canvas = Rect::from_xywh(0, 0, 40, 20);
+        let (mut fits, mut wide) = (Surface::new(photocraft_color::PixelFormat::RGBA8), Surface::new(photocraft_color::PixelFormat::RGBA8));
+        fits.fill_rect(canvas, &[0.25, 0.25, 0.25, 1.0]);
+        wide.fill_rect(Rect::from_xywh(-20, 0, 80, 20), &[0.25, 0.25, 0.25, 1.0]);
+        // The left half of the canvas brightened by a linear gradient, and a dab on the right.
+        let masks = json!([
+            {"components": [{"kind": "linear", "zero": [0.6, 0.5], "full": [0.4, 0.5]}], "adjust": {"exposure": 1}},
+            {"components": [{"kind": "brush", "dabs": [{"x": 0.8, "y": 0.5, "size": 0.1}]}], "adjust": {"exposure": -1}}
+        ]);
+        let cr = raw_params(RAW, &json!({"masks": masks})).unwrap();
+        let (a, b) = (camera_raw_surface(&fits, canvas, &cr), camera_raw_surface(&wide, canvas, &cr));
+        for x in 0..40 {
+            let (fa, fb) = (a.sample_channel(x, 10, 0), b.sample_channel(x, 10, 0));
+            assert!((fa - fb).abs() < 2.0 / 255.0, "x {x}: {fa} on a layer that fits, {fb} on one past the canvas");
+        }
+        assert!(a.sample_channel(5, 10, 0) > 0.3 && a.sample_channel(32, 10, 0) < 0.2);
+        // With Geometry, which develops the canvas only, the masks stay where they were.
+        let turned = raw_params(RAW, &json!({"masks": masks, "perspectiveScale": 100.5})).unwrap();
+        let c = camera_raw_surface(&wide, canvas, &turned);
+        assert!(c.sample_channel(5, 10, 0) > 0.3 && c.sample_channel(32, 10, 0) < 0.2);
+        assert!(c.sample_channel(5, 10, 0) - b.sample_channel(5, 10, 0) < 0.05);
+    }
+
+    #[test]
     fn camera_raw_decodes_light_with_the_documents_curve() {
         // A raw opens in ProPhoto (gamma 1.8): the filter keeps that with its settings, so Whites,
         // Blacks, Shadows and Highlights work on the same light as when it was applied.
@@ -709,6 +913,144 @@ mod tests {
         if let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
             assert!(so.smart_filters[0].params.get("encodingGamma").is_none());
         }
+    }
+
+    /// Display P3 shares sRGB's curve, so the curve alone made it develop as sRGB: its own
+    /// primaries now go with the settings. The primaries the curve implies add nothing.
+    #[test]
+    fn camera_raw_takes_the_documents_primaries() {
+        let mut s = session(16);
+        assert_eq!(document_primaries(&s.active().unwrap().doc), None);
+        for (profile, own) in [("display-p3", true), ("rec2020", true), ("prophoto-compat", false), ("adobe-rgb-compat", false), ("linear-srgb", false)] {
+            s.execute("edit.assignProfile", json!({"profile": profile})).unwrap();
+            let m = document_primaries(&s.active().unwrap().doc);
+            assert_eq!(m.is_some(), own, "{profile}: {m:?}");
+            if let Some(m) = m {
+                // White stays white (both D50-adapted), and the matrix is not sRGB's.
+                let white: Vec<f32> = m.iter().map(|r| r.iter().sum()).collect();
+                assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-3), "{profile}: {white:?}");
+                assert!((m[0][0] - 0.529_345).abs() > 0.05, "{profile}: {m:?}");
+            }
+        }
+        // A P3 document develops with it: the same picture as in sRGB (converted to P3) comes
+        // out as it does in sRGB, within 16-bit rounding and the sRGB document's clipping of
+        // what Contrast pushes past its gamut (0.005; read as sRGB, the P3 picture was 0.03 off).
+        let params = json!({"texture": 80, "whites": -60, "contrast": 40});
+        let colourful = || {
+            let mut s = session(16);
+            s.edit("colours", |doc, active| {
+                let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                let fmt = surf.format();
+                for y in 0..80 {
+                    for x in 0..120 {
+                        let c = if (x / 4 + y / 4) % 2 == 0 { [0.8, 0.3, 0.2] } else { [0.2, 0.55, 0.75] };
+                        surf.write_pixel(x, y, &photocraft_raster::from_rgba(&fmt, [c[0], c[1], c[2], 1.0]));
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            s
+        };
+        let mut srgb = colourful();
+        srgb.execute(RAW, params.clone()).unwrap();
+        let mut p3 = colourful();
+        p3.execute("edit.convertToProfile", json!({"profile": "display-p3", "intent": "relative"})).unwrap();
+        p3.execute(RAW, params).unwrap();
+        p3.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "relative"})).unwrap();
+        let mut worst = 0.0f32;
+        for (x, y) in [(5, 5), (30, 20), (60, 40), (90, 60), (110, 75), (17, 63)] {
+            let (a, b) = (active_px(&srgb, x, y), active_px(&p3, x, y));
+            for c in 0..3 {
+                worst = worst.max((a[c] - b[c]).abs());
+            }
+        }
+        assert!(worst < 0.012, "P3 develops off by {worst}");
+    }
+
+    #[test]
+    fn camera_raw_geometry_moves_alpha_and_rejects_bad_upright() {
+        // A pixel layer: Scale 50 leaves its edges transparent and its middle opaque.
+        let mut s = session(8);
+        s.execute(RAW, json!({"perspectiveScale": 50})).unwrap();
+        let d = s.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let fmt = surf.format();
+        assert!(fmt.alpha);
+        let a = fmt.channels() - 1;
+        assert!(surf.sample_channel(2, 2, a) < 0.01, "edge left opaque");
+        assert!(surf.sample_channel(60, 40, a) > 0.99, "centre lost");
+        // The background: uncovered pixels turn white where there is no alpha to clear.
+        let mut b = Session::new();
+        b.execute("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+        b.execute(RAW, json!({"perspectiveRotate": 10})).unwrap();
+        let d = b.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        // A Background stays opaque even when its surface stores alpha (as `file.new`'s does).
+        let fmt = surf.format();
+        if fmt.alpha {
+            assert!(surf.sample_channel(0, 0, fmt.channels() - 1) > 0.99, "the Background's corner turned transparent");
+        }
+        assert!(surf.sample_channel(0, 0, 0) > 0.99, "the uncovered corner is white");
+        assert!(surf.sample_channel(32, 24, 0) < 0.01, "the middle stays black");
+        for bad in [
+            json!({"perspectiveUpright": "sideways"}),
+            json!({"perspectiveUpright": 3}),
+            json!({"uprightGuides": vec![[[0, 0], [1, 1]]; 5]}),
+            json!({"masks": [{"components": [{"kind": "depth"}], "adjust": {"exposure": 1}}]}),
+            json!({"masks": [{"components": [{"kind": "teleport"}]}]}),
+            json!({"uprightGuides": [[[0, 0], [1]]]}),
+            json!({"perspectiveVertical": "steep"}),
+        ] {
+            assert!(s.execute(RAW, bad.clone()).is_err(), "{bad}");
+        }
+        // Hostile but well-typed numbers are clamped, not fatal.
+        s.execute(RAW, json!({"perspectiveVertical": 1e30, "perspectiveScale": -4, "perspectiveUpright": "full"})).unwrap();
+    }
+
+    #[test]
+    fn camera_raw_geometry_sizes_the_canvas_not_far_off_canvas_content() {
+        // One opaque pixel far past a 100 × 100 canvas: canvas ∪ content is about 6.25e8 px.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        s.edit("far", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let fmt = surf.format();
+            surf.write_pixel(25_000, 25_000, &photocraft_raster::from_rgba(&fmt, [0.5, 0.5, 0.5, 1.0]));
+            Ok(())
+        })
+        .unwrap();
+        // Geometry develops only the canvas, which fits.
+        s.execute(RAW, json!({"perspectiveRotate": 2})).unwrap();
+        // Without Geometry the whole extent is developed, which does not.
+        let err = s.execute(RAW, json!({"exposure": 1})).unwrap_err();
+        assert!(err.to_string().contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn camera_raw_geometry_respects_a_transparency_lock() {
+        let mut s = session(8);
+        s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
+        let (corner, steps) = (active_px(&s, 1, 1), s.active().unwrap().history.past_len());
+        let err = s.execute(RAW, json!({"perspectiveRotate": 5})).unwrap_err();
+        assert!(err.to_string().contains("transparency"), "{err}");
+        assert_eq!(active_px(&s, 1, 1), corner);
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        // Settings that keep alpha still apply.
+        s.execute(RAW, json!({"exposure": 0.5})).unwrap();
+    }
+
+    #[test]
+    fn camera_raw_geometry_respects_a_transparency_lock_on_a_smart_object() {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let err = s.execute(RAW, json!({"perspectiveRotate": 5})).unwrap_err();
+        assert!(err.to_string().contains("transparency"), "{err}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        // Settings that keep alpha still go on as a Smart Filter.
+        s.execute(RAW, json!({"exposure": 0.5})).unwrap();
     }
 
     #[test]
