@@ -1564,7 +1564,6 @@ fn every_raster_refusal_reason_is_reported_once() {
     assert_eq!(dropped("too much memory"), 1, "{:?}", result.warnings);
 }
 
-
 /// Decoded content remains bounded even when an unreadable image spent the resolver's budget.
 #[test]
 fn damaged_images_do_not_hide_decoded_text_byte_overruns() {

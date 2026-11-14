@@ -612,11 +612,7 @@ struct SvgRefusals {
 
 fn charge_svg_content(bytes: usize, refusals: &SvgRefusals) {
     let budget = usize::try_from(MAX_BOUNDED_SVG_BYTES).unwrap_or(usize::MAX);
-    if refusals
-        .content_bytes
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(bytes).filter(|total| *total <= budget))
-        .is_err()
-    {
+    if refusals.content_bytes.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(bytes).filter(|total| *total <= budget)).is_err() {
         refusals.over_budget.store(true, Ordering::Relaxed);
     }
 }
