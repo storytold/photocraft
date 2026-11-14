@@ -7,12 +7,12 @@
 //! alpha channels of every other mode (max = selected). Channel names come from resources 1006 /
 //! 1045 and ink colours from DisplayInfo (1077), exactly as for spot channels in the other modes.
 
+use craft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
+use craft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
+use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, PsdFile, TaggedBlock};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::Rect;
-use photocraft_psd::file::{GlobalLayerMask, LayerInfoPlacement};
-use photocraft_psd::resources::{ImageResource, ResolutionInfo, ids, version_info_resource};
-use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, PsdFile, TaggedBlock};
 use photocraft_raster::Surface;
 
 use crate::pixels::{encode_be, psd_depth};
@@ -158,7 +158,7 @@ pub(crate) fn document_to_psd(
     }
     // Alpha identifiers: one u32 per channel, only while they still match the channels.
     let keep = |id: u16, data: &[u8]| id != ALPHA_IDENTIFIERS || data.len() == channels.len().saturating_mul(4);
-    let color_mode_data = photocraft_psd::hdr::color_mode_data_for_depth(header.depth);
+    let color_mode_data = craft_psd::hdr::color_mode_data_for_depth(header.depth);
     let file = layerless_file(doc, header, image_data, color_mode_data, resources, keep, size_limit, &mut warnings, patterns);
     (file, warnings)
 }
@@ -241,7 +241,7 @@ mod import_allocation_tests {
 
     #[test]
     fn missing_planes_remain_recoverable_without_reading_past_input() {
-        let file = photocraft_psd::testgen::merged_only(photocraft_psd::Version::Psd, PsdMode::Multichannel, 8, Compression::Raw, 3, 2);
+        let file = craft_psd::testgen::merged_only(craft_psd::Version::Psd, PsdMode::Multichannel, 8, Compression::Raw, 3, 2);
         let mut doc = Document::new("Partial", photocraft_geom::Size::new(3, 2), ColorMode::Multichannel, SampleType::U8);
         let mut warnings = Vec::new();
         import(&file, &[0; 6], &mut doc, &[], &mut warnings).unwrap();
