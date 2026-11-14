@@ -329,6 +329,50 @@ fn keys_held_in_a_panel_window_count_as_released_once_it_loses_the_keyboard() {
     assert_eq!(held(&mut desktop), [], "released once a field of the window takes keyboard focus");
 }
 
+/// #11555: ⌘Z through the Mac menu, then Z held for the Zoom tool in a panel's own window: letting
+/// go gives the Mixer Brush back. The menu's press of Z had no release (egui-winit drops the key-up
+/// of a key-down AppKit took), so the main window still counted Z as held and the Zoom tool stayed
+/// until Z was pressed again there.
+#[test]
+fn a_letter_held_in_a_panel_window_after_a_menu_undo_springs_back() {
+    let mut desktop = Desktop::new(app_with_document());
+    desktop.h.state_mut().run("window.panel.float", json!({"panel": "brushes"})).unwrap();
+    desktop.steps(3);
+    let viewport = desktop.window_of("brushes").unwrap();
+    let app = desktop.h.state_mut();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.ui.tool = crate::state::Tool::MixerBrush;
+    let undo = crate::native_menu::Chord::parse("Cmd+Z").unwrap();
+    app.services.native_menu = Some(crate::native_menu::NativeMenu::new(Box::new(MenuKey(vec![crate::native_menu::Event::Key(undo)]))));
+    // A pass of the main window's input and shortcuts, as eframe runs it.
+    let main = |desktop: &mut Desktop, events: Vec<Event>| {
+        let ctx = desktop.h.ctx.clone();
+        let mut raw = {
+            let host = desktop.host.borrow();
+            egui::RawInput { viewports: host.infos(), focused: host.focus.is_none(), events, ..Default::default() }
+        };
+        eframe::App::raw_input_hook(desktop.h.state_mut(), &ctx, &mut raw);
+        ctx.run_ui(raw, |ui| crate::shortcuts::handle(desktop.h.state_mut(), ui.ctx())).textures_delta.clear();
+    };
+    let layers = |desktop: &Desktop| desktop.h.state().session.active().unwrap().doc.layers.len();
+    let before = layers(&desktop);
+    // ⌘ down, Z taken by the menu, ⌘ up: the Z key-up never arrives.
+    main(&mut desktop, vec![Event::ModifiersChanged(Modifiers::COMMAND)]);
+    main(&mut desktop, vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    assert_eq!(layers(&desktop), before - 1, "⌘Z undid the new layer");
+
+    // A brush picked in the Brushes window gives it the keyboard; Z held there is the Zoom tool.
+    desktop.host.borrow_mut().focus = Some(viewport);
+    let z = |pressed| Event::Key { key: Key::Z, physical_key: Some(Key::Z), pressed, repeat: false, modifiers: Modifiers::NONE };
+    desktop.send(viewport, vec![z(true)]);
+    assert_eq!(desktop.h.state().ui.tool, crate::state::Tool::Zoom, "held Z is the Zoom tool");
+    desktop.steps(30);
+    desktop.send(viewport, vec![z(false)]);
+    main(&mut desktop, vec![]);
+    assert_eq!(desktop.h.state().ui.tool, crate::state::Tool::MixerBrush, "letting go of Z gives the Mixer Brush back");
+    assert_eq!(desktop.h.state().ui.spring, None);
+}
+
 #[test]
 fn a_dialog_blocks_the_panel_windows() {
     let about = |app: &mut PhotocraftApp| _ = app.ui.open_dialog(crate::state::DialogKind::About, Default::default());
