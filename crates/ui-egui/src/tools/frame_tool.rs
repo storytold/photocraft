@@ -99,8 +99,18 @@ fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
         return None;
     }
     let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, l);
-    (!b.is_empty() && i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
+    let whole = photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, l);
+    // Each frame dimension must reach one third of the layer's bounds, not just overlap it (#13861).
+    // Widen before subtracting so even extreme input coordinates cannot overflow.
+    let width = i128::from(r[2]) - i128::from(r[0]);
+    let height = i128::from(r[3]) - i128::from(r[1]);
+    if b.is_empty() || width * 3 < i128::from(whole.x1) - i128::from(whole.x0) || height * 3 < i128::from(whole.y1) - i128::from(whole.y0) {
+        return None;
+    }
+    (i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
 }
+#[cfg(test)]
+mod content_threshold_tests;
 fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
         app.ui.status = e;
