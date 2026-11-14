@@ -62,7 +62,7 @@ use pen::pen_to_json;
 pub(crate) use pen::{PATH_OPS, path_op_field, pen_path, pen_replace};
 pub use pen::{
     cancel_stale, closes_path_at, continues_path_at, freeform_finish, pen_break_handle, pen_commit, pen_down, pen_end, pen_enter, pen_grab_handle, pen_move,
-    pen_undo_last_point, pen_up,
+    pen_relink_handle, pen_undo_last_point, pen_up,
 };
 #[cfg(test)]
 use pen::{closing, pen_path_op};
@@ -149,6 +149,9 @@ pub struct PenPath {
     /// Re-dragging the final anchor changes its outgoing control only; the incoming curve stays put.
     #[serde(skip)]
     pub adjusting_last: bool,
+    /// Relink only a pair broken during this new-anchor drag, not a re-grab or close-drag.
+    #[serde(skip)]
+    pub(crate) relink_on_alt_release: bool,
     /// Space moves the anchor and both handles together during a Pen drag.
     #[serde(skip)]
     pub reposition: bool,

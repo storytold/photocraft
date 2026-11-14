@@ -22,8 +22,12 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
     if tool.is_type() && app.drag.is_none() {
         crate::type_tool::pointer_move(app, x, y, mods);
     }
-    if tool == Tool::Pen && mods.alt {
-        crate::vector_ui::pen_break_handle(app);
+    if tool == Tool::Pen {
+        if mods.alt {
+            crate::vector_ui::pen_break_handle(app);
+        } else {
+            crate::vector_ui::pen_relink_handle(app);
+        }
     }
     if tool == Tool::Pen {
         crate::vector_ui::pen_move(app, x, y, mods.shift);
@@ -736,6 +740,10 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                 app.ui.caret_blink_time = app.last_frame_time;
             }
             if tool == Tool::Pen {
+                // Alt may go up immediately before the mouse, with no intervening move/frame.
+                if !mods.alt {
+                    crate::vector_ui::pen_relink_handle(app);
+                }
                 crate::vector_ui::pen_up(app);
             } else if tool == Tool::CurvaturePen {
                 crate::vector_ui::curvature_up(app);
