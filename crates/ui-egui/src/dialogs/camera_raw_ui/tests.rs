@@ -543,6 +543,41 @@ fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
     assert_eq!(develop(true, false).0, 1, "Cancel decodes nothing more");
 }
 
+/// A pathless raw opened as a background job keeps its bytes for Camera Raw: Open re-develops it
+/// from the sensor data (sensor-stage settings), the same pixels as the inline open gives, and not
+/// as an RGB adjustment of the default develop.
+#[test]
+fn a_pathless_background_raw_open_still_redevelops_from_the_sensor_data() {
+    let ctx = egui::Context::default();
+    let sensor_stage = json!({"set": {"exposure": 1.0, "temperature": 30}, "commit": true});
+    let (mut inline, dng) = raw_app();
+    inline.open_bytes("IMG_0008.dng", &dng).unwrap();
+    let raw = take_queued(&mut inline).unwrap();
+    open_raw(&mut inline, &ctx, raw).unwrap();
+    let r = menu(&mut inline, &ctx, "filter.cameraRaw", &json!({"ui": sensor_stage})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], true, "{r}");
+    let fresh = pixels(&inline);
+
+    let (mut app, dng) = raw_app();
+    app.background_jobs = true;
+    app.open_bytes("IMG_0008.dng", &dng).unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !app.jobs.opens.is_empty() || app.session.has_jobs() {
+        assert!(std::time::Instant::now() < end, "the open did not finish within 20 s");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let raw = take_queued(&mut app).expect("a raw open queues the dialog");
+    assert!(raw.path.is_none() && raw.bytes.is_some(), "the bytes survive the background open");
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().raw_open.as_ref().unwrap().decoded.is_some(), "the open's decode is taken, not decoded again");
+    // The re-develop of the commit runs inline: this is about the source it has.
+    app.background_jobs = false;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": sensor_stage})).unwrap().unwrap();
+    assert_eq!(r["redeveloped"], true, "{r}");
+    assert_eq!(pixels(&app), fresh, "the same pixels as a fresh re-develop");
+}
+
 #[test]
 fn the_demosaic_method_is_chosen_at_open() {
     let (mut app, dng) = raw_app();
