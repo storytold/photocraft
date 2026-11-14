@@ -916,6 +916,9 @@ mod file_names_tests;
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
 #[cfg(test)]
+#[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
+mod from_group_hidden_bounds_tests;
+#[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
 #[cfg(test)]
