@@ -297,7 +297,7 @@ impl Headless {
         })
     }
 
-    /// Export each data set of a document as its own flattened file beneath the write root: the
+    /// Export each data set of a document as its own file (a layered PSD unless `format` names another) beneath the write root: the
     /// capability-scoped `file.export.dataSetsAsFiles` (#3216). As in the command, the whole
     /// batch is planned first and colliding names are refused before any file is written; the
     /// directory itself is created before that, so a refused batch can leave it empty behind.
@@ -317,7 +317,13 @@ impl Headless {
             let written = photocraft_engine::export_data_sets_with(&this.session, params, |name, bytes| {
                 outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
             });
-            exported(dir, written, &mut outputs)
+            let (names, warnings) = match written {
+                Ok(done) => (Ok(done.files), done.warnings),
+                Err(error) => (Err(error), Vec::new()),
+            };
+            let mut result = exported(dir, names, &mut outputs)?;
+            result["warnings"] = json!(warnings);
+            Ok(result)
         })
     }
 
