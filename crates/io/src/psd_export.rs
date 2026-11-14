@@ -120,6 +120,10 @@ struct Ex<'c> {
     /// `TextIndex`, others get the next free number; see `photocraft_text::psd::build_txt2`),
     /// written into the `TySh` data this export re-serializes.
     text_index: std::collections::HashMap<photocraft_doc::LayerId, i32>,
+    /// The file's `Txt2` no longer matches its type layers (one was edited or added): every type
+    /// layer gets a generated `TySh` and the old `Txt2` is dropped. Photoshop refuses a file that
+    /// mixes its own `Txt2` with `TySh` data written here.
+    regen_text: bool,
     canvas: photocraft_geom::Rect,
     records: Vec<LayerRecord>,
     warnings: Vec<String>,
@@ -421,6 +425,26 @@ impl Ex<'_> {
     /// overrides) plus regenerated adjustment/fill blocks. A preserved
     /// adjustment or fill block is reused verbatim while it still decodes to
     /// the layer's current parameters; otherwise it is regenerated.
+    /// The `TySh` data a type layer is written with.
+    fn text_tysh(&self, id: photocraft_doc::LayerId, t: &photocraft_doc::TextLayer) -> Option<std::sync::Arc<Vec<u8>>> {
+        // Text layers without PSD data (created here) get a generated TySh, and so does every
+        // type layer once the file's `Txt2` is not kept (`regen_text`).
+        let generated = (t.psd_raw.is_none() || self.regen_text).then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
+        let src = if self.regen_text { generated.as_ref() } else { t.psd_raw.as_ref().or(generated.as_ref()) };
+        // Character/paragraph style sheets from the document's styles.
+        let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
+        // `TextIndex` names the layer's object in the document's `Txt2` (where the
+        // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
+        // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
+        // Duplicate or out-of-range file TextIndex values must be renumbered,
+        // however, even when no style sheet needed rebuilding: otherwise two
+        // layers may read the same Txt2 object and acquire the wrong kerning.
+        let idx = self.text_index.get(&id).copied().unwrap_or(0);
+        let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
+        let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
+        fresh.or(styled).or_else(|| src.cloned())
+    }
+
     fn content_blocks(&mut self, l: &Layer) -> Vec<TaggedBlock> {
         let mut raw: Vec<([u8; 4], Vec<u8>)> = l.psd_blocks.iter().filter(|(k, _)| !REGENERATED.contains(&k)).map(|(k, d)| (*k, d.to_vec())).collect();
         // A stale multi-effects block would override the regenerated lfx2.
@@ -519,21 +543,7 @@ impl Ex<'_> {
                     self.warnings
                         .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
                 }
-                // Text layers without PSD data (created here) get a generated TySh.
-                let generated = t.psd_raw.is_none().then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
-                let src = t.psd_raw.as_ref().or(generated.as_ref());
-                // Character/paragraph style sheets from the document's styles.
-                let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
-                // `TextIndex` names the layer's object in the document's `Txt2` (where the
-                // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
-                // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
-                // Duplicate or out-of-range file TextIndex values must be renumbered,
-                // however, even when no style sheet needed rebuilding: otherwise two
-                // layers may read the same Txt2 object and acquire the wrong kerning.
-                let idx = self.text_index.get(&l.id).copied().unwrap_or(0);
-                let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
-                let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
-                set_principal(&mut raw, &[b"TySh"], fresh.as_ref().or(styled.as_ref().or(src)));
+                set_principal(&mut raw, &[b"TySh"], self.text_tysh(l.id, t).as_ref());
                 if !raw.iter().any(|(k, _)| k == b"TySh") {
                     self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
                 }
@@ -827,8 +837,13 @@ impl Ex<'_> {
         use photocraft_doc::SmartSource;
         let preview = self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?)));
         let mut source = match &sm.source {
-            // A file of the imported document, or one its placed-layer data names (a missing
-            // link stays a smart object, as in Photoshop).
+            // Placed-layer data naming a file the document has no record of (not even an external
+            // link): Photoshop opens such a file but fails to save it ("disk error", -32005), so
+            // the layer is written as the pixels it shows.
+            SmartSource::Linked { path } if !path.is_empty() && !self.smart.known.contains(path) && template.is_some_and(|t| t.idnt == *path) => {
+                Err(format!("its source file {path} is missing from the document, and Photoshop can't save such a smart object"))
+            }
+            // A file of the imported document, or one its placed-layer data names.
             SmartSource::Linked { path } if self.smart.known.contains(path) || template.is_some_and(|t| t.idnt == *path) => {
                 let stored = template.filter(|t| t.idnt == *path).and_then(|t| crate::smart_map::stored_size(&t.descriptor));
                 let geometry = stored.map(|size| (size, f64::from(self.dpi))).or_else(|| {

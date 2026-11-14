@@ -26,7 +26,7 @@ mod import;
 
 #[cfg(test)]
 pub(crate) use build::font_entry;
-pub use build::{MAX_TEXT_INDEX, build_engine_data, build_txt2, build_txt2_at, build_tysh, needs_txt2};
+pub use build::{MAX_TEXT_INDEX, build_engine_data, build_txt2, build_txt2_at, build_tysh, made_here_without_document_sizes, needs_txt2};
 pub(crate) use build::{font_set, paragraph_properties, style_sheet_data};
 pub use edit::{set_text_index, text_index, txt2_object_count};
 #[cfg(test)]
