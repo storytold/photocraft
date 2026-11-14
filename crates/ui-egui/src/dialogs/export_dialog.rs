@@ -151,6 +151,13 @@ fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
     }
 }
 
+/// Whether Enter answers the dialog with `f` as its fields the way its default button does. Export
+/// As starts only from a click on Export, as in Photoshop: Enter, with no text field taking it,
+/// leaves the dialog open (#13740). Every other dialog keeps Enter = OK.
+pub(crate) fn enter_confirms(f: &Map<String, Value>) -> bool {
+    !f.contains_key("__export")
+}
+
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
 pub fn open_layer(app: &mut PhotocraftApp, layer: photocraft_doc::LayerId) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
@@ -475,6 +482,9 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         // Metadata: None drops EXIF and resolution as well as XMP. A missing key keeps them,
         // which is what Export As wrote before the choice existed.
         embed_metadata: metadata != "none",
+        // Export As's JPGs are progressive (SOF2) in the reference application, measured at its
+        // default quality; the scan layout is one setting for the whole dialog.
+        jpeg_format: photocraft_codecs::JpegFormat::Progressive,
         ..Default::default()
     }
 }
@@ -1174,6 +1184,12 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 mod srgb_default_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod enter_key_tests;
+
+#[cfg(test)]
+mod jpg_progressive_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
