@@ -1,3 +1,5 @@
+use photocraft_color::SampleType;
+
 use super::manage::gray_document;
 use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
@@ -63,6 +65,10 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let n = sf.channels();
         let colors = sf.mode.color_channels();
+        // #14490: at 8 bit Apply Image truncates the Add/Subtract quotient instead of rounding it
+        // to the nearest level. Nothing else is measured, so only this depth and only these two
+        // blends take that path; Calculations, 16 and 32 bit and the blend modes stay as they are.
+        let truncates = matches!(blending, Blending::Add { .. } | Blending::Subtract { .. }) && sf.sample == SampleType::U8;
         let mut v = surf.read_region(area);
         for (i, px) in v.chunks_exact_mut(n).enumerate() {
             let base_a = if sf.alpha { px[colors].clamp(0.0, 1.0) } else { 1.0 };
@@ -77,6 +83,10 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // pixels (where it is transparent the source shows as is), and the alpha grows by
             // source-over, so applying to an empty layer copies the source in any mode.
             let out_a = if preserve { base_a } else { w + base_a * (1.0 - w) };
+            // The truncation only replaces today's rounding where the blend is what lands on the
+            // pixel: at full weight (opacity 100 %, no mask, no selection) and on an opaque pixel.
+            // Attenuated blends are not measured (#14490), so they keep the old rounding.
+            let lands_whole = truncates && w >= 1.0 && base_a >= 1.0;
             for (c, b) in px[..colors].iter_mut().enumerate() {
                 // Blended as tone, as Photoshop does: a CMYK layer's ink turns into tone and back
                 // (Multiply darkens, so it adds ink). One plane (a channel, a mask) is a tone already.
@@ -85,7 +95,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
                 let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
                 let top = if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
                 let base = tone(sf.mode, *b);
-                let blended = top + (blending.apply(base, top) - top) * base_a;
+                let applied = if lands_whole { blending.apply_truncated_at_8bit(base, top) } else { blending.apply(base, top) };
+                let blended = top + (applied - top) * base_a;
                 *b = tone(sf.mode, if preserve { base + (blended - base) * w } else { (w * blended + base_a * (1.0 - w) * base) / out_a });
             }
             if sf.alpha {
