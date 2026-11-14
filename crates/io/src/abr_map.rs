@@ -57,7 +57,8 @@ pub fn map_file(f: &AbrFile, group: &str) -> AbrImport {
 /// [`map_file`] that checks `ctl` before each brush.
 pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, photocraft_raster::Cancelled> {
     let mut out = AbrImport { version: f.version, warnings: f.warnings.clone(), ..Default::default() };
-    let mut m = Mapper { file: f, warnings: BTreeSet::new(), unknown: BTreeSet::new(), tips: Default::default() };
+    let mut m =
+        Mapper { file: f, warnings: BTreeSet::new(), unknown: BTreeSet::new(), tips: Default::default(), patterns: Default::default(), pattern_index: None };
     let total = f.legacy.len().max(f.samples.len()).max(f.presets.len()).max(1) as f32;
     let step = |i: usize| -> Result<(), photocraft_raster::Cancelled> {
         ctl.check()?;
@@ -258,9 +259,35 @@ struct Mapper<'a> {
     /// Tips already converted, by sample: presets can name one sample thousands of times, and a
     /// tile clones by sharing its data.
     tips: std::collections::HashMap<*const AbrSample, (photocraft_paint::tile::GrayTile, f32)>,
+    /// Texture patterns already converted (`None`: unreadable), by pattern, as for tips.
+    patterns: std::collections::HashMap<*const PsdPattern, Option<GrayTile>>,
+    /// The file's patterns by id and by name, the first of each (built on first use).
+    pattern_index: Option<PatternIndex<'a>>,
 }
 
-impl Mapper<'_> {
+/// Index of the first pattern with each (non-empty) id and each (non-empty) name.
+#[derive(Default)]
+struct PatternIndex<'a> {
+    ids: std::collections::HashMap<&'a str, usize>,
+    names: std::collections::HashMap<&'a str, usize>,
+}
+
+impl<'a> PatternIndex<'a> {
+    fn new(patterns: &'a [PsdPattern]) -> Self {
+        let mut index = PatternIndex::default();
+        for (i, p) in patterns.iter().enumerate() {
+            if !p.id.is_empty() {
+                index.ids.entry(p.id.as_str()).or_insert(i);
+            }
+            if !p.name.is_empty() {
+                index.names.entry(p.name.as_str()).or_insert(i);
+            }
+        }
+        index
+    }
+}
+
+impl<'a> Mapper<'a> {
     /// A sampled tip (downsampled to [`MAX_TIP_EDGE`]) and its size (larger side).
     fn tip(&mut self, s: &AbrSample) -> (TipShape, f32) {
         if let Some((tile, size)) = self.tips.get(&std::ptr::from_ref(s)) {
@@ -318,9 +345,12 @@ impl Mapper<'_> {
     fn pattern(&mut self, t: &Descriptor) -> Pattern {
         let id = text(t, "Idnt").unwrap_or_default();
         let name = text(t, "Nm  ").unwrap_or_default();
-        let found =
-            self.file.patterns.iter().find(|p| !id.is_empty() && p.id == id).or_else(|| self.file.patterns.iter().find(|p| !name.is_empty() && p.name == name));
-        match found.and_then(pattern_tile) {
+        let file: &'a AbrFile = self.file;
+        let patterns: &'a [PsdPattern] = &file.patterns;
+        let index = self.pattern_index.get_or_insert_with(|| PatternIndex::new(patterns));
+        let found = index.ids.get(id.as_str()).or_else(|| index.names.get(name.as_str())).and_then(|&i| patterns.get(i));
+        let tile = found.and_then(|p| self.patterns.entry(std::ptr::from_ref(p)).or_insert_with(|| pattern_tile(p)).clone());
+        match tile {
             Some(tile) => Pattern::Tile(tile),
             None => {
                 let label = if name.is_empty() { id } else { name };
@@ -534,6 +564,17 @@ fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
     if w <= max && h <= max {
         return (w, h, v);
     }
+    fit_with(w, h, max, |i| v.get(i).copied())
+}
+
+/// [`fit`] over a plane read on demand: `at(i)` is the sample at row-major index `i` (`None`
+/// where the plane has none, which the average leaves out). Only the output is allocated, never
+/// a `w × h` plane.
+fn fit_with(w: u32, h: u32, max: u32, at: impl Fn(usize) -> Option<f32>) -> (u32, u32, Vec<f32>) {
+    if w <= max && h <= max {
+        let n = w as usize * h as usize;
+        return (w, h, (0..n).map(|i| at(i).unwrap_or(0.0)).collect());
+    }
     let k = (w.max(h) as f32 / max as f32).max(1.0);
     let (nw, nh) = (((w as f32 / k).round() as u32).clamp(1, max), ((h as f32 / k).round() as u32).clamp(1, max));
     let mut out = vec![0.0f32; nw as usize * nh as usize];
@@ -551,7 +592,7 @@ fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
             let (mut sum, mut n) = (0.0, 0usize);
             for yy in y0..y1 {
                 for xx in x0..x1 {
-                    if let Some(s) = v.get(yy * w as usize + xx) {
+                    if let Some(s) = yy.checked_mul(w as usize).and_then(|row| row.checked_add(xx)).and_then(&at) {
                         sum += s;
                         n += 1;
                     }
@@ -563,48 +604,81 @@ fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
     (nw, nh, out)
 }
 
+/// One colour plane of a pattern, read a sample at a time.
+enum Plane<'a> {
+    U8(&'a [u8]),
+    U16(&'a [[u8; 2]]),
+    F32(&'a [[u8; 4]]),
+}
+
+impl<'a> Plane<'a> {
+    /// Plane `ch` at `depth` bits when it holds at least `n` samples.
+    fn new(ch: &'a [u8], depth: u16, n: usize) -> Option<Self> {
+        let plane = match depth {
+            8 => Plane::U8(ch),
+            16 => Plane::U16(ch.as_chunks::<2>().0),
+            32 => Plane::F32(ch.as_chunks::<4>().0),
+            _ => return None,
+        };
+        (plane.len() >= n).then_some(plane)
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Plane::U8(s) => s.len(),
+            Plane::U16(s) => s.len(),
+            Plane::F32(s) => s.len(),
+        }
+    }
+
+    /// Sample `i` as 0..1.
+    fn at(&self, i: usize) -> f32 {
+        match self {
+            Plane::U8(s) => s.get(i).map_or(0.0, |&b| f32::from(b) / 255.0),
+            Plane::U16(s) => s.get(i).map_or(0.0, |b| f32::from(u16::from_be_bytes(*b)) / 65535.0),
+            Plane::F32(s) => s.get(i).map_or(0.0, |b| f32::from_be_bytes(*b).clamp(0.0, 1.0)),
+        }
+    }
+}
+
 /// A pattern as a grayscale texture tile (luminance; transparent areas count as white).
+///
+/// Luminance is computed per sample as the downsampling reads it, so the work and memory follow
+/// the planes the file decoded to, never a full-size `f32` copy of a large pattern. Indexed
+/// patterns are read only at 8 bits with an index for every pixel.
 fn pattern_tile(p: &PsdPattern) -> Option<GrayTile> {
     let (w, h) = (p.width, p.height);
-    let n = w as usize * h as usize;
+    let n = (w as usize).checked_mul(h as usize)?;
     if n == 0 {
         return None;
     }
-    let plane = |c: usize| -> Option<Vec<f32>> {
-        let ch = p.channels.get(c)?;
-        Some(match p.depth {
-            8 => ch.iter().take(n).map(|&b| f32::from(b) / 255.0).collect(),
-            16 => ch.as_chunks::<2>().0.iter().take(n).map(|b| f32::from(u16::from_be_bytes(*b)) / 65535.0).collect(),
-            32 => ch.as_chunks::<4>().0.iter().take(n).map(|b| f32::from_be_bytes(*b).clamp(0.0, 1.0)).collect(),
-            _ => return None,
-        })
-        .filter(|v: &Vec<f32>| v.len() == n)
-    };
-    let gray: Vec<f32> = match p.mode {
+    let plane = |c: usize| Plane::new(p.channels.get(c)?, p.depth, n);
+    let (w, h, gray) = match p.mode {
         3 => {
             let (r, g, b) = (plane(0)?, plane(1)?, plane(2)?);
-            (0..n).map(|i| 0.299 * r[i] + 0.587 * g[i] + 0.114 * b[i]).collect()
+            fit_with(w, h, MAX_PATTERN_EDGE, |i| Some(0.299 * r.at(i) + 0.587 * g.at(i) + 0.114 * b.at(i)))
         }
         2 => {
             let pal = p.palette.as_deref()?;
-            let idx = p.channels.first()?;
-            (0..n)
-                .map(|i| {
-                    let k = usize::from(idx.get(i).copied().unwrap_or(0)) * 3;
-                    let c = |o: usize| f32::from(pal.get(k + o).copied().unwrap_or(0)) / 255.0;
-                    0.299 * c(0) + 0.587 * c(1) + 0.114 * c(2)
-                })
-                .collect()
+            let Plane::U8(idx) = plane(0).filter(|_| p.depth == 8)? else { return None };
+            let gray = |i: usize| {
+                let k = usize::from(idx.get(i).copied().unwrap_or(0)) * 3;
+                let c = |o: usize| f32::from(pal.get(k + o).copied().unwrap_or(0)) / 255.0;
+                0.299 * c(0) + 0.587 * c(1) + 0.114 * c(2)
+            };
+            fit_with(w, h, MAX_PATTERN_EDGE, |i| Some(gray(i)))
         }
         4 => {
             // CMYK planes are stored inverted (0 = full ink).
             let k = plane(3)?;
             let c = plane(0)?;
-            (0..n).map(|i| (c[i] * k[i]).clamp(0.0, 1.0)).collect()
+            fit_with(w, h, MAX_PATTERN_EDGE, |i| Some((c.at(i) * k.at(i)).clamp(0.0, 1.0)))
         }
-        _ => plane(0)?,
+        _ => {
+            let v = plane(0)?;
+            fit_with(w, h, MAX_PATTERN_EDGE, |i| Some(v.at(i)))
+        }
     };
-    let (w, h, gray) = fit(w, h, gray, MAX_PATTERN_EDGE);
     Some(GrayTile { width: w, height: h, data: gray.iter().map(|x| (x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect() })
 }
 
@@ -613,7 +687,134 @@ mod tests;
 
 #[cfg(test)]
 mod fit_tests {
-    use super::fit;
+    use super::*;
+
+    /// The box filter as it was before it read samples on demand: the oracle the streaming
+    /// version must match bit for bit.
+    fn reference_fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
+        if w <= max && h <= max {
+            return (w, h, v);
+        }
+        let k = (w.max(h) as f32 / max as f32).max(1.0);
+        let (nw, nh) = (((w as f32 / k).round() as u32).clamp(1, max), ((h as f32 / k).round() as u32).clamp(1, max));
+        let mut out = vec![0.0f32; nw as usize * nh as usize];
+        let span = |i: u32, n: u32, m: u32| {
+            let at = |k: u32| usize::try_from(u64::from(k) * u64::from(n) / u64::from(m)).unwrap_or(usize::MAX);
+            (at(i), at(i + 1).max(at(i).saturating_add(1)).min(n as usize))
+        };
+        for y in 0..nh {
+            let (y0, y1) = span(y, h, nh);
+            for x in 0..nw {
+                let (x0, x1) = span(x, w, nw);
+                let (mut sum, mut n) = (0.0, 0usize);
+                for yy in y0..y1 {
+                    for xx in x0..x1 {
+                        if let Some(s) = v.get(yy * w as usize + xx) {
+                            sum += s;
+                            n += 1;
+                        }
+                    }
+                }
+                out[(y * nw + x) as usize] = if n > 0 { sum / n as f32 } else { 0.0 };
+            }
+        }
+        (nw, nh, out)
+    }
+
+    /// `pattern_tile` as it was when it built whole `f32` planes (modes 1, 3, 4 and 8-bit 2).
+    fn reference_pattern_tile(p: &PsdPattern) -> Option<GrayTile> {
+        let (w, h) = (p.width, p.height);
+        let n = w as usize * h as usize;
+        let plane = |c: usize| -> Option<Vec<f32>> {
+            let ch = p.channels.get(c)?;
+            Some(match p.depth {
+                8 => ch.iter().take(n).map(|&b| f32::from(b) / 255.0).collect(),
+                16 => ch.as_chunks::<2>().0.iter().take(n).map(|b| f32::from(u16::from_be_bytes(*b)) / 65535.0).collect(),
+                32 => ch.as_chunks::<4>().0.iter().take(n).map(|b| f32::from_be_bytes(*b).clamp(0.0, 1.0)).collect(),
+                _ => return None,
+            })
+            .filter(|v: &Vec<f32>| v.len() == n)
+        };
+        let gray: Vec<f32> = match p.mode {
+            3 => {
+                let (r, g, b) = (plane(0)?, plane(1)?, plane(2)?);
+                (0..n).map(|i| 0.299 * r[i] + 0.587 * g[i] + 0.114 * b[i]).collect()
+            }
+            2 => {
+                let pal = p.palette.as_deref()?;
+                let idx = p.channels.first()?;
+                (0..n)
+                    .map(|i| {
+                        let k = usize::from(idx.get(i).copied().unwrap_or(0)) * 3;
+                        let c = |o: usize| f32::from(pal.get(k + o).copied().unwrap_or(0)) / 255.0;
+                        0.299 * c(0) + 0.587 * c(1) + 0.114 * c(2)
+                    })
+                    .collect()
+            }
+            4 => {
+                let k = plane(3)?;
+                let c = plane(0)?;
+                (0..n).map(|i| (c[i] * k[i]).clamp(0.0, 1.0)).collect()
+            }
+            _ => plane(0)?,
+        };
+        let (w, h, gray) = reference_fit(w, h, gray, MAX_PATTERN_EDGE);
+        Some(GrayTile { width: w, height: h, data: gray.iter().map(|x| (x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect() })
+    }
+
+    /// Deterministic noise bytes.
+    fn noise(len: usize, seed: u64) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn streaming_fit_matches_the_plane_fit() {
+        for (w, h) in [(1, 1), (1024, 1024), (1025, 3), (3000, 1100), (7, 4000), (2049, 2049)] {
+            let v: Vec<f32> = noise(w as usize * h as usize, u64::from(w * 31 + h)).iter().map(|&b| f32::from(b) / 255.0).collect();
+            let want = reference_fit(w, h, v.clone(), 1024);
+            assert_eq!(fit_with(w, h, 1024, |i| v.get(i).copied()), want, "{w}x{h}");
+            assert_eq!(fit(w, h, v, 1024), want, "{w}x{h}");
+        }
+        // A plane shorter than its rectangle averages the samples it has, as before.
+        let short = vec![1.0; 2000 * 1500 - 5000];
+        assert_eq!(fit(2000, 1500, short.clone(), 1024), reference_fit(2000, 1500, short, 1024));
+    }
+
+    #[test]
+    fn pattern_tiles_match_the_plane_conversion() {
+        for (w, h) in [(5, 3), (1500, 700), (64, 1100)] {
+            let n = w as usize * h as usize;
+            for (mode, channels) in [(1u32, 1usize), (3, 3), (4, 4), (9, 3), (2, 1)] {
+                for depth in [8u16, 16, 32] {
+                    if mode == 2 && depth != 8 {
+                        continue;
+                    }
+                    let bps = usize::from(depth / 8);
+                    let p = PsdPattern {
+                        mode,
+                        width: w,
+                        height: h,
+                        name: "P".into(),
+                        id: "p".into(),
+                        palette: (mode == 2).then(|| noise(768, 7)),
+                        depth,
+                        channels: (0..channels).map(|c| noise(n * bps, u64::from(mode) * 100 + c as u64 + u64::from(depth))).collect(),
+                        alpha: None,
+                    };
+                    assert_eq!(pattern_tile(&p), reference_pattern_tile(&p), "{w}x{h} mode {mode} depth {depth}");
+                    assert!(pattern_tile(&p).is_some(), "{w}x{h} mode {mode} depth {depth}");
+                }
+            }
+        }
+    }
 
     /// A tall, narrow plane: `(y + 1) * h` passes `u32::MAX` once `h` is over 2^32 / `max` rows.
     /// The ABR and pattern parsers cap edges well below that, but `fit` must not rely on it.

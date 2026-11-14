@@ -106,6 +106,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         "actions": names,
         "steps": steps,
         "unsupported": imp.unsupported,
+        "unsupportedCount": imp.unsupported_total,
         "functionKeys": keys.iter().map(|(n, k)| json!({"action": n, "key": k})).collect::<Vec<_>>(),
         "warnings": imp.warnings,
         "encoding": imp.encoding.as_deref().unwrap_or("UTF-8"),
