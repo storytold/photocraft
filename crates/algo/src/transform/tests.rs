@@ -130,6 +130,61 @@ fn stretched_single_column_stays_opaque() {
     }
 }
 
+#[test]
+fn bicubic_reduction_keeps_opaque_straight_edges() {
+    let mut s = rgba();
+    let rect = Rect::new(0, 0, 60, 36);
+    s.fill_rect(rect, &[0.125, 0.125, 0.125, 1.0]);
+    let h = Homography([0.5, 0.0, 10.0, 0.0, 0.5, 7.0, 0.0, 0.0, 1.0]);
+    let out = warp_surface(&s, rect, &h, Interp::Bicubic).unwrap();
+    for y in 7..25 {
+        for x in 10..40 {
+            let pixel = out.pixel(x, y);
+            assert!((pixel[3] - 1.0).abs() < 1e-6, "({x}, {y}) has alpha {}", pixel[3]);
+            assert_eq!(pixel, s.pixel(0, 0));
+        }
+    }
+}
+
+#[test]
+fn reduced_edges_follow_fractional_coverage_and_preserve_source_alpha() {
+    use photocraft_color::{ColorMode, SampleType};
+
+    let rect = Rect::new(-7, 5, 54, 42);
+    // This reflected, odd-sized crop maps to [7.25, 37.75] × [7.25, 25.75].
+    let h = Homography([-0.5, 0.0, 34.25, 0.0, 0.5, 4.75, 0.0, 0.0, 1.0]);
+    for (sample, tolerance) in [(SampleType::U8, 0.5 / 255.0), (SampleType::U16, 0.5 / 65535.0), (SampleType::F32, 1e-6)] {
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        s.fill_rect(Rect::new(-12, 0, 59, 47), &[1.0, 0.0, 0.0, 1.0]);
+        s.fill_rect(rect, &[0.125, 0.375, 0.625, 0.5]);
+        let out = warp_surface(&s, rect, &h, Interp::Bicubic).unwrap();
+        let source = s.pixel(0, 6);
+        for (x, y, coverage) in [(7, 7, 0.5625), (10, 7, 0.75), (37, 25, 0.5625), (37, 12, 0.75), (8, 8, 1.0), (6, 7, 0.0), (38, 25, 0.0)] {
+            let pixel = out.pixel(x, y);
+            assert!((pixel[3] - coverage * source[3]).abs() <= tolerance + 1e-7, "{sample:?}, ({x}, {y}): {pixel:?}");
+            if coverage > 0.0 {
+                for (actual, expected) in pixel[..3].iter().zip(&source[..3]) {
+                    assert!((actual - expected).abs() <= tolerance, "{sample:?}, ({x}, {y}): pixels outside the crop bled in");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_reduced_subpixel_object_keeps_its_covered_area() {
+    let mut s = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::F32, true));
+    let rect = Rect::new(0, 0, 60, 36);
+    s.fill_rect(rect, &[0.125, 0.125, 0.125, 1.0]);
+    let h = Homography([0.001, 0.0, 10.95, 0.0, 0.001, 7.97, 0.0, 0.0, 1.0]);
+    let out = warp_surface(&s, rect, &h, Interp::Bicubic).unwrap();
+    for (x, y, alpha) in [(10, 7, 0.05 * 0.03), (11, 7, 0.01 * 0.03), (10, 8, 0.05 * 0.006), (11, 8, 0.01 * 0.006)] {
+        let actual = out.sample_channel(x, y, 3);
+        assert!((actual - alpha).abs() < 1e-7, "({x}, {y}): {actual} vs {alpha}");
+    }
+    assert_eq!(out.content_bounds(), Rect::new(10, 7, 12, 9));
+}
+
 /// Photoshop 27.11's Free Transform, Bicubic, 200 % about the centre of a 64 px image whose left
 /// half is grey 64 and right half grey 192: the row across the edge, columns 26..36.
 #[test]
