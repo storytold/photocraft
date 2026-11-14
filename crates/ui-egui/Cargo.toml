@@ -53,6 +53,8 @@ serde_json = { workspace = true }
 toml = { version = "1.1", default-features = false, features = ["std", "serde"] }
 log = { workspace = true }
 base64 = "0.23"
+# Reading Contact Sheet II settings files (`contact_sheet_settings_file.rs`); already linked through photocraft-io.
+roxmltree = "0.21"
 web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -93,6 +93,7 @@ pub(crate) mod params {
         },
         ParamFamily {
             check: Some(contact_sheet_ui::check),
+            footer: Some(contact_sheet_ui::footer),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == contact_sheet_ui::COMMAND, contact_sheet_ui::run)
         },
@@ -423,6 +424,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     preset_group_prompt::answer,
     open_prompt::answer_prompt,
     alerts::answer,
+    contact_sheet_ui::answer,
     crate::jobs_ui::answer,
     crate::gpu_status::answer,
     crate::actions::library::answer,
