@@ -45,6 +45,11 @@ pub struct Stats {
     pub layers_batched: usize,
     /// Batched passes drawn with Normal's code alone (`fs_layerbatch_normal`), summed over chunks.
     pub normal_batches: usize,
+    /// Passes not bound because they draw in none of a cell's chunks (a layer elsewhere on the
+    /// canvas), summed over cells.
+    pub passes_culled: usize,
+    /// Passes a cell considered binding, from the checkpoint it resumes at, summed over cells.
+    pub pass_bindings: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
