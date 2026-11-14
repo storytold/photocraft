@@ -493,14 +493,34 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     // names the Background while another layer is selected.
     let select = p.get("select").and_then(Value::as_bool).unwrap_or(true);
     let id = s.edit("Layer From Background", |doc, active| {
+        let bg = doc.background().ok_or(EngineError::Other("the document has no Background layer".into()))?;
+        let (id, name) = (bg.id, lowest_free_layer_name(doc, bg.id));
+        // The name is read before the layer is unlocked, from the other layers' names.
         let l = doc.background_mut().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         unlock_background(l);
+        l.name = name;
         if select || active.is_none() {
-            *active = Some(l.id);
+            *active = Some(id);
         }
-        Ok(l.id)
+        Ok(id)
     })?;
     Ok(json!({"layer": id.0}))
+}
+
+/// The name `layer_from_background` gives the converted Background: "Layer N" with the lowest N of
+/// 0 or more that no other top-level layer is named (#14821). `Document::next_layer_name` counts
+/// from 1, so this is the 0-based variant the issue measures; it lives next to the command because
+/// the rule is the command's alone - the other callers of `unlock_background` /
+/// `background_to_layer` (an edit the Background can't take, artboards, the crop) keep naming the
+/// layer "Layer 0" as today.
+///
+/// Only top-level names count, and they are compared exactly: whether a name inside a group, or a
+/// name written with other capitals ("LAYER 1"), blocks a number is not measured in #14821 (asked
+/// on the issue), so the search stays with the measured cases.
+fn lowest_free_layer_name(doc: &Document, renamed: LayerId) -> String {
+    let taken: std::collections::HashSet<&str> = doc.layers.iter().filter(|l| l.id != renamed).map(|l| l.name.as_str()).collect();
+    // At most `taken.len() + 1` names from 0 are needed, so the search always succeeds.
+    (0..=taken.len()).map(|n| format!("Layer {n}")).find(|n| !taken.contains(n.as_str())).unwrap_or_else(|| "Layer".to_string())
 }
 
 pub(crate) fn unlock_background(l: &mut Layer) {
