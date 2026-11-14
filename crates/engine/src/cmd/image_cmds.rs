@@ -1214,6 +1214,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
+    if let Some(st) = s.active_mut() {
+        st.history.set_current_label("Duplicate Image");
+        // The copy has never been saved; closing it must ask before discarding its content.
+        st.saved_revision = 0;
+    }
     Ok(json!({ "document": index, "name": name }))
 }
 
@@ -1299,6 +1304,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_cmds/duplicate_history_tests.rs"]
+mod duplicate_history_tests;
 
 #[cfg(test)]
 #[path = "image_size_drops_selection_tests.rs"]
