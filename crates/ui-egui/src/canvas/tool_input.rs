@@ -410,13 +410,28 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
     }
     match ev {
         // ⇧-click places a colour sampler instead of sampling (#11748); ⇧⌥ on a sampler deletes it.
-        ToolEvent::Down { x, y, .. } if mods.shift => eyedropper_shift_click(app, x, y, mods.alt),
-        // While ⇧ stays held after that press, moves sample nothing.
-        ToolEvent::Move { .. } if mods.shift => {}
-        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, mods),
-        ToolEvent::Up { .. } => {}
+        ToolEvent::Down { x, y, .. } if mods.shift => {
+            SAMPLER_PRESS.set(true);
+            eyedropper_shift_click(app, x, y, mods.alt);
+        }
+        // The moves of a press that began with ⇧ sample nothing, whether ⇧ stays down or not.
+        ToolEvent::Move { .. } if SAMPLER_PRESS.get() => {}
+        // Any other press samples and keeps sampling as it moves, ⇧ pressed meanwhile or not.
+        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => {
+            if matches!(ev, ToolEvent::Down { .. }) {
+                SAMPLER_PRESS.set(false);
+            }
+            sample_eyedropper(app, x, y, mods);
+        }
+        ToolEvent::Up { .. } => SAMPLER_PRESS.set(false),
     }
     true
+}
+
+thread_local! {
+    /// The Eyedropper press in progress began with ⇧ (it placed or deleted a colour sampler), so
+    /// the drag that follows doesn't sample (#11748).
+    static SAMPLER_PRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A Mixer Brush press the engine refused: Indexed Color and Bitmap documents answer it with the

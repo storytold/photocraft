@@ -98,3 +98,29 @@ fn a_shift_click_off_the_canvas_adds_nothing() {
     assert!(samplers(&app).is_empty());
     assert!(app.ui.dialogs.is_empty());
 }
+
+/// CodeRabbit on #14693: pressing ⇧ in the middle of a sampling drag doesn't stop the sampling
+/// (drag sampling is unchanged), and a drag that started with ⇧ (it placed a sampler) samples
+/// nothing, even if ⇧ is let go meanwhile.
+#[test]
+fn shift_pressed_mid_drag_keeps_sampling_and_a_shift_press_never_samples() {
+    let mut app = app();
+    let blue = [30, 30, 220];
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 650.0, y: 400.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(foreground(&app), blue);
+    // ⇧ goes down and the pointer moves onto the white: it samples the white.
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 200.0, y: 100.0, pressure: 1.0 }, SHIFT);
+    assert_eq!(foreground(&app), [255, 255, 255], "the drag keeps sampling with ⇧ held");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 200.0, y: 100.0 }, SHIFT);
+    assert!(samplers(&app).is_empty(), "no sampler from a drag that began without ⇧");
+
+    // A press with ⇧ places a sampler; the moves that follow sample nothing, ⇧ held or not.
+    let fg = foreground(&app);
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 650.0, y: 400.0, pressure: 1.0 }, SHIFT);
+    for m in [SHIFT, Modifiers::NONE] {
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 660.0, y: 410.0, pressure: 1.0 }, m);
+    }
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 660.0, y: 410.0 }, Modifiers::NONE);
+    assert_eq!(samplers(&app).len(), 1, "one sampler");
+    assert_eq!(foreground(&app), fg, "the drag after a ⇧ press samples nothing");
+}
