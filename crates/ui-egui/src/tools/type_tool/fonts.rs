@@ -55,7 +55,9 @@ fn localized_families() -> Arc<HashMap<String, String>> {
     {
         return v.clone();
     }
-    let v = Arc::new(photocraft_text::shared().lock().map(|mut e| e.fonts.localized_family_names()).unwrap_or_default());
+    // Never wait for the font scan on a UI frame. Show family names until it finishes.
+    let Some(engine) = photocraft_text::try_shared() else { return Arc::new(HashMap::new()) };
+    let v = Arc::new(engine.lock().map(|mut e| e.fonts.localized_family_names()).unwrap_or_default());
     *cached = Some((key, v.clone()));
     v
 }
