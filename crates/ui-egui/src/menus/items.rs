@@ -254,8 +254,8 @@ impl ItemCache {
 }
 
 fn insert_recent_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
-    // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
-    if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
+    // File › Open Recent: insert after Open as Smart Object, falling back to Open As.
+    if let Some(after) = items.iter().position(|i| i.id == "file.openAsSmartObject").or_else(|| items.iter().position(|i| i.id == "file.openAs")) {
         let hosted = app.services.file_provider.as_ref().is_some_and(|provider| provider.connected());
         let mut rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
         if hosted {
