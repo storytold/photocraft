@@ -46,7 +46,7 @@ fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() 
     parse_image_bounded_with(invalid.as_bytes(), budget.clone(), MAX_XML_DEPTH, inter_only, false).unwrap();
     assert!(budget.lock().unwrap().error.is_none(), "ordinary invalid images are still omitted");
     let svg = image_svg("<text>x</text>");
-    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 1, panic_fonts, false).unwrap_err();
+    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 2, panic_fonts, false).unwrap_err();
     assert!(error.to_string().contains("bounded SVG worker failed"));
     assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
 }
@@ -1336,8 +1336,16 @@ fn nested_shared_patterns_add_up_their_depth() {
     let body: String = (0..k).rev().map(|i| format!("<rect width=\"10\" height=\"10\" fill=\"url(#D{i})\"/>")).collect();
     let svg = format!("<svg {NS} width=\"100\" height=\"100\"><defs>{defs}</defs>{body}</svg>");
     // 9,500 nested groups: usvg's conversion overflows the 2 MiB test-thread stack on Windows.
-    let err = std::thread::Builder::new().stack_size(64 << 20).spawn(move || check_only(&svg, 100, 100).unwrap_err()).unwrap().join().unwrap();
-    assert!(err.message.contains("layers"), "{err:?}");
+    let msg = std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(move || match parse(svg.as_bytes()) {
+            Err(e) => e.to_string(),
+            Ok(p) => limits::check(p.tree.root().children(), tiny_skia::Transform::identity(), 100, 100, 0).unwrap_err().message,
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(msg.contains("layers"), "{msg}");
 }
 
 /// usvg makes the layer the union of a group's filter regions and every unary primitive on it keeps
