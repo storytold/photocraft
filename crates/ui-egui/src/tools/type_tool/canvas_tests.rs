@@ -3700,3 +3700,112 @@ fn styles_at_a_collapsed_caret_shows_the_caret_s_paragraph() {
         assert_eq!(p.align, want, "caret {caret}");
     }
 }
+
+/// #11280: a double-click held and dragged selects whole words, as in Photoshop: from the
+/// double-clicked word to the whole word under the pointer, either way. A plain drag still
+/// selects by characters.
+#[test]
+fn double_click_held_and_dragged_selects_whole_words() {
+    let mut app = new_app();
+    app.ui.extras.snap = false;
+    // alpha 0..5, beta 6..10, gamma 11..16, delta 17..22.
+    let id = LayerId(app.run("type.create", json!({"text": "alpha beta gamma delta", "size": 60, "x": 300, "y": 200})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = quick_harness(app);
+    centre_on(&mut h, id);
+    let in_beta = glyph(&mut h, id, 7, 0.5);
+    let drag_words = |h: &mut Harness<'static, PhotocraftApp>, to: Pos2| {
+        // The first click (it also starts editing), then the second press, held and dragged.
+        h.hover_at(in_beta);
+        h.run_steps(1);
+        press(h, in_beta, true);
+        press(h, in_beta, false);
+        press(h, in_beta, true);
+        for t in 1..=6 {
+            h.hover_at(in_beta + (to - in_beta) * (t as f32 / 6.0));
+            h.run_steps(1);
+        }
+        let during = selection(h);
+        press(h, to, false);
+        h.run_steps(1);
+        let after = selection(h);
+        h.run_steps(40);
+        (during, after)
+    };
+    // Right into "gamma" (glyph 13, its 'm'): beta and all of gamma.
+    let gamma = glyph(&mut h, id, 13, 0.5);
+    assert_eq!(drag_words(&mut h, gamma), ((6, 16), (6, 16)), "rightward: whole words");
+    // Left into "alpha" (glyph 2): from the end of beta back to the start of alpha.
+    let alpha = glyph(&mut h, id, 2, 0.5);
+    assert_eq!(drag_words(&mut h, alpha), ((10, 0), (10, 0)), "leftward: whole words");
+    // A triple-click's third press held and dragged isn't a word drag.
+    h.hover_at(in_beta);
+    h.run_steps(1);
+    for down in [true, false, true, false, true] {
+        press(&mut h, in_beta, down);
+    }
+    for t in 1..=6 {
+        h.hover_at(in_beta + (gamma - in_beta) * (t as f32 / 6.0));
+        h.run_steps(1);
+    }
+    let third = selection(&h);
+    press(&mut h, gamma, false);
+    h.run_steps(1);
+    let third_after = selection(&h);
+    h.run_steps(40);
+    assert_ne!(third, (6, 16), "a third press dragged doesn't select by words");
+    assert_ne!(third_after, (6, 16), "nor once released");
+    // A single press dragged still selects character by character. It ends a quarter into
+    // glyph 13, so the nearest boundary is 13.
+    let in_gamma = glyph(&mut h, id, 13, 0.25);
+    h.hover_at(in_beta);
+    h.run_steps(1);
+    press(&mut h, in_beta, true);
+    for t in 1..=6 {
+        h.hover_at(in_beta + (in_gamma - in_beta) * (t as f32 / 6.0));
+        h.run_steps(1);
+    }
+    let during = selection(&h);
+    press(&mut h, in_gamma, false);
+    h.run_steps(1);
+    assert_eq!((during, selection(&h)), ((7, 13), (7, 13)), "a plain drag selects from the pressed character to the one under the pointer");
+}
+
+/// #11280: a second press that isn't a double-click (too far from the first, or too late) and
+/// is dragged selects by characters, not whole words.
+#[test]
+fn a_second_press_far_away_or_late_drags_by_characters() {
+    let mut app = new_app();
+    app.ui.extras.snap = false;
+    // alpha 0..5, beta 6..10, gamma 11..16, delta 17..22.
+    let id = LayerId(app.run("type.create", json!({"text": "alpha beta gamma delta", "size": 60, "x": 300, "y": 200})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = quick_harness(app);
+    centre_on(&mut h, id);
+    let in_beta = glyph(&mut h, id, 7, 0.5);
+    let in_gamma = glyph(&mut h, id, 12, 0.25);
+    let in_delta = glyph(&mut h, id, 19, 0.25);
+    // `first` clicked, `wait` steps, then a press at `second` held and dragged to `to`.
+    let second_press = |h: &mut Harness<'static, PhotocraftApp>, first: Pos2, wait: usize, second: Pos2, to: Pos2| {
+        h.hover_at(first);
+        h.run_steps(1);
+        press(h, first, true);
+        press(h, first, false);
+        h.run_steps(wait);
+        h.hover_at(second);
+        h.run_steps(1);
+        press(h, second, true);
+        for t in 1..=6 {
+            h.hover_at(second + (to - second) * (t as f32 / 6.0));
+            h.run_steps(1);
+        }
+        let during = selection(h);
+        press(h, to, false);
+        h.run_steps(1);
+        let after = selection(h);
+        h.run_steps(40);
+        (during, after)
+    };
+    // Far: the second press is in gamma, the first was in beta.
+    assert_eq!(second_press(&mut h, in_beta, 0, in_gamma, in_delta), ((12, 19), (12, 19)), "far: by characters");
+    // Late: the second press is where the first was, past the double-click delay.
+    assert_eq!(second_press(&mut h, in_beta, 40, in_beta, in_delta), ((7, 19), (7, 19)), "late: by characters");
+}
