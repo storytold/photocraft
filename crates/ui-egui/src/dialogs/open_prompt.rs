@@ -43,6 +43,9 @@ pub struct Held {
     /// The Color Settings policy was already applied (a background open added it before it had
     /// to wait); otherwise opening applies it.
     pub policy_applied: bool,
+    /// Held by Open as Smart Object: the document holds the smart object layer already, and is
+    /// admitted by [`photocraft_engine::file_cmds::admit_as_smart_object`].
+    pub smart_object: bool,
 }
 
 /// Dialog field for the high-memory confirmation prompt.
@@ -174,9 +177,9 @@ fn show(app: &mut PhotocraftApp) {
 /// The Color Settings policy that answers this mode's files when Ask On Mismatch is off.
 fn policy_key(mode: ColorMode) -> Option<&'static str> {
     match photocraft_engine::color_cmds::mode_space(mode) {
-        photocraft_cms::ColorSpace::Rgb => Some("policyRgb"),
-        photocraft_cms::ColorSpace::Cmyk => Some("policyCmyk"),
-        photocraft_cms::ColorSpace::Gray => Some("policyGray"),
+        craft_cms::ColorSpace::Rgb => Some("policyRgb"),
+        craft_cms::ColorSpace::Cmyk => Some("policyCmyk"),
+        craft_cms::ColorSpace::Gray => Some("policyGray"),
         _ => None,
     }
 }
@@ -323,7 +326,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied } = held;
+    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
@@ -331,7 +334,13 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
             app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
-        app.session.add_document(doc, None)
+        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
+    } else if smart_object {
+        // A damage-only hold has no colour question: apply the policy as the engine's open does,
+        // then admit it as the smart object document it is (name, history label, snapshot).
+        let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
+        app.session.color.open_policy(&mut doc, ignore_exif);
+        photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
     } else {
         app.session.open_document(doc, None).0
     };
@@ -350,7 +359,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         None => index,
     };
     app.session.set_active(index);
-    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
+    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_ref())?;
     Ok(json!({"document": index, "action": action}))
 }
 
