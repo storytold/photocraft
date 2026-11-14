@@ -936,12 +936,13 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
     // One size on every page (`dialogs::sizing_of`): the list and the page fill its height and
     // scroll when they are taller.
     let height = ui.available_height().max(160.0);
+    let side_w = widgets::button_width(ui, &[tl!("OK"), tl!("Cancel"), tl!("New Style…")]).max(SIDE_W);
     ui.horizontal_top(|ui| {
         boxed(ui, LIST_W, height, |ui, h| {
             egui::ScrollArea::vertical().id_salt("layer-style-effects").max_height(h - BAR_H).auto_shrink(false).show(ui, |ui| effect_list(ui, f, &selected));
             list_bar(ui, f, &selected);
         });
-        let page_w = ui.available_width() - SIDE_W - ui.spacing().item_spacing.x;
+        let page_w = ui.available_width() - side_w - ui.spacing().item_spacing.x;
         boxed(ui, page_w, height, |ui, h| {
             egui::ScrollArea::vertical()
                 .id_salt("layer-style-page")
@@ -950,7 +951,7 @@ pub fn body_with_response(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Ma
                 .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click));
         });
         ui.vertical(|ui| {
-            ui.set_width(SIDE_W);
+            ui.set_width(side_w);
             outcome = side_column(app, ui, f, &mut new_style);
         });
     });
@@ -1747,7 +1748,9 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                         .or_else(|| list.first().map(|l| l.0.clone()))
                         .unwrap_or_default();
                     let opts: Vec<(String, &str)> = list.iter().map(|(id, n)| (id.clone(), n.as_str())).collect();
-                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 180.0)
+                    // Translated action buttons can narrow the page at the dialog's minimum width.
+                    let width = ui.available_width().min(180.0);
+                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, width)
                         || disp.get(key).and_then(Value::as_str).is_none_or(str::is_empty)
                     {
                         let value = json!(cur);
@@ -1794,15 +1797,16 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
 /// Photoshop's right-hand column: OK, Cancel, New Style…, Preview and the preview swatch.
 fn side_column(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, new_style: &mut bool) -> Option<bool> {
     let mut outcome = None;
-    if widgets::primary_button(ui, tl!("OK"), SIDE_W).clicked() {
+    let width = ui.available_width();
+    if widgets::primary_button(ui, tl!("OK"), width).clicked() {
         outcome = Some(true);
     }
     ui.add_space(2.0);
-    if widgets::secondary_button(ui, tl!("Cancel"), SIDE_W).clicked() {
+    if widgets::secondary_button(ui, tl!("Cancel"), width).clicked() {
         outcome = Some(false);
     }
     ui.add_space(2.0);
-    if widgets::secondary_button(ui, tl!("New Style…"), SIDE_W).clicked() {
+    if widgets::secondary_button(ui, tl!("New Style…"), width).clicked() {
         *new_style = true;
     }
     ui.add_space(6.0);
@@ -1811,7 +1815,7 @@ fn side_column(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
         f.insert("preview".into(), json!(preview));
     }
     ui.add_space(6.0);
-    preview_swatch(app, ui, f, SIDE_W);
+    preview_swatch(app, ui, f, width);
     outcome
 }
 
