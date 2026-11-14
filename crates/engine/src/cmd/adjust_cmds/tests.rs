@@ -58,10 +58,13 @@ fn destructive_adjustments_all_depths_and_modes_one_undo_step() {
         for depth in DEPTHS {
             for mode in MODES {
                 // CMYK and Lab documents grey HDR Toning (#14735, hdr_toning_enabled_tests).
+                let mut s = session(depth, mode);
                 if id.ends_with("hdrToning") && matches!(mode, "cmyk" | "lab") {
+                    let steps = s.active().unwrap().history.past_len();
+                    assert!(s.execute(id, params.clone()).is_err(), "{id} {depth} {mode}: refused");
+                    assert_eq!(s.active().unwrap().history.past_len(), steps, "{id} {depth} {mode}: no history step");
                     continue;
                 }
-                let mut s = session(depth, mode);
                 let before = rgba(&s, 3, 3);
                 let steps = s.active().unwrap().history.past_len();
                 s.execute(id, params.clone()).unwrap_or_else(|e| panic!("{id} {depth} {mode}: {e}"));

@@ -43,7 +43,7 @@ fn cmyk_lab_and_indexed_documents_refuse_hdr_toning() {
 }
 
 #[test]
-fn rgb_and_grayscale_8_bit_keep_hdr_toning_and_their_mode_and_depth() {
+fn rgb_all_depths_and_grayscale_8_bit_keep_hdr_toning_and_their_mode_and_depth() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("grayscale", 8)] {
         let mut s = new_doc(mode, depth);
         assert!(s.is_enabled(HDR), "{mode} {depth} bit");
@@ -85,6 +85,11 @@ fn the_refusals_say_why() {
     s.execute("select.all", json!({})).unwrap();
     let why = super::hdr_toning_enabled(&s).unwrap_err();
     assert!(why.contains("deselect"), "{why}");
+    // A CMYK document with a selection names the mode: deselecting would not help.
+    let mut s = new_doc("cmyk", 8);
+    s.execute("select.all", json!({})).unwrap();
+    let why = super::hdr_toning_enabled(&s).unwrap_err();
+    assert!(why.contains("CMYK Color"), "{why}");
 }
 
 #[test]

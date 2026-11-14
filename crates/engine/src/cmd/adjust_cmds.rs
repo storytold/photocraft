@@ -383,19 +383,20 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 fn hdr_toning_enabled(s: &Session) -> std::result::Result<(), String> {
     use photocraft_color::ColorMode;
     let d = s.active().ok_or("no document open")?;
-    if d.doc.selection.is_some() {
-        return Err("HDR Toning works on the whole image: deselect first".into());
-    }
     let mode = match d.doc.mode {
         ColorMode::Cmyk => Some("CMYK Color"),
         ColorMode::Lab => Some("Lab Color"),
         ColorMode::Indexed => Some("Indexed Color"),
         _ => None,
     };
-    match mode {
-        Some(m) => Err(format!("HDR Toning needs an RGB or Grayscale document (this one is {m})")),
-        None => Ok(()),
+    // The mode comes first: deselecting can't fix it.
+    if let Some(m) = mode {
+        return Err(format!("HDR Toning needs an RGB or Grayscale document (this one is {m})"));
     }
+    if d.doc.selection.is_some() {
+        return Err("HDR Toning works on the whole image: deselect first".into());
+    }
+    Ok(())
 }
 
 // ---------- commands ----------
