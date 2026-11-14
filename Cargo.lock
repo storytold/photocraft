@@ -5620,7 +5620,9 @@ dependencies = [
  "craft-cms",
  "craft-flags",
  "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-svg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ed3c05963894e091844d11b440352df9e3ac2612)",
  "craft-update",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "dispatch2",
  "eframe",
  "egui",
@@ -5644,10 +5646,8 @@ dependencies = [
  "photocraft-tablet",
  "photocraft-ui-egui",
  "plist",
- "resvg 0.45.1",
  "rfd",
  "ron",
- "roxmltree 0.21.2",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -5982,11 +5982,11 @@ dependencies = [
 name = "photocraft-raw"
 version = "0.23.1"
 dependencies = [
+ "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-raw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ed3c05963894e091844d11b440352df9e3ac2612)",
  "flate2",
  "image",
  "photocraft-raw",
- "png 0.18.1",
  "rayon",
  "zune-core",
  "zune-jpegxl",
