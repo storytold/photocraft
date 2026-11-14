@@ -20,7 +20,7 @@
 //! Filter has none). Without `HasCrop`, or with `HasCrop="False"`, the crop keys are stale and
 //! mean nothing. A straightened crop (`CropAngle` other than 0) isn't applied.
 
-pub use craft_crs::{CRS_NS, CROP_KEYS, Crop, MAX_XMP_BYTES};
+pub use craft_crs::{CROP_KEYS, CRS_NS, Crop, MAX_XMP_BYTES};
 use craft_crs::{CropState, Settings, Value, number, points, signed, toolkit};
 use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
 
