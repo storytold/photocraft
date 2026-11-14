@@ -43,12 +43,13 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
             // Preferences › Interface › Show File Name In Title: with it off the bar keeps the
-            // app name and the unsaved dot, since the tabs already name the file (#5037).
+            // app name and the unsaved dot, since the tabs already name the file (#5037). The
+            // name carries the tab's "© " for a Copyrighted document (#13993).
             let show_name = app.session.prefs().interface.show_file_name_in_title;
             let title = app
                 .session
                 .active()
-                .map(|d| format!("{}{}", if show_name { d.doc.name.as_str() } else { "PhotoCraft" }, if d.is_dirty() { "  •" } else { "" }))
+                .map(|d| format!("{}{}", if show_name { crate::canvas::titled_name(d) } else { "PhotoCraft".into() }, if d.is_dirty() { "  •" } else { "" }))
                 .unwrap_or_else(|| "PhotoCraft".into());
             // The menus and the far-end controls are laid out first; the title is centred in
             // whatever room is left between them (`free`, left to right: menus then controls, or
@@ -167,12 +168,16 @@ pub fn system_title_bar(app: &PhotocraftApp) -> bool {
 /// The OS window title: the active document's name suffixed with the app name (a `*` prefix
 /// marks unsaved changes, like the `•` in the app-drawn title), or just the app name with no
 /// document open. With Preferences › Interface › Show File Name In Title off, the file name
-/// drops out and only the app name (and the `*`) remains (#5037).
+/// drops out and only the app name (and the `*`) remains (#5037). A Copyrighted document's name
+/// carries the tab's "© " prefix (#13993).
 pub fn window_title(app: &PhotocraftApp) -> String {
     if !app.session.prefs().interface.show_file_name_in_title {
         return format!("{}PhotoCraft", if app.session.active().is_some_and(|d| d.is_dirty()) { "*" } else { "" });
     }
-    app.session.active().map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, d.doc.name)).unwrap_or_else(|| "PhotoCraft".into())
+    app.session
+        .active()
+        .map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, crate::canvas::titled_name(d)))
+        .unwrap_or_else(|| "PhotoCraft".into())
 }
 
 /// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends
