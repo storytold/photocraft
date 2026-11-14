@@ -407,6 +407,272 @@ fn the_ramp_covers_its_checkerboard_at_half_pixel_offsets() {
     }
 }
 
+/// A layer with a white (reveal all) mask, targeted, and the live Gradient tool.
+fn app_on_mask() -> (PhotocraftApp, LayerId) {
+    let mut app = app_with_gradient("linear");
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool_options.gradient_dither = false;
+    app.ui.tool_options.gradient_classic = false;
+    app.sync_views();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+    (app, layer)
+}
+
+fn mask_at(doc: &Document, layer: LayerId, x: i32) -> f32 {
+    doc.layer(layer).unwrap().mask.as_ref().unwrap().surface.pixel(x, 60)[0]
+}
+
+/// #10703: on a layer mask the live Gradient previews the gradient and keeps its handles, so it
+/// can still be moved; ↩ paints exactly what was shown, in one history step.
+#[test]
+fn a_gradient_on_a_mask_previews_with_handles_and_paints_what_was_shown() {
+    let (mut app, layer) = app_on_mask();
+    let revision = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient waits with its handles");
+    assert_eq!(app.session.active().unwrap().revision, revision, "nothing is painted yet");
+    let (shown, _) = display_doc(&mut app, 0).expect("a preview of the mask");
+    // The mask colours: white foreground to black background.
+    assert!(mask_at(&shown, layer, 10) > 0.95 && mask_at(&shown, layer, 150) < 0.05, "the preview shows the gradient");
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0, "the mask itself is untouched");
+    // The end handle drags the end; the line drags both ends.
+    drag(&mut app, [120.0, 60.0], [180.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [180.0, 60.0])));
+    drag(&mut app, [100.0, 60.0], [90.0, 70.0]);
+    assert_eq!(mask::pending(&app), Some(([10.0, 70.0], [170.0, 70.0])));
+    let (shown, _) = display_doc(&mut app, 0).unwrap();
+    mask::commit(&mut app).unwrap();
+    assert_eq!(mask::pending(&app), None);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.revision, revision + 1, "one history step");
+    for x in (0..200).step_by(7) {
+        assert_eq!(mask_at(&st.doc, layer, x), mask_at(&shown, layer, x), "x = {x}: painted as previewed");
+    }
+}
+
+/// Esc drops it; another tool, or a command that edits the document, paints it first; an undo
+/// under it drops it.
+#[test]
+fn a_pending_mask_gradient_is_painted_or_dropped_like_photoshops() {
+    let (mut app, layer) = app_on_mask();
+    let revision = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    mask::cancel(&mut app);
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (None, revision), "Esc paints nothing");
+
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.ui.tool = Tool::Brush;
+    mask::tick(&mut app);
+    assert_eq!(mask::pending(&app), None);
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "switching tools paints it");
+
+    app.ui.tool = Tool::Gradient;
+    drag(&mut app, [150.0, 60.0], [50.0, 60.0]);
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(mask::pending(&app), None);
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 10) < 0.05, "a new layer paints it first, into its own mask");
+
+    app.run("layer.select", json!({"layer": layer.0})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_views();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    app.session.execute("edit.undo", json!({})).unwrap();
+    mask::tick(&mut app);
+    assert_eq!(mask::pending(&app), None, "an edit under it drops it");
+    assert_ne!(app.session.active().unwrap().revision, before);
+}
+
+/// Classic still paints the mask on release, with no handles.
+#[test]
+fn the_classic_gradient_paints_a_mask_on_release() {
+    let (mut app, layer) = app_on_mask();
+    app.ui.tool_options.gradient_classic = true;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert_eq!(mask::pending(&app), None);
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05);
+}
+
+/// #10703 review: three things must not paint the pending gradient. Undo and Redo step the
+/// history, so painting first would put it in the step being undone; a command the automation
+/// gate refuses changes nothing at all; and the Classic Gradient lays its own only after the
+/// pending one is down.
+#[test]
+fn undo_an_authorization_refusal_and_classic_treat_the_pending_gradient_right() {
+    // Undo through the app (not the session) leaves the pending gradient alone and does not
+    // paint it into the step it is undoing.
+    let (mut app, layer) = app_on_mask();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    let filled = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.session.active().unwrap().revision != filled, "the undo happened");
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient still waits, unpainted");
+
+    // A command the automation gate refuses paints nothing either.
+    let (mut app, layer2) = app_on_mask();
+    app.services.automation_command =
+        Some(Box::new(|id: &str, _: &serde_json::Value| if id == "layer.new.layer" { Err("not allowed".to_string()) } else { Ok(()) }));
+    app.automation_input = true;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    assert!(app.run("layer.new.layer", json!({})).is_err(), "the gate refuses it");
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "nothing was painted for a refused command");
+    assert_eq!(app.session.active().unwrap().revision, before);
+    app.automation_input = false;
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer2, 150), 1.0, "the mask is untouched");
+
+    // The Classic Gradient paints the pending one first, then its own.
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    app.run("paint.gradient", json!({"from": [150, 60], "to": [190, 60], "target": "mask"})).unwrap();
+    assert_eq!(mask::pending(&app), None, "the pending one went down first");
+    assert_eq!(app.session.active().unwrap().revision, before + 2, "two steps: the pending gradient, then this one");
+    let _ = layer;
+}
+
+/// CodeRabbit on #10722: the preview follows the colours the gradient takes from outside its
+/// params: a new foreground shows at once, not the cached preview of the old one.
+#[test]
+fn the_mask_preview_follows_a_new_foreground() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let (shown, _) = display_doc(&mut app, 0).unwrap();
+    assert!(mask_at(&shown, layer, 10) > 0.95, "white foreground");
+    app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    let (shown, _) = display_doc(&mut app, 0).unwrap();
+    assert!(mask_at(&shown, layer, 10) < 0.05, "the black foreground shows");
+}
+
+/// CodeRabbit on #10722: a drag whose release comes on another layer than its press (the layer
+/// switched mid-drag) draws nothing.
+#[test]
+fn a_mask_drag_released_on_another_layer_draws_nothing() {
+    let (mut app, first) = app_on_mask();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.sync_views();
+    let second = app.session.active().unwrap().active_layer.unwrap();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 60.0, pressure: 1.0 }, mods());
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 60.0, pressure: 1.0 }, mods());
+    app.session.active_mut().unwrap().active_layer = Some(first);
+    app.sync_views();
+    assert!(mask::active(&app), "the other layer's mask is targeted");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 60.0 }, mods());
+    assert_eq!(mask::pending(&app), None, "nothing waits on the layer the drag did not start on");
+    let _ = second;
+}
+
+/// CodeRabbit on #10722: a line too short for the preview to show is not painted either, however
+/// far the pointer moved on screen at a high zoom.
+#[test]
+fn a_mask_gradient_too_short_to_preview_is_not_kept() {
+    let (mut app, _) = app_on_mask();
+    app.ui.views[0].zoom = 8.0;
+    assert!(app.point_zoom() >= 7.9);
+    drag(&mut app, [20.0, 60.0], [20.5, 60.0]);
+    assert_eq!(mask::pending(&app), None, "half a pixel: no preview, so nothing to paint");
+    drag(&mut app, [20.0, 60.0], [22.0, 60.0]);
+    assert!(mask::pending(&app).is_some(), "two pixels are shown, and kept");
+}
+
+/// CodeRabbit on #10722: a gradient waiting in one document is not replaced by one drawn in
+/// another: each waits in its own until it is painted there.
+#[test]
+fn a_mask_gradient_waits_in_its_own_document() {
+    let (mut app, _) = app_on_mask();
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.sync_views();
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert!(app.session.set_active(1));
+    app.sync_views();
+    mask::tick(&mut app);
+    drag(&mut app, [30.0, 40.0], [90.0, 40.0]);
+    assert_eq!(mask::pending(&app), Some(([30.0, 40.0], [90.0, 40.0])));
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the first document's gradient still waits");
+}
+
+/// CodeRabbit on #10722: a command the engine refuses (here, a layer the document doesn't have)
+/// changes nothing: the pending gradient is not painted for it.
+#[test]
+fn a_refused_command_does_not_paint_the_pending_gradient() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    assert!(app.run("layer.select", json!({"layer": 424_242})).is_err());
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "it still waits");
+    assert_eq!(app.session.active().unwrap().revision, before);
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0);
+}
+
+/// CodeRabbit on #10722: a pending gradient that can't be painted (its layer hidden meanwhile)
+/// refuses the command that would paint it, with the reason, rather than let it run as though
+/// nothing was lost.
+#[test]
+fn a_gradient_that_cannot_be_painted_refuses_the_command() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.session
+        .edit("hide", |doc, _| {
+            doc.layer_mut(layer).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+    // The edit above moved the revision, which `tick` would take as an undo; the command comes first.
+    let err = app.run("select.all", json!({})).expect_err("the gradient could not be painted");
+    assert!(!err.is_empty() && app.ui.status_error, "{err}");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "Select All did not run");
+}
+
+/// CodeRabbit on #10722: Esc through the shortcut dispatch drops the pending gradient.
+#[test]
+fn escape_drops_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let ctx = egui::Context::default();
+    let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+    ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx())).textures_delta.clear();
+    assert_eq!(mask::pending(&app), None);
+}
+
+/// CodeRabbit on #10722: the overlay draws the line and its two handles where the gradient runs.
+#[test]
+fn the_mask_overlay_draws_the_line_and_its_handles() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let xf = crate::canvas::ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 120.0)),
+        zoom: 1.0,
+        center: [100.0, 60.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| mask::draw_overlay(&app, ui.painter(), &xf));
+    out.textures_delta.clear();
+    let handles: Vec<egui::Pos2> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Circle(c) if c.fill == egui::Color32::WHITE => Some(c.center),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(handles, [xf.to_screen(20.0, 60.0), xf.to_screen(120.0, 60.0)]);
+    assert!(out.shapes.len() > 2, "and the line between them");
+}
+
 /// #9311 review: with an artboard selected, the live preview puts the new gradient layer where
 /// the commit will, on top of that board's contents, so it doesn't jump on release (#9147).
 #[test]
@@ -429,4 +695,160 @@ fn the_preview_of_a_new_gradient_goes_inside_the_selected_artboard() {
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 190.0, y: 60.0 }, mods());
     let committed = app.session.active().unwrap().active_layer;
     assert_eq!(top(&app.session.active().unwrap().doc), committed, "and so does the committed layer");
+}
+
+/// CodeRabbit on #10722: a menu over the canvas owns Esc while it is open. The pending gradient
+/// stands, the menu closes, and Esc pressed again then drops the gradient.
+#[test]
+fn a_canvas_menu_takes_escape_before_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    assert!(pending.is_some(), "a gradient is pending");
+    app.ui.canvas_tool_menu = Some(crate::canvas::canvas_tool_menu::CanvasToolMenu {
+        pos: [40.0, 40.0],
+        tool: Tool::Gradient,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        under: None,
+        text: false,
+        type_layer: false,
+        guide: false,
+        spelling: None,
+        crop: None,
+        sampler: None,
+        sampler_at: None,
+        color: None,
+        inside_selection: false,
+        type_shape: None,
+        point: None,
+    });
+    let escape = |app: &mut PhotocraftApp| {
+        let ctx = egui::Context::default();
+        let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+        let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+        ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    };
+    escape(&mut app);
+    assert_eq!(mask::pending(&app), pending, "the menu's Esc leaves the gradient pending");
+    app.ui.canvas_tool_menu = None;
+    escape(&mut app);
+    assert_eq!(mask::pending(&app), None, "with the menu closed, Esc drops it");
+}
+
+/// CodeRabbit on #10722: an open popup (the status bar's Show menu, an options bar list) owns Esc
+/// too. Its id lives in egui's memory from the last frame, which is what the keys see — the
+/// popups of this frame are drawn after them, so `ctx.any_popup_open` would still read false.
+#[test]
+fn an_open_popup_takes_escape_before_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    assert!(pending.is_some(), "a gradient is pending");
+    let ctx = egui::Context::default();
+    egui::Popup::open_id(&ctx, egui::Id::unique("a-list-in-the-options-bar"));
+    assert!(egui::Popup::is_any_open(&ctx), "the popup is open in egui's memory");
+    let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+    ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx())).textures_delta.clear();
+    assert_eq!(mask::pending(&app), pending, "the popup's Esc leaves the gradient pending");
+}
+
+/// CodeRabbit on #10722: a command the engine won't run leaves the gradient pending. Paste with
+/// nothing on the clipboard is refused by its own precondition (`has_clip_only`) in the precheck
+/// `before_command` runs, so no history step is written for a paste that does nothing.
+#[test]
+fn a_paste_with_an_empty_clipboard_leaves_the_pending_mask_gradient_alone() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    let revision = app.session.active().unwrap().revision;
+    assert!(app.session.clipboard.is_none(), "nothing copied yet");
+    assert!(app.run("edit.paste", json!({})).is_err(), "paste is refused");
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (pending, revision), "nothing was painted");
+}
+
+/// CodeRabbit on #10722: the preview and the paint take one line length, handle drags included.
+/// A handle dragged until the line is shorter than the preview shows keeps the line the gradient
+/// already has, rather than leaving one waiting that nothing on screen draws.
+#[test]
+fn a_handle_dragged_shorter_than_the_preview_keeps_the_line_it_had() {
+    let (mut app, _) = app_on_mask();
+    app.ui.views[0].zoom = 8.0;
+    assert!(app.point_zoom() >= 7.9);
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let line = mask::pending(&app).expect("a gradient is pending");
+    // Grab the end handle and pull it onto the start: half a document pixel apart, which the
+    // preview does not show.
+    drag(&mut app, [120.0, 60.0], [20.5, 60.0]);
+    assert_eq!(mask::pending(&app), Some(line), "the line it had, not an invisible one");
+    // A handle drag that keeps the line long enough does move it.
+    drag(&mut app, [120.0, 60.0], [80.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [80.0, 60.0])), "a visible line moves the end");
+}
+
+/// CodeRabbit on #10722: a drag ends with the tool it started on. Switching to another tool while
+/// the button is down leaves nothing for the release to store.
+#[test]
+fn a_mask_drag_ends_when_the_tool_changes_under_it() {
+    let (mut app, _) = app_on_mask();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 60.0, pressure: 1.0 }, mods());
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 120.0, y: 60.0, pressure: 1.0 }, mods());
+    assert!(app.gradient.mask.dragging(), "a drag is under way");
+    app.ui.tool = Tool::Brush;
+    mask::tick(&mut app);
+    assert!(!app.gradient.mask.dragging(), "the drag ended with the tool");
+    app.ui.tool = Tool::Gradient;
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 60.0 }, mods());
+    assert_eq!(mask::pending(&app), None, "the release stores nothing for a drag that ended");
+}
+
+/// CodeRabbit on #10722, the narrower case its first finding was reaching for: the engine
+/// clipboard holds an image mirrored from outside, the OS clipboard no longer does, and paste is
+/// reached directly rather than through the menu. The OS read then empties the stale copy and the
+/// paste does nothing, so the pending gradient must not have been painted for it.
+#[test]
+fn a_paste_whose_mirrored_clipboard_has_gone_leaves_the_pending_mask_gradient_alone() {
+    // An OS clipboard that holds an image for the copy and nothing afterwards.
+    type OsClip = std::sync::Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+    let os: OsClip = std::sync::Arc::default();
+    let (set, get) = (os.clone(), os.clone());
+    let services = crate::Services {
+        clipboard_set_image: Some(Box::new(move |w: u32, h: u32, px: &[u8]| {
+            *set.lock().unwrap() = Some((w, h, px.to_vec()));
+            Ok(())
+        })),
+        clipboard_get_image: Some(Box::new(move || Ok(get.lock().unwrap().clone()))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.ui.tool = Tool::Gradient;
+    app.ui.tool_options.gradient_style = "linear".into();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool_options.gradient_dither = false;
+    app.ui.tool_options.gradient_classic = false;
+    app.sync_views();
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+
+    // An image from outside: imported, so mirrored and external.
+    *os.lock().unwrap() = Some((2, 1, vec![255; 8]));
+    assert!(app.import_os_clipboard().unwrap(), "the outside image is imported");
+    assert!(app.session.clipboard.is_some() && app.clip_external, "mirrored from outside");
+
+    // It is gone from the OS clipboard, and a gradient waits on the mask.
+    *os.lock().unwrap() = None;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app).expect("a gradient is pending");
+    let revision = app.session.active().unwrap().revision;
+
+    // Paste reached directly, as automation or a script does.
+    let refused = app.run("edit.paste", json!({})).is_err();
+    assert!(refused, "the paste is refused: the mirrored copy is gone");
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (Some(pending), revision), "nothing was painted for it");
 }

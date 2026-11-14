@@ -642,6 +642,10 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
         return true;
     }
+    // A live gradient on a layer mask: ↩ paints it into the mask, Esc drops it (#10703).
+    if focus == Focus::None && crate::gradient_ui::mask::keys(app, ctx) {
+        return true;
+    }
     if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
         return true;
     }
