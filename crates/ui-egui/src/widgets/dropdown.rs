@@ -2,6 +2,21 @@ use super::panel::chevron_icon;
 use super::scrub::take_label_scrub_name;
 use super::{Align2, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Tokens, Ui, Vec2, pos2, type_ahead, vec2};
 
+/// Option label that draws a horizontal dividing line between groups instead of a choice.
+pub const DROPDOWN_SEPARATOR: &str = "---";
+
+/// Whether an option `label` marks a group separator rather than a selectable choice.
+fn is_separator(label: &str) -> bool {
+    label == DROPDOWN_SEPARATOR
+}
+
+/// Next selectable option index in `step` direction (`1` down, `-1` up), skipping separators and
+/// the options `enabled` refuses, and stopping at the ends.
+fn step_option<T>(options: &[(T, &str)], from: usize, step: isize, enabled: &dyn Fn(&T) -> bool) -> Option<usize> {
+    let selectable = |i: &usize| !is_separator(options[*i].1) && enabled(&options[*i].0);
+    if step > 0 { ((from + 1)..options.len()).find(selectable) } else { (0..from.min(options.len())).rev().find(selectable) }
+}
+
 /// A compact labelled dropdown in the studio style.
 pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
     dropdown_hovered(ui, id, name, current, options, width).0
@@ -106,8 +121,16 @@ fn dropdown_with<T: PartialEq + Clone>(
     starts_group: &dyn Fn(&T) -> bool,
     enabled: &dyn Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
-    let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
-    let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
+    let shown = |l: &str| {
+        if is_separator(l) {
+            String::new()
+        } else if translate {
+            tl!(l).to_string()
+        } else {
+            l.to_string()
+        }
+    };
+    let label = options.iter().find(|(v, l)| !is_separator(l) && v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
     let (mut chosen, mut hovered) = (Vec::new(), None);
     // The wheel's notches add up over the button and the open list alike.
     let wheel_id = ui.make_persistent_id(id).with("wheel");
@@ -124,7 +147,7 @@ fn dropdown_with<T: PartialEq + Clone>(
         fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
         // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
         let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
-        let shown = options.iter().position(|(v, _)| v == current);
+        let shown = options.iter().position(|(v, l)| !is_separator(l) && v == current);
         if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
             *current = v.clone();
             chosen.push(v.clone());
@@ -144,10 +167,19 @@ fn dropdown_with<T: PartialEq + Clone>(
         // The row nearest the pointer, by its distance to each row.
         let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
         let mut nearest: Option<(f32, &T)> = None;
-        for (i, ((v, _), text)) in options.iter().zip(texts.iter()).enumerate() {
-            if i > 0 && starts_group(v) {
+        let mut last_was_sep = true;
+        for (i, ((v, l), text)) in options.iter().zip(texts.iter()).enumerate() {
+            if is_separator(l) {
+                if !last_was_sep && options[i + 1..].iter().any(|(_, next_l)| !is_separator(next_l)) {
+                    list_separator(ui);
+                    last_was_sep = true;
+                }
+                continue;
+            }
+            if i > 0 && !last_was_sep && starts_group(v) {
                 list_separator(ui);
             }
+            last_was_sep = false;
             let on = enabled(v);
             let item = if on {
                 ui.selectable_label(v == current, text.as_str())
@@ -246,16 +278,13 @@ fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
 /// is the new `current`. A notch goes to the next option `enabled` accepts, so a greyed one costs
 /// no notch.
 fn wheel_steps<T: PartialEq + Clone>(notches: f32, current: &mut T, options: &[(T, &str)], enabled: &dyn Fn(&T) -> bool) -> Vec<T> {
-    let Some(mut index) = options.iter().position(|(v, _)| v == current) else { return Vec::new() };
+    let Some(mut index) = options.iter().position(|(v, l)| !is_separator(l) && v == current) else { return Vec::new() };
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.
     for _ in 0..(notches.abs().min(options.len() as f32) as usize) {
-        let mut ahead = options.iter().enumerate().skip(index.saturating_add(1));
-        let mut behind = options.iter().enumerate().take(index).rev();
-        let next = if notches < 0.0 { ahead.find(|(_, (v, _))| enabled(v)) } else { behind.find(|(_, (v, _))| enabled(v)) };
-        let Some((next, (v, _))) = next else { break };
+        let Some(next) = step_option(options, index, if notches < 0.0 { 1 } else { -1 }, enabled) else { break };
         index = next;
-        chosen.push(v.clone());
+        chosen.push(options[next].0.clone());
     }
     if let Some(v) = chosen.last() {
         *current = v.clone();
@@ -282,14 +311,16 @@ fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, 
     } else {
         return false;
     };
-    let index = options.iter().position(|(value, _)| value == current).unwrap_or(0);
-    let next = if step > 0 { (index + 1).min(options.len() - 1) } else { index.saturating_sub(1) };
-    match options.get(next) {
-        Some((value, _)) if next != index => {
-            *current = value.clone();
-            true
-        }
-        _ => false,
+    let Some(index) = options.iter().position(|(value, l)| !is_separator(l) && value == current).or_else(|| options.iter().position(|(_, l)| !is_separator(l)))
+    else {
+        return false;
+    };
+    // The keys still land on greyed options (see `dropdown_wheel_grouped_enabled`).
+    if let Some(next) = step_option(options, index, step, &|_| true) {
+        *current = options[next].0.clone();
+        true
+    } else {
+        false
     }
 }
 

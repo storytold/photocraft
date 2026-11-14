@@ -18,10 +18,16 @@ fn color_profile_menu_lists_the_profiles_of_the_modes_space() {
     assert!(!rgb.contains(&Builtin::CoatedCmyk.id().to_string()) && !rgb.contains(&"press.icc".to_string()));
     let cmyk = values("cmyk");
     assert!(cmyk.contains(&"press.icc".to_string()) && !cmyk.contains(&Builtin::Srgb.id().to_string()));
+    // #9851: a separator sits between the built-in profiles and the installed ones when any apply.
+    let rgb_opts = profile_options(Some(ColorSpace::Rgb), "sRGB", &installed);
+    let sep = rgb_opts.iter().position(|(_, l)| l == crate::widgets::DROPDOWN_SEPARATOR);
+    assert_eq!(sep.and_then(|i| rgb_opts.get(i + 1)).map(|(v, _)| v.as_str()), Some("panel.icc"));
+    let gray_opts = profile_options(Some(ColorSpace::Gray), "Gray", &installed);
+    assert!(!gray_opts.iter().any(|(_, l)| l == crate::widgets::DROPDOWN_SEPARATOR));
     assert!(profile_options(None, "sRGB", &installed).len() == 1, "an unknown mode offers only the working space");
     // Every entry is one `file.new` takes for that mode.
     for mode in ["rgb", "gray", "cmyk", "lab"] {
-        for v in values(mode).into_iter().filter(|v| !v.ends_with(".icc")) {
+        for v in values(mode).into_iter().filter(|v| !v.is_empty() && !v.ends_with(".icc")) {
             let mut s = photocraft_engine::Session::new();
             s.execute("file.new", json!({"width": 2, "height": 2, "mode": mode, "profile": v})).unwrap_or_else(|e| panic!("{mode} {v}: {e}"));
         }
