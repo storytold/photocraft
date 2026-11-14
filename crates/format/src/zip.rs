@@ -246,6 +246,11 @@ impl<'a> ZipReader<'a> {
             .and_then(|end| self.bytes.get(e.data_offset..end))
             .ok_or_else(|| FormatError::corrupt(format!("zip entry `{}` out of range", e.name)))?;
         let data = match e.method {
+            // A stored entry is its payload: sizes that disagree are a damaged (or forged)
+            // header, refused before the payload is copied.
+            0 if e.compressed != e.uncompressed => {
+                return Err(FormatError::corrupt(format!("zip entry `{}` stores {} bytes but declares {}", e.name, e.compressed, e.uncompressed)));
+            }
             0 => raw.to_vec(),
             8 => {
                 // The uncompressed length comes from an untrusted ZIP header: a
@@ -281,6 +286,21 @@ impl<'a> ZipReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stored entry whose header declares fewer bytes than it stores is refused by the size
+    /// mismatch before its payload is copied (a caller's `max` checks only the declared size).
+    #[test]
+    fn a_stored_entry_must_store_what_it_declares() {
+        let mut writer = ZipWriter::new();
+        writer.add("a", &[7; 1000]).unwrap();
+        let mut bytes = writer.finish().unwrap();
+        let cd = bytes.windows(4).position(|w| w == CENTRAL_SIG.to_le_bytes()).unwrap();
+        bytes[cd + 24..cd + 28].copy_from_slice(&4u32.to_le_bytes());
+        let zip = ZipReader::new(&bytes).unwrap();
+        let entry = zip.find("a").unwrap().clone();
+        let e = zip.read(&entry, 4).unwrap_err().to_string();
+        assert!(e.contains("stores 1000 bytes but declares 4"), "{e}");
+    }
 
     #[test]
     fn crc_known_value() {

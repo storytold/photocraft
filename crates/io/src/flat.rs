@@ -341,33 +341,51 @@ pub struct FramesImport {
 }
 
 /// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in
-/// milliseconds (a still GIF has one). One frame at a time becomes a document, so the caller
-/// can flatten and drop it. Returns the frame count and any decoder warnings; stops at the
-/// first error `each` gives.
+/// milliseconds (a still GIF has one). Frames are decoded one at a time, and each becomes a
+/// document and goes to `each` before the next is decoded, so the caller can flatten and drop it
+/// and refuse the rest. Returns the frame count and any decoder warnings; stops at the first
+/// error `each` gives.
 pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
-    import_frames(name, codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?, each)
+    import_frames(name, |frame| codecs::for_each_gif_frame(bytes, &codecs::DecodeOptions::default(), frame), each)
 }
 
 /// Every frame of a WebP as a single-layer document, as [`import_gif_frames`] does for a GIF: an
 /// animation's frames composited onto its canvas, with their durations in milliseconds; a still
 /// WebP is one frame.
 pub fn import_webp_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
-    import_frames(name, codecs::decode_webp_frames(bytes, &codecs::DecodeOptions::default())?, each)
+    import_frames(name, |frame| codecs::for_each_webp_frame(bytes, &codecs::DecodeOptions::default(), frame), each)
 }
 
-fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
-    let n = frames.len();
-    let mut warnings = Vec::new();
-    for f in frames {
+/// Where a streamed decode hands [`import_frames`] each frame.
+type FrameSink<'a> = dyn FnMut(codecs::AnimationFrame) -> Result<(), IoError> + 'a;
+
+fn import_frames(
+    name: &str,
+    decode: impl FnOnce(&mut FrameSink<'_>) -> Result<codecs::FramesDecoded, IoError>,
+    each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>,
+) -> Result<FramesImport, IoError> {
+    let mut warnings: Vec<String> = Vec::new();
+    let done = decode(&mut |f| {
         let r = image_to_document(name, &f.image)?;
+        let delay_ms = f.delay_ms;
+        // The decoded frame is not needed once its document exists.
+        drop(f);
         for w in r.warnings {
             if !warnings.contains(&w) {
                 warnings.push(w);
             }
         }
-        each(r.document, f.delay_ms)?;
+        each(r.document, delay_ms)
+    })?;
+    // What the decoder noticed about the whole animation (a truncation) comes first, as it did
+    // when it rode on the first frame.
+    let mut all: Vec<String> = Vec::new();
+    for w in done.warnings.iter().map(ToString::to_string).chain(warnings) {
+        if !all.contains(&w) {
+            all.push(w);
+        }
     }
-    Ok(FramesImport { frames: n, warnings })
+    Ok(FramesImport { frames: done.frames, warnings: all })
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality

@@ -278,6 +278,47 @@ fn video_frames_to_layers_enforces_the_footage_limit_on_every_tiff_page() {
     assert_eq!(s.active().unwrap().doc.layers.len(), before, "nothing imported");
 }
 
+/// A 1x1 GIF of `n` opaque one-pixel frames, hand-built so a large count stays a few bytes a
+/// frame.
+fn tiny_gif(n: usize) -> Vec<u8> {
+    let mut b = b"GIF89a".to_vec();
+    b.extend_from_slice(&[1, 0, 1, 0, 0b1000_0001, 0, 0]);
+    b.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0]);
+    for _ in 0..n {
+        b.extend_from_slice(&[0x21, 0xF9, 4, 0, 4, 0, 0, 0]);
+        b.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0]);
+        // LZW, minimum code size 2: clear (4), index 0, end (5) in 3-bit codes.
+        b.extend_from_slice(&[2, 2, 0x44, 0x01, 0]);
+    }
+    b.push(0x3B);
+    b
+}
+
+/// A GIF's frames go through the footage `keep` budget one at a time, as they are decoded: the
+/// import stops at the first frame past the cap with the footage error. The animation has more
+/// frames than the decoder allows, so decoding every frame before keeping any (which held them
+/// all at once, whatever the cap) fails on the frame count instead. A test scope lowers the cap.
+#[test]
+fn video_frames_to_layers_enforces_the_footage_limit_on_every_gif_frame() {
+    let dir = tmpdir("gif-budget");
+    let path = format!("{dir}/frames.gif");
+    let mut s = session();
+    let fmt = s.active().unwrap().doc.pixel_format();
+    let tile = u64::from(photocraft_geom::TILE_SIZE.unsigned_abs()).pow(2) * fmt.bytes_per_pixel() as u64;
+    let budget = 4u64 << 20;
+    assert!(tile < budget, "one frame must fit in the lowered budget");
+    let bytes = tiny_gif(photocraft_codecs::MAX_GIF_FRAMES + 1);
+    assert!((bytes.len() as u64) < budget, "the file itself is read within the cap");
+    std::fs::write(&path, bytes).unwrap();
+    let before = s.active().unwrap().doc.layers.len();
+    let _limit = super::limits::Scoped::max_footage_bytes(budget);
+    for cmd in ["file.import.videoFramesToLayers", "layer.videoLayers.newVideoLayerFromFile"] {
+        let err = s.execute(cmd, json!({"path": path})).unwrap_err().to_string();
+        assert!(err.contains("frames.gif") && err.contains("more than 4 MiB"), "{cmd}: {err}");
+        assert_eq!(s.active().unwrap().doc.layers.len(), before, "{cmd}: nothing imported");
+    }
+}
+
 /// #10897 review: a single-page layered TIFF does not take the multi-page branch, so it falls
 /// through to the ordinary single-file import. That import must carry the footage import settings,
 /// including the PSD/layered-TIFF memory limit the caller lowered; before, it called the default

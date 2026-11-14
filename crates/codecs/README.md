@@ -193,8 +193,11 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   methods applied, as RGBA8 with its delay in milliseconds, within `Limits` and
   `MAX_GIF_FRAMES`. Every frame of an animated WebP comes from `decode_webp_frames` the same
   way, composited onto its canvas, with its duration in milliseconds and the file's ICC profile.
-  The video-layer commands use both (`photocraft_io::import_gif_frames`,
-  `photocraft_io::import_webp_frames`).
+  `for_each_gif_frame` and `for_each_webp_frame` hand the frames out one at a time instead,
+  each before the next is decoded, so a caller can stop at its own limit while only one frame
+  is held; the byte budget still counts every frame decoded, which bounds the work. The
+  video-layer commands use these (`photocraft_io::import_gif_frames`,
+  `photocraft_io::import_webp_frames`), so the footage limit applies frame by frame.
 * **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
   `caps.exif = false` for TIFF, and a warning is raised.
 * **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the decoded page's tag in TIFF and

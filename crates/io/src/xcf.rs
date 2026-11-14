@@ -330,9 +330,16 @@ fn parasites(data: &[u8]) -> Vec<(String, Vec<u8>)> {
 }
 
 /// What one tile's bytes decode to, for a drawable of `bpp` bytes per pixel.
+///
+/// A tile reads its data from `at` to `end` (the next tile's pointer, or the end of the file),
+/// but never more than one and a half whole tiles of it, the most GIMP reads for a tile: every
+/// tile could otherwise point into one long stream that inflates or runs to nothing, and re-read
+/// it to the end of the file.
 fn decode_tile(c: &Cursor<'_>, at: usize, end: usize, compression: Compression, bpp: usize, pixels: usize) -> Result<Vec<u8>> {
     let expected = pixels.checked_mul(bpp).ok_or_else(|| invalid("tile size overflow"))?;
-    let input = c.b.get(at..end.min(c.b.len())).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
+    let most = (TILE as usize * TILE as usize).checked_mul(bpp).and_then(|n| (n / 2).checked_mul(3)).ok_or_else(|| invalid("tile size overflow"))?;
+    let end = end.min(c.b.len()).min(at.saturating_add(most));
+    let input = c.b.get(at..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
     match compression {
         Compression::None => input.get(..expected).map(<[u8]>::to_vec).ok_or_else(|| invalid("an uncompressed tile is cut short")),
         Compression::Zlib => {
@@ -379,6 +386,11 @@ fn rle_decode(input: &[u8], bpp: usize, pixels: usize) -> Result<Vec<u8>> {
                 }
                 _ => (256 - usize::from(op), true),
             };
+            // A long run of length zero reads input and writes nothing: a stream of them would
+            // never fill the tile, only use up the input.
+            if run == 0 {
+                return Err(invalid("an RLE tile has an empty long run"));
+            }
             if plane.len() + run > pixels {
                 return Err(invalid("an RLE run crosses the end of its tile"));
             }

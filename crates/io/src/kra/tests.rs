@@ -319,3 +319,28 @@ fn the_mimetype_wins_over_the_extension() {
     assert!(is_kra(&bytes));
     assert!(crate::import("download", &bytes).is_ok_and(|r| r.source_read_only));
 }
+
+/// A layer file is charged against the archive's inflate budget each time a layer reads it, so
+/// layers naming one entry (or a tile file that holds no tiles, only padding) can't inflate it
+/// again and again for free.
+#[test]
+fn every_layer_file_read_is_charged_against_the_inflate_budget() {
+    let mut padded = b"VERSION 2\nTILEWIDTH 64\nTILEHEIGHT 64\nPIXELSIZE 4\nDATA 0\n".to_vec();
+    padded.resize(4096, 0);
+    let layers = r#"<layer nodetype="paintlayer" name="L" colorspacename="RGBA" filename="l"/>"#.repeat(3);
+    let bytes = archive(&maindoc("RGBA", &layers), &[("img/layers/l", padded.clone())]);
+    let r = import_within("x.kra", &bytes, &Interrupt::NONE, 3 * padded.len()).unwrap();
+    assert_eq!(r.document.layers.len(), 3);
+    let e = import_within("x.kra", &bytes, &Interrupt::NONE, 3 * padded.len() - 1).unwrap_err().to_string();
+    assert!(e.contains("inflate"), "{e}");
+}
+
+/// A default pixel is one pixel: an entry declaring more is refused by its declared size, before
+/// it is inflated or copied.
+#[test]
+fn an_oversized_default_pixel_is_refused_before_it_is_read() {
+    let one = r#"<layer nodetype="paintlayer" name="L" colorspacename="RGBA" filename="l"/>"#;
+    let files = [("img/layers/l", tile_file(4, &[])), ("img/layers/l.defaultpixel", vec![0; 1 << 20])];
+    let e = crate::import("x.kra", &archive(&maindoc("RGBA", one), &files)).unwrap_err().to_string();
+    assert!(e.contains("(max 4)"), "{e}");
+}

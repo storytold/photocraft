@@ -71,41 +71,51 @@ pub(crate) fn is_animated(bytes: &[u8]) -> bool {
 /// ([`super::gif_frames::MAX_GIF_FRAMES`]) and the total decoded bytes are checked against
 /// `limits` before each frame is kept.
 pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<super::gif_frames::AnimationFrame>>, CodecError> {
-    use super::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
     if !is_animated(bytes) {
         return Ok(None);
     }
+    super::gif_frames::collect(|each| for_each_frame(bytes, limits, each)).map(Some)
+}
+
+/// The frames of an animated WebP (see [`decode_frames`]) one at a time, each handed to `each`
+/// before the next is decoded; the first error `each` returns stops the decode and is returned as
+/// it is. The frame count and the total bytes of every frame decoded so far are checked against
+/// `limits` before each frame is decoded, which bounds the decoding work whatever the caller
+/// keeps. A damaged later frame ends the decode with [`DecodeWarning::Truncated`] in the result.
+pub(crate) fn for_each_frame<E: From<CodecError>>(
+    bytes: &[u8],
+    limits: &Limits,
+    each: &mut dyn FnMut(super::gif_frames::AnimationFrame) -> Result<(), E>,
+) -> Result<super::gif_frames::FramesDecoded, E> {
+    use super::gif_frames::{AnimationFrame, FramesDecoded, MAX_GIF_FRAMES};
     let (mut dec, w, h, layout) = open(bytes, limits)?;
     let size = dec.output_buffer_size().ok_or_else(|| err("image too large"))?;
     let icc = dec.icc_profile().ok().flatten();
     let mut buf = alloc_zeroed::<u8>(size)?;
-    let mut out: Vec<AnimationFrame> = Vec::new();
-    let mut damaged = false;
+    let mut done = FramesDecoded::default();
     for _ in 0..dec.num_frames() {
-        if out.len() >= MAX_GIF_FRAMES {
-            return Err(CodecError::LimitExceeded(format!("more than {MAX_GIF_FRAMES} frames")));
+        if done.frames >= MAX_GIF_FRAMES {
+            return Err(CodecError::LimitExceeded(format!("more than {MAX_GIF_FRAMES} frames")).into());
         }
         // Every frame keeps its own copy of the file's ICC profile along with its pixels.
         let frame_bytes = (size as u64).saturating_add(icc.as_ref().map_or(0, |p| p.len() as u64));
-        if frame_bytes.saturating_mul(out.len() as u64 + 1) > limits.max_alloc {
-            return Err(CodecError::LimitExceeded(format!("{} frames of {w}x{h} exceed max_alloc {}", out.len() + 1, limits.max_alloc)));
+        if frame_bytes.saturating_mul(done.frames as u64 + 1) > limits.max_alloc {
+            return Err(CodecError::LimitExceeded(format!("{} frames of {w}x{h} exceed max_alloc {}", done.frames + 1, limits.max_alloc)).into());
         }
         let delay_ms = match dec.read_frame(&mut buf) {
             Ok(d) => d,
-            Err(e) if out.is_empty() => return Err(err(e)),
+            Err(e) if done.frames == 0 => return Err(err(e).into()),
             Err(_) => {
-                damaged = true;
+                done.warnings.push(DecodeWarning::Truncated { format: F });
                 break;
             }
         };
         let mut image = Image::from_u8(w, h, layout, buf.clone())?;
         image.icc.clone_from(&icc);
-        out.push(AnimationFrame { image, delay_ms });
+        each(AnimationFrame { image, delay_ms })?;
+        done.frames += 1;
     }
-    if damaged && let Some(first) = out.first_mut() {
-        first.image.warnings.push(DecodeWarning::Truncated { format: F });
-    }
-    Ok(Some(out))
+    Ok(done)
 }
 
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {

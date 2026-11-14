@@ -15,7 +15,8 @@ mod tests;
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
-use photocraft_format::zip::{ZipReader, ZipWriter};
+use photocraft_format::FormatError;
+use photocraft_format::zip::{Entry, ZipReader, ZipWriter};
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::{Interrupt, Surface};
 
@@ -33,10 +34,28 @@ pub(crate) const MAX_SIDE: u32 = 300_000;
 pub(crate) const MAX_NODES: usize = 8192;
 const MAX_STACK_XML: usize = 16 << 20;
 const MAX_ENTRY: usize = 512 << 20;
+/// Layer files inflated from one archive (ORA layer images, Krita tile files), all together. A
+/// layer file holds no more than its pixels, compressed, and the decoded pixels are capped at
+/// [`MAX_PIXEL_BYTES`]; this bounds what layers naming one entry, or files padded past the pixels
+/// they hold, can make the reader inflate.
+pub(crate) const MAX_INFLATED_BYTES: usize = 2 * MAX_PIXEL_BYTES;
 const THUMBNAIL_SIDE: u32 = 256;
 
 fn invalid(message: impl Into<String>) -> IoError {
     IoError::Ora(message.into())
+}
+
+/// Reads a layer file of at most `max` bytes, charging it to `inflated` of the archive's
+/// `limit`: an entry past what is left is refused by its declared size, before it is inflated.
+/// The error is the message the caller wraps in its own format's error.
+pub(crate) fn read_charged(zip: &ZipReader<'_>, entry: &Entry, max: usize, inflated: &mut usize, limit: usize) -> std::result::Result<Vec<u8>, String> {
+    let left = limit.saturating_sub(*inflated);
+    let data = zip.read(entry, max.min(left)).map_err(|e| match e {
+        FormatError::LimitExceeded(_) if left < max => format!("the archive's layer files inflate to more than {limit} bytes together"),
+        e => e.to_string(),
+    })?;
+    *inflated = inflated.saturating_add(data.len());
+    Ok(data)
 }
 
 /// The payload of a ZIP's first entry when it is a stored file named `mimetype`, which is how
@@ -274,9 +293,14 @@ struct Reader<'a, 'c> {
     explicit_group_isolation: bool,
     nodes: usize,
     budget: usize,
+    /// Layer image bytes inflated so far, of `max_inflated` ([`MAX_INFLATED_BYTES`]).
+    inflated: usize,
+    max_inflated: usize,
     warnings: Warnings,
     /// Decoded layer PNGs, converted to the document depth once every layer is known.
     images: Vec<Image>,
+    /// The image each archive entry decoded to: layers naming one entry share it.
+    by_entry: std::collections::HashMap<String, usize>,
 }
 
 /// A layer as read, before its pixels are converted to the document's format.
@@ -291,20 +315,35 @@ impl Reader<'_, '_> {
             self.warnings.layer(layer, "the layer's image is missing from the archive; the layer opens empty");
             return Ok(None);
         };
-        let data = self.zip.read(&entry, MAX_ENTRY).map_err(|e| invalid(format!("{src}: {e}")))?;
+        if let Some(&i) = self.by_entry.get(&entry.name) {
+            // The decode is shared, but every layer still converts and writes the whole image
+            // (pruned to nothing if it is transparent), so each reference pays for its pixels.
+            let (w, h) = self.images.get(i).map(Image::dimensions).ok_or_else(|| invalid(format!("{src}: lost its decoded image")))?;
+            self.charge_pixels(w, h)?;
+            return Ok(Some(i));
+        }
+        let data = read_charged(&self.zip, &entry, MAX_ENTRY, &mut self.inflated, self.max_inflated).map_err(|e| invalid(format!("{src}: {e}")))?;
         let mut opts = codecs::DecodeOptions::default();
         opts.limits.max_width = MAX_SIDE;
         opts.limits.max_height = MAX_SIDE;
         opts.limits.max_alloc = self.budget as u64;
         let image = codecs::decode_with(&data, &opts).map_err(|e| invalid(format!("{src}: {e}")))?;
         let (w, h) = image.dimensions();
-        let rgba16 = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(8)).ok_or_else(|| invalid("layer image size overflow"))?;
-        self.budget = self.budget.checked_sub(rgba16).ok_or_else(|| invalid("decoded layers exceed the 1 GiB limit"))?;
+        self.charge_pixels(w, h)?;
         if !matches!(codecs::detect(&data), Some(Format::Png)) {
             self.warnings.note("some layer images are not PNG, as OpenRaster expects; they were read anyway");
         }
         self.images.push(image);
-        Ok(Some(self.images.len() - 1))
+        let i = self.images.len() - 1;
+        self.by_entry.insert(entry.name, i);
+        Ok(Some(i))
+    }
+
+    /// Charges one layer's `w`×`h` image, as 16-bit RGBA, against the decoded-pixel budget.
+    fn charge_pixels(&mut self, w: u32, h: u32) -> Result<()> {
+        let rgba16 = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(8)).ok_or_else(|| invalid("layer image size overflow"))?;
+        self.budget = self.budget.checked_sub(rgba16).ok_or_else(|| invalid("decoded layers exceed the 1 GiB limit"))?;
+        Ok(())
     }
 
     fn stack(&mut self, stack: roxmltree::Node<'_, '_>, depth: usize) -> Result<Vec<Node>> {
@@ -417,6 +456,11 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, budget: &mut usiz
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
+    import_within(name, bytes, ctl, MAX_INFLATED_BYTES)
+}
+
+/// [`import`], inflating at most `max_inflated` bytes of layer images.
+fn import_within(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, max_inflated: usize) -> Result<ImportResult> {
     let zip = ZipReader::new(bytes).map_err(|e| invalid(e.to_string()))?;
     let mime = zip.read_by_name("mimetype", 256).map_err(|e| invalid(e.to_string()))?;
     if mime.trim_ascii() != MIMETYPE {
@@ -447,8 +491,11 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         explicit_group_isolation: uses_explicit_group_isolation(image.attribute("version")),
         nodes: 0,
         budget: MAX_PIXEL_BYTES,
+        inflated: 0,
+        max_inflated,
         warnings: Warnings::default(),
         images: Vec::new(),
+        by_entry: std::collections::HashMap::new(),
     };
     let nodes = reader.stack(root, 1)?;
     ctl.progress(0.8);

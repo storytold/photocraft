@@ -57,3 +57,36 @@ fn an_error_from_the_callback_stops_the_import() {
 fn garbage_is_an_error() {
     assert!(import_gif_frames("a.gif", b"not a gif", &mut |_, _| Ok(())).is_err());
 }
+
+/// A 1x1 GIF of `n` one-pixel frames (palette index 0 of a 4-colour table), hand-built so a
+/// large count stays a few bytes a frame.
+fn tiny_frames(n: usize) -> Vec<u8> {
+    let mut b = b"GIF89a".to_vec();
+    b.extend_from_slice(&[1, 0, 1, 0, 0b1000_0001, 0, 0]);
+    b.extend_from_slice(&[255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0]);
+    for _ in 0..n {
+        b.extend_from_slice(&[0x21, 0xF9, 4, 0, 10, 0, 0, 0]);
+        b.extend_from_slice(&[0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0]);
+        // LZW, minimum code size 2: clear (4), index 0, end (5) in 3-bit codes.
+        b.extend_from_slice(&[2, 2, 0x44, 0x01, 0]);
+    }
+    b.push(0x3B);
+    b
+}
+
+#[test]
+fn each_frame_reaches_the_callback_before_the_next_is_decoded() {
+    // More frames than the decoder allows: decoding them all before the first callback failed on
+    // the frame count, so a caller's own limit (the footage budget) could never refuse first.
+    let bytes = tiny_frames(photocraft_codecs::MAX_GIF_FRAMES + 1);
+    let all = photocraft_codecs::decode_gif_frames(&bytes, &Default::default());
+    assert!(matches!(&all, Err(photocraft_codecs::CodecError::LimitExceeded(m)) if m.contains("frames")), "{all:?}");
+    let mut calls = 0;
+    let r = import_gif_frames("a.gif", &bytes, &mut |doc, delay_ms| {
+        assert_eq!((doc.bounds().width(), delay_ms), (1, 100));
+        calls += 1;
+        Err(IoError::Cancelled)
+    });
+    assert!(matches!(r, Err(IoError::Cancelled)), "{r:?}");
+    assert_eq!(calls, 1);
+}

@@ -26,7 +26,7 @@ use photocraft_format::zip::ZipReader;
 use photocraft_geom::Size;
 use photocraft_raster::{Interrupt, Surface};
 
-use crate::ora::{MAX_NODES, MAX_PIXEL_BYTES, MAX_SIDE, Warnings, krita_blend};
+use crate::ora::{MAX_INFLATED_BYTES, MAX_NODES, MAX_PIXEL_BYTES, MAX_SIDE, Warnings, krita_blend, read_charged};
 use crate::{ImportResult, IoError};
 use tiles::{Space, TileFile};
 
@@ -84,21 +84,27 @@ struct Reader<'a, 'c> {
     fmt: PixelFormat,
     nodes: usize,
     budget: usize,
+    /// Layer file bytes inflated so far, of `max_inflated` ([`MAX_INFLATED_BYTES`]). Every read
+    /// is charged, so layers naming one file pay for it each time.
+    inflated: usize,
+    max_inflated: usize,
     warnings: Warnings,
 }
 
 impl Reader<'_, '_> {
-    fn file(&self, name: &str) -> Result<Option<Vec<u8>>> {
+    /// The layer file `name` of at most `max` bytes, charged to the archive's inflate limit.
+    fn file(&mut self, name: &str, max: usize) -> Result<Option<Vec<u8>>> {
         let path = format!("{}{name}", self.dir);
         match self.zip.find(&path) {
             None => Ok(None),
-            Some(e) => self.zip.read(e, MAX_LAYER_FILE).map(Some).map_err(|err| invalid(format!("{path}: {err}"))),
+            Some(e) => read_charged(&self.zip, e, max, &mut self.inflated, self.max_inflated).map(Some).map_err(|err| invalid(format!("{path}: {err}"))),
         }
     }
 
-    /// The default pixel Krita stores next to a tiled file, decoded to `space` samples.
-    fn default_pixel(&self, name: &str, space: Space) -> Result<Option<Vec<f32>>> {
-        let Some(bytes) = self.file(&format!("{name}.defaultpixel"))? else { return Ok(None) };
+    /// The default pixel Krita stores next to a tiled file, decoded to `space` samples. It is
+    /// one pixel, so a larger entry is refused by its declared size before it is inflated.
+    fn default_pixel(&mut self, name: &str, space: Space) -> Result<Option<Vec<f32>>> {
+        let Some(bytes) = self.file(&format!("{name}.defaultpixel"), space.pixel_size())? else { return Ok(None) };
         if bytes.len() != space.pixel_size() {
             return Err(invalid(format!("{name}.defaultpixel has {} bytes, expected {}", bytes.len(), space.pixel_size())));
         }
@@ -107,8 +113,11 @@ impl Reader<'_, '_> {
 
     /// A tiled pixel file in `space` as a surface in `fmt`, offset by (`dx`, `dy`).
     fn surface(&mut self, name: &str, space: Space, fmt: PixelFormat, dx: i32, dy: i32) -> Result<Option<Surface>> {
-        let Some(bytes) = self.file(name)? else { return Ok(None) };
-        let file = TileFile::parse(&bytes)?;
+        let Some(bytes) = self.file(name, MAX_LAYER_FILE)? else { return Ok(None) };
+        // Every tile record is charged at least a Krita tile, so no more records than the budget
+        // pays for are kept.
+        let max_tiles = self.budget / tiles::KRITA_TILE_PIXELS.saturating_mul(fmt.bytes_per_pixel()).max(1);
+        let file = TileFile::parse(&bytes, max_tiles)?;
         if file.pixel_size != space.pixel_size() {
             return Err(invalid(format!("{name}: pixel size {} does not match its colour space", file.pixel_size)));
         }
@@ -276,6 +285,11 @@ fn preview(name: &str, zip: &ZipReader<'_>, why: String) -> Result<ImportResult>
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
+    import_within(name, bytes, ctl, MAX_INFLATED_BYTES)
+}
+
+/// [`import`], inflating at most `max_inflated` bytes of layer files.
+fn import_within(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, max_inflated: usize) -> Result<ImportResult> {
     let zip = ZipReader::new(bytes).map_err(|e| invalid(e.to_string()))?;
     let mime = zip.read_by_name("mimetype", 256).map_err(|e| invalid(e.to_string()))?;
     if mime.trim_ascii() != MIMETYPE {
@@ -312,6 +326,8 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         fmt: PixelFormat::new(mode, depth, true),
         nodes: 0,
         budget: MAX_PIXEL_BYTES,
+        inflated: 0,
+        max_inflated,
         warnings: Warnings::default(),
     };
     let layers = reader.layers(image, 1, 0, 0)?;

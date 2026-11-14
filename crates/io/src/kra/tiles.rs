@@ -157,6 +157,10 @@ pub(crate) fn lzf_decompress(src: &[u8], expected: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Pixels in one of the tiles Krita writes (64×64). Every tile record is charged at least this
+/// many, however small its declared tiles: each costs a record and a write of its own.
+pub(crate) const KRITA_TILE_PIXELS: usize = 64 * 64;
+
 /// A parsed tiled pixel file (`VERSION 2`), borrowing the tile payloads.
 pub(crate) struct TileFile<'a> {
     pub(crate) width: usize,
@@ -179,7 +183,9 @@ fn header_value(bytes: &[u8], pos: &mut usize, key: &str, max: usize) -> Result<
 }
 
 impl<'a> TileFile<'a> {
-    pub(crate) fn parse(bytes: &'a [u8]) -> Result<TileFile<'a>> {
+    /// Parses the header and the tile records, refusing more than `max_tiles` of them (what the
+    /// pixel budget can pay for) before any is kept.
+    pub(crate) fn parse(bytes: &'a [u8], max_tiles: usize) -> Result<TileFile<'a>> {
         let mut pos = 0;
         let version = line(bytes, &mut pos)?;
         if version.trim() != "VERSION 2" {
@@ -198,7 +204,11 @@ impl<'a> TileFile<'a> {
         if count > bytes.len() / 8 + 1 {
             return Err(invalid("tile count exceeds the file size"));
         }
-        let mut tiles = Vec::with_capacity(count);
+        if count > max_tiles {
+            return Err(invalid("decoded layers exceed the 1 GiB limit"));
+        }
+        // The count is file data: grow as records actually parse rather than reserving it all.
+        let mut tiles = Vec::with_capacity(count.min(4096));
         for _ in 0..count {
             let l = line(bytes, &mut pos)?;
             let mut f = l.split(',');
@@ -216,12 +226,14 @@ impl<'a> TileFile<'a> {
         Ok(TileFile { width, height, pixel_size, tiles })
     }
 
-    /// Bytes the decoded tiles take at `bpp` bytes per pixel: the larger of their own pixels and
-    /// the whole 256×256 backing tiles they land in (a surface stores no less than a tile, so
-    /// sparse tiles at distinct positions retain far more than they hold).
+    /// Bytes the decoded tiles take at `bpp` bytes per pixel: the larger of their own pixels (at
+    /// least a Krita tile's, [`KRITA_TILE_PIXELS`], each) and the whole 256×256 backing tiles they
+    /// land in (a surface stores no less than a tile, so sparse tiles at distinct positions retain
+    /// far more than they hold).
     pub(crate) fn decoded_bytes(&self, bpp: usize, dx: i32, dy: i32) -> Result<usize> {
         let overflow = || invalid("tile size overflow");
-        let logical = self.tiles.len().checked_mul(self.width * self.height).and_then(|n| n.checked_mul(bpp)).ok_or_else(overflow)?;
+        let per_tile = self.width.checked_mul(self.height).ok_or_else(overflow)?.max(KRITA_TILE_PIXELS);
+        let logical = self.tiles.len().checked_mul(per_tile).and_then(|n| n.checked_mul(bpp)).ok_or_else(overflow)?;
         let side = photocraft_geom::TILE_SIZE;
         let (w, h) = (i32::try_from(self.width.max(1)).map_err(|_| overflow())?, i32::try_from(self.height.max(1)).map_err(|_| overflow())?);
         let mut backing = std::collections::HashSet::new();
@@ -304,5 +316,28 @@ mod tests {
         // A tile wider than a backing tile reaches the ones between its corners.
         let wide = TileFile { width: 1024, height: 1, pixel_size: 4, tiles: vec![(0, 0, &[][..])] };
         assert_eq!(wide.decoded_bytes(4, 0, 0).unwrap(), 4 * 256 * 256 * 4);
+    }
+
+    #[test]
+    fn every_record_is_charged_at_least_one_krita_tile() {
+        // A hundred 1x1 tiles at one spot hold 100 pixels, but each record is parsed, kept and
+        // written on its own: each is charged as one 64x64 tile, as Krita writes them.
+        let tiny = TileFile { width: 1, height: 1, pixel_size: 4, tiles: vec![(0, 0, &[][..]); 100] };
+        assert_eq!(tiny.decoded_bytes(4, 0, 0).unwrap(), 100 * 64 * 64 * 4);
+        // Krita's own 64x64 tiles cost what they did.
+        assert_eq!(file(&[(0, 0)]).decoded_bytes(4, 0, 0).unwrap(), 256 * 256 * 4);
+    }
+
+    #[test]
+    fn a_tile_count_past_the_budget_is_refused_from_the_header() {
+        // The DATA count fits the file (a record per 8 bytes) but not the records the budget can
+        // pay for: refused before any record list is reserved or parsed.
+        let mut bytes = b"VERSION 2\nTILEWIDTH 64\nTILEHEIGHT 64\nPIXELSIZE 4\nDATA 1001\n".to_vec();
+        bytes.resize(bytes.len() + 1001 * 8, b'x');
+        let e = TileFile::parse(&bytes, 1000).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains("1 GiB limit"), "{e}");
+        // Within the budget the same header gets as far as the (malformed) first record.
+        let e = TileFile::parse(&bytes, 1001).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains("malformed tile file header"), "{e}");
     }
 }

@@ -45,7 +45,12 @@ The reader uses the bounded ZIP reader of `photocraft-format` (no ZIP64, CRC-che
 `maindoc.xml` with `roxmltree` (32 MiB cap; the DTD is declared by public id and not fetched),
 and decodes tiles with a bounds-checked LZF decoder that must produce exactly one tile. Tiles
 are at most 1024 px a side; canvases at most 300,000 px a side and 1 GiB of decoded pixels;
-8,192 nodes; nesting at most `MAX_GROUP_DEPTH`. Version 1 tile files (Krita 1.x) are refused.
+8,192 nodes; nesting at most `MAX_GROUP_DEPTH`. Every tile record is charged at least one
+64×64 tile against the pixel limit, and a file declaring more records than that limit pays for
+is refused from its header. The layer files inflated from one archive total at most 2 GiB (each
+read is charged, so layers naming one file pay for it each time), and a `.defaultpixel` entry
+larger than one pixel is refused by its declared size before it is inflated. Version 1 tile files
+(Krita 1.x) are refused.
 Malformed archives, XML, numbers, tile headers and tile data return errors; truncated and
 corrupted files are covered by tests.
 

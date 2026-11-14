@@ -2,7 +2,7 @@
 
 use photocraft_codecs::{
     AnimationFrame, ChannelLayout, CodecError, DecodeOptions, DecodeWarning, EncodeOptions, Format, Image, Limits, decode, decode_webp_frames, encode,
-    webp_is_animated,
+    for_each_webp_frame, webp_is_animated,
 };
 
 const RED: [u8; 4] = [255, 0, 0, 255];
@@ -163,4 +163,78 @@ fn the_byte_budget_covers_all_frames_together() {
     let opts = DecodeOptions { limits: Limits { max_alloc: 256, ..Limits::default() }, ..Default::default() };
     assert_eq!(decode_webp_frames(&two, &opts).unwrap().len(), 2);
     assert!(matches!(decode_webp_frames(&ten, &opts), Err(CodecError::LimitExceeded(_))));
+}
+
+#[derive(Debug)]
+enum Stop {
+    Refused,
+    Codec(CodecError),
+}
+
+impl From<CodecError> for Stop {
+    fn from(e: CodecError) -> Self {
+        Stop::Codec(e)
+    }
+}
+
+#[test]
+fn streaming_stops_decoding_when_the_callback_refuses_a_frame() {
+    let ten: Vec<Part> = (0..10).map(|i| part(if i % 2 == 0 { RED } else { BLUE }, 4, 4, 50)).collect();
+    let ten = animated(4, 4, &ten);
+    // Ten frames exceed this budget together (see above), so a decoder that read them all before
+    // handing any out would fail without a callback; one at a time, the refusal comes first.
+    let opts = DecodeOptions { limits: Limits { max_alloc: 256, ..Limits::default() }, ..Default::default() };
+    let mut calls = 0;
+    let r = for_each_webp_frame(&ten, &opts, &mut |f| {
+        calls += 1;
+        assert_eq!(pixel(&f, 0, 0), RED);
+        Err(Stop::Refused)
+    });
+    assert!(matches!(r, Err(Stop::Refused)), "{r:?}");
+    assert_eq!(calls, 1);
+    // Accepting every frame, the budget still refuses the animation, after handing some out.
+    let mut calls = 0;
+    let r = for_each_webp_frame(&ten, &opts, &mut |_| {
+        calls += 1;
+        Ok::<(), Stop>(())
+    });
+    assert!(matches!(r, Err(Stop::Codec(CodecError::LimitExceeded(_)))), "{r:?}");
+    assert!((1..10).contains(&calls), "{calls} frames arrived");
+}
+
+#[test]
+fn streaming_gives_every_frame_and_a_still_as_one() {
+    let a = animated(6, 4, &[part(RED, 6, 4, 40), part(GREEN, 6, 4, 120), part(BLUE, 6, 4, 7)]);
+    let mut got = Vec::new();
+    let done = for_each_webp_frame(&a, &DecodeOptions::default(), &mut |f| {
+        got.push((pixel(&f, 0, 0), f.delay_ms));
+        Ok::<(), CodecError>(())
+    })
+    .unwrap();
+    assert_eq!(done.frames, 3);
+    assert_eq!(got, [(RED, 40), (GREEN, 120), (BLUE, 7)]);
+    let still = encode(&solid(RED, 6, 4), Format::WebP, &EncodeOptions::default()).unwrap();
+    let mut n = 0;
+    let done = for_each_webp_frame(&still, &DecodeOptions::default(), &mut |f| {
+        n += 1;
+        assert_eq!(f.image, decode(&still).unwrap());
+        Ok::<(), CodecError>(())
+    })
+    .unwrap();
+    assert_eq!((done.frames, n), (1, 1));
+}
+
+#[test]
+fn streaming_reports_a_damaged_later_frame_once_the_rest_are_out() {
+    let mut a = animated(6, 4, &[part(RED, 6, 4, 50), part(GREEN, 6, 4, 50), part(BLUE, 6, 4, 50)]);
+    let last = a.windows(4).rposition(|w| w == b"VP8L").unwrap();
+    a[last + 8] = 0;
+    let mut calls = 0;
+    let done = for_each_webp_frame(&a, &DecodeOptions::default(), &mut |_| {
+        calls += 1;
+        Ok::<(), CodecError>(())
+    })
+    .unwrap();
+    assert_eq!((done.frames, calls), (2, 2));
+    assert_eq!(done.warnings, [DecodeWarning::Truncated { format: Format::WebP }]);
 }

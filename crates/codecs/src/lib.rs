@@ -30,7 +30,7 @@ pub mod source_settings;
 pub mod web;
 pub use crate::cicp::Cicp;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
-pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
+pub use crate::codecs::gif_frames::{AnimationFrame, FramesDecoded, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{
     PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed, palette as png_palette,
     stereo as png_stereo,
@@ -254,6 +254,32 @@ pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anim
         Some(frames) => Ok(frames),
         None => Ok(vec![AnimationFrame { image: decode_as_with(Format::WebP, bytes, opts)?, delay_ms: 0 }]),
     }
+}
+
+/// [`decode_gif_frames`] one frame at a time: each is handed to `each` before the next is
+/// decoded, so a caller converting the frames holds one at a time and can refuse the rest (the
+/// first error `each` returns stops the decode and is returned as it is). A damaged later frame
+/// is reported in the result's warnings instead of on the first frame.
+pub fn for_each_gif_frame<E: From<CodecError>>(
+    bytes: &[u8],
+    opts: &DecodeOptions,
+    each: &mut dyn FnMut(AnimationFrame) -> Result<(), E>,
+) -> Result<FramesDecoded, E> {
+    crate::codecs::gif_frames::for_each(bytes, opts, each)
+}
+
+/// [`decode_webp_frames`] one frame at a time, as [`for_each_gif_frame`] does for a GIF; a still
+/// WebP is one frame.
+pub fn for_each_webp_frame<E: From<CodecError>>(
+    bytes: &[u8],
+    opts: &DecodeOptions,
+    each: &mut dyn FnMut(AnimationFrame) -> Result<(), E>,
+) -> Result<FramesDecoded, E> {
+    if !webp_is_animated(bytes) {
+        each(AnimationFrame { image: decode_as_with(Format::WebP, bytes, opts)?, delay_ms: 0 })?;
+        return Ok(FramesDecoded { frames: 1, warnings: Vec::new() });
+    }
+    crate::codecs::webp::for_each_frame(bytes, &opts.limits, each)
 }
 
 /// Whether `bytes` is an animated WebP of more than one frame (which [`decode`] opens as its
