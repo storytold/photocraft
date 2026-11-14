@@ -80,6 +80,31 @@ fn open_file_sets_name_path_and_recent() {
     assert!(app.ui.notices.is_empty());
 }
 
+/// A `.tx` render texture opens read-only on the inline and automation paths too (the
+/// background open gets it from the importer): Save asks for a new file instead of writing a
+/// plain TIFF over the texture.
+#[test]
+fn tx_texture_does_not_acquire_its_path() {
+    let img = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Gray, vec![40; 4]).unwrap();
+    let tiff = photocraft_codecs::encode(&img, photocraft_codecs::Format::Tiff, &Default::default()).unwrap();
+    for automation in [false, true] {
+        let (mut app, _written) = app_with(vec![None]);
+        if automation {
+            app.open_automation_bytes("wall.tx", &tiff).unwrap();
+        } else {
+            app.open_file("/tex/wall.tx", &tiff).unwrap();
+        }
+        let st = app.session.active().unwrap();
+        assert!(st.source_read_only, "automation: {automation}");
+        assert!(st.path.is_none(), "automation: {automation}");
+        assert_eq!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
+    }
+    // The same bytes under a TIFF name keep their path, as before.
+    let (mut app, _written) = app_with(vec![None]);
+    app.open_file("/tex/wall.tif", &tiff).unwrap();
+    assert!(!app.session.active().unwrap().source_read_only);
+}
+
 #[test]
 fn affinity_preview_does_not_acquire_the_source_path_even_when_renamed() {
     for automation in [false, true] {
