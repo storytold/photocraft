@@ -63,7 +63,7 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
-lopdf = { version = "0.38", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 # PDF XMP serialization assertions parse output XML in tests.
 roxmltree = "0.21"
 miniz_oxide = "0.9"
