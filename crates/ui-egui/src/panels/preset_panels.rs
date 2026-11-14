@@ -776,6 +776,36 @@ mod tests {
         assert_eq!(app.ui.crop_rect, Some([8.0, 0.0, 56.0, 48.0]));
     }
 
+    /// Every shape and Pen preset restores alignment after Reset Tool clears it.
+    #[test]
+    fn pixel_alignment_tool_presets_roundtrip_and_reset_for_shape_and_pen_tools() {
+        for tool in [
+            Tool::Rectangle,
+            Tool::EllipseShape,
+            Tool::Triangle,
+            Tool::Polygon,
+            Tool::Star,
+            Tool::CustomShape,
+            Tool::Line,
+            Tool::Pen,
+            Tool::CurvaturePen,
+            Tool::FreeformPen,
+        ] {
+            let (mut app, _) = app();
+            app.ui.tool = tool;
+            app.ui.tool_options.use_aligned_rendering = true;
+            let params = new_tool_preset_params(&app, tool);
+            assert_eq!(params["options"]["toolOptions"]["useAlignedRendering"], true, "{tool:?}");
+            let name = app.run("tool.presets.new", params).unwrap()["name"].as_str().unwrap().to_string();
+            crate::tool_reset::reset_options(&mut app.ui.tool_options, tool);
+            assert!(!app.ui.tool_options.use_aligned_rendering, "{tool:?}");
+            app.ui.tool_options.feather = 11.0;
+            select_tool_preset(&mut app, &name);
+            assert_eq!(app.ui.tool, tool);
+            assert!(app.ui.tool_options.use_aligned_rendering, "{tool:?}");
+            assert_eq!(app.ui.tool_options.feather, 11.0);
+        }
+    }
     /// #7356: a preset made with + keeps only its own tool's options, so choosing it doesn't
     /// reset the Crop tool's Delete Cropped Pixels or the Move tool's Auto-Select.
     #[test]
@@ -824,6 +854,60 @@ mod tests {
         let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
         assert_eq!(l.name, "Star");
         assert!(matches!(l.content, photocraft_doc::LayerContent::Shape(_)));
+    }
+
+    /// Shapes-panel activation and canvas drops use the same alignment default as the tool.
+    #[test]
+    fn pixel_alignment_shapes_panel_activation_and_drop_preserve_preference() {
+        use egui_kittest::kittest::Queryable;
+        for enabled in [false, true] {
+            for drop in [false, true] {
+                let (mut app, _) = app();
+                app.ui.tool_options.use_aligned_rendering = enabled;
+                app.last_canvas_rect = Rect::from_min_max(pos2(340.0, 0.0), pos2(800.0, 500.0));
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 500.0)).with_step_dt(0.02).build_ui_state(
+                    |ui, app: &mut PhotocraftApp| {
+                        let _language = crate::i18n::language_scope(crate::i18n::Lang::EN);
+                        if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                            ui.set_max_width(300.0);
+                            shapes_panel(app, ui);
+                        }
+                    },
+                    app,
+                );
+                PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+                h.run_steps(4);
+                let history = h.state().session.active().unwrap().history.past_len();
+                let at = h.get_by_role_and_label(egui::accesskit::Role::Button, "Heart").rect().center();
+                h.hover_at(at);
+                h.step();
+                if drop {
+                    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+                    h.step();
+                    let to = pos2(550.0, 250.0);
+                    h.event(egui::Event::PointerMoved(to));
+                    h.step();
+                    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+                    h.step();
+                } else {
+                    for _ in 0..2 {
+                        for pressed in [true, false] {
+                            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                            h.step();
+                        }
+                    }
+                }
+                let info = h.state_mut().run("shape.info", json!({})).unwrap();
+                assert_eq!(info["useAlignedRendering"], enabled, "drop={drop}");
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+                h.state_mut().run("edit.undo", json!({})).unwrap();
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+                h.state_mut().run("edit.redo", json!({})).unwrap();
+                let redone = h.state_mut().run("shape.info", json!({})).unwrap();
+                assert_eq!(redone["path"], info["path"]);
+                assert_eq!(redone["useAlignedRendering"], enabled);
+            }
+        }
     }
 
     /// #3658: a group/folder drag reorders by name, stores only a real reorder, and falls back to

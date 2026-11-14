@@ -42,8 +42,9 @@ pub(super) fn copy_shape_fill(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 pub(super) fn copy_shape_stroke(s: &mut Session, _p: &Value) -> Result<Value> {
-    let stroke = active_shape(s).map_err(EngineError::Other)?.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
-    s.path_stroke_clipboard = Some(stroke);
+    let shape = active_shape(s).map_err(EngineError::Other)?;
+    let stroke = shape.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
+    s.path_stroke_clipboard = Some((stroke, shape.use_aligned_rendering));
     Ok(Value::Null)
 }
 
@@ -58,10 +59,11 @@ pub(super) fn paste_shape_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let stroke = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
+    let (stroke, use_aligned_rendering) = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
     let id = layer_id(s, p)?;
     with_shape(s, id, "Paste Complete Stroke", |shape, _| {
         shape.stroke = Some(stroke);
+        shape.use_aligned_rendering = use_aligned_rendering;
         Ok(())
     })?;
     shape_info(s, id)
@@ -213,6 +215,17 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
 
     sh.path = sh.path.transform(a);
     let [m0, m1, m2, m3, tx, ty] = a.m;
+    // Signed axis permutations preserve the original quantization error.
+    let near = |x: f64, target: f64| (x - target).abs() <= 1e-12;
+    let unit = |x: f64| near(x.abs(), 1.0);
+    let translation = tx.is_finite() && ty.is_finite() && near(tx, tx.round()) && near(ty, ty.round());
+    if translation && unit(m0) && unit(m3) && near(m1, 0.0) && near(m2, 0.0) {
+        // Translation or reflection keeps the original axes.
+    } else if translation && unit(m1) && unit(m2) && near(m0, 0.0) && near(m3, 0.0) {
+        sh.psd_coordinate_frame = sh.psd_coordinate_frame.map(|[w, h]| [h, w]);
+    } else {
+        sh.psd_coordinate_frame = None;
+    }
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
     // The path has already received the exact affine transform. Drop live arrow
     // parameters if later edits would regenerate a different, unskewed head.
@@ -375,9 +388,11 @@ pub(crate) fn map_shape(sh: &mut ShapeLayer, h: Option<&photocraft_algo::transfo
     sh.path = map_path(&sh.path, h, warp)?;
     sh.live = None;
     sh.psd_raw = None;
+    sh.psd_coordinate_frame = None;
     Ok(())
 }
 
+/// Report a shape layer's geometry, appearance, Align Edges state and optional cached bounds.
 pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
@@ -391,12 +406,15 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
         "path": path_json(&sh.path),
         "fill": sh.fill.as_ref().map(fill_json),
         "stroke": sh.stroke.as_ref().map(stroke_json),
+        "useAlignedRendering": sh.use_aligned_rendering,
         "live": sh.live.as_ref().map(live_json),
         "kind": sh.live.as_ref().map_or("path", live_kind),
         "bounds": bounds,
     }))
 }
 
+/// Run a lock-checked shape edit in one history step, restoring the layer content afterward.
+/// Recover missing PSD provenance before the edit and refresh cached pixels on success.
 pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
@@ -413,6 +431,9 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
         let LayerContent::Shape(mut sh) = std::mem::replace(&mut l.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) else {
             return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
         };
+        if sh.psd_coordinate_frame.is_none() && sh.psd_raw.is_some() {
+            sh.psd_coordinate_frame = Some([snapshot.size.width, snapshot.size.height]);
+        }
         let r = f(&mut sh, l);
         if r.is_ok() {
             refresh_shape(&snapshot, &mut sh);
@@ -436,6 +457,7 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
+/// Applies alignment to additions only when explicitly supplied.
 /// The Freeform Pen or Line Tool history override labels new layers; additions retain the Add
 /// Shape label.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
@@ -451,11 +473,19 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+    let use_aligned_rendering = match p.get("useAlignedRendering") {
+        None => None,
+        Some(Value::Bool(enabled)) => Some(*enabled),
+        Some(_) => return Err(bad(CMD, "`useAlignedRendering` must be a boolean")),
+    };
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
         with_shape(s, id, "Add Shape", |sh, _| {
+            if let Some(enabled) = use_aligned_rendering {
+                sh.use_aligned_rendering = enabled;
+            }
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.
                 if sp.op != PathOp::Join {
@@ -465,13 +495,14 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             sh.live = None;
             sh.psd_raw = None;
+            sh.psd_coordinate_frame = None;
             vector::flatten::validate_shape(&sh.path, sh.stroke.as_ref()).map_err(|e| bad(CMD, e))?;
             Ok(())
         })?;
         return shape_info(s, id);
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let mut sh = ShapeLayer { path, fill, stroke, live, ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, live, use_aligned_rendering: use_aligned_rendering.unwrap_or(false), ..Default::default() };
     let id = s.edit(label, |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
@@ -505,6 +536,11 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
+    let use_aligned_rendering = match p.get("useAlignedRendering") {
+        None => false,
+        Some(Value::Bool(enabled)) => *enabled,
+        Some(_) => return Err(bad(CMD, "`useAlignedRendering` must be a boolean")),
+    };
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) => Some(n.as_str()),
@@ -534,7 +570,8 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
         Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
     };
-    let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
+    let psd_coordinate_frame = if p.get("path").is_none_or(Value::is_null) { converted_path_frame(s, name, &path) } else { None };
+    let mut sh = ShapeLayer { path, fill, stroke, use_aligned_rendering, psd_coordinate_frame, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
@@ -546,6 +583,30 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     shape_info(s, id)
+}
+
+/// Reuse a source grid only when retained PSD bytes still describe the copied path.
+fn converted_path_frame(s: &Session, name: Option<&str>, path: &Path) -> Option<[u32; 2]> {
+    let st = s.active()?;
+    let [w, h] = [st.doc.size.width, st.doc.size.height];
+    if name == Some("layer") {
+        let layer = st.doc.layer(st.active_layer?)?;
+        if let LayerContent::Shape(source) = &layer.content {
+            return source.psd_coordinate_frame.or_else(|| source.psd_raw.as_ref().map(|_| [w, h]));
+        }
+        return layer
+            .psd_blocks
+            .iter()
+            .filter(|(key, _)| key == b"vsms" || key == b"vmsk")
+            .any(|(_, data)| photocraft_io::vector_map::vector_mask_from_block(data, w, h).is_some_and(|mask| mask.path == *path))
+            .then_some([w, h]);
+    }
+    if super::is_work(name) {
+        return None;
+    }
+    let saved = st.doc.paths.iter().find(|p| Some(p.name.as_str()) == name)?;
+    let raw = saved.psd_raw.as_ref()?;
+    (photocraft_io::vector_map::path_from_resource(raw, w, h).as_ref() == Some(path)).then_some([w, h])
 }
 
 /// The History name of a `shape.edit` of layer `id`: an edit of one arrowhead setting of a line
@@ -570,6 +631,7 @@ fn edit_history_name(s: &Session, id: LayerId, p: &Value) -> &'static str {
     }
 }
 
+/// Apply geometry and appearance edits in one history step, rebuilding derived shape data as needed.
 pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.edit";
     let id = layer_id(s, p)?;
@@ -579,7 +641,9 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let label = edit_history_name(s, id, p);
     with_shape(s, id, label, |sh, layer| {
         if let Some(v) = p.get("path") {
-            sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
+            let path = parse_path(v).map_err(|e| bad(CMD, e))?;
+            sh.psd_coordinate_frame = (path == sh.path).then_some(sh.psd_coordinate_frame).flatten();
+            sh.path = path;
             sh.live = None;
             sh.psd_raw = None;
         }
@@ -613,6 +677,7 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
                 sh.path = vector::shapes::live_path(&l);
                 sh.live = Some(l);
                 sh.psd_raw = None;
+                sh.psd_coordinate_frame = None;
             }
         }
         if let Some(m) = nums::<6>(p, "transform") {
@@ -638,6 +703,9 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(v) = p.get("stroke") {
             sh.stroke = parse_stroke(v, sh.stroke.clone(), fgc).map_err(|e| bad(CMD, e))?;
+        }
+        if let Some(value) = p.get("useAlignedRendering") {
+            sh.use_aligned_rendering = value.as_bool().ok_or_else(|| bad(CMD, "`useAlignedRendering` must be a boolean"))?;
         }
         if let Some(n) = name {
             layer.name = n;
@@ -685,6 +753,7 @@ fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
     sh.path = bake_path(&sh.path, tol)?;
     sh.live = None;
     sh.psd_raw = None;
+    sh.psd_coordinate_frame = None;
     Ok(())
 }
 
@@ -769,7 +838,7 @@ fn merge_shape_layers(s: &mut Session, ids: &[LayerId], op: Option<PathOp>, labe
         let LayerContent::Shape(sh) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is not a shape layer", keep.0)));
         };
-        let mut merged = ShapeLayer { path, live: None, psd_raw: None, cache: None, ..sh.clone() };
+        let mut merged = ShapeLayer { path, live: None, psd_raw: None, psd_coordinate_frame: None, cache: None, ..sh.clone() };
         if let Some(tol) = bake {
             bake_components(&mut merged, tol)?;
         }

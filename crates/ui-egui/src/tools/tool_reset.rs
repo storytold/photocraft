@@ -186,10 +186,19 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
 /// (less [`kept_by_reset_tool`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
+    // This field's script/serialized name differs from its Rust identifier.
+    macro_rules! serialized_key {
+        (use_aligned_rendering) => {
+            "useAlignedRendering"
+        };
+        ($field:ident) => {
+            stringify!($field)
+        };
+    }
     macro_rules! reset {
         ($($f:ident),* $(,)?) => {{
             let _ = |o: &ToolOptions| { $(let _ = &o.$f;)* };
-            &[$(stringify!($f)),*]
+            &[$(serialized_key!($f)),*]
         }};
     }
     match tool {
@@ -256,13 +265,14 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, sponge_flow, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, pen_rubber_band),
-        Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
-        Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
+        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, pen_rubber_band, use_aligned_rendering),
+        Tool::CurvaturePen => reset!(vector_mode, pen_path_op, use_aligned_rendering),
+        Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit, use_aligned_rendering),
         Tool::Line => reset!(
             shape_mode,
             shape_path_op,
             shape_fill,
+            use_aligned_rendering,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,
@@ -281,6 +291,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             shape_mode,
             shape_path_op,
             shape_fill,
+            use_aligned_rendering,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,
@@ -301,6 +312,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 shape_mode,
                 shape_path_op,
                 shape_fill,
+                use_aligned_rendering,
                 stroke_width,
                 shape_stroke,
                 shape_fill_gradient,

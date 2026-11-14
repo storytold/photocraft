@@ -1609,6 +1609,54 @@ fn fx_doc(effects: Vec<Effect>) -> Document {
     d
 }
 
+/// Interior effects must not shift the fill away from a live line's visible outline.
+#[test]
+fn pixel_align_live_line_with_effect_keeps_fill_and_outline_registered() {
+    use photocraft_doc::{LiveShape, ShapeLayer, ShapeStroke};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for arrow in [false, true] {
+            let live = if arrow {
+                LiveShape::ArrowLine { from: [10.0, 20.0], to: [70.0, 20.0], weight: 1.0, start: false, end: true, width: 5.0, length: 8.0, concavity: 0.0 }
+            } else {
+                LiveShape::Line { from: [10.0, 20.0], to: [70.0, 20.0], weight: 1.0 }
+            };
+            let mut doc = Document::new("line", Size::new(100, 50), ColorMode::Rgb, depth);
+            let shape = ShapeLayer {
+                path: photocraft_vector::shapes::live_path(&live),
+                live: Some(live),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                stroke: Some(ShapeStroke { width: 0.5, opacity: 0.5, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..Default::default() }),
+                ..Default::default()
+            };
+            let path = shape.path.clone();
+            let mut layer = Layer::new("line", LayerContent::Shape(shape));
+            layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) });
+            doc.layers.push(layer);
+            let LayerContent::Shape(shape) = &mut doc.layers[0].content else { panic!("shape") };
+            shape.use_aligned_rendering = true;
+            assert_eq!(shape.path, path);
+            assert!(shape.cache.is_none());
+            // A full-opacity Color Overlay makes the aligned fill green, then the
+            // independent vector outline paints above it. Build that reference
+            // explicitly, rather than expecting alignment to retain legacy pixels.
+            let mut reference = Document::new("reference", Size::new(100, 50), ColorMode::Rgb, depth);
+            for part in [
+                ShapeLayer { live: None, stroke: None, fill: Some(Fill::Solid(Color::rgb(0.0, 1.0, 0.0))), ..shape.clone() },
+                ShapeLayer { fill: None, ..shape.clone() },
+            ] {
+                let surface = photocraft_vector::render_shape(&part, PixelFormat::RGBA8.with_sample(depth), Rect::new(0, 0, 100, 50));
+                reference.layers.push(Layer::new("part", LayerContent::Raster(surface)));
+            }
+            let expected = flatten(&reference);
+            assert!(expected.get(35, 20)[1] > 0.0, "fixture must paint the aligned green fill");
+            let actual = flatten(&doc);
+            for (i, (actual, expected)) in actual.px.iter().zip(&expected.px).enumerate() {
+                assert!(close4(*actual, *expected), "depth={depth:?}, arrow={arrow}, pixel={i}: {actual:?} != {expected:?}");
+            }
+        }
+    }
+}
+
 fn stroke(size: f32, position: StrokePosition) -> Effect {
     Effect::Stroke(StrokeFx {
         common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
@@ -4888,6 +4936,80 @@ fn softer_outer_glow_fades_out_before_its_size() {
             };
             let tolerance = if dist >= 56 { 0.0 } else { 2.0 };
             assert!((v - want).abs() <= tolerance, "range {range}, {dist} px: {v} vs the reference application's {want} ({got:?})");
+        }
+    }
+}
+
+#[test]
+fn pixel_align_psd_effect_layer_roi_matches_document_frame() {
+    use photocraft_doc::effects::{Effect, FxCommon};
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    let quantize = |v: f64| (v / 1000.0 * 16_777_216.0).round() / 16_777_216.0 * 1000.0;
+    let shape = ShapeLayer {
+        path: photocraft_vector::shapes::rect(quantize(10.0), quantize(10.0), quantize(70.0) - quantize(10.0), quantize(70.0) - quantize(10.0)),
+        fill: Some(Fill::Solid(Color::WHITE)),
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        use_aligned_rendering: true,
+        psd_raw: Some(std::sync::Arc::new(Vec::new())),
+        psd_coordinate_frame: Some([1000, 1000]),
+        ..Default::default()
+    };
+    let mut layer = Layer::new("PSD rectangle", LayerContent::Shape(shape));
+    layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 0.25), color: Color::BLACK });
+    let full = render_layer(&layer, Rect::new(0, 0, 1000, 1000));
+    let roi = render_layer(&layer, Rect::new(0, 0, 80, 80));
+    for y in 0..80 {
+        for x in 0..80 {
+            assert_eq!(roi.px[y * 80 + x], full.px[y * 1000 + x], "{x},{y}");
+        }
+    }
+}
+
+#[test]
+fn pixel_align_round2_effect_identity_tracks_alignment_provenance() {
+    use std::hash::Hasher;
+    let mut layer = Layer::new("shape", LayerContent::Shape(photocraft_doc::ShapeLayer::default()));
+    let key = |layer: &Layer| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        super::fx_cache::layer_identity(layer, &mut h, &mut |_| {});
+        h.finish()
+    };
+    let original = key(&layer);
+    let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
+    sh.use_aligned_rendering = true;
+    let aligned = key(&layer);
+    assert_ne!(original, aligned);
+    let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
+    sh.psd_coordinate_frame = Some([1000, 2000]);
+    let framed = key(&layer);
+    assert_ne!(aligned, framed);
+    let LayerContent::Shape(sh) = &mut layer.content else { panic!() };
+    sh.psd_raw = Some(std::sync::Arc::new(Vec::new()));
+    assert_ne!(framed, key(&layer));
+}
+
+/// Reference: a black no-stroke rectangle at 10.5..30.5 on white has a white
+/// column 10 and black column 30 with Align Edges enabled.
+#[test]
+fn align_edges_no_stroke_rectangle_matches_reference_columns() {
+    for enabled in [false, true] {
+        let mut doc = doc_white(48, 48);
+        let mut shape = photocraft_doc::ShapeLayer {
+            path: photocraft_vector::shapes::rect(10.5, 10.5, 20.0, 20.0),
+            fill: Some(Fill::Solid(Color::BLACK)),
+            use_aligned_rendering: enabled,
+            ..Default::default()
+        };
+        // The engine supplies vector rasterization to the compositor as the shape cache.
+        shape.cache = Some(photocraft_vector::render_shape(&shape, PixelFormat::RGBA8, Rect::new(0, 0, 48, 48)));
+        doc.layers.push(Layer::new("rectangle", LayerContent::Shape(shape)));
+        let (left, right) = (px(&doc, 10, 20), px(&doc, 30, 20));
+        if enabled {
+            assert_eq!(left, [1.0; 4]);
+            assert_eq!(right, [0.0, 0.0, 0.0, 1.0]);
+        } else {
+            assert!(left[0] > 0.0 && left[0] < 1.0);
+            assert!(right[0] > 0.0 && right[0] < 1.0);
         }
     }
 }

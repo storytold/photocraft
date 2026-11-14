@@ -678,3 +678,1115 @@ fn flatten_interrupt_stops_during_preparation() {
     assert_eq!(polls.load(Ordering::Relaxed), 6);
     assert_eq!(flatten::flatten_path_with(&path, DEFAULT_TOLERANCE, &Interrupt::NONE), Some(flatten_path(&path, DEFAULT_TOLERANCE)));
 }
+/// Solid and dashed rectangle edges occupy one opaque row only when alignment is enabled.
+#[test]
+fn centered_one_pixel_rectangle_strokes_are_pixel_aligned() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let path = shapes::rect(10.0, 10.0, 60.0, 60.0);
+
+    for dashes in [vec![], vec![4.0, 2.0]] {
+        let shape = ShapeLayer {
+            use_aligned_rendering: true,
+            path: path.clone(),
+            fill: None,
+            stroke: Some(ShapeStroke {
+                width: 1.0,
+                paint: Fill::Solid(Color::BLACK),
+                opacity: 1.0,
+                align: StrokeAlign::Center,
+                dashes: dashes.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+        let alpha = |x: usize, y: usize| pixels[y * 100 + x][3];
+
+        assert!(alpha(12, 10) > 0.99, "1px centered stroke should cover one full pixel row; dashes={dashes:?}, alpha={}", alpha(12, 10));
+
+        assert!(alpha(12, 9) < 0.01, "1px centered stroke should not bleed into the adjacent row; dashes={dashes:?}, alpha={}", alpha(12, 9));
+
+        if !dashes.is_empty() {
+            assert!(alpha(15, 10) < 0.01, "Dash gaps must remain transparent");
+        }
+    }
+}
+/// Fractional rectangles and wider strokes retain their original antialiased coverage.
+#[test]
+fn one_pixel_rectangle_alignment_preserves_other_geometry() {
+    let clip = Rect::new(0, 0, 100, 100);
+
+    let render = |path, width| {
+        let shape = ShapeLayer {
+            use_aligned_rendering: true,
+            path,
+            fill: None,
+            stroke: Some(ShapeStroke { width, paint: Fill::Solid(Color::BLACK), opacity: 1.0, align: StrokeAlign::Center, ..Default::default() }),
+            ..Default::default()
+        };
+        CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip)
+    };
+
+    let alpha = |pixels: &Vec<[f32; 4]>, x: usize, y: usize| pixels[y * 100 + x][3];
+
+    let aligned = render(shapes::rect(10.0, 10.0, 60.0, 60.0), 1.0);
+
+    // All four sides must occupy one fully opaque pixel row or column.
+    for (x, y) in [(12, 10), (12, 69), (10, 12), (69, 12)] {
+        assert!(alpha(&aligned, x, y) > 0.99, "side pixel ({x}, {y})");
+    }
+
+    // No unwanted coverage outside the rectangle.
+    for (x, y) in [(12, 9), (12, 70), (9, 12), (70, 12)] {
+        assert!(alpha(&aligned, x, y) < 0.01, "outside pixel ({x}, {y})");
+    }
+
+    // Fractional axis-aligned edges snap with Align Edges enabled.
+    let fractional = render(shapes::rect(10.25, 10.25, 60.0, 60.0), 1.0);
+    assert_eq!(fractional, aligned);
+
+    // Even-width centered strokes must retain their existing coverage.
+    let two_px = render(shapes::rect(10.0, 10.0, 60.0, 60.0), 2.0);
+    assert!(alpha(&two_px, 12, 9) > 0.99);
+    assert!(alpha(&two_px, 12, 10) > 0.99);
+}
+/// Enabling and disabling alignment changes coverage without changing stored vector geometry.
+#[test]
+fn pixel_alignment_is_opt_in_and_preserves_original_path() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let original_path = shapes::rect(10.0, 10.0, 60.0, 60.0);
+
+    let mut shape = ShapeLayer {
+        path: original_path.clone(),
+        fill: None,
+        stroke: Some(ShapeStroke { width: 1.0, paint: Fill::Solid(Color::BLACK), opacity: 1.0, align: StrokeAlign::Center, ..Default::default() }),
+        ..Default::default()
+    };
+
+    let render = |shape: &ShapeLayer| CompiledShape::new(shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+    let alpha = |pixels: &Vec<[f32; 4]>, x: usize, y: usize| pixels[y * 100 + x][3];
+
+    // Legacy: original centered stroke covers two rows at 50%.
+    assert!(!shape.use_aligned_rendering);
+    let legacy = render(&shape);
+
+    assert!((alpha(&legacy, 12, 9) - 0.5).abs() < 0.01);
+    assert!((alpha(&legacy, 12, 10) - 0.5).abs() < 0.01);
+
+    // Opt-in: one fully opaque row.
+    shape.use_aligned_rendering = true;
+    let aligned = render(&shape);
+
+    assert!(alpha(&aligned, 12, 9) < 0.01);
+    assert!(alpha(&aligned, 12, 10) > 0.99);
+
+    // The stored vector geometry must never change.
+    assert_eq!(shape.path, original_path);
+
+    // Disabling the option must restore the exact legacy pixels.
+    shape.use_aligned_rendering = false;
+    assert_eq!(render(&shape), legacy);
+}
+/// Every dashed rectangle side has crisp normal-axis coverage and transparent gaps.
+#[test]
+fn pixel_aligned_dashed_rectangle_has_crisp_edges_on_all_sides() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let path = shapes::rect(10.0, 10.0, 60.0, 60.0);
+
+    let shape = ShapeLayer {
+        path: path.clone(),
+        fill: None,
+        stroke: Some(ShapeStroke {
+            width: 1.0,
+            paint: Fill::Solid(Color::BLACK),
+            opacity: 1.0,
+            align: StrokeAlign::Center,
+            dashes: vec![4.0, 2.0],
+            ..Default::default()
+        }),
+        use_aligned_rendering: true,
+        ..Default::default()
+    };
+
+    let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+    let alpha = |x: usize, y: usize| pixels[y * 100 + x][3];
+
+    let sides = [("top", 0), ("bottom", 1), ("left", 2), ("right", 3)];
+
+    for (name, side) in sides {
+        let mut opaque = 0;
+        let mut transparent = 0;
+
+        for p in 16..64 {
+            let (x, y, ox, oy) = match side {
+                0 => (p, 10, p, 9),
+                1 => (p, 69, p, 70),
+                2 => (10, p, 9, p),
+                _ => (69, p, 70, p),
+            };
+
+            let a = alpha(x, y);
+
+            assert!(a < 0.01 || a > 0.99, "{name}: partial alpha at ({x}, {y}) = {a}");
+
+            assert!(alpha(ox, oy) < 0.01, "{name}: stroke bleeds outside at ({ox}, {oy})");
+
+            if a > 0.99 {
+                opaque += 1;
+            } else {
+                transparent += 1;
+            }
+        }
+
+        assert!(opaque > 0, "{name}: no opaque dash segments");
+        assert!(transparent > 0, "{name}: no transparent dash gaps");
+    }
+
+    assert_eq!(shape.path, path);
+}
+/// Dash-boundary quantization leaves the rectangle's established corner coverage intact.
+#[test]
+fn pixel_aligned_dashes_round_cap_phase_but_preserve_corner_coverage() {
+    let clip = Rect::new(0, 0, 100, 100);
+
+    for offset in [0.0, 0.5, 1.25] {
+        let mut shape = ShapeLayer {
+            path: shapes::rect(10.0, 10.0, 60.0, 60.0),
+            fill: None,
+            stroke: Some(ShapeStroke {
+                width: 1.0,
+                paint: Fill::Solid(Color::BLACK),
+                opacity: 1.0,
+                align: StrokeAlign::Center,
+                dashes: vec![4.0, 2.0],
+                dash_offset: offset,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+        shape.use_aligned_rendering = true;
+
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+        let alpha = |pixels: &Vec<[f32; 4]>, x: usize, y: usize| pixels[y * 100 + x][3];
+
+        for p in 10..70 {
+            for (x, y, ox, oy) in [(p, 10, p, 9), (p, 69, p, 70), (10, p, 9, p), (69, p, 70, p)] {
+                let original = alpha(&legacy, x, y);
+                let actual = alpha(&aligned, x, y);
+                let value = (original * 2.0).min(1.0);
+                let expected = if (12..68).contains(&p) {
+                    let (dx, dy) = if y == 10 || y == 69 { (1, 0) } else { (0, 1) };
+                    let previous = alpha(&legacy, x - dx, y - dy);
+                    let next = alpha(&legacy, x + dx, y + dy);
+                    if (value - 0.5).abs() < 1e-5 {
+                        if previous > next { 1.0 } else { 0.0 }
+                    } else if value > 0.5 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    value
+                };
+
+                assert!((actual - expected).abs() < 0.02, "Incorrect cap rounding at ({x}, {y}), offset={offset}: expected={expected}, actual={actual}");
+
+                assert!(alpha(&aligned, ox, oy) < 0.01, "Outside coverage at ({ox}, {oy}), offset={offset}");
+            }
+        }
+    }
+}
+
+/// The Line Tool's filled bar, rather than a standard stroke, aligns on either document axis.
+#[test]
+fn pixel_aligned_one_pixel_live_line_is_crisp() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let path = shapes::line((10.0, 10.0), (70.0, 10.0), 1.0);
+
+    let mut shape = ShapeLayer {
+        path: path.clone(),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        stroke: None,
+        live: Some(photocraft_doc::LiveShape::Line { from: [10.0, 10.0], to: [70.0, 10.0], weight: 1.0 }),
+        ..Default::default()
+    };
+
+    let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+    let alpha = |pixels: &Vec<[f32; 4]>, x: usize, y: usize| pixels[y * 100 + x][3];
+
+    assert!((alpha(&legacy, 25, 9) - 0.5).abs() < 0.02);
+    assert!((alpha(&legacy, 25, 10) - 0.5).abs() < 0.02);
+
+    shape.use_aligned_rendering = true;
+
+    let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+
+    assert!(alpha(&aligned, 25, 9) < 0.01, "Pixel alignment must remove coverage from the upper row");
+
+    assert!(alpha(&aligned, 25, 10) > 0.99, "The aligned line must be fully opaque");
+
+    assert_eq!(shape.path, path);
+}
+
+/// A transparent solid outline must not suppress alignment of the painted live bar.
+#[test]
+fn pixel_aligned_live_line_ignores_transparent_solid_outline() {
+    let clip = Rect::new(0, 0, 100, 100);
+    for vertical in [false, true] {
+        for arrow in [false, true] {
+            let to = if vertical { [10.0, 70.0] } else { [70.0, 10.0] };
+            let live = if arrow {
+                photocraft_doc::LiveShape::ArrowLine { from: [10.0, 10.0], to, weight: 1.0, start: false, end: true, width: 5.0, length: 8.0, concavity: 0.0 }
+            } else {
+                photocraft_doc::LiveShape::Line { from: [10.0, 10.0], to, weight: 1.0 }
+            };
+            let mut shape = ShapeLayer {
+                path: shapes::live_path(&live),
+                live: Some(live),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                use_aligned_rendering: true,
+                ..Default::default()
+            };
+            let expected = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            let path = shape.path.clone();
+            shape.stroke = Some(ShapeStroke { width: 2.0, paint: Fill::Solid(Color::TRANSPARENT), ..Default::default() });
+            let actual = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                assert_eq!(actual, expected, "vertical={vertical}, arrow={arrow}, pixel={i}");
+            }
+            assert_eq!(shape.path, path);
+            shape.stroke.as_mut().unwrap().paint = Fill::Solid(Color::BLACK);
+            assert!(crate::pixel_aligned_line_fill_path(&shape).is_none(), "visible outlines retain legacy placement");
+        }
+    }
+}
+
+/// A straight Pen run keeps its dash phase and yields the same pixels in independent tiles.
+#[test]
+fn pixel_alignment_straight_pen_runs_preserve_fractional_dash_phase_and_tiles() {
+    let clip = Rect::new(0, 0, 100, 100);
+    for vertical in [false, true] {
+        for offset in [-2.25, 0.0, 0.5, 1.25] {
+            let pts = if vertical { vec![(20.0, 10.0), (20.0, 80.0)] } else { vec![(10.0, 20.0), (80.0, 20.0)] };
+            let mut shape = ShapeLayer {
+                path: Path { subpaths: vec![Subpath::polyline(&pts)], ..Default::default() },
+                stroke: Some(ShapeStroke { width: 1.0, dashes: vec![4.0, 2.0], dash_offset: offset, ..Default::default() }),
+                ..Default::default()
+            };
+            let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            shape.use_aligned_rendering = true;
+            let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+            let aligned = compiled.render_rgba(clip);
+            for p in 12..78 {
+                let (x, y, ox, oy) = if vertical { (20, p, 19, p) } else { (p, 20, p, 19) };
+                // Independent point-sampling oracle: keep the original dash phase,
+                // selecting the pixel center (ties at a start are excluded).
+                let phase = (p as f64 + 0.5 - 10.0 + f64::from(offset) - 1e-7).rem_euclid(6.0);
+                let expected = if phase < 4.0 { 1.0 } else { 0.0 };
+                assert_eq!(aligned[y * 100 + x][3], expected, "offset={offset}, p={p}, vertical={vertical}");
+                assert!(legacy[y * 100 + x][3] <= 0.5 + 1e-5);
+                assert_eq!(aligned[oy * 100 + ox][3], 0.0);
+            }
+            for region in [Rect::new(0, 0, 20, 20), Rect::new(20, 0, 100, 20), Rect::new(0, 20, 100, 100)] {
+                let tile = compiled.render_rgba(region);
+                for y in region.y0..region.y1 {
+                    for x in region.x0..region.x1 {
+                        assert_eq!(tile[((y - region.y0) * region.width() as i32 + x - region.x0) as usize], aligned[(y * 100 + x) as usize]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Unsupported curve, diagonal and fractional placements remain identical to legacy rendering.
+#[test]
+fn pixel_alignment_keeps_curves_diagonals_and_fractional_transforms_antialiased() {
+    let clip = Rect::new(0, 0, 100, 100);
+    for path in [
+        shapes::ellipse(10.0, 10.0, 60.0, 50.0),
+        shapes::polygon(10.0, 10.0, 60.0, 60.0, 5, 0.5),
+        Path { subpaths: vec![Subpath::polyline(&[(10.0, 10.0), (70.0, 60.0)])], ..Default::default() },
+    ] {
+        let mut shape = ShapeLayer { path: path.clone(), stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }), ..Default::default() };
+        let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        shape.use_aligned_rendering = true;
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert_eq!(legacy, aligned);
+        assert!(aligned.iter().any(|p| p[3] > 0.01 && p[3] < 0.99));
+        assert_eq!(shape.path, path);
+    }
+}
+
+/// Sharpening a rounded rectangle's straight runs must not threshold its curved corners.
+#[test]
+fn pixel_alignment_rounded_rectangle_retains_curved_corners() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let mut shape = ShapeLayer {
+        path: shapes::rounded_rect(10.0, 10.0, 60.0, 60.0, [10.0; 4]),
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        ..Default::default()
+    };
+    let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    shape.use_aligned_rendering = true;
+    let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert_eq!(aligned[10 * 100 + 40][3], 1.0);
+    assert_eq!(aligned[9 * 100 + 40][3], 0.0);
+    for y in 8..20 {
+        for x in 8..20 {
+            assert_eq!(aligned[y * 100 + x], legacy[y * 100 + x]);
+        }
+    }
+}
+
+/// Crossing custom-shape geometry must not borrow or move another segment's coverage.
+#[test]
+fn pixel_alignment_crossing_custom_subpaths_keep_diagonal_coverage() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let mut shape = ShapeLayer {
+        path: Path { subpaths: vec![Subpath::polyline(&[(10.0, 20.0), (80.0, 20.0)]), Subpath::polyline(&[(10.0, 10.0), (70.0, 50.0)])], ..Default::default() },
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        ..Default::default()
+    };
+    let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    shape.use_aligned_rendering = true;
+    assert_eq!(legacy, CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip));
+}
+
+/// Live arrow alignment retains smooth heads and refuses stale live parameters after a path edit.
+#[test]
+fn pixel_aligned_live_arrow_keeps_head_antialiasing_and_stale_metadata_is_ignored() {
+    let clip = Rect::new(0, 0, 100, 100);
+    for vertical in [false, true] {
+        let live = photocraft_doc::LiveShape::ArrowLine {
+            from: [20.0, 20.0],
+            to: if vertical { [20.0, 80.0] } else { [80.0, 20.0] },
+            weight: 1.0,
+            start: false,
+            end: true,
+            width: 8.0,
+            length: 10.0,
+            concavity: 0.0,
+        };
+        let path = shapes::live_path(&live);
+        let mut shape =
+            ShapeLayer { path: path.clone(), live: Some(live), fill: Some(Fill::Solid(Color::BLACK)), use_aligned_rendering: true, ..Default::default() };
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        let (x, y, ox, oy) = if vertical { (20, 40, 19, 40) } else { (40, 20, 40, 19) };
+        assert!(aligned[y * 100 + x][3] > 0.99);
+        assert_eq!(aligned[oy * 100 + ox][3], 0.0);
+        assert!(aligned.iter().any(|p| p[3] > 0.01 && p[3] < 0.99));
+        assert_eq!(shape.path, path);
+        shape.path = shape.path.transform(&photocraft_geom::Affine::translate(0.25, 0.25));
+        let stale = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        shape.use_aligned_rendering = false;
+        assert_ne!(stale, CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip));
+        assert!(pixel_aligned_line_fill_path(&shape).is_none(), "stale metadata must not qualify for live-line translation");
+    }
+}
+
+/// Polygon axis edges align independently while their diagonal edges remain antialiased.
+#[test]
+fn pixel_alignment_triangle_and_polygon_axis_edges_preserve_diagonal_antialiasing() {
+    let clip = Rect::new(0, 0, 100, 100);
+    for pts in [vec![(10.0, 20.0), (80.0, 20.0), (50.0, 80.0)], vec![(10.0, 20.0), (80.0, 20.0), (85.0, 60.0), (20.0, 70.0)]] {
+        let mut shape =
+            ShapeLayer { path: Path::new(vec![Subpath::polygon(&pts)]), stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }), ..Default::default() };
+        let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        shape.use_aligned_rendering = true;
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert_eq!(aligned[20 * 100 + 40][3], 1.0);
+        assert_eq!(aligned[19 * 100 + 40][3], 0.0);
+        for y in 24..85 {
+            for x in 0..100 {
+                assert_eq!(legacy[y * 100 + x], aligned[y * 100 + x]);
+            }
+        }
+    }
+}
+
+/// Eligibility follows transformed document axes without changing the transformed path.
+#[test]
+fn pixel_alignment_integer_translation_and_rotation_use_document_pixel_axes() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let path = Path::new(vec![Subpath::polyline(&[(10.0, 20.0), (70.0, 20.0)])]);
+    let shape = |path| ShapeLayer { path, use_aligned_rendering: true, stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }), ..Default::default() };
+    let original = CompiledShape::new(&shape(path.clone()), DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    let moved = CompiledShape::new(&shape(path.transform(&photocraft_geom::Affine::translate(3.0, 4.0))), DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    for y in 0..90 {
+        for x in 0..90 {
+            assert_eq!(original[y * 100 + x], moved[(y + 4) * 100 + x + 3]);
+        }
+    }
+    let rotated = path.transform(&photocraft_geom::Affine::rotate(std::f64::consts::FRAC_PI_4));
+    let mut sh = shape(rotated);
+    let aligned = CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    sh.use_aligned_rendering = false;
+    assert_eq!(aligned, CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip));
+}
+
+#[test]
+#[ignore = "manual 24 MP pixel alignment timing"]
+fn pixel_alignment_perf_24mp() {
+    let clip = Rect::new(0, 0, 6000, 4000);
+    let mut shape = ShapeLayer {
+        path: shapes::rounded_rect(10.0, 10.0, 5980.0, 3980.0, [30.0; 4]),
+        stroke: Some(ShapeStroke { width: 1.0, dashes: vec![4.0, 2.0], ..Default::default() }),
+        ..Default::default()
+    };
+    for enabled in [false, true] {
+        shape.use_aligned_rendering = enabled;
+        let start = std::time::Instant::now();
+        let surface = render_shape(&shape, PixelFormat::RGBA8, clip);
+        std::hint::black_box(surface);
+        eprintln!("24 MP rounded dashed rectangle, pixel alignment={enabled}: {:?}", start.elapsed());
+    }
+}
+
+/// Coverage alignment must work through the document's depth and color-model conversion paths.
+#[test]
+fn pixel_alignment_surfaces_keep_all_depths_and_colour_models() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let shape = ShapeLayer {
+        path: Path::new(vec![Subpath::polyline(&[(10.0, 20.0), (70.0, 20.0)])]),
+        use_aligned_rendering: true,
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        ..Default::default()
+    };
+    for sample in SampleType::ALL {
+        for mode in [photocraft_color::ColorMode::Rgb, photocraft_color::ColorMode::Grayscale, photocraft_color::ColorMode::Cmyk] {
+            let format = PixelFormat::new(mode, sample, true);
+            let surface = render_shape(&shape, format, clip);
+            assert_eq!(photocraft_raster::to_rgba(&format, &surface.pixel(40, 20))[3], 1.0);
+            assert_eq!(photocraft_raster::to_rgba(&format, &surface.pixel(40, 19))[3], 0.0);
+        }
+    }
+}
+
+/// Tiny trigonometric errors in a live triangle must not disable its mathematically axial edge.
+#[test]
+fn pixel_alignment_live_triangle_tolerates_trigonometric_roundoff() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let live = photocraft_doc::LiveShape::Polygon { rect: [10.0, 10.0, 60.0, 60.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0 };
+    let shape = ShapeLayer {
+        path: shapes::live_path(&live),
+        live: Some(live),
+        use_aligned_rendering: true,
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        ..Default::default()
+    };
+    let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert!(pixels[55 * 100 + 40][3] > 0.99);
+    assert!(pixels[54 * 100 + 40][3] < 0.01);
+}
+
+/// Rectangle corner recognition is independent of winding and quarter-turn orientation.
+#[test]
+fn pixel_aligned_rectangle_corners_survive_reversed_traversal_and_quarter_turns() {
+    let clip = Rect::new(-100, -100, 100, 100);
+    let original = shapes::rect(10.0, 10.0, 60.0, 50.0);
+    let mut reversed = original.clone();
+    reversed.subpaths[0].knots.reverse();
+    let rotated = original.transform(&photocraft_geom::Affine::rotate(std::f64::consts::FRAC_PI_2));
+    for path in [original, reversed, rotated] {
+        assert!(crate::pixel_align::integer_rectangle(&path, (1e-7, 1e-7)));
+        let shape = ShapeLayer {
+            path: path.clone(),
+            use_aligned_rendering: true,
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            ..Default::default()
+        };
+        let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert!(pixels.iter().all(|p| p[3] < 0.001 || p[3] > 0.999));
+        let (x0, y0, x1, y1) = path.control_bounds().unwrap();
+        let (x0, y0, x1, y1) = (x0.round() as i32, y0.round() as i32, x1.round() as i32, y1.round() as i32);
+        let alpha = |x: i32, y: i32| pixels[((y - clip.y0) * clip.width() as i32 + x - clip.x0) as usize][3];
+        for x in x0..x1 {
+            assert_eq!(alpha(x, y0), 1.0, "top side and corners");
+            assert_eq!(alpha(x, y1 - 1), 1.0, "bottom side and corners");
+        }
+        for y in y0..y1 {
+            assert_eq!(alpha(x0, y), 1.0, "left side and corners");
+            assert_eq!(alpha(x1 - 1, y), 1.0, "right side and corners");
+        }
+        assert_eq!(alpha((x0 + x1) / 2, (y0 + y1) / 2), 0.0, "unfilled interior");
+        assert_eq!(shape.path, path);
+    }
+}
+
+/// An acute neighboring miter can reach beyond control bounds and must suppress alignment there.
+#[test]
+fn pixel_alignment_does_not_sharpen_a_nearby_acute_miter() {
+    let clip = Rect::new(0, 0, 100, 100);
+    let path = Path::new(vec![Subpath::polyline(&[(10.0, 20.0), (80.0, 20.0)]), Subpath::polyline(&[(44.0, 50.0), (45.0, 30.0), (46.0, 50.0)])]);
+    let mut shape = ShapeLayer { path, stroke: Some(ShapeStroke { width: 1.0, miter_limit: 100.0, ..Default::default() }), ..Default::default() };
+    let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    shape.use_aligned_rendering = true;
+    assert_eq!(legacy, CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip));
+}
+
+/// Reversed lines and rectangles keep integer dash lengths, phase, cap opacity and tiled output.
+#[test]
+fn pixel_aligned_dashes_have_uniform_opaque_lengths_with_half_pixel_periods() {
+    let clip = Rect::new(0, 0, 256, 256);
+    for length in [4.0, 9.0] {
+        for gap in [12.5, 17.0] {
+            for offset in [-2.25, 0.0, 0.5, 1.25] {
+                for rectangle in [false, true] {
+                    for vertical in [false, true] {
+                        for reversed in [false, true] {
+                            let mut points = if vertical { vec![(20.0, 10.0), (20.0, 230.0)] } else { vec![(10.0, 20.0), (230.0, 20.0)] };
+                            if reversed {
+                                points.reverse();
+                            }
+                            let mut path = if rectangle { shapes::rect(10.0, 10.0, 220.0, 220.0) } else { Path::new(vec![Subpath::polyline(&points)]) };
+                            if rectangle && reversed {
+                                path.subpaths[0].knots.reverse();
+                                for knot in &mut path.subpaths[0].knots {
+                                    std::mem::swap(&mut knot.in_ctrl, &mut knot.out_ctrl);
+                                }
+                                assert_ne!(path, shapes::rect(10.0, 10.0, 220.0, 220.0));
+                            }
+                            let shape = ShapeLayer {
+                                path: path.clone(),
+                                use_aligned_rendering: true,
+                                stroke: Some(ShapeStroke { width: 1.0, dashes: vec![length, gap], dash_offset: offset, ..Default::default() }),
+                                ..Default::default()
+                            };
+                            let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+                            let pixels = compiled.render_rgba(clip);
+                            let mut runs = Vec::new();
+                            let mut count = 0;
+                            for p in 14..226 {
+                                let (x, y) = if rectangle {
+                                    if vertical { (229, p) } else { (p, 10) }
+                                } else if vertical {
+                                    (20, p)
+                                } else {
+                                    (p, 20)
+                                };
+                                let alpha = pixels[y * 256 + x][3];
+                                assert!(
+                                    alpha == 0.0 || alpha == 1.0,
+                                    "partial dash cap: {alpha}, length={length}, gap={gap}, offset={offset}, rectangle={rectangle}, vertical={vertical}, p={p}"
+                                );
+                                let probe = p as f64 + 0.5 - 1e-6;
+                                let distance = match (rectangle, vertical, reversed) {
+                                    (true, false, true) => 440.0 + 230.0 - probe,
+                                    (true, true, true) => 220.0 + 230.0 - probe,
+                                    (true, true, false) => 220.0 + probe - 10.0,
+                                    (_, _, true) => 230.0 - probe,
+                                    _ => probe - 10.0,
+                                };
+                                assert_eq!(
+                                    alpha,
+                                    f32::from((distance + f64::from(offset)).rem_euclid(f64::from(length + gap)) < f64::from(length)),
+                                    "dash phase: rectangle={rectangle}, vertical={vertical}, reversed={reversed}, p={p}"
+                                );
+                                if alpha == 1.0 {
+                                    count += 1;
+                                } else if count > 0 {
+                                    runs.push(count);
+                                    count = 0;
+                                }
+                            }
+                            // The first scanned dash can be clipped by the scan boundary.
+                            assert!(runs.len() >= 5);
+                            for count in runs.into_iter().skip(1) {
+                                assert_eq!(
+                                    count, length as usize,
+                                    "length={length}, gap={gap}, offset={offset}, rectangle={rectangle}, vertical={vertical}, reversed={reversed}"
+                                );
+                            }
+                            assert_eq!(shape.path, path);
+                            assert_eq!(shape.stroke.as_ref().unwrap().dash_offset, offset);
+                            let band = Rect::new(19, 19, 232, 232);
+                            let tile = compiled.render_rgba(band);
+                            for y in band.y0..band.y1 {
+                                for x in band.x0..band.x1 {
+                                    assert_eq!(tile[((y - band.y0) * band.width() as i32 + x - band.x0) as usize], pixels[(y * 256 + x) as usize]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Edge alignment must not measure later sides using the snapped rectangle's perimeter.
+#[test]
+fn pixel_aligned_fractional_rectangle_preserves_dash_phase_on_later_sides() {
+    let clip = Rect::new(-32, -32, 48, 48);
+    for (start, end) in [(10.2, 30.6), (10.5, 30.5), (-10.5, 9.5)] {
+        let length = end - start;
+        let low = crate::pixel_align::snap_edge(start) as i32;
+        let high = crate::pixel_align::snap_edge(end) as i32 - 1;
+        for (width, offset) in [1.0, 2.0, 3.0].into_iter().flat_map(|width| [-0.75, 0.0, 0.5].map(|offset| (width, offset))) {
+            let shape = ShapeLayer {
+                path: shapes::rect(start, start, length, length),
+                use_aligned_rendering: true,
+                stroke: Some(ShapeStroke { width, dashes: vec![4.0, 2.0], dash_offset: offset, ..Default::default() }),
+                ..Default::default()
+            };
+            let original = shape.path.clone();
+            let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+            for p in low + 4..high - 2 {
+                let probe = f64::from(p) + 0.5 - 1e-6;
+                for (x, y, distance) in
+                    [(p, low, probe - start), (high, p, length + probe - start), (p, high, 2.0 * length + end - probe), (low, p, 3.0 * length + end - probe)]
+                {
+                    let expected = f32::from((distance / f64::from(width) + f64::from(offset)).rem_euclid(6.0) < 4.0);
+                    let actual = compiled.render_rgba(Rect::from_xywh(x, y, 1, 1))[0][3];
+                    assert_eq!(actual, expected, "dash phase at ({x}, {y}), width={width}, offset={offset}");
+                }
+            }
+            assert_eq!(shape.path, original);
+        }
+    }
+}
+
+#[test]
+fn pixel_aligned_fractional_open_dashes_probe_the_original_centerline() {
+    let clip = Rect::new(0, 0, 80, 40);
+    let shape = ShapeLayer {
+        path: Path::new(vec![Subpath::polyline(&[(10.2, 20.5), (70.6, 20.5)])]),
+        use_aligned_rendering: true,
+        stroke: Some(ShapeStroke { width: 1.0, dashes: vec![4.0, 2.0], ..Default::default() }),
+        ..Default::default()
+    };
+    let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+    for x in 14..67 {
+        let expected = f32::from((f64::from(x) + 0.5 - 1e-6 - 10.2).rem_euclid(6.0) < 4.0);
+        assert_eq!(compiled.render_rgba(Rect::from_xywh(x, 21, 1, 1))[0][3], expected, "x={x}");
+    }
+}
+
+/// Fractional butt dashes are selected by their centers, not their integrated area.
+#[test]
+fn pixel_aligned_fractional_butt_dashes_select_pixel_centers() {
+    let clip = Rect::new(0, 0, 80, 80);
+    for rectangle in [false, true] {
+        for reversed in [false, true] {
+            for vertical in [false, true] {
+                for (length, gap, offset) in [(0.25, 1.75, -0.375), (0.75, 1.25, 0.125), (1.25, 0.75, -0.25)] {
+                    let mut path = if rectangle {
+                        shapes::rect(10.0, 10.0, 60.0, 60.0)
+                    } else {
+                        let points = if vertical { [(20.0, 10.0), (20.0, 70.0)] } else { [(10.0, 20.0), (70.0, 20.0)] };
+                        Path::new(vec![Subpath::polyline(&points)])
+                    };
+                    if reversed {
+                        path.subpaths[0].knots.reverse();
+                        for knot in &mut path.subpaths[0].knots {
+                            std::mem::swap(&mut knot.in_ctrl, &mut knot.out_ctrl);
+                        }
+                    }
+                    let shape = ShapeLayer {
+                        path: path.clone(),
+                        use_aligned_rendering: true,
+                        stroke: Some(ShapeStroke { width: 1.0, dashes: vec![length, gap], dash_offset: offset, ..Default::default() }),
+                        ..Default::default()
+                    };
+                    let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+                    let pixels = compiled.render_rgba(clip);
+                    for p in 14..66 {
+                        let probe = f64::from(p) + 0.5 - 1e-6;
+                        let distance = match (rectangle, vertical, reversed) {
+                            (true, false, true) => 120.0 + 70.0 - probe,
+                            (true, true, true) => 60.0 + 70.0 - probe,
+                            (true, true, false) => 60.0 + probe - 10.0,
+                            (_, _, true) => 70.0 - probe,
+                            _ => probe - 10.0,
+                        };
+                        let (x, y) = if rectangle {
+                            if vertical { (69, p) } else { (p, 10) }
+                        } else if vertical {
+                            (20, p)
+                        } else {
+                            (p, 20)
+                        };
+                        let expected = f32::from((distance + f64::from(offset)).rem_euclid(f64::from(length + gap)) < f64::from(length));
+                        assert_eq!(
+                            pixels[(y * 80 + x) as usize][3],
+                            expected,
+                            "p={p}, rectangle={rectangle}, vertical={vertical}, reversed={reversed}, length={length}"
+                        );
+                    }
+                    let tile = Rect::new(19, 19, 60, 60);
+                    let part = compiled.render_rgba(tile);
+                    for y in tile.y0..tile.y1 {
+                        for x in tile.x0..tile.x1 {
+                            assert_eq!(part[((y - tile.y0) * 41 + x - tile.x0) as usize], pixels[(y * 80 + x) as usize]);
+                        }
+                    }
+                    assert_eq!(shape.path, path);
+                }
+            }
+        }
+    }
+}
+
+/// Half-shifted one-pixel dashes stay alternating, even when every area sample is one half.
+#[test]
+fn pixel_aligned_one_pixel_dashes_keep_phase_at_half_offsets() {
+    let clip = Rect::new(0, 0, 64, 64);
+    for vertical in [false, true] {
+        for reversed in [false, true] {
+            for offset in [-0.5, 0.5, 1.5] {
+                let mut points = if vertical { vec![(20.0, 10.0), (20.0, 54.0)] } else { vec![(10.0, 20.0), (54.0, 20.0)] };
+                if reversed {
+                    points.reverse();
+                }
+                let shape = ShapeLayer {
+                    path: Path::new(vec![Subpath::polyline(&points)]),
+                    use_aligned_rendering: true,
+                    stroke: Some(ShapeStroke { width: 1.0, dashes: vec![1.0, 1.0], dash_offset: offset, ..Default::default() }),
+                    ..Default::default()
+                };
+                let compiled = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip);
+                let pixels = compiled.render_rgba(clip);
+                for p in 14..50 {
+                    let (x, y) = if vertical { (20, p) } else { (p, 20) };
+                    // Probe just below the boundary: ties round toward increasing document coordinates.
+                    let coordinate = p as f64 + 0.5 - 1e-6;
+                    let distance = if reversed { 54.0 - coordinate } else { coordinate - 10.0 };
+                    let expected = f32::from((distance + f64::from(offset)).rem_euclid(2.0) < 1.0);
+                    assert_eq!(pixels[y * 64 + x][3], expected, "p={p}, vertical={vertical}, reversed={reversed}, offset={offset}");
+                }
+                let tile = Rect::new(19, 19, 44, 44);
+                let part = compiled.render_rgba(tile);
+                for y in tile.y0..tile.y1 {
+                    for x in tile.x0..tile.x1 {
+                        assert_eq!(part[((y - tile.y0) * 25 + x - tile.x0) as usize], pixels[(y * 64 + x) as usize]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Native fractional centerlines snap independently of the canvas dimensions.
+#[test]
+fn align_edges_snaps_native_fractional_centerlines() {
+    let clip = Rect::new(0, 0, 64, 64);
+    let canvas = Rect::new(0, 0, 300_000, 300_000);
+    for offset in [0.0001, 0.001, 0.25] {
+        for vertical in [false, true] {
+            let points = if vertical { [(20.0 + offset, 10.0), (20.0 + offset, 54.0)] } else { [(10.0, 20.0 + offset), (54.0, 20.0 + offset)] };
+            let mut shape = ShapeLayer {
+                path: Path::new(vec![Subpath::polyline(&points)]),
+                stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+                ..Default::default()
+            };
+            let legacy = CompiledShape::with_frames(&shape, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
+            shape.use_aligned_rendering = true;
+            let aligned = CompiledShape::with_frames(&shape, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
+            assert_ne!(aligned, legacy);
+            let at = if vertical { 30 * 64 + 20 } else { 20 * 64 + 30 };
+            assert_eq!(aligned[at][3], 1.0);
+        }
+    }
+}
+
+/// Align Edges snaps quantized and genuinely fractional PSD centerlines on both axes,
+/// regardless of the old tolerance frame, without changing stored geometry.
+#[test]
+fn align_edges_psd_paths_match_snapped_output_on_both_axes() {
+    let clip = Rect::new(0, 0, 64, 64);
+    let canvas = Rect::new(0, 0, 100, 300_000);
+    let quantize = |coordinate: f64, side: f64| (coordinate / side * 16_777_216.0).round() / 16_777_216.0 * side;
+    for vertical in [false, true] {
+        let (source, snapped) = if vertical {
+            ([(quantize(20.001, 100.0), 10.0), (quantize(20.001, 100.0), 54.0)], [(20.0, 10.0), (20.0, 54.0)])
+        } else {
+            ([(10.0, quantize(20.0, 300_000.0)), (54.0, quantize(20.0, 300_000.0))], [(10.0, 20.0), (54.0, 20.0)])
+        };
+        let shape = ShapeLayer {
+            path: Path::new(vec![Subpath::polyline(&source)]),
+            use_aligned_rendering: true,
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            psd_coordinate_frame: Some([100, 300_000]),
+            psd_raw: Some(std::sync::Arc::new(Vec::new())),
+            ..Default::default()
+        };
+        let stored = shape.path.clone();
+        let expected = ShapeLayer { path: Path::new(vec![Subpath::polyline(&snapped)]), psd_coordinate_frame: None, psd_raw: None, ..shape.clone() };
+        let pixels = CompiledShape::with_frames(&shape, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
+        let snapped_pixels = CompiledShape::with_frames(&expected, DEFAULT_TOLERANCE, clip, canvas).render_rgba(clip);
+        let mismatch = pixels.iter().zip(&snapped_pixels).position(|(actual, expected)| actual != expected);
+        assert_eq!(mismatch, None, "vertical={vertical}");
+        assert_eq!(shape.path, stored);
+    }
+}
+
+/// Adjacent-row sampling must not overflow when hostile coordinates round to an integer limit.
+#[test]
+fn pixel_alignment_at_integer_limits_falls_back_without_panicking() {
+    let clip = Rect::new(0, 0, 2, 2);
+    for coordinate in [f64::from(i32::MIN), f64::from(i32::MAX), f64::from(i32::MAX) - 0.001] {
+        let shape = ShapeLayer {
+            path: Path::new(vec![Subpath::polyline(&[(0.0, coordinate), (20.0, coordinate)])]),
+            use_aligned_rendering: true,
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            psd_raw: Some(std::sync::Arc::new(Vec::new())),
+            ..Default::default()
+        };
+        assert!(
+            CompiledShape::with_frames(&shape, DEFAULT_TOLERANCE, clip, Rect::new(0, 0, 300_000, 300_000))
+                .render_rgba(clip)
+                .iter()
+                .all(|pixel| pixel[3] == 0.0)
+        );
+    }
+}
+
+/// Round and square caps preserve their extra raster extent across phases and tessellations.
+#[test]
+fn pixel_aligned_round_and_square_dash_caps_have_uniform_lengths() {
+    let clip = Rect::new(0, 0, 256, 256);
+    for cap in [LineCap::Round, LineCap::Square] {
+        for length in [4.0, 9.0] {
+            for vertical in [false, true] {
+                for tol in [0.001, DEFAULT_TOLERANCE, 0.015, 0.1] {
+                    for offset in [-2.25, 0.0, 0.001, 0.5, 1.25] {
+                        let points = if vertical { [(20.0, 10.0), (20.0, 240.0)] } else { [(10.0, 20.0), (240.0, 20.0)] };
+                        let shape = ShapeLayer {
+                            path: Path::new(vec![Subpath::polyline(&points)]),
+                            use_aligned_rendering: true,
+                            stroke: Some(ShapeStroke { width: 1.0, cap, dashes: vec![length, 12.5], dash_offset: offset, ..Default::default() }),
+                            ..Default::default()
+                        };
+                        let pixels = CompiledShape::new(&shape, tol, clip).render_rgba(clip);
+                        let mut runs = Vec::new();
+                        let mut count = 0;
+                        for p in 20..225 {
+                            let alpha = pixels[if vertical { p * 256 + 20 } else { 20 * 256 + p }][3];
+                            let expected = (-1..20).any(|dash| {
+                                let start = 10.0 + f64::from(dash) * f64::from(length + 12.5) - f64::from(offset);
+                                (p as f64) >= start.floor() && (p as f64) <= (start + f64::from(length)).floor()
+                            });
+                            assert_eq!(alpha, f32::from(expected), "{cap:?}, offset={offset}, length={length}, p={p}, tol={tol}, vertical={vertical}");
+                            assert!(alpha == 0.0 || alpha == 1.0);
+                            if alpha == 1.0 {
+                                count += 1;
+                            } else if count > 0 {
+                                runs.push(count);
+                                count = 0;
+                            }
+                        }
+                        assert!(runs.len() > 5);
+                        for count in runs.into_iter().skip(1) {
+                            assert_eq!(count, length as usize + 1, "{cap:?}, offset={offset}, length={length}, tol={tol}, vertical={vertical}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// General rotations retain the exact legacy dash antialiasing, including cap and phase choices.
+#[test]
+fn pixel_aligned_rotated_dashes_preserve_legacy_antialiasing() {
+    let clip = Rect::new(0, 0, 320, 320);
+    for angle in [0.1, 0.37, std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2 + 0.1] {
+        for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+            for offset in [-2.25, 0.5] {
+                let path = shapes::rect(70.0, 20.0, 120.0, 80.0)
+                    .transform(&photocraft_geom::Affine::rotate(angle))
+                    .transform(&photocraft_geom::Affine::translate(110.0, 20.0));
+                let mut shape = ShapeLayer {
+                    path: path.clone(),
+                    stroke: Some(ShapeStroke { width: 1.0, cap, dashes: vec![9.0, 12.5], dash_offset: offset, ..Default::default() }),
+                    ..Default::default()
+                };
+                let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+                shape.use_aligned_rendering = true;
+                let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+                assert_eq!(aligned, legacy, "angle={angle}, cap={cap:?}, offset={offset}");
+                assert!(aligned.iter().any(|p| p[3] > 0.0 && p[3] < 1.0));
+                assert_eq!(shape.path, path);
+            }
+        }
+    }
+}
+
+#[test]
+fn pixel_alignment_reflected_live_line_accepts_reversed_outline_but_rejects_stale_metadata() {
+    let live = photocraft_doc::LiveShape::Line { from: [10.0, 20.0], to: [54.0, 20.0], weight: 1.0 };
+    let reflect = photocraft_geom::Affine { m: [-1.0, 0.0, 0.0, 1.0, 64.0, 0.0] };
+    let mut shape = ShapeLayer {
+        path: shapes::live_path(&live).transform(&reflect),
+        live: Some(photocraft_doc::LiveShape::Line { from: [54.0, 20.0], to: [10.0, 20.0], weight: 1.0 }),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        use_aligned_rendering: true,
+        ..Default::default()
+    };
+    assert_ne!(shape.path, shapes::live_path(shape.live.as_ref().unwrap()));
+    assert!(pixel_aligned_line_fill_path(&shape).is_some());
+    let clip = Rect::new(0, 0, 64, 64);
+    let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert_eq!(pixels[19 * 64 + 30][3], 0.0);
+    assert_eq!(pixels[20 * 64 + 30][3], 1.0);
+    shape.path.subpaths[0].knots[0].out_ctrl.x += 0.25;
+    assert!(pixel_aligned_line_fill_path(&shape).is_none());
+}
+
+#[test]
+fn pixel_alignment_round2_quarter_turn_accepts_roundoff_not_stale_controls() {
+    let live = photocraft_doc::LiveShape::Line { from: [0.0, 20.0], to: [40.0, 20.0], weight: 1.0 };
+    let a = photocraft_geom::Affine::rotate(std::f64::consts::FRAC_PI_2).then(&photocraft_geom::Affine::translate(40.0, 0.0));
+    let p = a.apply(photocraft_geom::Point::new(0.0, 20.0));
+    let q = a.apply(photocraft_geom::Point::new(40.0, 20.0));
+    let mut sh = ShapeLayer {
+        path: shapes::live_path(&live).transform(&a),
+        live: Some(photocraft_doc::LiveShape::Line { from: [p.x, p.y], to: [q.x, q.y], weight: 1.0 }),
+        fill: Some(Fill::Solid(Color::BLACK)),
+        use_aligned_rendering: true,
+        ..Default::default()
+    };
+    assert!(pixel_aligned_line_fill_path(&sh).is_some());
+    sh.path.subpaths[0].knots[0].out_ctrl.x += 0.001;
+    assert!(pixel_aligned_line_fill_path(&sh).is_none());
+}
+
+#[test]
+fn pixel_alignment_round2_missing_provenance_does_not_depend_on_roi() {
+    let sh = ShapeLayer {
+        path: shapes::rect(10.00001, 10.00001, 60.0, 60.0),
+        stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        use_aligned_rendering: true,
+        psd_raw: Some(std::sync::Arc::new(Vec::new())),
+        ..Default::default()
+    };
+    let clip = Rect::new(0, 0, 80, 80);
+    let a = CompiledShape::new(&sh, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    let b = CompiledShape::with_frames(&sh, DEFAULT_TOLERANCE, clip, Rect::new(0, 0, 1000, 1000)).render_rgba(clip);
+    assert_eq!(a, b);
+}
+
+/// Align Edges affects the fill without requiring any stroke, preserving stored geometry.
+#[test]
+fn align_edges_fractional_fill_and_stroke_share_snapped_edges() {
+    let clip = Rect::new(0, 0, 80, 80);
+    for stroke in [
+        None,
+        Some(ShapeStroke { width: 1.0, ..Default::default() }),
+        Some(ShapeStroke { width: 2.0, ..Default::default() }),
+        Some(ShapeStroke { width: 3.0, ..Default::default() }),
+    ] {
+        let mut shape = ShapeLayer { path: shapes::rect(10.25, 11.75, 40.0, 40.0), fill: Some(Fill::Solid(Color::BLACK)), stroke, ..Default::default() };
+        let original = shape.path.clone();
+        let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert!(legacy.iter().any(|pixel| pixel[3] > 0.0 && pixel[3] < 1.0));
+        shape.use_aligned_rendering = true;
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert!(aligned.iter().all(|pixel| pixel[3] == 0.0 || pixel[3] == 1.0));
+        assert_eq!(aligned[12 * 80 + 10][3], 1.0);
+        if shape.stroke.as_ref().is_none_or(|stroke| stroke.width <= 1.0) {
+            assert_eq!(aligned[11 * 80 + 10][3], 0.0);
+        }
+        assert_eq!(shape.path, original);
+        shape.use_aligned_rendering = false;
+        assert_eq!(CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip), legacy);
+    }
+}
+
+#[test]
+fn align_edges_ellipse_extrema_snap_without_thresholding_curves() {
+    let mut shape =
+        ShapeLayer { path: shapes::ellipse(10.5, 10.5, 40.0, 40.0), fill: Some(Fill::Solid(Color::BLACK)), use_aligned_rendering: true, ..Default::default() };
+    let stored = shape.path.clone();
+    let path = super::pixel_align::aligned_edge_path(&shape).unwrap();
+    assert_eq!(path.control_bounds().unwrap(), (11.0, 11.0, 51.0, 51.0));
+    let clip = Rect::new(0, 0, 64, 64);
+    let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert!(aligned.iter().any(|pixel| pixel[3] > 0.0 && pixel[3] < 1.0));
+    for y in 20..40 {
+        assert_eq!(aligned[y * 64 + 10][3], 0.0);
+    }
+    shape.use_aligned_rendering = false;
+    let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+    assert_ne!(aligned, legacy);
+    assert_eq!(shape.path, stored);
+}
+
+/// Align Edges must not round a subpixel outline's two edges onto the same pixel.
+#[test]
+fn align_edges_fractional_stroke_width_keeps_area_coverage() {
+    let clip = Rect::new(0, 0, 80, 80);
+    for width in [0.25, 0.5, 1.5, 2.5] {
+        let mut shape =
+            ShapeLayer { path: shapes::rect(20.0, 20.0, 40.0, 30.0), stroke: Some(ShapeStroke { width, ..Default::default() }), ..Default::default() };
+        let legacy = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        shape.use_aligned_rendering = true;
+        let aligned = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+        assert_eq!(aligned, legacy, "width={width}");
+        assert_eq!(aligned[20 * 80 + 35][3], width.min(2.0) / 2.0);
+    }
+}
+
+/// Render the same document pixels after an integer translation of both geometry and clip.
+fn aligned_pixels_after_translation(shape: &ShapeLayer, offset: [i32; 2]) -> Vec<[f32; 4]> {
+    let [dx, dy] = offset;
+    let shifted = ShapeLayer { path: shape.path.transform(&photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy))), ..shape.clone() };
+    let clip = Rect::new(-30 + dx, -30 + dy, 50 + dx, 50 + dy);
+    CompiledShape::new(&shifted, DEFAULT_TOLERANCE, clip).render_rgba(clip)
+}
+
+/// A half-pixel rectangle spanning the origin keeps its dimensions and occupied pixels.
+#[test]
+fn align_edges_fill_half_ties_preserve_extent_across_zero() {
+    let shape =
+        ShapeLayer { path: shapes::rect(-10.5, -5.5, 31.0, 21.0), fill: Some(Fill::Solid(Color::BLACK)), use_aligned_rendering: true, ..Default::default() };
+    let reference = aligned_pixels_after_translation(&shape, [40, 30]);
+    assert!(reference.iter().all(|pixel| pixel[3] == 0.0 || pixel[3] == 1.0));
+    assert_eq!(reference.iter().filter(|pixel| pixel[3] == 1.0).count(), 31 * 21);
+    for offset in [[-40, -30], [0, 0], [40, 30]] {
+        let pixels = aligned_pixels_after_translation(&shape, offset);
+        let mismatch = pixels.iter().zip(&reference).position(|(actual, expected)| actual != expected);
+        assert_eq!(mismatch, None, "offset={offset:?}");
+    }
+}
+
+/// Odd-width outlines have half-pixel boundaries even when their source path is integral.
+#[test]
+fn align_edges_three_pixel_stroke_translates_across_zero() {
+    let shape = ShapeLayer {
+        path: shapes::rect(-10.0, -5.0, 31.0, 21.0),
+        stroke: Some(ShapeStroke { width: 3.0, ..Default::default() }),
+        use_aligned_rendering: true,
+        ..Default::default()
+    };
+    let reference = aligned_pixels_after_translation(&shape, [40, 30]);
+    assert!(reference.iter().all(|pixel| pixel[3] == 0.0 || pixel[3] == 1.0));
+    assert_eq!(reference.iter().filter(|pixel| pixel[3] == 1.0).count(), 2 * (31 + 21) * 3);
+    for offset in [[-40, -30], [0, 0], [40, 30]] {
+        let pixels = aligned_pixels_after_translation(&shape, offset);
+        let mismatch = pixels.iter().zip(&reference).position(|(actual, expected)| actual != expected);
+        assert_eq!(mismatch, None, "offset={offset:?}");
+    }
+}
+
+/// The common edge rule is half-up on both sides of zero and preserves nearby non-ties.
+#[test]
+fn align_edges_half_ties_choose_increasing_coordinates() {
+    for (source, expected) in [(-10.5, -10.0), (-0.5, 0.0), (0.5, 1.0), (10.5, 11.0), (-10.75, -11.0), (10.25, 10.0)] {
+        assert_eq!(super::pixel_align::snap_edge(source), expected, "source={source}");
+    }
+    let below_half = f64::from_bits(0.5_f64.to_bits() - 1);
+    assert_eq!(super::pixel_align::snap_edge(below_half), 0.0);
+    let large_integer = 4_503_599_627_370_497.0;
+    assert_eq!(super::pixel_align::snap_edge(large_integer), large_integer);
+}

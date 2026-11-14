@@ -21,13 +21,23 @@ struct SelectedShape {
     fill: Option<photocraft_doc::Fill>,
     stroke: Option<photocraft_doc::ShapeStroke>,
     live: Option<photocraft_doc::LiveShape>,
+    use_aligned_rendering: bool,
 }
 
+/// Capture the active shape's identity and appearance for the options bar.
+/// Return None when there is no active document, layer or shape target.
 fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
     let st = session.active()?;
     let layer = st.active_layer?;
     match &st.doc.layer(layer)?.content {
-        LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone(), live: sh.live.clone() }),
+        LayerContent::Shape(sh) => Some(SelectedShape {
+            doc: st.doc.id,
+            layer,
+            fill: sh.fill.clone(),
+            stroke: sh.stroke.clone(),
+            live: sh.live.clone(),
+            use_aligned_rendering: sh.use_aligned_rendering,
+        }),
         _ => None,
     }
 }
@@ -101,6 +111,8 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
+    let previous_alignment_preference = o.use_aligned_rendering;
+    let alignment_edit = pixel_align_option(ui, &mut o.use_aligned_rendering, target.as_ref().map(|s| s.use_aligned_rendering), paint);
     let (mut radius_alert, mut sides_alert) = (false, false);
     match tool {
         Tool::Rectangle => {
@@ -124,7 +136,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         Tool::Triangle => {
             crate::widgets::vline(ui, 22.0);
             // Only a shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
-            ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Align Edges")));
+            ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Snap Bounding Box")));
         }
         Tool::Line => {
             crate::widgets::vline(ui, 22.0);
@@ -182,9 +194,14 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             (_, PaintChange::OpenPicker) => continue,
         });
     }
+    // A click can commit a numeric expression and toggle alignment in the same frame.
+    // Merge after the other controls so both changes reach the same history step.
+    edit = merge_pixel_alignment_edit(edit, alignment_edit.clone());
     if let (Some(mut p), Some(s)) = (edit, &target) {
         p["layer"] = json!(s.layer.0);
         if let Err(e) = app.run("shape.edit", p) {
+            app.ui.tool_options.use_aligned_rendering =
+                alignment_edit.as_ref().map_or(app.ui.tool_options.use_aligned_rendering, |_| previous_alignment_preference);
             app.ui.status = e;
             app.ui.status_error = true;
             recent = None;
@@ -201,6 +218,29 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     range_alert(app, radius_alert, RADIUS_RANGE_ALERT);
     range_alert(app, sides_alert, SIDES_RANGE_ALERT);
+}
+
+/// Append the checkbox change without replacing another control's pending edit or coalesce key.
+fn merge_pixel_alignment_edit(mut edit: Option<Value>, alignment: Option<Value>) -> Option<Value> {
+    if let Some(alignment) = alignment {
+        edit.get_or_insert_with(|| json!({}))["useAlignedRendering"] = alignment["useAlignedRendering"].clone();
+    }
+    edit
+}
+
+/// Show Align Edges in paint mode, preferring the target layer over the new-shape preference.
+/// Return an alignment patch and update the preference only when the checkbox changes.
+fn pixel_align_option(ui: &mut egui::Ui, preference: &mut bool, selected: Option<bool>, paint: bool) -> Option<Value> {
+    if !paint {
+        return None;
+    }
+    crate::widgets::vline(ui, 22.0);
+    let mut pixel_align = selected.unwrap_or(*preference);
+    if !crate::widgets::checkbox(ui, &mut pixel_align, tl!("Align Edges")).changed() {
+        return None;
+    }
+    *preference = pixel_align;
+    Some(json!({"useAlignedRendering": pixel_align}))
 }
 
 /// The Rectangle tool's corner radius in px, as the reference takes it (#13336).

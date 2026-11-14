@@ -94,7 +94,11 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
     let shape = layer.filter(|id| s.active().and_then(|d| d.doc.layer(*id)).is_some_and(|l| matches!(l.content, LayerContent::Shape(_))));
     let path = match shape {
         Some(id) => with_shape(s, id, label, |sh, _| {
+            let previous = sh.path.clone();
             f(&mut sh.path).map_err(|e| bad(cmd, e))?;
+            if !preserves_psd_grid(&previous, &sh.path) {
+                sh.psd_coordinate_frame = None;
+            }
             sh.live = None;
             sh.psd_raw = None;
             Ok(path_json(&sh.path))
@@ -106,6 +110,24 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
         })?,
     };
     Ok(json!({ "name": name, "path": path }))
+}
+
+/// Only a verified whole-path integer translation retains the source quantization grid.
+fn preserves_psd_grid(before: &Path, after: &Path) -> bool {
+    if before == after {
+        return true;
+    }
+    let first = |path: &Path| path.subpaths.first().and_then(|s| s.knots.first()).map(|k| k.anchor);
+    let (Some(a), Some(b)) = (first(before), first(after)) else { return false };
+    let integer_offset = |from: f64, to: f64| {
+        let delta = to - from;
+        // Recover subtraction roundoff, including when a move crosses a binade.
+        // The exact whole-path check below still rejects genuine fractional edits.
+        let tolerance = 1e-12_f64.max(4.0 * f64::EPSILON * from.abs().max(to.abs()));
+        (delta.is_finite() && (delta - delta.round()).abs() <= tolerance).then_some(delta.round())
+    };
+    let (Some(dx), Some(dy)) = (integer_offset(a.x, b.x), integer_offset(a.y, b.y)) else { return false };
+    before.transform(&photocraft_geom::Affine::translate(dx, dy)) == *after
 }
 
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
