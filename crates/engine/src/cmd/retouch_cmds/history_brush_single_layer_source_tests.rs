@@ -1,9 +1,10 @@
 //! #12620: a History Brush source state or snapshot holding exactly one pixel layer paints into
 //! any pixel layer, also one made after that state, from that layer's pixels at the same document
 //! coordinates. With more layers a layer missing from the source is still refused, and a layer
-//! the source has paints from itself. Measured in Photoshop 28.0.0 with the issue's document.
+//! the source has paints from itself. Measured in Photoshop 28.0.0 with the issue's document; the
+//! Art History Brush was measured there too and follows the same rule.
 //! Not measured, so unchanged: a one-layer source whose layer is a group, type, shape or smart
-//! object; mask, alpha channel and Quick Mask targets; the Art History Brush.
+//! object, or in another colour mode or bit depth; mask, alpha channel and Quick Mask targets.
 
 use photocraft_doc::LayerId;
 
@@ -255,9 +256,9 @@ fn a_one_layer_source_in_another_mode_or_depth_keeps_refusing() {
 }
 
 /// Not measured, so as before: a layer mask, an alpha channel or the Quick Mask that did not exist
-/// in a one-layer source is refused, and the Art History Brush refuses a later layer.
+/// in a one-layer source is refused.
 #[test]
-fn masks_channels_quick_mask_and_the_art_history_brush_keep_refusing() {
+fn masks_channels_and_the_quick_mask_keep_refusing() {
     let open = json!({"snapshot": 0});
     let mut targets: Vec<(&str, Session, Value)> = Vec::new();
     let Doc { mut s, .. } = issue_document(8);
@@ -277,12 +278,34 @@ fn masks_channels_quick_mask_and_the_art_history_brush_keep_refusing() {
         assert!(LiveRetouch::begin(&s, "paint.historyBrush", &p).is_err(), "{what}: live");
         assert_eq!(steps(&s), before, "{what}: no state");
     }
+}
+
+/// The Art History Brush, measured in Photoshop 28.0.0 on the same kind of document: from the open
+/// snapshot and from the earlier one-layer state it paints a layer made after them, each dab
+/// coloured from that source (it works at 8 bits only); from "Setup", with two layers, it refuses
+/// that layer, adding no state.
+#[test]
+fn the_art_history_brush_follows_the_same_one_layer_rule() {
+    for open in [true, false] {
+        let Doc { mut s, fill, new, .. } = issue_document(8);
+        let (source, rgb) = if open { (json!({"snapshot": 0}), WHITE) } else { (json!({"state": fill}), GREY) };
+        let mut p = stroke(&source, json!([[150, 300], [200, 300]]));
+        p["tolerance"] = json!(0);
+        let before = steps(&s);
+        s.execute("paint.artHistoryBrush", p).unwrap_or_else(|e| panic!("{source}: {e}"));
+        assert_eq!(steps(&s), before + 1, "{source}: one state");
+        // The dabs land within reach of the stroke, left of the grey/green edge at x 400.
+        let opaque: Vec<[f32; 4]> =
+            (60..340).flat_map(|x| (200..400).map(move |y| (x, y))).map(|(x, y)| pixel(&s, new, x, y)).filter(|p| p[3] > 0.99).collect();
+        assert!(!opaque.is_empty(), "{source}: painted");
+        assert!(opaque.iter().all(|p| (0..3).all(|i| (p[i] - rgb[i]).abs() < 0.01)), "{source}: every opaque pixel is {rgb:?}");
+    }
 
     let Doc { mut s, new, .. } = issue_document(8);
-    let mut p = stroke(&open, json!([[200, 300]]));
+    let mut p = stroke(&json!({"snapshot": 1}), json!([[150, 300], [200, 300]]));
     p["tolerance"] = json!(0);
     let before = steps(&s);
-    assert!(s.execute("paint.artHistoryBrush", p).is_err(), "Art History Brush");
-    assert_eq!(steps(&s), before, "Art History Brush: no state");
-    assert!(pixel(&s, new, 200, 300)[3] < 0.01, "Art History Brush: nothing painted");
+    assert!(s.execute("paint.artHistoryBrush", p).is_err(), "Setup");
+    assert_eq!(steps(&s), before, "Setup: no state");
+    assert!(pixel(&s, new, 175, 300)[3] < 0.01, "Setup: nothing painted");
 }

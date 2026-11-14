@@ -106,15 +106,16 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// panel row `state` or snapshot `snapshot` (default: the source set in the History panel,
 /// `history.setSource`, else the oldest state still held, the "Open" state unless trimmed).
 /// A layer that did not exist in that state has no pixels there. From a state holding a single
-/// pixel layer, Background or not, the History Brush paints such a layer with that layer's pixels
-/// at the same document coordinates (#12620, observed in Photoshop 28.0.0); from any other state it
-/// refuses it as Photoshop's does. `eraseToHistory` (the Eraser's Erase to History option) paints
-/// such a layer with that layer's own pixels (its opacity not applied) from a state holding a
-/// single layer, Background or not, or past its path with a shape's solid colour, else white, and
-/// refuses it from any other state: observed in Photoshop 27.11.0, where a state with a second
-/// layer, even an empty one, gives an error. For the History Brush, a single group, type layer,
-/// shape or smart object, or a source in another colour mode or bit depth (Image › Mode ›
-/// Indexed Color flattens into a new layer), wasn't measured and is refused as before.
+/// pixel layer, Background or not, the History Brush and the Art History Brush paint such a layer
+/// with that layer's pixels at the same document coordinates (#12620, observed in Photoshop
+/// 28.0.0); from any other state they refuse it as Photoshop's do. `eraseToHistory` (the Eraser's
+/// Erase to History option) paints such a layer with that layer's own pixels (its opacity not
+/// applied) from a state holding a single layer, Background or not, or past its path with a
+/// shape's solid colour, else white, and refuses it from any other state: observed in Photoshop
+/// 27.11.0, where a state with a second layer, even an empty one, gives an error. For the two
+/// brushes, a single group, type layer, shape or smart object, or a source in another colour mode
+/// or bit depth (Image › Mode › Indexed Color flattens into a new layer), wasn't measured and is
+/// refused as before.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
@@ -130,7 +131,7 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
             if crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
                 && source_doc.layers.len() == 1
                 && (flag(p, "eraseToHistory", false)
-                    || (cmd == "paint.historyBrush"
+                    || (matches!(cmd, "paint.historyBrush" | "paint.artHistoryBrush")
                         && (source_doc.mode, source_doc.depth) == (st.doc.mode, st.doc.depth)
                         && source_doc.layers.first().is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Raster(_))))) =>
         {
