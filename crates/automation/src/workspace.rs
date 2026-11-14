@@ -760,6 +760,10 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     // not widen its own file access.
     let key = segments.next();
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
+        || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
+        // Camera Raw's External Editor names a program that Edit/Develop in Raw Editor later runs:
+        // the user's own choice in Preferences, never one automation makes for them.
+        || (section == "rawDefaults" && segments.next().is_none_or(|key| key == "externalEditor"))
         || (section == "fileHandling" && key.is_none_or(|key| key == "lutFolder"))
         || (section == "integrations" && key.is_none_or(|key| matches!(key, "readRoot" | "writeRoot")))
 }
