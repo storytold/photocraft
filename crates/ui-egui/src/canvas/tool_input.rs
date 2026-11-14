@@ -502,7 +502,34 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
 }
 
 /// Dispatches a tool event through preflight, pre-tool overlays, and tool handlers within an explicit view context.
+///
+/// The keyboard route resolves held keys into `tool_override` per frame before the event is
+/// dispatched; a synthetic event from the control channel or a test carries its modifiers on the
+/// event instead (#12038). Resolve the same temporary tool for the duration of one such event, so
+/// every handler's `active_tool` agrees with the `event_tool` computed below: with the Ruler tool
+/// and ⌘ (Ctrl off the Mac) held on the event, the whole gesture belongs to the Move tool, as
+/// `docs/control-protocol.md` already promises for `ui.pointer` with `command: true`. The Count
+/// and Note tools do what the keyboard does for them, which is the same temporary Move tool (the
+/// Color Sampler is left to #11731). A Move drag that began this way keeps the override for the
+/// rest of its events whatever modifiers they carry, so a release without Command still ends it.
 pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, view: Option<ToolViewContext<'_>>) {
+    let move_gesture = app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move);
+    let temporary_move = matches!(app.ui.tool, Tool::Ruler | Tool::Count | Tool::Note)
+        && app.tool_override.is_none()
+        && app.ui.transform.is_none()
+        && app.ui.text_edit.is_none()
+        && (mods.command || move_gesture)
+        && crate::hold_keys::cmd_moves(app.ui.tool);
+    if temporary_move {
+        app.tool_override = Some(Tool::Move);
+    }
+    tool_event_dispatch(app, ev, mods, view);
+    if temporary_move {
+        app.tool_override = None;
+    }
+}
+
+fn tool_event_dispatch(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, view: Option<ToolViewContext<'_>>) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
     }
