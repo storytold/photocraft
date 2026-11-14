@@ -134,10 +134,17 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
         _ => SelectionMode::Add,
     };
     let enhance = b(p, "enhanceEdge", false);
-    let region = with_quick_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
+    let all_layers = b(p, "sampleAllLayers", false);
+    // Transparency is an edge for the cut (#12921) on a layer's own pixels only. The composite
+    // (Sample All Layers on) and a group (not measured) are cut as before, a transparent part of
+    // them reading as the mid-grey behind it.
+    let on_layer =
+        !all_layers && s.active().and_then(|d| d.active_layer.and_then(|id| d.doc.layer(id))).is_none_or(|l| !matches!(l.content, LayerContent::Group(_)));
+    let region = with_quick_sampler(s, all_layers, |smp, doc| {
         let canvas = doc.bounds();
-        // Transparency is an edge for the cut (#12921); Enhance Edge reads the pixels as before.
-        let Some(r) = quick::quick_select(&quick::CutSampler(smp), canvas, &pts, size) else { return Ok(None) };
+        // Enhance Edge reads the pixels as before.
+        let cut = if on_layer { quick::quick_select(&quick::CutSampler(smp), canvas, &pts, size) } else { quick::quick_select(smp, canvas, &pts, size) };
+        let Some(r) = cut else { return Ok(None) };
         let surface = matting::region_surface(&r);
         if enhance { matting::refine_surface(smp, &surface, canvas, &ENHANCE, None).map_err(|e| EngineError::Other(e.to_string())) } else { Ok(Some(surface)) }
     })??;
@@ -714,5 +721,7 @@ mod tests;
 
 #[cfg(test)]
 mod object_mode_refusal_tests;
+#[cfg(test)]
+mod quick_composite_cut_tests;
 #[cfg(test)]
 mod quick_group_target_tests;

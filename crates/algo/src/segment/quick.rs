@@ -41,7 +41,7 @@ const TRANSPARENT: f32 = -2.0;
 /// mid-grey [`RgbImage::from_rgba`] puts behind it for the other tools. On a layer whose shapes sit
 /// on transparency, that grey matched mid-tone content (a grey ramp from 100 to 145 brackets it),
 /// so the shapes' outline was no edge and the cut fell on the ramp's 5-level steps instead. The
-/// reference application stops at the outline. Opaque pixels, and so the composite, read as before.
+/// reference application stops at the outline. Opaque pixels read as before. Only a layer's own pixels are cut through it: the composite, whose transparent parts keep the grey, and groups are not.
 pub struct CutSampler<'a>(pub &'a dyn Sampler);
 
 impl Sampler for CutSampler<'_> {
