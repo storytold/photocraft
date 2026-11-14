@@ -49,15 +49,35 @@ pub extern "C" fn pc_alloc(size: u32) -> u32 {
 /// The host guarantees `buf..buf + len` is a block it got from `pc_alloc`, holding `len / 4`
 /// samples.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pc_filter(buf: *mut f32, len: u32, _width: u32, _height: u32, channels: u32, format: u32, _params: *const u8, _params_len: u32) -> i32 {
+pub unsafe extern "C" fn pc_filter(buf: *mut f32, len: u32, width: u32, height: u32, channels: u32, format: u32, _params: *const u8, _params_len: u32) -> i32 {
     let n = channels as usize;
-    if n == 0 {
+    let alpha = format & HAS_ALPHA != 0;
+
+    // Reject invalid channel layouts and unaligned sample counts.
+    if n == 0 || (alpha && n < 2) || len % 4 != 0 {
         return 1;
     }
-    // SAFETY: see the function's contract.
-    let px = unsafe { core::slice::from_raw_parts_mut(buf, len as usize / 4) };
-    let alpha = format & HAS_ALPHA != 0;
-    // Fast path for the common RGBA layout (the interpreter rewards fewer instructions).
+
+    let sample_count = len as usize / 4;
+
+    // Verify that the buffer contains exactly the expected pixels.
+    let Some(expected) = (width as usize).checked_mul(height as usize).and_then(|pixels| pixels.checked_mul(n)) else {
+        return 1;
+    };
+
+    if sample_count != expected {
+        return 1;
+    }
+
+    // An empty image requires no processing.
+    if sample_count == 0 {
+        return 0;
+    }
+
+    // SAFETY: The host guarantees the buffer is valid and writable.
+    let px = unsafe { core::slice::from_raw_parts_mut(buf, sample_count) };
+
+    // Optimized path for RGBA images.
     if alpha && n == 4 {
         for p in px.chunks_exact_mut(4) {
             if p[3] > 0.0 {
@@ -68,14 +88,18 @@ pub unsafe extern "C" fn pc_filter(buf: *mut f32, len: u32, _width: u32, _height
         }
         return 0;
     }
+
     let colour = if alpha { n - 1 } else { n };
+
     for p in px.chunks_exact_mut(n) {
         if alpha && p[n - 1] <= 0.0 {
             continue;
         }
-        for v in &mut p[..colour] {
-            *v = 1.0 - *v;
+
+        for value in &mut p[..colour] {
+            *value = 1.0 - *value;
         }
     }
+
     0
 }
