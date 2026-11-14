@@ -415,6 +415,23 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
     true
 }
 
+/// A Magic Wand press. The reference refuses it with an error dialog and an OK button when the
+/// targeted layer is a group and Sample All Layers is off (#11784): the engine already left the
+/// selection and the history alone, so the UI only has to say so. A refused Move is shown the same
+/// way (`move_lock::prompt`).
+fn handle_magic_wand_press(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let o = app.ui.tool_options.clone();
+    let mode = selection_mode(app, mods);
+    let group_target = app
+        .run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}))
+        .err()
+        .is_some_and(|e| e == photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR);
+    if group_target {
+        let message = tl!(photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR);
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": message}).as_object().cloned().unwrap_or_default());
+    }
+}
+
 /// A Mixer Brush press the engine refused: Indexed Color and Bitmap documents answer it with the
 /// reference's alert (#11958); anything else goes to the status bar, as before.
 fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
@@ -623,12 +640,10 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    if wand_pasteboard_click(app, x, y, mode) {
+                    if wand_pasteboard_click(app, x, y, selection_mode(app, mods)) {
                         return;
                     }
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    handle_magic_wand_press(app, x, y, mods);
                     return;
                 }
                 Tool::MagicEraser => {
@@ -992,3 +1007,7 @@ pub(crate) fn command_guide_at(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mod
 #[cfg(test)]
 #[path = "art_history_shift_click_tests.rs"]
 mod art_history_shift_click_tests;
+
+#[cfg(test)]
+#[path = "wand_group_dialog_tests.rs"]
+mod wand_group_dialog_tests;
