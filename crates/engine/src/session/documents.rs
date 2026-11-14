@@ -36,6 +36,11 @@ impl Session {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
 
+    /// The open document with this id, active or not.
+    pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.doc.id == id)
+    }
+
     /// Monotonic active-document generation. It changes when a different document becomes
     /// active, including a switch away and back between two observations; equal values therefore
     /// mean the document was not switched in between.

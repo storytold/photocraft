@@ -50,6 +50,9 @@ impl PhotocraftApp {
     }
 
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Commands never see Apply Data Set's Preview: it is not the document (a Save would write
+        // it). The dialog shows it again on the next frame.
+        crate::panels::apply_data_set_ui::end_preview(self);
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }

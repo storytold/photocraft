@@ -23,9 +23,12 @@ struct Layers {
     title: LayerId,
 }
 
-/// An 8x8 blue PNG for the Pixel Replacement variable.
+/// An 8x8 blue PNG for the Pixel Replacement variable, in a folder of its own for each fixture:
+/// tests run in parallel, and rewriting a shared file could hand another test a half-written one.
 fn blue_png() -> String {
-    let dir = std::env::temp_dir().join(format!("pc-apply-data-set-preview-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("pc-apply-data-set-preview-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("blue.png");
     let mut src = photocraft_engine::Session::new();
@@ -40,7 +43,11 @@ fn blue_png() -> String {
 /// Zed (Badge hidden, "Alpha", Photo blue), Data Set 2 (Badge shown, "Beta", no image) and
 /// Data Set 3 (Badge hidden, "Gamma", an image file that doesn't exist).
 fn app() -> (PhotocraftApp, Layers) {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
+    app_with(photocraft_ui_egui::Services::default())
+}
+
+fn app_with(services: photocraft_ui_egui::Services) -> (PhotocraftApp, Layers) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 64, "height": 48, "background": "white"})).unwrap();
     let (photo, badge, title) = app
         .session
@@ -331,4 +338,83 @@ fn control_channel_reads_and_sets_preview() {
     let cancelled = control(&mut h, "ui.dialog.cancel", json!({"dialog": id}));
     assert_eq!(cancelled["ok"], true, "{cancelled}");
     assert_eq!(*doc(&h), *before);
+}
+
+/// A command run while the dialog is open (a script or an action step calls `run` directly) works on
+/// the document itself,
+/// never on the preview: its history state starts from the real document, and Cancel leaves the
+/// command's change without any of the set.
+#[test]
+fn a_command_run_while_previewing_works_on_the_document_itself() {
+    let (mut h, l, before) = opened();
+    let past = history(&h);
+    click(&mut h, "Preview");
+    assert_eq!(shown(&h, &l).1, "Alpha");
+    h.state_mut().run("layer.new.layer", json!({"name": "Extra"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(history(&h), past + 1);
+    assert_eq!(shown(&h, &l), (false, "Alpha".into(), true), "the dialog shows the set again");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    let d = doc(&h);
+    assert!(d.walk().iter().any(|(_, _, layer)| layer.name == "Extra"), "the command's layer stays");
+    assert_eq!((d.layer(l.badge).unwrap().visible, text(&d, l.title), photo_blue(&d, l.photo)), (true, "Old".into(), false), "nothing of Zed");
+    assert!(h.state_mut().session.undo());
+    assert_eq!(*doc(&h), *before, "the command's state undoes to the document before the dialog");
+}
+
+/// Another document made active while a set is previewed (not through a command): the previewed
+/// document gets its own content back, without being made active.
+#[test]
+fn another_active_document_gives_the_previewed_one_its_document_back() {
+    let (mut a, l) = app();
+    a.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    assert!(a.session.set_active(0));
+    let mut h = harness(a);
+    let before = doc(&h);
+    open(&mut h);
+    click(&mut h, "Preview");
+    assert_eq!(shown(&h, &l).1, "Alpha");
+    assert!(h.state_mut().session.set_active(1));
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), Some(1), "the other document stays active");
+    let first = h.state().session.documents()[0].doc.clone();
+    assert_eq!(*first, *before, "the previewed document is itself again");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(*h.state().session.documents()[0].doc, *before);
+}
+
+/// Autosave never writes the preview: it waits while a set is shown and saves the real document
+/// once the preview ends.
+#[test]
+fn autosave_waits_while_previewing() {
+    type Saved = std::sync::Arc<std::sync::Mutex<Vec<Arc<Document>>>>;
+    let saved: Saved = Default::default();
+    let log = saved.clone();
+    let services = photocraft_ui_egui::Services {
+        autosave: Some(Box::new(move |d: &Arc<Document>, _rev: u64, _path: Option<&str>| {
+            log.lock().unwrap().push(d.clone());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let (mut a, l) = app_with(services);
+    // Unsaved work, so autosave has something to write.
+    a.run("layer.new.layer", json!({"name": "Work"})).unwrap();
+    let mut h = harness(a);
+    let before = doc(&h);
+    open(&mut h);
+    click(&mut h, "Preview");
+    assert_eq!(shown(&h, &l).1, "Alpha");
+    let ctx = h.ctx.clone();
+    photocraft_ui_egui::prefs_ui::autosave_now(h.state_mut());
+    photocraft_ui_egui::prefs_ui::tick(h.state_mut(), &ctx);
+    assert!(saved.lock().unwrap().is_empty(), "nothing saved while the preview shows");
+    click(&mut h, "Preview");
+    photocraft_ui_egui::prefs_ui::autosave_now(h.state_mut());
+    photocraft_ui_egui::prefs_ui::tick(h.state_mut(), &ctx);
+    let saved = saved.lock().unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(*saved[0], *before, "the document itself");
 }

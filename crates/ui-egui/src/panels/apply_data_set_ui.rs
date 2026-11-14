@@ -146,15 +146,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 /// Show set `wanted` in the active document, or nothing. A set that can't be applied (a missing
 /// or unreadable replacement file, an index past the list) shows nothing rather than part of it.
 fn sync(app: &mut PhotocraftApp, wanted: Option<usize>) {
-    let current = app.session.active().map(|st| (st.doc.id, st.revision));
-    if let Some(p) = &app.data_set_preview.shown
-        && current != Some((p.doc, p.revision))
-    {
-        app.data_set_preview.shown = None;
-    }
-    if app.data_set_preview.shown.as_ref().map(|p| p.index) == wanted {
+    let active = app.session.active().map(|st| st.doc.id);
+    if app.data_set_preview.shown.as_ref().is_some_and(|p| Some(p.doc) == active && Some(p.index) == wanted) {
         return;
     }
+    // Also when another document became active: the previewed one gets its own document back.
     revert(app);
     let Some(index) = wanted else { return };
     let Some(st) = app.session.active() else { return };
@@ -183,16 +179,27 @@ fn shown(st: &mut photocraft_engine::DocState, was_clean: bool) {
     st.last_damage = None;
 }
 
-/// Put the document back as it was before Preview showed a set.
+/// Put the document back as it was before Preview showed a set, whether it is active or not. A
+/// document changed since keeps that change (and with it the preview).
 fn revert(app: &mut PhotocraftApp) {
     let Some(p) = app.data_set_preview.shown.take() else { return };
-    if let Some(st) = app.session.active_mut()
-        && st.doc.id == p.doc
+    if let Some(st) = app.session.document_mut(p.doc)
         && st.revision == p.revision
     {
         st.doc = p.original;
         shown(st, p.was_clean);
     }
+}
+
+/// Before any command runs: the document goes back to itself, so the command neither works on
+/// nor saves the preview. The dialog, still open with Preview on, shows the set again.
+pub(crate) fn end_preview(app: &mut PhotocraftApp) {
+    revert(app);
+}
+
+/// Whether Preview is showing a set in document `doc` (autosave waits for it to end).
+pub(crate) fn previewing(app: &PhotocraftApp, doc: DocId) -> bool {
+    app.data_set_preview.shown.as_ref().is_some_and(|p| p.doc == doc)
 }
 
 /// Cancel, Escape and the close box: the preview goes, and the next open starts with it off.
