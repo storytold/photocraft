@@ -43,3 +43,7 @@ pub(crate) fn rows(dir: String) -> Vec<Param> {
         Param::new("edge", tl!("Edge"), ParamKind::choice(opts(&EDGES), Some("transparency".into()))),
     ]
 }
+
+#[cfg(test)]
+#[path = "lens_batch_layout_tests.rs"]
+mod lens_batch_layout_tests;
