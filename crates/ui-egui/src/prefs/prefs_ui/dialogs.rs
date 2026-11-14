@@ -17,7 +17,11 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
     match id {
         "edit.keyboardShortcuts" => Some(Ok(json!({"dialog": open_shortcuts(app, 0)}))),
         "edit.menus" => Some(Ok(json!({"dialog": open_shortcuts(app, 1)}))),
-        "edit.toolbar" => Some(Ok(json!({"dialog": open_shortcuts(app, 2)}))),
+        // Its own dialog, Customize Toolbar (#14616), as in the reference application.
+        "edit.toolbar" => {
+            let fields = super::customize_toolbar::open(app);
+            Some(Ok(json!({"dialog": open_kind(app, super::customize_toolbar::KIND, tl!("Customize Toolbar"), fields)})))
+        }
         "edit.colorSettings" => {
             let d = crate::filter_dialog::open(app, "edit.colorSettings");
             let cur = serde_json::to_value(&app.session.color.settings).unwrap_or_default();
@@ -147,6 +151,7 @@ pub fn width(fields: &Map<String, Value>, available: f32) -> Option<f32> {
     match fields.get("__prefsui").and_then(Value::as_str)? {
         "prefs" => Some(available.max(380.0)),
         "shortcuts" => Some(720.0),
+        super::customize_toolbar::KIND => Some(820.0),
         _ => Some(460.0),
     }
 }
@@ -344,6 +349,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             let values = committed_values(app, f);
             app.run("prefs.set", json!({"path": "", "value": values}))
         }
+        super::customize_toolbar::KIND => super::customize_toolbar::confirm(app, f),
         "shortcuts" => {
             let overrides = f.get("overrides").cloned().unwrap_or(json!({}));
             // Shortcuts moved to another command are taken from their old owner (shell

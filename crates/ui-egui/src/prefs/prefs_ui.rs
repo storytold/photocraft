@@ -71,6 +71,7 @@ pub use crate::shortcuts::{default_shortcut, effective_shortcut};
 
 mod agents;
 mod appearance;
+mod customize_toolbar;
 mod dialogs;
 mod fields;
 mod graphics;
@@ -82,6 +83,7 @@ mod startup;
 use appearance::{DARK_THEME_OPTIONS, LIGHT_THEME_OPTIONS, display_scale, favorite_theme_groups, selected_theme};
 pub(crate) use appearance::{appearance_context_menu, cycle_appearance, step_brightness, sync_appearance};
 pub use appearance::{canvas_style, pasteboard_color};
+pub use customize_toolbar::owns as owns_customize_toolbar;
 pub use dialogs::{
     PREFERENCES_SIZE, apply, confirm, invoke, is_preferences, open_mismatch, open_preferences, open_shortcuts, owns, preferences_changed, width,
 };
