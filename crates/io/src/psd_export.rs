@@ -508,7 +508,13 @@ impl Ex<'_> {
             }
             LayerContent::Fill(f) => fill_rule(&mut raw, &mut regenerated, f),
             LayerContent::Shape(sh) => {
-                if let Some(f) = &sh.fill {
+                // A shape whose fill lives in `vscg` (every shape Photoshop CS6 and later
+                // writes) keeps it there: `shape_blocks` rewrites that block when the fill
+                // changes. A second fill block next to it (`SoCo`/`GdFl`/`PtFl`) is something
+                // Photoshop never writes (none of the corpus shapes has one) and made an
+                // unedited re-save differ from the file it came from (#1281).
+                let in_vscg = raw.iter().any(|(k, d)| k == b"vscg" && crate::vector_map::fill_from_vscg(d).is_some());
+                if let Some(f) = sh.fill.as_ref().filter(|_| !in_vscg) {
                     fill_rule(&mut raw, &mut regenerated, f);
                 }
                 let (w, h) = (self.canvas.width(), self.canvas.height());
