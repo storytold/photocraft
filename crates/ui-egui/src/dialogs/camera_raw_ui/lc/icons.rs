@@ -1,6 +1,7 @@
 //! The develop view's icons, drawn in code on a 20×20 design grid (1.5 px strokes): LightCraft's
 //! own vector icons (`crates/ui-egui/src/icons.rs` in storytold/lightcraft, original work, MIT OR
-//! Apache-2.0), the subset the RAW Develop dialog uses.
+//! Apache-2.0), the subset the RAW Develop dialog uses, and PhotoCraft's own Upright mode icons
+//! (`Upright*`, original work in the same style; recorded in `ATTRIBUTION.md`).
 
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
@@ -28,6 +29,18 @@ pub(crate) enum Icon {
     GradeAll,
     /// Red eye: an eye with a filled pupil.
     RedEye,
+    /// Upright Off: a circle struck through.
+    UprightOff,
+    /// Upright Auto: an "A" in a frame.
+    UprightAuto,
+    /// Upright Level: a level line with a bubble at its middle and marks at its ends.
+    UprightLevel,
+    /// Upright Vertical: converging verticals (faint) made upright.
+    UprightVertical,
+    /// Upright Full: a square frame with its grid (level and both perspectives).
+    UprightFull,
+    /// Upright Guided: two guide lines with handles at their ends.
+    UprightGuided,
 }
 
 struct Pen<'a> {
@@ -38,6 +51,10 @@ struct Pen<'a> {
 }
 
 impl Pen<'_> {
+    /// The same pen in a faded colour (the "before" of a correction).
+    fn faint(&self) -> Pen<'_> {
+        Pen { p: self.p, r: self.r, s: Stroke::new(self.s.width, self.s.color.gamma_multiply(0.55)), k: self.k }
+    }
     fn pt(&self, x: f32, y: f32) -> Pos2 {
         pos2(self.r.min.x + x * self.k, self.r.min.y + y * self.k)
     }
@@ -159,6 +176,41 @@ pub(crate) fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.circle(10.0, 6.0, 3.2);
             pen.circle(5.5, 13.5, 3.2);
             pen.circle(14.5, 13.5, 3.2);
+        }
+        Icon::UprightOff => {
+            pen.circle(10.0, 10.0, 7.0);
+            pen.line(&[(5.05, 14.95), (14.95, 5.05)]);
+        }
+        Icon::UprightAuto => {
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+            pen.line(&[(6.2, 14.5), (10.0, 5.5), (13.8, 14.5)]);
+            pen.line(&[(7.6, 11.2), (12.4, 11.2)]);
+        }
+        Icon::UprightLevel => {
+            pen.line(&[(2.0, 10.0), (7.5, 10.0)]);
+            pen.line(&[(12.5, 10.0), (18.0, 10.0)]);
+            pen.circle(10.0, 10.0, 2.5);
+            pen.line(&[(2.5, 5.5), (2.5, 14.5)]);
+            pen.line(&[(17.5, 5.5), (17.5, 14.5)]);
+        }
+        Icon::UprightVertical => {
+            let f = pen.faint();
+            f.line(&[(4.0, 17.0), (8.0, 3.0)]);
+            f.line(&[(16.0, 17.0), (12.0, 3.0)]);
+            pen.line(&[(4.0, 3.0), (4.0, 17.0)]);
+            pen.line(&[(16.0, 3.0), (16.0, 17.0)]);
+        }
+        Icon::UprightFull => {
+            pen.rect(3.0, 3.0, 17.0, 17.0, 0.5);
+            pen.line(&[(10.0, 3.0), (10.0, 17.0)]);
+            pen.line(&[(3.0, 10.0), (17.0, 10.0)]);
+        }
+        Icon::UprightGuided => {
+            for (top, bottom) in [((6.0, 4.0), (4.0, 16.0)), ((14.0, 4.0), (16.0, 16.0))] {
+                pen.line(&[top, bottom]);
+                pen.dot(top.0, top.1, 1.9);
+                pen.dot(bottom.0, bottom.1, 1.9);
+            }
         }
     }
 }

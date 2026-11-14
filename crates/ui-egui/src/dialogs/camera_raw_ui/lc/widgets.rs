@@ -505,6 +505,33 @@ pub(crate) fn icon_button(ui: &mut Ui, icon: Icon, size: egui::Vec2, active: boo
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
 }
 
+/// A mode button of a row (Upright's Off … Guided): `icon` over a small `label`, `width` wide;
+/// the selected one filled and outlined in the accent. `label` is also its accessible name, and
+/// `tooltip` shows on hover.
+pub(crate) fn mode_button(ui: &mut Ui, icon: Icon, label: &str, width: f32, active: bool, tooltip: &str) -> Response {
+    let t = Lc::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, 46.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
+    let p = ui.painter();
+    if active {
+        p.rect_filled(r, 4.0, t.tool_active);
+        p.rect_stroke(r.shrink(0.5), 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+    } else if resp.hovered() {
+        p.rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
+    }
+    let c = if active {
+        t.pick
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.icon
+    };
+    paint(p, Rect::from_center_size(pos2(r.center().x, r.top() + 15.0), vec2(20.0, 20.0)), icon, c);
+    let text = if active { t.text } else { t.text_label };
+    p.text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, label, t.font(10.0), text);
+    if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
+}
+
 /// A borderless dropdown button: `text` and a chevron. Open a menu on its response.
 pub(crate) fn dropdown(ui: &mut Ui, text: &str, font: egui::FontId, color: Color32) -> Response {
     let t = Lc::get(ui.ctx());

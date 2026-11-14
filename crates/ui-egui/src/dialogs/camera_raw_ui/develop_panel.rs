@@ -43,18 +43,52 @@ pub(crate) struct DevelopPanel {
     pub(crate) open: Vec<String>,
     /// The control ids drawn in the last frame, in order.
     pub(crate) drawn: Vec<&'static str>,
+    /// A section to scroll the panel to on its next frame (⌘1 …, ⇧T).
+    pub(crate) scroll_to: Option<String>,
+    /// The section headers wholly in view in the last frame.
+    pub(crate) in_view: Vec<String>,
 }
 
 impl Default for DevelopPanel {
     fn default() -> Self {
         // Light open, as LightCraft opens a photo
-        DevelopPanel { mixer_tab: 0, curve_channel: 0, curve_state: Default::default(), expand_all: false, open: vec!["light".into()], drawn: Vec::new() }
+        DevelopPanel {
+            mixer_tab: 0,
+            curve_channel: 0,
+            curve_state: Default::default(),
+            expand_all: false,
+            open: vec!["light".into()],
+            drawn: Vec::new(),
+            scroll_to: None,
+            in_view: Vec::new(),
+        }
     }
 }
 
 impl DevelopPanel {
-    fn is_open(&self, id: &str) -> bool {
+    pub(crate) fn is_open(&self, id: &str) -> bool {
         self.expand_all || self.open.iter().any(|o| o == id)
+    }
+
+    /// Opens section `id` and scrolls the panel to it on its next frame.
+    pub(crate) fn reveal(&mut self, id: &str) {
+        if !self.is_open(id) {
+            self.open.push(id.to_string());
+        }
+        self.scroll_to = Some(id.to_string());
+    }
+
+    /// Folds section `id` (with every section open, the others stay open).
+    pub(crate) fn fold(&mut self, id: &str) {
+        if std::mem::take(&mut self.expand_all) {
+            self.open = numbered_sections().into_iter().map(|(id, _)| id).chain(FLYOUTS.iter().map(|f| f.to_string())).collect();
+        }
+        self.open.retain(|o| o != id);
+    }
+
+    /// Whether section `id`'s header was wholly in view in the last frame.
+    pub(crate) fn in_view(&self, id: &str) -> bool {
+        self.in_view.iter().any(|v| v == id)
     }
 
     fn toggle(&mut self, id: &str) {
@@ -80,6 +114,8 @@ pub(crate) struct Tools<'a> {
     pub(crate) sampler: &'a mut bool,
     /// The tone zone an Alt-drag of a Light slider shows the clipping of.
     pub(crate) alt: &'a mut Option<ToneZone>,
+    /// The dialog's shortcuts, for the tooltips.
+    pub(crate) keymap: &'a super::keymap::Keymap,
 }
 
 pub(crate) fn tr(s: &str) -> &str {
@@ -105,6 +141,34 @@ const ORDER: [Section; 15] = [
     Section::LensBlur,
     Section::Calibration,
 ];
+
+/// The flyouts inside the sections (their ids in [`DevelopPanel::open`]).
+const FLYOUTS: [&str; 3] = ["curve", "mixer", "grading"];
+
+/// A section the panel shows under a header of its own: its id (in [`DevelopPanel::open`] and the
+/// control channel's `sections`) and title. `None` for the sections drawn inside another one
+/// (Curve in Light; the mixers and Color Grading in Color; Vignette and Grain in Effects) and the
+/// Profile row.
+pub(crate) fn top_level(section: Section) -> Option<(String, &'static str)> {
+    let (id, title) = match section {
+        Section::Profile | Section::Curve | Section::Mixer | Section::BwMix | Section::Grading | Section::Vignette | Section::Grain => return None,
+        Section::Light => ("light", "Light"),
+        Section::Color => ("color", "Color"),
+        Section::Effects => ("effects", "Effects"),
+        Section::Optics => ("optics", "Optics"),
+        Section::Geometry => ("geometry", "Geometry"),
+        Section::LensBlur => ("lensBlur", "Lens Blur"),
+        // any other section, including one added to the registry later
+        other => return Some((format!("{other:?}"), other.label())),
+    };
+    Some((id.to_string(), title))
+}
+
+/// The panel's section headers top to bottom, as it draws them: ⌘1 is the first. A section the
+/// registry adds gets the next number with no change here.
+pub(crate) fn numbered_sections() -> Vec<(String, &'static str)> {
+    sections().into_iter().filter_map(top_level).collect()
+}
 
 /// The sections the registry has controls in: those in [`ORDER`] first, then any other in
 /// registry order (a section is where its first control is).
@@ -250,7 +314,10 @@ fn eye_id(section: Section) -> Option<&'static str> {
     })
 }
 
-/// A section under a LightCraft header, its body when open, and the divider below.
+/// A section under a LightCraft header (its tooltip shows `key`, the shortcut that opens it), its
+/// body when open, and the divider below.
+// (the panel's state and settings, the section's id, title, eye and key, and its body)
+#[allow(clippy::too_many_arguments)]
 fn section(
     ui: &mut egui::Ui,
     st: &mut DevelopPanel,
@@ -258,10 +325,23 @@ fn section(
     id: &str,
     title: &str,
     eye: Option<&str>,
+    key: Option<String>,
     body: impl FnOnce(&mut egui::Ui, &mut DevelopPanel, &mut DevelopSettings),
 ) {
     let open = st.is_open(id);
-    let (resp, toggled) = w::section_header(ui, id, tr(title), open, eye.map(|e| s.section_enabled(e)));
+    let title = tr(title);
+    let (resp, toggled) = w::section_header(ui, id, title, open, eye.map(|e| s.section_enabled(e)));
+    if ui.clip_rect().contains_rect(resp.rect) {
+        st.in_view.push(id.to_string());
+    }
+    if st.scroll_to.as_deref() == Some(id) {
+        st.scroll_to = None;
+        resp.scroll_to_me(Some(egui::Align::TOP));
+    }
+    let resp = match key {
+        Some(k) => resp.on_hover_text(format!("{title} ({k})")),
+        None => resp,
+    };
     if let (Some(on), Some(e)) = (toggled, eye) {
         s.set_section_enabled(e, on);
     } else if resp.clicked() {
@@ -545,20 +625,24 @@ fn grading_wheels(ui: &mut egui::Ui, st: &mut DevelopPanel, s: &mut DevelopSetti
 /// Upright's modes (Off … Guided) and Guided's guides.
 fn upright(ui: &mut egui::Ui, s: &mut DevelopSettings, tools: &mut Tools<'_>) {
     w::sub_title(ui, tr("Upright"));
-    const MODES: [(Upright, &str, &str); 6] = [
-        (Upright::Off, "Off", "Disable Upright"),
-        (Upright::Auto, "Auto", "Auto: apply balanced perspective corrections"),
-        (Upright::Level, "Level", "Level: apply only level correction"),
-        (Upright::Vertical, "Vertical", "Vertical: apply level and vertical perspective correction"),
-        (Upright::Full, "Full", "Full: apply level, horizontal, and vertical perspective corrections"),
-        (Upright::Guided, "Guided", "Guided: draw two or more guides to customize perspective corrections"),
+    const MODES: [(Upright, Icon, &str, &str); 6] = [
+        (Upright::Off, Icon::UprightOff, "Off", "Disable Upright"),
+        (Upright::Auto, Icon::UprightAuto, "Auto", "Auto: apply balanced perspective corrections"),
+        (Upright::Level, Icon::UprightLevel, "Level", "Level: apply only level correction"),
+        (Upright::Vertical, Icon::UprightVertical, "Vertical", "Vertical: apply level and vertical perspective correction"),
+        (Upright::Full, Icon::UprightFull, "Full", "Full: apply level, horizontal, and vertical perspective corrections"),
+        (Upright::Guided, Icon::UprightGuided, "Guided", "Guided: draw two or more guides to customize perspective corrections"),
     ];
-    w::padded(ui, 2, 4, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for (mode, name, tip) in MODES {
+    // one row of six across the panel, a little wider than the rows' margins so the names fit
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 12, top: 2, bottom: 6 }).show(ui, |ui| {
+        let gap = 2.0;
+        let width = ((ui.available_width() - gap * (MODES.len() - 1) as f32) / MODES.len() as f32).floor().max(24.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(gap, 6.0);
+            for (mode, icon, name, tip) in MODES {
                 let on = s.geometry.upright == mode;
-                if w::text_button(ui, tr(name), on).on_hover_text(tr(tip)).clicked() {
+                let tip = if mode == Upright::Guided { tools.keymap.tip(tr(tip), super::keymap::Action::GuidedUpright) } else { tr(tip).to_string() };
+                if w::mode_button(ui, icon, tr(name), width, on, &tip).clicked() {
                     if !on {
                         let g = &mut s.geometry;
                         g.upright = mode;
@@ -573,6 +657,8 @@ fn upright(ui: &mut egui::Ui, s: &mut DevelopSettings, tools: &mut Tools<'_>) {
                 }
             }
         });
+    });
+    w::padded(ui, 0, 4, |ui| {
         if s.geometry.upright == Upright::Guided {
             let t = Lc::get(ui.ctx());
             let n = s.geometry.guides.len();
@@ -602,6 +688,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&Deve
     lc::style(ui);
     ui.spacing_mut().item_spacing.y = 0.0;
     st.drawn.clear();
+    st.in_view.clear();
     let basis = e.basis();
     let unedited = e.unedited().clone();
     let s = &mut e.settings;
@@ -611,12 +698,16 @@ pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&Deve
     profile(ui, st, s, basis, tools.alt);
     w::divider(ui);
     let all = sections();
+    let mut number = 0u8;
     for sec in all.iter().copied() {
+        // the others are drawn by the Profile row, in Light (Curve), Color (the mixers, Color
+        // Grading) and Effects
+        let Some((id, title)) = top_level(sec) else { continue };
+        number = number.saturating_add(1);
+        let key = tools.keymap.label(super::keymap::Action::Section(number));
         let eye = eye_id(sec);
         match sec {
-            // drawn by the Profile row, in Light (Curve), Color (the mixers, Color Grading) and Effects
-            Section::Profile | Section::Curve | Section::Mixer | Section::BwMix | Section::Grading | Section::Vignette | Section::Grain => {}
-            Section::Light => section(ui, st, s, "light", "Light", eye, |ui, st, s| {
+            Section::Light => section(ui, st, s, &id, title, eye, key, |ui, st, s| {
                 rows(ui, st, s, Section::Light, basis, tools.alt, |_| true);
                 ui.add_space(6.0);
                 if all.contains(&Section::Curve) {
@@ -626,7 +717,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&Deve
                     });
                 }
             }),
-            Section::Color => section(ui, st, s, "color", "Color", eye, |ui, st, s| {
+            Section::Color => section(ui, st, s, &id, title, eye, key, |ui, st, s| {
                 white_balance(ui, s, source, basis);
                 rows(ui, st, s, Section::Color, basis, tools.alt, |_| true);
                 ui.add_space(6.0);
@@ -650,7 +741,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&Deve
                     });
                 }
             }),
-            Section::Effects => section(ui, st, s, "effects", "Effects", eye, |ui, st, s| {
+            Section::Effects => section(ui, st, s, &id, title, eye, key, |ui, st, s| {
                 rows(ui, st, s, Section::Effects, basis, tools.alt, |_| true);
                 w::sub_title(ui, tr(Section::Vignette.label()));
                 let styles = [VignetteStyle::HighlightPriority, VignetteStyle::ColorPriority, VignetteStyle::PaintOverlay];
@@ -665,31 +756,28 @@ pub(crate) fn panel(ui: &mut egui::Ui, e: &mut DevelopEdit, source: Option<&Deve
                 w::sub_title(ui, tr(Section::Grain.label()));
                 rows(ui, st, s, Section::Grain, basis, tools.alt, |_| true);
             }),
-            Section::Optics => section(ui, st, s, "optics", "Optics", eye, |ui, st, s| {
+            Section::Optics => section(ui, st, s, &id, title, eye, key, |ui, st, s| {
                 check(ui, &mut s.optics.remove_ca, tl!("Remove Chromatic Aberration"));
                 check(ui, &mut s.optics.lens_profile, tl!("Enable Lens Corrections"));
                 rows(ui, st, s, Section::Optics, basis, tools.alt, |_| true);
             }),
             Section::Geometry => {
-                // Shift+T opens the section (the Guided Upright tool)
-                if std::mem::take(&mut tools.guides.reveal) && !st.is_open("geometry") {
-                    st.toggle("geometry");
+                // Shift+T opens the section (the Guided Upright tool) and scrolls to it
+                if std::mem::take(&mut tools.guides.reveal) {
+                    st.reveal(&id);
                 }
-                section(ui, st, s, "geometry", "Geometry", eye, |ui, st, s| {
+                section(ui, st, s, &id, title, eye, key, |ui, st, s| {
                     upright(ui, s, &mut tools);
                     w::sub_title(ui, tl!("Manual Transformations"));
                     rows(ui, st, s, Section::Geometry, basis, tools.alt, |_| true);
                 });
             }
-            Section::LensBlur => section(ui, st, s, "lensBlur", "Lens Blur", eye, |ui, st, s| {
+            Section::LensBlur => section(ui, st, s, &id, title, eye, key, |ui, st, s| {
                 check(ui, &mut s.lens_blur.enabled, tl!("Apply"));
                 rows(ui, st, s, Section::LensBlur, basis, tools.alt, |_| true);
             }),
             // any other section, including one added to the registry later: its controls in order
-            other => {
-                let id = format!("{other:?}");
-                section(ui, st, s, &id, other.label(), eye, |ui, st, s| rows(ui, st, s, other, basis, tools.alt, |_| true));
-            }
+            other => section(ui, st, s, &id, title, eye, key, |ui, st, s| rows(ui, st, s, other, basis, tools.alt, |_| true)),
         }
     }
     ui.add_space(40.0);
@@ -711,7 +799,8 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(input, |ui| {
-            let tools = Tools { guides: &mut guides, sampler: &mut sampler, alt: &mut alt };
+            let keymap = super::super::keymap::Keymap::default();
+            let tools = Tools { guides: &mut guides, sampler: &mut sampler, alt: &mut alt, keymap: &keymap };
             panel(ui, e, None, st, tools);
         });
         out.textures_delta.clear();
@@ -760,6 +849,36 @@ mod tests {
         let mut st = DevelopPanel::default();
         let shown_now = draw(&ctx, &mut e, &mut st, frame + 3.0);
         assert!(shown_now.contains(&"light.exposure") && !shown_now.contains(&"color.vibrance"), "{shown_now:?}");
+    }
+
+    /// ⌘1 … number the section headers the panel draws, in the order it draws them: Light,
+    /// Color, Effects first, and every registry section with a header of its own, so a section
+    /// added to the registry gets the next number.
+    #[test]
+    fn section_numbers_are_the_panels_header_order() {
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        ctx.all_styles_mut(|s| s.animation_time = 0.0);
+        let basis = WbBasis::Kelvin { as_shot_temp: 5000.0, as_shot_tint: 2.0 };
+        let mut e = DevelopEdit::new(&CameraRaw::default(), basis, &DevelopSettings::for_raw(5000.0, 2.0));
+        // every section folded on a panel tall enough to show all of their headers
+        let mut st = DevelopPanel { open: Vec::new(), ..Default::default() };
+        draw(&ctx, &mut e, &mut st, 1.0);
+        draw(&ctx, &mut e, &mut st, 2.0);
+        let numbered: Vec<String> = numbered_sections().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(st.in_view, numbered, "the headers drawn, top to bottom");
+        assert_eq!(&numbered[..3], ["light", "color", "effects"]);
+        let expected: Vec<String> = sections().into_iter().filter_map(top_level).map(|(id, _)| id).collect();
+        assert_eq!(numbered, expected);
+        for s in [Section::Curve, Section::Mixer, Section::Grading, Section::Vignette, Section::Grain, Section::Profile] {
+            assert!(top_level(s).is_none(), "{s:?} is inside another section, not numbered");
+        }
+        // reveal opens and asks for a scroll; fold with every section open keeps the others
+        st.reveal("geometry");
+        assert!(st.is_open("geometry") && st.scroll_to.as_deref() == Some("geometry"));
+        let mut all = DevelopPanel { expand_all: true, ..Default::default() };
+        all.fold("color");
+        assert!(!all.is_open("color") && all.is_open("light") && all.is_open("geometry") && all.is_open("curve"));
     }
 
     /// A slider writes its control by id, on the spec's steps and in its range, and a white

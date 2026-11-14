@@ -498,12 +498,8 @@ pub(crate) fn preview(
     // a drag starts where it was pressed, not where egui saw it move far enough to be one
     let origin = if response.drag_started() { ui.input(|i| i.pointer.press_origin()) } else { None };
     let pointer = origin.or(response.interact_pointer_pos()).or(response.hover_pos());
-    // Delete (or Backspace) removes the selected mask, spot or red eye
-    let delete = !ui.ctx().text_edit_focused()
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
-    if delete {
-        out.edited = delete_selected(st, tool, s);
-    }
+    // Delete (or Backspace) removing the selected mask, spot or red eye is the dialog's keymap's
+    // (`keys::delete`)
     match tool {
         Tool::Edit => {}
         Tool::Masking => masking(ui, st, s, &c, &p, response, live, press, pointer, sample, &mut out),

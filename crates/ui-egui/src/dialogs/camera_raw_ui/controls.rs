@@ -238,39 +238,6 @@ fn geometry(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, guides: &mut
     }
 }
 
-/// Shift+T picks Guided Upright and its tool (a second press puts the tool down); Delete or
-/// Backspace removes the selected guide. Each change is one undo step.
-fn guide_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
-    if ctx.text_edit_focused() {
-        return;
-    }
-    // Shift exactly, read from the press itself: Shift may be up again by the end of the frame,
-    // and consume_key alone would also take Alt+Shift+T.
-    let shift_t = ctx.input_mut(|i| {
-        let pressed = i.events.iter().any(|e| {
-            matches!(e, egui::Event::Key { key: egui::Key::T, pressed: true, modifiers: m, .. } if m.shift && !m.alt && !m.ctrl && !m.command && !m.mac_cmd)
-        });
-        pressed && i.consume_key(egui::Modifiers::SHIFT, egui::Key::T)
-    });
-    if shift_t {
-        let was = snapshot(d);
-        if crate::camera_raw_guides_ui::toggle(&mut d.guides, &mut d.params) {
-            remember_shortcut_edit(d, was);
-        }
-        if d.guides.active {
-            d.guides.reveal = true;
-        }
-    }
-    let delete = d.guides.active
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
-    if delete {
-        let was = snapshot(d);
-        if crate::camera_raw_guides_ui::delete_selected(&mut d.guides, &mut d.params) {
-            remember_shortcut_edit(d, was);
-        }
-    }
-}
-
 /// The pointer is up: the edit since its gesture began (or, without one, since `frame_start`) is
 /// one undo step.
 fn record_edit(d: &mut CameraRawDialog, frame_start: Snapshot) {
@@ -286,7 +253,7 @@ fn record_edit(d: &mut CameraRawDialog, frame_start: Snapshot) {
 
 /// A shortcut changed the settings from `was`: its own undo step. A gesture the pointer is still
 /// holding ends here with a step of its own, so its release doesn't record `was` a second time.
-fn remember_shortcut_edit(d: &mut CameraRawDialog, was: Snapshot) {
+pub(super) fn remember_shortcut_edit(d: &mut CameraRawDialog, was: Snapshot) {
     let edited = snapshot(d);
     restore(d, was);
     if let Some(origin) = d.edit_origin.take()
@@ -358,7 +325,7 @@ fn develop_props(ui: &mut egui::Ui, d: &mut CameraRawDialog, sampler: &mut bool)
     let before = edit.settings.clone();
     match d.tool {
         super::rail::Tool::Edit => {
-            let tools = super::develop_panel::Tools { guides: &mut d.guides, sampler, alt: &mut d.scope.alt_tone };
+            let tools = super::develop_panel::Tools { guides: &mut d.guides, sampler, alt: &mut d.scope.alt_tone, keymap: &d.keymap };
             let out = super::develop_panel::panel(ui, edit, d.develop_source.as_deref(), &mut d.develop_panel, tools);
             d.curve_rect = out.curve_rect;
             d.auto_all |= out.auto;
@@ -510,7 +477,7 @@ fn rail_and_panel(ui: &mut egui::Ui, painter: &egui::Painter, d: &mut CameraRawD
     let rail = ERect::from_min_max(pos2(right.right() - super::lc::RAIL_W, right.top()), right.max);
     right.max.x = rail.left();
     let was = d.tool;
-    super::rail::rail(ui, rail, &mut d.tool);
+    super::rail::rail(ui, rail, &mut d.tool, &d.keymap);
     if d.tool != was {
         d.tool_changed(was);
     }
@@ -627,7 +594,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
         let guides_were_active = d.guides.active;
-        guide_keys(d, ctx);
+        // the dialog's shortcuts (its keymap): ⇧T, Delete, and the develop view's tools, brush
+        // and section keys
+        super::keys::handle(d, ctx);
         // Shift+T took the Guided Upright tool up: it puts the Color Sampler down (the newest
         // tool wins), rather than the sampler putting the new tool straight down again.
         if d.guides.active && !guides_were_active {

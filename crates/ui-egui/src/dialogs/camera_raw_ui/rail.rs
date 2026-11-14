@@ -4,6 +4,7 @@
 
 use egui::{Rect, Sense, Ui, pos2, vec2};
 
+use super::keymap::{Action, Keymap};
 use super::lc::Lc;
 use super::lc::icons::Icon;
 use super::lc::widgets::icon_button;
@@ -44,29 +45,26 @@ impl Tool {
         }
     }
 
-    fn tip(self) -> &'static str {
+    /// The tool's name on the rail (its tooltip and accessible label add its shortcut).
+    pub(crate) fn name(self) -> &'static str {
         match self {
-            Tool::Edit => "Edit (E)",
-            Tool::Heal => "Heal (Q)",
-            Tool::Masking => "Masking (M)",
+            Tool::Edit => "Edit",
+            Tool::Heal => "Heal",
+            Tool::Masking => "Masking",
             Tool::RedEye => "Red Eye",
         }
     }
 
-    /// The key that picks the tool, as in LightCraft.
-    fn key(self) -> Option<egui::Key> {
-        match self {
-            Tool::Edit => Some(egui::Key::E),
-            Tool::Heal => Some(egui::Key::Q),
-            Tool::Masking => Some(egui::Key::M),
-            Tool::RedEye => None,
-        }
+    /// The tool after `picked` was chosen while this one is: the current tool's button (or key)
+    /// again goes back to Edit, as LightCraft's rail does.
+    pub(crate) fn after_picking(self, picked: Tool) -> Tool {
+        if self == picked && picked != Tool::Edit { Tool::Edit } else { picked }
     }
 }
 
-/// The rail in `rect`; a click (or the tool's key, outside a text field) picks a tool. Returns the
-/// tool picked this frame.
-pub(crate) fn rail(ui: &mut Ui, rect: Rect, tool: &mut Tool) -> Option<Tool> {
+/// The rail in `rect`; a click picks a tool (its key is in `keymap`, handled with the dialog's other
+/// keys). Returns the tool picked this frame.
+pub(crate) fn rail(ui: &mut Ui, rect: Rect, tool: &mut Tool, keymap: &Keymap) -> Option<Tool> {
     let t = Lc::get(ui.ctx());
     ui.painter().rect_filled(rect, 0.0, t.chrome);
     ui.painter().line_segment([rect.left_top(), rect.left_bottom()], egui::Stroke::new(1.0, t.divider));
@@ -74,18 +72,14 @@ pub(crate) fn rail(ui: &mut Ui, rect: Rect, tool: &mut Tool) -> Option<Tool> {
     child.spacing_mut().item_spacing.y = 8.0;
     let mut picked = None;
     for candidate in Tool::RAIL {
-        let tip = super::develop_panel::tr(candidate.tip());
-        if icon_button(&mut child, candidate.icon(), vec2(40.0, 40.0), *tool == candidate, true, tip).clicked() {
+        let tip = keymap.tip(super::develop_panel::tr(candidate.name()), Action::Tool(candidate));
+        if icon_button(&mut child, candidate.icon(), vec2(40.0, 40.0), *tool == candidate, true, &tip).clicked() {
             picked = Some(candidate);
         }
     }
     let _ = child.allocate_rect(Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(0.0, 0.0)), Sense::hover());
-    if picked.is_none() && !ui.ctx().text_edit_focused() {
-        picked = Tool::RAIL.into_iter().find(|c| c.key().is_some_and(|k| ui.ctx().input_mut(|i| i.consume_key(egui::Modifiers::NONE, k))));
-    }
     if let Some(p) = picked {
-        // the current tool's button (or key) again goes back to Edit, as LightCraft's rail does
-        *tool = if *tool == p && p != Tool::Edit { Tool::Edit } else { p };
+        *tool = tool.after_picking(p);
     }
     picked
 }

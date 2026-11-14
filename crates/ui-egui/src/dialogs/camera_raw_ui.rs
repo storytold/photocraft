@@ -33,6 +33,8 @@ mod controls;
 mod convert;
 pub(crate) mod develop_panel;
 mod filmstrip;
+mod keymap;
+mod keys;
 pub(crate) mod lc;
 mod local;
 mod local_panels;
@@ -125,6 +127,8 @@ pub struct CameraRawDialog {
     pub(crate) develop_panel: develop_panel::DevelopPanel,
     /// The develop view's tool (its icon rail): Edit, Heal, Masking, Red Eye.
     pub(crate) tool: rail::Tool,
+    /// The develop view's keyboard shortcuts (Camera Raw's).
+    pub(crate) keymap: keymap::Keymap,
     /// The local tools' selection and settings (masks, spots, red eyes).
     pub(crate) local: local::LocalTools,
     /// The proxy develop running on a worker ([`Self::request_render`]).
@@ -170,6 +174,11 @@ impl CameraRawDialog {
         result["develop"] = self.develop.as_ref().map(|e| e.settings.to_json()).unwrap_or(Value::Null);
         result["developControls"] = json!(self.develop_panel.drawn);
         result["tool"] = json!(self.tool.id());
+        result["shortcuts"] = self.keymap.describe();
+        result["sectionOrder"] = json!(develop_panel::numbered_sections().into_iter().map(|(id, _)| id).collect::<Vec<_>>());
+        result["sectionsInView"] = json!(self.develop_panel.in_view);
+        result["brush"] = json!({"size": self.local.brush.size, "feather": self.local.brush.feather});
+        result["healBrush"] = json!({"size": self.local.heal.size, "feather": self.local.heal.feather});
         result["sections"] = json!(self.develop_panel.open);
         result["selectedMask"] = json!(self.local.selected);
         result["maskComponent"] = json!(self.local.component);

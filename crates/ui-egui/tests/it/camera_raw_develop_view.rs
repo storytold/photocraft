@@ -155,7 +155,7 @@ fn masking(h: &mut Harness<'_, PhotocraftApp>) {
 /// Heal: a spot placed with a click and deleted with Delete, then one placed by the control channel.
 fn heal(h: &mut Harness<'_, PhotocraftApp>) {
     // Heal: a spot where a click places it
-    h.get_by_label("Heal (Q)").click();
+    h.get_by_label("Heal (B)").click();
     settle(h);
     // a click on the preview places a spot, Delete takes it away again
     let rect = preview_rect(h);
@@ -202,7 +202,8 @@ fn the_develop_view_edits_masks_spots_and_red_eyes() {
     assert_eq!(r["panel"], "develop", "{}", r["panel"]);
     assert_eq!(r["tool"], "edit");
     // LightCraft's Edit panel: its header buttons and the rail's tools
-    for label in ["Auto", "B&W", "Reset", "Edit (E)", "Heal (Q)", "Masking (M)", "Red Eye"] {
+    let red_eye = format!("Red Eye ({})", photocraft_ui_egui::shortcuts::pretty("Shift+E"));
+    for label in ["Auto", "B&W", "Reset", "Edit (E)", "Heal (B)", "Masking (M)", red_eye.as_str()] {
         assert!(h.query_by_label(label).is_some(), "{label}");
     }
     assert!(h.query_by_label("Crop").is_none(), "no rail button for a tool that doesn't work here");
@@ -220,7 +221,7 @@ fn the_develop_view_edits_masks_spots_and_red_eyes() {
     masking(&mut h);
     heal(&mut h);
     // Red Eye
-    h.get_by_label("Red Eye").click();
+    h.get_by_label(&red_eye).click();
     settle(&mut h);
     let r = local(&mut h, json!({"redEye": {"at": [0.6, 0.4]}}));
     assert_eq!(r["develop"]["red_eye"].as_array().map(Vec::len), Some(1));

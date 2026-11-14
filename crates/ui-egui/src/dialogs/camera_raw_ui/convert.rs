@@ -244,6 +244,7 @@ pub(super) fn open_pixels(
         develop: develop_edit,
         develop_panel: Default::default(),
         tool: Default::default(),
+        keymap: Default::default(),
         local: Default::default(),
         pending: None,
         preview_error: None,
