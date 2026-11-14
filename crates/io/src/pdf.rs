@@ -327,8 +327,211 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    Ok(ExportResult { bytes: print_pdf_pages(&pages, &vectors, &selection_font, xmp.as_deref(), ctl)?, warnings })
+    let mut bytes = print_pdf_pages(&pages, &vectors, &selection_font, xmp.as_deref(), ctl)?;
+    // The notes go on the document's one page (#11796). Artboard pages were not measured, so they
+    // keep writing none, and say so.
+    if !doc.notes.is_empty() {
+        if artboards.is_empty() {
+            let page_height = f64::from(doc.size.height) * 72.0 / dpi;
+            bytes = with_notes(bytes, &doc.notes, 72.0 / dpi, page_height)?;
+        } else {
+            warnings.push("notes were not written: a PDF of artboards keeps no notes".into());
+        }
+    }
+    Ok(ExportResult { bytes, warnings })
+}
+
+/// The side of a note's icon annotation, in PDF points.
+const NOTE_ICON_PT: f64 = 20.0;
+
+/// `pdf` (the shared writer's output: one classic cross-reference table, plain page dictionaries)
+/// with `notes` added to its first page as PDF text annotations (ISO 32000 `/Subtype /Text`),
+/// each with its `/Popup`. They go in an incremental update (§7.5.6): the new annotation objects,
+/// the page again with `/Annots`, and a cross-reference section chained to the original by
+/// `/Prev`, so the bytes the writer produced stay untouched. `scale` is points per document pixel
+/// and `page_height` the page height in points (PDF's y axis points up). A note with a position
+/// that isn't a finite number is left out.
+fn with_notes(mut pdf: Vec<u8>, notes: &[photocraft_doc::Note], scale: f64, page_height: f64) -> Result<Vec<u8>, IoError> {
+    let broken = || IoError::Unsupported("the PDF writer's output has no page to put the notes on".into());
+    let (prev, size, root) = trailer_of(&pdf).ok_or_else(broken)?;
+    let (page, page_dict) = first_page(&pdf).ok_or_else(broken)?;
+    let num = |v: f64| {
+        let t = format!("{v:.3}");
+        let t = t.trim_end_matches('0').trim_end_matches('.');
+        if t == "-0" { "0".to_string() } else { t.to_string() }
+    };
+    let (x, y) = (|px: f64| px * scale, |py: f64| page_height - py * scale);
+    let mut objects: Vec<(u32, String)> = Vec::new();
+    let mut refs = Vec::new();
+    let mut next = size;
+    for n in notes {
+        let (left, top) = (x(n.position[0]), y(n.position[1]));
+        if !left.is_finite() || !top.is_finite() {
+            continue;
+        }
+        let (annot, popup) = (next, next + 1);
+        next += 2;
+        let [r, g, b] = n.color.to_rgb().map(|c| f64::from(c.clamp(0.0, 1.0)));
+        let mut d = format!(
+            "<< /Type /Annot /Subtype /Text /Rect [{} {} {} {}] /Contents {} /T {} /C [{} {} {}] /Name /Comment /F 28 /Open {} /Popup {popup} 0 R",
+            num(left),
+            num(top - NOTE_ICON_PT),
+            num(left + NOTE_ICON_PT),
+            num(top),
+            text_string(&n.text),
+            text_string(&n.author),
+            num(r),
+            num(g),
+            num(b),
+            n.open
+        );
+        // The stored date is already PDF date text; anything else is left out rather than escaped.
+        if n.modified.starts_with("D:") && n.modified.bytes().all(|c| c.is_ascii_graphic() && !matches!(c, b'(' | b')' | b'\\')) {
+            d.push_str(&format!(" /M ({})", n.modified));
+        }
+        d.push_str(" >>");
+        let [l, t, rr, bb] = n.popup;
+        let rect = if [l, t, rr, bb].iter().all(|v| v.is_finite()) && rr > l && bb > t {
+            [x(l), y(bb), x(rr), y(t)]
+        } else {
+            [left + NOTE_ICON_PT, top - 140.0, left + NOTE_ICON_PT + 240.0, top]
+        };
+        let p = format!(
+            "<< /Type /Annot /Subtype /Popup /Parent {annot} 0 R /Rect [{} {} {} {}] /F 28 /Open {} >>",
+            num(rect[0]),
+            num(rect[1]),
+            num(rect[2]),
+            num(rect[3]),
+            n.open
+        );
+        objects.push((annot, d));
+        objects.push((popup, p));
+        refs.push(format!("{annot} 0 R {popup} 0 R"));
+    }
+    if refs.is_empty() {
+        return Ok(pdf);
+    }
+    let body = page_dict.trim_end();
+    let Some(open) = body.strip_suffix(">>") else { return Err(broken()) };
+    let page_text = format!("{open}/Annots [{}] >>", refs.join(" "));
+    if !pdf.ends_with(b"\n") {
+        pdf.push(b'\n');
+    }
+    let mut offsets = Vec::with_capacity(objects.len() + 1);
+    offsets.push((page, pdf.len()));
+    pdf.extend_from_slice(format!("{page} 0 obj\n{page_text}\nendobj\n").as_bytes());
+    for (n, text) in &objects {
+        offsets.push((*n, pdf.len()));
+        pdf.extend_from_slice(format!("{n} 0 obj\n{text}\nendobj\n").as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n{page} 1\n{:010} 00000 n \n{size} {}\n", offsets[0].1, objects.len()).as_bytes());
+    for (_, at) in &offsets[1..] {
+        pdf.extend_from_slice(format!("{at:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {next} /Root {root} /Prev {prev} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Ok(pdf)
+}
+
+/// A PDF text string: UTF-16BE with its byte-order mark, as a hex string, so any text needs no
+/// escaping.
+fn text_string(text: &str) -> String {
+    let mut out = String::from("<FEFF");
+    for unit in text.encode_utf16() {
+        out.push_str(&format!("{unit:04X}"));
+    }
+    out.push('>');
+    out
+}
+
+/// The last cross-reference section's offset, the trailer's `/Size` and its `/Root` reference
+/// (as `N G R`), from the end of the shared writer's output.
+fn trailer_of(pdf: &[u8]) -> Option<(usize, u32, String)> {
+    let text = std::str::from_utf8(&pdf[pdf.len().saturating_sub(512)..]).ok()?;
+    let trailer = &text[text.rfind("trailer")?..];
+    let after = |key: &str| trailer.find(key).map(|i| trailer[i + key.len()..].trim_start());
+    let size = after("/Size")?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+    let root: Vec<&str> = after("/Root")?.split_whitespace().take(3).collect();
+    let prev = after("startxref")?.lines().next()?.trim().parse().ok()?;
+    (root.len() == 3 && root[2].starts_with('R')).then(|| (prev, size, format!("{} {} R", root[0], root[1])))
+}
+
+/// The first page object's number and its dictionary text, as the shared writer prints it.
+fn first_page(pdf: &[u8]) -> Option<(u32, String)> {
+    let needle = b" 0 obj\n<< /Type /Page /Parent";
+    let at = pdf.windows(needle.len()).position(|w| w == needle)?;
+    let start = pdf[..at].iter().rposition(|c| *c == b'\n').map_or(0, |i| i + 1);
+    let number = std::str::from_utf8(&pdf[start..at]).ok()?.trim().parse().ok()?;
+    let dict = at + b" 0 obj\n".len();
+    let end = dict + pdf[dict..].windows(b"\nendobj".len()).position(|w| w == b"\nendobj")?;
+    Some((number, std::str::from_utf8(&pdf[dict..end]).ok()?.to_string()))
+}
+
+/// The text annotations on a PDF's first page, read back as notes (#11796), and the page's
+/// height. Positions are in points from the page's top-left (its crop box), y down, so
+/// [`Note::position`](photocraft_doc::Note) scales onto a canvas by canvas height / page height.
+/// Text, author, colour, open state and date come from `/Contents`, `/T`, `/C`, `/Open` and `/M`;
+/// the popup rectangle from the annotation's `/Popup`. Other annotation types are skipped. A PDF
+/// that can't be read is an error; one without text annotations gives no notes.
+pub fn read_notes(bytes: &[u8]) -> Result<(Vec<photocraft_doc::Note>, f64), IoError> {
+    use craft_pdf::syntax::object::{Array, Dict, Name, Rect, String as PdfString};
+    let pdf = craft_pdf::open_slice_with_options(bytes, None, &craft_pdf::OpenOptions::default())
+        .map_err(|e| IoError::Unsupported(format!("the PDF could not be read: {e:?}")))?;
+    let pages = pdf.pages();
+    let Some(page) = pages.first() else {
+        return Err(IoError::Unsupported("the PDF has no pages".into()));
+    };
+    let bounds = page.intersected_crop_box();
+    let (left, top) = (bounds.x0.min(bounds.x1), bounds.y0.max(bounds.y1));
+    let height = (bounds.y1 - bounds.y0).abs();
+    let to_note_space = |r: &Rect| [r.x0.min(r.x1) - left, top - r.y0.max(r.y1), r.x0.max(r.x1) - left, top - r.y0.min(r.y1)];
+    let mut notes = Vec::new();
+    let Some(annots) = page.raw().get::<Array>(b"Annots") else {
+        return Ok((notes, height));
+    };
+    for a in annots.iter::<Dict>() {
+        if a.get::<Name>(b"Subtype").is_none_or(|s| s.as_ref() != b"Text") {
+            continue;
+        }
+        let Some(rect) = a.get::<Rect>(b"Rect") else { continue };
+        let [x0, y0, ..] = to_note_space(&rect);
+        if !x0.is_finite() || !y0.is_finite() {
+            continue;
+        }
+        let text = |key: &[u8]| a.get::<PdfString>(key).map(|s| decode_text_string(s.as_bytes())).unwrap_or_default();
+        let color = a.get::<Vec<f64>>(b"C").filter(|c| c.len() == 3 && c.iter().all(|v| v.is_finite())).map_or_else(
+            || photocraft_doc::Note::default().color,
+            |c| photocraft_color::Color::rgb(c[0].clamp(0.0, 1.0) as f32, c[1].clamp(0.0, 1.0) as f32, c[2].clamp(0.0, 1.0) as f32),
+        );
+        let popup = a.get::<Dict>(b"Popup").and_then(|p| p.get::<Rect>(b"Rect")).map(|r| to_note_space(&r)).filter(|r| r.iter().all(|v| v.is_finite()));
+        notes.push(photocraft_doc::Note {
+            author: text(b"T"),
+            color,
+            text: text(b"Contents"),
+            position: [x0, y0],
+            popup: popup.unwrap_or([x0, y0, x0, y0]),
+            open: a.get::<bool>(b"Open").unwrap_or(false),
+            modified: text(b"M"),
+        });
+    }
+    Ok((notes, height))
+}
+
+/// A PDF text string's bytes as text: UTF-16BE after its byte-order mark, UTF-8 after its mark,
+/// otherwise PDFDocEncoding (read as Latin-1, which it matches outside a few punctuation codes).
+fn decode_text_string(b: &[u8]) -> String {
+    if let Some(rest) = b.strip_prefix(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|p| u16::from_be_bytes(*p)).collect();
+        return String::from_utf16_lossy(&units);
+    }
+    if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    b.iter().map(|&c| char::from(c)).collect()
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod notes_tests;

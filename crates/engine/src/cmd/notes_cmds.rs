@@ -184,7 +184,7 @@ fn read(path: &str) -> Result<Vec<u8>> {
 /// canvas are pulled inside, as Photoshop does when sizes differ.
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.import.notes";
-    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.psd, .psb or .pcraft)"))?;
+    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.pdf, .psd, .psb or .pcraft)"))?;
     let bytes = read(path)?;
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
     import_notes_from(s, &name, &bytes)
@@ -192,12 +192,22 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// File › Import › Notes… from file bytes (what a file picker returns).
 pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Value> {
-    let src = crate::file_cmds::import(name, bytes)?;
-    if src.notes.is_empty() {
+    // A PDF's notes are its first page's text annotations, placed by the page's height and dated
+    // with the import, as the reference application does (#11796). PSD, PSB and .pcraft keep
+    // their own dates.
+    let (src_notes, source_height) = if is_pdf(bytes) {
+        let (notes, height) = photocraft_io::pdf::read_notes(bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+        let now = pdf_date();
+        (notes.into_iter().map(|n| Note { modified: now.clone(), ..n }).collect(), height)
+    } else {
+        let src = crate::file_cmds::import(name, bytes)?;
+        (src.notes, f64::from(src.size.height))
+    };
+    if src_notes.is_empty() {
         return Err(EngineError::Other(format!("{name} has no notes")));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let (notes, outside) = place_notes(src.notes, [d.size.width, d.size.height], src.size.height)?;
+    let (notes, outside) = place_notes_from(src_notes, [d.size.width, d.size.height], source_height)?;
     let count = notes.len();
     s.edit("Import Notes", |d, _| {
         d.notes.extend(notes);
@@ -216,11 +226,18 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
 /// the icon and popup keep their sizes, and nothing is clamped or rounded. Also returns whether
 /// any icon's top-left lies outside the canvas. A zero source height, or a scale or position that
 /// overflows, is an error.
-pub(crate) fn place_notes(mut notes: Vec<Note>, target: [u32; 2], source_height: u32) -> Result<(Vec<Note>, bool)> {
-    if source_height == 0 {
+#[cfg(test)]
+pub(crate) fn place_notes(notes: Vec<Note>, target: [u32; 2], source_height: u32) -> Result<(Vec<Note>, bool)> {
+    place_notes_from(notes, target, f64::from(source_height))
+}
+
+/// Where imported notes land (`place_notes` is its whole-pixel form, for the tests), for a
+/// source height that need not be whole: a PDF page's, in points (#11796).
+fn place_notes_from(mut notes: Vec<Note>, target: [u32; 2], source_height: f64) -> Result<(Vec<Note>, bool)> {
+    if !(source_height.is_finite() && source_height > 0.0) {
         return Err(EngineError::Other("the notes' source has no height".into()));
     }
-    let scale = f64::from(target[1]) / f64::from(source_height);
+    let scale = f64::from(target[1]) / source_height;
     let (w, h) = (f64::from(target[0]), f64::from(target[1]));
     let mut outside = false;
     for n in &mut notes {
@@ -235,6 +252,11 @@ pub(crate) fn place_notes(mut notes: Vec<Note>, target: [u32; 2], source_height:
         outside |= !((0.0..w).contains(&px) && (0.0..h).contains(&py));
     }
     Ok((notes, outside))
+}
+
+/// Whether `bytes` are a PDF: its header in the first KiB, where readers look for it.
+fn is_pdf(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -284,7 +306,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Notes…",
             menu: &["File", "Import"],
             shortcut: None,
-            params: r##"{"path":".psd|.psb|.pcraft with notes"}"##,
+            params: r##"{"path":".pdf|.psd|.psb|.pcraft with notes"}"##,
             enabled: has_doc,
             run: import,
             journal: true,
