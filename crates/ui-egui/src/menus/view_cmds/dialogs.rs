@@ -566,12 +566,15 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({"mode": ["32", "16", "8"], "method": ["localAdaptation", "exposureGamma", "highlightCompression", "equalizeHistogram"]}),
         ),
         // Drawn by `lens_batch_ui`; the reference dialog has no Alt+Reset (#13981).
-        "file.automate.lensCorrection" => dialog(
-            app,
+        "file.automate.lensCorrection" => {
             // Opens as the reference dialog does (#13980); the command's own defaults stay for scripts.
-            json!({"input": [], "output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency", "__altReset": false}),
-            crate::dialogs::lens_batch_ui::choices(),
-        ),
+            let mut fields = json!({"input": [], "output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency", "__altReset": false});
+            // Then the settings of the last OK in this session (#13989); Use, the list and the destination start over.
+            if let Value::Object(f) = &mut fields {
+                f.extend(app.ui.lens_batch_kept.clone());
+            }
+            dialog(app, fields, crate::dialogs::lens_batch_ui::choices())
+        }
         "file.scripts.imageProcessor" => dialog(
             app,
             json!({

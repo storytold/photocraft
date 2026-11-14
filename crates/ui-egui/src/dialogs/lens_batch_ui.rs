@@ -25,6 +25,28 @@ fn fallback() -> Value {
     json!({"output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
 }
 
+/// The fields the next open keeps from an OK, as in the reference application (#13989).
+const KEPT: [&str; 7] = ["format", "profile", "correctDistortion", "correctCA", "correctVignette", "autoScale", "edge"];
+
+/// Keeps the [`KEPT`] fields of the confirmed form `f` for the next open in this session: only
+/// values their control can show, so one set by a script (`same`, `null`) leaves the default.
+pub(super) fn remember(ui: &mut crate::state::UiState, f: &Map<String, Value>) {
+    let one_of = |v: &Value, options: &[(&str, &str)]| v.as_str().is_some_and(|s| options.iter().any(|(id, _)| *id == s));
+    ui.lens_batch_kept = KEPT
+        .iter()
+        .filter_map(|&key| {
+            let v = f.get(key)?;
+            let shown = match key {
+                "format" => one_of(v, &FORMATS),
+                "profile" => one_of(v, &PROFILES),
+                "edge" => one_of(v, &EDGES),
+                _ => v.is_boolean(),
+            };
+            shown.then(|| (key.to_string(), v.clone()))
+        })
+        .collect();
+}
+
 /// Whether `f` is the batch Lens Correction form.
 pub(crate) fn owns(f: &Map<String, Value>) -> bool {
     f.contains_key("__form") && f.get("__command").and_then(Value::as_str) == Some(COMMAND)
