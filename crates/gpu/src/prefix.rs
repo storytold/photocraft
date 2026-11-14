@@ -39,6 +39,8 @@ pub(crate) struct Prefix {
     /// The root layers of the last prepared render, all of them: a chunk stays valid while every
     /// render since its capture left the layers below its checkpoint as they were.
     layers: Vec<Layer>,
+    /// Layer-operator fingerprints of those root layers (0: none), as `prepare` was given them.
+    operators: Vec<u64>,
     /// Where renders capture: the highest useful checkpoint below the latest edit.
     checkpoint: Option<Checkpoint>,
     chunks: HashMap<Rect, Chunk>,
@@ -49,7 +51,7 @@ pub(crate) struct Prefix {
 
 impl Default for Prefix {
     fn default() -> Self {
-        Self { context: None, layers: Vec::new(), checkpoint: None, chunks: HashMap::new(), bytes: 0, budget: MAX_BYTES, step: 512 }
+        Self { context: None, layers: Vec::new(), operators: Vec::new(), checkpoint: None, chunks: HashMap::new(), bytes: 0, budget: MAX_BYTES, step: 512 }
     }
 }
 
@@ -64,6 +66,7 @@ impl Prefix {
     pub(crate) fn clear(&mut self) {
         self.context = None;
         self.layers.clear();
+        self.operators.clear();
         self.checkpoint = None;
         self.chunks.clear();
         self.bytes = 0;
@@ -107,7 +110,7 @@ impl Prefix {
     /// Drops the chunks `doc` invalidated and returns the checkpoint this render captures at, one
     /// of `checkpoints` (the plan's that a batch run starts at). A chunk held at any other point
     /// is dropped too: resuming there would group the layers above it differently.
-    pub(crate) fn prepare(&mut self, doc: &Document, checkpoints: &[Checkpoint]) -> Option<Checkpoint> {
+    pub(crate) fn prepare(&mut self, doc: &Document, checkpoints: &[Checkpoint], operators: &[u64]) -> Option<Checkpoint> {
         if self.budget == 0 {
             return None;
         }
@@ -118,11 +121,15 @@ impl Prefix {
         let same_context = self.context.as_ref() == Some(&context);
         // The lowest root layer this render changes since the last one (a layer added or removed
         // at the top changes from there on).
+        // A layer operator's output isn't part of the document: a root layer whose operators
+        // changed (`operators`, one fingerprint per root layer) changed too, so a checkpoint
+        // above it can never restore pixels drawn with other operator settings (#5772).
         let changed = self
             .layers
             .iter()
             .zip(&layers)
-            .position(|(a, b)| a != b)
+            .zip(self.operators.iter().chain(std::iter::repeat(&0)).zip(operators.iter().chain(std::iter::repeat(&0))))
+            .position(|((a, b), (oa, ob))| a != b || oa != ob)
             .or_else(|| (layers.len() != self.layers.len()).then_some(layers.len().min(self.layers.len())));
         if same_context {
             let mut freed = 0u64;
@@ -151,6 +158,7 @@ impl Prefix {
         // edit would populate and immediately discard the default checkpoint.
         self.context = Some(context);
         self.layers = layers;
+        self.operators = operators.to_vec();
         self.checkpoint = checkpoint;
         checkpoint
     }
