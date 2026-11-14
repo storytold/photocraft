@@ -1,5 +1,6 @@
-//! Toolbar tools in Edit › Keyboard Shortcuts (#4086). Explicit assignments select an
-//! individual tool; unchanged tools keep Photoshop's shared keys and Shift cycling.
+//! Toolbar tools in Edit › Keyboard Shortcuts (#4086). As in Photoshop, tools whose key (default
+//! or assigned) is the same plain key share it and cycle with Shift; a key with modifiers selects
+//! its one tool like any other command shortcut.
 
 use crate::{PhotocraftApp, state::Tool};
 
@@ -25,8 +26,14 @@ pub(crate) fn shortcut(app: &PhotocraftApp, tool: Tool) -> Option<String> {
     crate::shortcuts::effective_shortcut(app, &id(tool), default(tool).as_deref())
 }
 
-pub(crate) fn uses_default(app: &PhotocraftApp, tool: Tool) -> bool {
-    !app.session.prefs().shortcuts.contains_key(&id(tool))
+/// The tool's key when it has no modifiers: every tool with the same one is in its group.
+pub(crate) fn plain_key(app: &PhotocraftApp, tool: Tool) -> Option<egui::Key> {
+    plain(&shortcut(app, tool)?)
+}
+
+/// `shortcut` as a key without modifiers, the kind tools share.
+pub(crate) fn plain(shortcut: &str) -> Option<egui::Key> {
+    crate::shortcuts::parse(shortcut).filter(|sc| sc.modifiers.is_none()).map(|sc| sc.logical_key)
 }
 
 #[cfg(test)]
