@@ -184,11 +184,20 @@ fn cached_layer_source(doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Opti
 /// Layer `id` of `doc` composited for export, kept for the next call with the same document and
 /// layer ([`LAYER_SOURCE`]).
 fn layer_source(doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Result<Arc<Document>, String> {
+    layer_source_for(None, doc, id)
+}
+
+/// [`layer_source`] on a job's worker: a job cancelled while it composited keeps nothing. The
+/// cancel is checked under the lock the cancel's clean-up takes, so that clean-up is never undone.
+fn layer_source_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Result<Arc<Document>, String> {
     if let Some(out) = cached_layer_source(doc, id) {
         return Ok(out);
     }
     let out = Arc::new(photocraft_engine::layer_menu_cmds::layer_document(doc, id).map_err(|e| e.to_string())?);
-    *LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((doc.clone(), id, out.clone()));
+    let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !job.is_some_and(photocraft_engine::jobs::JobCtx::cancelled) {
+        *kept = Some((doc.clone(), id, out.clone()));
+    }
     Ok(out)
 }
 
@@ -217,7 +226,7 @@ pub fn open_selected_layers(app: &mut PhotocraftApp, layers: Vec<photocraft_doc:
             json!({"layers": ids}),
             &label,
             false,
-            move |_| layer_source(&doc, first).map(drop).map_err(photocraft_engine::EngineError::Other),
+            move |ctx| layer_source_for(Some(ctx), &doc, first).map(drop).map_err(photocraft_engine::EngineError::Other),
             move |_, ()| Ok(result),
         )
         .map_err(|e| e.to_string())?;
@@ -284,6 +293,8 @@ pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs:
         }
         (EXPORT_JOB, _) => {
             forget_layer_source();
+            // A failed or cancelled export doesn't close the window over its notice, as with saves.
+            app.jobs.close_after_saves = false;
             false
         }
         _ => false,
@@ -317,7 +328,7 @@ fn start_export(
             ctx.check().map_err(|e| e.to_string())?;
             ctx.progress(i as f32 / n, "");
             let doc = match layer {
-                Some(id) => layer_source(&source, *id)?,
+                Some(id) => layer_source_for(Some(ctx), &source, *id)?,
                 None => source.clone(),
             };
             let converted;
@@ -355,6 +366,8 @@ fn start_export(
     Some(started.map(|started| match started {
         photocraft_engine::jobs::Started::Done(v) => v,
         photocraft_engine::jobs::Started::Job(job) => {
+            // Its action step (a whole-document export's) goes to the recording active now.
+            app.session.record_job_in_take(job);
             app.ui.status.clear();
             app.ui.status_error = false;
             json!({"job": job.0, "pending": true})

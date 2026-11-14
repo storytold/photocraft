@@ -1107,6 +1107,31 @@ fn a_job_lands_in_the_recording_it_was_started_in_only() {
     assert_eq!(action_steps(&mut s, "A"), ["filter.blur.gaussianBlur"]);
 }
 
+/// A [`Session::start_job`] job claimed with [`Session::record_job_in_take`] gives the step its
+/// apply records (Export As's) to the recording it was started in, as a command's job does.
+#[test]
+fn a_started_job_claimed_for_the_recording_lands_in_it() {
+    let mut s = session(40, 30);
+    s.execute("actions.record", json!({"name": "A"})).unwrap();
+    let id = job(s
+        .start_job(
+            "file.export.write",
+            json!({}),
+            "Export",
+            false,
+            |_ctx| -> Result<()> { Ok(()) },
+            |s, ()| {
+                s.journal.push(("file.export.exportAs".into(), json!({"path": "x.png"})));
+                Ok(json!(null))
+            },
+        )
+        .unwrap());
+    s.record_job_in_take(id);
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(action_steps(&mut s, "A"), ["file.export.exportAs"]);
+}
+
 /// The automation policy the next tests stand in for: Gaussian Blur is refused.
 fn deny_blur(id: &str, _: &Value) -> Result<()> {
     if id == "filter.blur.gaussianBlur" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }

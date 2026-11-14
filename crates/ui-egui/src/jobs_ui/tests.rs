@@ -1332,3 +1332,26 @@ fn layer_export_as_without_jobs_keeps_no_composite() {
     h.run_steps(4);
     assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go before writing");
 }
+
+/// A window close held while an export writes doesn't close the window over the export's error,
+/// as with saves.
+#[test]
+fn a_failed_export_does_not_close_the_window_over_its_error() {
+    let path = "/tmp/photocraft-test/fail.png";
+    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
+    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let gates = Gates::default();
+    h.state_mut().services.save_file = Some(gates.save(Some("disk full")));
+    let st = h.state_mut().session.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
+    let fields = h.state().ui.dialogs.last().unwrap().fields.clone();
+    crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    step_until(&mut h, PhotocraftApp::exporting);
+    assert!(press_window_close(h.state_mut()), "the close waits for the export");
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| noticed(a, "disk full"));
+    assert!(!h.state().jobs.close_after_saves, "the window stays open to show the error");
+}

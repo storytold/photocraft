@@ -1484,6 +1484,18 @@ impl Session {
         }
     }
 
+    /// Give job `id`, started with [`Session::start_job`], to the action recording active now, as
+    /// a command's job is (`recorded_by`): steps its apply records (Export As's) then land in that
+    /// recording instead of being treated as another recording's. Other `start_job` callers keep
+    /// their jobs out of recordings.
+    pub fn record_job_in_take(&mut self, id: JobId) {
+        let take = self.actions.recording.map(|_| self.actions.take);
+        if let Some(job) = self.jobs.running.iter_mut().find(|j| j.id == id) {
+            job.started_in_take = take;
+            job.recorded_by = take;
+        }
+    }
+
     /// Whether this session has no worker threads: [`StepWork`] jobs are run a slice at a time by
     /// [`Session::poll_jobs`] on the UI thread, and every other command runs inline. The web
     /// build (wasm) is always like this; tests turn it on to run that path on a desktop.
