@@ -74,6 +74,21 @@ verify_appimagetool_override() { return 1; }
     for key in ("CROSS_TARGET", "CROSS_COMPILE", "EMULATOR", "APPIMAGETOOL", "CRAFT_FONTS_DIR"):
         env.pop(key, None)
     env.update(CARGO_TARGET_DIR=str(target), DIST=str(temp / "dist"), CROSS_ARCH="x86_64", PHOTOCRAFT_BUILD_DATE="2026-01-01")
+
+    # The shared setup must read CRLF Cargo.toml files as well as LF, without leaking a CR
+    # into artifact versions. Keep the explicit release-version override working for both.
+    manifest = fixture / "Cargo.toml"
+    original_manifest = manifest.read_bytes()
+    version_env = dict(env, PHOTOCRAFT_BUILD_SHA="test", PHOTOCRAFT_VERSION="")
+    try:
+        for ending in (b"\n", b"\r\n"):
+            manifest.write_bytes(b'[package]\nversion = "9.9.9"\n[workspace.package]\nversion = "1.2.3-beta.1+test"\n'.replace(b"\n", ending))
+            run(["bash", "-c", '. packaging/env.sh; [[ "$VERSION" == "1.2.3-beta.1+test" ]]'], fixture, version_env)
+            run(["bash", "-c", '. packaging/env.sh; [[ "$VERSION" == "2.0.0-override" ]]'], fixture, dict(version_env, PHOTOCRAFT_VERSION="2.0.0-override"))
+    finally:
+        manifest.write_bytes(original_manifest)
+    print("PASS: packaging reads LF/CRLF workspace versions and explicit overrides")
+
     run(["bash", "packaging/linux/package.sh", "--skip-build", "--formats", "tar appimage"], fixture, env)
     assert_docs(target / "linux-package/root/usr/share/doc/photocraft")
     assert_docs(target / "linux-package/PhotoCraft.AppDir/usr/share/doc/photocraft")
