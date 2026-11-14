@@ -321,7 +321,7 @@ pub struct ToolOptions {
 }
 
 fn default_art_history_style() -> String {
-    "tightMedium".into()
+    "tightShort".into()
 }
 
 pub(super) fn yes() -> bool {
