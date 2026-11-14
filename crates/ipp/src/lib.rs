@@ -525,8 +525,16 @@ fn http_response(raw: &[u8]) -> Result<(u16, Headers, &[u8])> {
     let head = String::from_utf8_lossy(raw.get(..end).unwrap_or(&[]));
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
-    let status: u16 =
-        status_line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).ok_or_else(|| Error::Protocol(format!("bad status line `{status_line}`")))?;
+    let mut words = status_line.split_whitespace();
+    let version = words.next().unwrap_or_default().as_bytes();
+    let code = words.next().unwrap_or_default();
+    // RFC 9112 requires an HTTP version and three status digits, not merely a parseable number.
+    let valid_version = matches!(version, [b'H', b'T', b'T', b'P', b'/', major, b'.', minor] if major.is_ascii_digit() && minor.is_ascii_digit());
+    let status: u16 = valid_version
+        .then_some(code)
+        .filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| Error::Protocol(format!("bad status line `{status_line}`")))?;
     let headers = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_ascii_lowercase())).collect();
     Ok((status, headers, raw.get(end + 4..).unwrap_or(&[])))
 }
