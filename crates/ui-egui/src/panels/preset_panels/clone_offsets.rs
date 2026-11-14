@@ -26,7 +26,8 @@ pub fn clone_mapping_at(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<Map
     let source = slot.source?;
     let start = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).map(|d| d.start);
     let first = start.or(at).or(slot.last_anchor).or(slot.anchor).unwrap_or(source);
-    let params = json!({"aligned": app.ui.tool_options.clone_aligned});
+    let aligned = if app.ui.tool == Tool::Healing { app.ui.tool_options.healing_aligned } else { app.ui.tool_options.clone_aligned };
+    let params = json!({"aligned": aligned});
     let (map, _) = resolve(&app.session, &params, (first[0], first[1]), "clone.preview").ok()?;
     [map.source.0, map.source.1, map.anchor.0, map.anchor.1].into_iter().chain(map.m).all(|v| v.is_finite() && v.abs() < 1_000_000.0).then_some(map)
 }

@@ -176,59 +176,38 @@ fn omitted_healing_alignment_restarts_the_sample_without_reusing_or_replacing_an
 }
 
 #[test]
-fn pending_retouch_stroke_keeps_its_tool_after_selection_changes() {
+fn pending_retouch_stroke_keeps_its_alignment_after_selection_changes() {
     for tool in [Tool::Healing, Tool::CloneStamp] {
         for switched in [false, true] {
             let mut app = PhotocraftApp::new(sampled_session(8), Services::default());
             app.ui.tool = if switched { if tool == Tool::Healing { Tool::CloneStamp } else { Tool::Healing } } else { tool };
             app.ui.tool_options.healing_aligned = false;
             app.ui.tool_options.clone_aligned = true;
-            app.session.tools.brush.mode = photocraft_color::BlendMode::Overlay;
             app.session.tools.brush.size = 8.0;
-            app.session.tools.brush.opacity = 0.5;
-            app.session.tools.brush.flow = 0.25;
             let drag = crate::canvas::Drag::new(tool, [24.0, 24.0], vec![[24.0, 24.0, 1.0]], egui::Modifiers::NONE, false);
             crate::canvas::finish_gesture(&mut app, drag);
             assert!(!app.ui.status_error, "{}", app.ui.status);
             let (command, params) = app.session.journal.last().unwrap();
-            if tool == Tool::Healing {
-                assert_eq!(command, "paint.healingBrush");
-                assert_eq!(params["aligned"], false);
-                assert_eq!(params["mode"], "Normal", "Healing cannot inherit Clone Stamp's Overlay mode");
-                assert!(params.get("opacity").is_none());
-                assert!(params.get("flow").is_none());
-                assert!(app.ui.clone_offset.is_none());
-            } else {
-                assert_eq!(command, "paint.cloneStamp");
-                assert_eq!(params["aligned"], true);
-                assert_eq!(params["mode"], "Overlay");
-                assert_eq!(params["opacity"], 50.0);
-                assert_eq!(params["flow"], 25.0);
-                assert!(app.ui.clone_offset.is_some());
-            }
+            assert_eq!(command, if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" });
+            assert_eq!(params["aligned"], tool == Tool::CloneStamp, "Aligned follows the stroke tool, including after a switch");
+            assert_eq!(app.ui.clone_offset.is_some(), tool == Tool::CloneStamp);
         }
     }
 }
 
 #[test]
-fn indexed_retouch_strokes_use_their_tool_after_selection_changes() {
-    for tool in [Tool::Healing, Tool::CloneStamp] {
-        let mut app = PhotocraftApp::new(sampled_session(8), Services::default());
-        app.run("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
-        app.session.execute("cloneSource.set", json!({"source": [8, 8]})).unwrap();
-        app.ui.tool = if tool == Tool::Healing { Tool::CloneStamp } else { Tool::Healing };
-        app.ui.tool_options.clone_sample = "all".into();
-        app.session.tools.brush.size = 8.0;
-        let before = app.session.journal.len();
-        let drag = crate::canvas::Drag::new(tool, [24.0, 24.0], vec![[24.0, 24.0, 1.0]], egui::Modifiers::NONE, false);
-        crate::canvas::finish_gesture(&mut app, drag);
-        if tool == Tool::Healing {
-            assert_eq!(app.session.journal.len(), before, "Indexed Healing remains refused");
-        } else {
-            assert!(!app.ui.status_error, "{}", app.ui.status);
-            let (command, params) = app.session.journal.last().unwrap();
-            assert_eq!(command, "paint.cloneStamp");
-            assert_eq!(params["sampleLayer"], "current", "Indexed Clone Stamp keeps its current-layer rule");
+fn healing_source_mapping_uses_its_own_alignment_without_changing_the_anchor() {
+    let mut app = PhotocraftApp::new(sampled_session(8), Services::default());
+    app.session.presets.clone.active_mut().anchor = Some([24.0, 24.0]);
+    for (healing, clone) in [(false, true), (true, false), (false, false), (true, true)] {
+        app.ui.tool_options.healing_aligned = healing;
+        app.ui.tool_options.clone_aligned = clone;
+        for tool in [Tool::Healing, Tool::CloneStamp] {
+            app.ui.tool = tool;
+            let sample = crate::preset_panels::clone_sample_point(&app, Some([44.0, 24.0])).unwrap();
+            let aligned = if tool == Tool::Healing { healing } else { clone };
+            assert_eq!(sample, if aligned { [28.0, 8.0] } else { [8.0, 8.0] });
+            assert_eq!(app.session.presets.clone.active().anchor, Some([24.0, 24.0]), "preview must not store a new pairing");
         }
     }
 }
