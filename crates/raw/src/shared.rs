@@ -160,7 +160,9 @@ pub(crate) fn adapt(image: craft_raw::RawImage) -> Sensor {
         warnings,
     };
     crate::cameras::apply(&mut sensor, image.bits);
-    if sensor.float_data.is_none() {
+    // Only DNG writers state a white level the sensor never reaches (saturation.rs); the other formats'
+    // levels come from the camera's own tags or the data, and their samples stay as decoded.
+    if sensor.float_data.is_none() && sensor.format == RawFormat::Dng {
         sensor.lift_clipped_samples();
     }
     sensor
