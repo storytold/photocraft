@@ -32,9 +32,19 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
     if st.convert_to_srgb && doc.icc_profile.is_some() {
         // Documents without a profile are treated as sRGB already. The layers are blended in the
         // document's own space and the flattened image is converted, not each layer (#13796).
-        // Same flatten as Convert to Profile's Flatten option, but without a matte so
-        // transparency survives into the exported file.
-        tmp.edit("Flatten for export", |d, active| super::super::color_cmds::flatten_for_profile(d, active, None))?;
+        // The same flatten every export uses (no matte, so transparency survives).
+        tmp.edit("Flatten for export", |d, active| {
+            let bounds = d.bounds();
+            if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+                return Err(other("the canvas is too large to flatten for export"));
+            }
+            let format = d.pixel_format();
+            let mut flat = photocraft_doc::Layer::raster("Background", format);
+            *crate::pixels_mut(&mut flat)? = crate::file_cmds::flattened(d, format);
+            *active = Some(flat.id);
+            d.layers = vec![flat];
+            Ok(())
+        })?;
         tmp.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"}))?;
     }
     let out = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
