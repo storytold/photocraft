@@ -1760,8 +1760,9 @@ fn flatten_before_srgb_is_only_the_measured_case() {
 }
 
 /// The measured case looks at what renders: a hidden layer (or a hidden group's contents) does not
-/// decide the path, while effects, adjustment layers, Blend If, excluded channels and Advanced
-/// Blending were not measured and keep the per-layer conversion.
+/// decide the path, while effects, Blend If, excluded channels, Advanced Blending and any content
+/// other than pixels or a group (adjustment, fill, smart object, frame, video) were not measured
+/// and keep the per-layer conversion.
 #[test]
 fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
     let doc = |s: &Session| (*s.active().unwrap().doc).clone();
@@ -1810,6 +1811,15 @@ fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
     let mut smart = wide_gamut_session();
     smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     assert!(!optimizer::flattens_before_srgb(&doc(&smart)), "a smart object");
+    let mut fill = wide_gamut_session();
+    fill.execute("layer.newFillLayer.solidColor", json!({"color": "#c82828"})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&fill)), "a fill layer");
+    let frame = changed(&|l| {
+        l.frame = Some(Box::new(photocraft_doc::Frame { path: photocraft_doc::Path::default(), transform: photocraft_geom::Affine::IDENTITY, stroke: None }));
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&frame)), "a Frame Tool frame");
+    let video = changed(&|l| l.video = Some(photocraft_doc::VideoData::new(Vec::new(), 30.0)));
+    assert!(!optimizer::flattens_before_srgb(&doc(&video)), "a video layer");
 
     let blend_if = changed(&|l| {
         l.blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 40], white: [255, 255] }, photocraft_doc::BlendRange::default()]);

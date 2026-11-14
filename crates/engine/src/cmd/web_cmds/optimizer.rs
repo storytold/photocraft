@@ -79,8 +79,8 @@ pub(super) fn flattens_before_srgb(doc: &Document) -> bool {
 /// Whether every visible layer (hidden ones and the contents of hidden groups do not render) is
 /// a pixel layer or a group that blends Normal (a group may pass through) with no active effects,
 /// no active Blend If, no excluded channels and default Advanced Blending. Adjustment, fill,
-/// text, shape and smart object layers (with their smart filters) were not measured, so they keep
-/// the per-layer conversion.
+/// text, shape and smart object layers (with their smart filters), Frame Tool frames and video
+/// layers were not measured, so they keep the per-layer conversion.
 fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
     use photocraft_doc::{BlendMode, LayerContent};
     if depth > photocraft_doc::MAX_GROUP_DEPTH {
@@ -93,6 +93,8 @@ fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
         };
         blend_ok
             && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_))
+            && l.frame.is_none()
+            && l.video.is_none()
             && !photocraft_compose::effects::has_effects(l)
             && !photocraft_compose::blend_if_active(l, photocraft_color::ColorMode::Rgb)
             && l.excluded_channels == 0
