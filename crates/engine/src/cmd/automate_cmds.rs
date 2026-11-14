@@ -355,6 +355,10 @@ pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Ve
     Ok(action.enabled_steps().map(|(_, step)| step.clone()).collect())
 }
 
+/// The Play options of Create Droplet, in the dialog's order: Override Action "Open" Commands,
+/// Include All Subfolders, Suppress File Open Options Dialogs, Suppress Color Profile Warnings.
+const DROPLET_PLAY_OPTIONS: [&str; 4] = ["overrideOpen", "includeSubfolders", "suppressOpenOptions", "suppressWarnings"];
+
 /// Save the chosen action's enabled steps and dependencies as a runnable droplet.
 fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
@@ -375,9 +379,19 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));
     let steps_json: Vec<Value> = steps.iter().map(|(id, pr)| json!([id, pr])).collect();
     let mut options = serde_json::Map::new();
-    for k in ["output", "format", "quality", "suffix", "overrideOpen"] {
+    for k in ["output", "format", "quality", "suffix"] {
         if let Some(v) = p.get(k) {
             options.insert(k.into(), v.clone());
+        }
+    }
+    // The dialog's Play checkboxes are saved with the droplet, which hands them to each run.
+    for k in DROPLET_PLAY_OPTIONS {
+        match p.get(k) {
+            None | Some(Value::Null) => {}
+            Some(Value::Bool(on)) => {
+                options.insert(k.into(), json!(on));
+            }
+            Some(_) => return Err(bad(cmd, format!("\"{k}\" must be true or false"))),
         }
     }
     let mut droplet = json!({"photocraftDroplet": 1, "name": name, "action": {"name": name, "steps": steps_json}, "options": options});
@@ -442,6 +456,18 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let steps = v.get("action").and_then(|a| a.get("steps")).cloned().ok_or_else(|| bad(cmd, "droplet has no action"))?;
     let opts = v.get("options").cloned().unwrap_or(json!({}));
+    // A droplet saved before Include All Subfolders existed has no key and lists a folder's own images.
+    let include_subfolders = match opts.get("includeSubfolders") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(bad(cmd, format!("{path}: \"includeSubfolders\" must be true or false"))),
+    };
+    let mut output = p.get("output").or_else(|| opts.get("output")).and_then(Value::as_str).map(str::to_string);
+    // Without a chosen output the results go next to the first input.
+    let default_output = |first: &str| {
+        let first = std::path::Path::new(first);
+        join(&first.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), "droplet-output")
+    };
     let mut inputs: Vec<String> = Vec::new();
     let raw: Vec<String> = match p.get("input").or_else(|| p.get("files")) {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
@@ -449,21 +475,34 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "missing \"input\" (files or folders)")),
     };
     for i in raw {
-        if std::path::Path::new(&i).is_dir() { inputs.extend(list_images(&i)?) } else { inputs.push(i) }
+        if std::path::Path::new(&i).is_dir() {
+            // The subfolder walk doesn't go into the output folder below a dropped one, so a rerun
+            // doesn't take its results as inputs: the chosen one, else the first input's default,
+            // else this folder's own `droplet-output`, which then becomes the output. A dropped
+            // folder is taken as given, as without the walk (and as Batch takes an input folder
+            // that is also its output).
+            let skip = output.clone().or_else(|| inputs.first().map(|first| default_output(first))).unwrap_or_else(|| join(&i, "droplet-output"));
+            let found = folder_images(&i, include_subfolders, &skip, cmd)?;
+            if include_subfolders && output.is_none() && !found.is_empty() {
+                output = Some(skip);
+            }
+            inputs.extend(found)
+        } else {
+            inputs.push(i)
+        }
     }
     if inputs.is_empty() {
         return Err(bad(cmd, "no input images"));
     }
-    let output = p.get("output").or_else(|| opts.get("output")).and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| {
-        let first = std::path::Path::new(&inputs[0]);
-        join(&first.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), "droplet-output")
-    });
+    let output = output.unwrap_or_else(|| default_output(&inputs[0]));
     let mut bp = json!({"steps": steps, "input": inputs, "output": output, "format": opts.get("format").cloned().unwrap_or(json!("same"))});
     if let Some(name) = v.get("action").and_then(|action| action.get("name")).or_else(|| v.get("name")) {
         bp["action"] = name.clone();
     }
-    // Override Open is saved with the droplet: a recorded Open then reads each dropped input.
-    for key in ["quality", "overrideOpen"] {
+    // The Play options are saved with the droplet: Override Open makes a recorded Open read each
+    // dropped input, and the two Suppress options open the inputs as Batch does with them.
+    // Include All Subfolders was applied above, where the dropped folders became files.
+    for key in ["quality", "overrideOpen", "suppressOpenOptions", "suppressWarnings"] {
         if let Some(value) = opts.get(key) {
             bp[key] = value.clone();
         }
@@ -473,6 +512,17 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let r = s.execute("file.automate.batch", bp)?;
     Ok(json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]}))
+}
+
+/// The images a dropped folder contributes: its own, sorted by name, or with Include All
+/// Subfolders also every subfolder's, depth first as Batch walks them, without going into the
+/// subfolder `skip` (the output). Results land flat in the output folder, so a later image
+/// replaces an earlier one of the same name.
+fn folder_images(dir: &str, include_subfolders: bool, skip: &str, cmd: &str) -> Result<Vec<String>> {
+    if !include_subfolders {
+        return list_images(dir);
+    }
+    Ok(crate::file_cmds::list_images_tree(dir, skip, cmd)?.into_iter().map(|input| input.path).collect())
 }
 
 // ---------- Statistics ----------
@@ -655,7 +705,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -663,7 +713,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name)"##,
             native,
             run_droplet
         ),
@@ -694,6 +744,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "droplet_play_options_tests.rs"]
+mod droplet_play_options_tests;
 #[cfg(test)]
 #[path = "automate_cmds/tests.rs"]
 mod tests;
