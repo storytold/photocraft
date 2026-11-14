@@ -4,7 +4,7 @@ use super::selection::{uniform, unselected_surface};
 use super::targeting::target;
 use super::view::{ChannelTarget, QuickMaskOptions, color_names, composite_name, fix_view, touch};
 use super::{
-    AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, EngineError, Layer, PixelFormat, Result, Session, Surface, Value, json, list, sel,
+    AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, EngineError, Layer, PixelFormat, Rect, Result, Session, Surface, Value, json, list, sel,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -26,8 +26,14 @@ fn color_value(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
     Ok(Some(Color::rgb(c[0], c[1], c[2])))
 }
 
+fn white_surface(area: Rect, fmt: PixelFormat) -> Surface {
+    let mut s = Surface::new(fmt);
+    s.fill_rect(area, &[1.0]);
+    s
+}
+
 pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
-    let fill = p.get("fill").and_then(Value::as_str).unwrap_or("black").to_string();
+    let fill = p.get("fill").and_then(Value::as_str);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let indicates = indicates_param(p.get("indicates"));
     let color = color_value("channel.new", p, "color")?;
@@ -35,9 +41,17 @@ pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
     let i = s.edit("New Channel", |doc, _| {
         let area = doc.bounds();
         let fmt = channel_format(doc);
-        let surface = match fill.as_str() {
-            "white" => plane_surface(&vec![1.0; area.width() as usize * area.height() as usize], area, fmt),
-            "selection" => plane_surface(&sel::mask_from_surface(doc.selection.as_ref(), area), area, fmt),
+        let surface = match fill {
+            Some("white") => white_surface(area, fmt),
+            Some("selection") => plane_surface(&sel::mask_from_surface(doc.selection.as_ref(), area), area, fmt),
+            Some("black") => Surface::new(fmt),
+            None => {
+                if indicates == Some(ColorIndicates::SelectedAreas) {
+                    white_surface(area, fmt)
+                } else {
+                    Surface::new(fmt)
+                }
+            }
             _ => Surface::new(fmt),
         };
         let mut ch = AlphaChannel::new(name.clone().unwrap_or_else(|| next_alpha_name(doc, "Alpha")), surface);

@@ -185,7 +185,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Channel…",
             [],
             None,
-            r##"{"name":str?,"fill":"black|white|selection"="black","color":"#rrggbb"="#ff0000","opacity":0..100=50,"indicates":"masked|selected"="masked"}"##,
+            r##"{"name":str?,"fill":"black|white|selection"? (default white when indicates=selected, black otherwise),"color":"#rrggbb"="#ff0000","opacity":0..100=50,"indicates":"masked|selected"="masked"}"##,
             has_doc,
             new_channel
         ),

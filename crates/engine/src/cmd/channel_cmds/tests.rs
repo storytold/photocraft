@@ -578,6 +578,35 @@ fn channel_options_and_spot_channels() {
 }
 
 #[test]
+fn new_channel_indicates_selected_areas_initializes_white() {
+    let mut s = session();
+    // Default / Masked Areas initializes to black (0.0).
+    let r1 = s.execute("channel.new", json!({"indicates": "masked"})).unwrap();
+    let i1 = r1["channel"].as_u64().unwrap() as usize;
+    assert_eq!(chan(&s, i1, 5, 5), 0.0);
+
+    // Selected Areas initializes to white (1.0) so filling selection with black leaves white background (#12512).
+    let r2 = s.execute("channel.new", json!({"indicates": "selected"})).unwrap();
+    let i2 = r2["channel"].as_u64().unwrap() as usize;
+    assert_eq!(chan(&s, i2, 5, 5), 1.0);
+
+    // Explicit fill is always respected.
+    let r3 = s.execute("channel.new", json!({"indicates": "selected", "fill": "black"})).unwrap();
+    let i3 = r3["channel"].as_u64().unwrap() as usize;
+    assert_eq!(chan(&s, i3, 5, 5), 0.0);
+
+    // Multi-tile canvas (width > 256): verify white value across tile boundaries and canvas edges.
+    let mut s_wide = Session::new();
+    s_wide.execute("file.new", json!({"width": 300, "height": 300, "depth": 8})).unwrap();
+    let r_wide = s_wide.execute("channel.new", json!({"indicates": "selected"})).unwrap();
+    let i_wide = r_wide["channel"].as_u64().unwrap() as usize;
+    assert_eq!(chan(&s_wide, i_wide, 5, 5), 1.0);
+    assert_eq!(chan(&s_wide, i_wide, 255, 50), 1.0);
+    assert_eq!(chan(&s_wide, i_wide, 256, 50), 1.0);
+    assert_eq!(chan(&s_wide, i_wide, 299, 299), 1.0);
+}
+
+#[test]
 fn apply_image_hand_computed() {
     let mut s = session();
     // Target: 50% gray. Source: a second document, red #ff0000 / 50% gray.
