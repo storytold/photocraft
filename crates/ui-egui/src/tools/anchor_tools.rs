@@ -7,6 +7,9 @@
 //!   click inserts it there (`path.addAnchor`). A curve is split without changing its shape, into
 //!   a smooth anchor; a straight segment gets a corner. The new anchor is selected with its
 //!   direction handles showing, and a drag from the click moves it, as in Photoshop (#8653).
+//!   On an anchor or a shown handle it works as Direct Selection does (#12708): a click selects
+//!   the anchor (⇧ adds it), a drag moves it or the handle (⌥ moves a handle alone), and a click on
+//!   empty canvas deselects the anchors while the path stays targeted.
 //! * Delete Anchor Point: hovering an anchor highlights it; a click removes it
 //!   (`path.deleteAnchor`), joining its neighbours.
 //! * ⌥ swaps the two tools and ⌘/Ctrl is Direct Selection (`direct_select`) while held; ⌥-click
@@ -183,7 +186,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 ds.subpath_press = Some([x, y]);
                 // A stale press is dropped with the selection (`cancel_stale`).
                 ds.owner = owner;
-            } else if tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods) {
+            } else if (app.ui.tool == Tool::AddAnchorPoint && edit_existing(app, [x, y], mods))
+                // After the shown handles: ⌥ makes `tool` Delete, and a handle over a segment is the handle.
+                || (tool == Tool::DeleteAnchorPoint && start_segment_drag(app, [x, y], mods))
+            {
                 return true;
             } else {
                 click(app, tool, [x, y]);
@@ -239,6 +245,26 @@ fn start_segment_drag(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) -> 
     true
 }
 
+/// Add Anchor Point (#12708): a press on an anchor or a shown handle of the targeted path starts
+/// Direct Selection there (`direct_select::begin`): the anchor is selected (⇧ adds it to the
+/// selection) and a drag moves it (**Drag Anchor Point(s)**), or the handle (**Drag Control
+/// Point**; a smooth anchor's other handle turns with it, ⌥ moves it alone). The drag's Move and Up
+/// reach `direct_select::pointer` first; a click without movement records nothing. Not measured,
+/// so as today: ⌥ on an anchor (Delete Anchor Point) and the Pen path being drawn. False when the
+/// press is not on such an anchor or handle (a segment press goes on to add).
+fn edit_existing(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) -> bool {
+    let Some((r, path, hit)) = crate::direct_select::hit_active_handles(app, p) else { return false };
+    let grabs = match hit {
+        Hit::Handle(..) => true,
+        Hit::Anchor(_) => !mods.alt,
+        Hit::Segment(..) => false,
+    };
+    if !grabs || r == PathRef::Pen || ignores(app, &r) {
+        return false;
+    }
+    crate::direct_select::begin(app, r, path, hit, p, mods, false)
+}
+
 /// ⌥-click with Delete Anchor Point on an anchor of a targeted path selects its whole subpath, as
 /// in Photoshop (#12770); ⌥ is Add Anchor Point only on a segment. The path and that subpath's
 /// anchors, or `None` when the press hits no anchor of a targeted path (a shape in a group that
@@ -290,12 +316,19 @@ fn select_follower(app: &mut PhotocraftApp, r: PathRef, before: &Path, [s, k]: [
     select_shown(app, r, vec![s], next.map(|k| [s, k]).into_iter().collect());
 }
 
-/// A click on empty canvas hides the saved path's anchors; its outline stays and it stays targeted (#12769).
+/// A click on empty canvas: Delete Anchor Point hides the saved path's anchors (#12769), Add Anchor
+/// Point deselects every anchor (#12708). The outline stays and the path stays targeted.
 fn hide_anchors(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
-    if tool != Tool::DeleteAnchorPoint || crate::direct_select::hit_active(app, p).is_some() {
+    if crate::direct_select::hit_active(app, p).is_some() {
         return;
     }
-    if let Some((i, _)) = crate::vector_ui::selected_saved_path_index(app) {
+    if tool == Tool::AddAnchorPoint && app.ui.tool == Tool::AddAnchorPoint {
+        let ds = &mut app.ui.direct_selection;
+        ds.anchors.clear();
+        ds.segment = None;
+    } else if tool == Tool::DeleteAnchorPoint
+        && let Some((i, _)) = crate::vector_ui::selected_saved_path_index(app)
+    {
         select_shown(app, PathRef::Saved(i), Vec::new(), Vec::new());
     }
 }
@@ -408,6 +441,8 @@ fn draw_hit(painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: 
 
 #[cfg(test)]
 mod add_anchor_lock_tests;
+#[cfg(test)]
+mod add_anchor_select_tests;
 #[cfg(test)]
 mod add_anchor_targeted_path_tests;
 #[cfg(test)]

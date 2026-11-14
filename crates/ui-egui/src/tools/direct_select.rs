@@ -461,8 +461,20 @@ pub(crate) fn hit_target(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Opt
 /// (#12762, #12705). Not measured, so as today: a layer inside a hidden group, and a shown shape layer
 /// inside a group, which stays a target without being active.
 pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    hit_targeted(app, p, false)
+}
+
+/// [`hit_active`] where the handles shown on a selection still valid count too: what an Add Anchor
+/// Point press grabs (#12708).
+pub(crate) fn hit_active_handles(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
+    hit_targeted(app, p, true)
+}
+
+fn hit_targeted(app: &PhotocraftApp, p: [f64; 2], handles: bool) -> Option<(PathRef, Path, Hit)> {
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     let st = app.session.active()?;
+    let ds = &app.ui.direct_selection;
+    let valid = handles && still_valid(app, ds);
     // A path selected in the Paths panel (saved or Work Path) is the only target; otherwise `targeted`.
     let targets: Vec<(PathRef, Path)> = match crate::vector_ui::selected_saved_path_index(app) {
         Some((i, path)) => Some((PathRef::Saved(i), path)).filter(|(r, _)| writable(app, r)).into_iter().collect(),
@@ -470,10 +482,12 @@ pub(crate) fn hit_active(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, P
         None if app.ui.selected_path.as_deref() == Some("work") => active_paths(app).into_iter().filter(|(r, _)| *r == PathRef::Work).collect(),
         None => targeted(app),
     };
-    targets
-        .into_iter()
-        .filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !st.doc.layer(photocraft_doc::LayerId(*id)).is_some_and(|l| l.visible)))
-        .find_map(|(r, path)| edit::hit(&path, Point::new(p[0], p[1]), tol, &[]).map(|h| (r, path, h)))
+    targets.into_iter().filter(|(r, _)| !matches!(r, PathRef::Layer(id) if !st.doc.layer(photocraft_doc::LayerId(*id)).is_some_and(|l| l.visible))).find_map(
+        |(r, path)| {
+            let shown = if valid && ds.target.as_ref() == Some(&r) { shown_handles(ds, &path) } else { Vec::new() };
+            edit::hit(&path, Point::new(p[0], p[1]), tol, &shown).map(|h| (r, path, h))
+        },
+    )
 }
 
 /// The Pen draft (as `candidates` builds it), then the active paths, then (not measured, so as today,
@@ -654,6 +668,13 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
         ds.owner = owner;
         return true;
     };
+    begin(app, target, base, hit, p, mods, convert)
+}
+
+/// Select what a press at `p` hit on `target` (`base` its path) and start dragging it. Add Anchor
+/// Point starts here too for an anchor or a shown handle (#12708).
+pub(crate) fn begin(app: &mut PhotocraftApp, target: PathRef, base: Path, hit: Hit, p: [f64; 2], mods: Modifiers, convert: bool) -> bool {
+    let own_tool = app.ui.tool == Tool::ConvertPoint;
     if let PathRef::Layer(id) | PathRef::TypePath(id) = target
         && app.session.active().and_then(|st| st.active_layer).map(|l| l.0) != Some(id)
     {
