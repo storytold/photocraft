@@ -517,8 +517,25 @@ pub fn read_notes(bytes: &[u8]) -> Result<(Vec<photocraft_doc::Note>, f64), IoEr
     Ok((notes, height))
 }
 
+/// PDFDocEncoding's code points that differ from Latin-1 (ISO 32000-1 Annex D): 0x18–0x1F, 0x80–0x9E
+/// and 0xA0. The other codes are the same as Latin-1's.
+fn pdf_doc_char(c: u8) -> char {
+    const LOW: [char; 8] = ['\u{2D8}', '\u{2C7}', '\u{2C6}', '\u{2D9}', '\u{2DD}', '\u{2DB}', '\u{2DA}', '\u{2DC}'];
+    const HIGH: [char; 31] = [
+        '\u{2022}', '\u{2020}', '\u{2021}', '\u{2026}', '\u{2014}', '\u{2013}', '\u{192}', '\u{2044}', '\u{2039}', '\u{203A}', '\u{2212}', '\u{2030}',
+        '\u{201E}', '\u{201C}', '\u{201D}', '\u{2018}', '\u{2019}', '\u{201A}', '\u{2122}', '\u{FB01}', '\u{FB02}', '\u{141}', '\u{152}', '\u{160}', '\u{178}',
+        '\u{17D}', '\u{131}', '\u{142}', '\u{153}', '\u{161}', '\u{17E}',
+    ];
+    match c {
+        0x18..=0x1F => LOW[usize::from(c - 0x18)],
+        0x80..=0x9E => HIGH[usize::from(c - 0x80)],
+        0xA0 => '\u{20AC}',
+        _ => char::from(c),
+    }
+}
+
 /// A PDF text string's bytes as text: UTF-16BE after its byte-order mark, UTF-8 after its mark,
-/// otherwise PDFDocEncoding (read as Latin-1, which it matches outside a few punctuation codes).
+/// otherwise PDFDocEncoding.
 fn decode_text_string(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xFE, 0xFF]) {
         let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|p| u16::from_be_bytes(*p)).collect();
@@ -527,7 +544,7 @@ fn decode_text_string(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(rest).into_owned();
     }
-    b.iter().map(|&c| char::from(c)).collect()
+    b.iter().map(|&c| pdf_doc_char(c)).collect()
 }
 
 #[cfg(test)]

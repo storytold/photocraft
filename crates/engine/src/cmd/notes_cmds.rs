@@ -195,10 +195,10 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
     // A PDF's notes are its first page's text annotations, placed by the page's height and dated
     // with the import, as the reference application does (#11796). PSD, PSB and .pcraft keep
     // their own dates.
-    let (src_notes, source_height) = if is_pdf(bytes) {
+    let target_height = f64::from(s.active().ok_or(EngineError::NoDocument)?.doc.size.height);
+    let (src_notes, source_height) = if is_pdf(name, bytes) {
         let (notes, height) = photocraft_io::pdf::read_notes(bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
-        let now = pdf_date();
-        (notes.into_iter().map(|n| Note { modified: now.clone(), ..n }).collect(), height)
+        (pdf_notes_for_canvas(notes, &pdf_date(), target_height / height), height)
     } else {
         let src = crate::file_cmds::import(name, bytes)?;
         (src.notes, f64::from(src.size.height))
@@ -218,6 +218,26 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
     // Some icon's top-left landed off the canvas: the shell says so (#13914).
     r["outside"] = json!(outside);
     Ok(r)
+}
+
+/// A PDF's notes ready to place on a canvas `scale` canvas pixels per page point high: each popup's
+/// size in canvas pixels (the page's own is in points; the placement keeps sizes as they are), and
+/// the import's date on each note (`now`, empty where the build has no clock: the notes then keep
+/// their own).
+fn pdf_notes_for_canvas(notes: Vec<Note>, now: &str, scale: f64) -> Vec<Note> {
+    notes
+        .into_iter()
+        .map(|mut n| {
+            if scale.is_finite() && scale > 0.0 {
+                n.popup[2] = n.popup[0] + (n.popup[2] - n.popup[0]) * scale;
+                n.popup[3] = n.popup[1] + (n.popup[3] - n.popup[1]) * scale;
+            }
+            if !now.is_empty() {
+                n.modified = now.to_string();
+            }
+            n
+        })
+        .collect()
 }
 
 /// Where imported notes land on a `target` (width, height) canvas, as the reference application
@@ -254,9 +274,14 @@ fn place_notes_from(mut notes: Vec<Note>, target: [u32; 2], source_height: f64) 
     Ok((notes, outside))
 }
 
-/// Whether `bytes` are a PDF: its header in the first KiB, where readers look for it.
-fn is_pdf(bytes: &[u8]) -> bool {
-    bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
+/// Whether `bytes` are a PDF: its header at the very start, or, for a file named `.pdf`, within
+/// the first KiB where readers accept it. A PSD or another format that happens to hold `%PDF-` in
+/// its first bytes is not one.
+fn is_pdf(name: &str, bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"%PDF-") {
+        return true;
+    }
+    name.to_ascii_lowercase().ends_with(".pdf") && bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
 }
 
 pub fn specs() -> Vec<CommandSpec> {

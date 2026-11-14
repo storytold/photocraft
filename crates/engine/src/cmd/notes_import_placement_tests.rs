@@ -86,3 +86,63 @@ fn an_import_reports_outside_and_keeps_the_history_step() {
     let r = import_notes_from(&mut s, "notes.pcraft", &bytes).unwrap();
     assert_eq!(r["outside"], json!(false));
 }
+
+/// A one-page 600 × 800 pt PDF with one text annotation at (100, 88) (from the page's top) and a
+/// 60 × 60 pt popup, with a correct cross-reference table.
+fn pdf_with_popup() -> Vec<u8> {
+    let objects: [&[u8]; 4] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [100 700 112 712] /Contents (hi) /T (Ana) /Popup << /Rect [120 650 180 710] >> >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// CodeRabbit on #14798: a PDF's popup size comes in page points, so it is converted to canvas
+/// pixels by the same factor as the positions (canvas height / page height), not kept as points.
+#[test]
+fn a_pdf_popup_keeps_its_size_in_canvas_pixels() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 900, "height": 1200})).unwrap();
+    import_notes_from(&mut s, "notes.pdf", &pdf_with_popup()).unwrap();
+    let n = &s.active().unwrap().doc.notes[0];
+    // 1200 px / 800 pt = 1.5 px per point.
+    assert_eq!(n.position, [150.0, 132.0]);
+    assert_eq!((n.popup[2] - n.popup[0], n.popup[3] - n.popup[1]), (90.0, 90.0), "60 pt popup is 90 px");
+}
+
+/// CodeRabbit on #14798: a build without a clock gives no import date; the notes keep their own
+/// rather than losing them to an empty string.
+#[test]
+fn without_a_clock_the_notes_keep_their_own_dates() {
+    let own = Note { modified: "D:20250101000000Z".into(), ..Default::default() };
+    assert_eq!(pdf_notes_for_canvas(vec![own.clone()], "", 1.0)[0].modified, "D:20250101000000Z");
+    assert_eq!(pdf_notes_for_canvas(vec![own], "D:20261114120000Z", 1.0)[0].modified, "D:20261114120000Z");
+}
+
+/// CodeRabbit on #14798: only a header at the very start (or, in a file named .pdf, within the
+/// first KiB) makes a PDF. A PSD that happens to hold `%PDF-` early on goes to the document importer.
+#[test]
+fn a_psd_holding_a_pdf_marker_is_not_a_pdf() {
+    let mut psd = b"8BPS\0\x01".to_vec();
+    psd.extend_from_slice(b"....%PDF-1.4....");
+    assert!(!is_pdf("notes.psd", &psd));
+    assert!(is_pdf("notes.pdf", b"%PDF-1.7\n"));
+    assert!(is_pdf("scan.PDF", b"junk before\n%PDF-1.4\n"), "a .pdf file may have bytes before its header");
+    assert!(!is_pdf("notes.psd", b"junk before\n%PDF-1.4\n"));
+}
