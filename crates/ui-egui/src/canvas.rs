@@ -70,7 +70,7 @@ pub(crate) use cursors::{
     alt_picks, alt_samples, color_sampler_cursor, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
     precise_other_cursor, sampler_hover_cursor,
 };
-use cursors::{brush_tip_centre, eyedropper_ring, preview_locator_cursor, visible_crosshair};
+use cursors::{brush_tip_centre, eyedropper_cursor, preview_locator_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
@@ -2068,13 +2068,8 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
         // otherwise its pipette, or the crosshair for precise Other Cursors.
         Tool::Eyedropper => {
-            if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
-                icon
-            } else if precise_other_cursor(app) {
-                egui::CursorIcon::Crosshair
-            } else {
-                pipette_cursor(ui.ctx(), p)
-            }
+            let shift = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).shift;
+            eyedropper_cursor(app, painter, xf, p, response.is_pointer_button_down_on(), shift)
         }
         // The Count tool (#11773): an arrow with "1+", "1" over a marker (the click's own hit
         // test) or "1−" with ⌥ there. Precise Other Cursors keeps today's crosshair.

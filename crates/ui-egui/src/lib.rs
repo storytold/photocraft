@@ -852,6 +852,8 @@ mod pen_variants_tests;
 #[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
+mod eyedropper_shift_sampler_tests;
+#[cfg(test)]
 mod home_recent_gate_tests;
 #[cfg(test)]
 mod layer_shortcut_tests;

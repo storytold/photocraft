@@ -1,5 +1,5 @@
 use super::cancel_stale_vector_drag;
-use super::cursors::{alt_eyedropper, sample_eyedropper};
+use super::cursors::{alt_eyedropper, eyedropper_shift_click, sample_eyedropper};
 use super::drag::Drag;
 use super::gesture::{finish_release, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
@@ -405,14 +405,37 @@ fn consumes_cancelled_vector_event(app: &mut PhotocraftApp, ev: ToolEvent) -> bo
 }
 
 fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    // Whichever tool gets it, a button release ends the press the flag is about.
+    if matches!(ev, ToolEvent::Up { .. }) {
+        SAMPLER_PRESS.set(false);
+    }
     if tool != Tool::Eyedropper {
         return false;
     }
     match ev {
-        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, mods),
-        ToolEvent::Up { .. } => {}
+        // ⇧-click places a colour sampler instead of sampling (#11748); ⇧⌥ on a sampler deletes it.
+        ToolEvent::Down { x, y, .. } if mods.shift => {
+            SAMPLER_PRESS.set(true);
+            eyedropper_shift_click(app, x, y, mods.alt);
+        }
+        // The moves of a press that began with ⇧ sample nothing, whether ⇧ stays down or not.
+        ToolEvent::Move { .. } if SAMPLER_PRESS.get() => {}
+        // Any other press samples and keeps sampling as it moves, ⇧ pressed meanwhile or not.
+        ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => {
+            if matches!(ev, ToolEvent::Down { .. }) {
+                SAMPLER_PRESS.set(false);
+            }
+            sample_eyedropper(app, x, y, mods);
+        }
+        ToolEvent::Up { .. } => SAMPLER_PRESS.set(false),
     }
     true
+}
+
+thread_local! {
+    /// The Eyedropper press in progress began with ⇧ (it placed or deleted a colour sampler), so
+    /// the drag that follows doesn't sample (#11748).
+    static SAMPLER_PRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A Mixer Brush press the engine refused: Indexed Color and Bitmap documents answer it with the
