@@ -1011,6 +1011,9 @@ mod convert_point_tolerance_tests;
 mod convert_point_drag_segment_tests;
 
 #[cfg(test)]
+mod delete_key_tests;
+
+#[cfg(test)]
 mod history_names_tests;
 
 #[cfg(test)]
