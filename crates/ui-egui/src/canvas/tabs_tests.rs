@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::theme::ThemeKind;
 
+use super::tabs::MAX_DOC_TAB_W;
 use super::{TabStrip, pro_tab_title};
 
 /// A real app window with `docs` documents named "ch1-pNN.png".
@@ -86,6 +87,22 @@ fn studio_tabs_overflow_into_the_same_menu() {
     let active = h.state().session.active_index().unwrap();
     let name = h.state().session.documents()[active].doc.name.clone();
     assert!(h.query_by_label(&name).is_some(), "the active tab is on the strip: {name}");
+}
+
+/// #11131: a document with a long name doesn't stretch its tab across the strip; the tab stops at
+/// a maximum width and the name is cut with '…'.
+#[test]
+fn a_long_document_name_keeps_its_tab_to_the_maximum_width() {
+    let long = format!("{}.png", "a-long-file-name-copied-from-a-web-address-".repeat(2));
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        h.state_mut().run("file.new", json!({"width": 400, "height": 300, "name": long})).unwrap();
+        h.run_steps(2);
+        let s = strip(&h);
+        let doc = h.state().session.active_index().unwrap();
+        let (_, r) = s.tabs.iter().find(|(d, _)| *d == doc).expect("the long tab is on the strip");
+        assert!(r.width() <= MAX_DOC_TAB_W + 0.5, "{theme:?}: the tab is {} wide", r.width());
+    }
 }
 
 #[test]
@@ -201,6 +218,87 @@ fn elided_on_strip(h: &Harness<'_, PhotocraftApp>) -> bool {
     }
     let strip = strip(h).rect;
     h.output().shapes.iter().any(|shape| elided(&shape.shape, strip))
+}
+
+/// The texts painted on the strip, as laid out (a cut text ends where its '…' is).
+fn texts_on_strip(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
+    texts_in(h, strip(h).rect, false)
+}
+
+/// The texts painted in `area` (tooltips included), as laid out; with `whole_only`, only the ones
+/// egui did not cut short (an elided galley still holds its whole text).
+fn texts_in(h: &Harness<'_, PhotocraftApp>, area: egui::Rect, whole_only: bool) -> Vec<String> {
+    fn collect(shape: &egui::Shape, area: egui::Rect, whole_only: bool, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) if area.intersects(text.visual_bounding_rect()) && !(whole_only && text.galley.elided) => {
+                out.push(text.galley.text().to_owned());
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, area, whole_only, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|shape| collect(&shape.shape, area, whole_only, &mut out));
+    out
+}
+
+/// #11131: a file still opening in the background has its tab kept to the maximum width as well,
+/// and hovering the cut tab shows the whole name, as on a document tab.
+#[test]
+fn a_cut_opening_tab_shows_its_whole_name_on_hover() {
+    let long = format!("{}.png", "a-long-file-name-copied-from-a-web-address-".repeat(2));
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        let job = photocraft_engine::jobs::JobId(7);
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: long.clone(), path: None, slot: None, order: None });
+        h.run_steps(2);
+        let whole = texts_in(&h, strip(&h).rect, true);
+        assert!(whole.iter().all(|t| !t.contains(long.as_str())), "{theme:?}: the opening tab is cut: {whole:?}");
+        assert!(texts_on_strip(&h).iter().any(|t| t.starts_with("a-long")), "{theme:?}: the opening tab is drawn");
+        let (_, doc_tab) = *strip(&h).tabs.first().expect("the document's tab");
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(doc_tab.right() + 40.0, doc_tab.center().y)));
+        h.run_steps(4);
+        let shown = texts_in(&h, egui::Rect::EVERYTHING, true);
+        assert!(shown.iter().any(|t| t.contains(long.as_str())), "{theme:?}: no tooltip with the whole name: {shown:?}");
+    }
+}
+
+/// #11131: an opening tab that shows its whole name has no tooltip repeating it, as a document tab.
+#[test]
+fn a_whole_opening_tab_shows_no_tooltip_on_hover() {
+    let short = "short.png";
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        let job = photocraft_engine::jobs::JobId(7);
+        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: short.to_owned(), path: None, slot: None, order: None });
+        h.run_steps(2);
+        let on_strip = texts_in(&h, strip(&h).rect, true).iter().filter(|t| t.contains(short)).count();
+        assert_eq!(on_strip, 1, "{theme:?}: the opening tab shows its whole name");
+        let (_, doc_tab) = *strip(&h).tabs.first().expect("the document's tab");
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(doc_tab.right() + 40.0, doc_tab.center().y)));
+        h.run_steps(4);
+        let shown: Vec<String> = texts_in(&h, egui::Rect::EVERYTHING, true).into_iter().filter(|t| t.contains(short)).collect();
+        assert_eq!(shown.len(), 1, "{theme:?}: a tooltip repeats the whole name: {shown:?}");
+    }
+}
+
+/// #11131: a tab cut to the maximum width cuts the document's name only; what follows it (the
+/// zoom, the mode and the unsaved '*') stays whole, as on Photoshop's tabs.
+#[test]
+fn a_cut_tab_keeps_the_rest_of_its_title_after_the_name() {
+    let long = format!("{}.png", "a-long-file-name-copied-from-a-web-address-".repeat(2));
+    for theme in ThemeKind::ALL {
+        let mut h = harness(1, theme);
+        h.state_mut().run("file.new", json!({"width": 400, "height": 300, "name": long})).unwrap();
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run_steps(2);
+        let pro = crate::theme::Tokens::get(&h.ctx).pro;
+        let doc = h.state().session.active_index().unwrap();
+        let rest = if pro { pro_tab_title(h.state(), doc).strip_prefix(long.as_str()).unwrap().to_owned() } else { " *".to_owned() };
+        assert!(rest.ends_with('*'), "{theme:?}: the document is unsaved: {rest}");
+        let texts = texts_on_strip(&h);
+        assert!(texts.iter().any(|t| t.contains('…') && t.ends_with(rest.as_str())), "{theme:?}: a cut name followed by {rest:?} in {texts:?}");
+    }
 }
 
 /// #4487: a crowded strip keeps whole names on the tabs it shows and moves the rest into the »
