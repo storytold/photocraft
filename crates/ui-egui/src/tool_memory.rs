@@ -150,6 +150,58 @@ pub(crate) fn default_colors() -> Value {
     color_value([[tools.foreground, tools.background], tools.other_colors], &tools.cmyk_picks, tools.cmyk_roles)
 }
 
+/// Reconstruct legacy CMYK role associations from saved RGB colors and picks.
+/// Used by restoration and by the three-way preferences merge baseline.
+pub(crate) fn recover_legacy_cmyk_roles(saved: &Value) -> CmykRoles {
+    let mut tools = photocraft_engine::ToolState::default();
+    let mut pairs = [[tools.foreground, tools.background], tools.other_colors];
+
+    for (key, pair, role) in [
+        ("foreground", 0, 0),
+        ("background", 0, 1),
+        ("maskForeground", 1, 0),
+        ("maskBackground", 1, 1),
+    ] {
+        if let Some(Ok(c)) = saved
+            .get(key)
+            .map(|v| serde_json::from_value::<[f32; 4]>(v.clone()))
+        {
+            if c.iter().all(|v| v.is_finite()) {
+                pairs[pair][role] = c;
+            }
+        }
+    }
+
+    if let Some(entries) = saved.get("cmykPicks").and_then(Value::as_array) {
+        let picks: Vec<_> = entries
+            .iter()
+            .rev()
+            .filter_map(|v| {
+                serde_json::from_value::<([f32; 3], [f32; 4])>(v.clone())
+                    .ok()
+                    .filter(|(rgb, inks)| {
+                        rgb.iter().all(|v| v.is_finite())
+                            && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+                    })
+            })
+            .take(photocraft_engine::ToolState::CMYK_PICKS)
+            .collect();
+
+        for (rgb, inks) in picks.into_iter().rev() {
+            tools.remember_cmyk(rgb, inks);
+        }
+    }
+
+    let mut roles = [[None; 2]; 2];
+    for pair in 0..2 {
+        for role in 0..2 {
+            let color = pairs[pair][role];
+            let rgb = [color[0], color[1], color[2]];
+            roles[pair][role] = tools.picked_cmyk(rgb).map(|inks| (rgb, inks));
+        }
+    }
+    roles
+}
 fn restore_colors(app: &mut PhotocraftApp) {
     let saved = app.session.prefs().tool_colors.clone();
     let mut pairs = colors(app);
@@ -206,13 +258,18 @@ fn restore_colors(app: &mut PhotocraftApp) {
             }
         }
     } else {
-        // Legacy cmykPicks contained only RGB-to-ink associations. Recover
-        // unambiguous matches, but never invent two different separations.
+        // Recover legacy associations using the same rules as the save baseline.
+        let recovered = saved.get("cmykPicks").and_then(Value::as_array)
+            .map(|_| recover_legacy_cmyk_roles(&saved));
+
         for pair in 0..2 {
             for role in 0..2 {
                 let c = pairs[pair][role];
                 let rgb = [c[0], c[1], c[2]];
-                let legacy = app.session.tools.picked_cmyk(rgb).map(|inks| (rgb, inks));
+                let legacy = recovered
+                    .as_ref()
+                    .map(|roles| roles[pair][role])
+                    .unwrap_or_else(|| app.session.tools.picked_cmyk(rgb).map(|inks| (rgb, inks)));
                 roles[pair][role] = valid_role(legacy, c);
             }
         }

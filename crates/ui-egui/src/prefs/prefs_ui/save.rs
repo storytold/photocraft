@@ -118,6 +118,18 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     let text = match (stored, &app.prefs_rt.saved_value) {
         (Some(mut theirs @ Value::Object(_)), Some(base)) => {
             let mut base = without_stale_migration(base, &theirs);
+            // Normalize legacy swatches through f32, as restore_colors does.
+            // Otherwise JSON values such as 0.2 differ from restored f32 values.
+            if let Some(colors) = base.get_mut("toolColors").and_then(Value::as_object_mut) {
+                for key in ["foreground", "background", "maskForeground", "maskBackground"] {
+                    if let Some(value) = colors.get_mut(key)
+                        && let Ok(color) = serde_json::from_value::<[f32; 4]>(value.clone())
+                        && color.iter().all(|v| v.is_finite())
+                    {
+                        *value = serde_json::to_value(color).unwrap();
+                    }
+                }
+            }
             // Older files have no toolColors object. Diff the first saved swatches against
             // their actual defaults so an unchanged field cannot overwrite another window's edit.
             if matches!(base.get("toolColors"), None | Some(Value::Null))
@@ -132,7 +144,8 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
                 && let Some(colors) = base.get_mut("toolColors").and_then(Value::as_object_mut)
                 && !colors.contains_key("cmykRoles")
             {
-                colors.insert("cmykRoles".into(), crate::tool_memory::default_colors()["cmykRoles"].clone());
+                let roles = crate::tool_memory::recover_legacy_cmyk_roles(&Value::Object(colors.clone()));
+                colors.insert("cmykRoles".into(), serde_json::json!(roles));
             }
             merge_changes(&base, ours, &mut theirs);
             serde_json::to_string_pretty(&theirs)
@@ -196,6 +209,53 @@ fn merge_cmyk_role_slots(base: &Value, ours: &Value, theirs: &mut Value) -> bool
     true
 }
 
+/// Merge recently picked CMYK colors without discarding picks from another window.
+/// Each RGB key retains its most recently supplied native inks.
+fn merge_cmyk_picks(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
+    type Pick = ([f32; 3], [f32; 4]);
+
+    let parse = |v: &Value| -> Option<Vec<Pick>> {
+        let entries = v.as_array()?;
+        let picks: Vec<Pick> = entries.iter()
+            .map(|entry| serde_json::from_value::<Pick>(entry.clone()))
+            .collect::<Result<_, _>>()
+            .ok()?;
+
+        picks.iter().all(|(rgb, inks)| {
+            rgb.iter().all(|v| v.is_finite())
+                && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        }).then_some(picks)
+    };
+
+    let (Some(old), Some(local), Some(mut stored)) =
+        (parse(base), parse(ours), parse(theirs))
+    else {
+        return false;
+    };
+
+    if local == old {
+        return true;
+    }
+
+    for &(rgb, inks) in &local {
+        if !old.iter().any(|&(old_rgb, old_inks)| {
+            old_rgb == rgb && old_inks == inks
+        }) {
+            stored.retain(|(existing_rgb, _)| *existing_rgb != rgb);
+            stored.push((rgb, inks));
+        }
+    }
+
+    let extra = stored.len().saturating_sub(photocraft_engine::ToolState::CMYK_PICKS);
+    stored.drain(..extra);
+
+    if let Ok(value) = serde_json::to_value(stored) {
+        *theirs = value;
+        true
+    } else {
+        false
+    }
+}
 pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
     if ours == base {
         return;
@@ -204,6 +264,11 @@ pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
         (Value::Object(b), Value::Object(o), Value::Object(t)) => {
             for (k, ov) in o {
                 match (b.get(k), t.get_mut(k)) {
+                    (Some(bv), Some(tv)) if k == "cmykPicks" => {
+                        if !merge_cmyk_picks(bv, ov, tv) {
+                            merge_changes(bv, ov, tv);
+                        }
+                    }
                     (Some(bv), Some(tv)) if k == "cmykRoles" => {
                         if !merge_cmyk_role_slots(bv, ov, tv) {
                             merge_changes(bv, ov, tv);

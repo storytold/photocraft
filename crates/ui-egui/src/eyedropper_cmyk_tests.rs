@@ -159,3 +159,36 @@ fn eyedropper_cmyk_dialog_web_only_still_snaps_and_drops_native_inks() {
     assert!(fields.get("__cmyk").is_none());
     assert!(color_picker_ui::current(fields).rgb.iter().all(|v| (v * 5.0 - (v * 5.0).round()).abs() < 1e-6));
 }
+
+#[test]
+fn eyedropper_cmyk_mixed_3x3_ring_matches_picked_foreground() {
+    for depth in [8, 16] {
+        let mut app = mixed_chart(depth);
+        app.ui.tool_options.eyedropper_size = 3;
+
+        // The sample crosses the boundary between two CMYK colors.
+        let (x, y) = (7.0, 3.0);
+        let (ring_sample, _) =
+            crate::canvas::eyedropper_ring_colors(&mut app, x, y)
+                .expect("mixed CMYK sample should be available");
+
+        sample_eyedropper(&mut app, x, y, egui::Modifiers::NONE);
+
+        let foreground = app.session.tools.foreground;
+        let to_byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let picked = egui::Color32::from_rgb(
+            to_byte(foreground[0]),
+            to_byte(foreground[1]),
+            to_byte(foreground[2]),
+        );
+
+        assert_eq!(
+            ring_sample, picked,
+            "depth {depth}: ring must match the picked foreground"
+        );
+        assert!(
+            app.session.tools.picked_role_cmyk(0).is_some(),
+            "depth {depth}: native CMYK inks must be preserved"
+        );
+    }
+}
