@@ -823,7 +823,12 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         }
     }
     // Inline type editing eats text and navigation keys; ⌘-shortcuts still reach the menus.
+    // If a same-frame canvas click will start a Type edit in `App::ui`, shield trailing keys
+    // from single-key tool shortcuts (such as `R` for Rotate View).
     let editing = crate::type_tool::handle_keys(app, ctx);
+    let pending = !editing && crate::type_tool::pending_canvas_edit(app, ctx);
+    let type_owns = editing || pending;
+    let dispatch_focus = if pending { crate::shortcut_dispatch::Focus::Text } else { focus };
     // ⌥⇧⌘N: a new layer at once, without the New Layer dialog ⇧⌘N opens (#4794).
     if new_layer_without_dialog(app, ctx) {
         return true;
@@ -833,10 +838,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         return true;
     }
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
-    if crate::shortcut_dispatch::dispatch_pressed(app, ctx, focus, editing) {
+    if crate::shortcut_dispatch::dispatch_pressed(app, ctx, dispatch_focus, type_owns) {
         return true;
     }
-    if editing {
+    if type_owns {
         return true;
     }
     // Crop tool showing a box: O cycles its overlay, ⇧O the overlay's orientation (#1919).
