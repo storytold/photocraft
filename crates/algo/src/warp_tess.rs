@@ -78,6 +78,14 @@ const SHALLOW_BEFORE_REACH: f64 = 0.42;
 const ROW_TWIST_ACROSS_TOL: f64 = 1.25;
 /// Twist of a cell's control net (document px) past which it splits.
 const TWIST_TOL: f64 = 1.0;
+/// The twist of a quilt patch's half-height strip's top row of control quads past which the
+/// strip's cells split down (see [`strip_down_cuts`]).
+const STRIP_TOP_TWIST_TOL: f64 = 2.0;
+/// The largest twist of the other strip, per [`STRIP_WIDTH`] px of the patch's width, past which a
+/// strip's cells split down as well.
+const STRIP_OTHER_TWIST_TOL: f64 = 2.5;
+/// See [`STRIP_OTHER_TWIST_TOL`]; patches narrower than this count as this wide.
+const STRIP_WIDTH: f64 = 64.0;
 /// The same for a whole patch of a quilt: the reference application leaves a patch whose twist is
 /// spread evenly (a wave that grows linearly down the patch) whole up to about 1.73 and splits it
 /// from about 1.85.
@@ -214,6 +222,18 @@ impl Net {
     /// The largest of the net's rows' [`need`]s, its inner control rows included.
     fn rows_need(&self) -> f64 {
         (0..self.nv).map(|j| need(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>())).fold(0.0, f64::max)
+    }
+    /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net's first row of quads.
+    fn top_row_twist(&self) -> f64 {
+        let mut m = 0.0f64;
+        for i in 0..self.nu.saturating_sub(1) {
+            let (a, b, c, d) = (self.at(i, 0), self.at(i + 1, 0), self.at(i, 1), self.at(i + 1, 1));
+            let t = (a[0] - b[0] - c[0] + d[0]).hypot(a[1] - b[1] - c[1] + d[1]);
+            if t.is_finite() {
+                m = m.max(t);
+            }
+        }
+        m
     }
     /// The largest `P00 − P10 − P01 + P11` (euclidean) of the net.
     fn twist(&self) -> f64 {
@@ -572,6 +592,35 @@ fn parent_of(c: &Cell) -> (i64, i64, i64, i64) {
     ((c[0] / w + EPS).floor() as i64, (c[2] / h + EPS).floor() as i64, q(w), q(h))
 }
 
+/// A quilt patch cut both ways splits its four first-level cells down by row strip, as the
+/// reference's split warps show (left and right cells of a row always agree there, whatever their
+/// own twist): the strip across the whole patch at that height splits when its top row of
+/// control quads twists past [`STRIP_TOP_TWIST_TOL`], when its columns at the patch's sides and
+/// middle ask for a split, or when the other strip's largest twist, per [`STRIP_WIDTH`] px of the
+/// patch's width, passes [`STRIP_OTHER_TWIST_TOL`]. Their own twist then spreads no further.
+fn strip_down_cuts(net: &Net, level_cells: &[Cell], decisions: &mut [(bool, bool)], twisted: &mut [bool]) {
+    let halves = level_cells.len() == 4 && level_cells.iter().all(|c| (c[1] - c[0] - 0.5).abs() < EPS && (c[3] - c[2] - 0.5).abs() < EPS);
+    if !halves {
+        return;
+    }
+    let strip = |v0: f64| {
+        let s = net.sub([0.0, 1.0, v0, v0 + 0.5]);
+        let fv = [0.0, 0.5, 1.0].iter().map(|&u| need(&segment(&net.col(u), v0, v0 + 0.5))).fold(0.0, f64::max);
+        (s.top_row_twist(), s.twist(), fv)
+    };
+    let (top, bottom) = (strip(0.0), strip(0.5));
+    let (p, q) = (net.at(0, 0), net.at(net.nu.saturating_sub(1), 0));
+    let per_width = STRIP_WIDTH / (q[0] - p[0]).hypot(q[1] - p[1]).max(STRIP_WIDTH);
+    let cut = |own: (f64, f64, f64), other: (f64, f64, f64)| {
+        own.0 > STRIP_TOP_TWIST_TOL + EPS || own.2 >= 1.0 - EPS || other.1 * per_width > STRIP_OTHER_TWIST_TOL + EPS
+    };
+    let (cut_top, cut_bottom) = (cut(top, bottom), cut(bottom, top));
+    for ((c, d), t) in level_cells.iter().zip(decisions.iter_mut()).zip(twisted.iter_mut()) {
+        d.1 = if c[2] < 0.25 { cut_top } else { cut_bottom };
+        *t = false;
+    }
+}
+
 /// Splits down every cell whose parent has a cell marked in `from`.
 fn spread_down(level_cells: &[Cell], decisions: &mut [(bool, bool)], from: &[bool]) {
     let parents: Vec<_> = level_cells.iter().zip(from).filter(|(_, t)| **t).map(|(c, _)| parent_of(c)).collect();
@@ -690,6 +739,7 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             twisted.push(twist_down);
         }
         if rules.twist_spreads {
+            strip_down_cuts(net, &level_cells, &mut decisions, &mut twisted);
             spread_down(&level_cells, &mut decisions, &twisted);
         }
         let first_level = level_cells.first().is_some_and(|c| (c[3] - c[2] - first).abs() < EPS);
@@ -1363,6 +1413,31 @@ mod tests {
         assert!(!splits_across(&slight), "1.1 px of twist along the rows split the patch across");
         let (_, log) = cells(&cubic_net(&bend), true, &Rules { twist_spreads: false, ..quilt });
         assert!(log.iter().any(|s| s.down), "a one-patch mesh splits for any twist");
+    }
+
+    /// A quilt patch cut both ways decides its first-level cells' down cuts by row strip, as the
+    /// reference redrew split waves (control points moved by a wave): the top-left patch of a 2 x 2 wave splits its top strip (the
+    /// warp's top edge twists) but not the one below; the bottom patch of a 1 x 2 wave of
+    /// amplitude 12 splits its top strip for the twist of the strip below, at amplitude 11 not.
+    #[test]
+    fn a_quilt_patch_splits_its_first_cells_down_by_row_strip() {
+        let pi = std::f64::consts::PI;
+        let quarters: Vec<Cell> = vec![[0.0, 0.5, 0.0, 0.5], [0.5, 1.0, 0.0, 0.5], [0.0, 0.5, 0.5, 1.0], [0.5, 1.0, 0.5, 1.0]];
+        // Control points placed where `at` puts their grid positions (as the probe files were made).
+        let decide = |at: &dyn Fn(f64, f64) -> P| {
+            let p = (0..16).map(|k| at(f64::from(k % 4) / 3.0, f64::from(k / 4) / 3.0)).collect();
+            let mut d = vec![(true, false); 4];
+            let mut t = vec![true; 4];
+            strip_down_cuts(&Net { nu: 4, nv: 4, p }, &quarters, &mut d, &mut t);
+            assert!(t.iter().all(|t| !t), "a strip's twist spread further");
+            assert!(d[0].1 == d[1].1 && d[2].1 == d[3].1, "a strip's left and right cells disagree: {d:?}");
+            (d[0].1, d[2].1)
+        };
+        let top_left = |u: f64, v: f64| [64.0 * u, 64.0 * v + 10.0 * (pi * u).sin() * (0.5 * pi * v).sin()];
+        assert_eq!(decide(&top_left), (true, false), "the 2 x 2 wave's top-left patch");
+        let bottom = |a: f64| move |u: f64, v: f64| [128.0 * u, 64.0 * v + a * (2.0 * pi * u).sin() * (0.5 * pi * (1.0 + v)).sin()];
+        assert_eq!(decide(&bottom(12.0)), (true, true), "the 1 x 2 wave's bottom patch, amplitude 12");
+        assert_eq!(decide(&bottom(11.0)), (false, true), "the 1 x 2 wave's bottom patch, amplitude 11");
     }
 
     /// In a quilt's patch the whole patch's own cut keeps only its halfway point on the middle row
