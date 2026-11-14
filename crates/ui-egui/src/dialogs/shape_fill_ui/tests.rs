@@ -5,6 +5,41 @@ use serde_json::json;
 
 use super::*;
 
+/// Shape fill and stroke keep float RGB and their original alpha through preview, Cancel and OK.
+#[test]
+fn float_shape_paint_picker_preserves_hdr_and_alpha() {
+    for which in [Paint::Fill, Paint::Stroke] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 16, "height": 16, "depth": 32, "background": "transparent"})).unwrap();
+        let original = [0.12345, 2.0, -0.25, 0.375];
+        let id = LayerId(
+            app.run("shape.create", json!({"rect": [2, 2, 10, 10], "fill": original, "stroke": {"width": 2, "color": original}})).unwrap()["layer"]
+                .as_u64()
+                .unwrap(),
+        );
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        let dialog = open_paint(&mut app, which, Some(id), false, original).unwrap();
+        assert_eq!(color_picker_ui::current(&app.ui.dialog_mut(dialog).unwrap().fields).rgb, [original[0], original[1], original[2]]);
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        let chosen = [0.54321, 3.0, -0.125];
+        let dialog = open_paint(&mut app, which, Some(id), false, original).unwrap();
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(chosen));
+        let (shown, _) = display_doc(&mut app, 0).unwrap();
+        let expected = Some(Some(Fill::Solid(Color::rgba(chosen[0], chosen[1], chosen[2], original[3]))));
+        assert_eq!(paint_of(&shown, id, which), expected);
+        crate::dialogs::cancel(&mut app, dialog).unwrap();
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        let dialog = open_paint(&mut app, which, Some(id), false, original).unwrap();
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(chosen));
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert_eq!(paint_of(&app.session.active().unwrap().doc, id, which), paint_of(&shown, id, which));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
+    }
+}
+
 fn double_click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.run_steps(40);
     for _ in 0..2 {

@@ -12,6 +12,11 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
+/// Numeric field whose displayed text round-trips through its f32 value without rounding.
+pub(crate) fn value_field_exact(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> Response {
+    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { round_trip: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field`] for a whole number: no decimals, and the arrow keys and a scrub (of the field
 /// or of its caption) move it a whole step at a time, whatever its range. A small range such as
 /// 1–10 would otherwise scrub in hundredths, which a whole-number setting rounds away (#11765).
@@ -144,6 +149,7 @@ pub(crate) fn compact_wrapping_value_field(ui: &mut Ui, value: &mut f32, range: 
 pub(super) struct FieldOpts {
     /// Decimal places shown (default: one, or two for a small range).
     pub(super) decimals: Option<u32>,
+    pub(super) round_trip: bool,
     /// Arrow-key and scrub step follow `decimals` (adjustment rows via [`slider_row_prec`], #5914).
     pub(super) step_from_decimals: bool,
     /// The unit typed units convert into (default: the suffix's, at [`set_field_resolution`]).
@@ -205,7 +211,7 @@ fn value_field_box(
     opts: FieldOpts,
     name: Option<&str>,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, step_from_decimals, units, extent, .. } = opts;
+    let FieldOpts { decimals, round_trip, step_from_decimals, units, extent, .. } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
     let last_editor = ui.data(|d| d.get_temp::<egui::Id>(slot.id));
@@ -331,10 +337,12 @@ fn value_field_box(
         ui.painter().text(pos2(rect.right() - 6.0 - trailing, rect.center().y), Align2::RIGHT_CENTER, suffix, suffix_font, t.text_faint);
     }
     if step != 0.0 {
-        // Round to the step before adding it, so whole-number fields drop decimals (55.4 + 1 = 56).
-        let v = (*value / grid).round() * grid + step;
-        // Round to 4 decimal places, so repeated 0.1 steps don't leave float errors.
-        let v = (v * 1e4).round() / 1e4;
+        let v = if round_trip {
+            *value + step
+        } else {
+            // Ordinary fields snap to the step and round to avoid accumulated float error.
+            (((*value / grid).round() * grid + step) * 1e4).round() / 1e4
+        };
         // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
         let v = if lo <= hi { v.clamp(lo, hi) } else { v };
         // A wild wheel delta must not leave infinity in the field.
@@ -349,7 +357,14 @@ fn value_field_box(
                 ui.memory_mut(|m| m.request_focus(resp.id));
             }
             // The text stays selected, as in Photoshop: typing after a step replaces the value.
-            crate::field_tab::select_all(ui.ctx(), resp.id, &if fine { fmt_num2(f64::from(*value)) } else { fmt_num(f64::from(*value)) });
+            let text = if round_trip {
+                format_round_trip(*value)
+            } else if fine {
+                fmt_num2(f64::from(*value))
+            } else {
+                fmt_num(f64::from(*value))
+            };
+            crate::field_tab::select_all(ui.ctx(), resp.id, &text);
         }
         let pass = ui.ctx().cumulative_pass_nr();
         ui.data_mut(|d| d.insert_temp(stepped_id(resp.id), pass));
@@ -503,6 +518,12 @@ fn drop_oversized_input(ui: &Ui) {
     });
 }
 
+/// Formats an exact f32 for display and for the selected text after a step.
+fn format_round_trip(v: f32) -> String {
+    let magnitude = v.abs();
+    if magnitude >= 1.0e7 || (magnitude > 0.0 && magnitude < 1.0e-4) { format!("{v:e}") } else { v.to_string() }
+}
+
 /// The number in a [`value_field`]. A typed number applies as it's typed, unless `opts.hold_typed`;
 /// arithmetic always waits for Enter, Tab or click-away, because per keystroke `5/2` would land
 /// first and a caller that rounds it would cut `5/2*2` short. `changed()` means a new value, not
@@ -515,7 +536,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
+    let FieldOpts { decimals, round_trip, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -534,11 +555,15 @@ fn number_edit(
         if blank_when_zero && v == 0.0 {
             return String::new();
         }
-        let text = match decimals {
-            Some(d) if keep_zeros => fmt_num_fixed(v, d),
-            Some(d) => fmt_num_prec(v, d),
-            None if fine => fmt_num2(v),
-            None => fmt_num(v),
+        let text = if round_trip {
+            format_round_trip(v as f32)
+        } else {
+            match decimals {
+                Some(d) if keep_zeros => fmt_num_fixed(v, d),
+                Some(d) => fmt_num_prec(v, d),
+                None if fine => fmt_num2(v),
+                None => fmt_num(v),
+            }
         };
         if hold_typed { crate::zoom_field::localize(text) } else { text }
     };
@@ -569,6 +594,24 @@ fn number_edit(
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
     let before = *value;
+    // Exact channels use the same unsnapped unit as arrows/wheel for assistive stepping.
+    // Consume only our requests so DragValue cannot apply its drag-speed rounding first.
+    let exact_step = field_step(&range, decimals, opts.step_from_decimals);
+    let mut accessible_steps = 0.0_f64;
+    if round_trip && ui.is_enabled() {
+        ui.input_mut(|input| {
+            input.consume_accesskit_action_requests(id, |request| {
+                match request.action {
+                    egui::accesskit::Action::Increment => accessible_steps += 1.0,
+                    egui::accesskit::Action::Decrement => accessible_steps -= 1.0,
+                    egui::accesskit::Action::SetValue
+                        if matches!(request.data.as_ref(), Some(egui::accesskit::ActionData::NumericValue(value)) if !value.is_finite()) => {}
+                    _ => return false,
+                }
+                true
+            })
+        });
+    }
     let speed = if fine { 0.01 } else { 0.5 };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
     let wrapped_drag = wrapping && ui.input(|i| i.pointer.primary_down());
@@ -584,7 +627,7 @@ fn number_edit(
             // scaled to 2400 pt in a 1296 pt field, must not change it (#5717).
             .clamp_existing_to_range(false)
             // A warp is an absolute-position jump. The scoped scrub below removes that jump.
-            .speed(if wrapped_drag { 0.0 } else { speed })
+            .speed(if wrapped_drag || round_trip { 0.0 } else { speed })
             .custom_formatter(move |v, _| format(v))
             .update_while_editing(!math && !hold_typed)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
@@ -629,6 +672,32 @@ fn number_edit(
                 v
             }),
     );
+    if round_trip {
+        // DragValue's smart aim and decimal rounding are appropriate for ordinary fields,
+        // but exact f32 channels retain their fractional origin throughout a scrub.
+        let precise_id = id.with("exact-drag");
+        if resp.drag_started() {
+            ui.data_mut(|data| data.insert_temp(precise_id, f64::from(before)));
+        }
+        if resp.dragged() {
+            let delta = resp.drag_delta();
+            let slow = ui.input(|input| input.modifiers.shift);
+            let precise = ui.data(|data| data.get_temp::<f64>(precise_id)).unwrap_or(f64::from(before));
+            let precise = precise + f64::from(delta.x - delta.y) * speed / if slow { 10.0 } else { 1.0 };
+            ui.data_mut(|data| data.insert_temp(precise_id, precise));
+            *value = precise.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
+        }
+        if resp.drag_stopped() {
+            ui.data_mut(|data| data.remove_temp::<f64>(precise_id));
+        }
+        if accessible_steps != 0.0 {
+            *value = (f64::from(*value) + accessible_steps * f64::from(exact_step)) as f32;
+        }
+        // AccessKit SetValue also bypasses the text parser; reject its non-finite values.
+        if !value.is_finite() {
+            *value = before;
+        }
+    }
     if hold_typed {
         // A scrub always applies; a typed value applies unless this frame's guard vetoes it.
         let scrub = resp.dragged() || resp.drag_started() || resp.drag_stopped();
@@ -648,6 +717,12 @@ fn number_edit(
     // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
     if *value != before && lo <= hi {
         *value = value.clamp(lo, hi);
+    }
+    if round_trip {
+        ui.ctx().accesskit_node_builder(resp.id, |builder| {
+            builder.set_numeric_value_step(f64::from(exact_step));
+            builder.set_numeric_value(f64::from(*value));
+        });
     }
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp
