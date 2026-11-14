@@ -183,6 +183,10 @@ pub struct ToolOptions {
     pub move_target: String,
     #[serde(default)]
     pub move_show_transform: bool,
+    /// Move tool and Properties › Align To: Canvas aligns the selected layers to the canvas;
+    /// off (Selection) to their own bounds, or an active selection's (#10337).
+    #[serde(default)]
+    pub move_align_to_canvas: bool,
     /// Move tool options bar, gear menu (#11381), all on by default: outline the layer under the
     /// pointer, open the closed groups of a layer picked by a canvas click, and outline the layer
     /// whose Layers panel row is hovered. Preferences > Show Highlight on Rollover still gates
@@ -444,6 +448,8 @@ impl Default for SampleAllLayers {
     }
 }
 
+/// Sample All Layers is per tool (#218), so each tool has its own flag and the lookups below
+/// turn a [`Tool`] into the one that belongs to it.
 impl SampleAllLayers {
     /// `tool`'s setting; false for a tool without the option.
     pub fn get(mut self, tool: Tool) -> bool {
@@ -560,6 +566,7 @@ impl Default for ToolOptions {
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
+            move_align_to_canvas: false,
             move_show_hover_bounds: true,
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
