@@ -495,6 +495,9 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("Layer From Background", |doc, active| {
         let l = doc.background_mut().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         unlock_background(l);
+        // A hidden Background becomes a visible layer (#14822). The implicit conversions
+        // (`background_to_layer`) keep its visibility.
+        l.visible = true;
         if select || active.is_none() {
             *active = Some(l.id);
         }
