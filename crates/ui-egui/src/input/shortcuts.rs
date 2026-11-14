@@ -733,6 +733,28 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         crate::vector_ui::pen_end(app);
         return true;
     }
+    // Direct Selection (#13208): only the measured saved-path case. Unmodified Enter
+    // clears the view selection, never geometry or History; modal transforms and Pen
+    // drafts have already taken their Enter above.
+    if focus == crate::shortcut_dispatch::Focus::None
+        && app.ui.tool == Tool::DirectSelection
+        && !crate::vector_ui::path_renaming(app, ctx)
+        && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
+        && app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Saved(index))
+        && app.ui.direct_selection.drag.is_none()
+        && !app.ui.direct_selection.anchors.is_empty()
+        && ctx.input_mut(|i| {
+            let n = i.events.len();
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.is_none()));
+            i.events.len() != n
+        })
+    {
+        app.ui.direct_selection = crate::direct_select::DirectSelection::default();
+        if let Some(name) = app.ui.selected_path.clone() {
+            crate::vector_ui::deselect_loaded_path(app, &name);
+        }
+        return true;
+    }
     // A shape box handle drag: Esc drops it, the shapes keep their size (#11107).
     if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         crate::shape_bounds_box::cancel(app);
