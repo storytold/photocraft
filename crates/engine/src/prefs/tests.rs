@@ -1134,6 +1134,25 @@ fn the_web_build_caps_memory_usage() {
     }
 }
 
+/// A wide map with one unreadable entry first re-read everything laid over so far for every key
+/// (quadratic); the check budget stops that and reports the rest as invalid.
+#[test]
+fn lenient_prefs_reading_is_bounded_on_a_wide_map_with_a_bad_entry() {
+    #[derive(Default, Serialize, Deserialize)]
+    struct Wide {
+        m: std::collections::BTreeMap<String, String>,
+    }
+    let mut m = serde_json::Map::new();
+    m.insert("a-bad".into(), json!(1));
+    for i in 0..4_000 {
+        m.insert(format!("k{i:05}"), json!("v"));
+    }
+    let mut invalid = Vec::new();
+    let wide: Wide = read_lenient(json!({"m": m}), &[], &mut invalid);
+    assert!(wide.m.len() <= 2048, "{}", wide.m.len());
+    assert!(invalid.len() > 1_900, "the keys past the budget are reported, not silently dropped");
+}
+
 #[test]
 fn paths_with_empty_segments_cannot_skip_the_alternate_shortcut_limit() {
     let mut prefs = Preferences::default();

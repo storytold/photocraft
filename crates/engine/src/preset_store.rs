@@ -90,6 +90,9 @@ pub const MAX_TIP_SIDE: u32 = 16384;
 pub const MAX_TIP_SAMPLES: u64 = 1 << 26;
 /// Most group files loaded.
 pub const MAX_GROUPS: usize = 4096;
+/// Longest group name a group file may carry: every name the commands accept (255 characters of
+/// up to 4 bytes each).
+pub const MAX_GROUP_NAME_BYTES: usize = 4 * 255;
 /// Most presets loaded from one group file.
 pub const MAX_PRESETS_PER_GROUP: usize = 50_000;
 
@@ -576,6 +579,9 @@ pub struct PresetStore {
     /// The pattern files and index (`patterns.json`).
     patterns: patterns::PatternFiles,
     warnings: Vec<String>,
+    /// Group-write failures already warned about since the last complete sync: every later command
+    /// retries the write, and one failure is reported once, not once per retry.
+    sync_warned: HashSet<String>,
     /// Full tips loaded for brushes in use (behind a lock so `&Session` paths can load).
     cache: Mutex<TipCache>,
     /// The stored pattern last read in full, so painting with it again doesn't re-read its file
@@ -622,8 +628,12 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
     let mut group_files: Vec<(String, u64)> = files.iter().filter(|(n, _)| !n.contains('/') && n.ends_with(&format!(".{GROUP_EXT}"))).cloned().collect();
     group_files.sort_by(|a, b| a.0.cmp(&b.0));
     if let Some(ix) = &index {
-        let pos = |n: &str| ix.groups.iter().position(|g| g == n).unwrap_or(usize::MAX);
-        group_files.sort_by_key(|(n, _)| pos(n));
+        // First occurrence wins; a map, not a scan of the index per file.
+        let mut order: HashMap<&str, usize> = HashMap::new();
+        for (i, g) in ix.groups.iter().enumerate() {
+            order.entry(g.as_str()).or_insert(i);
+        }
+        group_files.sort_by_key(|(n, _)| order.get(n.as_str()).copied().unwrap_or(usize::MAX));
     }
     if group_files.len() > MAX_GROUPS {
         warnings.push(format!("brush presets: only the first {MAX_GROUPS} of {} groups were loaded", group_files.len()));
@@ -642,6 +652,9 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
                 Err(format!("unknown format `{}`", g.format))
             } else if g.version != 1 {
                 Err(format!("unsupported version {}", g.version))
+            } else if g.group.len() > MAX_GROUP_NAME_BYTES {
+                // Copied into every preset of the group.
+                Err(format!("group name of {} bytes (limit {MAX_GROUP_NAME_BYTES})", g.group.len()))
             } else if g.presets.len() > MAX_PRESETS_PER_GROUP {
                 Err(format!("{} presets (limit {MAX_PRESETS_PER_GROUP})", g.presets.len()))
             } else {
@@ -686,6 +699,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         actions_skipped,
         patterns: pattern_files,
         warnings: Vec::new(),
+        sync_warned: HashSet::new(),
         cache: Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() }),
         pattern_cache: Mutex::new(None),
     };
@@ -909,7 +923,9 @@ impl PresetStore {
     /// Bring the files in line with `presets` (built-ins skipped): write changed groups, delete
     /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
     /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
-    pub fn sync(&mut self, presets: &mut [BrushPreset]) {
+    ///
+    /// `false` when a group write failed: what was not written is still pending, for the caller to try again.
+    pub fn sync(&mut self, presets: &mut [BrushPreset]) -> bool {
         // User presets by group, in first-appearance order.
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
@@ -918,18 +934,34 @@ impl PresetStore {
                 None => order.push((p.group.clone(), vec![i])),
             }
         }
-        let mut files = Vec::with_capacity(order.len());
-        for (group, idx) in &order {
-            let file = group_file_name(group);
-            files.push(file.clone());
+        // The index keeps the groups in first-appearance order; they are written with the ones that
+        // take presets they don't hold yet first, so a preset moved out of one group is never dropped
+        // from its old file before its new group is safely written.
+        let files: Vec<String> = order.iter().map(|(group, _)| group_file_name(group)).collect();
+        let mut writes: Vec<usize> = (0..order.len()).collect();
+        writes.sort_by_key(|&k| {
+            let idx = &order[k].1;
+            let held = self.groups.get(&files[k]).map(|s| &s.presets);
+            let gains = idx.iter().filter_map(|&i| presets.get(i)).any(|p| !held.is_some_and(|h| h.iter().any(|q| q.name == p.name)));
+            !gains
+        });
+        // After a write that fails (a name the file system refuses, a full disk) nothing more is
+        // changed on disk: the old files may be the only copy of the presets that failed, and the
+        // next sync retries the rest.
+        let mut failed = false;
+        let mut pending = false;
+        for k in writes {
+            let (group, idx) = &order[k];
+            let file = files[k].clone();
             let unchanged = self
                 .groups
                 .get(&file)
                 .is_some_and(|s| !s.stale && s.presets.len() == idx.len() && s.presets.iter().zip(idx).all(|(a, &i)| presets.get(i) == Some(a)));
-            if unchanged {
+            if unchanged || failed {
                 continue;
             }
             if self.skipped.contains(&file) {
+                failed = true;
                 self.warnings.push(format!(
                     "Couldn't save brush presets `{}`: {file} could not be read, so it was left unchanged",
                     if group.is_empty() { "(ungrouped)" } else { group }
@@ -938,11 +970,16 @@ impl PresetStore {
             }
             let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
             if let Err(e) = self.write_group(&file, group, &mut items) {
-                self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
+                failed = true;
+                pending = true;
+                let message = format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group });
+                if self.sync_warned.insert(message.clone()) {
+                    self.warnings.push(message);
+                }
             }
         }
-        // Groups that are gone.
-        let gone: Vec<String> = self.groups.keys().filter(|f| !files.contains(f)).cloned().collect();
+        // Groups that are gone, unless a write failed above.
+        let gone: Vec<String> = self.groups.keys().filter(|f| !failed && !files.contains(f)).cloned().collect();
         for f in gone {
             match self.backend.remove(&f) {
                 Ok(()) => drop(self.groups.remove(&f)),
@@ -989,6 +1026,10 @@ impl PresetStore {
                 Err(e) => self.warnings.push(format!("Couldn't save the brush preset index: {e}")),
             }
         }
+        if !pending {
+            self.sync_warned.clear();
+        }
+        !pending
     }
 
     /// Write one tip file (`others` bytes are already used by the rest of the store).
@@ -1010,6 +1051,10 @@ impl PresetStore {
     /// is written, the presets' bitmaps become stored tiles without their full bitmaps; on an
     /// error the presets are left unchanged.
     fn write_group(&mut self, file: &str, group: &str, items: &mut [&mut BrushPreset]) -> Result<(), String> {
+        // `open` skips a group file whose name is longer, so the presets would vanish on restart.
+        if group.len() > MAX_GROUP_NAME_BYTES {
+            return Err(format!("group name of {} bytes (limit {MAX_GROUP_NAME_BYTES})", group.len()));
+        }
         let others: u64 = self.groups.iter().filter(|(f, _)| f.as_str() != file).map(|(_, g)| g.bytes).sum::<u64>() + self.tips.values().sum::<u64>();
         let mut stored = Vec::with_capacity(items.len());
         let mut tiles = Vec::with_capacity(items.len());
@@ -1149,9 +1194,13 @@ impl Session {
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
         let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
+        let mut by_id: HashMap<String, usize> = HashMap::new();
+        for (i, q) in self.patterns.items.iter().enumerate() {
+            by_id.entry(q.id.clone()).or_insert(i);
+        }
         for l in patterns {
             let id = l.pattern.id.clone();
-            match self.patterns.items.iter_mut().find(|q| q.id == id) {
+            match by_id.get(&id).map(|&i| &mut self.patterns.items[i]) {
                 Some(q) if crate::pattern_cmds::is_pristine_builtin(q, &builtins) => {
                     *q = l.pattern;
                     if let Some(size) = l.full {
@@ -1164,6 +1213,7 @@ impl Session {
                     }
                 }
                 None => {
+                    by_id.insert(id.clone(), self.patterns.items.len());
                     if let Some(size) = l.full {
                         self.patterns.stored.insert(id, size);
                     }
@@ -1172,12 +1222,21 @@ impl Session {
             }
         }
         let lib = &mut self.tools.presets;
-        lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
+        let hidden: HashSet<String> = hidden_builtins.iter().map(|h| h.to_ascii_lowercase()).collect();
+        lib.retain(|p| !(p.builtin && hidden.contains(&p.name.to_ascii_lowercase())));
+        // Name -> first index, kept current as presets are added (a scan per preset is quadratic).
+        let mut by_name: HashMap<String, usize> = HashMap::new();
+        for (i, x) in lib.iter().enumerate() {
+            by_name.entry(x.name.to_ascii_lowercase()).or_insert(i);
+        }
         for p in presets {
-            match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-                Some(x) if x.builtin => *x = p,
+            match by_name.get(&p.name.to_ascii_lowercase()) {
+                Some(&i) if lib[i].builtin => lib[i] = p,
                 Some(_) => {}
-                None => lib.push(p),
+                None => {
+                    by_name.insert(p.name.to_ascii_lowercase(), lib.len());
+                    lib.push(p);
+                }
             }
         }
         // The saved panel order (stable: presets it doesn't name keep their order, at the end).
@@ -1195,8 +1254,9 @@ impl Session {
                 st.actions_rev = 1;
             }
         } else {
+            let mut have: HashSet<String> = self.actions.list.iter().map(|a| a.name.clone()).collect();
             for action in disk {
-                if !self.actions.list.iter().any(|have| have.name == action.name) {
+                if have.insert(action.name.clone()) {
                     self.actions.list.push(action);
                 }
             }
@@ -1221,8 +1281,10 @@ impl Session {
         let actions_rev = self.actions.rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
-                st.sync(&mut self.tools.presets);
-                st.synced_rev = Some(rev);
+                // A failed group write leaves the revision pending: the next command tries again.
+                if st.sync(&mut self.tools.presets) {
+                    st.synced_rev = Some(rev);
+                }
                 if link_stored_tips(st, &mut self.tools.brush) {
                     // An embedded tip became a store reference: what the last-brush
                     // persistence would write changed without a command touching the brush.
