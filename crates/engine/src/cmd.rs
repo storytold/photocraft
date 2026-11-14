@@ -103,6 +103,8 @@ pub mod gallery_cmds;
 #[cfg(test)]
 mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
+#[cfg(test)]
+mod gradient_fill_convert_empty_tests;
 pub mod group_view_cmds;
 pub mod history_cmds;
 pub mod history_menu_cmds;

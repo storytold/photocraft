@@ -1234,6 +1234,10 @@ fn new_layers_made_with_a_layer_in_an_artboard_selected_go_directly_above_it() {
         inside.push(LayerId(s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap()));
     }
     let (low, high) = (inside[0], inside[1]);
+    // `low` has pixels: a live gradient turns an empty pixel layer into the fill layer in place
+    // instead of adding one above it (#12015).
+    s.execute("layer.select", json!({"name": "low"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
     let board_path = doc(&s).path_of(board).unwrap();
     for (cmd, p) in new_layer_commands() {
         s.execute("layer.select", json!({"name": "low"})).unwrap();

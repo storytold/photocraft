@@ -316,6 +316,45 @@ pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
     Ok(l)
 }
 
+/// The empty pixel layer a live gradient turns into the Gradient fill layer: Photoshop converts
+/// the active layer in place (name and place kept) instead of adding one above it when it is a
+/// visible, unlocked pixel layer with no pixels and no mask. Any other layer, and the cases not
+/// measured (hidden, locked, masked), get a new layer above as before.
+pub fn convert_target(doc: &Document, active: Option<LayerId>) -> Option<LayerId> {
+    let l = doc.layer(active?)?;
+    let LayerContent::Raster(pixels) = &l.content else { return None };
+    let plain = l.visible && l.locks == photocraft_doc::Locks::default() && l.mask.is_none() && l.vector_mask.is_none();
+    (plain && l.frame.is_none() && pixels.content_bounds().is_empty()).then_some(l.id)
+}
+
+/// `new` takes the place of the empty pixel layer `old`: the id, name, label, clipping, link,
+/// effects, blending options, PSD layer id and XMP packet stay (the mode and opacity are the
+/// Gradient tool's), and the layer is revealed by a white mask unless the selection already masks
+/// it.
+pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Result<LayerId> {
+    let depth = doc.depth;
+    let mask = match new.mask.take() {
+        Some(m) => m,
+        None => crate::commands::mask_at_depth(photocraft_doc::LayerMask::reveal_all(), depth)?,
+    };
+    let slot = doc.layer_mut(old).ok_or(EngineError::NoLayer(old))?;
+    new.id = old;
+    new.name = slot.name.clone();
+    new.label = slot.label;
+    new.clipped = slot.clipped;
+    new.link_group = slot.link_group;
+    new.effects = slot.effects.clone();
+    new.fill_opacity = slot.fill_opacity;
+    new.excluded_channels = slot.excluded_channels;
+    new.blend_if = slot.blend_if.clone();
+    new.advanced = slot.advanced;
+    new.psd_id = slot.psd_id;
+    new.xmp = slot.xmp.clone();
+    new.mask = Some(mask);
+    *slot = new;
+    Ok(old)
+}
+
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let layer = {
         let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -323,7 +362,10 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
         doc.selection = None;
-        let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+        let id = match convert_target(doc, *active) {
+            Some(old) => convert_in_place(doc, old, layer)?,
+            None => crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable),
+        };
         *active = Some(id);
         Ok(id)
     })?;
