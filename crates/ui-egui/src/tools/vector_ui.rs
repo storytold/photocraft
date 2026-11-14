@@ -49,7 +49,7 @@ pub use path_ops::{
 };
 pub(crate) use path_ops::{
     active_shape_path, active_type_path, delete_key_deletes_anchor, delete_key_deletes_path, delete_key_deletes_segment, deselect_loaded_path,
-    free_transform_path, targeted_vector_mask, work_path_shown,
+    free_transform_path, path_selection_end, targeted_vector_mask, work_path_shown,
 };
 #[cfg(test)]
 use paths_panel::path_context_actions;

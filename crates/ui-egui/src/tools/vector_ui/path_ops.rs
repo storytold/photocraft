@@ -417,6 +417,29 @@ fn path_selection_offset(start: [f64; 2], end: [f64; 2]) -> Option<[f64; 2]> {
     Some([dx.round(), dy.round()])
 }
 
+/// Where Path Selection drag `d` ends for the pointer at `end`, for its live outline and its
+/// release alike. ⇧ pressed after the press locks the move to the nearer of the axis point, which
+/// keeps the longer leg, and the 45° point, which keeps the shorter one: the reference application
+/// moves (+60,+25) by (60,0) and (+60,+50) by (50,50) (#13285). Where it switches between them is
+/// not measured, nor is ⇧ let go again (the drag then moves freely, as before). ⇧ held at the
+/// press keeps adding or removing components (`path_components::press`) and its drag moves freely
+/// as before, although the reference application moves nothing then.
+pub(crate) fn path_selection_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
+    if !d.live.shift || d.modifiers.shift {
+        return end;
+    }
+    let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+    let (long, short) = (dx.abs().max(dy.abs()), dx.abs().min(dy.abs()));
+    let [dx, dy] = if long < 2.0 * short {
+        [short.copysign(dx), short.copysign(dy)]
+    } else if dx.abs() >= dy.abs() {
+        [dx, 0.0]
+    } else {
+        [0.0, dy]
+    };
+    [d.start[0] + dx, d.start[1] + dy]
+}
+
 /// The path a Path Selection drag in progress shows moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MovedPath {
@@ -436,7 +459,7 @@ pub(crate) fn path_selection_preview(app: &PhotocraftApp, doc: &Document) -> Opt
         return None;
     }
     let end = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
-    let [dx, dy] = path_selection_offset(d.start, end).filter(|o| o.iter().all(|v| v.is_finite()))?;
+    let [dx, dy] = path_selection_offset(d.start, path_selection_end(d, end)).filter(|o| o.iter().all(|v| v.is_finite()))?;
     if let Some((r, path)) = crate::path_components::moved_selected(app, [dx, dy]) {
         return match r {
             crate::direct_select::PathRef::Work => Some((MovedPath::Work, path)),
@@ -493,3 +516,7 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         }
     };
 }
+
+#[cfg(test)]
+#[path = "../path_selection_shift_constrain_tests.rs"]
+mod path_selection_shift_constrain_tests;
