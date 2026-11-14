@@ -82,9 +82,17 @@ fn open_files(app: &PhotocraftApp) -> Vec<String> {
     app.session.documents().iter().filter_map(|d| d.path.clone()).collect()
 }
 
-/// OK needs files to load: some in the list, or a chosen folder.
+/// OK needs files to load: some in the list, or a chosen folder. Load Files into Stack needs at
+/// least two files in Files mode (#14000); Statistics keeps one file.
 pub fn can_confirm(f: &Map<String, Value>) -> bool {
-    !owns(f) || if folder_mode(f) { !folder(f).is_empty() } else { !files(f).is_empty() }
+    !owns(f)
+        || if folder_mode(f) {
+            !folder(f).is_empty()
+        } else if statistics(f) {
+            !files(f).is_empty()
+        } else {
+            files(f).len() >= 2
+        }
 }
 
 /// Browse…: files to add (Files) or the folder to load (Folder), into dialog `id` once the file
@@ -196,7 +204,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             continue;
         }
         let mut on = f.get(key).and_then(Value::as_bool).unwrap_or(false);
-        if widgets::checkbox(ui, &mut on, label).changed() {
+        // Align needs at least 2 files in Files mode (#14000); Smart Object stays enabled.
+        let enabled = key != "align" || folder_mode || statistics(f) || files(f).len() >= 2;
+        if ui.add_enabled_ui(enabled, |ui| widgets::checkbox(ui, &mut on, label)).inner.changed() {
             f.insert(key.into(), json!(on));
         }
     }
@@ -240,3 +250,5 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod two_files_tests;
