@@ -27,7 +27,8 @@ pub(super) fn stroke_param(app: &PhotocraftApp) -> Value {
     p
 }
 
-/// An open Pen shape needs a visible fallback when no stroke is configured.
+/// An open Pen shape's stroke: the options bar's stroke when one is set, else a 1 px stroke in the
+/// foreground colour, so the open path stays visible.
 pub(super) fn open_pen_stroke_param(app: &PhotocraftApp) -> Value {
     let stroke = stroke_param(app);
     if !stroke.is_null() {

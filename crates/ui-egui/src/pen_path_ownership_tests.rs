@@ -138,8 +138,7 @@ fn captured_pen_paint_preserves_float_colour_and_alpha_after_toolbar_changes() {
         let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("expected Pen shape") };
         let paint = |c: [f32; 4]| photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]));
         assert_eq!(shape.fill, closed.then(|| paint(foreground)));
-        // Both open and closed shapes use the captured stroke paint; previously open paths
-        // incorrectly substituted the captured fill/foreground colour.
+        // Open and closed shapes both take the captured stroke paint.
         assert_eq!(shape.stroke.as_ref().unwrap().paint, paint(background));
     }
 }
