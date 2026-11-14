@@ -122,8 +122,26 @@ fn one_layer(p: &Value) -> bool {
     p.get("allLayers").and_then(Value::as_bool) == Some(false) || p.get("layer").is_some() || p.get("layers").is_some()
 }
 
+/// `range`: the characters `[start, end]` of one `layer` to check, as the dialog opened while
+/// editing type does (#14186); only words wholly inside it are listed.
+fn range_param(s: &Session, p: &Value) -> Result<Option<(usize, usize)>> {
+    let cmd = "edit.checkSpelling";
+    let Some(v) = p.get("range").filter(|v| !v.is_null()) else { return Ok(None) };
+    if p.get("layer").is_none() {
+        return Err(bad(cmd, "`range` needs `layer`"));
+    }
+    let id = layer_param(s, p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let n = text(&st.doc, id).ok_or_else(|| bad(cmd, format!("layer {} is not a type layer", id.0)))?.chars().count();
+    match v.as_array().map(|r| r.iter().map(Value::as_u64).collect::<Vec<_>>()).as_deref() {
+        Some(&[Some(a), Some(b)]) if a <= b && b <= n as u64 => Ok(Some((a as usize, b as usize))),
+        _ => Err(bad(cmd, format!("`range` must be [start, end] characters with start <= end <= {n}, not {v}"))),
+    }
+}
+
 fn list(s: &Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    let range = range_param(s, p)?;
     let dict = Dictionary::english();
     let ok = accepted(s, p);
     let max = p.get("suggestions").and_then(Value::as_u64).unwrap_or(5) as usize;
@@ -140,7 +158,12 @@ fn list(s: &Session, p: &Value) -> Result<Value> {
         }
         let chars = char_offsets(t, &offsets);
         for (i, m) in found.iter().enumerate() {
-            out.push(json!({ "layer": id.0, "start": chars[i * 2], "end": chars[i * 2 + 1], "word": m.word, "suggestions": dict.suggest(&m.word, max) }));
+            let (start, end) = (chars[i * 2], chars[i * 2 + 1]);
+            if range.is_some_and(|(a, b)| start < a || end > b) {
+                continue;
+            }
+            let suggestions = if max == 0 { Vec::new() } else { dict.suggest(&m.word, max) };
+            out.push(json!({ "layer": id.0, "start": start, "end": end, "word": m.word, "suggestions": suggestions }));
         }
     }
     Ok(json!({ "misspellings": out, "count": out.len() }))
@@ -313,7 +336,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Check Spelling…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"layers":[id]? (check these layers, as Check All Layers off does with several layers selected; implies Check All Layers off; in the `from` order; non-type layers are passed; an empty `layers` checks nothing; not with `layer`),"from":id|null? (all layers or `layers`: start at this type layer, go up and wrap; default: the active layer; null, or a `from` that is not a type layer: top to bottom),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
+            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"layers":[id]? (check these layers, as Check All Layers off does with several layers selected; implies Check All Layers off; in the `from` order; non-type layers are passed; an empty `layers` checks nothing; not with `layer`),"from":id|null? (all layers or `layers`: start at this type layer, go up and wrap; default: the active layer; null, or a `from` that is not a type layer: top to bottom),"range":[startChar,endChar]? (with `layer`: check only the words wholly inside these characters, as while editing type),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
             // Any open document, also one without type layers, where it lists nothing.
             enabled: crate::commands::has_doc,
             journal: true,
