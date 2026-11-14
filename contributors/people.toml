@@ -352,3 +352,8 @@ sync_github_name = true
 
 [people.slafebre]
 real_name = "Sven Lafebre"
+
+[people.qvest-ssels]
+real_name = "Stefan Sels"
+display_name = "tronicum"
+sync_github_name = false
