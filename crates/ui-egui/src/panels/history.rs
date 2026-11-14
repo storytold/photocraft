@@ -71,7 +71,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 12.0,
                 if is_redo { t.text_faint } else { t.icon },
             );
-            ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, &e, egui::FontId::proportional(12.0), color);
+            paint_label(ui, &resp, pos2(rect.left() + 58.0, rect.center().y), &e, color, label_room(rect, rect.left() + 58.0));
             if history_source_column(ui, rect, egui::Id::unique(("history-source", i)), source == Some(HistorySource::State(i))) {
                 set_source = Some(i);
             }
@@ -189,18 +189,36 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub(crate) fn step_icon(step: &str) -> &'static str {
     match step {
         s if s.contains("Brush") || s.contains("Eraser") => "brush",
-        // Applying a patch edits pixels; only the Patch tool's lasso is a selection step.
-        "Patch Selection" => "sliders-horizontal",
+        // Applying a patch or a content-aware move edits pixels; only these tools' lassos are selection steps.
+        "Patch Selection" | "Content-Aware Move Selection" => "sliders-horizontal",
         // The Layers panel's controls (layer.setProps).
         "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
         s if s.contains("Layer") => "layers",
         s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
-        // The selections the Patch tool draws (select.lasso's historyName).
-        "Patch Tool" => "square-dashed",
+        // The selections the Patch and Content-Aware Move tools draw (select.lasso's historyName).
+        "Patch Tool" | "Content-Aware Move Tool" => "square-dashed",
         s if s.contains("Fill") => "paint-bucket",
         // The opening state: "Open" for a file, "New" for a document from File › New (#14029).
         "Open" | "New" => "image",
         _ => "sliders-horizontal",
+    }
+}
+
+/// Width a row label may take: from `left` to the row's right edge, less a small gap. (The
+/// source column is at the row's left, so the right edge is what a long name runs into.)
+fn label_room(row: Rect, left: f32) -> f32 {
+    (row.right() - 6.0 - left).max(1.0)
+}
+
+/// Paint a row label left-centred at `pos`, cut with '…' to `max_w`. A cut name shows in full as
+/// the hover text of the row's own response (no new widget, so click and drag stay on the row).
+fn paint_label(ui: &egui::Ui, resp: &egui::Response, pos: egui::Pos2, text: &str, color: Color32, max_w: f32) {
+    let galley = crate::widgets::tab_strip::elided(ui, text, egui::FontId::proportional(12.0), color, max_w);
+    let elided = galley.elided;
+    let at = Align2::LEFT_CENTER.anchor_size(pos, galley.size()).min;
+    ui.painter().galley(at, galley, color);
+    if elided {
+        resp.clone().on_hover_text(text);
     }
 }
 
@@ -320,7 +338,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
                 }
             }
             None => {
-                ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &snap.name, egui::FontId::proportional(12.0), t.text);
+                paint_label(ui, &resp, pos2(thumb.right() + 8.0, rect.center().y), &snap.name, t.text, label_room(rect, thumb.right() + 8.0));
             }
         }
         if history_source_column(ui, rect, egui::Id::unique(("history-snapshot-source", snap.id)), source == Some(HistorySource::Snapshot(snap.id))) {
@@ -347,4 +365,30 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
     }
     ui.data_mut(|d| d.insert_temp(rename_id, renaming));
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn label_room_stops_short_of_the_row_edge() {
+        let row = Rect::from_min_size(pos2(10.0, 0.0), vec2(200.0, 24.0));
+        assert_eq!(label_room(row, 68.0), 136.0);
+        let tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(30.0, 24.0));
+        assert_eq!(label_room(tiny, 58.0), 1.0);
+    }
+
+    #[test]
+    fn a_long_name_is_cut_to_the_room() {
+        let ctx = egui::Context::default();
+        let mut cut = None;
+        ctx.run_ui(Default::default(), |ui| {
+            let g = crate::widgets::tab_strip::elided(ui, "Content-Aware Move Tool", egui::FontId::proportional(12.0), Color32::WHITE, 60.0);
+            cut = Some((g.elided, g.size().x));
+        })
+        .drop_without_applying_deltas();
+        let (elided, w) = cut.unwrap_or((false, 0.0));
+        assert!(elided && w <= 61.0, "{elided} {w}");
+    }
 }
