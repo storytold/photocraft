@@ -112,6 +112,8 @@ pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_css_cmds;
+#[cfg(test)]
+mod layer_duplicate_multi_history_tests;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
@@ -597,7 +599,7 @@ fn build() -> Vec<CommandSpec> {
                 let in_place = p.get("inPlace").and_then(Value::as_bool).unwrap_or(false);
                 let name = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
                 if crate::layer_multi_cmds::multi(s, p) {
-                    return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layers");
+                    return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layer");
                 }
                 let id = layer_param(s, p)?;
                 let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
