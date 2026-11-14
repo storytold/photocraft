@@ -1115,6 +1115,9 @@ mod smudge_default_tip_tests;
 mod sponge_default_tip_tests;
 
 #[cfg(test)]
+mod pattern_stamp_refusal_alert_tests;
+
+#[cfg(test)]
 mod red_eye_context_menu_tests;
 
 #[cfg(test)]

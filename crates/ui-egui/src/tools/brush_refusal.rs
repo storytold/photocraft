@@ -43,6 +43,7 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
+        Tool::PatternStamp => Some(tl!("pattern stamp")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
