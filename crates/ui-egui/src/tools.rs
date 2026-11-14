@@ -89,3 +89,6 @@ mod remove_default_size_tests;
 
 #[cfg(test)]
 mod ellipse_center_mark_tests;
+
+#[cfg(test)]
+mod object_selection_not_found_tests;

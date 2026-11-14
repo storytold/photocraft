@@ -624,10 +624,12 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 
 /// Object Selection: the dragged rectangle. A click (or a sub-2 px nudge) cannot be a
 /// rectangle: with Object Finder on it selects the object under the pointer, the one hovering
-/// highlighted (#4087). With it off it falls back to a Quick Selection dab at the brush size
-/// instead of looking dead (⌥ or Subtract mode subtracts, otherwise it adds). Larger drags
-/// run the rectangle GrabCut. Both combine as the options bar's New / Add / Subtract /
-/// Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥ intersecting (#12853).
+/// highlighted (#4087), and finding nothing stays silent. With it off it falls back to a Quick
+/// Selection dab at the brush size instead of looking dead (⌥ or Subtract mode subtracts,
+/// otherwise it adds). Larger drags run the rectangle GrabCut; one that finds nothing opens the
+/// reference application's alert with "Don't show again" (#12861). Both combine as the options
+/// bar's New / Add / Subtract / Intersect buttons say, with ⇧ adding, ⌥ subtracting and ⇧⌥
+/// intersecting (#12853).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     // Indexed Color and Bitmap: the reference application's alert with OK (#12867), and nothing runs.
     if let Some(why) = app.session.active().and_then(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode)) {
@@ -641,9 +643,17 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     let mode = crate::tool_feedback::selection_mode(Tool::ObjectSelection, app.ui.selection_mode, mods);
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
-        let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all}));
+        // A click that finds nothing stays silent, as in the reference application (#12861):
+        // where the sampled layer has no pixels the engine's error is not run into either.
+        let here = photocraft_geom::Rect::from_xywh((end[0] as f32).floor() as i32, (end[1] as f32).floor() as i32, 1, 1);
+        let empty = app
+            .session
+            .active()
+            .is_some_and(|st| photocraft_engine::smartselect_cmds::empty_sampled_area(&st.doc, st.active_layer, sample_all, here).is_some());
+        if !empty {
+            let _ = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all}));
+        }
         crate::object_finder::clear(app);
-        report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
     }
     if w < 2.0 || h < 2.0 {
@@ -653,14 +663,23 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
         report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
-    let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
-    report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
+    let r = app.run(
+        "select.object",
+        json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all, "recordEmptyArea": true}),
+    );
+    if matches!(r, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(false)) {
+        let why = tl!("Couldn't find an object to select. There might not be enough edge contrast, or the object might be too small.");
+        crate::dialogs::dont_show_again::alert(app, why, OBJECT_NOT_FOUND_PREF);
+    }
 }
+
+/// The "Don't show again" of the alert for an Object Selection rectangle that finds nothing.
+const OBJECT_NOT_FOUND_PREF: &str = "objectSelection.notFound";
 
 /// Reports a smart-selection command result in the status bar. Engine errors are already
 /// reported by [`PhotocraftApp::run`], but an empty result (`changed: false`) is a silent
-/// success that looks like a dead button (Select Subject finding nothing on a busy photo,
-/// Object Selection missing its rectangle). `empty_msg` says what to try next.
+/// success that looks like a dead button (Select Subject finding nothing on a busy photo).
+/// `empty_msg` says what to try next.
 pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, empty_msg: &str) {
     if matches!(res, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(false)) {
         app.ui.status = empty_msg.into();
