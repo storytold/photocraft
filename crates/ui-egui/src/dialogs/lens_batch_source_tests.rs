@@ -29,7 +29,7 @@ pub(super) fn click_answered(h: &mut H, button: &str) {
     h.run_steps(2);
 }
 
-fn click(h: &mut H, label: &str) {
+pub(super) fn click(h: &mut H, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(3);
 }
@@ -49,7 +49,7 @@ fn rows(h: &H, names: &[&str]) -> Vec<f32> {
     names.iter().map(|n| h.get_by_role_and_label(Role::Button, n).rect().top()).collect()
 }
 
-fn disabled(h: &H, button: &str) -> bool {
+pub(super) fn disabled(h: &H, button: &str) -> bool {
     h.get_by_role_and_label(Role::Button, button).accesskit_node().is_disabled()
 }
 
