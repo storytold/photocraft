@@ -769,13 +769,12 @@ fn pen_shift_click_puts_the_next_anchor_on_a_45_degree_ray() {
     pen_down(&mut app, 20.0, 20.0, true);
     pen_up(&mut app);
     assert_eq!(app.ui.pen.as_ref().unwrap().knots[0][0], [20.0, 20.0]);
-    // ~30° below horizontal snaps to the 45° diagonal at the pointer's projection.
+    // ~30° below horizontal snaps to the 45° diagonal, at the shorter axis distance (#12893).
     let (dx, dy) = (100.0 * 30f64.to_radians().cos(), 100.0 * 30f64.to_radians().sin());
     pen_down(&mut app, 20.0 + dx, 20.0 + dy, true);
     pen_up(&mut app);
     let k = app.ui.pen.as_ref().unwrap().knots[1];
-    let t = 100.0 * 15f64.to_radians().cos() / std::f64::consts::SQRT_2;
-    assert!(close(k[0], [20.0 + t, 20.0 + t]), "{:?}", k[0]);
+    assert!(close(k[0], [20.0 + dy, 20.0 + dy]), "{:?}", k[0]);
     assert!(k[1] == k[0] && k[2] == k[0], "a click stays a corner");
     // ~10° off vertical snaps to straight down from the previous anchor.
     let prev = k[0];
