@@ -1807,6 +1807,9 @@ fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
     let mut curves = wide_gamut_session();
     curves.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
     assert!(!optimizer::flattens_before_srgb(&doc(&curves)), "an adjustment layer");
+    let mut smart = wide_gamut_session();
+    smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&smart)), "a smart object");
 
     let blend_if = changed(&|l| {
         l.blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 40], white: [255, 255] }, photocraft_doc::BlendRange::default()]);

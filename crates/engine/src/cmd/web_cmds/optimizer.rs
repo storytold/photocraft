@@ -77,9 +77,10 @@ pub(super) fn flattens_before_srgb(doc: &Document) -> bool {
 }
 
 /// Whether every visible layer (hidden ones and the contents of hidden groups do not render) is
-/// a pixel-blending layer that blends Normal (a group may pass through) with no active effects,
-/// no Blend If ranges, no excluded channels and default Advanced Blending. Adjustment layers
-/// and everything else were not measured, so they keep the per-layer conversion.
+/// a pixel layer or a group that blends Normal (a group may pass through) with no active effects,
+/// no active Blend If, no excluded channels and default Advanced Blending. Adjustment, fill,
+/// text, shape and smart object layers (with their smart filters) were not measured, so they keep
+/// the per-layer conversion.
 fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
     use photocraft_doc::{BlendMode, LayerContent};
     if depth > photocraft_doc::MAX_GROUP_DEPTH {
@@ -90,11 +91,10 @@ fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
             Some(_) => matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough),
             None => l.blend == BlendMode::Normal,
         };
-        let effects_on = l.effects.enabled && l.effects.items.iter().any(photocraft_doc::Effect::enabled);
         blend_ok
-            && !effects_on
-            && !matches!(l.content, LayerContent::Adjustment(_))
-            && l.blend_if.is_default()
+            && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_))
+            && !photocraft_compose::effects::has_effects(l)
+            && !photocraft_compose::blend_if_active(l, photocraft_color::ColorMode::Rgb)
             && l.excluded_channels == 0
             && l.advanced.is_default()
             && l.children().is_none_or(|kids| plain_layers(kids, depth + 1))
