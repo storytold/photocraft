@@ -5936,10 +5936,10 @@ dependencies = [
 name = "photocraft-raw"
 version = "0.23.1"
 dependencies = [
+ "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-raw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eec8408c53620135e66344e342c2a0849aeb917a)",
  "flate2",
  "image",
- "photocraft-codecs",
  "photocraft-raw",
  "rayon",
  "zune-core",
