@@ -531,6 +531,10 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
+    /// The connected monitors, in the points of a window on each, for floating panels' OS
+    /// windows (`panel_docking::monitors`).
+    #[serde(skip)]
+    pub docking_monitors: Vec<craft_ui::docking::Monitor>,
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
@@ -706,6 +710,7 @@ impl Default for UiState {
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
+            docking_monitors: Vec::new(),
             color_panel: Default::default(),
             color_panel_synced: None,
             brush_section: 0,

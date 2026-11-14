@@ -4,7 +4,11 @@
 use super::*;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, ViewportId, pos2, vec2};
 use egui_kittest::Harness;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 /// Where the main window's content sits on the desktop.
 const ORIGIN: Pos2 = pos2(200.0, 100.0);
@@ -25,6 +29,8 @@ struct Host {
     focus: Option<ViewportId>,
     time: f64,
     size: egui::Vec2,
+    /// The size of the monitor each window is on, as egui-winit reports it; `None` reports none.
+    monitor_size: Option<egui::Vec2>,
 }
 
 impl Host {
@@ -34,6 +40,7 @@ impl Host {
             outer_rect: Some(rect),
             focused: Some(focused),
             native_pixels_per_point: Some(1.0),
+            monitor_size: self.monitor_size,
             ..Default::default()
         };
         std::iter::once((ViewportId::ROOT, info(Rect::from_min_size(ORIGIN, self.size), self.focus.is_none())))
@@ -83,11 +90,21 @@ struct Desktop {
 
 impl Desktop {
     fn new(app: PhotocraftApp) -> Self {
+        Self::on_monitor(app, None)
+    }
+
+    /// A desktop whose windows report `monitor_size` as the size of their monitor.
+    fn on_monitor(app: PhotocraftApp, monitor_size: Option<egui::Vec2>) -> Self {
         let size = vec2(1400.0, 900.0);
-        let host = Rc::new(RefCell::new(Host { size, ..Default::default() }));
+        let host = Rc::new(RefCell::new(Host { size, monitor_size, ..Default::default() }));
         let shared = host.clone();
         egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| Host::render(&shared, ctx, viewport));
         let mut ready = false;
+        // The dock draws only once the window system reports its windows (`steps`), as in the
+        // app, whose first frame has them: not in the frames the harness runs while it is built,
+        // where it would restore a saved layout's windows on no monitor at all.
+        let reporting = Rc::new(Cell::new(false));
+        let drawing = reporting.clone();
         let h = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
             move |ui, app: &mut PhotocraftApp| {
                 if !ready {
@@ -96,11 +113,15 @@ impl Desktop {
                     ready = true;
                     return;
                 }
+                if !drawing.get() {
+                    return;
+                }
                 crate::panels::dock_area(app, ui);
                 egui::CentralPanel::default().show(ui, |_| {});
             },
             app,
         );
+        reporting.set(true);
         let mut desktop = Self { h, host };
         desktop.steps(4);
         desktop
@@ -393,4 +414,65 @@ fn a_file_dropped_on_a_panel_window_opens_as_a_document() {
     let names: Vec<String> = desktop.h.state().session.documents().iter().map(|d| d.doc.name.clone()).collect();
     assert_eq!(names.len(), documents + 1, "{names:?}");
     assert_eq!(names.last().map(String::as_str), Some("dropped.psd"));
+}
+
+/// The monitors of a desktop, from what winit reports for each: name, physical origin and size,
+/// and scale. The main window (at `ORIGIN`, 1400 × 900) is on the 100% "main" one.
+fn desktop_monitors(extra: &[(&str, [i32; 2], [u32; 2], f64)]) -> Vec<craft_ui::docking::Monitor> {
+    let display = |&(name, position, size, scale): &(&str, [i32; 2], [u32; 2], f64)| monitors::Display { name: Some(name.into()), position, size, scale };
+    let main = ("main", [0, 0], [1920, 1080], 1.0);
+    monitors::dock_monitors(std::iter::once(&main).chain(extra).map(display), 1.0)
+}
+
+/// Float Info, leave its OS window at `at` on a desktop of `saved` monitors, and quit; start
+/// again on a desktop of `connected` monitors. Returns where Info's window opens.
+fn reopened_at(saved: Vec<craft_ui::docking::Monitor>, at: Pos2, connected: Vec<craft_ui::docking::Monitor>) -> Rect {
+    // egui-winit reports the size of the monitor each window is on; the main window's is 1920 × 1080.
+    let monitor_size = Some(vec2(1920.0, 1080.0));
+    let mut app = app_with_document();
+    app.ui.docking_monitors = saved;
+    let mut desktop = Desktop::on_monitor(app, monitor_size);
+    desktop.h.state_mut().run("window.panel.float", json!({"panel": "info"})).unwrap();
+    // Past the dock's wait for the window system to place a new window.
+    desktop.steps(40);
+    let viewport = desktop.window_of("info").expect("Info's OS window");
+    // The user drags it to `at`: the window system reports it there.
+    let size = desktop.window_rect(viewport).size();
+    desktop.host.borrow_mut().windows.get_mut(&viewport).unwrap().rect = Rect::from_min_size(at, size);
+    desktop.steps(40);
+    let saved: Value = serde_json::from_str(&crate::dock::snapshot(desktop.h.state()).to_string()).unwrap();
+    drop(desktop);
+
+    let mut app = app_with_document();
+    crate::dock::apply(&mut app, &saved);
+    app.ui.docking_monitors = connected;
+    let mut desktop = Desktop::on_monitor(app, monitor_size);
+    desktop.steps(3);
+    let reopened = desktop.window_rect(desktop.window_of("info").expect("Info opens in its own OS window again"));
+    assert_eq!(reopened.size(), size, "at the size it had");
+    reopened
+}
+
+#[test]
+fn a_floating_panel_reopens_on_the_monitor_it_was_left_on() {
+    // A 100% monitor right of the main one (#13599).
+    let right = desktop_monitors(&[("right", [1920, 0], [2560, 1440], 1.0)]);
+    assert_eq!(reopened_at(right.clone(), pos2(2400.0, 300.0), right).min, pos2(2400.0, 300.0));
+    // A 150% monitor left of and above the main one: negative origins, in its own points.
+    let left = desktop_monitors(&[("left", [-3840, -300], [3840, 2160], 1.5)]);
+    assert_eq!(left[1].rect, [-2560.0, -200.0, 2560.0, 1440.0]);
+    assert_eq!(reopened_at(left.clone(), pos2(-2000.0, -100.0), left).min, pos2(-2000.0, -100.0));
+}
+
+#[test]
+fn a_floating_panel_on_a_monitor_that_is_gone_reopens_on_the_main_one() {
+    let right = desktop_monitors(&[("right", [1920, 0], [2560, 1440], 1.0)]);
+    let only_main = desktop_monitors(&[]);
+    let reopened = reopened_at(right, pos2(2400.0, 300.0), only_main);
+    // At the same place on the main monitor as it had on its own, wholly on it.
+    assert_eq!(reopened.min, pos2(480.0, 300.0));
+    assert!(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0)).contains_rect(reopened), "{reopened:?}");
+    // Left past the bottom right corner of a monitor that is gone: pulled wholly onto the main one.
+    let reopened = reopened_at(desktop_monitors(&[("right", [1920, 0], [2560, 1440], 1.0)]), pos2(4300.0, 1300.0), desktop_monitors(&[]));
+    assert_eq!(reopened.max, pos2(1920.0, 1080.0), "{reopened:?}");
 }

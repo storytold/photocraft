@@ -17,6 +17,8 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 
+pub(crate) mod monitors;
+
 /// The saved arrangement: layout, hidden panels with their return places, and the lock.
 pub(crate) type Workspace = craft_ui::docking::Workspace<String>;
 
@@ -820,6 +822,7 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     style.new_dock_zones = true;
     let style = style.localized(|key| DOCK_LABELS.iter().find(|(k, _)| *k == key).map(|(_, english)| tl!(english).to_string()));
     let mut dock = craft_ui::docking::DockArea::new(area)
+        .monitors(app.ui.docking_monitors.clone())
         .locked(locked)
         .auto_collapse_iconic(app.session.prefs().workspace.auto_collapse_icon_panels)
         .input_blocked(modal_open(app, ui.ctx()));
