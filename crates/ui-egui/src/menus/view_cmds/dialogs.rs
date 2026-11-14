@@ -152,6 +152,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string)
     };
+    per_format_state(f);
     let keys = form_keys(f);
     let mut browse: Option<String> = None;
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -162,7 +163,25 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             {
                 continue;
             }
+            if !shown(f, &k) {
+                continue;
+            }
+            if let Some(title) = f.get("__sections").and_then(|m| m.get(&k)).and_then(Value::as_str) {
+                ui.label(egui::RichText::new(title).font(crate::theme::semibold(13.0)));
+                ui.end_row();
+            }
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
+            // A key named in `__swatches` is an sRGB `[r, g, b]` (0..1) edited with a colour swatch.
+            let swatch = f.get("__swatches").and_then(Value::as_array).is_some_and(|s| s.iter().any(|n| n.as_str() == Some(k.as_str())));
+            if swatch && let Some(rgb) = v.as_array() {
+                ui.label(label(&k));
+                let byte = |i: usize| (rgb.get(i).and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+                let mut c = [byte(0), byte(1), byte(2)];
+                crate::widgets::color_edit_button_srgb(ui, &mut c, &crate::color_picker_ui::title_for(&label(&k))).on_hover_text(label(&k));
+                f.insert(k, json!(c.map(|b| f64::from(b) / 255.0)));
+                ui.end_row();
+                continue;
+            }
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
                 let mut naming = v.as_str().unwrap_or_default().to_owned();
@@ -206,13 +225,18 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     json!(b)
                 }
                 Value::String(s) => {
-                    ui.label(label(&k));
+                    let name = ui.label(label(&k));
+                    if let Some(tip) = f.get("__tooltips").and_then(|m| m.get(&k)).and_then(Value::as_str) {
+                        name.on_hover_text(tip);
+                    }
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
                         Some(opts) => {
-                            // Action and set names are the user's own text, never catalogue entries.
-                            let action_names = matches!(k.as_str(), "action" | "set")
-                                && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet"));
+                            // Action and set names are the user's own text, never catalogue entries;
+                            // nor are the choices of a key in `__literal` (font names).
+                            let action_names = (matches!(k.as_str(), "action" | "set")
+                                && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet")))
+                                || f.get("__literal").and_then(Value::as_array).is_some_and(|l| l.iter().any(|n| n.as_str() == Some(k.as_str())));
                             let opts: Vec<(String, String)> =
                                 opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) })).collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
@@ -277,8 +301,59 @@ const BATCH_QUALITY: &str = "__batchQuality";
 /// is not JPEG or Custom is off: shell state, never command parameters.
 const JPEG_CUSTOM: &str = "__jpegCustom";
 const JPEG_QUALITY: &str = "__jpegQuality";
+/// The checkboxes a form keeps per file type (`__perFormat`, keys of the `format` field), the
+/// values kept for the other types, and the type they belong to now (#13637): shell state.
+const PER_FORMAT_STATE: &str = "__perFormatState";
+const FORMAT_SEEN: &str = "__formatSeen";
 /// The shell keys Alt+Reset restores along with a form's params.
-const RESET_SHELL_KEYS: [&str; 3] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY];
+const RESET_SHELL_KEYS: [&str; 5] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY, PER_FORMAT_STATE, FORMAT_SEEN];
+
+/// When the `format` field has changed, keeps the `__perFormat` keys' values under the type they
+/// were set for and brings back the new type's (their value at open for a type not seen yet), as
+/// Artboards to Files keeps Include Artboard Name per file type.
+fn per_format_state(f: &mut Map<String, Value>) {
+    let Some(keys) = f.get("__perFormat").and_then(Value::as_array).cloned() else { return };
+    let format = f.get("format").and_then(Value::as_str).unwrap_or_default().to_string();
+    let seen = f.get(FORMAT_SEEN).and_then(Value::as_str).unwrap_or_default().to_string();
+    if format == seen {
+        return;
+    }
+    let orig = f.get("__formOrig").cloned().unwrap_or(Value::Null);
+    let mut state = f.get(PER_FORMAT_STATE).and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut old = Map::new();
+    for k in keys.iter().filter_map(Value::as_str) {
+        old.insert(k.to_string(), f.get(k).cloned().unwrap_or(Value::Null));
+        let kept = state.get(&format).and_then(|m| m.get(k)).or_else(|| orig.get(k)).cloned();
+        if let Some(v) = kept {
+            f.insert(k.to_string(), v);
+        }
+    }
+    state.insert(seen, Value::Object(old));
+    f.insert(PER_FORMAT_STATE.into(), Value::Object(state));
+    f.insert(FORMAT_SEEN.into(), json!(format));
+}
+
+/// A key named in `__shownBy` is shown only while the checkbox it names is on, or, for a
+/// `[key, value]` pair, while that choice is `value`; and only while the key it names is shown.
+fn shown(f: &Map<String, Value>, k: &str) -> bool {
+    shown_at(f, k, 0)
+}
+
+fn shown_at(f: &Map<String, Value>, k: &str, depth: u8) -> bool {
+    // A chain longer than this (or a cycle) shows the field rather than recursing on.
+    if depth > 8 {
+        return true;
+    }
+    let (by, on) = match f.get("__shownBy").and_then(|m| m.get(k)) {
+        Some(Value::String(by)) => (by.as_str(), f.get(by.as_str()).and_then(Value::as_bool) == Some(true)),
+        Some(Value::Array(pair)) => match (pair.first().and_then(Value::as_str), pair.get(1)) {
+            (Some(by), Some(want)) => (by, f.get(by) == Some(want)),
+            _ => return true,
+        },
+        _ => return true,
+    };
+    on && shown_at(f, by, depth + 1)
+}
 
 /// A Custom checkbox and the 0..12 Quality field it enables (Batch, the exports to files). Off,
 /// the command gets no quality and keeps its own defaults; `usable` false greys out both.
@@ -507,9 +582,34 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
                     "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
             } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
+                // Include Artboard Name, kept per file type, and its Name Options (#13637).
+                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10,
+                    "includeName": false, "font": "Arial", "fontStyle": "Regular", "fontSize": "12", "extension": "white", "extensionColor": [0.5, 0.5, 0.5],
+                    "textColor": [0.0, 0.0, 0.0],
+                    "__order": ["dir", "prefix", "format", "quality", "includeName", "font", "fontStyle", "fontSize", "extension", "extensionColor", "textColor"],
+                    "__perFormat": ["includeName"], PER_FORMAT_STATE: {}, FORMAT_SEEN: "png",
+                    "__shownBy": {"font": "includeName", "fontStyle": "includeName", "fontSize": "includeName", "extension": "includeName",
+                        "extensionColor": ["extension", "other"], "textColor": "includeName"},
+                    "__sections": {"font": tl!("Name Options")},
+                    "__swatches": ["extensionColor", "textColor"],
+                    "__literal": ["font"],
+                    "__tooltips": {"fontStyle": tl!("Select the font style")},
+                    "__labels": {"includeName": tl!("Include Artboard Name"), "font": tl!("Font:"), "fontStyle": tl!("Style"), "fontSize": tl!("Size (pt)"),
+                        "extension": tl!("Canvas Extension:"), "white": tl!("White"), "black": tl!("Black"), "other": tl!("Other..."),
+                        "extensionColor": tl!("Canvas Extension Color"), "textColor": tl!("Text:"),
+                        "Regular": tl!("Regular"), "Italic": tl!("Italic"), "Bold": tl!("Bold"), "Bold Italic": tl!("Bold Italic"), "Black": tl!("Black")}})
             };
-            dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
+            let mut choices = json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]});
+            if id == "file.export.artboardsToFiles" {
+                let mut fonts: Vec<String> = crate::type_tool::families().to_vec();
+                if !fonts.iter().any(|f| f == "Arial") {
+                    fonts.insert(0, "Arial".into());
+                }
+                choices["font"] = json!(fonts);
+                choices["fontStyle"] = json!(["Regular", "Italic", "Bold", "Bold Italic", "Black"]);
+                choices["extension"] = json!(["white", "black", "other"]);
+            }
+            dialog(app, fields, choices)
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;

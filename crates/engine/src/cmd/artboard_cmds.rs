@@ -13,7 +13,7 @@ use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, color_param, int, int_i32};
+use crate::commands::{CommandSpec, color_param, int, int_i32, parse_hex};
 use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
@@ -675,17 +675,139 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     }
 }
 
+/// Artboards to Files' Include Artboard Name and its Name Options (#13637).
+struct NameBorder {
+    /// `{"font", "fontStyle", "size", "color"}` for [`crate::type_cmds::apply_char_props`].
+    style: Value,
+    /// The Canvas Extension colour, sRGB with alpha.
+    extension: [f32; 4],
+}
+
+/// Photoshop's largest type size, in points.
+const NAME_SIZE_MAX_PT: f64 = 1296.0;
+
+/// The Name Options of `file.export.artboardsToFiles`, or `None` with `includeName` off. A size
+/// that is not a positive number fails the export, as in Photoshop ("the initial bounding
+/// rectangle is empty"), before any file is written.
+fn name_border_param(p: &Value, cmd: &str) -> Result<Option<NameBorder>> {
+    if !p.get("includeName").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(None);
+    }
+    // The dialog's Size field takes any text, so a numeric string counts as its number.
+    let size = match p.get("fontSize") {
+        None | Some(Value::Null) => Some(12.0),
+        Some(Value::String(t)) => t.trim().parse::<f64>().ok(),
+        Some(v) => v.as_f64(),
+    };
+    let Some(size) = size.filter(|v| v.is_finite() && *v > 0.0) else {
+        return Err(bad(cmd, "the artboard name size must be a positive number of points"));
+    };
+    let font = p.get("font").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Arial");
+    let font_style = p.get("fontStyle").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Regular");
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let extension = match p.get("extension") {
+        None | Some(Value::Null) => white,
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("white") => white,
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("black") => [0.0, 0.0, 0.0, 1.0],
+        // The dialog's Other...: the colour picked in its swatch.
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("other") => color_param(cmd, p, "extensionColor", white)?,
+        Some(Value::String(c)) => parse_hex(c).ok_or_else(|| bad(cmd, "`extension` must be \"white\", \"black\", \"#rrggbb\" or [r, g, b]"))?,
+        Some(_) => color_param(cmd, p, "extension", white)?,
+    };
+    let text = color_param(cmd, p, "textColor", [0.0, 0.0, 0.0, 1.0])?.map(|c| c.clamp(0.0, 1.0));
+    let style = json!({"font": font, "fontStyle": font_style, "size": size.min(NAME_SIZE_MAX_PT), "color": text});
+    Ok(Some(NameBorder { style, extension: extension.map(|c| c.clamp(0.0, 1.0)) }))
+}
+
+/// The width of the name border on each side: a twentieth of width plus height, rounded. This
+/// gives exactly Photoshop's measured borders: 18 px for 200 x 150, 20 for 200 x 200 and 60 for
+/// 800 x 400.
+fn name_border_width(w: u32, h: u32) -> u32 {
+    ((f64::from(w) + f64::from(h)) / 20.0).round() as u32
+}
+
+/// Include Artboard Name: extends `one` on all four sides by [`name_border_width`], fills the new
+/// border with the Canvas Extension colour (a bottom layer, so the board keeps its own pixels)
+/// and draws the board's name in the top border, its ink left-aligned with the board's left edge
+/// and centred in the border's height.
+fn add_name_border(one: &mut Document, o: &NameBorder, cmd: &str) -> Result<()> {
+    let (w, h) = (one.size.width, one.size.height);
+    let b = name_border_width(w, h);
+    let grown = |len: u32| b.checked_mul(2).and_then(|d| len.checked_add(d)).and_then(|n| i32::try_from(n).ok().map(|i| (n, i)));
+    let (Some((nw, nwi)), Some((nh, nhi)), Ok(bi)) = (grown(w), grown(h), i32::try_from(b)) else {
+        return Err(bad(cmd, format!("artboard `{}` is too large to add a name border", one.name)));
+    };
+    let before = one.clone();
+    for l in &mut one.layers {
+        crate::commands::translate_layer(&before, l, bi, bi);
+        crate::vector_cmds::translate_vectors(&before, l, f64::from(bi), f64::from(bi));
+    }
+    crate::canvas_geom::transform_doc_marks(one, &Affine::translate(f64::from(bi), f64::from(bi)));
+    one.size = Size::new(nw, nh);
+    let fmt = one.pixel_format();
+    let mut ring = Layer::raster("Canvas Extension", fmt);
+    if let Some(surf) = ring.surface_mut() {
+        let px = photocraft_raster::from_rgba(&fmt, o.extension);
+        let (x1, y1) = (nwi - bi, nhi - bi);
+        for r in [Rect::new(0, 0, nwi, bi), Rect::new(0, y1, nwi, nhi), Rect::new(0, bi, bi, y1), Rect::new(x1, bi, nwi, y1)] {
+            if !r.is_empty() {
+                surf.fill_rect(r, &px);
+            }
+        }
+    }
+    one.layers.insert(0, ring);
+    let mut style = photocraft_doc::text::CharStyle::default();
+    crate::type_cmds::apply_char_props(&mut style, &o.style);
+    let mut t = photocraft_doc::TextLayer { text: one.name.clone(), ..Default::default() };
+    t.runs = vec![photocraft_doc::text::TextRun { len: t.text.len(), style }];
+    t.sync_summary();
+    let dpi = one.resolution_dpi;
+    let layout = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner).layout(&t, dpi);
+    if let Some([x0, y0, _, y1]) = photocraft_text::render::ink_bounds(&layout) {
+        let (dx, dy) = ((f64::from(bi) - x0).round(), (f64::from(bi) / 2.0 - (y0 + y1) / 2.0).round());
+        if dx.is_finite() && dy.is_finite() {
+            t.transform = Affine::translate(dx, dy);
+            crate::type_cmds::refresh_at(dpi, fmt, &mut t);
+            // Only the top border takes the name: ink of a size taller than the border is cut
+            // there, never drawn over the board (the file is flat, so the type need not stay
+            // editable).
+            if let Some(cache) = &t.cache {
+                let r = cache.content_bounds().intersect(&Rect::new(0, 0, nwi, bi));
+                if !r.is_empty() {
+                    let px = cache.try_read_region(r).map_err(|e| bad(cmd, e.to_string()))?;
+                    let mut clipped = Surface::new(cache.format());
+                    clipped.write_region(r, &px);
+                    one.layers.push(Layer::new(t.text.clone(), LayerContent::Raster(clipped)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// File types Include Artboard Name leaves as they are: what it does there is not measured.
+fn keeps_layers(format: &str) -> bool {
+    matches!(format, "psd" | "psb" | "pdf" | "pcraft")
+}
+
 /// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
+    let border = name_border_param(p, cmd)?.filter(|_| !keeps_layers(&format));
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
+    let mut boards = chosen_documents(&doc, p)?;
+    if let Some(o) = &border {
+        for one in &mut boards {
+            add_name_border(one, o, cmd)?;
+        }
+    }
     let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
+    for (i, one) in boards.into_iter().enumerate() {
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
@@ -829,7 +951,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?,"includeName":bool=false (Include Artboard Name: a border of (w + h) / 20 px on each side, the name in the top one; psd and pdf keep their layers),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension; "other" takes "extensionColor":[r,g,b]),"textColor":"#rrggbb"|[r,g,b]=black} → {files}"##,
             export_artboards,
             artboards_to_files
         ),
@@ -847,6 +969,9 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/include_name_tests.rs"]
+mod include_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
