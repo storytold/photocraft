@@ -478,6 +478,28 @@ fn bucket_click(app: &mut PhotocraftApp, x: f64, y: f64) {
     }
 }
 
+/// Paint Bucket ⇧-click on the pasteboard sets the pasteboard colour to the foreground colour, as
+/// in the reference application (#12534): the custom colour, and use it, as the pasteboard menu's
+/// Select Custom Color… does. It is a preference, so no history state and no document change.
+/// Only a plain ⇧ with no selection: other modifiers and an active selection were not measured and
+/// keep today's fill. True when it handled the click.
+fn bucket_pasteboard_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
+    let plain_shift = mods.shift && !mods.alt && !mods.ctrl && !mods.command && !mods.mac_cmd;
+    let Some(st) = app.session.active() else { return false };
+    let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+    let outside = x.is_finite() && y.is_finite() && (x < 0.0 || y < 0.0 || x >= w || y >= h);
+    if !plain_shift || !outside || st.doc.selection.is_some() {
+        return false;
+    }
+    let [r, g, b, _] = app.session.tools.foreground;
+    let color = crate::color_picker_ui::hex([r, g, b]);
+    if let Err(e) = app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}})) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
+}
+
 /// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
 /// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
 /// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
@@ -636,7 +658,9 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::PaintBucket => {
-                    bucket_click(app, x, y);
+                    if !bucket_pasteboard_click(app, x, y, mods) {
+                        bucket_click(app, x, y);
+                    }
                     return;
                 }
                 Tool::RedEye => {
