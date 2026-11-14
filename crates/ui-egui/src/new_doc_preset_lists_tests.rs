@@ -105,6 +105,7 @@ fn pixel_grids_apply_their_pixels_whatever_unit_is_picked() {
         assert_eq!((f["width"].as_u64(), f["height"].as_u64(), f["resolution"].as_f64()), (Some(2000), Some(2000), Some(300.0)), "{unit}");
         assert_eq!(f["__unit"], "px", "{unit}");
         // Poster is still a print preset in the picked physical unit.
+        f.insert("__unit".into(), json!(unit));
         apply_preset(&mut f, &find("Art & Illustration", "Poster"), &UnitsAndRulers::default());
         assert_eq!(f["__unit"], if unit == "px" { "in" } else { unit });
     }
