@@ -328,6 +328,8 @@ fn global_light_dialog_reflects_active_document_light() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = egui::Context::default();
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    // A document holding only the Background greys Global Light (#14681).
+    app.run("layer.new.layer", json!({})).unwrap();
     let doc1_id = app.session.active().unwrap().doc.id;
 
     // 0. Default-document control: fresh document starts at angle 120 and altitude 30.
@@ -378,6 +380,8 @@ fn global_light_dialog_reflects_active_document_light() {
 
     // 6. Multiple documents: each document initializes the dialog to its own light.
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    // A document holding only the Background greys Global Light (#14681).
+    app.run("layer.new.layer", json!({})).unwrap();
     let doc2_id = app.session.active().unwrap().doc.id;
     assert_ne!(doc1_id, doc2_id);
     app.run("layer.layerStyle.globalLight", json!({"angle": -45.0, "altitude": 15.0})).unwrap();

@@ -715,6 +715,14 @@ fn blend_range(v: &Value) -> Option<BlendRange> {
     q.windows(2).all(|w| w[0] <= w[1]).then(|| BlendRange::from_bytes(q))
 }
 
+/// Global Light is greyed in a document whose only layer is the Background (#14681): with any other
+/// layer it is available, even with the Background active and no effects.
+fn global_light_enabled(s: &Session) -> Enabled {
+    has_doc(s)?;
+    let background_only = s.active().is_some_and(|d| matches!(d.doc.layers.as_slice(), [only] if d.doc.is_background(only.id)));
+    if background_only { Err("the document has only the Background layer".into()) } else { Ok(()) }
+}
+
 fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
     let cur = s.active().ok_or(EngineError::NoDocument)?.doc.global_light;
     // Read as f64 and reject what f32 can't hold: 1e39 would become inf, and rem_euclid NaN.
@@ -1071,7 +1079,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Global Light…",
             ["Layer", "Layer Style"],
             r##"{"angle":-180..180=120,"altitude":0..90=30}"##,
-            has_doc,
+            global_light_enabled,
             global_light
         ),
         spec!("layer.layerStyle.createLayer", "Create Layer", ["Layer", "Layer Style"], r##"{"layer":id?}"##, has_effects, create_layer),
@@ -1111,5 +1119,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod global_light_background_only_tests;
 #[cfg(test)]
 mod tests;
