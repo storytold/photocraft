@@ -238,7 +238,7 @@ fn data_sets_and_footage_read_only_followed_files() {
     s.execute("image.applyDataSet", json!({"name": "relative"})).unwrap();
     assert_eq!(centre(&s), BLUE);
 
-    // Reload Frame re-reads the video layer's footage.
+    // Reload Frame re-reads the current frame of the video layer's footage.
     s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": d.join("blue.png").to_string_lossy()})).unwrap();
     let footage = |s: &mut Session, path: &str| {
         let id = s.active().unwrap().active_layer.unwrap();

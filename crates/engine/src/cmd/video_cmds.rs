@@ -573,8 +573,12 @@ fn interpret_footage(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Layer › Video Layers › Reload Frame: re-read the frame at the playhead from the layer's file
+/// source, after the footage changed on disk. As in Photoshop, only that frame is reloaded: it
+/// shows the file's pixels again (its original footage and its displayed frame both become the
+/// file's frame), and every other frame keeps its footage and its edits. A file that no longer
+/// reaches the frame is an error and changes nothing.
 fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
-    // Reload the whole stack from its file source (what a frame reload needs for a sequence).
     let (src, fmt) = {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let id = st.active_layer.ok_or(EngineError::NoDocument)?;
@@ -590,10 +594,22 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     };
     // The footage path is stored in the document.
     let file = crate::doc_path::resolve(&path).map_err(|why| crate::doc_path::refusal("the footage", &path, why))?;
-    let Footage { frames, warnings, .. } = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?;
-    let mut out = edit_video(s, "Reload Frame", move |v, _| {
-        v.original_frames = Some(frames.clone());
-        v.frames = frames;
+    let Footage { mut frames, warnings, .. } = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?;
+    let mut out = edit_video(s, "Reload Frame", move |v, cur| {
+        // The frame the layer shows at the playhead, as `sync` picks it.
+        let at = cur.min(v.frames.len().saturating_sub(1));
+        if at >= frames.len() {
+            return Err(EngineError::BadParams {
+                cmd: "layer.videoLayers.reloadFrame".into(),
+                msg: format!("the footage now has {} frames, so it has no frame {} to reload", frames.len(), at + 1),
+            });
+        }
+        let fresh = frames.swap_remove(at);
+        let original = v.original_frames.get_or_insert_with(|| v.frames.clone());
+        if let (Some(shown), Some(footage)) = (v.frames.get_mut(at), original.get_mut(at)) {
+            *shown = fresh.clone();
+            *footage = fresh;
+        }
         Ok(())
     })?;
     if !warnings.is_empty() {
