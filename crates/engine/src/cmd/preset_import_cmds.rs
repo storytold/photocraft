@@ -28,7 +28,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 /// Largest accepted file (Photoshop's biggest bundled sets are well under this).
 pub const MAX_FILE_BYTES: u64 = 512 << 20;
 /// Largest accepted `.abr` file: brush libraries of large sampled tips outgrow [`MAX_FILE_BYTES`].
-/// Tied to the decoder's sample budget (1 GiB, 512 MiB on 32-bit targets) so it never refuses
+/// Tied to the decoder's sample budget (2 GiB, 512 MiB on 32-bit targets) so it never refuses
 /// what this accepts.
 pub const MAX_ABR_FILE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 512 << 20 };
 
@@ -56,26 +56,31 @@ pub(crate) fn file_bytes_limited(p: &Value, cmd: &str, what: &str, max_bytes: u6
     }
     let path =
         p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or_else(|| bad(cmd, format!("give `path` ({what}) or `data` (base64)")))?;
-    let len = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.len();
+    let file = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let len = file.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.len();
     if len > max_bytes {
         return Err(bad(cmd, format!("{path}: file too large ({len} bytes)")));
     }
-    let file = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    let bytes = read_preset_bytes(file, cmd, path, max_bytes)?;
+    let bytes = read_preset_bytes_with_hint(file, cmd, path, len, max_bytes)?;
     let stem = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok((bytes, stem))
 }
 
 /// Bound the actual stream independently of metadata, which can become stale before reading.
 /// One extra byte distinguishes an exact-limit file from an oversized or growing input.
+#[cfg(test)]
 fn read_preset_bytes(reader: impl std::io::Read, cmd: &str, path: &str, max_bytes: u64) -> Result<Vec<u8>> {
-    use std::io::Read;
-    let mut bytes = Vec::new();
-    reader.take(max_bytes.saturating_add(1)).read_to_end(&mut bytes).map_err(|error| EngineError::Other(format!("{path}: {error}")))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(bad(cmd, format!("{path}: file too large")));
-    }
-    Ok(bytes)
+    read_preset_bytes_with_hint(reader, cmd, path, 0, max_bytes)
+}
+
+/// Reads up to `max_bytes` from `reader` using [`photocraft_format::read::read_all_limited`]:
+/// pre-reserves `size_hint` exactly (avoiding Vec doubling on >1 GiB `.abr` files), reads in
+/// bounded chunks, and retries `ErrorKind::Interrupted`.
+fn read_preset_bytes_with_hint(mut reader: impl std::io::Read, cmd: &str, path: &str, size_hint: u64, max_bytes: u64) -> Result<Vec<u8>> {
+    photocraft_format::read::read_all_limited(&mut reader, size_hint.min(max_bytes), max_bytes).map_err(|error| match error.kind() {
+        std::io::ErrorKind::FileTooLarge => bad(cmd, format!("{path}: file too large")),
+        _ => EngineError::Other(format!("{path}: {error}")),
+    })
 }
 
 /// The preset names in use, for naming new presets.
@@ -125,16 +130,16 @@ fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
         false,
         move |ctx| {
             ctx.progress(0.0, "Importing brushes");
-            let p = &params;
-            let (bytes, stem) = file_bytes_limited(p, cmd, ".abr file", MAX_ABR_FILE_BYTES)?;
-            let group = match p.get("group") {
+            let (bytes, stem) = file_bytes_limited(&params, cmd, ".abr file", MAX_ABR_FILE_BYTES)?;
+            let group = match params.get("group") {
                 Some(v) => v.as_str().map(str::trim).filter(|g| !g.is_empty()).ok_or_else(|| bad(cmd, "`group` must be a non-empty string"))?.to_string(),
                 None if !stem.is_empty() => stem,
                 None => "Imported Brushes".to_string(),
             };
+            drop(params);
             ctx.check()?;
             let imp = ctx
-                .stage(0.05, 1.0, "Importing brushes", |ctl| photocraft_io::abr_map::read_abr_with(&bytes, &group, ctl))
+                .stage(0.05, 1.0, "Importing brushes", |ctl| photocraft_io::abr_map::read_abr_owned(bytes, &group, ctl))
                 .map_err(|e| if ctx.cancelled() { EngineError::Cancelled } else { bad(cmd, e) })?;
             Ok((group, imp))
         },
@@ -449,6 +454,43 @@ mod tests {
             assert!(error.to_string().contains("file too large"), "{error}");
             assert_eq!(growing.position(), cap + 1, "the reader must not consume the rest of a growing source");
         }
+    }
+
+    #[test]
+    fn interrupted_preset_stream_retries_until_eof_and_enforces_cap() {
+        struct InterruptedReader<'a> {
+            data: &'a [u8],
+            pos: usize,
+            step: usize,
+            flip: bool,
+        }
+        impl std::io::Read for InterruptedReader<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                self.flip = !self.flip;
+                if self.flip {
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+                }
+                let n = out.len().min(self.step).min(self.data.len() - self.pos);
+                out[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+
+        let payload: Vec<u8> = (0..8_192u32).map(|i| (i * 19 % 251) as u8).collect();
+        let exact = InterruptedReader { data: &payload, pos: 0, step: 317, flip: false };
+        let got = super::read_preset_bytes_with_hint(exact, "test", "fixture", payload.len() as u64, payload.len() as u64).unwrap();
+        assert_eq!(got, payload);
+        assert_eq!(got.capacity(), payload.len(), "exact stat hint avoids Vec doubling");
+
+        let grown = InterruptedReader { data: &payload, pos: 0, step: 317, flip: false };
+        let got = super::read_preset_bytes_with_hint(grown, "test", "fixture", 512, payload.len() as u64).unwrap();
+        assert_eq!(got, payload);
+
+        let over = InterruptedReader { data: &payload, pos: 0, step: 317, flip: false };
+        let err = super::read_preset_bytes_with_hint(over, "test", "fixture", 512, payload.len() as u64 - 1).unwrap_err();
+        assert!(matches!(err, super::EngineError::BadParams { .. }), "{err:?}");
+        assert!(err.to_string().contains("file too large"), "{err}");
     }
     #[test]
     fn decoded_preset_data_cannot_exceed_its_format_budget() {
@@ -852,6 +894,8 @@ mod tests {
         // 1 GiB on 64-bit; 32-bit (wasm) keeps 512 MiB so a big file fails cleanly instead of aborting.
         const WANT: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 512 << 20 };
         const _: () = assert!(MAX_ABR_FILE_BYTES == WANT && MAX_ABR_FILE_BYTES >= MAX_FILE_BYTES);
+        #[cfg(target_pointer_width = "64")]
+        const _: () = assert!(1_077_579_672 <= MAX_ABR_FILE_BYTES);
         let dir = std::env::temp_dir().join(format!("pc-abr-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cap.abr");
@@ -859,6 +903,11 @@ mod tests {
         let p = json!({"path": path.to_string_lossy()});
         assert!(file_bytes_limited(&p, "t", "f", 10).is_ok());
         assert!(file_bytes_limited(&p, "t", "f", 9).is_err(), "a file over the cap is refused before reading");
+        // A sparse file over MAX_ABR_FILE_BYTES is refused before reading on open handle metadata.
+        let over_abr = dir.join("over.abr");
+        std::fs::File::create(&over_abr).unwrap().set_len(MAX_ABR_FILE_BYTES + 1).unwrap();
+        let err = Session::new().execute("brush.presets.importAbr", json!({"path": over_abr.to_string_lossy()})).unwrap_err();
+        assert!(err.to_string().contains("file too large"), "{err}");
         // A sparse file between the two caps: refused as a .grd, which is checked before reading.
         let big = dir.join("big.grd");
         std::fs::File::create(&big).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();

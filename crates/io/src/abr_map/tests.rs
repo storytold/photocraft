@@ -488,3 +488,39 @@ fn dual_brush_spacing_comes_from_its_tip() {
     assert!((spacing(dual(tip.clone().with("Spcn", prc(10.0)))) - 0.10).abs() < 1e-6, "the tip's 10 %, not the outer 100 %");
     assert!((spacing(dual(tip)) - 1.0).abs() < 1e-6, "no tip spacing: the outer value");
 }
+
+#[test]
+fn read_abr_owned_matches_borrowed_and_shares_reused_tips() {
+    let s1 = sample("tip-a", 12, 8, 8);
+    let s2 = sample("tip-b", 10, 10, 16);
+    let p1 = Descriptor::new("brushPreset").with("Nm  ", t("First")).with("Brsh", Value::Descriptor(sampled_tip("tip-a")));
+    let p2 = Descriptor::new("brushPreset").with("Nm  ", t("Second")).with("Brsh", Value::Descriptor(sampled_tip("tip-a")));
+    let p3 = Descriptor::new("brushPreset").with("Nm  ", t("Third")).with("Brsh", Value::Descriptor(sampled_tip("tip-b")));
+    let v6 = write_v6(2, &[s1.clone(), s2], &[], &[p1, p2, p3], false).unwrap();
+    let borrowed = read_abr(&v6, "Pack").unwrap();
+    let owned = read_abr_owned(v6, "Pack", &photocraft_raster::Interrupt::NONE).unwrap();
+    assert_eq!((owned.version, &owned.warnings, owned.presets.len()), (borrowed.version, &borrowed.warnings, borrowed.presets.len()));
+    for (a, b) in owned.presets.iter().zip(&borrowed.presets) {
+        assert_eq!((&a.name, &a.group, a.brush.size), (&b.name, &b.group, b.brush.size));
+        let (TipShape::Sampled(ta), TipShape::Sampled(tb)) = (&a.brush.tip, &b.brush.tip) else { panic!("sampled tip expected") };
+        assert_eq!((ta.width, ta.height, &*ta.data), (tb.width, tb.height, &*tb.data));
+    }
+    let (TipShape::Sampled(t0), TipShape::Sampled(t1)) = (&owned.presets[0].brush.tip, &owned.presets[1].brush.tip) else {
+        panic!("sampled tip expected");
+    };
+    assert!(std::sync::Arc::ptr_eq(&t0.data, &t1.data), "presets reusing a sample share one tile allocation");
+
+    // Sole-sample fallback when `sampledData` does not match, plus sample-only v6 and v2 legacy.
+    let fallback_preset = Descriptor::new("brushPreset").with("Nm  ", t("Fallback")).with("Brsh", Value::Descriptor(sampled_tip("other-id")));
+    let sole = write_v6(2, std::slice::from_ref(&s1), &[], &[fallback_preset], false).unwrap();
+    assert_eq!(read_abr_owned(sole.clone(), "G", &photocraft_raster::Interrupt::NONE).unwrap().presets.len(), read_abr(&sole, "G").unwrap().presets.len());
+
+    let sample_only = write_v6(1, std::slice::from_ref(&s1), &[], &[], false).unwrap();
+    assert_eq!(
+        read_abr_owned(sample_only.clone(), "G", &photocraft_raster::Interrupt::NONE).unwrap().presets.len(),
+        read_abr(&sample_only, "G").unwrap().presets.len()
+    );
+
+    let legacy = write_v12(2, &[LegacyBrush { name: "Ink".into(), spacing: 25, anti_alias: true, tip: LegacyTip::Sampled(s1) }], true).unwrap();
+    assert_eq!(read_abr_owned(legacy.clone(), "G", &photocraft_raster::Interrupt::NONE).unwrap().presets.len(), read_abr(&legacy, "G").unwrap().presets.len());
+}

@@ -270,8 +270,12 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         // Documents opening in the background are read on the worker too (a 2 GB PSB read
-        // would block the window). Preset files (brushes, gradients) go the usual way.
+        // would block the window). Brush libraries (.abr) also pass their path straight to the
+        // engine instead of reading up to 2 GB here and again on the worker (#5949).
         let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if ext == "abr" {
+            return crate::preset_files_ui::open_abr_path(self, path).map(|()| Vec::new());
+        }
         if self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
             crate::jobs_ui::start_open(
                 self,

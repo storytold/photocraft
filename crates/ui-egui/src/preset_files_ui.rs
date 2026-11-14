@@ -32,18 +32,46 @@ pub const BRUSH_IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "ps
 
 /// Brushes panel / brush preset picker › Import Brushes…: an `.abr` joins the brush library as a
 /// group (as File › Open does), an image file becomes a new brush preset with that image as its tip.
+/// Desktop paths go straight to the engine without pre-reading the file on the UI thread (#5949).
 pub fn import_brushes(app: &mut PhotocraftApp) -> Result<Value, String> {
     let exts: Vec<&str> = std::iter::once("abr").chain(BRUSH_IMAGE_EXTS.iter().copied()).collect();
-    app.pick_file_bytes_filtered(&exts, |app, name, bytes| match open(app, &name, &bytes) {
-        Some(r) => r.map(|()| Value::Null),
-        None => import_brush_image(app, &name, &bytes),
+    app.pick_file_source_filtered(&exts, |app, name, bytes| match bytes {
+        Some(bytes) => match open(app, &name, &bytes) {
+            Some(r) => r.map(|()| Value::Null),
+            None => import_brush_image(app, &name, &bytes),
+        },
+        None => import_brushes_path(app, &name),
     })
+}
+
+/// Imports a native path picked in Import Brushes… without reading it on the UI thread first.
+#[cfg(not(target_arch = "wasm32"))]
+fn import_brushes_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
+    if ext(path) == "abr" {
+        return open_abr_path(app, path).map(|()| Value::Null);
+    }
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", crate::file_open::display_name(path)))?;
+    if !meta.is_file() {
+        return Err(format!("{}: path is not a regular file", crate::file_open::display_name(path)));
+    }
+    let abs = crate::file_open::absolute(path);
+    import_brush_image_with_source(app, path, json!({"path": abs}))
+}
+
+/// Web builds receive browser file bytes rather than filesystem paths.
+#[cfg(target_arch = "wasm32")]
+fn import_brushes_path(_app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
+    Err(format!("cannot open paths on the web: {path}"))
 }
 
 /// An image file as a brush tip: a new preset named after the file, made the current brush.
 pub fn import_brush_image(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<Value, String> {
+    import_brush_image_with_source(app, name, source(name, bytes))
+}
+
+/// Runs `brush.presets.importImage` for `p` (`path` or inline `data`) and selects the new brush.
+fn import_brush_image_with_source(app: &mut PhotocraftApp, name: &str, mut p: Value) -> Result<Value, String> {
     let file = std::path::Path::new(name).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| name.to_string());
-    let mut p = source(name, bytes);
     if p.get("data").is_some() {
         p["fileName"] = json!(file);
     }
@@ -84,6 +112,17 @@ fn source(name: &str, bytes: &[u8]) -> Value {
     json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
+/// Imports an `.abr` file from `path` without reading its bytes on the UI thread (#5949).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_abr_path(app: &mut PhotocraftApp, path: &str) -> Result<(), String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path}: path is not a regular file"));
+    }
+    let abs = crate::file_open::absolute(path);
+    open_command(app, "brush.presets.importAbr", "brushes", path, json!({"path": abs}))
+}
+
 /// Import a preset file; `None` when `name` isn't one.
 pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
     let (cmd, what) = match ext(name).as_str() {
@@ -95,13 +134,17 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
         "kys" | "psp" => return Some(crate::kys_import::open_bytes(app, name, bytes).map(|_| ())),
         _ => return None,
     };
+    Some(open_command(app, cmd, what, name, source(name, bytes)))
+}
+
+/// Prepares group/selection fields on `p`, checks for a group-name clash, and runs `cmd`.
+fn open_command(app: &mut PhotocraftApp, cmd: &'static str, what: &'static str, name: &str, mut p: Value) -> Result<(), String> {
     // Trimmed like the engine trims `group`, so the clash check sees the name the import uses.
     let stem = std::path::Path::new(name)
         .file_stem()
         .map(|s| s.to_string_lossy().trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| tl!("Imported").into());
-    let mut p = source(name, bytes);
     p["group"] = json!(stem);
     if what == "brushes" {
         p["select"] = json!(true);
@@ -109,13 +152,13 @@ pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<
     // A group of the same name with the user's presets: ask before importing (#10640).
     if matches!(what, "brushes" | "gradients") {
         let held = crate::preset_group_prompt::Held { cmd, what, stem, params: p };
-        return Some(match crate::preset_group_prompt::intercept(app, held) {
+        return match crate::preset_group_prompt::intercept(app, held) {
             Ok(Some(held)) => run_import(app, held.cmd, held.what, &held.stem, held.params),
             Ok(None) => Ok(()),
             Err(e) => Err(e),
-        });
+        };
     }
-    Some(run_import(app, cmd, what, &stem, p))
+    run_import(app, cmd, what, &stem, p)
 }
 
 /// Run the import command for a preset file and report it in the status bar.
@@ -299,5 +342,65 @@ mod tests {
         let TipShape::Sampled(tip) = &app.session.tools.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (3, 8));
         assert!(app.ui.panels.brush_settings && app.ui.brush_tab == 1, "the Brushes tab shows the new brush");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn desktop_abr_import_routes_paths_directly_to_engine_cap() {
+        use craft_psd::abr::{LegacyBrush, LegacyTip, write_v12};
+        let dir = std::env::temp_dir().join(format!("pc-ui-abr-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let valid = dir.join("Pack.abr");
+        let abr = write_v12(
+            2,
+            &[LegacyBrush {
+                name: String::new(),
+                spacing: 25,
+                anti_alias: true,
+                tip: LegacyTip::Computed { diameter: 14, hardness: 100, angle: 0, roundness: 100 },
+            }],
+            true,
+        )
+        .unwrap();
+        std::fs::write(&valid, &abr).unwrap();
+
+        let over = dir.join("TooBig.abr");
+        std::fs::File::create(&over).unwrap().set_len(photocraft_engine::preset_import_cmds::MAX_ABR_FILE_BYTES + 1).unwrap();
+
+        let png_path = dir.join("Spot.png");
+        let img = photocraft_codecs::Image::from_u8(8, 8, photocraft_codecs::ChannelLayout::Gray, vec![0u8; 64]).unwrap();
+        std::fs::write(&png_path, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+
+        let (show, _) = crate::file_dialog::fake(vec![
+            Some(crate::file_dialog::FileDialogAnswer::Paths(vec![valid.to_string_lossy().into_owned()])),
+            Some(crate::file_dialog::FileDialogAnswer::Paths(vec![over.to_string_lossy().into_owned()])),
+            Some(crate::file_dialog::FileDialogAnswer::Paths(vec![png_path.to_string_lossy().into_owned()])),
+        ]);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
+        import_brushes(&mut app).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert!(app.session.tools.presets.iter().any(|p| p.group == "Pack" && p.brush.size == 14.0));
+
+        // Oversized .abr via Import Brushes… is rejected immediately by MAX_ABR_FILE_BYTES without reading 2 GiB on the UI thread.
+        import_brushes(&mut app).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert!(app.ui.status_error && app.ui.status.contains("file too large"), "{}", app.ui.status);
+
+        // Native image path via Import Brushes… also imports directly without a UI-thread double-read.
+        import_brushes(&mut app).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.tools.current_preset.as_deref(), Some("Spot"));
+
+        // File › Open (`open_path`) uses the same single-read engine path for `.abr`.
+        let valid2 = dir.join("PackOpen.abr");
+        std::fs::write(&valid2, &abr).unwrap();
+        app.open_path(&valid2.to_string_lossy()).unwrap();
+        assert!(app.session.tools.presets.iter().any(|p| p.group == "PackOpen" && p.brush.size == 14.0));
+        let err = app.open_path(&over.to_string_lossy()).unwrap_err();
+        assert!(err.contains("file too large"), "{err}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
