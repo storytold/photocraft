@@ -190,7 +190,7 @@ A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; fil
 |---|---|
 | `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
-| `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
+| `PHOTOCRAFT_NO_PRINT` | Set to a non-empty value other than `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
 | `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
