@@ -5,6 +5,12 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
+/// The Timeline's Options menu button. The window has another "Options" (the options bar): the Timeline's
+/// is the lowest, at the panel's header.
+fn timeline_options<'h>(h: &'h Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'h> {
+    h.query_all_by_label("Options").max_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("the Timeline's Options menu")
+}
+
 /// An app with a three-layer document that has a frame animation (one frame per layer).
 fn harness() -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
@@ -558,7 +564,7 @@ fn onion_skin_settings_survive_the_saved_ui_state() {
 fn onion_skin_is_off_the_bar_until_the_options_menu_turns_it_on() {
     let mut h = harness();
     assert!(h.query_all_by_label_contains("Onion Skin").next().is_none(), "not shown by default");
-    h.get_by_label("Options").click();
+    timeline_options(&h).click();
     h.run_steps(4);
     h.query_all_by_label_contains("Onion Skin").next().expect("the checkbox").click();
     h.run_steps(4);
@@ -614,8 +620,8 @@ fn the_tween_menu_adds_frames_between_two() {
     h.run_steps(4);
     assert!(h.query_by_label("Frames to add").is_some(), "the menu opened");
     // The count starts at 3; tween with the previous frame.
-    let items: Vec<_> = h.query_all_by_label("Previous frame").collect();
-    items.last().expect("the menu's Previous frame item").click();
+    // The transport bar has a "Previous frame" icon button too: the menu's item is the wider one.
+    h.query_all_by_label("Previous frame").max_by(|a, b| a.rect().width().total_cmp(&b.rect().width())).expect("the menu's Previous frame item").click();
     h.run_steps(4);
     let a = anim(&h);
     assert_eq!(a.frames.len(), 6, "three frames added to the three");
@@ -626,7 +632,7 @@ fn the_tween_menu_adds_frames_between_two() {
 #[test]
 fn the_options_menu_turns_the_tween_menu_on() {
     let mut h = harness();
-    h.get_by_label("Options").click();
+    timeline_options(&h).click();
     h.run_steps(4);
     h.query_all_by_label_contains("Tween").next().expect("the checkbox").click();
     h.run_steps(4);
