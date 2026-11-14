@@ -169,16 +169,18 @@ fn filter_event_before_tool(
     if crate::distort_ui::pointer(app, ev, mods) {
         return None;
     }
+    // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
+    let sticky = crate::workspace_ui::sticky_mods(app, mods);
+    // ⌘⌥⌃-click with any tool selects the topmost layer with pixels there (quick_pick.rs). It
+    // runs before the Perspective Crop, whose first press would drop the selection and start a
+    // quad (#13054), and before the ⌃⌥ brush resize below, which the same keys would trigger.
+    if crate::quick_pick::pointer(app, ev, sticky) {
+        return None;
+    }
     if crate::perspective_crop_ui::pointer(app, ev, mods) {
         return None;
     }
-    // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
-    let mods = crate::workspace_ui::sticky_mods(app, mods);
-    // ⌘⌥⌃-click with any tool selects the topmost layer with pixels there (quick_pick.rs); it
-    // must run before the ⌃⌥ brush resize below, which the same keys would trigger.
-    if crate::quick_pick::pointer(app, ev, mods) {
-        return None;
-    }
+    let mods = sticky;
     // Control+Alt-drag or Alt+right-drag with a painting tool resizes the brush instead of
     // painting (#231, #297).
     if crate::brush_resize::pointer(app, ev, mods, armed) {

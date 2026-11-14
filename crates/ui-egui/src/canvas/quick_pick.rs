@@ -82,6 +82,29 @@ mod tests {
         assert_eq!(st.history.past_len(), before, "no paint stroke was recorded");
     }
 
+    /// #13054: with the Perspective Crop, the gesture picks the layer before the tool sees the
+    /// press: the selection stays and no quad or corner starts.
+    #[test]
+    fn picks_the_layer_before_the_perspective_crop() {
+        let (mut app, a) = app();
+        app.ui.tool = Tool::PerspectiveCrop;
+        app.session.execute("select.rect", json!({"x": 30, "y": 30, "width": 20, "height": 20})).unwrap();
+        let before = app.session.active().unwrap().history.past_len();
+        tool_event(&mut app, ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, PICK);
+        tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 40.0, pressure: 1.0 }, PICK);
+        tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 40.0 }, PICK);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.active_layer, Some(a), "the layer under the pointer is picked");
+        assert!(st.doc.selection.is_some(), "the selection stays");
+        assert_eq!(st.history.past_len(), before, "no Deselect step");
+        assert!(app.ui.perspective_crop.is_none() && !crate::perspective_crop_ui::pending(&app), "no quad, corner or drag");
+        // A plain press still starts the crop as before.
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, Modifiers::NONE);
+        assert!(app.ui.perspective_crop.is_some());
+    }
+
     #[test]
     fn needs_all_three_modifiers() {
         let (mut app, a) = app();
