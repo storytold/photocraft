@@ -48,6 +48,7 @@ pub fn is_selection_tool(tool: Tool) -> bool {
             | Tool::MagneticLasso
             | Tool::MagicWand
             | Tool::QuickSelection
+            | Tool::SelectionBrush
             | Tool::ObjectSelection
     )
 }
@@ -57,7 +58,7 @@ pub fn is_selection_tool(tool: Tool) -> bool {
 pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
     match tool {
         // Quick Selection always adds (⌥ subtracts), like Photoshop's after the first stroke.
-        Tool::QuickSelection => {
+        Tool::QuickSelection | Tool::SelectionBrush => {
             if m.alt {
                 "subtract"
             } else {
@@ -84,6 +85,9 @@ pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
 /// subtract from or intersect with, so it draws a new selection, as in Photoshop (where ⌥ then
 /// only draws a marquee from its centre). An options-bar Subtract or Intersect is kept (#1106).
 pub fn document_selection_mode(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> &'static str {
+    if tool == Tool::SelectionBrush {
+        return if app.ui.tool_options.selection_brush.subtracts(m.alt) { "subtract" } else { "add" };
+    }
     let mode = selection_mode(tool, app.ui.selection_mode, m);
     // Asked last, and from the bounds the selection outline caches (same key): the canvas asks
     // every frame while a Patch lasso is drawn or hovered with ⌥.
@@ -143,6 +147,9 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // The Lasso's Alt with nothing selected draws straight segments; it subtracts nothing.
     if matches!(tool, Tool::Lasso | Tool::PolygonLasso) && app.drag.is_none() && app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
         m.alt = false;
+    }
+    if tool == Tool::SelectionBrush {
+        return Some(if app.ui.tool_options.selection_brush.subtracts(m.alt) { Badge::Subtract } else { Badge::Add });
     }
     Badge::from_mode(selection_mode(tool, app.ui.selection_mode, m))
 }

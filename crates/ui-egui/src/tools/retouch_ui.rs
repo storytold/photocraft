@@ -273,6 +273,19 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
             Some(cp) => cp,
             None => return false,
         },
+        Tool::SelectionBrush => {
+            let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
+            if let Err(e) = app.run(
+                "select.brush",
+                json!({"points": xy, "size": app.session.tools.brush.size.clamp(1.0, 5000.0), "hardness":app.session.tools.brush.hardness*100.0,
+                    "opacity":app.session.tools.brush.opacity*100.0,"fillClosed":o.selection_brush.fill_closed,
+                    "mode": if o.selection_brush.subtracts(mods.alt) { "subtract" } else { "add" }}),
+            ) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            return true;
+        }
         Tool::QuickSelection => {
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
@@ -305,6 +318,47 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         }
     }
     true
+}
+
+/// The Selection Brush options bar: Add / Subtract, the brush's size, hardness and opacity, and
+/// the overlay display settings.
+fn selection_brush_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let settings = &mut app.ui.tool_options.selection_brush;
+    if crate::widgets::pill_tab(ui, tl!("Add"), !settings.subtract).clicked() {
+        settings.subtract = false;
+    }
+    if crate::widgets::pill_tab(ui, tl!("Subtract"), settings.subtract).clicked() {
+        settings.subtract = true;
+    }
+    let before = app.session.tools.brush.clone();
+    let mut brush = before.clone();
+    opt(ui, tl!("Size"));
+    crate::widgets::value_field(ui, &mut brush.size, 1.0..=5000.0, "px", 56.0);
+    let mut hardness = brush.hardness * 100.0;
+    let mut opacity = brush.opacity * 100.0;
+    opt(ui, tl!("Hardness"));
+    crate::widgets::value_field(ui, &mut hardness, 0.0..=100.0, "%", 52.0);
+    opt(ui, tl!("Opacity"));
+    crate::widgets::value_field(ui, &mut opacity, 0.0..=100.0, "%", 52.0);
+    ui.menu_button(tl!("Brush Settings"), |ui| {
+        crate::widgets::slider_row(ui, tl!("Size"), &mut brush.size, 1.0..=5000.0, "px", None);
+        crate::widgets::slider_row(ui, tl!("Hardness"), &mut hardness, 0.0..=100.0, "%", None);
+        crate::widgets::slider_row(ui, tl!("Opacity"), &mut opacity, 0.0..=100.0, "%", None);
+    });
+    ui.menu_button(tl!("Overlay"), |ui| {
+        crate::widgets::color_edit_button_rgb(ui, &mut settings.overlay_color, tl!("Overlay"));
+        crate::widgets::slider_row(ui, tl!("Display Opacity"), &mut settings.overlay_opacity, 0.0..=100.0, "%", None);
+        crate::widgets::checkbox(ui, &mut settings.fill_closed, tl!("Fill Closed Strokes"));
+    });
+    // Only an edited field is converted back: the percent round trip can move a value by
+    // one ulp, which would send a brush update every frame with nothing changed.
+    if hardness != before.hardness * 100.0 {
+        brush.hardness = hardness / 100.0;
+    }
+    if opacity != before.opacity * 100.0 {
+        brush.opacity = opacity / 100.0;
+    }
+    crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
 }
 
 /// `paint.remove` params from the options bar (without the strokes).
@@ -895,7 +949,8 @@ fn clone_sample_dropdown(ui: &mut egui::Ui, stored: &mut String, indexed: bool) 
 
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
+    if !tool.is_brushlike()
+        && !matches!(tool, Tool::SelectionBrush | Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
         || matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)
     {
         return false;
@@ -1148,6 +1203,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Stylized dabs from a history state"));
         }
+        Tool::SelectionBrush => selection_brush_bar(app, ui),
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));

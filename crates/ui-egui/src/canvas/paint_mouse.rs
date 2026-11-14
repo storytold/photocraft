@@ -44,8 +44,13 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // opacity and flow (#12616): those fields are their own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
         // Stamp and the Smudge tool start with their own measured tips instead, as the whole brush
-        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
+        // Reset Tool gives them (#11911, #12099, #12671, #12684, #13029, #12601, #12964), and the
+        // Selection Brush its soft tip.
+        None if matches!(
+            tool,
+            Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge | Tool::SelectionBrush
+        ) =>
+        {
             fresh_brush(tool, &current)
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
@@ -110,8 +115,8 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// [`BRUSH_TOOL_TIP`], the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] with no smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
-/// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
-/// default tip.
+/// tool's [`SMUDGE_TOOL_TIP`], the Pencil's [`PENCIL_TOOL_TIP`], the Selection Brush's a 60 px,
+/// 70 % hard tip at full opacity; the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -121,6 +126,11 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,
+        // The Selection Brush paints full-strength coverage with a soft 60 px tip.
+        Tool::SelectionBrush => {
+            (brush.size, brush.hardness) = (60.0, 0.7);
+            brush.opacity = 1.0;
+        }
         Tool::CloneStamp => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
             brush.smoothing.amount = 0.0;
@@ -158,7 +168,7 @@ pub struct Buttons {
 
 /// Tools with the options-bar brush chip, which opens the Brush Preset picker.
 pub fn has_brush_picker(tool: Tool) -> bool {
-    tool.is_brushlike() || tool == Tool::QuickSelection
+    tool.is_brushlike() || matches!(tool, Tool::QuickSelection | Tool::SelectionBrush)
 }
 
 /// Tools whose canvas right-click opens the Brush Preset picker: the painting tools. The Quick

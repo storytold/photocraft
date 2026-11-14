@@ -129,6 +129,7 @@ fn is_selection_tool(tool: Tool) -> bool {
             | Tool::MagneticLasso
             | Tool::MagicWand
             | Tool::QuickSelection
+            | Tool::SelectionBrush
             | Tool::ObjectSelection
     )
 }
@@ -211,6 +212,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
         Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
         Tool::QuickSelection => reset!(enhance_edge),
+        Tool::SelectionBrush => reset!(selection_brush),
         Tool::ObjectSelection => reset!(enhance_edge, object_finder),
         Tool::Crop => reset!(
             crop_ratio,
