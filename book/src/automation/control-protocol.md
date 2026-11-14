@@ -32,8 +32,8 @@ rejected before file effects.
 control surface. There is no encryption, client identity, general per-method capability check,
 explicit JSON-depth policy, aggregate session-memory accounting, or command-duration/cancellation
 budget. Desktop capture/encoding and import/export still need their own operation budgets.
-The listener creates one thread per authenticated
-active connection, within the connection cap. Trusted one-shot CLI operations and interactive
+The listener creates one thread per accepted active connection, including clients that are still
+authenticating, within the connection cap. Trusted one-shot CLI operations and interactive
 desktop file pickers retain the launching user's normal filesystem authority.
 
 Use a private token file, enable `--control` only for a trusted local automation session, and never proxy the unencrypted protocol beyond loopback. See [Automation security](../security/automation-security.md) for the remaining gateway work.
