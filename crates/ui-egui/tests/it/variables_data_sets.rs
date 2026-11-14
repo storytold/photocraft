@@ -327,6 +327,14 @@ fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
         h.get_by_label("Apply").click();
         h.run_steps(3);
         assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
+        // The missing file's alert opens on top (#14500); OK dismisses it.
+        let alert = h.state().ui.dialogs.last().unwrap();
+        assert_eq!(alert.kind, DialogKind::Error);
+        assert_eq!(alert.fields["message"], json!("Could not apply data set because the replacement file was not found."));
+        let alert = alert.id;
+        let _ = photocraft_ui_egui::dialogs::confirm(h.state_mut(), alert);
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.iter().all(|d| d.id != alert));
         assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
         assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
         h.state_mut().ui.status.clear();

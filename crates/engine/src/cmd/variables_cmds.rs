@@ -219,7 +219,11 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
     let fmt = doc.pixel_format();
     // The path is stored in the document's data sets.
     let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
-    let bytes = std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
+    let bytes = std::fs::read(&file).map_err(|e| match e.kind() {
+        // The reference application's alert; the error also names the file (#14500).
+        std::io::ErrorKind::NotFound => EngineError::Other(format!("{DATA_SET_FILE_MISSING} ({path})")),
+        _ => EngineError::Other(format!("read `{path}`: {e}")),
+    })?;
     let src = crate::file_cmds::import(path, &bytes)?;
     let img = crate::file_cmds::flattened(&src, fmt);
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
@@ -285,7 +289,15 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
         s.edit(&label, |_, _| Ok(()))?;
         return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
     }
-    s.edit(&label, |doc, _| apply_to_doc(doc, &vars, &set))?;
+    match s.edit(&label, |doc, _| apply_to_doc(doc, &vars, &set)) {
+        // A missing replacement file applies nothing of the set (the edit is dropped whole), but
+        // the attempt is still a history state that changes nothing, as for a locked layer (#14500).
+        Err(EngineError::Other(m)) if m.starts_with(DATA_SET_FILE_MISSING) => {
+            s.edit(&label, |_, _| Ok(()))?;
+            return Err(EngineError::Other(m));
+        }
+        r => r?,
+    }
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
 }
@@ -293,6 +305,10 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// The reference application's alert when Apply Data Set would replace the text of a layer
 /// under Lock All.
 pub const DATA_SET_LAYER_LOCKED: &str = "Could not apply data set because the layer is locked.";
+
+/// The reference application's alert when a Pixel Replacement value names a file that does not
+/// exist. The command's error starts with it and names the file in parentheses.
+pub const DATA_SET_FILE_MISSING: &str = "Could not apply data set because the replacement file was not found.";
 
 /// Whether `set` has a Text value for a type layer with its own Lock All. Visibility and Pixel
 /// Replacement values still apply to locked layers, as in the reference application; partial
@@ -595,3 +611,6 @@ mod import_enabled_tests;
 
 #[cfg(test)]
 mod locked_text_layer_tests;
+
+#[cfg(test)]
+mod missing_file_tests;
