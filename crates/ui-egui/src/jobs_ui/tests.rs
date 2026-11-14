@@ -1327,6 +1327,8 @@ fn layer_export_as_without_jobs_keeps_no_composite() {
     let st = h.state().session.active().unwrap();
     let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
     let fields = h.state().ui.dialogs.last().unwrap().fields.clone();
+    // Closed as the Export button closes it: an open dialog keeps previewing (and compositing).
+    h.state_mut().ui.dialogs.clear();
     // No exporter in these services: the write fails, after the composite was let go.
     let _ = crate::export_dialog::confirm(h.state_mut(), &fields);
     h.run_steps(4);
