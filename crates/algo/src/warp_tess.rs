@@ -74,15 +74,17 @@ const SHALLOW_AFTER_REACH: f64 = 1.7;
 const SHALLOW_BEFORE_TOL: f64 = 0.5;
 /// See [`SHALLOW_BEFORE_TOL`].
 const SHALLOW_BEFORE_REACH: f64 = 0.42;
-/// A segment folded right over (its inner control points past the chord's end by
-/// [`SHALLOW_AFTER_REACH`] or more) whose inner control points lie within this many chord lengths of
-/// each other along it (it turns back sharply) splits past its end from [`SHARP_FOLD_TOL`] times
-/// its furthest reach (in chord lengths) on, if that is less than [`AFTER_TOL`]; the reference
-/// application's 16-bit crease redraws at four scales show that limit (0.34 to 0.35 times the
-/// reach from 1.35 to 2.05 chord lengths).
+/// A segment turning back sharply past its chord's end (its inner control points within this many
+/// chord lengths of each other along it, the furthest past the end) splits past its end from
+/// [`SHARP_FOLD_TOL`] times its furthest reach (in chord lengths), at most [`SHARP_FOLD_MAX`], in
+/// place of [`SHALLOW_AFTER_TOL`] or [`AFTER_TOL`]: the reference application's 16-bit crease
+/// redraws at four scales show that limit (0.34 to 0.35 times the reach from 1.35 to 2.05 chord
+/// lengths, about 0.7 px at 3.3).
 const SHARP_FOLD_SPAN: f64 = 0.35;
 /// See [`SHARP_FOLD_SPAN`].
 const SHARP_FOLD_TOL: f64 = 0.34;
+/// See [`SHARP_FOLD_SPAN`].
+const SHARP_FOLD_MAX: f64 = 0.7;
 /// The twist along a whole quilt patch's rows (document px) past which the patch splits across.
 const ROW_TWIST_ACROSS_TOL: f64 = 1.25;
 /// Twist of a cell's control net (document px) past which it splits.
@@ -340,10 +342,10 @@ fn need(c: &[P]) -> f64 {
         let first = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::INFINITY, f64::min);
         let last = (1..n).filter_map(|k| c.get(k)).map(along_of).fold(f64::NEG_INFINITY, f64::max);
         let before_tol = if first > -SHALLOW_BEFORE_REACH { SHALLOW_BEFORE_TOL } else { BEFORE_TOL };
-        let after_tol = if last < SHALLOW_AFTER_REACH {
+        let after_tol = if last >= 1.0 && last - first < SHARP_FOLD_SPAN {
+            (SHARP_FOLD_TOL * last).min(SHARP_FOLD_MAX)
+        } else if last < SHALLOW_AFTER_REACH {
             SHALLOW_AFTER_TOL
-        } else if last - first < SHARP_FOLD_SPAN {
-            AFTER_TOL.min(SHARP_FOLD_TOL * last)
         } else {
             AFTER_TOL
         };
@@ -1245,11 +1247,16 @@ mod tests {
         assert!(need(&[[0.0, 0.0], [-0.55, 0.0], [2.0, 0.0], [3.0, 0.0]]) >= 1.0);
         assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.4, 0.0], [3.0, 0.0]]) < 1.0);
         assert!(need(&[[0.0, 0.0], [1.0, 0.0], [3.5, 0.0], [3.0, 0.0]]) >= 1.0);
-        // Folded right over and turning back sharply (both inner points about two chord lengths
-        // along, close together): past the end from 0.34 times the reach; spread apart, from 1 px.
+        // Turning back sharply (both inner points past the end, close together): past the end from
+        // 0.34 times the reach (at most 0.7 px); spread apart, from 1 px.
         let sharp = |l: f64| need(&[[0.0, 0.0], [1.743 * l, 0.0], [1.976 * l, 0.0], [l, 0.0]]);
         assert!(sharp(0.6) < 1.0 && sharp(0.75) >= 1.0, "{} {}", sharp(0.6), sharp(0.75));
         assert!(need(&[[0.0, 0.0], [1.476 * 0.75, 0.0], [1.976 * 0.75, 0.0], [0.75, 0.0]]) < 1.0);
+        // Reaching 3.3 chord lengths: at most 0.7 px; reaching 1.55 (short of SHALLOW_AFTER_REACH): 0.53 px.
+        let long = |l: f64| need(&[[0.0, 0.0], [3.183 * l, 0.0], [3.312 * l, 0.0], [l, 0.0]]);
+        assert!(long(0.29) < 1.0 && long(0.32) >= 1.0, "{} {}", long(0.29), long(0.32));
+        let short = |l: f64| need(&[[0.0, 0.0], [1.288 * l, 0.0], [1.553 * l, 0.0], [l, 0.0]]);
+        assert!(short(0.93) < 1.0 && short(0.99) >= 1.0, "{} {}", short(0.93), short(0.99));
         // Both points outside and close to the ends: nothing to split; non-finite points neither.
         assert!(need(&[[0.0, 0.0], [-0.4, 0.0], [3.4, 0.0], [3.0, 0.0]]) < 1.0);
         assert_eq!(need(&[[0.0, 0.0], [f64::NAN, 0.0], [2.0, f64::INFINITY], [3.0, 0.0]]), 0.0);
