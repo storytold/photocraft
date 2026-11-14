@@ -151,3 +151,16 @@ fn crop_on_the_switch_prompt_with_a_crossed_quad_opens_the_alert() {
     assert_eq!((app.ui.tool, app.ui.perspective_crop), (Tool::PerspectiveCrop, Some(CROSSED)), "the tool and the quad stay");
     assert_eq!((steps(&app), size(&app)), (before, (160, 120)), "the document is untouched");
 }
+
+/// CodeRabbit on #14793: the alert asks about one quad. When another document becomes active the
+/// quad and the alert both go, so a Don't Crop answered later can't end another document's quad.
+#[test]
+fn the_alert_goes_with_its_quad_when_another_document_is_active() {
+    let mut app = setup(CROSSED);
+    enter(&mut app);
+    assert_eq!(alerts(&app).len(), 1);
+    app.run("file.new", json!({"width": 90, "height": 70})).unwrap();
+    cancel_stale(&mut app);
+    assert!(app.ui.perspective_crop.is_none(), "the old quad is dropped");
+    assert!(alerts(&app).is_empty(), "and its alert with it");
+}
