@@ -1257,5 +1257,11 @@ fn a_file_opens_as_a_pdf_when_it_starts_like_one_or_nothing_else_takes_it() {
     bom.extend(pdf(&[page(72.0, 72.0, &rect(0.0, 0.0, 72.0, 72.0, (0.0, 0.0, 0.0)))]));
     assert!(crate::is_pdf_input("x.pdf", &bom));
     assert!(crate::import("x.pdf", &bom).is_ok());
+    let r = crate::import("scan.bin", &bom).expect("a leading-byte PDF needs no .pdf extension");
+    assert_eq!(r.document.artboards().len(), 1);
+    let mut illustrator = pdf(&[page(72.0, 72.0, &rect(0.0, 0.0, 72.0, 72.0, (0.0, 0.0, 0.0)))]);
+    illustrator.extend_from_slice(b"\n% /AIPrivateData\n");
+    let r = crate::import("illustration.ai", &illustrator).expect("PDF-based Illustrator data still uses PDF import");
+    assert_eq!(r.document.artboards().len(), 1);
     assert!(crate::is_pdf_input("x", b"%PDF-1.7\n"));
 }

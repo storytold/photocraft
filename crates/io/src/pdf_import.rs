@@ -31,6 +31,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use craft_cms::{Builtin, Intent, Transform};
 use craft_pdf::OpenError;
 use craft_pdf::interpret::TransformExt;
 use craft_pdf::interpret::font::Glyph;
@@ -46,7 +47,6 @@ use craft_pdf::syntax::object::{Array, Dict, Name, Object, ObjectIdentifier, Str
 use craft_pdf::syntax::page::{Page, Resources, Rotation};
 use craft_pdf::syntax::{Filter, LoadPdfError, Pdf};
 use kurbo::{Affine, BezPath, Rect as PtRect, Shape};
-use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::Size;
@@ -668,7 +668,7 @@ fn write_bands(surface: &mut Surface, rgba: &[u8], (w, h): (u32, u32), mode: Col
         let px = match &t {
             Some(t) => {
                 let mut out = vec![0.0f32; src.len() / 4 * (n + 1)];
-                t.convert_f32(&src, 4, &mut out, n + 1, true);
+                t.convert_f32(&src, 4, &mut out, n + 1, true).map_err(|e| IoError::Pdf(format!("colour conversion: {e}")))?;
                 out
             }
             None => src,
