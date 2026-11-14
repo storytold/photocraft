@@ -10,6 +10,9 @@ use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 /// A dialog body sets this field to the key of the text field whose Browse… button was clicked;
 /// [`show`] takes it out again and opens the matching file or folder dialog.
 pub(crate) const BROWSE_FIELD: &str = "__browse";
+/// A form field typed past its range leaves its "Closest value inserted" message here, for the
+/// alert over the dialog (Batch's Starting Serial #, #13662).
+pub(crate) const RANGE_ALERT_FIELD: &str = "__rangeAlert";
 
 /// A text field that names a folder: an export's `dir`, and the source (`input`) and destination
 /// (`output`) folders of Image Processor, Batch, Lens Correction, Contact Sheet and Create
@@ -739,6 +742,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
             }
+            // The Enter that left the field shows its alert and must not also run the dialog.
+            let range_alert = fields.remove(RANGE_ALERT_FIELD);
+            if let Some(Value::String(message)) = &range_alert {
+                crate::panels::options_bar::range_alert(&mut app.ui, message);
+            }
             if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
                 // These dialogs own their right-side actions and validate Enter themselves.
             } else if crate::color_picker_ui::owns(&fields) {
@@ -755,7 +763,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    let (done, apply) = button_row(app, ui, &d, &mut fields, id, interactive, web && (web_popup_open || egui::Popup::is_any_open(ui.ctx())));
+                    let blocks_enter = (web && (web_popup_open || egui::Popup::is_any_open(ui.ctx()))) || range_alert.is_some();
+                    let (done, apply) = button_row(app, ui, &d, &mut fields, id, interactive, blocks_enter);
                     outcome = done.or(outcome);
                     apply_requested |= apply;
                 });

@@ -3604,7 +3604,6 @@ fn batch_naming_validates_the_whole_plan_before_writing() {
         json!({"naming": "{name"}),
         json!({"naming": "name}"}),
         json!({"naming": 42}),
-        json!({"naming": "{serial}", "startingSerial": 0}),
         json!({"naming": "{serial}", "startingSerial": 1.5}),
         json!({"naming": "{serial}", "startingSerial": "1"}),
         json!({"naming": "{serial}", "startingSerial": 4294967295_u64}),

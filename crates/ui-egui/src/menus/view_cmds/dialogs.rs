@@ -173,6 +173,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.end_row();
                 continue;
             }
+            if k == "startingSerial" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
+                let name = label(&k);
+                ui.label(&name);
+                starting_serial_field(ui, f, &name);
+                ui.end_row();
+                continue;
+            }
             if k == "quality" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 ui.label(label(&k));
                 let mut custom = v.as_f64().is_some();
@@ -269,6 +276,21 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
     camera_data(ui, f);
+}
+
+/// The reference's alert for a Batch Starting Serial # typed past 0..9999 (#13662).
+pub(crate) const STARTING_SERIAL_ALERT: &str = "An integer between 0 and 9999 is required. Closest value inserted.";
+
+/// Batch's Starting Serial #: whole numbers 0..9999, as in the reference (#13662). A value typed
+/// past them becomes the closest one, with [`STARTING_SERIAL_ALERT`] once the field is left; a
+/// field left empty counts as 0, and letters are not taken.
+fn starting_serial_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, name: &str) {
+    let mut serial = f.get("startingSerial").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+    let (_, alert) = crate::widgets::value_field_whole_alerting_empty_zero(ui, name, &mut serial, 0.0..=9999.0, "", 74.0);
+    f.insert("startingSerial".into(), json!(serial as u32));
+    if alert {
+        f.insert(crate::dialogs::RANGE_ALERT_FIELD.into(), json!(STARTING_SERIAL_ALERT));
+    }
 }
 
 /// Batch's inactive Custom quality (#3956): shell state, never a command parameter.
@@ -765,3 +787,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "batch_starting_serial_tests.rs"]
+mod batch_starting_serial_tests;

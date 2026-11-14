@@ -33,15 +33,30 @@ pub fn value_field_whole_alerting(
     suffix: &str,
     width: f32,
 ) -> (Response, bool) {
-    value_field_alerting_in(ui, name, value, range, suffix, width, true)
+    value_field_alerting_in(ui, name, value, range, suffix, width, true, false)
+}
+
+/// [`value_field_whole_alerting`] where a field left empty means 0 rather than "keep the old
+/// value", and 0 still shows as `0`: Batch's Starting Serial # (#13662).
+pub fn value_field_whole_alerting_empty_zero(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+) -> (Response, bool) {
+    value_field_alerting_in(ui, name, value, range, suffix, width, true, true)
 }
 
 /// [`value_field_whole_alerting`] for a field that takes decimals (a corner radius, #13336): a
 /// typed value past `range` becomes the closest end, unrounded.
 pub fn value_field_alerting(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> (Response, bool) {
-    value_field_alerting_in(ui, name, value, range, suffix, width, false)
+    value_field_alerting_in(ui, name, value, range, suffix, width, false, false)
 }
 
+// The explicit accessible name accompanies the existing numeric-field parameters.
+#[expect(clippy::too_many_arguments)]
 fn value_field_alerting_in(
     ui: &mut Ui,
     name: &str,
@@ -50,6 +65,7 @@ fn value_field_alerting_in(
     suffix: &str,
     width: f32,
     whole: bool,
+    empty_is_zero: bool,
 ) -> (Response, bool) {
     let (lo, hi) = (*range.start(), *range.end());
     let fit = |v: f32| {
@@ -69,7 +85,7 @@ fn value_field_alerting_in(
     let draft = draft.filter(|(_, stored, field)| *stored == *value && field.is_some_and(|f| ui.ctx().memory(|m| m.has_focus(f))));
     let mut typed = draft.map_or(*value, |(typed, _, _)| typed);
     // The field's own range is wide, so the typed value reaches here unclamped.
-    let r = value_field_named(ui, name, &mut typed, -1.0e9..=1.0e9, suffix, width);
+    let r = value_field_in(ui, &mut typed, -1.0e9..=1.0e9, suffix, width, 0.0, FieldOpts { empty_is_zero, ..Default::default() }, Some(name)).0;
     // A step past the ends is no typed value (#13304). Only a step the field took counts: a wheel
     // event that moves less than a notch (or not at all) steps nothing, and must not drop what was
     // typed.
@@ -158,6 +174,8 @@ pub(super) struct FieldOpts {
     /// Show an unset value as an empty field rather than `0` (the Crop tool's free ratio sides,
     /// #10888). Editing, scrubbing and parsing are unchanged.
     pub(super) blank_when_zero: bool,
+    /// A cleared field means 0, as with `blank_when_zero`, but 0 still shows as `0` (#13662).
+    pub(super) empty_is_zero: bool,
     /// Keep the trailing zeros of `decimals` (`50.0`), where every other field drops them.
     pub(super) keep_zeros: bool,
 }
@@ -515,7 +533,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, keep_zeros, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, blank_when_zero, empty_is_zero, keep_zeros, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -611,7 +629,7 @@ fn number_edit(
                 };
                 let s = ready.as_str();
                 // A cleared field that draws its zero blank means zero, not "keep what was there" (#10888).
-                let blank = blank_when_zero && s.trim().is_empty();
+                let blank = (blank_when_zero || empty_is_zero) && s.trim().is_empty();
                 let v = if hold_typed {
                     zoom_number(s, units)
                 } else if blank {
