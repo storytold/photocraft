@@ -877,11 +877,13 @@ fn toggle_panels(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+/// Toggle or expand a panel group and replace retained fallback data after a layout edit.
 fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
     let key = &id["window.toggle.".len()..];
     // A shown but collapsed dock group is expanded rather than hidden (#129).
     if let Some(group) = crate::dock::Group::from_key(key).filter(|group| group.shown(&app.ui.panels) && app.ui.dock.is_collapsed(*group)) {
         crate::dock::reveal(app, group);
+        crate::dock::discard_retained_layout(app);
         return Ok(Value::Null);
     }
     let panels = &mut app.ui.panels;
@@ -903,6 +905,9 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
     if let Some(group) = crate::dock::Group::from_key(key).filter(|group| group.shown(&app.ui.panels)) {
         crate::dock::reveal(app, group);
     }
+    if crate::dock::Group::from_key(key).is_some() {
+        crate::dock::discard_retained_layout(app);
+    }
     Ok(Value::Null)
 }
 
@@ -917,7 +922,9 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     app.ui.docking = None;
+    // A preset reset replaces the fallback rather than freezing the old native arrangement.
     app.ui.docking_kept = None;
+    crate::dock::discard_retained_layout(app);
     app.ui.docking_returns.clear();
     app.ui.docking_collapsed.clear();
     app.ui.dock_tabs = Default::default();
