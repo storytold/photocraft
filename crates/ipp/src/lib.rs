@@ -551,6 +551,10 @@ fn chunked_complete(body: &[u8], resume: &mut usize) -> bool {
         // (checked, so `ffffffffffffffff` cannot overflow the slice arithmetic).
         let Some(end) = size.checked_add(2).filter(|_| size <= MAX_REPLY) else { return true };
         let Some(rest) = b.get(end..) else { return false };
+        // A full malformed separator must reach dechunk now, even if the server stays open.
+        if b.get(size..end) != Some(b"\r\n") {
+            return true;
+        }
         b = rest;
     }
 }
@@ -571,7 +575,8 @@ fn dechunk(mut b: &[u8]) -> Result<Vec<u8>> {
         if out.len() > MAX_REPLY {
             return Err(Error::Protocol("the reply is larger than 16 MiB".into()));
         }
-        b = b.get(size + 2..).ok_or_else(|| Error::Protocol("cut chunk end".into()))?;
+        // RFC 9112 requires a CRLF separator after each nonempty chunk.
+        b = b.get(size..).and_then(|rest| rest.strip_prefix(b"\r\n")).ok_or_else(|| Error::Protocol("invalid chunk end".into()))?;
     }
 }
 
