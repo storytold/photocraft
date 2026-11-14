@@ -237,46 +237,100 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     resp
 }
 
+/// State of a running checkbox drag-paint (#3333), kept in the egui context.
+#[derive(Clone, Copy)]
+struct DragPaint {
+    /// Id scope of the `ui` that holds the pressed box.
+    group: egui::Id,
+    /// The state every swept box is set to.
+    target: bool,
+    /// Last frame the button was seen down in.
+    seen: u64,
+    /// The pointer segment travelled in frame `seg_frame`: from the position of the frame before.
+    from: egui::Pos2,
+    to: egui::Pos2,
+    seg_frame: u64,
+}
+
+/// The middle of the part of the segment `a`..`b` that lies inside `rect` (the point itself for a
+/// segment of no length), or `None` if it never touches it. Liang-Barsky clipping. The middle,
+/// not the entry, so rounding can't put the point just outside the rect.
+fn segment_crossing(a: egui::Pos2, b: egui::Pos2, rect: Rect) -> Option<egui::Pos2> {
+    if !rect.is_positive() {
+        return None;
+    }
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0_f32, 1.0_f32);
+    for (delta, lo, hi, start) in [(d.x, rect.min.x, rect.max.x, a.x), (d.y, rect.min.y, rect.max.y, a.y)] {
+        if delta == 0.0 {
+            if start < lo || start > hi {
+                return None;
+            }
+        } else {
+            let (ta, tb) = ((lo - start) / delta, (hi - start) / delta);
+            t0 = t0.max(ta.min(tb));
+            t1 = t1.min(ta.max(tb));
+        }
+    }
+    (t0 <= t1).then(|| a + d * ((t0 + t1) / 2.0))
+}
+
 /// Click or drag-paint a checkbox (#3333). A click flips `on`. Pressing and dragging flips it and
 /// remembers the new state, and the group it was pressed in (the id scope of the `ui` that holds the box, see `Ui::scope_id`), in the
 /// egui context. Every other checkbox of that same group whose `hit` rect the pointer then sweeps
 /// over is set to the same state (as Photoshop's eye column does), until the button is released.
-/// A box takes part only if it is enabled, the pointer is inside the visible clip of its `ui` and
-/// that `ui`'s layer is the topmost one under the pointer; boxes of other groups, disabled boxes,
-/// clipped-away or covered boxes are left alone. The state outlives the release frame, so a box
+/// The whole pointer path of a frame counts, not just where it ends, so a fast move that jumps over
+/// a box within one frame still sets it.
+/// A box takes part only if it is enabled, the pointer crosses the visible clip of its `ui` and
+/// that `ui`'s layer is the topmost one under the crossing point; boxes of other groups, disabled
+/// boxes, clipped-away or covered boxes are left alone. The state outlives the release frame, so a box
 /// that runs before the pressed one in that frame still sees it. `resp` is the response of the
 /// pressed widget (it must sense drags). Returns whether `on` changed.
 pub fn drag_toggle(ui: &Ui, resp: &Response, hit: Rect, on: &mut bool) -> bool {
     let ctx = ui.ctx();
     let key = egui::Id::unique("pc-checkbox-drag-target");
     let frame = ctx.cumulative_frame_nr();
-    // The target carries the last frame the button was seen down in. It stays valid for the one
-    // frame after that (the release frame) and is dropped after it.
-    if let Some((group, target, seen)) = ctx.data(|d| d.get_temp::<(egui::Id, bool, u64)>(key)) {
+    let latest = ctx.input(|i| i.pointer.latest_pos());
+    // The state carries the last frame the button was seen down in. It stays valid for the one
+    // frame after that (the release frame) and is dropped after it. The first box of a frame moves
+    // the travelled segment on; the others of that frame see the same one.
+    if let Some(mut st) = ctx.data(|d| d.get_temp::<DragPaint>(key)) {
         if ctx.input(|i| i.pointer.primary_down()) {
-            ctx.data_mut(|d| d.insert_temp(key, (group, target, frame)));
-        } else if seen.saturating_add(1) < frame {
-            ctx.data_mut(|d| d.remove::<(egui::Id, bool, u64)>(key));
+            st.seen = frame;
+        }
+        if st.seen.saturating_add(1) < frame {
+            ctx.data_mut(|d| d.remove::<DragPaint>(key));
+        } else {
+            if st.seg_frame != frame {
+                st.from = st.to;
+                st.to = latest.unwrap_or(st.to);
+                st.seg_frame = frame;
+            }
+            ctx.data_mut(|d| d.insert_temp(key, st));
         }
     }
     if resp.drag_started_by(egui::PointerButton::Primary) {
         *on = !*on;
-        ctx.data_mut(|d| d.insert_temp(key, (ui.scope_id(), *on, frame)));
+        let to = latest.unwrap_or(resp.rect.center());
+        let from = ctx.input(|i| i.pointer.press_origin()).unwrap_or(to);
+        ctx.data_mut(|d| d.insert_temp(key, DragPaint { group: ui.scope_id(), target: *on, seen: frame, from, to, seg_frame: frame }));
         return true;
     }
     if resp.clicked() {
         *on = !*on;
         return true;
     }
-    let Some((group, target, _)) = ctx.data(|d| d.get_temp::<(egui::Id, bool, u64)>(key)) else { return false };
-    if group != ui.scope_id() || *on == target || !resp.enabled() || !ui.is_enabled() {
+    let Some(st) = ctx.data(|d| d.get_temp::<DragPaint>(key)) else { return false };
+    if st.group != ui.scope_id() || *on == st.target || !resp.enabled() || !ui.is_enabled() {
         return false;
     }
-    let Some(p) = ctx.input(|i| i.pointer.latest_pos()) else { return false };
-    if !hit.contains(p) || !ui.clip_rect().contains(p) || ctx.layer_id_at(p) != Some(ui.layer_id()) {
+    // The part of the box that is on screen; the pointer must have crossed it, on this ui's layer.
+    let visible = hit.intersect(ui.clip_rect());
+    let Some(p) = segment_crossing(st.from, st.to, visible) else { return false };
+    if ctx.layer_id_at(p) != Some(ui.layer_id()) {
         return false;
     }
-    *on = target;
+    *on = st.target;
     true
 }
 

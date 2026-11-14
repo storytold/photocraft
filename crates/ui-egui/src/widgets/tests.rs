@@ -2072,15 +2072,15 @@ mod checkbox_drag {
     fn drag_sweep_does_not_toggle_a_covered_checkbox() {
         let mut h = Harness::new_ui_state(
             |ui, s: &mut [bool; 3]| {
+                let mut rects = Vec::new();
                 ui.vertical(|ui| {
                     for b in s.iter_mut() {
-                        crate::widgets::checkbox(ui, b, "Box");
+                        rects.push(crate::widgets::checkbox(ui, b, "Box").rect);
                     }
                 });
-                // A floating panel over the third box.
-                let y = ui.min_rect().bottom() - 12.0;
-                egui::Area::new(egui::Id::unique("cover")).fixed_pos(egui::pos2(0.0, y)).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-                    ui.allocate_exact_size(egui::vec2(200.0, 40.0), egui::Sense::click());
+                // A floating panel over the whole third box.
+                egui::Area::new(egui::Id::unique("cover")).fixed_pos(rects[2].min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+                    ui.allocate_exact_size(rects[2].size(), egui::Sense::click());
                 });
             },
             [false; 3],
@@ -2120,6 +2120,70 @@ mod checkbox_drag {
         // Left column top, across to the right column, then down the right column, back to the left.
         sweep(&mut h, &[b[0], b[2], b[3], b[1]], 2);
         assert_eq!(*h.state(), [true, true, false, false], "only the starting group follows");
+    }
+
+    /// #3333: a pointer jump over a box within one frame still sets it, in the middle of a drag.
+    #[test]
+    fn drag_sweep_jumping_over_a_checkbox_in_one_frame_still_sets_it() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 4]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        crate::widgets::checkbox(ui, b, "Box");
+                    }
+                });
+            },
+            [false; 4],
+        );
+        h.run();
+        let b = box_points(&h);
+        assert_eq!(b.len(), 4);
+        // Box 3 is reached from box 1 in a single pointer move: box 2 lies on the way.
+        sweep(&mut h, &[b[0], b[1], b[3]], 1);
+        assert_eq!(*h.state(), [true, true, true, true], "the box on the way is set too");
+    }
+
+    /// #3333: the same for the very first move of the drag, which also jumps over a box.
+    #[test]
+    fn drag_sweep_jumping_over_a_checkbox_in_the_first_move_still_sets_it() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 4]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        crate::widgets::checkbox(ui, b, "Box");
+                    }
+                });
+            },
+            [false; 4],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &[b[0], b[2]], 1);
+        assert_eq!(*h.state(), [true, true, true, false]);
+    }
+
+    /// #3333: a jump over a covered box does not set it (the layer check is made where the path crosses).
+    #[test]
+    fn drag_sweep_jumping_over_a_covered_checkbox_leaves_it_alone() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 3]| {
+                let mut rects = Vec::new();
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        rects.push(crate::widgets::checkbox(ui, b, "Box").rect);
+                    }
+                });
+                // A floating panel over the whole middle box.
+                egui::Area::new(egui::Id::unique("cover")).fixed_pos(rects[1].min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+                    ui.allocate_exact_size(rects[1].size(), egui::Sense::click());
+                });
+            },
+            [false; 3],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &[b[0], b[2]], 1);
+        assert_eq!(*h.state(), [true, false, true], "the covered box on the way keeps its state");
     }
 
     /// #3333: sweeping upwards and releasing on the next frame still reaches the earlier box.
