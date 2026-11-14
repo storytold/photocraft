@@ -9,8 +9,9 @@
 //! passes of `camera_raw_tone.rs`, which then also measure the image's points for Whites and
 //! Blacks; this pass applies their change. Dehaze runs before them (its filters on the copy of
 //! [`Dehaze::cells`], then `fs_dehaze`, which the later passes read instead of the source),
-//! Clarity and Texture after them (`fs_luma`, then their filters, applied in `tonal`). Settings with Detail have no
-//! [`PerPixel`] and stay on the CPU.
+//! Clarity and Texture after them (`fs_luma`, then their filters, applied in `tonal`). With
+//! Detail, the pass stops after Color Grading (`fs_colour`), Detail's filters run on that, and
+//! the last pass combines them before the vignette and grain.
 //!
 //! The pipelines are built on demand ([`CameraRawDevelop::new`]), not with the compositor
 //! (#6419). They render into `Rgba32Float`, `R32Float` and `Rgba32Uint`;
@@ -27,8 +28,8 @@ use crate::camera_raw_tone::{Segment, ToneFrame, TonePipelines, WB_ROW};
 pub const CAMERA_RAW_SHADER: &str = include_str!("camera_raw.wgsl");
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-/// `Params` in the shader: 23 rows of 16 bytes.
-const PARAMS_SIZE: u64 = 23 * 16;
+/// `Params` in the shader: 25 rows of 16 bytes.
+const PARAMS_SIZE: u64 = 25 * 16;
 /// Rows of the table texture: parametric, master, red, green, blue curves; Whites, Blacks.
 const LUT_ROWS: u32 = 7;
 const LUT_WIDTH: u32 = CURVE_LUT as u32;
@@ -67,6 +68,8 @@ pub struct CameraRawDevelop {
     /// `fs_dehaze` and `fs_luma`: Dehaze's result, Clarity and Texture's input.
     dehaze: wgpu::RenderPipeline,
     luma: wgpu::RenderPipeline,
+    /// `fs_colour`: stages 1 to 7, Detail's input.
+    colour: wgpu::RenderPipeline,
     tone: TonePipelines,
     tone_frame: Option<ToneFrame>,
     layout: wgpu::BindGroupLayout,
@@ -80,6 +83,12 @@ pub struct CameraRawDevelop {
 }
 
 impl CameraRawDevelop {
+    /// Spatial plans cached, for tests: at most 64 however many settings a session tries.
+    #[doc(hidden)]
+    pub fn cached_plans(&self) -> usize {
+        self.tone_frame.as_ref().map_or(0, ToneFrame::plans)
+    }
+
     /// Whether `adapter` can render the passes' `Rgba32Float`, `R32Float` and `Rgba32Uint` targets.
     pub fn supported(adapter: &wgpu::Adapter) -> bool {
         [FORMAT, wgpu::TextureFormat::R32Float, wgpu::TextureFormat::Rgba32Uint]
@@ -123,6 +132,11 @@ impl CameraRawDevelop {
                 crate::tex_entry(8),
                 crate::tex_entry(9),
                 crate::tex_entry(10),
+                crate::tex_entry(11),
+                crate::tex_entry(12),
+                crate::tex_entry(13),
+                crate::tex_entry(14),
+                crate::tex_entry(15),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -153,6 +167,7 @@ impl CameraRawDevelop {
         let points = pipeline_for("fs_points", FORMAT);
         let dehaze = pipeline_for("fs_dehaze", FORMAT);
         let luma = pipeline_for("fs_luma", wgpu::TextureFormat::R32Float);
+        let colour = pipeline_for("fs_colour", FORMAT);
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pc_camera_raw_params"),
             size: PARAMS_SIZE,
@@ -177,6 +192,7 @@ impl CameraRawDevelop {
             points,
             dehaze,
             luma,
+            colour,
             tone: TonePipelines::build(device),
             tone_frame: None,
             layout,
@@ -223,7 +239,8 @@ impl CameraRawDevelop {
         }
         let clarity = stages.clarity.is_some();
         let texture = stages.texture.as_ref().is_some_and(|t| t.radii.iter().any(|r| *r > 0));
-        let filtered = stages.local_tone.is_some() || stages.dehaze.is_some() || clarity || texture || stages.measure_whites_blacks.is_some();
+        let filtered =
+            stages.local_tone.is_some() || stages.dehaze.is_some() || clarity || texture || stages.measure_whites_blacks.is_some() || stages.detail.is_some();
         let frame = if filtered {
             let frame = match self.tone_frame.take() {
                 Some(f) if f.size() == size => f,
@@ -257,7 +274,21 @@ impl CameraRawDevelop {
         };
         let target = self.target.insert(target);
         let (dummy, dummy_uint) = (self.tone.dummy(), self.tone.dummy_uint());
-        let mut all = Bound { log_in: dummy, log_out: dummy, stats: dummy_uint, base: dummy, haze: dummy, air: dummy, clarity: dummy, texture: dummy };
+        let mut all = Bound {
+            log_in: dummy,
+            log_out: dummy,
+            stats: dummy_uint,
+            base: dummy,
+            haze: dummy,
+            air: dummy,
+            clarity: dummy,
+            texture: dummy,
+            colored: dummy,
+            noise: dummy,
+            chroma: dummy,
+            sharpen: dummy,
+            mask: dummy,
+        };
         if let Some(f) = frame {
             all.stats = f.stats();
             if let Some((log_in, log_out)) = f.log() {
@@ -266,9 +297,16 @@ impl CameraRawDevelop {
             if let Some([t, air, dehazed]) = f.haze() {
                 (all.haze, all.air, all.base) = (t, air, dehazed);
             }
-            if let Some((_, c, t)) = f.detail() {
+            if let Some((_, c, t)) = f.local() {
                 all.clarity = c.unwrap_or(dummy);
                 all.texture = t.unwrap_or(dummy);
+            }
+            if let Some(d) = f.detail() {
+                all.colored = d.colored;
+                all.noise = d.noise.unwrap_or(dummy);
+                all.chroma = d.chroma.unwrap_or(dummy);
+                all.sharpen = d.sharpen.unwrap_or(dummy);
+                all.mask = d.mask.unwrap_or(dummy);
             }
         }
         let group = |b: &Bound| {
@@ -284,6 +322,11 @@ impl CameraRawDevelop {
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(b.air) },
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(b.clarity) },
                 wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(b.texture) },
+                wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(b.colored) },
+                wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(b.noise) },
+                wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(b.chroma) },
+                wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(b.sharpen) },
+                wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::TextureView(b.mask) },
             ];
             device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("pc_camera_raw"), layout: &self.layout, entries: &entries })
         };
@@ -303,13 +346,18 @@ impl CameraRawDevelop {
                 f.record(encoder, &self.tone, Segment::Tone);
             }
             if clarity || texture {
-                let (lc, _, _) = f.detail().ok_or_else(missing)?;
+                let (lc, _, _) = f.local().ok_or_else(missing)?;
                 pass(encoder, &self.luma, &main, lc);
-                f.record(encoder, &self.tone, Segment::Detail);
+                f.record(encoder, &self.tone, Segment::Local);
             }
             if stages.measure_whites_blacks.is_some() {
                 pass(encoder, &self.points, &main, f.points().0);
                 f.record(encoder, &self.tone, Segment::WhitesBlacks);
+            }
+            if stages.detail.is_some() {
+                let colored = f.detail().ok_or_else(missing)?.colored;
+                pass(encoder, &self.colour, &group(&Bound { colored: dummy, ..all }), colored);
+                f.record(encoder, &self.tone, Segment::Detail);
             }
         }
         pass(encoder, &self.pipeline, &main, &target.view);
@@ -424,6 +472,13 @@ struct Bound<'a> {
     /// Clarity's coefficients and Texture's blur.
     clarity: &'a wgpu::TextureView,
     texture: &'a wgpu::TextureView,
+    /// Detail: stages 1 to 7, the reduced luminance, the chroma's blur, sharpening's blur and its
+    /// mask's.
+    colored: &'a wgpu::TextureView,
+    noise: &'a wgpu::TextureView,
+    chroma: &'a wgpu::TextureView,
+    sharpen: &'a wgpu::TextureView,
+    mask: &'a wgpu::TextureView,
 }
 
 /// One full-frame pass of `pipeline` into `target`.
@@ -460,6 +515,8 @@ fn check_size(device: &wgpu::Device, source: &[[f32; 4]], [w, h]: [u32; 2]) -> R
 /// Flags of `Params.flags`, in the shader's bit order; `texture` is whether Texture's blur ran.
 fn flags(s: &PerPixel, texture: bool) -> u32 {
     let wb = s.whites_blacks.as_ref();
+    let detail = s.detail.as_ref();
+    let sharpen = detail.and_then(|d| d.sharpen.as_ref());
     // Measured after Shadows and Highlights, the amounts keep the sliders' signs.
     let measured = s.measure_whites_blacks;
     let on = [
@@ -484,6 +541,11 @@ fn flags(s: &PerPixel, texture: bool) -> u32 {
         s.dehaze.is_some(),
         s.clarity.is_some(),
         texture,
+        detail.is_some(),
+        detail.is_some_and(|d| d.luminance.is_some()),
+        detail.is_some_and(|d| d.color.is_some()),
+        sharpen.is_some(),
+        sharpen.is_some_and(|s| s.mask.is_some()),
     ];
     on.iter().enumerate().fold(0, |f, (bit, on)| if *on { f | 1 << bit } else { f })
 }
@@ -537,6 +599,20 @@ fn params(size: [u32; 2], s: &PerPixel, tone: [u32; 4], texture: bool) -> Vec<u8
         s.dehaze.as_ref().map_or(1.0, |d| d.factor as f32),
         s.clarity.as_ref().map_or(1.0, |c| c.subsample as f32),
         DEHAZE_T_FLOOR,
+        0.0,
+    ];
+    out.extend(rows.iter().flat_map(|v| v.to_le_bytes()));
+    let detail = s.detail.as_ref();
+    let sharpen = detail.and_then(|d| d.sharpen.as_ref());
+    let edges = sharpen.and_then(|s| s.mask.as_ref()).map_or([0.0, 1.0], |(_, e)| *e);
+    let rows = [
+        detail.and_then(|d| d.color.as_ref()).map_or(1.0, |c| c.keep),
+        sharpen.map_or(0.0, |s| s.amount),
+        sharpen.map_or(0.0, |s| s.limit),
+        sharpen.map_or(0.0, |s| s.scale),
+        edges[0],
+        edges[1],
+        0.0,
         0.0,
     ];
     out.extend(rows.iter().flat_map(|v| v.to_le_bytes()));

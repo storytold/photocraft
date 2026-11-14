@@ -1,6 +1,6 @@
 //! The spatial stages of Camera Raw's GPU preview (#6916) as fragment passes, with no compute
 //! shaders, so the same passes can run on WebGL2: Dehaze, Shadows and Highlights, Clarity and
-//! Texture, and the measurement of Whites and Blacks' points after them.
+//! Texture, the measurement of Whites and Blacks' points after them, and Detail.
 //!
 //! Shadows and Highlights are the local Laplacian filter of
 //! `photocraft_algo::camera_raw::local_tone` (`camera_raw_tone.wgsl`). Each
@@ -9,9 +9,10 @@
 //! of a level in one atlas), and the output from coarse to fine, each coefficient interpolated
 //! between the two references around the input there.
 //!
-//! Dehaze, Clarity and Texture (`camera_raw_filters.wgsl`, constants from
+//! Dehaze, Clarity, Texture and Detail (`camera_raw_filters.wgsl`, constants from
 //! `photocraft_algo::camera_raw::spatial`) are separable box and minimum filters and guided
-//! filters on small copies; `camera_raw.wgsl` applies their results per pixel.
+//! filters, Dehaze's and Clarity's on small copies; `camera_raw.wgsl` applies their results per
+//! pixel.
 //!
 //! The quantiles the filters and Whites and Blacks read (including Dehaze's brightest cells) are
 //! exact order statistics, found on the GPU by narrowing an interval of keys in [`ROUNDS`] rounds
@@ -49,6 +50,10 @@ const ROUNDS: usize = rounds();
 /// at most [`SUM_MAX`] tiles remain, which a round's update sums.
 const COUNT_TILE: u32 = 16;
 const SUM_MAX: u32 = 256;
+/// Plans kept at most. Each distinct setting of a key's values (luminance noise reduction's
+/// regularisation and kept share, for one) makes a plan with its own buffers, so a slider drag
+/// would otherwise keep adding them; past this many the cache starts again.
+pub(crate) const MAX_PLANS: usize = 64;
 
 /// [`ROUNDS`]: the widest part `fs_update` can leave of an interval `span` keys wide (less one),
 /// until it is 0.
@@ -142,10 +147,12 @@ enum Pipe {
     MinPack,
     HazeRank,
     Air,
+    /// `fs_detail_in`: Detail's luminance or chroma from the developed colour.
+    DetailIn,
 }
 
 impl Pipe {
-    const ALL: [Pipe; 18] = [
+    const ALL: [Pipe; 19] = [
         Pipe::Down,
         Pipe::DownRemap,
         Pipe::DownAtlas,
@@ -164,6 +171,7 @@ impl Pipe {
         Pipe::MinPack,
         Pipe::HazeRank,
         Pipe::Air,
+        Pipe::DetailIn,
     ];
 
     fn entry(self) -> &'static str {
@@ -184,12 +192,13 @@ impl Pipe {
             Pipe::Min | Pipe::MinPack => "fs_min",
             Pipe::HazeRank => "fs_haze_rank",
             Pipe::Air => "fs_air",
+            Pipe::DetailIn => "fs_detail_in",
         }
     }
 
     fn targets(self) -> &'static [wgpu::TextureFormat] {
         match self {
-            Pipe::DownRemap | Pipe::DownAtlas | Pipe::Box | Pipe::Block | Pipe::MinPack | Pipe::Air => &[RGBA],
+            Pipe::DownRemap | Pipe::DownAtlas | Pipe::Box | Pipe::Block | Pipe::MinPack | Pipe::Air | Pipe::DetailIn => &[RGBA],
             Pipe::Init | Pipe::Update => &[UINT],
             Pipe::Count | Pipe::Reduce => &[UINT, UINT],
             _ => &[PLANE],
@@ -465,6 +474,15 @@ impl Chain {
     }
 }
 
+/// How [`Builder::guided`] ends: the box means of the coefficients (a, b) in `t[0]`; the output
+/// a·I + b in `t[2]`; or that output `s` moved back toward I, to `s + (I − s)·keep`, in `t[2]`.
+#[derive(Clone, Copy)]
+enum Guided {
+    Coefficients,
+    Output,
+    Kept(f32),
+}
+
 /// Collects a plan's passes.
 #[derive(Default)]
 struct Builder {
@@ -485,16 +503,26 @@ impl Builder {
     }
 
     /// Develop's `guided` (radius `r`, regularised by `eps`) on the (I, p, I·p, I·I) in `t[0]`
-    /// (`size` texels): the box means of its coefficients (a, b) in `t[0]`, or with `output`
-    /// a·I + b in `t[2]`.
-    fn guided(&mut self, size: [u32; 2], r: u32, eps: f32, t: &[Tex; 3], output: bool) {
-        self.filter(Pipe::Box, size, size, [0, r, 0, 0], &t[0], None, &t[1]);
-        self.filter(Pipe::Box, size, size, [1, r, 1, eps.to_bits()], &t[1], None, &t[2]);
-        self.filter(Pipe::Box, size, size, [0, r, 0, 0], &t[2], None, &t[1]);
-        if output {
-            self.filter(Pipe::Box, size, size, [1, r, 2, 0], &t[1], Some(&t[0]), &t[2]);
-        } else {
-            self.filter(Pipe::Box, size, size, [1, r, 0, 0], &t[1], None, &t[0]);
+    /// (`size` texels), ending as `out` says.
+    fn guided(&mut self, size: [u32; 2], r: u32, eps: f32, t: [&Tex; 3], out: Guided) {
+        self.filter(Pipe::Box, size, size, [0, r, 0, 0], t[0], None, t[1]);
+        self.filter(Pipe::Box, size, size, [1, r, 1, eps.to_bits()], t[1], None, t[2]);
+        self.filter(Pipe::Box, size, size, [0, r, 0, 0], t[2], None, t[1]);
+        match out {
+            Guided::Coefficients => self.filter(Pipe::Box, size, size, [1, r, 0, 0], t[1], None, t[0]),
+            Guided::Output => self.filter(Pipe::Box, size, size, [1, r, 2, 0], t[1], Some(t[0]), t[2]),
+            Guided::Kept(keep) => self.filter(Pipe::Box, size, size, [1, r, 3, keep.to_bits()], t[1], Some(t[0]), t[2]),
+        }
+    }
+
+    /// Develop's `box_means` of `from` (`size` texels) at `radii`, through `pair` (in `pipe`'s
+    /// target format); the result ends in `pair[1]`, also when `radii` is empty.
+    fn blur(&mut self, pipe: Pipe, size: [u32; 2], radii: &[u32], from: &Tex, pair: [&Tex; 2]) {
+        let mut from = from;
+        for &r in if radii.is_empty() { &[0] } else { radii } {
+            self.filter(pipe, size, size, [0, r, 0, 0], from, None, pair[0]);
+            self.filter(pipe, size, size, [1, r, 0, 0], pair[0], None, pair[1]);
+            from = pair[1];
         }
     }
 
@@ -621,6 +649,27 @@ struct PlanKey {
     texture: Vec<u32>,
     /// Whether Whites and Blacks measure the points.
     whites_blacks: bool,
+    /// Detail.
+    detail: Option<DetailKey>,
+}
+
+/// What a plan runs of Detail: luminance noise reduction's radius, regularisation and kept share
+/// (their bits), and the box radii of colour noise reduction, sharpening and its mask (those of 0
+/// left out).
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct DetailKey {
+    luminance: Option<[u32; 3]>,
+    color: Option<Vec<u32>>,
+    sharpen: Option<Vec<u32>>,
+    mask: Option<Vec<u32>>,
+}
+
+impl DetailKey {
+    /// Whether the plan reads `fs_colour`'s luminance: luminance noise reduction filters it and
+    /// sharpening blurs it (or what the reduction made of it). Colour noise reduction alone doesn't.
+    fn reads_luma(&self) -> bool {
+        self.luminance.is_some() || self.sharpen.is_some()
+    }
 }
 
 impl PlanKey {
@@ -632,6 +681,15 @@ impl PlanKey {
             clarity: s.clarity.as_ref().map(|c| [n(c.subsample), n(c.sub_radius)]),
             texture: s.texture.as_ref().map_or(Vec::new(), |t| t.radii.iter().filter(|r| **r > 0).map(|r| n(*r)).collect()),
             whites_blacks: s.measure_whites_blacks.is_some(),
+            detail: s.detail.as_ref().map(|d| {
+                let radii = |r: &[usize]| r.iter().filter(|r| **r > 0).map(|r| n(*r)).collect::<Vec<u32>>();
+                DetailKey {
+                    luminance: d.luminance.as_ref().map(|l| [n(l.radius), l.eps.to_bits(), l.keep.to_bits()]),
+                    color: d.color.as_ref().map(|c| radii(&c.radii)),
+                    sharpen: d.sharpen.as_ref().map(|s| radii(&s.radii)),
+                    mask: d.sharpen.as_ref().and_then(|s| s.mask.as_ref()).map(|(r, _)| radii(r)),
+                }
+            }),
         }
     }
 }
@@ -644,16 +702,18 @@ pub(crate) enum Segment {
     /// After `fs_log`: Shadows and Highlights.
     Tone,
     /// After `fs_luma`: Clarity's coefficients and Texture's blur.
-    Detail,
+    Local,
     /// After `fs_points`: Whites and Blacks' points and curves.
     WhitesBlacks,
+    /// After `fs_colour`: Detail's filters.
+    Detail,
 }
 
 /// The recorded passes for one [`PlanKey`], by [`Segment`].
 struct Plan {
     /// Holds the passes' uniform slots.
     _steps: wgpu::Buffer,
-    segments: [Vec<Op>; 4],
+    segments: [Vec<Op>; 5],
 }
 
 /// Pyramid level sizes down to about 2 pixels on the short side (`local_tone::depth`).
@@ -788,13 +848,37 @@ impl Haze {
 }
 
 /// Clarity and Texture's textures.
-struct Detail {
+struct Local {
     /// The luminance clipped to 1, which `camera_raw.wgsl`'s `fs_luma` renders.
     lc: Tex,
     /// Texture's blur, back and forth; it ends in the second.
     blur: Option<[Tex; 2]>,
     /// Clarity's subsampled copy and guided filter (its size; the coefficients end in the first).
     sub: Option<([u32; 2], [Tex; 3])>,
+}
+
+/// Detail's textures, at full size; each part's from when it first runs.
+struct Detail {
+    /// Stages 1 to 7, which `camera_raw.wgsl`'s `fs_colour` renders.
+    colored: Tex,
+    /// The luminance as a guided filter's (I, p, I·p, I·I), for noise reduction or sharpening.
+    luma: Option<Tex>,
+    /// Luminance noise reduction's guided filter; the reduced luminance ends in the second.
+    noise: Option<[Tex; 2]>,
+    /// The chroma, then its blur back and forth; the blur ends in the third.
+    chroma: Option<[Tex; 3]>,
+    /// Sharpening's blur and its mask's, back and forth; each ends in the second.
+    sharpen: Option<[Tex; 2]>,
+    mask: Option<[Tex; 2]>,
+}
+
+/// The textures `camera_raw.wgsl` reads for Detail (`None` where a part has never run).
+pub(crate) struct DetailViews<'a> {
+    pub(crate) colored: &'a wgpu::TextureView,
+    pub(crate) noise: Option<&'a wgpu::TextureView>,
+    pub(crate) chroma: Option<&'a wgpu::TextureView>,
+    pub(crate) sharpen: Option<&'a wgpu::TextureView>,
+    pub(crate) mask: Option<&'a wgpu::TextureView>,
 }
 
 /// The cells of a `size` frame at most `side` across: their size and edge in pixels.
@@ -809,6 +893,7 @@ pub(crate) struct ToneFrame {
     size: [u32; 2],
     pyramid: Option<Pyramid>,
     haze: Option<Haze>,
+    local: Option<Local>,
     detail: Option<Detail>,
     /// Whites and Blacks' cells, which `fs_points` renders.
     points: Tex,
@@ -830,6 +915,7 @@ impl ToneFrame {
             size,
             pyramid: None,
             haze: None,
+            local: None,
             detail: None,
             points: Tex::target(device, "pc_camera_raw_wb_cells", points_size, RGBA),
             points_size,
@@ -877,28 +963,68 @@ impl ToneFrame {
         }
         if stages.clarity.is_some() || stages.texture.is_some() {
             let full = self.size;
-            let detail = self.detail.get_or_insert_with(|| Detail { lc: Tex::target(device, "pc_camera_raw_luma", full, PLANE), blur: None, sub: None });
-            if stages.texture.is_some() && detail.blur.is_none() {
-                detail.blur = Some([0, 1].map(|_| Tex::target(device, "pc_camera_raw_texture", full, PLANE)));
+            let local = self.local.get_or_insert_with(|| Local { lc: Tex::target(device, "pc_camera_raw_luma", full, PLANE), blur: None, sub: None });
+            if stages.texture.is_some() && local.blur.is_none() {
+                local.blur = Some([0, 1].map(|_| Tex::target(device, "pc_camera_raw_texture", full, PLANE)));
             }
             if let Some(c) = &stages.clarity {
                 let size = dim(c.sub_size);
                 if size[0] == 0 || size[1] == 0 || size[0] > max || size[1] > max {
                     return Err(Unsupported(format!("Clarity's {}×{} copy doesn't fit the GPU's {max} px textures", size[0], size[1])));
                 }
-                if detail.sub.as_ref().is_none_or(|(s, _)| *s != size) {
-                    detail.sub = Some((size, [0, 1, 2].map(|_| Tex::target(device, "pc_camera_raw_clarity", size, RGBA))));
+                if local.sub.as_ref().is_none_or(|(s, _)| *s != size) {
+                    local.sub = Some((size, [0, 1, 2].map(|_| Tex::target(device, "pc_camera_raw_clarity", size, RGBA))));
                     self.plans.clear();
+                }
+            }
+        }
+        if let Some(d) = &stages.detail {
+            // A plan made before a part's textures existed doesn't read them, so it stays valid.
+            let full = self.size;
+            let rgba = |label: &str| Tex::target(device, label, full, RGBA);
+            let plane = |label: &str| Tex::target(device, label, full, PLANE);
+            let t = self.detail.get_or_insert_with(|| Detail {
+                colored: rgba("pc_camera_raw_colored"),
+                luma: None,
+                noise: None,
+                chroma: None,
+                sharpen: None,
+                mask: None,
+            });
+            if (d.luminance.is_some() || d.sharpen.is_some()) && t.luma.is_none() {
+                t.luma = Some(rgba("pc_camera_raw_detail_luma"));
+            }
+            if d.luminance.is_some() && t.noise.is_none() {
+                t.noise = Some([0, 1].map(|_| rgba("pc_camera_raw_noise")));
+            }
+            if d.color.is_some() && t.chroma.is_none() {
+                t.chroma = Some([0, 1, 2].map(|_| rgba("pc_camera_raw_chroma")));
+            }
+            if let Some(s) = &d.sharpen {
+                if t.sharpen.is_none() {
+                    t.sharpen = Some([0, 1].map(|_| plane("pc_camera_raw_sharpen")));
+                }
+                if s.mask.is_some() && t.mask.is_none() {
+                    t.mask = Some([0, 1].map(|_| plane("pc_camera_raw_sharpen_mask")));
                 }
             }
         }
         let key = PlanKey::new(stages);
         if !self.plans.contains_key(&key) {
+            // `current` is set below, so the frame records the plan made here.
+            if self.plans.len() >= MAX_PLANS {
+                self.plans.clear();
+            }
             let plan = self.plan(device, queue, pipes, &key, luts);
             self.plans.insert(key.clone(), plan);
         }
         self.current = Some(key);
         Ok(())
+    }
+
+    /// Plans cached ([`MAX_PLANS`] at most).
+    pub(crate) fn plans(&self) -> usize {
+        self.plans.len()
     }
 
     /// Records segment `seg` of the plan [`prepare`](Self::prepare) picked; results go into `stats`.
@@ -964,9 +1090,21 @@ impl ToneFrame {
     }
 
     /// The clipped luminance (which `fs_luma` renders), Clarity's coefficients and Texture's blur.
-    pub(crate) fn detail(&self) -> Option<(&wgpu::TextureView, Option<&wgpu::TextureView>, Option<&wgpu::TextureView>)> {
-        let d = self.detail.as_ref()?;
+    pub(crate) fn local(&self) -> Option<(&wgpu::TextureView, Option<&wgpu::TextureView>, Option<&wgpu::TextureView>)> {
+        let d = self.local.as_ref()?;
         Some((&d.lc.view, d.sub.as_ref().map(|(_, t)| &t[0].view), d.blur.as_ref().map(|t| &t[1].view)))
+    }
+
+    /// Detail's textures: the colour `fs_colour` renders, and its filters' results.
+    pub(crate) fn detail(&self) -> Option<DetailViews<'_>> {
+        let d = self.detail.as_ref()?;
+        Some(DetailViews {
+            colored: &d.colored.view,
+            noise: d.noise.as_ref().map(|t| &t[1].view),
+            chroma: d.chroma.as_ref().map(|t| &t[2].view),
+            sharpen: d.sharpen.as_ref().map(|t| &t[1].view),
+            mask: d.mask.as_ref().map(|t| &t[1].view),
+        })
     }
 
     /// The statistics slots of the last pass of `tone`: its input's and its output's.
@@ -977,7 +1115,7 @@ impl ToneFrame {
 
     fn plan(&self, device: &wgpu::Device, queue: &wgpu::Queue, pipes: &TonePipelines, key: &PlanKey, luts: &wgpu::TextureView) -> Plan {
         let mut b = Builder::default();
-        let mut bounds = [0usize; 3];
+        let mut bounds = [0usize; 4];
         let full = self.size;
         let rank = |len: u32, q: f32| (quantile_rank(len as usize, q) as u32).min(len.saturating_sub(1));
         let v = |t: &Tex| Some(t.view.clone());
@@ -1013,7 +1151,7 @@ impl ToneFrame {
             let mut pack = Step::sized(s, s);
             pack.misc = [1, 0, 3, 0];
             b.draw(Pipe::MinPack, pack, Reads { a: v(&hz.opened), b: v(&hz.cells), fine: v(&hz.weight), ..Default::default() }, &[&hz.guide[0].view], None);
-            b.guided(s, gr, DEHAZE_EPS, &hz.guide, true);
+            b.guided(s, gr, DEHAZE_EPS, hz.guide.each_ref(), Guided::Output);
         }
         bounds[0] = b.ops.len();
         if let Some(py) = &self.pyramid {
@@ -1081,12 +1219,12 @@ impl ToneFrame {
         }
         bounds[1] = b.ops.len();
         // Clarity's coefficients and Texture's blur, from the luminance of `fs_luma`.
-        if let Some(d) = &self.detail {
+        if let Some(d) = &self.local {
             if let (Some([s, rs]), Some((size, sub))) = (key.clarity, &d.sub) {
                 let mut step = Step::sized(*size, full);
                 step.sizes2[3] = s;
                 b.draw(Pipe::Block, step, Reads { a: v(&d.lc), ..Default::default() }, &[&sub[0].view], None);
-                b.guided(*size, rs, CLARITY_EPS, sub, false);
+                b.guided(*size, rs, CLARITY_EPS, sub.each_ref(), Guided::Coefficients);
             }
             if let Some(blur) = &d.blur {
                 let mut from = &d.lc;
@@ -1115,11 +1253,37 @@ impl ToneFrame {
             let rows = Some([0.0, WB_ROW as f32, photocraft_algo::camera_raw::WB_STEPS as f32, 2.0]);
             b.draw(Pipe::WbRows, step, Reads::default(), &[luts], rows);
         }
+        bounds[3] = b.ops.len();
+        // Detail, from the colour of `fs_colour`: the luminance's noise reduction (a guided filter
+        // of itself), the chroma's (a Gaussian), then sharpening's blur and its mask's of the
+        // reduced luminance. `camera_raw.wgsl` combines them.
+        if let (Some(k), Some(d)) = (&key.detail, &self.detail) {
+            // The texture outlives the plan that made it: only a plan that reads it fills it.
+            let luma = d.luma.as_ref().filter(|_| k.reads_luma());
+            if let Some(luma) = luma {
+                b.filter(Pipe::DetailIn, full, full, [0, 0, 0, 0], &d.colored, None, luma);
+            }
+            let mut reduced = luma;
+            if let (Some([r, eps, keep]), Some(luma), Some(noise)) = (k.luminance, luma, &d.noise) {
+                b.guided(full, r, f32::from_bits(eps), [luma, &noise[0], &noise[1]], Guided::Kept(f32::from_bits(keep)));
+                reduced = Some(&noise[1]);
+            }
+            if let (Some(radii), Some([chroma, a, b2])) = (&k.color, &d.chroma) {
+                b.filter(Pipe::DetailIn, full, full, [1, 0, 0, 0], &d.colored, None, chroma);
+                b.blur(Pipe::Box, full, radii, chroma, [a, b2]);
+            }
+            for (radii, pair) in [(&k.sharpen, &d.sharpen), (&k.mask, &d.mask)] {
+                if let (Some(radii), Some(pair), Some(y)) = (radii, pair, reduced) {
+                    b.blur(Pipe::BoxPlane, full, radii, y, pair.each_ref());
+                }
+            }
+        }
         let (steps, mut ops) = b.finish(device, queue, pipes, &self.stats.view);
+        let detail = ops.split_off(bounds[3].min(ops.len()));
         let whites_blacks = ops.split_off(bounds[2].min(ops.len()));
-        let detail = ops.split_off(bounds[1].min(ops.len()));
+        let local = ops.split_off(bounds[1].min(ops.len()));
         let tone = ops.split_off(bounds[0].min(ops.len()));
-        Plan { _steps: steps, segments: [ops, tone, detail, whites_blacks] }
+        Plan { _steps: steps, segments: [ops, tone, local, whites_blacks, detail] }
     }
 }
 
@@ -1164,5 +1328,26 @@ fn record(encoder: &mut wgpu::CommandEncoder, ops: &[Op], pipes: &TonePipelines,
                 wgpu::Extent3d { width: 1, height: 2, depth_or_array_layers: 1 },
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_algo::camera_raw::{CameraRaw, per_pixel};
+
+    fn reads_luma(p: &CameraRaw) -> bool {
+        let stages = per_pixel(p, 64, 48, false, None).expect("a per-pixel develop");
+        PlanKey::new(&stages).detail.expect("Detail's stages").reads_luma()
+    }
+
+    /// Colour noise reduction alone doesn't fill the luminance texture a sharpening or luminance
+    /// noise reduction frame left allocated (a full-frame pass nothing reads).
+    #[test]
+    fn only_luminance_noise_and_sharpening_read_the_luminance() {
+        assert!(!reads_luma(&CameraRaw { noise_color: 50.0, ..Default::default() }));
+        assert!(reads_luma(&CameraRaw { noise_luminance: 50.0, ..Default::default() }));
+        assert!(reads_luma(&CameraRaw { sharpen_amount: 80.0, ..Default::default() }));
+        assert!(reads_luma(&CameraRaw { noise_color: 50.0, sharpen_amount: 80.0, sharpen_masking: 40.0, ..Default::default() }));
     }
 }
