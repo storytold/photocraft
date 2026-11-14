@@ -119,6 +119,27 @@ fn cancelling_creates_nothing() {
     assert!(h.state().ui.text_edit.is_none());
 }
 
+/// The dialog belongs to the document the Alt+drag was made in: when another document is active at
+/// OK, nothing is created in it (or anywhere), and the dialog closes.
+#[test]
+fn confirming_after_another_document_became_active_creates_nothing() {
+    let mut app = app();
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT);
+    let d = only_dialog(&app);
+    let first = app.session.active_index().unwrap();
+    let first_layers = layers(&app);
+    app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
+    app.sync_views();
+    assert_ne!(app.session.active_index(), Some(first), "the second document is active");
+    let second_layers = layers(&app);
+    let r = crate::dialogs::confirm(&mut app, d);
+    assert!(r.is_err(), "OK in another document is refused: {r:?}");
+    assert!(app.ui.dialogs.is_empty(), "the dialog closes");
+    assert_eq!(layers(&app), second_layers, "nothing lands in the active document");
+    assert!(app.session.set_active(first));
+    assert_eq!(layers(&app), first_layers, "nor in the original one");
+    assert!(app.ui.text_edit.is_none());
+}
 /// Not measured by the ticket, so unchanged: a drag without Alt still commits the box directly.
 #[test]
 fn a_plain_drag_still_makes_the_box_directly() {

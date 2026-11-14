@@ -22,6 +22,8 @@ const COMMAND: &str = "type.create";
 /// The top-left the box was dragged from, in document pixels: OK puts the box there, whatever its
 /// size becomes in the dialog.
 const AT: &str = "__at";
+/// The document the drag was made in (its id): OK creates the text only while it is still the active one.
+const DOCUMENT: &str = "__document";
 
 /// Identify the Paragraph Text Size dialog fields.
 pub fn owns(fields: &Map<String, Value>) -> bool {
@@ -36,6 +38,9 @@ pub fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> u64 {
     f.insert("__command".into(), json!(COMMAND));
     f.insert("__label".into(), json!("Paragraph Text Size"));
     f.insert(AT.into(), json!([at[0], at[1]]));
+    if let Some(st) = app.session.active() {
+        f.insert(DOCUMENT.into(), json!(st.doc.id.0));
+    }
     f.insert("width".into(), json!(w));
     f.insert("height".into(), json!(h));
     app.ui.open_dialog(DialogKind::Command, f)
@@ -71,6 +76,10 @@ fn px_or(f: &Map<String, Value>, key: &str) -> f32 {
 /// OK: create the paragraph text the dialog sized, the same layer a plain drag of the same box
 /// would have made.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    // The box was dragged in one document: never put the text into another one that became active since.
+    if f.get(DOCUMENT).and_then(Value::as_u64) != app.session.active().map(|st| st.doc.id.0) {
+        return Err("the document the box was dragged in is no longer the active one".into());
+    }
     let at = f.get(AT).and_then(Value::as_array);
     let (Some(x), Some(y)) = (at.as_ref().and_then(|a| a.first()).and_then(Value::as_f64), at.as_ref().and_then(|a| a.get(1)).and_then(Value::as_f64)) else {
         return Err("the Paragraph Text Size dialog has no position".into());
