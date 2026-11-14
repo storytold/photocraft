@@ -232,7 +232,7 @@ pub fn apply_preset(f: &mut Map<String, Value>, p: &Preset, units: &UnitsAndRule
 }
 
 /// The colour mode of the dialog's `mode` value.
-fn color_mode_of(mode: &str) -> Option<photocraft_color::ColorMode> {
+pub(crate) fn color_mode_of(mode: &str) -> Option<photocraft_color::ColorMode> {
     use photocraft_color::ColorMode;
     match mode {
         "rgb" => Some(ColorMode::Rgb),
@@ -244,18 +244,29 @@ fn color_mode_of(mode: &str) -> Option<photocraft_color::ColorMode> {
 }
 
 /// The Color Profile menu for a document of colour `space` (#321): the working space (shown with
-/// its profile's description), then the built-in and installed profiles of that space, as
-/// `file.new`'s `profile` values (an id or a path) with their labels.
-fn profile_options(
+/// its profile's description), Don't Color Manage (an untagged document, #14032), then the
+/// built-in and installed profiles of that space, as `file.new`'s `profile` values (an id or a
+/// path) with their labels.
+pub(crate) fn profile_options(
     space: Option<craft_cms::ColorSpace>,
     working: &str,
     installed: &[photocraft_engine::installed_profiles::InstalledProfile],
 ) -> Vec<(String, String)> {
     let mut v = vec![("working".to_string(), crate::i18n::fmt(tl!("Working: {working}"), &[("working", working)]))];
     let Some(space) = space else { return v };
+    v.push(("none".to_string(), tl!("Don't Color Manage").to_string()));
     v.extend(craft_cms::Builtin::ALL.iter().filter(|b| b.profile().color_space == space).map(|b| (b.id().to_string(), b.description().to_string())));
     v.extend(installed.iter().filter(|i| i.is_destination() && i.color_space == space).map(|i| (i.path.clone(), i.description.clone())));
     v
+}
+
+/// Switch the Color Mode. A profile of the old mode's colour space doesn't suit the new one, but
+/// Don't Color Manage suits every mode and stays picked (#14032).
+pub(crate) fn set_mode(f: &mut Map<String, Value>, mode: &str) {
+    f.insert("mode".into(), json!(mode));
+    if f.get("profile").and_then(Value::as_str) != Some("none") {
+        f.remove("profile");
+    }
 }
 
 /// Fields `file.new` takes (drops the dialog's `__` UI keys).
@@ -744,9 +755,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     ],
                     110.0,
                 ) {
-                    f.insert("mode".into(), json!(mode));
-                    // A profile of the old mode's colour space doesn't suit the new one.
-                    f.remove("profile");
+                    set_mode(f, &mode);
                     f.remove("__savedPreset");
                 }
                 let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
