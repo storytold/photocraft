@@ -1142,7 +1142,7 @@ fn identity_app() -> PhotocraftApp {
     PhotocraftApp::new(session, crate::Services::default())
 }
 
-fn identity_png(profile: Option<photocraft_cms::Builtin>) -> Vec<u8> {
+fn identity_png(profile: Option<craft_cms::Builtin>) -> Vec<u8> {
     let app = identity_app();
     let mut doc = (*app.session.active().unwrap().doc).clone();
     doc.icc_profile = profile.map(|profile| profile.profile().to_bytes());
@@ -1246,7 +1246,10 @@ fn open_identity_rejects_closed_missing_and_invalid_identities() {
             }
             Some(value) => result["docId"] = value,
         }
-        assert!(super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, Some(0), None, None).is_err(), "invalid identity was accepted: {result}");
+        assert!(
+            super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, Some(0), None, None).is_err(),
+            "invalid identity was accepted: {result}"
+        );
         control.assert_untouched(&app);
         assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
         assert_eq!(app.session.documents().len(), 1);
@@ -1264,7 +1267,7 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     let mut app = identity_app();
     let control = IdentityControl::capture(&app);
     app.session.execute("edit.colorSettings", json!({"askOnMismatch": true, "askOnMissing": false, "policyRgb": "preserve"})).unwrap();
-    let mismatched = identity_png(photocraft_cms::Builtin::from_id("adobe-rgb-compat"));
+    let mismatched = identity_png(craft_cms::Builtin::from_id("adobe-rgb-compat"));
     let prompt = completed_identity_open(&mut app, "profile.png", mismatched);
     assert!(prompt["held"].as_u64().is_some());
     let first = completed_identity_open(&mut app, "first.png", identity_png(None));

@@ -1548,7 +1548,14 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     let (mut app, _) = app_with(Vec::new());
     app.open_bytes("existing.psd", b"x").unwrap();
     let batch = jobs_ui::begin_batch(&mut app);
-    let tab = |seq: usize| OpenTab { job: JobId(100 + seq as u64), name: format!("f{seq}.psd"), path: None, slot: None, order: Some(OpenOrder { batch, seq }), bytes: None };
+    let tab = |seq: usize| OpenTab {
+        job: JobId(100 + seq as u64),
+        name: format!("f{seq}.psd"),
+        path: None,
+        slot: None,
+        order: Some(OpenOrder { batch, seq }),
+        bytes: None,
+    };
     app.jobs.opens.extend((0..4).map(tab));
     // f1 opened at once (a preset file, say, or background jobs off for it).
     app.jobs.opens.remove(1);

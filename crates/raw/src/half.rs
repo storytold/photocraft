@@ -38,6 +38,10 @@ pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     if s.samples != 1 && s.samples != 3 {
         return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
     }
+    // Floating-point sample data and polynomial opcodes are linearized by the full develop only.
+    if s.float_data.is_some() || !s.polynomials.is_empty() {
+        return Err(RawError::unsupported("half-size preview of floating-point or polynomial-mapped sensor data"));
+    }
     if let Some(cfa) = &s.cfa
         && (s.samples != 1
             || cfa.width == 0
@@ -421,6 +425,8 @@ mod tests {
             tone_curve: Vec::new(),
             black_point: 0.0,
             warnings: Vec::new(),
+            float_data: None,
+            polynomials: Vec::new(),
         }
     }
 

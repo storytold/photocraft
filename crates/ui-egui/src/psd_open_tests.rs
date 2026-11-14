@@ -164,7 +164,7 @@ fn damage_confirmation_precedes_the_profile_question() {
     let (mut file, _) = craft_psd::PsdFile::from_bytes_and_merged(&recovery_psd::make_psd(true), |_| false).unwrap();
     file.resources.push(craft_psd::ImageResource::new(
         craft_psd::resources::ids::ICC_PROFILE,
-        photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes().to_vec(),
+        craft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes().to_vec(),
     ));
     app.open_bytes("profile.psd", &file.to_bytes().unwrap()).unwrap();
     let id = damage_dialog(&mut app);
@@ -720,6 +720,7 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
         path: Some("/pics/unknown.psd".into()),
         slot: None,
         order: None,
+        bytes: None,
     };
     crate::jobs_ui::finish_open_tab(
         &mut app,
@@ -742,7 +743,7 @@ fn memory_prompt_states_unknown_capacity_and_the_eight_gib_warning() {
 
     // A measured capacity shows the number and drops the uncertainty warning.
     let id = store_preflight(&mut app, "known.psd", 3 * gb, Some(5 * gb));
-    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(2), name: "known.psd".into(), path: None, slot: None, order: None };
+    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(2), name: "known.psd".into(), path: None, slot: None, order: None, bytes: None };
     crate::jobs_ui::finish_open_tab(
         &mut app,
         &tab,
@@ -768,7 +769,7 @@ fn memory_prompt_warns_when_little_memory_would_be_left() {
     let mut app = app();
     let available = 3 * gb + gb / 2;
     let id = store_preflight(&mut app, "tight.psd", 3 * gb, Some(available));
-    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, slot: None, order: None };
+    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(3), name: "tight.psd".into(), path: None, slot: None, order: None, bytes: None };
     crate::jobs_ui::finish_open_tab(
         &mut app,
         &tab,

@@ -177,9 +177,9 @@ fn show(app: &mut PhotocraftApp) {
 /// The Color Settings policy that answers this mode's files when Ask On Mismatch is off.
 fn policy_key(mode: ColorMode) -> Option<&'static str> {
     match photocraft_engine::color_cmds::mode_space(mode) {
-        photocraft_cms::ColorSpace::Rgb => Some("policyRgb"),
-        photocraft_cms::ColorSpace::Cmyk => Some("policyCmyk"),
-        photocraft_cms::ColorSpace::Gray => Some("policyGray"),
+        craft_cms::ColorSpace::Rgb => Some("policyRgb"),
+        craft_cms::ColorSpace::Cmyk => Some("policyCmyk"),
+        craft_cms::ColorSpace::Gray => Some("policyGray"),
         _ => None,
     }
 }
@@ -466,13 +466,21 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         Ok(r) => {
             if accept {
                 if let Some(job) = r.get("job").and_then(Value::as_u64) {
-                    app.jobs.opens.push(crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(job), name: name.clone(), path, slot, order, bytes: None });
+                    app.jobs.opens.push(crate::jobs_ui::OpenTab {
+                        job: photocraft_engine::jobs::JobId(job),
+                        name: name.clone(),
+                        path,
+                        slot,
+                        order,
+                        bytes: None,
+                    });
                     app.jobs.focus = Some(photocraft_engine::jobs::JobId(job));
                     app.ui.chrome.home = None;
                     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &name)]);
                     app.ui.status_error = false;
                 } else if let Some(result) = r.get("result") {
-                    let tab = crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(0), name: name.clone(), path: path.clone(), slot, order, bytes: None };
+                    let tab =
+                        crate::jobs_ui::OpenTab { job: photocraft_engine::jobs::JobId(0), name: name.clone(), path: path.clone(), slot, order, bytes: None };
                     if let Err(e) = crate::jobs_ui::finish_open_tab(app, &tab, result) {
                         app.ui.status = e;
                         app.ui.status_error = true;
