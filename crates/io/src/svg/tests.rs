@@ -1059,33 +1059,71 @@ fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
         .unwrap();
 }
 
-/// gzipped at every level, a chain of SVG images stays small, so the byte budget never ends it:
-/// one image past [`MAX_EMBEDDED_SVG_DEPTH`] is refused, not parsed with the innermost left out.
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// An `<image>` holding an 8 × 8 rect inside `levels` SVG images, each gzipped: small at any
+/// depth, so the byte budget never ends the chain.
+fn gzipped_chain_image(levels: usize) -> String {
+    let mut svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\"/></svg>".to_string();
+    for level in 0..levels {
+        let image = format!("<image width=\"8\" height=\"8\" href=\"data:image/svg+xml;base64,{}\"/>", base64(&gzip(svg.as_bytes())));
+        if level + 1 == levels {
+            return image;
+        }
+        svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\">{image}</svg>");
+    }
+    String::new()
+}
+
+fn chain_svg(images: &str) -> String {
+    format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\">{images}</svg>")
+}
+
+/// One image past [`MAX_EMBEDDED_SVG_DEPTH`] is refused, not parsed with the innermost left out.
 /// (Drawing such a chain is refused past craft-svg's own, lower limit of 24.)
 #[test]
 fn a_chain_of_svg_images_past_the_nesting_cap_is_refused() {
-    use std::io::Write;
-    let gz = |bytes: &[u8]| {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
-        encoder.write_all(bytes).unwrap();
-        encoder.finish().unwrap()
-    };
-    let chain = |levels: usize| {
-        let mut svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\"/></svg>".to_string();
-        for _ in 0..levels {
-            svg = format!(
-                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" href=\"data:image/svg+xml;base64,{}\"/></svg>",
-                base64(&gz(svg.as_bytes()))
-            );
-        }
-        svg
-    };
-    let deepest = chain(MAX_EMBEDDED_SVG_DEPTH);
+    let deepest = chain_svg(&gzipped_chain_image(MAX_EMBEDDED_SVG_DEPTH));
     assert!(deepest.len() < 1 << 20, "far below the byte budget: {} bytes", deepest.len());
     let (_, chain_length) = parse_bounded_inner(deepest.as_bytes(), MAX_RASTER_PIXELS).unwrap();
     assert_eq!(chain_length, MAX_EMBEDDED_SVG_DEPTH as u64, "every level parses");
-    let error = parse_bounded(chain(MAX_EMBEDDED_SVG_DEPTH + 1).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
+    let error = parse_bounded(chain_svg(&gzipped_chain_image(MAX_EMBEDDED_SVG_DEPTH + 1)).as_bytes(), MAX_RASTER_PIXELS).unwrap_err();
     assert!(error.to_string().contains("byte or nesting budget"), "{error}");
+}
+
+/// A chain that fits the cap beside an image only nested too deeply in XML: that image is left
+/// out, as on its own, and the chain still parses.
+#[test]
+fn a_chain_at_the_nesting_cap_beside_an_image_too_deep_in_xml_still_parses() {
+    let deep = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\">{}<rect width=\"8\" height=\"8\"/>{}</svg>",
+        "<g>".repeat(MAX_XML_DEPTH - 1),
+        "</g>".repeat(MAX_XML_DEPTH - 1)
+    );
+    let too_deep = embedded_image("image/svg+xml", deep.as_bytes());
+    assert!(parse_bounded(image_svg(&too_deep).as_bytes(), MAX_RASTER_PIXELS).is_ok(), "on its own it is left out");
+    let svg = chain_svg(&format!("{}{too_deep}", gzipped_chain_image(MAX_EMBEDDED_SVG_DEPTH)));
+    let (_, chain_length) = parse_bounded_inner(svg.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(chain_length, MAX_EMBEDDED_SVG_DEPTH as u64);
+}
+
+/// An embedded SVGZ whose gzip stream is cut short is left out like any unreadable image, though
+/// craft-svg charges it the rest of the byte budget; an image refused for bytes after it is too.
+#[test]
+fn a_damaged_embedded_svgz_is_left_out() {
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>";
+    let compressed = gzip(svg.as_bytes());
+    let damaged = embedded_image("image/svg+xml", &compressed[..compressed.len() / 2]);
+    let after = embedded_image("image/svg+xml", svg.as_bytes());
+    let parsed = parse_bounded(image_svg(&format!("{damaged}{after}")).as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert!(!parsed.tree.root().has_children(), "both images are left out");
+    // A stored preview must draw completely, so it is still refused there.
+    assert!(parse_bounded_work_with(image_svg(&damaged).as_bytes(), MAX_RASTER_PIXELS, true, fonts).is_err());
 }
 
 /// Only a stored display preview is strict about an embedded image it can't read; an edited SVG
