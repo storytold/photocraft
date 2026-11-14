@@ -56,7 +56,18 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
         let fmt = doc.pixel_format();
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+        // A fully locked or pixel-locked layer still takes the image, as in the reference
+        // application, and keeps its transparency as with Preserve transparency. A lock that comes
+        // from a group around it still refuses, through `paint_surface`.
+        let own = doc.layer(id).map(|l| l.locks).unwrap_or_default();
+        let groups = doc.path_of(id).map_or_else(Default::default, |p| doc.locks_at(p.get(..p.len().saturating_sub(1)).unwrap_or_default()));
+        let locked = (own.pixels || own.all) && !(groups.pixels || groups.all);
+        let preserve = preserve || locked;
+        let surf = if locked {
+            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?
+        } else {
+            crate::commands::paint_surface(doc, id, &Value::Null)?
+        };
         let sf = surf.format();
         if sf != fmt {
             return Err(EngineError::Other("the target layer's format doesn't match the document".into()));
