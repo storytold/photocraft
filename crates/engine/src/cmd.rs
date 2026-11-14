@@ -112,6 +112,8 @@ pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_css_cmds;
+#[cfg(test)]
+mod layer_duplicate_multi_history_tests;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
@@ -1536,6 +1538,3 @@ mod parse_hex_tests {
         assert_eq!(parse_hex("#0f0f0fff"), Some([g, g, g, 1.0]));
     }
 }
-
-#[cfg(test)]
-mod layer_duplicate_multi_history_tests;
