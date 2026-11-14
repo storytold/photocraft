@@ -26,22 +26,32 @@ pub fn open_new(app: &mut PhotocraftApp) {
 /// Opens the dialog to rename count group `group`, pre-filled with its name.
 pub fn open_rename(app: &mut PhotocraftApp, group: usize) {
     let Some(name) = app.session.active().and_then(|d| d.doc.measurement.count_groups.get(group)).map(|g| g.name.clone()) else { return };
-    open(app, json!({"mode": "rename", "group": group, "name": name}));
+    open(app, json!({"mode": "rename", "group": group, "name": name, "orig": name}));
 }
 
 fn open(app: &mut PhotocraftApp, fields: Value) {
     let mut fields = fields.as_object().cloned().unwrap_or_default();
-    // The document that opened it: the group index and the default name mean something only there.
-    if let Some(doc) = app.session.active().map(|d| d.doc.id.0) {
-        fields.insert("doc".into(), json!(doc));
-    }
+    // The document activation that opened it: the group index and the default name mean something
+    // only there. A switch to another document (and back, or a reopened one with a reused id)
+    // makes a new activation.
+    fields.insert("gen".into(), json!(app.session.active_generation()));
     app.ui.analysis.dialog = Some((KIND.to_string(), fields));
 }
 
-/// Has another document become active since the dialog opened? Then it is dropped, with whatever
-/// was typed, so OK can't name a group of the wrong document.
+/// Is the dialog out of date: has another document been activated since it opened, or (renaming)
+/// has the group list changed so that its group is no longer where, and what, it was? Then it is
+/// dropped, with whatever was typed, so OK can't name a group of the wrong document or rename the
+/// wrong group.
 pub fn stale(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
-    f.get("doc").and_then(Value::as_u64) != app.session.active().map(|d| d.doc.id.0)
+    if f.get("gen").and_then(Value::as_u64) != Some(app.session.active_generation()) {
+        return true;
+    }
+    if f.get("mode").and_then(Value::as_str) != Some("rename") {
+        return false;
+    }
+    let group = f.get("group").and_then(Value::as_u64).and_then(|g| usize::try_from(g).ok());
+    let now = app.session.active().and_then(|d| group.and_then(|g| d.doc.measurement.count_groups.get(g))).map(|g| g.name.as_str());
+    now != f.get("orig").and_then(Value::as_str)
 }
 
 /// The dialog's body: the name field, focused with its text selected when the dialog opens.

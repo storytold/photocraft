@@ -150,3 +150,35 @@ fn switching_documents_drops_the_dialog() {
         assert_eq!(groups(&h), vec!["Mine".to_string()], "the other document's groups are untouched (rename {rename})");
     }
 }
+
+/// CodeRabbit on #14707: coming back to a document (or opening one that reuses a closed
+/// document's id) is a new activation, so the dialog is dropped then too.
+#[test]
+fn leaving_a_document_and_coming_back_drops_the_dialog() {
+    let mut h = harness();
+    h.get_by_label("Create a new count group").click();
+    h.run_steps(3);
+    assert!(h.state().ui.analysis.dialog.is_some());
+    h.state_mut().run("file.new", json!({"width": 100, "height": 100})).unwrap();
+    h.state_mut().session.set_active(0);
+    h.run_steps(3);
+    assert!(h.state().ui.analysis.dialog.is_none(), "dropped after the round trip");
+    assert_eq!(groups(&h), vec!["Count Group 1".to_string()], "nothing made");
+}
+
+/// CodeRabbit on #14707: the rename dialog targets one group; deleting an earlier one shifts the
+/// indexes, so it is dropped rather than renaming the group that moved into the index.
+#[test]
+fn deleting_a_group_drops_the_rename_dialog() {
+    let mut h = harness();
+    h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
+    h.state_mut().run("count.newGroup", json!({"name": "C"})).unwrap();
+    assert_eq!(groups(&h), vec!["Count Group 1".to_string(), "B".to_string(), "C".to_string()]);
+    crate::count_group_name_ui::open_rename(h.state_mut(), 1);
+    h.run_steps(3);
+    assert!(h.state().ui.analysis.dialog.is_some());
+    h.state_mut().run("count.deleteGroup", json!({"group": 0})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped");
+    assert_eq!(groups(&h), vec!["B".to_string(), "C".to_string()], "no group renamed");
+}
