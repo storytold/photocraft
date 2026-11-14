@@ -11,7 +11,7 @@
 
 use std::time::Instant;
 
-use photocraft_cms::{Builtin, Intent, Transform};
+use craft_cms::{Builtin, Intent, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, EncodeOptions, Format, Image};
 use photocraft_raw::{DevelopOptions, develop_sensor};
 
@@ -91,7 +91,7 @@ fn mean_de(a: &[f32], b: &[f32]) -> f64 {
 fn to_srgb(rgb: &[u16]) -> Vec<f32> {
     let t = Transform::new(Builtin::ProPhotoCompat.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, false).expect("transform");
     let mut out = vec![0u16; rgb.len()];
-    t.convert_u16(rgb, 3, &mut out, 3, false);
+    t.convert_u16(rgb, 3, &mut out, 3, false).unwrap();
     out.iter().map(|v| f32::from(*v) / 65535.0).collect()
 }
 
