@@ -671,3 +671,47 @@ fn a_header_trickled_a_byte_at_a_time_is_found() {
     assert!(raw.ends_with(b"\r\n\r\nok"), "{:?}", String::from_utf8_lossy(&raw));
     server.join().unwrap();
 }
+
+#[test]
+fn malformed_http_status_lines_cannot_report_a_default_printer() {
+    for (status_line, valid) in [
+        ("garbage 200 OK", false),
+        ("HTTP/1.1 +200 OK", false),
+        ("HTTP/1.1 0200 OK", false),
+        ("http/1.1 200 OK", false),
+        ("HTTP/1.a 200 OK", false),
+        ("HTTP/1.10 200 OK", false),
+        ("HTTP/1.0 200 OK", true),
+        ("HTTP/1.1 200 ", true),
+        ("HTTP/1.9 200 OK", true),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let (mut line, mut len) = (String::new(), 0usize);
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = value.trim().parse().unwrap();
+                }
+            }
+            reader.read_exact(&mut vec![0; len]).unwrap();
+            let body = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"P"])])]);
+            let mut reply = format!("{status_line}\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+            reply.extend_from_slice(&body);
+            let _ = reader.into_inner().write_all(&reply);
+        });
+        let result = default_printer(&Endpoint::Tcp("127.0.0.1".into(), port));
+        server.join().unwrap();
+        if valid {
+            assert_eq!(result, Ok(Some("P".into())), "{status_line}");
+        } else {
+            assert!(matches!(&result, Err(Error::Protocol(message)) if message.starts_with("bad status line")), "{status_line}: {result:?}");
+        }
+    }
+}
