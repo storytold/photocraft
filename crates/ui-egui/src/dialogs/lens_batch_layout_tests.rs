@@ -271,13 +271,9 @@ fn a_file_list_set_as_input_is_kept_and_sent() {
         let mut h = harness();
         let dir = fixture("list");
         let files = json!([dir.join("a.png").to_string_lossy()]);
-        let dialog = h.state().ui.dialogs.last().expect("the dialog is open").id;
-        for (field, value) in [("input", files.clone()), ("output", json!(dir.join("out").to_string_lossy())), ("format", json!("png"))] {
-            let (req, _rx) = crate::ControlRequest::new("ui.dialog.set", json!({"dialog": dialog, "field": field, "value": value}));
-            let ctx = h.ctx.clone();
-            assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Outcome::Done(_)));
-        }
-        h.run_steps(2);
+        set(&mut h, "input", files.clone());
+        set(&mut h, "output", json!(dir.join("out").to_string_lossy()));
+        set(&mut h, "format", json!("png"));
         let kept = crate::filter_dialog::params_of(fields(&h))["input"].clone();
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);
