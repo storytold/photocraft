@@ -707,7 +707,12 @@ fn cells(net: &Net, twisty: bool, rules: &Rules) -> (Vec<Cell>, Vec<Split>) {
             let [u0, u1, v0, v1] = c;
             // A quilt's patch measures its cells' rows by all the rows of their control nets.
             let fu = if rules.twist_spreads { net.sub(c).rows_need() } else { need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1))) };
-            let fv = need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)));
+            // A whole quilt patch measures its columns by every column of its control net.
+            let fv = if rules.twist_spreads && u1 - u0 > 1.0 - EPS && v1 - v0 > 1.0 - EPS {
+                net.cols_need()
+            } else {
+                need(&segment(&net.col(u0), v0, v1)).max(need(&segment(&net.col(u1), v0, v1)))
+            };
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let mut twist_down = false;
             let (lu, lv) = (u1 - u0, v1 - v0);
@@ -1604,6 +1609,23 @@ mod tests {
         };
         assert!(across(&quilt), "the inner rows' bend didn't split the patch across");
         assert!(!across(&Rules { twist_spreads: false, ..quilt }), "straight outer rows split a one-patch mesh across");
+    }
+
+    /// And its columns by every column of its control net: a bulge sideways whose left and right
+    /// columns are straight and whose twist stays under WHOLE_PATCH_TWIST_TOL still splits down.
+    #[test]
+    fn a_quilt_patch_measures_its_inner_control_columns() {
+        let bulge = |u: f64, v: f64| [128.0 * u + 24.0 * u * (1.0 - u) * v * (1.0 - v), 128.0 * v];
+        let net = cubic_net(&bulge);
+        let sides = need(&net.col(0.0)).max(need(&net.col(1.0)));
+        let du = [net.at(3, 0)[0] - net.at(0, 0)[0], net.at(3, 0)[1] - net.at(0, 0)[1]];
+        let dv = [net.at(0, 3)[0] - net.at(0, 0)[0], net.at(0, 3)[1] - net.at(0, 0)[1]];
+        assert!(sides < 1e-9 && net.twist_across_rows(du, dv, 2.0) < WHOLE_PATCH_TWIST_TOL, "{sides} {}", net.twist_across_rows(du, dv, 2.0));
+        let (_, log) = cells(&net, true, &quilt_rules());
+        assert!(
+            log.iter().any(|s| s.down && s.cell[1] - s.cell[0] > 1.0 - 1e-9 && s.cell[3] - s.cell[2] > 1.0 - 1e-9),
+            "the inner columns' bend didn't split the patch down"
+        );
     }
 
     /// A full mesh starts as 2 × 2 cells, so only its halfway lines stay on the surface: a point at
