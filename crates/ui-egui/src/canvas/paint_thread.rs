@@ -214,10 +214,26 @@ impl PaintThread {
         (steps, stroke)
     }
 
+    /// Take the stroke once it has painted everything handed over, if `want` it, and let the
+    /// thread end; what it shows stays shown. The canvas keeps showing a released stroke while
+    /// its commit is prepared elsewhere (`strokes::continue_finishing_stroke`). `None` while a
+    /// step is running or not yet taken by `catch_up`, after a failed step, or once taken.
+    pub(super) fn take_idle(&mut self, want: impl FnOnce(&EngineStroke) -> bool) -> Option<EngineStroke> {
+        let mut st = self.shared.lock();
+        if !st.idle() || st.failed || !st.steps.is_empty() || !st.stroke.as_ref().is_some_and(want) {
+            return None;
+        }
+        let stroke = st.stroke.take();
+        st.closed = true;
+        drop(st);
+        self.shared.changed.notify_all();
+        stroke
+    }
+
     /// Tests: from now on the thread holds the next step it takes, as a slow brush would, until
     /// the returned function lets it go (from any thread).
     #[cfg(test)]
-    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static {
+    pub(super) fn hold(&self) -> impl FnOnce() + Send + 'static + use<> {
         self.shared.lock().held = true;
         let shared = self.shared.clone();
         move || {
@@ -259,6 +275,107 @@ impl PaintThread {
             st = guard;
         }
         st
+    }
+}
+
+/// How many dropped values wait for the bin thread.
+const BIN_DEPTH: usize = 2;
+/// How many more may be freed at once on threads of their own when the bin is full.
+const EXTRA_THREADS: usize = 2;
+
+/// Drop `x` on a thread kept for that: freeing a released stroke's own copy of a gigapixel
+/// document took the UI thread over a second ([`DropBin`]). Where no thread can start (the web),
+/// here.
+pub(super) fn drop_elsewhere<T: Send + 'static>(x: T) {
+    static BIN: std::sync::OnceLock<DropBin> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| DropBin::new(BIN_DEPTH, EXTRA_THREADS)).drop_elsewhere(x);
+}
+
+/// Frees values off the UI thread, with a bound on how many are outstanding at once: `depth`
+/// waiting for its thread, the one it is freeing, and `extra` more freed alongside on threads of
+/// their own. Past that, or where no thread can start, a value is freed where it is handed over:
+/// strokes committing faster than gigapixel documents can be freed then wait for one, rather than
+/// documents and threads piling up.
+pub(super) struct DropBin {
+    tx: Option<Mutex<std::sync::mpsc::SyncSender<Box<dyn Send>>>>,
+    /// Starts a thread (tests make it fail).
+    spawn: Spawn,
+    /// Values handed over and not yet freed.
+    outstanding: Arc<std::sync::atomic::AtomicUsize>,
+    /// Threads of their own freeing one now.
+    extra: Arc<std::sync::atomic::AtomicUsize>,
+    extra_max: usize,
+}
+
+/// Starts a thread named `name` running `f`; on failure `f` (and what it holds) is dropped.
+pub(super) type Spawn = fn(&str, Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// [`Spawn`] on an OS thread.
+fn os_thread(name: &str, f: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new().name(name.into()).spawn(f).map(|_| ())
+}
+
+impl DropBin {
+    pub(super) fn new(depth: usize, extra_max: usize) -> Self {
+        Self::with_spawn(depth, extra_max, os_thread)
+    }
+
+    /// [`DropBin::new`] starting its threads with `spawn`.
+    pub(super) fn with_spawn(depth: usize, extra_max: usize, spawn: Spawn) -> Self {
+        let outstanding = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Box<dyn Send>>(depth);
+        let freed = Arc::clone(&outstanding);
+        let started = spawn(
+            "photocraft-drop",
+            Box::new(move || {
+                for x in rx {
+                    drop(x);
+                    freed.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                }
+            }),
+        );
+        let tx = started.ok().map(|()| Mutex::new(tx));
+        Self { tx, spawn, outstanding, extra: Arc::new(std::sync::atomic::AtomicUsize::new(0)), extra_max }
+    }
+
+    /// Values handed over and not yet freed.
+    #[cfg(test)]
+    pub(super) fn outstanding(&self) -> usize {
+        self.outstanding.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(super) fn drop_elsewhere<T: Send + 'static>(&self, x: T) {
+        use std::sync::atomic::Ordering::AcqRel;
+        let Some(tx) = &self.tx else { return };
+        self.outstanding.fetch_add(1, AcqRel);
+        let full = match tx.lock().unwrap_or_else(PoisonError::into_inner).try_send(Box::new(x)) {
+            Ok(()) => return,
+            Err(std::sync::mpsc::TrySendError::Full(x) | std::sync::mpsc::TrySendError::Disconnected(x)) => x,
+        };
+        if self.extra.fetch_add(1, AcqRel) < self.extra_max {
+            let (extra, outstanding) = (Arc::clone(&self.extra), Arc::clone(&self.outstanding));
+            let spawned = (self.spawn)(
+                "photocraft-drop-extra",
+                Box::new(move || {
+                    drop(full);
+                    extra.fetch_sub(1, AcqRel);
+                    outstanding.fetch_sub(1, AcqRel);
+                }),
+            );
+            if spawned.is_ok() {
+                return;
+            }
+            // No thread: the closure, and the value with it, was freed here.
+            self.extra.fetch_sub(1, AcqRel);
+        } else {
+            self.extra.fetch_sub(1, AcqRel);
+            log::warn!(
+                "stroke: freeing a released stroke's document here: {} are being freed already",
+                self.outstanding.load(std::sync::atomic::Ordering::Acquire) - 1
+            );
+            drop(full);
+        }
+        self.outstanding.fetch_sub(1, AcqRel);
     }
 }
 

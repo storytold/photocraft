@@ -34,6 +34,14 @@ impl Session {
         Ok(())
     }
 
+    /// [`Self::offer_live_stroke`] with the commit already taken from the stroke
+    /// ([`brush_cmds::LiveStroke::into_commit`]), on a worker say: taking it copies the stroke's
+    /// document when the canvas still shows it, which took the UI thread seconds on a gigapixel
+    /// one.
+    pub fn offer_live_commit(&mut self, commit: brush_cmds::LiveCommit) {
+        self.live_commit = Some(commit);
+    }
+
     /// [`Self::offer_live_stroke`] for a live Clone Stamp or History Brush stroke, taken by the
     /// `paint.cloneStamp` / `paint.historyBrush` it was drawn for. Refused for the Healing Brush
     /// (it blends on release) and when the brush, layer or clone source changed during the stroke.

@@ -335,7 +335,11 @@ impl CommittedStroke {
 /// The live stroke on document `idx`, while it is current.
 pub(super) fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
     let st = app.session.documents().get(idx)?;
-    app.live_stroke.as_ref().filter(|l| app.drag.is_some() && l.doc == st.doc.id && l.revision == st.revision)
+    // A released stroke still finishing stays on the canvas until it commits: dropping it there
+    // redrew the whole document without the stroke (2 s on a 1.1-gigapixel storyboard), then the
+    // stroke's area again at the commit.
+    let current = app.drag.is_some() || app.finishing_stroke.is_some();
+    app.live_stroke.as_ref().filter(|l| current && l.doc == st.doc.id && l.revision == st.revision)
 }
 
 /// `paint.stroke` params for a Brush/Eraser drag (shared by the live preview and the commit). The
@@ -734,29 +738,33 @@ pub(super) fn draw_smoothing_string(painter: &egui::Painter, xf: &ViewXform, (br
 
 /// Commit a Brush, Pencil or Eraser drag. The live stroke already rendered it: its pixels are
 /// offered to the commit (`Session::offer_live_stroke`), so release costs no second render, and
-/// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
+/// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`). On the desktop
+/// the release doesn't wait for the stroke's thread: the stroke finishes over the next frames
+/// ([`continue_finishing_stroke`]).
 pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
-    let live = app.live_stroke.take();
+    // Taken now, while the pen's samples are the drag's: the stroke may commit frames later.
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-    if let Some(seed) = live.as_ref().and_then(|l| l.seed) {
+    if let Some(seed) = app.live_stroke.as_ref().and_then(|l| l.seed) {
         p["seed"] = json!(seed);
     }
-    let Some(l) = live else {
-        let _ = app.run(stroke_command(app, d.tool), p);
+    // Points the live stroke hasn't rendered yet (the release frame's last moves).
+    let rest = app.live_stroke.as_ref().map(|l| rest_points(app, d, l.fed)).unwrap_or_default();
+    if finishes_after_release(app) {
+        let paint = ReleasePaint::of(app);
+        app.finishing_stroke = Some(FinishingStroke { tool: d.tool, params: p, rest, preparing: None, released: crate::gpu_canvas::now_ms(), paint });
+        continue_finishing_stroke(app);
+        return;
+    }
+    commit_brush_stroke_now(app, d.tool, p, rest);
+}
+
+/// [`commit_brush_stroke`] at once, with the stroke's command `p` and the points `rest` the live
+/// stroke hasn't rendered: waits for the stroke's thread to paint what it was given.
+fn commit_brush_stroke_now(app: &mut PhotocraftApp, tool: Tool, p: serde_json::Value, rest: Vec<photocraft_engine::paint::StrokePoint>) {
+    let Some(l) = app.live_stroke.take() else {
+        let _ = app.run(stroke_command(app, tool), p);
         return;
     };
-    // Points the live stroke hasn't rendered yet (the release frame's last moves).
-    let t0 = app.stylus.point_ms(0);
-    let rest: Vec<_> = (l.fed..d.points.len())
-        .filter_map(|i| {
-            let q = d.points.get(i)?;
-            let t = app.stylus.stroke.get(i).or(app.stylus.stroke.last()).copied().unwrap_or_default();
-            let mut sp = photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32);
-            (sp.tilt_x, sp.tilt_y, sp.rotation) = (t[0], t[1], t[2]);
-            sp.time = app.stylus.point_ms(i) - t0;
-            Some(sp)
-        })
-        .collect();
     // What the live stroke's thread was still painting, then those points.
     let LiveStroke { paint, doc, key, mut damage, .. } = l;
     let (steps, stroke) = paint.finish();
@@ -768,17 +776,41 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     });
     // The live stroke can't show these points: the commit renders the stroke itself.
     let Some(stroke) = painted else {
-        let _ = app.run(stroke_command(app, d.tool), p);
+        let _ = app.run(stroke_command(app, tool), p);
         return;
     };
-    let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     if let EngineStroke::Brush(stroke) = stroke
         && app.session.offer_live_stroke(*stroke).is_err()
     {
         app.session.clear_live_stroke();
     }
+    run_brush_commit(app, tool, p, doc, key, damage);
+}
+
+/// The drag points from `fed` on, which the live stroke hasn't rendered: the release frame's last
+/// moves.
+fn rest_points(app: &PhotocraftApp, d: &Drag, fed: usize) -> Vec<photocraft_engine::paint::StrokePoint> {
+    let t0 = app.stylus.point_ms(0);
+    (fed..d.points.len())
+        .filter_map(|i| {
+            let q = d.points.get(i)?;
+            let t = app.stylus.stroke.get(i).or(app.stylus.stroke.last()).copied().unwrap_or_default();
+            let mut sp = photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32);
+            (sp.tilt_x, sp.tilt_y, sp.rotation) = (t[0], t[1], t[2]);
+            sp.time = app.stylus.point_ms(i) - t0;
+            Some(sp)
+        })
+        .collect()
+}
+
+/// Run the stroke's command `p` for `tool`, which takes the offered live stroke's pixels (or the
+/// commit prepared from them), then refresh document `doc` on the canvas: only what the live
+/// stroke (preview key `key`, steps `damage`) hadn't shown when the commit took its pixels, else
+/// what the commit drew.
+fn run_brush_commit(app: &mut PhotocraftApp, tool: Tool, p: serde_json::Value, doc: photocraft_doc::DocId, key: u64, damage: Vec<DRect>) {
+    let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     let started = crate::gpu_canvas::now_ms();
-    let result = app.run(stroke_command(app, d.tool), p);
+    let result = app.run(stroke_command(app, tool), p);
     app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
     app.session.clear_live_stroke();
     let Ok(r) = result else { return };
@@ -794,6 +826,239 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
         // Raw preview key 0 = the document itself (its colour display folded in).
         shown_as_document(app, doc, |k| shown.since(k).is_some());
     }
+}
+
+/// A released Brush, Pencil or Eraser stroke still finishing ([`continue_finishing_stroke`]):
+/// its thread painting what it was given, then its commit prepared on a thread of its own. The
+/// canvas keeps showing the live stroke meanwhile.
+pub(crate) struct FinishingStroke {
+    tool: Tool,
+    /// The stroke's command, taken at the release.
+    params: serde_json::Value,
+    /// The release's points the live stroke hadn't been given.
+    rest: Vec<photocraft_engine::paint::StrokePoint>,
+    /// Those points and the commit, being prepared ([`start_preparing`]).
+    preparing: Option<std::sync::mpsc::Receiver<Prepared>>,
+    /// When the pen came up (`now_ms`), for the log.
+    released: f64,
+    /// What it paints with, as it was at the release.
+    paint: ReleasePaint,
+}
+
+impl FinishingStroke {
+    /// Commit it at once (rendering it from its command if the live stroke is gone).
+    fn commit_now(self, app: &mut PhotocraftApp) {
+        let FinishingStroke { tool, params, rest, paint, .. } = self;
+        paint.while_committing(app, |app| commit_brush_stroke_now(app, tool, params, rest));
+    }
+}
+
+/// The colours and brush a released stroke paints with, as they were at the release. Tool
+/// commands keep running while it finishes ([`runs_while_a_stroke_finishes`]), so its command
+/// runs with these put back: a commit rendered from it (the live stroke lost) paints what the
+/// canvas showed, not a colour or brush picked meanwhile.
+struct ReleasePaint {
+    foreground: [f32; 4],
+    background: [f32; 4],
+    brush: photocraft_engine::BrushSettings,
+}
+
+impl ReleasePaint {
+    fn of(app: &PhotocraftApp) -> Self {
+        let t = &app.session.tools;
+        Self { foreground: t.foreground, background: t.background, brush: t.brush.clone() }
+    }
+
+    /// Run `f` (the stroke's command) with these, then put the newer ones back for what follows.
+    fn while_committing<R>(self, app: &mut PhotocraftApp, f: impl FnOnce(&mut PhotocraftApp) -> R) -> R {
+        let t = &mut app.session.tools;
+        let newer = (
+            std::mem::replace(&mut t.foreground, self.foreground),
+            std::mem::replace(&mut t.background, self.background),
+            std::mem::replace(&mut t.brush, self.brush),
+        );
+        let r = f(app);
+        let t = &mut app.session.tools;
+        (t.foreground, t.background, t.brush) = newer;
+        r
+    }
+}
+
+/// What [`start_preparing`] gives: the damage of the points the live stroke hadn't painted, and
+/// the commit taken from the stroke.
+type Prepared = photocraft_engine::Result<(Option<DRect>, photocraft_engine::brush_cmds::LiveCommit)>;
+
+/// Whether a release finishes over the next frames instead of waiting: on the desktop, whenever
+/// a live stroke can be offered. Waiting for a very large brush's last steps took 25 s on a
+/// 1.1-gigapixel storyboard, and a window that doesn't answer for a second or so is dropped by
+/// Wayland. Taking the commit from the stroke copies its document, up to 2 s more.
+fn finishes_after_release(app: &PhotocraftApp) -> bool {
+    app.background_jobs && app.live_stroke.as_ref().is_some_and(|l| !l.preview_failed)
+}
+
+/// How long a new press or a command waits for a released stroke before it is turned away
+/// ([`flush_finishing_stroke`]).
+const FLUSH_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// One frame of a released stroke finishing: takes its thread's new steps, then prepares its
+/// commit, then commits it and runs the commands that waited for it. Whether it is still
+/// finishing (the caller asks for another frame).
+pub(crate) fn continue_finishing_stroke(app: &mut PhotocraftApp) -> bool {
+    let Some(mut f) = app.finishing_stroke.take() else { return false };
+    // The commit being prepared: commit once it is ready.
+    if let Some(rx) = f.preparing.take() {
+        match rx.try_recv() {
+            Ok(prepared) => commit_prepared(app, f, prepared),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                f.preparing = Some(rx);
+                app.finishing_stroke = Some(f);
+                return true;
+            }
+            // The preparing thread died with the stroke: the commit renders it from its command.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                app.live_stroke = None;
+                f.commit_now(app);
+            }
+        }
+        app.stroke_landed = true;
+        return false;
+    }
+    if !take_finishing_steps(app, std::time::Duration::ZERO) {
+        f.commit_now(app);
+        app.stroke_landed = true;
+        return false;
+    }
+    if app.live_stroke.as_ref().is_some_and(|l| l.paint.busy()) {
+        app.finishing_stroke = Some(f);
+        return true;
+    }
+    // Everything painted: the last points and the commit are prepared off the UI thread.
+    match start_preparing(app, &f.rest) {
+        Some(rx) => {
+            f.preparing = Some(rx);
+            app.finishing_stroke = Some(f);
+            true
+        }
+        None => {
+            f.commit_now(app);
+            app.stroke_landed = true;
+            false
+        }
+    }
+}
+
+/// Take the steps the finishing stroke's thread painted, waiting up to `wait`. False when a step
+/// failed or there is no live stroke: the commit then renders the stroke from its command.
+fn take_finishing_steps(app: &mut PhotocraftApp, wait: std::time::Duration) -> bool {
+    let Some(l) = app.live_stroke.as_mut() else { return false };
+    for step in l.paint.catch_up(wait) {
+        match step {
+            Ok(r) => l.damage.push(r),
+            Err(_) => {
+                app.live_stroke = None;
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Hand the stroke, once its thread has painted everything, and the release's last points to a
+/// thread of their own, which paints those points and takes the commit (copying the stroke's
+/// document, which took the UI thread up to 2 s on a storyboard). `None` if the stroke isn't the
+/// Brush's or no thread could start: the release then commits at once.
+fn start_preparing(app: &mut PhotocraftApp, rest: &[photocraft_engine::paint::StrokePoint]) -> Option<std::sync::mpsc::Receiver<Prepared>> {
+    let rest = rest.to_vec();
+    let l = app.live_stroke.as_mut()?;
+    let EngineStroke::Brush(mut stroke) = l.paint.take_idle(|s| matches!(s, EngineStroke::Brush(_)))? else { return None };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("photocraft-stroke-commit".into())
+        .spawn(move || {
+            let painted = if rest.is_empty() { Ok(None) } else { stroke.push(&rest).map(Some) };
+            let _ = tx.send(painted.and_then(|r| Ok((r, (*stroke).into_commit()?))));
+        })
+        .ok()?;
+    Some(rx)
+}
+
+/// Commit the released stroke `f` with the commit [`start_preparing`] made (or, if that failed,
+/// by rendering the stroke from its command).
+fn commit_prepared(app: &mut PhotocraftApp, f: FinishingStroke, prepared: Prepared) {
+    let Some(LiveStroke { paint, doc, key, mut damage, .. }) = app.live_stroke.take() else {
+        f.commit_now(app);
+        return;
+    };
+    // It holds the stroke's own copy of the document: freeing that is for another thread.
+    super::paint_thread::drop_elsewhere(paint);
+    if let Ok((painted, commit)) = prepared {
+        damage.extend(painted);
+        app.session.offer_live_commit(commit);
+    }
+    log::info!("stroke: committed {:.0} ms after the release, which didn't wait for it", crate::gpu_canvas::now_ms() - f.released);
+    let FinishingStroke { tool, params, paint, .. } = f;
+    paint.while_committing(app, |app| run_brush_commit(app, tool, params, doc, key, damage));
+}
+
+/// Commit a released stroke that is still finishing, before a new press or a command; true when
+/// there is none left and the canvas has shown the last commit. It gets [`FLUSH_WAIT`]: still not
+/// done after that, it stays, and the press or command is turned away rather than the window
+/// waiting. Committed now, the press or command waits a frame too: landing on the document in the
+/// commit's frame, it made the canvas redraw everything (2 s on a 1.1-gigapixel storyboard).
+pub(crate) fn flush_finishing_stroke(app: &mut PhotocraftApp) -> bool {
+    if app.finishing_stroke.is_none() {
+        return !app.stroke_landed;
+    }
+    let start = web_time::Instant::now();
+    loop {
+        if !continue_finishing_stroke(app) {
+            return !app.stroke_landed;
+        }
+        let left = FLUSH_WAIT.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return false;
+        }
+        let wait = left.min(std::time::Duration::from_millis(10));
+        if app.finishing_stroke.as_ref().is_some_and(|f| f.preparing.is_some()) || !take_finishing_steps(app, wait) {
+            std::thread::sleep(wait);
+        }
+    }
+}
+
+/// The frame after a released stroke committed (`stroke_landed`): run the commands that waited
+/// for it. Whether it did.
+pub(crate) fn land_finished_stroke(app: &mut PhotocraftApp) -> bool {
+    if !std::mem::take(&mut app.stroke_landed) {
+        return false;
+    }
+    run_queued_commands(app);
+    true
+}
+
+/// Run the commands that waited for a released stroke, in order. A command that failed is
+/// reported in the status bar once they have all run, so a later one that succeeds doesn't hide
+/// it.
+pub(crate) fn run_queued_commands(app: &mut PhotocraftApp) {
+    let mut failed = None;
+    for (id, params) in std::mem::take(&mut app.queued_commands) {
+        if let Err(e) = app.run(&id, params) {
+            failed = Some(e);
+        }
+    }
+    if let Some(e) = failed {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Commands that don't touch the document run while a released stroke is still finishing.
+pub(crate) fn runs_while_a_stroke_finishes(id: &str) -> bool {
+    ["view.", "help.", "tools."].iter().any(|p| id.starts_with(p))
+}
+
+/// The status line for a press, or an automation command, turned away while a stroke finishes.
+pub(crate) fn still_finishing() -> &'static str {
+    tl!("Finishing the last brush stroke…")
 }
 
 /// Pencil (and a Pencil-mode Eraser) dabs sit on the pixel grid. Clicks anywhere inside one

@@ -387,6 +387,17 @@ pub struct PhotocraftApp {
     pub(crate) tool_override: Option<state::Tool>,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
+    /// A released Brush, Pencil or Eraser stroke still finishing on its thread, or having its
+    /// commit prepared: it commits once done, or before the next press or command
+    /// (`canvas::flush_finishing_stroke`).
+    finishing_stroke: Option<canvas::FinishingStroke>,
+    /// Commands made while `finishing_stroke` was still finishing: they run, in order, once
+    /// it has committed (`canvas::run_queued_commands`).
+    queued_commands: Vec<(String, Value)>,
+    /// A released stroke committed this frame: the canvas shows the commit before anything else
+    /// lands on the document (the queued commands, a new press), so it redraws only the stroke's
+    /// last steps, not the whole canvas (`canvas::land_finished_stroke`).
+    stroke_landed: bool,
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
     /// refresh only what it drew after the step they showed (`canvas::damage_since`).
     committed_stroke: Option<canvas::CommittedStroke>,
