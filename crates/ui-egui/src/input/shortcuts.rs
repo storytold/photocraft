@@ -853,7 +853,7 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         }
     }
     if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
-        crate::frame_tool::cancel(app);
+        crate::frame_tool::escape(app);
         return true;
     }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
