@@ -68,6 +68,16 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
 /// The reference application's note when Use Legacy Undo Shortcuts is ticked.
 pub(crate) const LEGACY_UNDO_NOTE: &str = "This change will take effect the next time you start PhotoCraft.";
 
+/// Use Legacy Channel Shortcuts (#14325), below Use Legacy Undo Shortcuts: stored at once and
+/// read by the key dispatch, so it takes effect when the dialog closes. No message; the list and
+/// the set don't change (100% still shows ⌘1).
+fn legacy_channel_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let mut on = app.session.prefs().use_legacy_channel_shortcuts;
+    if crate::widgets::checkbox(ui, &mut on, tl!("Use Legacy Channel Shortcuts")).on_hover_text(tl!("Use older channel switching shortcuts")).clicked() {
+        app.session.edit_prefs(|p| p.use_legacy_channel_shortcuts = on);
+    }
+}
+
 /// Use Legacy Undo Shortcuts (#14319), below the Set row: stored at once, read at the next
 /// launch. Ticking it says so in an alert with OK; unticking says nothing. The list and the set
 /// don't change, since the keys of this run were chosen when it started.
@@ -258,6 +268,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     if tab == 0 {
         set_row(app, ui, f, &mut overrides, &mut alt_overrides, &items, &mut message, &mut message_warning);
         legacy_undo_row(app, ui);
+        legacy_channel_row(app, ui);
         ui.add_space(4.0);
     }
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();
