@@ -11,17 +11,17 @@ use crate::dialogs::lens_batch_sources::UNSAVED;
 use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use crate::state::DialogKind;
 
-type Asked = std::rc::Rc<std::cell::RefCell<Vec<FileDialogRequest>>>;
+pub(super) type Asked = std::rc::Rc<std::cell::RefCell<Vec<FileDialogRequest>>>;
 
 /// [`harness`] whose file dialogs give `answers` in turn.
-fn harness_answering(answers: Vec<FileDialogAnswer>) -> (H, Asked) {
+pub(super) fn harness_answering(answers: Vec<FileDialogAnswer>) -> (H, Asked) {
     let (show, asked) = crate::file_dialog::fake(answers.into_iter().map(Some).collect());
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
     (harness_with(app), asked)
 }
 
 /// Clicks `button` and lets the file dialog it opens answer.
-fn click_answered(h: &mut H, button: &str) {
+pub(super) fn click_answered(h: &mut H, button: &str) {
     h.get_by_role_and_label(Role::Button, button).click();
     h.run_steps(2);
     let ctx = h.ctx.clone();
@@ -35,7 +35,7 @@ fn click(h: &mut H, label: &str) {
 }
 
 /// The paths OK sends.
-fn input(h: &H) -> Vec<String> {
+pub(super) fn input(h: &H) -> Vec<String> {
     crate::filter_dialog::params_of(fields(h))["input"]
         .as_array()
         .expect("input is a list")
