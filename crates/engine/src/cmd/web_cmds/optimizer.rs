@@ -3,8 +3,10 @@ use super::{Dither, Document, EngineError, Forced, PaletteKind, Rect, Result, Se
 
 // ---------- the image ----------
 
-/// The document as Save for Web sees it: RGB (converted to sRGB unless told otherwise), resized
-/// by `"width"`/`"height"`/`"percent"`, flattened. Returns the document and the scale factors.
+/// The document as Save for Web sees it: RGB, resized by `"width"`/`"height"`/`"percent"`, and
+/// converted to sRGB unless told otherwise: flattened first (transparency kept) in the measured
+/// case of [`flattens_before_srgb`], so the blend happens before the conversion, and layer by
+/// layer otherwise. Returns the document and the scale factors.
 pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Document, f64, f64)> {
     let mut tmp = Session::new();
     tmp.add_document(doc.clone(), None);
@@ -12,8 +14,10 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
     if mode != photocraft_color::ColorMode::Rgb {
         tmp.execute("image.mode.rgb", json!({}))?;
     }
-    if st.convert_to_srgb && doc.icc_profile.is_some() {
-        // Documents without a profile are treated as sRGB already.
+    let flatten_first = st.convert_to_srgb && flattens_before_srgb(doc);
+    if st.convert_to_srgb && doc.icc_profile.is_some() && !flatten_first {
+        // Documents without a profile are treated as sRGB already. Unmeasured cases keep the
+        // per-layer conversion (#13796).
         tmp.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"}))?;
     }
     let (w0, h0) = (f64::from(doc.size.width), f64::from(doc.size.height));
@@ -32,8 +36,77 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
         let resample = p.get("resample").and_then(Value::as_str).unwrap_or("bicubic");
         tmp.execute("image.imageSize", json!({"width": nw, "height": nh, "resample": resample}))?;
     }
+    if flatten_first {
+        // The layers are blended in the document's own space and the flattened image is
+        // converted, not each layer (#13796). The same flatten every export uses (no matte, so
+        // transparency survives).
+        tmp.edit("Flatten for export", |d, active| {
+            let bounds = d.bounds();
+            if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+                return Err(other("the canvas is too large to flatten for export"));
+            }
+            let format = d.pixel_format();
+            let mut flat = photocraft_doc::Layer::raster("Background", format);
+            *crate::pixels_mut(&mut flat)? = crate::file_cmds::flattened(d, format);
+            *active = Some(flat.id);
+            d.layers = vec![flat];
+            Ok(())
+        })?;
+        tmp.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"}))?;
+    }
     let out = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     Ok((out, nw / w0, nh / h0))
+}
+
+/// Whether Convert to sRGB blends first and converts the flattened image (#13796). Only the
+/// measured case: an 8-bit RGB document tagged with an Adobe RGB (1998)-compatible profile whose
+/// visible layers are plain (see [`plain_layers`]). Documents without a profile are sRGB already;
+/// every other document keeps the per-layer conversion until it is measured too.
+pub(super) fn flattens_before_srgb(doc: &Document) -> bool {
+    if doc.mode != photocraft_color::ColorMode::Rgb || doc.depth != photocraft_color::SampleType::U8 {
+        return false;
+    }
+    // The layer check first: it is cheap, and the profile comparison samples a colour grid.
+    if !plain_layers(&doc.layers, 0) {
+        return false;
+    }
+    let Some(profile) = doc.icc_profile.as_deref().and_then(|b| photocraft_cms::Profile::parse(b).ok()) else {
+        return false;
+    };
+    profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile())
+}
+
+/// Whether every visible layer (hidden ones and the contents of hidden groups do not render) is
+/// a pixel layer or a group that blends Normal (a group may pass through) with no active effects,
+/// no active Blend If, no excluded channels and default Advanced Blending. Adjustment, fill,
+/// text, shape and smart object layers (with their smart filters), artboards, frames (Frame Tool
+/// frames and imported frames with a frame stroke) and video layers were not measured, so they
+/// keep the per-layer conversion.
+fn plain_layers(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
+    use photocraft_doc::{BlendMode, LayerContent};
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return false;
+    }
+    layers.iter().filter(|l| l.visible).all(|l| {
+        let blend_ok = match l.children() {
+            Some(_) => matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough),
+            None => l.blend == BlendMode::Normal,
+        };
+        blend_ok
+            && match &l.content {
+                LayerContent::Raster(_) => true,
+                // An artboard paints its own background and clips; an imported frame draws its stroke.
+                LayerContent::Group(g) => g.artboard.is_none() && g.frame_stroke.is_none(),
+                _ => false,
+            }
+            && l.frame.is_none()
+            && l.video.is_none()
+            && !photocraft_compose::effects::has_effects(l)
+            && !photocraft_compose::blend_if_active(l, photocraft_color::ColorMode::Rgb)
+            && l.excluded_channels == 0
+            && l.advanced.is_default()
+            && l.children().is_none_or(|kids| plain_layers(kids, depth + 1))
+    })
 }
 
 /// An optimised image.

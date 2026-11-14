@@ -1602,3 +1602,292 @@ fn a_whole_image_path_with_slice_numbers_is_refused() {
     s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": whole, "numbers": [1]})).unwrap();
     assert_eq!(decode(&whole).dimensions(), (64, 48));
 }
+
+/// The document of #13796: 200x150, a wide-gamut profile assigned, a red/white background, a blue
+/// square and a green strip at half opacity.
+fn wide_gamut_session() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 150, "depth": 8, "name": "wide.psd", "background": "transparent"})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    s.edit("paint", |doc, active| {
+        let fmt = doc.pixel_format();
+        let rgb = |r: f32, g: f32, b: f32| photocraft_raster::from_rgba(&fmt, [r / 255.0, g / 255.0, b / 255.0, 1.0]);
+        let mut bg = Layer::raster("Background", fmt);
+        let surf = bg.surface_mut().unwrap();
+        surf.fill_rect(Rect::new(0, 0, 100, 150), &rgb(200.0, 30.0, 30.0));
+        surf.fill_rect(Rect::new(100, 0, 200, 150), &rgb(255.0, 255.0, 255.0));
+        doc.insert_above(None, bg);
+        let mut top = Layer::raster("Top", fmt);
+        top.surface_mut().unwrap().fill_rect(Rect::new(50, 25, 150, 125), &rgb(30.0, 30.0, 200.0));
+        doc.insert_above(None, top);
+        let mut semi = Layer::raster("Semi", fmt);
+        semi.surface_mut().unwrap().fill_rect(Rect::new(0, 100, 200, 150), &rgb(0.0, 160.0, 0.0));
+        semi.opacity = 0.5;
+        let id = doc.insert_above(None, semi);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+fn rgb_at(img: &photocraft_codecs::Image, x: u32, y: u32) -> [i32; 3] {
+    let px = img.to_rgba8();
+    let i = (y as usize * img.width() as usize + x as usize) * 4;
+    [px[i].into(), px[i + 1].into(), px[i + 2].into()]
+}
+
+fn near(got: [i32; 3], want: [i32; 3], tol: i32, what: &str) {
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol), "{what}: got {got:?}, want {want:?} (+-{tol})");
+}
+
+/// Convert to sRGB converts the flattened image: layers are blended in the document's space and the
+/// result is converted, not blended after each layer was converted (#13796).
+#[test]
+fn quick_export_converts_the_flattened_image_to_srgb() {
+    let dir = tmp("srgb_flat");
+    let mut s = wide_gamut_session();
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": true})).unwrap();
+    let path = format!("{dir}/q.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    let img = decode(&path);
+    let blended = rgb_at(&img, 25, 125);
+    near(blended, [102, 95, 0], 2, "blend of red and half green");
+    near(rgb_at(&img, 25, 75), [233, 24, 24], 2, "red");
+    near(rgb_at(&img, 100, 75), [24, 24, 205], 2, "blue");
+}
+
+/// Flattening for the conversion adds no matte: empty canvas stays transparent in the PNG.
+#[test]
+fn quick_export_convert_to_srgb_keeps_transparency() {
+    let dir = tmp("srgb_alpha");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 20, "depth": 8, "name": "alpha.psd", "background": "transparent"})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    s.edit("paint", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut half = Layer::raster("Half", fmt);
+        half.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 10, 20), &photocraft_raster::from_rgba(&fmt, [0.8, 0.1, 0.1, 1.0]));
+        *active = Some(doc.insert_above(None, half));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": true})).unwrap();
+    let path = format!("{dir}/a.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    let img = decode(&path);
+    let px = img.to_rgba8();
+    let alpha = |x: usize, y: usize| px[(y * img.width() as usize + x) * 4 + 3];
+    assert_eq!(alpha(5, 10), 255, "painted half stays opaque");
+    assert_eq!(alpha(15, 10), 0, "empty half stays transparent");
+}
+
+#[test]
+fn quick_export_without_convert_to_srgb_keeps_raw_values() {
+    let dir = tmp("srgb_raw");
+    let mut s = wide_gamut_session();
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": false})).unwrap();
+    let path = format!("{dir}/q.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    let img = decode(&path);
+    near(rgb_at(&img, 25, 75), [200, 30, 30], 1, "red");
+    near(rgb_at(&img, 100, 75), [30, 30, 200], 1, "blue");
+    near(rgb_at(&img, 25, 125), [100, 95, 15], 1, "blend");
+}
+
+#[test]
+fn save_for_web_converts_the_flattened_image_to_srgb() {
+    let dir = tmp("srgb_sfw");
+    let mut s = wide_gamut_session();
+    let path = format!("{dir}/w.png");
+    s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "convertToSrgb": true, "path": path})).unwrap();
+    let img = decode(&path);
+    near(rgb_at(&img, 25, 125), [102, 95, 0], 2, "blend of red and half green");
+    near(rgb_at(&img, 25, 75), [233, 24, 24], 2, "red");
+}
+
+/// The Quick Export PNG of `s` (convert to sRGB as asked), straight RGBA8.
+fn quick_png(s: &mut Session, dir: &str, name: &str, srgb: bool) -> Vec<u8> {
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": srgb})).unwrap();
+    let path = format!("{dir}/{name}.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    decode(&path).to_rgba8().to_vec()
+}
+
+/// The previous order: every layer converted to sRGB, then blended (what unmeasured documents keep).
+fn per_layer_png(mut s: Session, dir: &str, name: &str) -> Vec<u8> {
+    s.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"})).unwrap();
+    quick_png(&mut s, dir, name, false)
+}
+
+/// Only the measured case (8-bit RGB, Adobe RGB-compatible profile, Normal blending) flattens before
+/// converting; every other document keeps the per-layer conversion (#13796).
+#[test]
+fn flatten_before_srgb_is_only_the_measured_case() {
+    let doc = |s: &Session| (*s.active().unwrap().doc).clone();
+    assert!(optimizer::flattens_before_srgb(&doc(&wide_gamut_session())));
+
+    let mut grouped = wide_gamut_session();
+    grouped
+        .edit("group", |d, _| {
+            let kids = std::mem::take(&mut d.layers);
+            d.layers = vec![Layer::group("G", kids)];
+            Ok(())
+        })
+        .unwrap();
+    assert!(optimizer::flattens_before_srgb(&doc(&grouped)), "a pass-through group is still Normal blending");
+
+    let mut deep = wide_gamut_session();
+    deep.execute("image.mode.bits16", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&deep)), "16-bit");
+    let mut float = wide_gamut_session();
+    float.execute("image.mode.bits32", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&float)), "32-bit");
+    let mut p3 = wide_gamut_session();
+    p3.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&p3)), "another profile");
+    let mut untagged = wide_gamut_session();
+    untagged.execute("edit.assignProfile", json!({"profile": "none"})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&untagged)), "no profile");
+    let mut multiply = wide_gamut_session();
+    multiply
+        .edit("blend", |d, _| {
+            d.layers.last_mut().unwrap().blend = photocraft_doc::BlendMode::Multiply;
+            Ok(())
+        })
+        .unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&multiply)), "a colour-space-dependent blend mode");
+}
+
+/// The measured case looks at what renders: a hidden layer (or a hidden group's contents) does not
+/// decide the path, while effects, Blend If, excluded channels, Advanced Blending and any content
+/// other than pixels or a plain group (adjustment, fill, smart object, frame, artboard, video) were
+/// not measured and keep the per-layer conversion.
+#[test]
+fn flatten_before_srgb_ignores_hidden_layers_and_refuses_unmeasured_features() {
+    let doc = |s: &Session| (*s.active().unwrap().doc).clone();
+    let changed = |f: &dyn Fn(&mut photocraft_doc::Layer)| {
+        let mut s = wide_gamut_session();
+        s.edit("change", |d, _| {
+            f(d.layers.last_mut().unwrap());
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+
+    let hidden = changed(&|l| {
+        l.blend = photocraft_doc::BlendMode::Multiply;
+        l.visible = false;
+    });
+    assert!(optimizer::flattens_before_srgb(&doc(&hidden)), "a hidden Multiply layer");
+    let mut hidden_group = wide_gamut_session();
+    hidden_group
+        .edit("hidden group", |d, _| {
+            let mut inner = Layer::raster("Inner", d.pixel_format());
+            inner.blend = photocraft_doc::BlendMode::Screen;
+            let mut g = Layer::group("G", vec![inner]);
+            g.visible = false;
+            d.layers.push(g);
+            Ok(())
+        })
+        .unwrap();
+    assert!(optimizer::flattens_before_srgb(&doc(&hidden_group)), "a Screen layer inside a hidden group");
+
+    let shadow = changed(&|l| {
+        l.effects.enabled = true;
+        l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&shadow)), "a Multiply drop shadow");
+    let shadow_off = changed(&|l| {
+        l.effects.enabled = false;
+        l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    });
+    assert!(optimizer::flattens_before_srgb(&doc(&shadow_off)), "effects turned off do not render");
+
+    let mut curves = wide_gamut_session();
+    curves.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&curves)), "an adjustment layer");
+    let mut smart = wide_gamut_session();
+    smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&smart)), "a smart object");
+    let mut fill = wide_gamut_session();
+    fill.execute("layer.newFillLayer.solidColor", json!({"color": "#c82828"})).unwrap();
+    assert!(!optimizer::flattens_before_srgb(&doc(&fill)), "a fill layer");
+    // Groups that draw something of their own: an (empty) Frame Tool frame, an imported frame with
+    // a frame stroke, and an artboard with its background.
+    let group = |f: &dyn Fn(&mut photocraft_doc::Layer)| {
+        let mut s = wide_gamut_session();
+        s.edit("group", |d, _| {
+            let mut g = Layer::group("G", Vec::new());
+            f(&mut g);
+            d.layers.push(g);
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+    assert!(optimizer::flattens_before_srgb(&doc(&group(&|_| {}))), "a plain empty group");
+    let frame = group(&|g| {
+        g.frame = Some(Box::new(photocraft_doc::Frame { path: photocraft_doc::Path::default(), transform: photocraft_geom::Affine::IDENTITY, stroke: None }));
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&frame)), "a Frame Tool frame");
+    let frame_stroke = group(&|g| {
+        if let photocraft_doc::LayerContent::Group(grp) = &mut g.content {
+            grp.frame_stroke = Some(photocraft_doc::ShapeStroke::default());
+        }
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&frame_stroke)), "an imported frame's stroke");
+    let artboard = group(&|g| {
+        if let photocraft_doc::LayerContent::Group(grp) = &mut g.content {
+            grp.artboard = Some(photocraft_doc::Artboard::new(photocraft_geom::Rect::from_xywh(0, 0, 8, 8)));
+        }
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&artboard)), "an artboard");
+    let video = changed(&|l| l.video = Some(photocraft_doc::VideoData::new(Vec::new(), 30.0)));
+    assert!(!optimizer::flattens_before_srgb(&doc(&video)), "a video layer");
+
+    let blend_if = changed(&|l| {
+        l.blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 40], white: [255, 255] }, photocraft_doc::BlendRange::default()]);
+    });
+    assert!(!optimizer::flattens_before_srgb(&doc(&blend_if)), "Blend If");
+    let excluded = changed(&|l| l.excluded_channels = 1);
+    assert!(!optimizer::flattens_before_srgb(&doc(&excluded)), "an excluded channel");
+    let knockout = changed(&|l| l.advanced.knockout = photocraft_doc::Knockout::Shallow);
+    assert!(!optimizer::flattens_before_srgb(&doc(&knockout)), "knockout");
+}
+
+/// The unmeasured cases export exactly as before: each layer converted, then blended.
+#[test]
+fn unmeasured_documents_keep_the_per_layer_srgb_conversion() {
+    let dir = tmp("srgb_unmeasured");
+    let multiply = || {
+        let mut s = wide_gamut_session();
+        s.edit("blend", |d, _| {
+            d.layers.last_mut().unwrap().blend = photocraft_doc::BlendMode::Multiply;
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+    let deep = || {
+        let mut s = wide_gamut_session();
+        s.execute("image.mode.bits16", json!({})).unwrap();
+        s
+    };
+    let p3 = || {
+        let mut s = wide_gamut_session();
+        s.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+        s
+    };
+    for (name, make) in [("multiply", &multiply as &dyn Fn() -> Session), ("deep", &deep), ("p3", &p3)] {
+        let got = quick_png(&mut make(), &dir, &format!("{name}_got"), true);
+        let want = per_layer_png(make(), &dir, &format!("{name}_want"));
+        assert_eq!(got, want, "{name}: per-layer conversion");
+        let raw = quick_png(&mut make(), &dir, &format!("{name}_raw"), false);
+        assert_ne!(got, raw, "{name}: still converted to sRGB");
+    }
+    // The measured case does differ from the per-layer order at the half-opacity blend.
+    let flat = quick_png(&mut wide_gamut_session(), &dir, "measured", true);
+    assert_ne!(flat, per_layer_png(wide_gamut_session(), &dir, "measured_per_layer"));
+}
