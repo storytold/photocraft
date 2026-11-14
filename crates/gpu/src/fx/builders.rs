@@ -20,7 +20,7 @@ impl B {
         let (dx, dy) = offset(angle, s.distance);
         let src = self.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
         let m = self.spread_blur(src, (s.size, s.spread), inner, dx, dy);
-        self.finish(m, None, false, &s.contour, inner, 0);
+        self.finish_lut(m, None, false, fx::shadow_lut(&s.contour, inner), inner, 0);
         1
     }
 
