@@ -136,6 +136,28 @@ fn magic_eraser_samples_all_layers_and_paints_background_under_a_transparency_lo
     assert_eq!(surface(&s).rgba(2, 2), [0.0, 1.0, 0.0, 1.0]);
 }
 
+/// #11997: a click whose region lies wholly outside the selection erases nothing and adds no
+/// history step; a click on already transparent pixels with no selection still adds one.
+#[test]
+fn magic_eraser_outside_the_selection_adds_no_history_step() {
+    let mut s = session("rgb", 8);
+    s.execute("select.rect", json!({"x": 40, "y": 0, "width": 24, "height": 48, "antiAlias": false})).unwrap();
+    let h = history_len(&s);
+    let r = s.execute("paint.magicEraser", json!({"x": 15, "y": 15, "antiAlias": false})).unwrap();
+    assert_eq!(r["erased"], false);
+    assert_eq!(history_len(&s), h);
+    assert_eq!(alpha(&s, 15, 15), 1.0);
+    // A region that reaches into the selection still erases there, and only there.
+    s.execute("paint.magicEraser", json!({"x": 2, "y": 2, "antiAlias": false})).unwrap();
+    assert_eq!(history_len(&s), h + 1);
+    assert_eq!((alpha(&s, 50, 2), alpha(&s, 2, 2)), (0.0, 1.0));
+    // Already transparent, no selection: still a history step.
+    s.execute("select.deselect", json!({})).unwrap();
+    let h = history_len(&s);
+    s.execute("paint.magicEraser", json!({"x": 50, "y": 2, "antiAlias": false})).unwrap();
+    assert_eq!(history_len(&s), h + 1);
+}
+
 #[test]
 fn magic_eraser_fails_gracefully() {
     let mut s = session("rgb", 8);
