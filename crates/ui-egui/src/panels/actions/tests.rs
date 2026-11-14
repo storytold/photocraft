@@ -2,9 +2,9 @@ use super::*;
 
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
-    use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-    use photocraft_psd::descriptor::UnicodeString;
-    photocraft_psd::atn::write(&AtnFile {
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::UnicodeString;
+    craft_psd::atn::write(&AtnFile {
         name: UnicodeString::new_nul(set),
         actions: vec![AtnAction {
             name: UnicodeString::new_nul(action),
@@ -14,6 +14,214 @@ fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
         ..Default::default()
     })
     .unwrap()
+}
+
+/// Dialog confirmation, worker completion and cancellation retain the original action boundary.
+#[test]
+fn single_history_dialog_confirmation_and_cancel() {
+    for (single, confirm, background) in [(true, true, false), (true, true, true), (true, false, false), (false, true, false)] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":4,"height":4,"background":"#804020"})).unwrap();
+        app.run("actions.setHistory", json!({"singleState":single})).unwrap();
+        app.background_jobs = background;
+        let before = app.session.active().unwrap().doc.clone();
+        let count = app.session.active().unwrap().history.past_len();
+        let mut action = Action::new(
+            "Dialog",
+            vec![
+                ("layer.renameLayer".into(), json!({"name":"Prefix"})),
+                ("filter.blur.gaussianBlur".into(), json!({"radius":1})),
+                ("layer.renameLayer".into(), json!({"name":"Suffix"})),
+            ],
+        );
+        action.dialogs.insert(1);
+        app.session.actions.list.push(action);
+        let paused = play(&mut app, &json!({"action":"Dialog"})).unwrap();
+        let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), count + 1);
+        if confirm {
+            crate::dialogs::confirm(&mut app, dialog).unwrap();
+        } else {
+            crate::dialogs::cancel(&mut app, dialog).unwrap();
+        }
+        let st = app.session.active().unwrap();
+        let after = st.doc.clone();
+        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, if confirm { "Suffix" } else { "Prefix" });
+        if single {
+            assert_eq!(st.history.past_len(), count + 1);
+            assert_eq!(st.history.undo_label(), Some("Action: Dialog"));
+        } else {
+            assert!(st.history.past_len() >= count + 2);
+        }
+        assert!(app.session.undo());
+        if single {
+            assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+        } else {
+            assert_ne!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+        }
+        assert!(app.session.redo());
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), after.as_ref());
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert_eq!(app.session.actions.playing, 0);
+        let count = app.session.active().unwrap().history.past_len();
+        app.session.execute("layer.renameLayer", json!({"name":"Outside"})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), count + 1);
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), after.as_ref());
+    }
+}
+
+/// A stale dialog must reject its own edit before it can change an unrelated document/history.
+#[test]
+fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
+    for (single_state, switch) in [(true, false), (true, true), (false, false), (false, true)] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":4,"height":4,"background":"#804020"})).unwrap();
+        app.run("actions.setHistory", json!({"singleState":single_state})).unwrap();
+        let mut action =
+            Action::new("Bound", vec![("layer.renameLayer".into(), json!({"name":"Prefix"})), ("filter.blur.gaussianBlur".into(), json!({"radius":1}))]);
+        action.dialogs.insert(1);
+        app.session.actions.list.push(action);
+        let paused = play(&mut app, &json!({"action":0})).unwrap();
+        let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+        if switch {
+            app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        } else {
+            app.session.execute("layer.renameLayer", json!({"name":"Unrelated"})).unwrap();
+        }
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.entries();
+        assert!(crate::dialogs::confirm(&mut app, dialog).is_err());
+        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+        assert_eq!(app.session.active().unwrap().history.entries(), history);
+        assert!(app.filter_preview.is_none());
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert_eq!(app.session.actions.playing, 0);
+    }
+}
+
+/// Prepare a real paused spelling step with a known document and history boundary, under either grouping policy.
+fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":300,"height":100})).unwrap();
+    app.run("type.create", json!({"x":10,"y":50,"text":"Teh brwon"})).unwrap();
+    app.run("actions.setHistory", json!({"singleState":single})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let past = app.session.active().unwrap().history.past_len();
+    let mut action = Action::new(
+        "Spell",
+        vec![
+            ("layer.renameLayer".into(), json!({"name":"Prefix"})),
+            ("edit.checkSpelling".into(), json!({"allLayers":false})),
+            ("layer.renameLayer".into(), json!({"name":"Tail"})),
+        ],
+    );
+    action.dialogs.insert(1);
+    app.session.actions.list.push(action);
+    app.session.authorize = gate;
+    let paused = play(&mut app, &json!({"action":"Spell"})).unwrap();
+    assert_eq!(paused["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{paused}");
+    (app, before, past)
+}
+
+#[test]
+/// Repeated corrections share one owned history entry; a rejected correction cannot lose earlier admitted edits.
+fn paused_spelling_repeated_changes_and_errors_keep_one_owned_history() {
+    for single in [false, true] {
+        let (mut app, before, past) = paused_history_spelling(single, None);
+        let paused_doc = app.session.active().unwrap().doc.clone();
+        let rows = app.session.active().unwrap().history.entries();
+        assert!(spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"wrong","replace":"The"})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &paused_doc));
+        assert_eq!(app.session.active().unwrap().history.entries(), rows);
+        for params in
+            [json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"}), json!({"action":"changeAll","word":"brwon","replace":"brown"})]
+        {
+            spelling_change(&mut app, params).unwrap();
+            let token = app.ui.type_panels.spell.as_ref().unwrap().resume.unwrap();
+            assert!(app.paused_playbacks.paused[&token].history.is_some());
+            assert_eq!(app.session.actions.playing, 0);
+        }
+        let st = app.session.active().unwrap();
+        let texts: Vec<_> = st
+            .doc
+            .walk()
+            .into_iter()
+            .filter_map(|(_, _, layer)| match &layer.content {
+                photocraft_doc::LayerContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["The brown"]);
+        let before_tail = st.doc.clone();
+        crate::type_panels_ui::close_spelling(&mut app);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert!(app.paused_playbacks.paused.is_empty());
+        let st = app.session.active().unwrap();
+        assert_eq!(st.history.past_len(), past + if single { 1 } else { 4 });
+        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "Tail");
+        if single {
+            assert_eq!(st.history.undo_label(), Some("Action: Spell"));
+        }
+        let after = st.doc.clone();
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), if single { before.as_ref() } else { before_tail.as_ref() });
+        assert!(app.session.redo());
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), after.as_ref());
+        app.run("layer.renameLayer", json!({"name":"Outside"})).unwrap();
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), after.as_ref());
+    }
+}
+
+fn deny_second_spelling_change(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+    if id == "edit.checkSpelling" && params["word"] == "brwon" { Err(photocraft_engine::EngineError::Other("original spelling gate".into())) } else { Ok(()) }
+}
+
+#[test]
+/// Reject a spelling continuation after document/history drift or captured-policy denial before any correction.
+fn paused_spelling_rejects_external_edit_switch_and_original_gate_before_change() {
+    for single in [false, true] {
+        for scenario in ["edit", "switch", "gate"] {
+            let gate = (scenario == "gate").then_some(deny_second_spelling_change as Gate);
+            let (mut app, _, _) = paused_history_spelling(single, gate);
+            spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
+            let corrected = app.session.active().unwrap().doc.clone();
+            if scenario == "edit" {
+                let past = app.session.active().unwrap().history.past_len();
+                app.run("layer.renameLayer", json!({"name":"External"})).unwrap();
+                assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "idle edits have their own history");
+            } else if scenario == "switch" {
+                app.run("file.new", json!({"width":4,"height":4})).unwrap();
+            }
+            // The original playback gate still applies even if the live gate has gone away.
+            app.session.authorize = None;
+            let before: Vec<_> = app.session.documents().iter().map(|st| (st.doc.clone(), st.history.entries())).collect();
+            let error = spelling_change(&mut app, json!({"action":"changeAll","word":"brwon","replace":"brown"})).unwrap_err();
+            if scenario == "gate" {
+                assert!(error.contains("original spelling gate"), "{error}");
+            }
+            for (state, (doc, rows)) in app.session.documents().iter().zip(&before) {
+                assert!(std::sync::Arc::ptr_eq(&state.doc, doc), "{scenario}");
+                assert_eq!(&state.history.entries(), rows);
+            }
+            crate::type_panels_ui::close_spelling(&mut app);
+            assert!(app.paused_playbacks.paused.is_empty());
+            assert_eq!(app.session.actions.playing, 0);
+            if scenario == "gate" {
+                assert_eq!(app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().name, "Tail");
+            } else {
+                assert!(!app.session.documents().iter().any(|st| st.doc.walk().iter().any(|(_, _, layer)| layer.name == "Tail")));
+                assert!(app.ui.status_error, "{}", app.ui.status);
+                if scenario == "edit" {
+                    assert!(app.session.undo());
+                    assert_eq!(app.session.active().unwrap().doc.as_ref(), corrected.as_ref());
+                } else {
+                    assert!(app.session.documents().iter().any(|st| std::sync::Arc::ptr_eq(&st.doc, &corrected)));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -39,9 +247,9 @@ fn bulk_load_keeps_selection_order_and_earlier_warnings_and_errors() {
     let first = dir.path().join("z-first.atn");
     let broken = dir.path().join("broken.atn");
     let last = dir.path().join("a-last.atn");
-    let mut unsupported = photocraft_psd::atn::parse(&action_set_bytes("Same set", "Old")).unwrap();
-    unsupported.actions[0].items[0].event = photocraft_psd::atn::AtnEvent::Code(*b"Xxxx");
-    std::fs::write(&first, photocraft_psd::atn::write(&unsupported).unwrap()).unwrap();
+    let mut unsupported = craft_psd::atn::parse(&action_set_bytes("Same set", "Old")).unwrap();
+    unsupported.actions[0].items[0].event = craft_psd::atn::AtnEvent::Code(*b"Xxxx");
+    std::fs::write(&first, craft_psd::atn::write(&unsupported).unwrap()).unwrap();
     std::fs::write(&broken, b"not an action file").unwrap();
     std::fs::write(&last, action_set_bytes("Same set", "Replacement")).unwrap();
     let paths = [first, broken, last].map(|p| p.to_string_lossy().into_owned()).to_vec();
@@ -74,9 +282,9 @@ fn bulk_load_status(app: &mut PhotocraftApp, files: Vec<(String, Vec<u8>)>) -> S
 /// what the panel holds afterwards and says which set was replaced.
 fn bulk_load_summary_counts_a_replaced_set_once() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let mut a = photocraft_psd::atn::parse(&action_set_bytes("Set 1", "A")).unwrap();
-    a.actions[0].items[0].event = photocraft_psd::atn::AtnEvent::Code(*b"Xxxx");
-    let files = vec![("a.atn".into(), photocraft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
+    let mut a = craft_psd::atn::parse(&action_set_bytes("Set 1", "A")).unwrap();
+    a.actions[0].items[0].event = craft_psd::atn::AtnEvent::Code(*b"Xxxx");
+    let files = vec![("a.atn".into(), craft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
     let status = bulk_load_status(&mut app, files);
     assert_eq!(app.session.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["B"]);
     assert!(!app.ui.status_error, "{status}");
@@ -99,6 +307,9 @@ fn bulk_load_summary_counts_distinct_sets_and_pluralises_files() {
 #[test]
 /// The multi-file summary is translated like the rest of the Actions panel.
 fn bulk_load_summary_is_translated() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let files = vec![("a.atn".into(), action_set_bytes("Set 1", "A")), ("b.atn".into(), action_set_bytes("Set 1", "B"))];
     let status = crate::i18n::with_language(crate::i18n::Lang::from_code("de").unwrap(), || bulk_load_status(&mut app, files));
@@ -431,6 +642,7 @@ fn drag_steps_and_action_headers_reorders_and_keeps_selection() {
     assert_eq!(h.state().ui.actions.selected, Some(0));
 }
 
+/// Shell playback retains nested failures and Batch file outcomes without running later steps.
 #[test]
 fn nested_shell_actions_include_view_steps_and_propagate_failures() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -456,6 +668,42 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
     assert!(r["failed"]["error"].as_str().unwrap().contains("denied nested view"));
     assert!(app.session.actions.playback_stack.is_empty());
     assert_eq!(app.session.actions.playing, 0);
+
+    app.session.authorize = None;
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("valid.png");
+    let corrupt = dir.path().join("corrupt.png");
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "png", &Default::default()).unwrap().bytes;
+    std::fs::write(&input, bytes).unwrap();
+    std::fs::write(&corrupt, b"not a PNG").unwrap();
+    let before = app.session.documents().len();
+    for mixed in [true, false] {
+        let output = dir.path().join(if mixed { "mixed" } else { "success" });
+        let inputs = if mixed { vec![&input, &corrupt] } else { vec![&input] };
+        let batch = json!({"input": inputs, "output": output, "steps": [], "format": "png"});
+        let index = app.session.actions.list.len();
+        let name = if mixed { "Mixed Batch" } else { "Successful Batch" };
+        app.session.actions.list.push(Action::new(name, vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))]));
+        let result = app.run("actions.play", json!({"action": index})).unwrap();
+        if mixed {
+            assert_eq!(result["ran"], 0, "{result}");
+            let batch = &result["failed"]["result"];
+            let files = batch["files"].as_array().unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(std::path::Path::new(files[0].as_str().unwrap()), output.join("valid.png").as_path());
+            assert_eq!(batch["errors"].as_array().unwrap().len(), 1);
+            assert_eq!(batch["errors"][0]["file"], json!(corrupt));
+            report_play(&mut app, &result);
+            assert!(app.ui.status_error);
+            assert!(app.ui.status.contains("1 file(s) failed") && app.ui.status.contains("1 saved") && app.ui.status.contains("corrupt.png"));
+            assert_eq!(app.session.documents().len(), before, "a failed Batch stops before file.new");
+        } else {
+            assert!(result.get("failed").is_none(), "{result}");
+            assert_eq!(result["ran"], 2);
+            assert_eq!(app.session.documents().len(), before + 1, "a successful Batch continues");
+        }
+        assert!(output.join("valid.png").exists(), "successful files remain available");
+    }
 }
 
 #[test]
@@ -686,8 +934,8 @@ fn recorded_save_never_flattens_layers_over_a_flat_file() {
 /// Photoshop's "save in directory", `out` itself) and plays it on each PSD in `sources`.
 /// Returns the played results, whether any PSD changed on disk and the files in `out`.
 fn play_imported_save_as(dest: &str, in_folder: bool, sources: &[&str]) -> (Vec<Value>, bool, Vec<String>) {
-    use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
     let dir = std::env::temp_dir().join(format!("photocraft-atn-save-as-{dest}-{in_folder}-{}", std::process::id()));
     let out = dir.join("out");
     std::fs::create_dir_all(&out).unwrap();
@@ -729,7 +977,7 @@ fn play_imported_save_as(dest: &str, in_folder: bool, sources: &[&str]) -> (Vec<
         app.save_as(Some(src.clone())).unwrap();
         before.push(std::fs::read(src).unwrap());
     }
-    app.run("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&photocraft_psd::atn::write(&set).unwrap())})).unwrap();
+    app.run("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&craft_psd::atn::write(&set).unwrap())})).unwrap();
     let mut played = Vec::new();
     for src in &sources {
         app.open_path(src).unwrap();
@@ -1108,10 +1356,12 @@ fn a_set_paused_at_a_dialog_ends_at_an_action_replaced_under_its_name() {
 /// the called action resumes alone, so the next action of the set must not run on a caller that
 /// never finished.
 #[test]
-fn a_set_paused_inside_a_called_action_stops_there() {
+fn a_set_paused_inside_a_called_action_continues_into_its_caller_then_the_set() {
     use egui_kittest::kittest::Queryable;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let count = app.session.active().unwrap().history.past_len();
     let mut a = Action::new("A", vec![("actions.play".into(), json!({"action": "C"})), ("layer.new.layer".into(), json!({"name": "a-tail"}))]);
     a.set = Some("S".into());
     let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "b"}))]);
@@ -1128,7 +1378,21 @@ fn a_set_paused_inside_a_called_action_stops_there() {
     let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("C's blur dialog");
     crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
     h.run_steps(2);
-    assert_eq!(layer_names(h.state()), ["c"], "C finished; B didn't run ahead of A's tail");
+    // #8386, measured: confirming a dialog inside a called action continues the caller after
+    // the call, and the set's next action after that.
+    assert_eq!(layer_names(h.state()), ["c", "a-tail", "b"], "C finished, then A's tail, then B");
+    // One history state per played action: A with its call into C, then B.
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), count + 2);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Action: B"));
+    let after = h.state().session.active().unwrap().doc.clone();
+    assert!(h.state_mut().session.undo());
+    assert_eq!(layer_names(h.state()), ["c", "a-tail"]);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Action: A"));
+    assert!(h.state_mut().session.undo());
+    assert_eq!(h.state().session.active().unwrap().doc.as_ref(), before.as_ref());
+    assert!(h.state_mut().session.redo());
+    assert!(h.state_mut().session.redo());
+    assert_eq!(h.state().session.active().unwrap().doc.as_ref(), after.as_ref());
 }
 
 /// #10459 fix-up: a set folder activated without a pointer (keyboard, accessibility) still
@@ -1523,6 +1787,7 @@ fn insert_stop_dialog_adds_a_stop_after_the_selected_step() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     let steps = &app.session.actions.list[0].steps;
     assert_eq!(steps[1], (photocraft_engine::atn_cmds::STOP_MESSAGE.to_string(), json!({"message": "Check the mask", "allowContinue": true})));
+    assert!(app.session.actions.list[0].dialogs.contains(&1), "an inserted Stop has its dialog toggle on");
     assert_eq!((app.ui.actions.selected, app.ui.actions.selected_step), (Some(0), Some(1)));
     assert_eq!(step_label(&steps[1].0, &steps[1].1), "Stop: Check the mask");
     // Without a selected step the stop goes last; the panel's menu wiring is exercised by name.
@@ -1774,6 +2039,37 @@ fn a_dialog_toggled_step_pauses_playback_and_resumes_on_ok() {
     assert!(v.get("paused").is_none());
 }
 
+#[test]
+fn equalize_step_with_a_selection_opens_its_choices() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 8})).unwrap();
+    app.run("edit.fill", json!({"color": [0.4, 0.4, 0.4]})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 8, "width": 16, "height": 8})).unwrap();
+    app.run("edit.fill", json!({"color": [0.5, 0.5, 0.5]})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+    let mut action = Action::new("Equalize", vec![(crate::equalize_ui::COMMAND.into(), json!({}))]);
+    action.dialogs.insert(0);
+    app.session.actions.list.push(action);
+    let gray = |app: &PhotocraftApp, x: i32, y: i32| {
+        let st = app.session.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)[0]
+    };
+
+    let result = play(&mut app, &json!({"action": "Equalize"})).unwrap();
+    let id = result["paused"]["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(crate::equalize_ui::owns(fields));
+    assert_eq!(fields["selectedAreaOnly"], true);
+    assert!((gray(&app, 12, 1) - 0.4).abs() < 0.01, "nothing changes before OK");
+
+    // OK with the entire image chosen maps the pixels outside the selection too.
+    app.ui.dialog_mut(id).unwrap().fields.insert("selectedAreaOnly".into(), json!(false));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(gray(&app, 12, 1) < 0.05 && gray(&app, 12, 12) > 0.95, "outside the selection too");
+}
+
 /// An 8×6 document, a Child action whose first step (a blur) shows its dialog and whose
 /// second step adds a "Suffix" layer, and recording into Owner started.
 fn recording_with_dialog_child() -> PhotocraftApp {
@@ -2011,22 +2307,496 @@ fn a_displace_step_resumes_and_records_its_call_once_after_choosing_a_map() {
     assert_displace_call_finished(&mut app, 1);
 }
 
+/// Recorded dialogs use sanitized public parameters and retain server-owned command and playback context.
 #[test]
 fn a_step_dialog_takes_only_the_steps_values() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
-    let mut a = Action::new("Blur", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 2, "__command": "select.all", "__label": "Other"}))]);
-    a.dialogs.insert(0);
-    app.session.actions.list.push(a);
-    let v = play(&mut app, &json!({"action": "Blur"})).unwrap();
-    let d = app.ui.dialog_mut(v["paused"]["dialog"].as_u64().unwrap()).unwrap();
-    assert_eq!(d.fields["radius"], 2);
-    assert_eq!(d.fields["__command"], "filter.blur.gaussianBlur");
-    assert_ne!(d.fields["__label"], "Other");
+    for (command, key, value) in
+        [("filter.blur.gaussianBlur", "radius", 2), ("image.adjustments.curves", "smooth", 2), ("image.adjustments.levels", "gamma", 2)]
+    {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut params = json!({"__command": "select.all", "__label": "Other", "__adjust": "invert", "__resumeAction": 999999, "__insertStop": true, "__smartFilter": {"layer": 1}});
+        params[key] = json!(value);
+        let mut a = Action::new("Step", vec![(command.into(), params)]);
+        a.dialogs.insert(0);
+        app.session.actions.list.push(a);
+        let v = play(&mut app, &json!({"action": "Step"})).unwrap();
+        let id = v["paused"]["dialog"].as_u64().unwrap();
+        let d = app.ui.dialog_mut(id).unwrap();
+        assert_eq!(d.fields[key], value);
+        assert_eq!(d.fields["__command"], command);
+        assert_ne!(d.fields["__label"], "Other");
+        assert_eq!(d.fields.get("__adjust").and_then(Value::as_str), command.strip_prefix("image.adjustments."));
+        assert!(!d.fields.contains_key("__insertStop"));
+        assert!(!d.fields.contains_key("__smartFilter"));
+        assert_ne!(d.fields[RESUME], 999999);
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert!(app.ui.dialogs.is_empty());
+        assert!(app.paused_playbacks.paused.is_empty());
+    }
 }
 
 fn deny_blur(id: &str, _: &Value) -> photocraft_engine::Result<()> {
     if id == "filter.blur.gaussianBlur" { Err(photocraft_engine::EngineError::Other("blur denied".into())) } else { Ok(()) }
+}
+
+/// Permit the recorded small blur but reject an edited radius, so admission is tested against final dialog parameters.
+fn deny_wide_blur(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+    if id == "filter.blur.gaussianBlur" && params["radius"].as_f64().is_some_and(|radius| radius > 1.0) {
+        Err(photocraft_engine::EngineError::Other("edited blur radius denied".into()))
+    } else {
+        Ok(())
+    }
+}
+
+/// Build a two-tone raster whose blur changes pixels, with a real action step configured to open its dialog.
+fn gated_blur_fixture(single: bool, background: bool) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 16, "background": "#000000"})).unwrap();
+    app.run("select.rect", json!({"x": 8, "y": 0, "width": 8, "height": 16})).unwrap();
+    app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("actions.setHistory", json!({"singleState": single})).unwrap();
+    app.background_jobs = background;
+    let mut action = Action::new("Gated blur", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1}))]);
+    action.dialogs.insert(0);
+    app.session.actions.list.push(action);
+    app
+}
+
+/// Simulate a temporary control gate: capture it at the pause and release the session gate before later confirmation.
+fn pause_gated_blur(app: &mut PhotocraftApp, gate: Option<Gate>) -> u64 {
+    app.session.authorize = gate;
+    let paused = play(app, &json!({"action": "Gated blur"})).unwrap();
+    app.session.authorize = None; // The temporary control gate ends before a later human OK.
+    paused["paused"]["dialog"].as_u64().unwrap()
+}
+
+#[test]
+/// Denied edited parameters must change neither pixels nor history and must admit no background worker.
+fn a_paused_dialog_authorizes_edited_params_before_history_or_worker_admission() {
+    for (single, background) in [(true, false), (true, true), (false, false)] {
+        let mut app = gated_blur_fixture(single, background);
+        let dialog = pause_gated_blur(&mut app, Some(deny_wide_blur));
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("radius".into(), json!(4));
+        let before = app.session.active().unwrap().doc.clone();
+        let revision = app.session.active().unwrap().revision;
+        let count = app.session.active().unwrap().history.past_len();
+        let error = crate::dialogs::confirm(&mut app, dialog).unwrap_err();
+        assert!(error.contains("edited blur radius denied"), "{error}");
+        let state = app.session.active().unwrap();
+        assert_eq!(state.doc.as_ref(), before.as_ref(), "denial changes no pixels");
+        assert_eq!(state.revision, revision);
+        assert_eq!(state.history.past_len(), count);
+        assert!(app.session.job_on(state.doc.id).is_none(), "no worker was admitted");
+        assert!(app.session.authorize.is_none());
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert_eq!(app.session.actions.playing, 0);
+        app.run("layer.renameLayer", json!({"name": "Outside"})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), count + 1, "no action scope leaked");
+    }
+}
+
+#[test]
+/// Allowed captured edits and unrelated manual dialogs retain their normal synchronous and worker behavior.
+fn an_allowed_paused_edit_and_an_ordinary_manual_dialog_still_run() {
+    for (paused, background) in [(true, false), (true, true), (false, false)] {
+        let mut app = gated_blur_fixture(true, background);
+        let before = app.session.active().unwrap().doc.clone();
+        let dialog = if paused {
+            pause_gated_blur(&mut app, Some(deny_wide_blur))
+        } else {
+            crate::dialogs::open_command_dialog(&mut app, "filter.blur.gaussianBlur", "Gaussian Blur")
+        };
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("radius".into(), json!(if paused { 1 } else { 4 }));
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let state = app.session.active().unwrap();
+        assert_ne!(state.doc.layers[0].surface().unwrap().pixel(7, 8), before.layers[0].surface().unwrap().pixel(7, 8));
+        assert!(app.session.job_on(state.doc.id).is_none(), "the resumed action waited for its worker");
+        assert!(app.session.authorize.is_none(), "the transient captured gate was restored");
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert_eq!(app.session.actions.playing, 0);
+    }
+}
+
+#[test]
+/// A paused action's captured permission cannot bypass a stricter live policy on confirmation.
+fn a_stricter_current_gate_still_denies_the_captured_dialog_edit() {
+    for service in [false, true] {
+        let mut app = gated_blur_fixture(true, true);
+        let dialog = pause_gated_blur(&mut app, Some(deny_wide_blur));
+        let before = app.session.active().unwrap().doc.clone();
+        if service {
+            app.automation_input = true;
+            app.services.automation_authorize = Some(deny_blur);
+        } else {
+            app.session.authorize = Some(deny_blur);
+        }
+        let error = crate::dialogs::confirm(&mut app, dialog).unwrap_err();
+        assert!(error.contains("blur denied"), "{error}");
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+        if service {
+            assert!(app.session.authorize.is_none());
+        } else {
+            assert!(app.session.authorize.unwrap()("filter.blur.gaussianBlur", &json!({"radius": 1})).is_err(), "the live gate was restored");
+        }
+        assert!(app.paused_playbacks.paused.is_empty());
+    }
+}
+
+#[test]
+/// Spelling corrections consult live Session and automation-service policies before resuming the owned history.
+fn paused_spelling_checks_the_live_gate_before_resuming_history() {
+    fn deny_correction(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+        if id == "edit.checkSpelling" && p["action"] == "changeAll" { Err(photocraft_engine::EngineError::Other("live spelling gate".into())) } else { Ok(()) }
+    }
+    for service in 0..3 {
+        let (mut app, _, _) = paused_history_spelling(true, Some(deny_second_spelling_change));
+        let before = app.session.active().unwrap().doc.clone();
+        let rows = app.session.active().unwrap().history.entries();
+        let token = app.ui.type_panels.spell.as_ref().unwrap().resume.unwrap();
+        if service != 1 {
+            app.session.authorize = None;
+        }
+        match service {
+            0 => app.session.authorize = Some(deny_correction),
+            1 => {
+                app.automation_input = true;
+                app.services.automation_authorize = Some(deny_correction);
+            }
+            _ => {
+                app.automation_input = true;
+                app.services.automation_command = Some(Box::new(|id, _| if id == "edit.checkSpelling" { Err("live spelling gate".into()) } else { Ok(()) }));
+            }
+        }
+        assert!(spelling_change(&mut app, json!({"action":"changeAll","word":"Teh","replace":"The"})).is_err());
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+        assert_eq!(app.session.active().unwrap().history.entries(), rows);
+        assert!(app.paused_playbacks.paused.get(&token).unwrap().history.is_some(), "denial must leave the bound continuation untouched");
+        assert!(app.session.execute("actions.setHistory", json!({"singleState":false})).is_err());
+        let fields = serde_json::Map::from_iter([(RESUME.to_string(), json!(token))]);
+        abandoned(&mut app, &fields);
+        app.session.execute("actions.setHistory", json!({"singleState":false})).unwrap();
+    }
+}
+
+#[test]
+/// A changed authority context cancels both direct and nested tails while keeping the admitted prefix undoable.
+fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
+    fn deny_tail(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "layer.renameLayer" { Err(photocraft_engine::EngineError::Other("live tail denied".into())) } else { Ok(()) }
+    }
+    for service in [false, true] {
+        for nested in [false, true] {
+            let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
+            if nested {
+                app.session.actions.list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
+                app.session.actions.list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
+            }
+            spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
+            let corrected = app.session.active().unwrap().doc.clone();
+            if service {
+                app.automation_input = true;
+                app.services.automation_authorize = Some(deny_tail);
+            } else {
+                app.session.authorize = Some(deny_tail);
+            }
+            crate::type_panels_ui::close_spelling(&mut app);
+            assert!(app.ui.status_error && app.ui.status.contains("authorization context changed"), "{}", app.ui.status);
+            assert_eq!(app.session.active().unwrap().doc.as_ref(), corrected.as_ref(), "the admitted prefix remains, with no tail edit");
+            assert_eq!(app.session.active().unwrap().history.past_len(), past + 1);
+            assert!(app.session.undo());
+            assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+            assert!(app.paused_playbacks.paused.is_empty());
+            assert_eq!(app.session.actions.playing, 0);
+        }
+    }
+}
+
+#[test]
+/// Distinct captured/live gates fail before applying the dialog or starting a worker, even if the edit is allowed.
+fn a_changed_context_is_rejected_before_dialog_or_worker_admission() {
+    fn allow_all(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Ok(())
+    }
+    for background in [false, true] {
+        let mut app = gated_blur_fixture(true, background);
+        let dialog = pause_gated_blur(&mut app, Some(deny_wide_blur));
+        let before = app.session.active().unwrap().doc.clone();
+        let rows = app.session.active().unwrap().history.entries();
+        app.session.authorize = Some(allow_all);
+        assert!(crate::dialogs::confirm(&mut app, dialog).is_err_and(|e| e.contains("authorization context changed")));
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+        assert_eq!(app.session.active().unwrap().history.entries(), rows);
+        assert!(app.session.job_on(before.id).is_none());
+    }
+}
+
+#[test]
+/// The same gate, a released temporary gate and a newly installed gate permit supported continuation paths.
+fn unchanged_and_released_gates_allow_the_action_tail() {
+    for scenario in ["released", "same", "new"] {
+        let mut app = gated_blur_fixture(true, false);
+        app.session.actions.list[0].steps.push(("layer.renameLayer".into(), json!({"name":"Allowed tail"})));
+        let dialog = pause_gated_blur(&mut app, (scenario != "new").then_some(deny_wide_blur as Gate));
+        match scenario {
+            "same" | "new" => app.session.authorize = Some(deny_wide_blur),
+            _ => {}
+        }
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let state = app.session.active().unwrap();
+        assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().name, "Allowed tail");
+    }
+}
+
+#[test]
+/// Distinct configured policies permit manual confirmation but cannot be combined for automated dispatch.
+/// The identical-gate automated control proves the supported composed-policy path still completes and undoes once.
+fn configured_gates_require_one_composed_policy_for_automated_resume() {
+    fn deny_file_open(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "file.open" { Err(photocraft_engine::EngineError::Other("file open denied".into())) } else { Ok(()) }
+    }
+    assert!(!std::ptr::fn_addr_eq(deny_wide_blur as Gate, deny_file_open as Gate));
+    for (automated, identical) in [(false, false), (true, false), (true, true)] {
+        let mut app = gated_blur_fixture(true, false);
+        app.session.actions.list[0].steps.push(("layer.renameLayer".into(), json!({"name":"Allowed tail"})));
+        app.session.authorize = Some(deny_wide_blur);
+        let service: Gate = if identical { deny_wide_blur } else { deny_file_open };
+        app.services.automation_authorize = Some(service);
+        // The service is configured before the real local pause, but becomes effective only
+        // for the automated OK. Both callbacks allow this edit and its remaining command.
+        for gate in [deny_wide_blur as Gate, deny_file_open as Gate] {
+            gate("filter.blur.gaussianBlur", &json!({"radius":1})).unwrap();
+            gate("layer.renameLayer", &json!({"name":"Allowed tail"})).unwrap();
+        }
+        let dialog = play(&mut app, &json!({"action":"Gated blur"})).unwrap()["paused"]["dialog"].as_u64().unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let rows = app.session.active().unwrap().history.past_len();
+        app.automation_input = automated;
+        let result = crate::dialogs::confirm(&mut app, dialog);
+        let state = app.session.active().unwrap();
+        if automated && !identical {
+            assert!(result.is_err_and(|error| error.contains("policies that cannot be combined")));
+            assert_eq!(state.doc.as_ref(), before.as_ref());
+            assert_eq!(state.history.past_len(), rows);
+            assert!(app.session.job_on(before.id).is_none());
+        } else {
+            result.unwrap();
+            assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().name, "Allowed tail");
+            assert_eq!(state.history.past_len(), rows + 1);
+            assert!(app.session.undo());
+            assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+        }
+        assert!(std::ptr::fn_addr_eq(app.session.authorize.unwrap(), deny_wide_blur as Gate));
+        assert!(std::ptr::fn_addr_eq(app.services.automation_authorize.unwrap(), service));
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert_eq!(app.session.actions.playing, 0);
+    }
+}
+
+#[test]
+/// A policy change after the final spelling step must not discard completed edits when no tail remains to dispatch.
+fn a_changed_gate_after_the_last_spelling_step_keeps_completed_edits() {
+    let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
+    app.session.actions.list[0].steps.truncate(2);
+    spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
+    let corrected = app.session.active().unwrap().doc.clone();
+    app.session.authorize = Some(|_, _| Ok(()));
+    crate::type_panels_ui::close_spelling(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.as_ref(), corrected.as_ref());
+    assert_eq!(app.session.active().unwrap().history.past_len(), past + 1);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+}
+
+#[test]
+/// Implicit layer-owned adjustments reject a receiver switch; explicit receivers change only their intended surface.
+/// An omitted target separately inherits the mask captured when its dialog opens.
+fn paused_adjustments_bind_implicit_pixel_and_mask_receivers() {
+    for targeting in ["implicit", "null", "explicit"] {
+        for mask in [false, true] {
+            let mut app = gated_blur_fixture(true, false);
+            let a = app.session.active().unwrap().active_layer.unwrap();
+            app.run("edit.fill", json!({"color":"#808080"})).unwrap();
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("edit.fill", json!({"color":"#808080","target":"mask"})).unwrap();
+            let b = photocraft_doc::LayerId(app.run("layer.new.layer", json!({"name":"B"})).unwrap()["layer"].as_u64().unwrap());
+            // Native mask eligibility checks the active layer, so keep both receivers eligible.
+            // The assertions below still require the explicitly named A mask alone to change.
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.session.select_layer(a).unwrap();
+            let mut params = json!({"brightness":40,"target":"pixels"});
+            if mask {
+                params["target"] = json!("mask");
+            }
+            if targeting == "explicit" {
+                params["layer"] = json!(a.0);
+            } else if targeting == "null" {
+                params["layer"] = Value::Null;
+            }
+            app.session.actions.list[0].steps[0] = ("image.adjustments.brightnessContrast".into(), params);
+            let dialog = pause_gated_blur(&mut app, None);
+            app.session.select_layer(b).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            let result = crate::dialogs::confirm(&mut app, dialog);
+            if targeting == "explicit" {
+                result.unwrap();
+                let after = &app.session.active().unwrap().doc;
+                assert_eq!(after.layer(b).unwrap(), before.layer(b).unwrap());
+                if mask {
+                    assert_ne!(after.layer(a).unwrap().mask, before.layer(a).unwrap().mask);
+                    assert_eq!(after.layer(a).unwrap().surface(), before.layer(a).unwrap().surface());
+                } else {
+                    assert_ne!(after.layer(a).unwrap().surface(), before.layer(a).unwrap().surface());
+                    assert_eq!(after.layer(a).unwrap().mask, before.layer(a).unwrap().mask);
+                }
+            } else {
+                assert!(result.is_err_and(|e| e.contains("receiver changed")));
+                assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+            }
+        }
+    }
+
+    // Batch 16 review: a dialog paused on a document target (an alpha channel) and switched to
+    // the layer's pixels checks the layer that was active at the pause.
+    {
+        let mut app = gated_blur_fixture(true, false);
+        let a = app.session.active().unwrap().active_layer.unwrap();
+        let b = photocraft_doc::LayerId(app.run("layer.new.layer", json!({"name":"B"})).unwrap()["layer"].as_u64().unwrap());
+        app.session.select_layer(a).unwrap();
+        app.session.actions.list[0].steps[0] = ("image.adjustments.brightnessContrast".into(), json!({"brightness":40,"target":{"channel":0}}));
+        let dialog = pause_gated_blur(&mut app, None);
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("target".into(), json!("pixels"));
+        app.session.select_layer(b).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let result = crate::dialogs::confirm(&mut app, dialog);
+        assert!(result.is_err_and(|e| e.contains("receiver changed")));
+        assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+    }
+
+    // An omitted target inherits the mask selected when the paused dialog opens. This is
+    // distinct from native playback without a dialog, which resolves the current channel.
+    let mut app = gated_blur_fixture(true, false);
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.run("edit.fill", json!({"color":"#808080","target":"mask"})).unwrap();
+    assert!(app.layer_mask_targeted());
+    app.session.actions.list[0].steps[0] = ("image.adjustments.brightnessContrast".into(), json!({"brightness":40}));
+    let before = app.session.active().unwrap().doc.clone();
+    let rows = app.session.active().unwrap().history.past_len();
+    let dialog = pause_gated_blur(&mut app, None);
+    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["target"], "mask");
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    let state = app.session.active().unwrap();
+    assert_ne!(state.doc.layer(a).unwrap().mask, before.layer(a).unwrap().mask);
+    assert_eq!(state.doc.layer(a).unwrap().surface(), before.layer(a).unwrap().surface());
+    assert_eq!(state.history.past_len(), rows + 1);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+}
+
+#[test]
+/// Document-owned alpha channels remain valid targets when the active layer changes during the pause.
+fn a_document_channel_adjustment_survives_an_active_layer_change() {
+    let mut app = gated_blur_fixture(true, false);
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    let b = photocraft_doc::LayerId(app.run("layer.new.layer", json!({"name":"B"})).unwrap()["layer"].as_u64().unwrap());
+    app.run("channel.new", json!({"name":"Alpha","fill":"black"})).unwrap();
+    app.run("edit.fill", json!({"color":"#808080","target":{"channel":0}})).unwrap();
+    app.session.select_layer(a).unwrap();
+    app.session.actions.list[0].steps[0] = ("image.adjustments.brightnessContrast".into(), json!({"brightness":40,"target":{"channel":0}}));
+    let dialog = pause_gated_blur(&mut app, None);
+    app.session.select_layer(b).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    let after = &app.session.active().unwrap().doc;
+    assert_eq!(after.layers, before.layers);
+    assert_ne!(after.channels, before.channels);
+}
+
+#[test]
+/// A public Session layer switch invalidates an implicit receiver while explicit-layer playback remains usable.
+fn an_implicit_paused_filter_refuses_a_public_api_receiver_change() {
+    for single in [false, true] {
+        for explicit in [false, true] {
+            let mut app = gated_blur_fixture(single, false);
+            let a = app.session.active().unwrap().active_layer.unwrap();
+            let b = photocraft_doc::LayerId(app.run("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap());
+            app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+            app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+            app.session.select_layer(a).unwrap();
+            if explicit {
+                app.session.actions.list[0].steps[0].1["layer"] = json!(a.0);
+            }
+            let dialog = pause_gated_blur(&mut app, None);
+            // Supported host/session API, not a modal-blocked native menu/control command.
+            app.session.select_layer(b).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            let result = crate::dialogs::confirm(&mut app, dialog);
+            let after = &app.session.active().unwrap().doc;
+            if explicit {
+                result.unwrap();
+                assert_ne!(after.layer(a).unwrap().surface().unwrap().pixel(7, 8), before.layer(a).unwrap().surface().unwrap().pixel(7, 8));
+                assert_eq!(after.layer(b).unwrap().surface().unwrap().pixel(7, 8), before.layer(b).unwrap().surface().unwrap().pixel(7, 8));
+            } else {
+                assert!(result.is_err_and(|e| e.contains("receiver changed")));
+                assert_eq!(after.as_ref(), before.as_ref(), "neither layer may be edited after stale implicit targeting");
+            }
+            assert!(app.paused_playbacks.paused.is_empty());
+            assert_eq!(app.session.actions.playing, 0);
+        }
+    }
+}
+
+#[test]
+/// Changes to other selected layers do not invalidate the unchanged active receiver captured by a filter dialog.
+fn an_implicit_filter_keeps_its_receiver_when_only_other_selected_layers_change() {
+    let mut app = gated_blur_fixture(true, false);
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    let b = photocraft_doc::LayerId(app.run("layer.new.layer", json!({"name": "Other"})).unwrap()["layer"].as_u64().unwrap());
+    app.session.select_layer(a).unwrap();
+    let dialog = pause_gated_blur(&mut app, None);
+    app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+    app.session.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+    let before = app.session.active().unwrap().doc.clone();
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    let after = &app.session.active().unwrap().doc;
+    assert_ne!(after.layer(a).unwrap().surface().unwrap().pixel(7, 8), before.layer(a).unwrap().surface().unwrap().pixel(7, 8));
+    assert_eq!(after.layer(b).unwrap().surface().unwrap().content_bounds(), before.layer(b).unwrap().surface().unwrap().content_bounds());
+}
+
+fn deny_displace_file(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+    if id == "filter.distort.displace" && params.get("mapPath").is_some() {
+        Err(photocraft_engine::EngineError::Other("chosen displacement map denied".into()))
+    } else {
+        Ok(())
+    }
+}
+
+#[test]
+/// Authorize a deferred displacement-map path before file access, worker admission or continuation history changes.
+fn a_deferred_displace_map_is_authorized_before_reading_or_resuming_history() {
+    let mut app = recording_with_displace_child();
+    app.background_jobs = true;
+    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::Paths(vec!["denied-map.png".into()]))]);
+    app.services.file_dialog = Some(show);
+    app.session.authorize = Some(deny_displace_file);
+    let dialog = pause_child(&mut app);
+    app.session.authorize = None;
+    let before = app.session.active().unwrap().doc.clone();
+    let count = app.session.active().unwrap().history.past_len();
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(app.file_dialog_open());
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(app.ui.status.contains("chosen displacement map denied"), "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
+    assert_eq!(app.session.active().unwrap().history.past_len(), count);
+    assert!(app.session.authorize.is_none());
+    assert!(app.session.job_on(before.id).is_none());
+    assert_displace_call_finished(&mut app, 0);
 }
 
 #[test]
@@ -2067,6 +2837,87 @@ fn a_paused_playback_keeps_its_automation_gate_when_the_dialog_is_confirmed() {
     app.automation_input = false;
     assert!(app.session.active().unwrap().doc.selection.is_none(), "the denied step did not run");
     assert!(app.ui.status.contains("select.all denied"), "{}", app.ui.status);
+}
+
+/// An action automation wrote, bound to a key, plays under the desktop's automation policy
+/// when the user presses the key: its file step is refused, not run with the user's access.
+#[test]
+fn a_users_key_plays_an_action_automation_wrote_under_its_gate() {
+    /// The automation policy this test stands in for: every `file.` command is refused.
+    fn deny_file(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id.starts_with("file.") { Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let services = crate::Services { automation_authorize: Some(deny_file), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let mut planted = Action::new("Backup", vec![("file.openAs".into(), json!({"path": "/outside/secret.png"}))]);
+    planted.automation = true;
+    app.session.actions.list.push(planted);
+    assign_shortcut(&mut app, "Backup", "F9").unwrap();
+    crate::shortcut_dispatch::dispatch(&mut app, &egui::Context::default(), &shortcut_id("Backup"));
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.status.contains("disabled"), "the refusal is reported: {}", app.ui.status);
+    assert!(app.session.authorize.is_none(), "the kept gate is removed after playback");
+}
+
+/// CodeRabbit on #9783: the kept gate of an action automation wrote stays with that action. A set
+/// the user plays pauses at the marked action's step dialog; after OK the marked action's tail
+/// still plays under the gate (its refused step is refused), and once that tail passes, the
+/// user's own action after it in the set keeps the user's access.
+#[test]
+fn a_kept_gate_does_not_carry_into_the_rest_of_a_set_after_a_pause() {
+    use egui_kittest::kittest::Queryable;
+    /// The automation policy this test stands in for: it refuses only layers named `a2` and `b`.
+    fn deny_a2_and_b(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+        match p.get("name").and_then(Value::as_str) {
+            Some(name @ ("a2" | "b")) if id == "layer.new.layer" => Err(photocraft_engine::EngineError::Other(format!("layer {name} denied"))),
+            _ => Ok(()),
+        }
+    }
+    let services = crate::Services { automation_authorize: Some(deny_a2_and_b), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut a = Action::new(
+        "A",
+        vec![
+            ("layer.new.layer".into(), json!({"name": "a"})),
+            ("filter.blur.gaussianBlur".into(), json!({"radius": 1})),
+            ("layer.new.layer".into(), json!({"name": "a2"})),
+        ],
+    );
+    a.set = Some("S".into());
+    a.dialogs.insert(1);
+    a.automation = true;
+    let mut b = Action::new("B", vec![("layer.new.layer".into(), json!({"name": "b"}))]);
+    b.set = Some("S".into());
+    app.session.actions.list.extend([a, b]);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("S").click();
+    h.run_steps(2);
+
+    // The marked action's tail after OK: its `a2` step meets the kept gate, and the set stops.
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"]);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    let _confirmed = crate::dialogs::confirm(h.state_mut(), dialog);
+    h.run_steps(2);
+    assert_eq!(layer_names(h.state()), ["a"], "a2 was refused after OK: {}", h.state().ui.status);
+    assert!(h.state().ui.status.contains("a2 denied"), "the refusal is reported: {}", h.state().ui.status);
+    assert!(h.state().session.authorize.is_none(), "no gate is left installed");
+
+    // With that step off, the tail passes, and the user's own action after it plays with the
+    // user's access.
+    h.state_mut().session.actions.list[0].disabled.insert(2);
+    h.get_by_label("Play selection").click();
+    h.run_steps(2);
+    let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("the blur's dialog");
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    let names = layer_names(h.state());
+    assert!(names.iter().any(|n| n == "b"), "B played with the user's access: {names:?} {}", h.state().ui.status);
+    assert!(!names.iter().any(|n| n == "a2"), "{names:?}");
+    assert!(h.state().session.authorize.is_none(), "no gate is left installed");
 }
 
 /// The dialog names only its pause: changing its fields can't resume another action.
@@ -2114,8 +2965,8 @@ fn button_mode_plays_the_clicked_action_and_hides_its_steps() {
 /// document (#7367).
 #[test]
 fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
-    use photocraft_psd::atn::{self, AtnEvent, AtnItem};
-    use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
+    use craft_psd::atn::{self, AtnEvent, AtnItem};
+    use craft_psd::descriptor::{Descriptor, Id, Value as D};
     use std::{cell::RefCell, rc::Rc};
     // A one-step .atn: Close (`Cls `) with Save: Yes.
     let seed = Action::new("Seed", vec![("layer.new.layer".into(), json!({}))]);
@@ -2182,9 +3033,9 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
 /// one in a set a later file replaced (CodeRabbit on #10776).
 fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let mut a = photocraft_psd::atn::parse(&action_set_bytes("Set A", "A")).unwrap();
-    a.actions[0].items[0].event = photocraft_psd::atn::AtnEvent::Code(*b"Xxxx");
-    let files = vec![("a.atn".into(), photocraft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set B", "B"))];
+    let mut a = craft_psd::atn::parse(&action_set_bytes("Set A", "A")).unwrap();
+    a.actions[0].items[0].event = craft_psd::atn::AtnEvent::Code(*b"Xxxx");
+    let files = vec![("a.atn".into(), craft_psd::atn::write(&a).unwrap()), ("b.atn".into(), action_set_bytes("Set B", "B"))];
     let status = bulk_load_status(&mut app, files);
     assert!(status.contains("1 step has no PhotoCraft equivalent yet"), "{status}");
     assert!(!app.ui.status_error, "{status}");
