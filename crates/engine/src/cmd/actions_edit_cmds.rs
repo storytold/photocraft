@@ -257,9 +257,12 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
     let action = &mut s.actions.list[idx];
-    action.set = set;
+    let previous_set = std::mem::replace(&mut action.set, set);
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();
+    if let Some(set) = previous_set.as_deref() {
+        s.prune_action_set_preferences(Some(set));
+    }
     Ok(result)
 }
 

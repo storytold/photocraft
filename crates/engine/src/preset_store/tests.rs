@@ -701,13 +701,45 @@ fn a_group_file_that_failed_to_load_is_not_overwritten() {
 }
 
 #[test]
+fn action_folder_preferences_prune_after_attach_and_confirmed_removal() {
+    use crate::actions_cmds::{Action, ActionsFile};
+
+    let mem = MemBackend::default();
+    let in_set = |name: &str, set: &str| {
+        let mut action = Action::new(name, Vec::new());
+        action.set = Some(set.into());
+        action
+    };
+    let file = ActionsFile { version: 1, actions: vec![in_set("Move me", "Move.Set"), in_set("Delete me", "Delete.Set")] };
+    mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), serde_json::to_vec(&file).unwrap());
+    let mut s = Session::new();
+    s.load_prefs_json(&json!({"collapsedActionSets": {"Move.Set": true, "Delete.Set": true, "Empty.Set": true, "Gone.Set": true}}).to_string()).unwrap();
+    s.execute("actions.newSet", json!({"name": "Empty.Set"})).unwrap();
+    assert!(s.prefs().collapsed_action_sets.contains_key("Gone.Set"));
+    assert!(s.attach_preset_store(open(Box::new(mem))).is_empty());
+    let expected = |sets: &[&str]| sets.iter().map(|&set| (set.to_owned(), true)).collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(s.prefs().collapsed_action_sets, expected(&["Delete.Set", "Empty.Set", "Move.Set"]));
+    s.execute("actions.assignSet", json!({"action": "Move me", "set": "Renamed.Set"})).unwrap();
+    assert_eq!(s.prefs().collapsed_action_sets, expected(&["Delete.Set", "Empty.Set"]));
+    s.execute("actions.delete", json!({"action": "Delete me"})).unwrap();
+    assert_eq!(s.prefs().collapsed_action_sets, expected(&["Empty.Set"]));
+
+    let mut empty_library = Session::new();
+    empty_library.load_prefs_json(r#"{"collapsedActionSets":{"Gone.Set":true}}"#).unwrap();
+    assert!(empty_library.attach_preset_store(open(Box::new(MemBackend::default()))).is_empty());
+    assert!(empty_library.prefs().collapsed_action_sets.is_empty());
+}
+
+#[test]
 fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     // e.g. written by a newer PhotoCraft: skipped on load, so recording an action must not replace it.
     let mem = MemBackend::default();
     let newer = br#"{"version":2,"actions":[{"name":"Keep","steps":[]}]}"#.to_vec();
     mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), newer.clone());
     let mut s = Session::new();
+    s.load_prefs_json(&json!({"collapsedActionSets": {"Unread.Set": true}}).to_string()).unwrap();
     s.attach_preset_store(open(Box::new(mem.clone())));
+    assert_eq!(s.prefs().collapsed_action_sets.get("Unread.Set"), Some(&true));
     s.execute("actions.record", json!({"name": "New"})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     s.sync_preset_store();

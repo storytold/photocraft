@@ -1068,8 +1068,12 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.recording.is_some() {
         return Err(bad("actions.delete", "stop recording before deleting an action"));
     }
-    let name = s.actions.list.remove(idx).name;
+    let action = s.actions.list.remove(idx);
     s.actions.touch();
+    if let Some(set) = action.set.as_deref() {
+        s.prune_action_set_preferences(Some(set));
+    }
+    let name = action.name;
     // Its function key goes with it, or the next action given the same name would inherit it.
     let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
     if s.prefs().shortcuts.contains_key(&key) {

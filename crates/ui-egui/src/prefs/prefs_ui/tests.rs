@@ -609,6 +609,10 @@ fn app_with_saved(text: Option<String>) -> (PhotocraftApp, Arc<Mutex<Option<Stri
 
 /// An app whose preferences live in `store`; writes fail while `fail` is set.
 fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::AtomicBool>) -> PhotocraftApp {
+    app_on_with_session(store, fail, photocraft_engine::Session::new())
+}
+
+fn app_on_with_session(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::AtomicBool>, session: photocraft_engine::Session) -> PhotocraftApp {
     let (a, b) = (store.clone(), store.clone());
     let services = crate::Services {
         load_prefs: Some(Box::new(move || a.lock().unwrap().clone())),
@@ -621,11 +625,80 @@ fn app_on(store: &Arc<Mutex<Option<String>>>, fail: Arc<std::sync::atomic::Atomi
         })),
         ..Default::default()
     };
-    PhotocraftApp::new(photocraft_engine::Session::new(), services)
+    PhotocraftApp::new(session, services)
 }
 
 fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
     serde_json::from_str(store.lock().unwrap().as_deref().unwrap_or("null")).unwrap()
+}
+
+#[test]
+fn action_folder_choices_merge_between_instances() {
+    let store = Arc::new(Mutex::new(Some(json!({"collapsedActionSets": {"Portrait": false}}).to_string())));
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+    let ctx = egui::Context::default();
+    a.run("prefs.set", json!({"path": "collapsedActionSets.Portrait", "value": true})).unwrap();
+    tick(&mut a, &ctx);
+    b.run("prefs.set", json!({"path": "collapsedActionSets.Retouch", "value": true})).unwrap();
+    tick(&mut b, &ctx);
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Retouch": true, "Portrait": true}));
+    let restored = app_on(&store, Arc::default());
+    assert_eq!(restored.ui.actions.collapsed_sets, ["Portrait", "Retouch"]);
+
+    // Reopening a folder here must keep the other instance's independent collapse.
+    a.run("prefs.reset", json!({"path": "collapsedActionSets"})).unwrap();
+    tick(&mut a, &ctx);
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Retouch": true}));
+    assert_eq!(app_on(&store, Arc::default()).ui.actions.collapsed_sets, ["Retouch"]);
+}
+
+#[test]
+fn action_folder_save_keeps_explicit_expand_intent_from_legacy_prefs() {
+    let legacy = json!({"general": {"beepWhenDone": true}});
+    let (mut expander, store) = app_with_saved(Some(legacy.to_string()));
+    let mut collapser = app_on(&store, Arc::default());
+    assert!(expander.session.prefs().collapsed_action_sets.is_empty());
+
+    collapser.run("prefs.set", json!({"values": {"collapsedActionSets.Retouch.Set": true, "collapsedActionSets.Other.Set": true}})).unwrap();
+    super::save::save_preferences(&mut collapser).unwrap();
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Retouch.Set": true, "Other.Set": true}));
+
+    expander.run("prefs.set", json!({"path": "collapsedActionSets.Retouch.Set", "value": false})).unwrap();
+    super::save::save_preferences(&mut expander).unwrap();
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Other.Set": true}));
+    assert_eq!(stored(&store)["general"]["beepWhenDone"], true);
+    let reopened = app_on(&store, Arc::default());
+    assert_eq!(reopened.ui.actions.collapsed_sets, ["Other.Set"]);
+}
+
+#[test]
+fn action_folder_preferences_prune_when_the_store_attaches_before_prefs_load() {
+    use photocraft_engine::preset_store::{MemBackend, open};
+
+    let mut session = photocraft_engine::Session::new();
+    session.execute("actions.newSet", json!({"name": "Empty.Set"})).unwrap();
+    assert!(session.attach_preset_store(open(Box::new(MemBackend::default()))).is_empty());
+    let store = Arc::new(Mutex::new(Some(json!({"collapsedActionSets": {"Empty.Set": true, "Gone.Set": true}}).to_string())));
+    let mut app = app_on_with_session(&store, Arc::default(), session);
+
+    assert_eq!(app.ui.actions.collapsed_sets, ["Empty.Set"]);
+    tick(&mut app, &egui::Context::default());
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Empty.Set": true}));
+}
+
+#[test]
+fn action_folder_disclosures_follow_preference_changes() {
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"values": {"collapsedActionSets": {"Retouch": true, "Portrait": false}}})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.actions.collapsed_sets, ["Retouch"]);
+    app.run("prefs.reset", json!({"path": "collapsedActionSets"})).unwrap();
+    tick(&mut app, &ctx);
+    assert!(app.ui.actions.collapsed_sets.is_empty());
+    app.run("prefs.set", json!({"values": {"collapsedActionSets": {"Portrait": true}}})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.actions.collapsed_sets, ["Portrait"]);
 }
 
 #[test]

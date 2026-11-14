@@ -1415,6 +1415,8 @@ pub struct Preferences {
     /// The Color panel's options (what it shows, its ramp, Web colors, which chip it edits),
     /// kept across restarts as Photoshop keeps them. JSON owned by the shell.
     pub color_panel: Value,
+    /// Collapsed Action-set folders, keyed by name so concurrent saves merge each set separately.
+    pub collapsed_action_sets: BTreeMap<String, bool>,
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,
@@ -1473,8 +1475,13 @@ impl Preferences {
     /// Set a value by dotted path, validating it. Unknown paths and wrong types are errors.
     pub fn set(&mut self, path: &str, value: Value) -> std::result::Result<(), String> {
         // `set_path` skips empty segments, so `.alternateShortcuts.x` would reach the typed state
-        // below the per-path validators above; refuse such paths instead.
-        if path.split('.').any(str::is_empty) {
+        // below the per-path validators above; refuse such paths instead. A folder suffix is one
+        // literal map key, including its dots, but must not be empty.
+        let invalid_path = match path.strip_prefix("collapsedActionSets.") {
+            Some(name) => name.is_empty(),
+            None => path.split('.').any(str::is_empty),
+        };
+        if invalid_path {
             return Err(format!("invalid preference path `{path}`"));
         }
         if path == "alternateShortcuts" {
@@ -1535,6 +1542,10 @@ impl Preferences {
             }
             Some(("menus.colors", id)) => {
                 self.menus.colors.remove(id);
+                return Ok(());
+            }
+            Some(("collapsedActionSets", id)) => {
+                self.collapsed_action_sets.remove(id);
                 return Ok(());
             }
             _ => {}
@@ -1777,12 +1788,7 @@ impl Session {
                     color_changed |= self.set_pref("colorSettings", v.clone(), validate_color)?;
                     continue;
                 }
-                if v.is_object()
-                    && !p.starts_with("shortcuts")
-                    && !p.starts_with("alternateShortcuts")
-                    && !p.ends_with(".colors")
-                    && next.get(&p).is_some_and(|c| c.is_object())
-                {
+                if v.is_object() && keyed(&format!("{p}.")).is_none() && next.get(&p).is_some_and(|c| c.is_object()) {
                     for (k2, v2) in v.as_object().into_iter().flatten() {
                         next.set(&format!("{p}.{k2}"), v2.clone())?;
                     }
