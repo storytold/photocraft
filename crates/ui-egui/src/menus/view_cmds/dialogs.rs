@@ -132,6 +132,27 @@ pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
     keys
 }
 
+/// A `__choices` entry that is not a value but the line between two groups of the dropdown's list,
+/// as in the menu catalog (#14479). The entry after it starts a group.
+const CHOICE_SEPARATOR: &str = "---";
+
+/// The `__choices` entries that start a group of the list: every entry written after a
+/// [`CHOICE_SEPARATOR`]. Empty for an ungrouped list, which renders exactly as before.
+fn group_lines(opts: &[Value]) -> Vec<String> {
+    let mut starts: Vec<String> = Vec::new();
+    let mut line = false;
+    for o in opts.iter().filter_map(Value::as_str) {
+        if o == CHOICE_SEPARATOR {
+            line = true;
+            continue;
+        }
+        if std::mem::take(&mut line) {
+            starts.push(o.to_string());
+        }
+    }
+    starts
+}
+
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
@@ -209,17 +230,28 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label(label(&k));
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
-                        Some(opts) => {
+                        Some(options) => {
                             // Action and set names are the user's own text, never catalogue entries.
                             let action_names = matches!(k.as_str(), "action" | "set")
                                 && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet"));
-                            let opts: Vec<(String, String)> =
-                                opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) })).collect();
+                            let grouped = group_lines(options);
+                            let opts: Vec<(String, String)> = options
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .filter(|o| *o != CHOICE_SEPARATOR)
+                                .map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) }))
+                                .collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
                             if action_names {
                                 crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
-                            } else {
+                            } else if grouped.is_empty() {
                                 crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            } else {
+                                // A grouped list (Apply Image's Blending, #14479): the same dropdown
+                                // with a line above every entry that starts a group.
+                                crate::widgets::dropdown_wheel_grouped(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0, |v| {
+                                    grouped.iter().any(|g| g == v)
+                                });
                             }
                         }
                         None => {
@@ -327,6 +359,43 @@ fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
 /// Folder the batch dialogs start from: next to the active document, else the working directory.
 fn default_dir(app: &PhotocraftApp) -> String {
     app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
+}
+
+/// Image ▸ Apply Image's Blending list (#14479): the reference application's modes in its order,
+/// a group per row, as the command's keys. Dissolve and the non-separable modes (Hue, Saturation,
+/// Color, Luminosity) are not in its list; Darker Color and Lighter Color join once the engine
+/// blends with them (#14478), and until then the order of the rest stays as measured.
+const APPLY_IMAGE_BLEND_GROUPS: [&[&str]; 6] = [
+    &["normal"],
+    &["darken", "multiply", "colorBurn", "linearBurn"],
+    &["lighten", "screen", "colorDodge", "linearDodge"],
+    &["overlay", "softLight", "hardLight", "vividLight", "linearLight", "pinLight", "hardMix"],
+    &["add", "subtract"],
+    &["difference", "exclusion", "divide"],
+];
+
+/// [`APPLY_IMAGE_BLEND_GROUPS`] as one `__choices` list, a [`CHOICE_SEPARATOR`] line between the
+/// groups.
+fn apply_image_blend_choices() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for group in APPLY_IMAGE_BLEND_GROUPS {
+        if !out.is_empty() {
+            out.push(CHOICE_SEPARATOR.to_string());
+        }
+        out.extend(group.iter().map(|key| (*key).to_string()));
+    }
+    out
+}
+
+/// The name the reference application gives Apply Image's blending entry `key`: the engine label
+/// table's own ("Color Burn", "Linear Dodge (Add)"), where the form's sentence-case label of the
+/// camelCase key would read "Color burn" and "Linear dodge" (#14479).
+fn apply_image_blend_label(key: &str) -> &str {
+    match key {
+        "add" => "Add",
+        "subtract" => "Subtract",
+        other => photocraft_engine::commands::blend_from_str(other).map_or(other, |m| m.label()),
+    }
 }
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
@@ -614,6 +683,9 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             }
             chans.extend(d.channels.iter().map(|c| c.name.clone()));
             let alphas: Vec<String> = std::iter::once("new".to_string()).chain(d.channels.iter().map(|c| c.name.clone())).collect();
+            // Image ▸ Calculations' Blending list. Apply Image has its own, measured list
+            // ([`apply_image_blend_choices`], #14479); this one keeps the order it has always had,
+            // as the issue marks Calculations *not measured*.
             let blends = [
                 "multiply",
                 "screen",
@@ -667,12 +739,19 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                             layers.push(l.name.clone());
                         }
                     }
-                    let names: Map<String, Value> = layers.iter().skip(1).map(|n| (n.clone(), json!(n))).collect();
+                    let mut names: Map<String, Value> = layers.iter().skip(1).map(|n| (n.clone(), json!(n))).collect();
+                    // The Blending list shows the reference application's names for the modes
+                    // ("Color Burn", "Linear Dodge (Add)"), from the engine's label table and
+                    // through the catalogue so other languages keep their translations (#14479).
+                    // A layer that is itself named one of the keys keeps its own name.
+                    for key in APPLY_IMAGE_BLEND_GROUPS.into_iter().flatten() {
+                        names.entry(key.to_string()).or_insert_with(|| json!(crate::i18n::t(apply_image_blend_label(key))));
+                    }
                     // Scale and Offset only affect Add and Subtract.
                     dialog(
                         app,
                         json!({"sourceLayer": "merged", "sourceChannel": chans[0], "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none", "__labels": names}),
-                        json!({"sourceLayer": layers, "sourceChannel": load, "blending": blends, "maskChannel": masks}),
+                        json!({"sourceLayer": layers, "sourceChannel": load, "blending": apply_image_blend_choices(), "maskChannel": masks}),
                     )
                 }
                 _ => dialog(
@@ -765,3 +844,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "apply_image_blending_list_tests.rs"]
+mod apply_image_blending_list_tests;
