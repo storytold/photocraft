@@ -838,12 +838,27 @@ fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
 }
 
 /// Photoshop's colours for new count groups, in order.
-const GROUP_COLORS: [[f32; 3]; 6] = [[1.0, 0.0, 0.0], [0.0, 0.6, 1.0], [0.0, 0.8, 0.0], [1.0, 0.6, 0.0], [0.8, 0.0, 0.8], [1.0, 1.0, 0.0]];
-
-fn new_group(d: &Document, name: Option<String>, color: Option<Color>) -> CountGroup {
+/// A new count group: the colour, Marker Size and Label Size of the last group edit (`next`,
+/// remembered in the preferences, #11767), unless `color` is given.
+fn new_group(d: &Document, name: Option<String>, color: Option<Color>, next: crate::prefs::CountGroupDefaults) -> CountGroup {
     let n = d.measurement.count_groups.len();
-    let c = GROUP_COLORS[n % GROUP_COLORS.len()];
-    CountGroup { name: name.unwrap_or_else(|| format!("Count Group {}", n + 1)), color: color.unwrap_or(Color::rgb(c[0], c[1], c[2])), ..Default::default() }
+    let c = next.color.map(|v| f32::from(v) / 255.0);
+    CountGroup {
+        name: name.unwrap_or_else(|| format!("Count Group {}", n + 1)),
+        color: color.unwrap_or(Color::rgb(c[0], c[1], c[2])),
+        marker_size: next.marker_size.clamp(1, 10),
+        label_size: next.label_size.clamp(8, 72),
+        ..Default::default()
+    }
+}
+
+/// Remembers `g`'s colour and sizes for the next new count group (#11767).
+fn remember_group(s: &mut Session, g: &CountGroup) {
+    let rgb = g.color.to_rgb().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    let next = crate::prefs::CountGroupDefaults { color: rgb, marker_size: g.marker_size, label_size: g.label_size };
+    if s.prefs().count_group != next {
+        s.edit_prefs(|p| p.count_group = next);
+    }
 }
 
 fn count_json(d: &Document) -> Value {
@@ -870,9 +885,10 @@ fn count_add(s: &mut Session, p: &Value) -> Result<Value> {
     if gi.is_some_and(|i| i >= group_count) {
         return Err(bad("count.add", "no such group"));
     }
+    let next = s.prefs().count_group;
     let n = s.edit("Add Count Object", |d, _| {
         if d.measurement.count_groups.is_empty() {
-            let g = new_group(d, None, None);
+            let g = new_group(d, None, None, next);
             d.measurement.count_groups.push(g);
             d.measurement.active_count_group = 0;
         }
@@ -955,8 +971,9 @@ fn count_clear(s: &mut Session, p: &Value) -> Result<Value> {
 fn count_new_group(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let color = color_of("count.newGroup", p, "color")?;
+    let next = s.prefs().count_group;
     s.edit("Add Count Group", |d, _| {
-        let g = new_group(d, name, color);
+        let g = new_group(d, name, color, next);
         d.measurement.count_groups.push(g);
         d.measurement.active_count_group = d.measurement.count_groups.len() - 1;
         Ok(())
@@ -1040,6 +1057,9 @@ fn count_set_group(s: &mut Session, p: &Value) -> Result<Value> {
             (Some(l), None) if !switches => l,
             _ => "Count Group Options",
         };
+        // A new colour or size is what the next new group starts with (#11767).
+        let old = &d.measurement.count_groups[g];
+        let remember = (grp.color != old.color || grp.marker_size != old.marker_size || grp.label_size != old.label_size).then(|| grp.clone());
         s.edit(label, |d, _| {
             d.measurement.count_groups[g] = grp;
             if activate {
@@ -1047,6 +1067,9 @@ fn count_set_group(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(())
         })?;
+        if let Some(grp) = remember {
+            remember_group(s, &grp);
+        }
     }
     Ok(count_json(doc(s)?.as_ref()))
 }
