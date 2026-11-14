@@ -503,6 +503,15 @@ fn drop_oversized_input(ui: &Ui) {
     });
 }
 
+/// Whether an input event changes the text of a focused number field.
+fn edits_text(event: &egui::Event) -> bool {
+    match event {
+        egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(egui::ImeEvent::Commit(_)) => true,
+        egui::Event::Key { key, pressed: true, .. } => matches!(key, egui::Key::Backspace | egui::Key::Delete),
+        _ => false,
+    }
+}
+
 /// The number in a [`value_field`]. A typed number applies as it's typed, unless `opts.hold_typed`;
 /// arithmetic always waits for Enter, Tab or click-away, because per keystroke `5/2` would land
 /// first and a caller that rounds it would cut `5/2*2` short. `changed()` means a new value, not
@@ -568,6 +577,18 @@ fn number_edit(
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
+    // Whether the text was edited during this focus: only an untouched field keeps its unrounded
+    // value on leaving (#13432); a typed edit always applies, even one that shows the same text.
+    let edited_id = id.with("edited");
+    if ui.memory(|m| m.has_focus(id)) {
+        // A new focus session starts unedited; after leaving, the marker waits for the lost_focus check below.
+        if !ui.memory(|m| m.had_focus_last_frame(id)) {
+            ui.data_mut(|d| d.remove_temp::<bool>(edited_id));
+        }
+        if ui.input(|i| i.events.iter().any(edits_text)) {
+            ui.data_mut(|d| d.insert_temp(edited_id, true));
+        }
+    }
     let before = *value;
     let speed = if fine { 0.01 } else { 0.5 };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
@@ -629,6 +650,12 @@ fn number_edit(
                 v
             }),
     );
+    // Leaving the number without typing re-reads its shown text, which rounds a value the slider set
+    // between two shown digits (#13432): when nothing shown differs, the value is what it was.
+    let edited = resp.lost_focus() && ui.data_mut(|d| d.remove_temp::<bool>(edited_id)).unwrap_or(false);
+    if !hold_typed && !edited && resp.lost_focus() && *value != before && format(f64::from(*value)) == format(f64::from(before)) {
+        *value = before;
+    }
     if hold_typed {
         // A scrub always applies; a typed value applies unless this frame's guard vetoes it.
         let scrub = resp.dragged() || resp.drag_started() || resp.drag_stopped();
