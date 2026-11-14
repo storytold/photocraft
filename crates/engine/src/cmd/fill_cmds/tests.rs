@@ -100,6 +100,32 @@ fn preserve_transparency_blends_source_atop_on_semi_transparent_pixels() {
 }
 
 #[test]
+fn linear_dodge_keeps_values_above_white_at_32_bit() {
+    // 0.75 + 0.5 is 1.25 in a float document, as in the layer compositor; integer depths still
+    // clip at white, and other modes are unchanged (#11126).
+    for (depth, want) in [(8, 1.0), (16, 1.0), (32, 1.25)] {
+        for preserve in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": depth, "background": "transparent"})).unwrap();
+            s.execute(CMD, json!({"color": [0.75, 0.75, 0.75, 1.0]})).unwrap();
+            s.execute(CMD, json!({"color": [0.5, 0.5, 0.5, 1.0], "mode": "linearDodge", "preserveTransparency": preserve})).unwrap();
+            let got = px(&s, 1, 1);
+            assert!((got[0] - want).abs() < 1.5 / 255.0 && got[3] == 1.0, "{depth} {preserve} {got:?}");
+            // Half opacity adds half the colour.
+            s.execute(CMD, json!({"color": [0.5, 0.5, 0.5, 1.0], "mode": "linearDodge", "opacity": 50, "preserveTransparency": preserve})).unwrap();
+            let half = if depth == 32 { 1.5 } else { 1.0 };
+            assert!((px(&s, 1, 1)[0] - half).abs() < 1.5 / 255.0, "{depth} {preserve} {:?}", px(&s, 1, 1));
+        }
+    }
+    // Screen still stays within 0..1 in a float document.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+    s.execute(CMD, json!({"color": [0.75, 0.75, 0.75, 1.0]})).unwrap();
+    s.execute(CMD, json!({"color": [0.5, 0.5, 0.5, 1.0], "mode": "screen"})).unwrap();
+    assert!((px(&s, 1, 1)[0] - 0.875).abs() < 1e-4, "{:?}", px(&s, 1, 1));
+}
+
+#[test]
 fn history_pattern_and_content_aware() {
     let mut s = session();
     s.execute(CMD, json!({"contents": "white"})).unwrap();
