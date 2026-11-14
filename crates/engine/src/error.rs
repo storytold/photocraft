@@ -148,13 +148,15 @@ pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> Engine
 /// so a file that cannot be read as it says so instead of naming a made-up `<stem>.<as>` file.
 pub(crate) fn io_open_as_error(name: &str, as_ext: &str, error: photocraft_io::IoError) -> EngineError {
     match io_open_error(name, error) {
-        EngineError::Other(message) => {
-            let detail = message.strip_prefix(&format!("{name}: ")).unwrap_or(&message);
-            let format = as_ext.trim_start_matches('.').to_ascii_uppercase();
-            EngineError::Other(format!("\"{name}\" could not be opened as {format}: {detail}"))
-        }
+        EngineError::Other(message) => open_as_failure(name, as_ext, message.strip_prefix(&format!("{name}: ")).unwrap_or(&message)),
         other => other,
     }
+}
+
+/// The Open As wording for a failure: `"<name>" could not be opened as <FORMAT>: <detail>`.
+pub(crate) fn open_as_failure(name: &str, as_ext: &str, detail: &str) -> EngineError {
+    let format = as_ext.trim_start_matches('.').to_ascii_uppercase();
+    EngineError::Other(format!("\"{name}\" could not be opened as {format}: {detail}"))
 }
 
 impl From<photocraft_raster::AllocationError> for EngineError {

@@ -4497,3 +4497,20 @@ fn save_and_close_refuses_a_read_only_source() {
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "overrideOpen {override_open}: the source is unchanged");
     }
 }
+
+/// #14119: a batch RAW Open As failure names the format that was asked for, as the flat Open As path does.
+#[test]
+fn batch_raw_open_as_error_names_the_requested_format() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    let (w, h) = (24, 16);
+    let mut bad = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
+    bad.truncate(400); // still sniffed as RAW, but the directory data is cut off
+    assert!(photocraft_io::raw::is_raw(&bad), "the truncated DNG must still reach the batch RAW path");
+    let mut s = Session::new();
+    s.batch_raw_open = Some(s.prefs().raw_defaults.clone());
+    let err = open_bytes_as(&mut s, "notes.txt", &bad, Some("dng"), None).unwrap_err().to_string();
+    assert!(err.starts_with("\"notes.txt\" could not be opened as DNG: unsupported camera raw"), "{err}");
+    let plain = open_bytes_as(&mut s, "bad.dng", &bad, None, None).unwrap_err().to_string();
+    assert!(plain.starts_with("bad.dng: unsupported camera raw"), "{plain}");
+    assert!(!plain.contains("could not be opened as"), "{plain}");
+}
