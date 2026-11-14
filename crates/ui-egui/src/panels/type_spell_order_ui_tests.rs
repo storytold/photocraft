@@ -8,7 +8,7 @@ use serde_json::json;
 use super::spell_enabled_ui_tests::{app, harness, open_edit_menu};
 
 /// The dialog's words, in its order.
-fn words(app: &crate::PhotocraftApp) -> Vec<String> {
+pub(super) fn words(app: &crate::PhotocraftApp) -> Vec<String> {
     let spell = app.ui.type_panels.spell.as_ref().expect("the Check Spelling dialog is open");
     spell.items[spell.index..].iter().map(|i| i["word"].as_str().unwrap_or("").to_string()).collect()
 }

@@ -1200,3 +1200,7 @@ mod spell_order_ui_tests;
 #[cfg(test)]
 #[path = "type_spell_per_layer_tests.rs"]
 mod spell_per_layer_tests;
+
+#[cfg(test)]
+#[path = "type_spell_selected_ui_tests.rs"]
+mod spell_selected_ui_tests;
