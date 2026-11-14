@@ -6,6 +6,10 @@ setting is `useAlignedRendering` on `shape.create`, `shape.edit`, `shape.info`,
 appending with `addTo` preserves the target setting when omitted. Tool presets
 retain the preference; Reset Tool restores false.
 
+The Triangle tool also exposes **Snap Bounding Box**, enabled by default. That
+separate tool preference (`align_edges`) rounds the drag box before creating the
+path; it does not toggle render-time Align Edges or edit an existing layer.
+
 Alignment affects both fill and stroke. Straight horizontal and vertical source
 edges at fractional coordinates snap to document pixel boundaries on a render-only
 copy. Axis-aligned curve extrema snap too, including ellipse boundaries. Handles

@@ -136,7 +136,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         Tool::Triangle => {
             crate::widgets::vline(ui, 22.0);
             // Only a shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
-            ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Align Edges")));
+            ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Snap Bounding Box")));
         }
         Tool::Line => {
             crate::widgets::vline(ui, 22.0);

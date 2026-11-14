@@ -81,8 +81,6 @@ fn key4(s: &str) -> Result<[u8; 4]> {
     unhex(s)?.try_into().map_err(|_| FormatError::corrupt(format!("bad 4-byte key `{s}`")))
 }
 
-pub(crate) use craft_pcraft_format::is_valid_hash;
-
 /// Convert native-endian sample bytes to little-endian in place (and back:
 /// the swap is an involution).
 pub(crate) fn swap_to_le(bytes: &mut [u8], sample: SampleType) {
@@ -510,25 +508,36 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, psd_coordinate_frame, live, arrow_live, triangle_live, density, feather } => {
-                LayerContent::Shape(ShapeLayer {
-                    path: path.clone(),
-                    fill: fill.clone(),
-                    stroke: stroke.clone(),
-                    use_aligned_rendering: *use_aligned_rendering,
-                    psd_coordinate_frame: *psd_coordinate_frame,
-                    live: arrow_live
-                        .as_ref()
-                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
-                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
-                        .cloned()
-                        .or_else(|| live.clone()),
-                    cache: self.opt_surface(cache)?,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    density: *density,
-                    feather: *feather,
-                })
-            }
+            ContentM::Shape {
+                fill,
+                cache,
+                psd_raw,
+                path,
+                stroke,
+                use_aligned_rendering,
+                psd_coordinate_frame,
+                live,
+                arrow_live,
+                triangle_live,
+                density,
+                feather,
+            } => LayerContent::Shape(ShapeLayer {
+                path: path.clone(),
+                fill: fill.clone(),
+                stroke: stroke.clone(),
+                use_aligned_rendering: *use_aligned_rendering,
+                psd_coordinate_frame: *psd_coordinate_frame,
+                live: arrow_live
+                    .as_ref()
+                    .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                    .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                    .cloned()
+                    .or_else(|| live.clone()),
+                cache: self.opt_surface(cache)?,
+                psd_raw: self.opt_blob(psd_raw)?,
+                density: *density,
+                feather: *feather,
+            }),
             ContentM::Smart {
                 contents_id,
                 source,
