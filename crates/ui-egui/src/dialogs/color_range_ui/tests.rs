@@ -149,6 +149,48 @@ fn eyedropper_hover_reuses_preview_textures_without_sampling() {
     assert_eq!((st.revision, st.history.past_len()), document);
 }
 
+/// #4998: a press on the image itself — with the real pointer, not the control channel's
+/// `ui.pointer` — samples with the dialog's eyedropper, the preview recomputes for the new
+/// sample, Shift adds to it, and OK makes the selection. Clicks left of the centred dialog
+/// reach the canvas; the 40 × 30 document at 20× puts them there.
+#[test]
+fn canvas_press_samples_recomputes_the_preview_and_ok_selects() {
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app_with_doc()
+    });
+    h.state_mut().ui.views[0].zoom = 20.0;
+    h.state_mut().ui.views[0].center = [20.0, 15.0];
+    h.state_mut().ui.views[0].fit_pending = false;
+    h.run_steps(3);
+    open(h.state_mut());
+    h.run_steps(3);
+    let fields = |h: &Harness<'static, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| owns(&d.fields)).unwrap().fields.clone();
+    let at = |h: &Harness<'static, PhotocraftApp>, x: f32, y: f32| crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(x, y);
+    let key_before = h.state().color_range.as_ref().map(|p| p.mask_key);
+    let p = at(&h, 3.0, 5.0);
+    click(&mut h, p);
+    h.run_steps(2);
+    assert_eq!(points(&fields(&h), "points"), vec![[3.0, 5.0]], "a press on the image samples");
+    assert_ne!(h.state().color_range.as_ref().map(|p| p.mask_key), key_before, "the preview recomputes for the new sample");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.run_steps(1);
+    let p = at(&h, 6.0, 5.0);
+    click(&mut h, p);
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+    assert_eq!(points(&fields(&h), "points").len(), 2, "Shift adds to the sample");
+    let past = h.state().session.active().unwrap().history.past_len();
+    ok(&mut h);
+    h.run_steps(2);
+    let app = h.state();
+    assert_eq!(coverage(app, 5, 5), 1.0, "the sampled red is selected");
+    assert_eq!(coverage(app, 35, 5), 0.0, "the blue was never sampled");
+    assert_eq!(coverage(app, 5, 22), 0.0);
+    assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "one history step");
+}
+
 #[test]
 fn opens_from_the_select_menu_without_touching_the_document() {
     let mut h = harness(app_with_doc());
