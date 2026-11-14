@@ -1107,6 +1107,31 @@ fn a_job_lands_in_the_recording_it_was_started_in_only() {
     assert_eq!(action_steps(&mut s, "A"), ["filter.blur.gaussianBlur"]);
 }
 
+/// A [`Session::start_job`] job claimed with [`Session::record_job_in_take`] gives the step its
+/// apply records (Export As's) to the recording it was started in, as a command's job does.
+#[test]
+fn a_started_job_claimed_for_the_recording_lands_in_it() {
+    let mut s = session(40, 30);
+    s.execute("actions.record", json!({"name": "A"})).unwrap();
+    let id = job(s
+        .start_job(
+            "file.export.write",
+            json!({}),
+            "Export",
+            false,
+            |_ctx| -> Result<()> { Ok(()) },
+            |s, ()| {
+                s.journal.push(("file.export.exportAs".into(), json!({"path": "x.png"})));
+                Ok(json!(null))
+            },
+        )
+        .unwrap());
+    s.record_job_in_take(id);
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(action_steps(&mut s, "A"), ["file.export.exportAs"]);
+}
+
 /// The automation policy the next tests stand in for: Gaussian Blur is refused.
 fn deny_blur(id: &str, _: &Value) -> Result<()> {
     if id == "filter.blur.gaussianBlur" { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
@@ -1719,4 +1744,17 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!((b.ctime_secs, b.ctime_nanos), (a.ctime_secs, a.ctime_nanos), "the Unix identity carries ctime, so a restored mtime cannot hide a rewrite");
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A job that writes several files commits before each and ends that commit after it: a cancel
+/// is refused while a file is being replaced and accepted again before the next one.
+#[test]
+fn ending_a_commit_lets_a_cancel_stop_the_job_again() {
+    let ctx = JobCtx::new();
+    ctx.commit().unwrap();
+    assert!(!ctx.try_cancel(), "a file is being replaced: no cancel");
+    ctx.end_commit();
+    assert!(!ctx.committed());
+    assert!(ctx.try_cancel(), "between files a cancel stops the job");
+    assert!(ctx.check().is_err() && ctx.commit().is_err(), "and the next file is never started");
 }

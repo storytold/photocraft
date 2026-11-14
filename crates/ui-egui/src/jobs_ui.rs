@@ -478,7 +478,7 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
 /// no save worker is left.
 fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
     app.jobs.saves.retain(|s| !(s.ended && s.state.finished()));
-    if !app.saving() && !app.printing() && std::mem::take(&mut app.jobs.close_after_saves) {
+    if !app.saving() && !app.printing() && !app.exporting() && std::mem::take(&mut app.jobs.close_after_saves) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 }
@@ -494,7 +494,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
     }
     close_after_saves(app, ctx);
-    if app.saving() || app.printing() {
+    if app.saving() || app.printing() || app.exporting() {
         // Keep checking on a cancelled save's worker until it returns.
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
@@ -651,6 +651,10 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             }
         }
         end_batch(app);
+        return;
+    }
+    // Export As: a layer composited for its dialog, or the files it wrote.
+    if crate::export_dialog::on_job_event(app, &e) {
         return;
     }
     match e.outcome {
