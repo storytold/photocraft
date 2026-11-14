@@ -8,7 +8,7 @@ use photocraft_raster::Interrupt;
 const MAX_SAMPLES: usize = 128 * 1024 * 1024;
 // The filter dialog caps radius at 1000. Preserve Details resampling can ask
 // for more; permit that while the unchanged kernel's i32 square is safe.
-const MAX_RADIUS: f32 = 15_446.0;
+pub(crate) const MAX_RADIUS: f32 = 15_446.0;
 
 pub(crate) fn valid_params(amount: f32, radius: f32, threshold: f32) -> bool {
     amount.is_finite() && threshold.is_finite() && radius.is_finite() && (0.0..=MAX_RADIUS).contains(&radius)
