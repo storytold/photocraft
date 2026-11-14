@@ -16,8 +16,8 @@ fn settings(input: &Path, output: &Path, per_format: bool) -> Value {
     params
 }
 
-fn write_image(path: &Path) {
-    fs::write(path, b"P6\n2 1\n255\n\xff\0\0\0\xff\0").unwrap();
+fn write_image(path: &Path) -> std::io::Result<()> {
+    fs::write(path, b"P6\n2 1\n255\n\xff\0\0\0\xff\0")
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn image_processor_skips_non_images_and_can_find_images_in_subfolders() {
     fs::create_dir_all(&nested).unwrap();
     fs::write(input.join("notes.txt"), b"not an image").unwrap();
     fs::write(nested.join("manifest.txt"), b"not an image").unwrap();
-    write_image(&nested.join("test.ppm"));
+    write_image(&nested.join("test.ppm")).unwrap();
     let mut session = Session::new();
 
     for per_format in [false, true] {
@@ -78,7 +78,7 @@ fn an_opened_image_can_still_report_a_processing_or_write_failure() {
     let input = root.path().join("input");
     let output = root.path().join("output");
     fs::create_dir(&input).unwrap();
-    write_image(&input.join("test.ppm"));
+    write_image(&input.join("test.ppm")).unwrap();
     fs::write(&output, b"not a directory").unwrap();
     let mut session = Session::new();
     for per_format in [false, true] {
@@ -118,7 +118,7 @@ fn mixed_valid_and_corrupt_images_keep_the_corrupt_file_report() {
     fs::create_dir(&input).unwrap();
     let corrupt = input.join("broken.jpg");
     fs::write(&corrupt, b"not an image").unwrap();
-    write_image(&input.join("test.ppm"));
+    write_image(&input.join("test.ppm")).unwrap();
     let mut session = Session::new();
     for per_format in [false, true] {
         let result = session.execute(COMMAND, settings(&input, &output, per_format)).unwrap();
