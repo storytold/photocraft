@@ -57,9 +57,59 @@ fn two_layers(s: &Session) -> std::result::Result<(), String> {
     if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
 }
 
+fn push_unique_raster(id: LayerId, out: &mut Vec<LayerId>) {
+    if !out.contains(&id) {
+        out.push(id);
+    }
+}
+
+fn collect_group_rasters(layers: &[Layer], out: &mut Vec<LayerId>) {
+    for l in layers {
+        match &l.content {
+            LayerContent::Raster(_) => push_unique_raster(l.id, out),
+            LayerContent::Group(g) => collect_group_rasters(&g.children, out),
+            _ => {}
+        }
+    }
+}
+
+fn alignable_pixel_layers(doc: &Document, selected: &[LayerId]) -> Vec<LayerId> {
+    let mut out = Vec::new();
+    for id in selected {
+        let Some(l) = doc.layer(*id) else { continue };
+        match &l.content {
+            LayerContent::Raster(_) => push_unique_raster(l.id, &mut out),
+            LayerContent::Group(g) => collect_group_rasters(&g.children, &mut out),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn auto_align_enabled(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    let sel = st.selected_layers();
+    if sel.len() < 2 {
+        return Err("select two or more layers in the Layers panel".into());
+    }
+    let all_allowed = sel.iter().all(|id| {
+        st.doc
+            .layer(*id)
+            .is_some_and(|l| matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_)))
+    });
+    if !all_allowed {
+        return Err("Auto-Align Layers is not available for the selected layer types".into());
+    }
+    Ok(())
+}
+
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.autoAlignLayers";
-    let ids = selected_pixel_layers(s);
+    auto_align_enabled(s).map_err(|msg| bad(cmd, msg))?;
+    let ids = {
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        alignable_pixel_layers(&st.doc, &st.selected_layers())
+    };
     if ids.len() < 2 {
         return Err(bad(cmd, "select two or more pixel layers"));
     }
@@ -350,8 +400,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 macro_rules! spec {
-    ($id:literal, $label:literal, $params:literal, $run:expr) => {
-        CommandSpec { id: $id, label: $label, menu: &["Edit"], shortcut: None, params: $params, enabled: two_layers, run: $run, journal: true }
+    ($id:literal, $label:literal, $params:literal, $enabled:expr, $run:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &["Edit"], shortcut: None, params: $params, enabled: $enabled, run: $run, journal: true }
     };
 }
 
@@ -361,16 +411,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.autoAlignLayers",
             "Auto-Align Layers…",
             r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=the locked selected layer, else the bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
+            auto_align_enabled,
             auto_align
         ),
         spec!(
             "edit.autoBlendLayers",
             "Auto-Blend Layers…",
             r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##,
+            two_layers,
             auto_blend
         ),
     ]
 }
 
+#[cfg(test)]
+mod auto_align_enabled_tests;
 #[cfg(test)]
 mod tests;
