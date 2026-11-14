@@ -36,7 +36,20 @@ pub fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, mode: Selec
         out.write_region(band, &pixels);
     }
     out.prune();
-    (out.tile_count() > 0).then_some(out)
+    selects_something(&out).then_some(out)
+}
+
+/// True when any pixel of `s` is selected. A selection whose default pixel is selected (an
+/// inverted one, or a full one with no tiles) covers everything outside its tiles, so it is
+/// not empty even with no tiles and empty `content_bounds()` (#13183).
+/// Only call it on pruned surfaces: an unpruned tile may hold nothing but unselected pixels.
+pub(super) fn selects_something(s: &Surface) -> bool {
+    s.tile_count() > 0 || default_selected(s)
+}
+
+/// True when pixels outside the tiles of `s` are selected.
+pub(super) fn default_selected(s: &Surface) -> bool {
+    s.default_pixel().first().is_some_and(|v| coverage8(*v) > 0)
 }
 
 pub(super) fn gray8(old: Option<&Surface>, mask: &[f32], area: Rect, mode: SelectionMode, keep_outside: bool) -> Option<Surface> {
@@ -46,7 +59,7 @@ pub(super) fn gray8(old: Option<&Surface>, mask: &[f32], area: Rect, mode: Selec
 pub(super) fn gray8_bytes(old: Option<&Surface>, mask: &[u8], area: Rect, mode: SelectionMode) -> Option<Surface> {
     let keep = matches!(mode, SelectionMode::Add | SelectionMode::Subtract);
     if area.is_empty() {
-        return if keep { old.cloned().filter(|s| !s.content_bounds().is_empty()) } else { None };
+        return if keep { old.cloned().filter(|s| default_selected(s) || !s.content_bounds().is_empty()) } else { None };
     }
     build(old, area, mode, keep, |i| mask.get(i).copied().unwrap_or(0))
 }
@@ -107,7 +120,7 @@ fn build(old: Option<&Surface>, area: Rect, mode: SelectionMode, keep_outside: b
     if keep_outside {
         out.prune();
     }
-    (out.tile_count() > 0).then_some(out)
+    selects_something(&out).then_some(out)
 }
 
 #[cfg(test)]
