@@ -47,19 +47,24 @@ fn step_dialog(app: &mut PhotocraftApp, params: Value) -> u64 {
     played["paused"]["dialog"].as_u64().expect("the toggled step opens its dialog")
 }
 
-/// The measured case: OK with a built-in look, and the next opening shows the defaults again
-/// instead of that look. It also asserts that OK keeps nothing at all for Color Lookup, so no
-/// unread values gather in the preferences.
+/// The measured case: OK with a built-in look, and the next opening shows no LUT again instead of
+/// that look. Dither and Interpolation are not the LUT and keep today's behaviour: they come back
+/// as they were OK'd, and the preferences keep no LUT choice.
 #[test]
-fn color_lookup_ok_with_a_builtin_look_reopens_at_the_defaults() {
+fn color_lookup_ok_with_a_builtin_look_reopens_with_no_lut() {
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
     assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "the first opening");
     ok_with(&mut app, id, json!({"lut": "warm", "dither": true, "interpolation": "tetrahedral"}));
 
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "after OK with the built-in look warm");
-    assert!(!app.session.prefs().dialogs.contains_key(COLOR_LOOKUP), "OK keeps no Color Lookup values");
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["lut"], json!("none"), "after OK with the built-in look warm: lut");
+    assert_eq!(fields["file"], json!(""), "after OK with the built-in look warm: file");
+    assert_eq!(fields["dither"], json!(true), "Dither keeps its remembered value");
+    assert_eq!(fields["interpolation"], json!("tetrahedral"), "Interpolation keeps its remembered value");
+    let saved = app.session.prefs().dialogs.get(COLOR_LOOKUP).and_then(Value::as_object).cloned().unwrap_or_default();
+    assert!(!saved.contains_key("lut") && !saved.contains_key("file"), "no LUT choice is kept: {saved:?}");
 }
 
 /// The other measured opening: a LUT file loaded and OK'd. The next opening shows no file and no
@@ -71,7 +76,7 @@ fn color_lookup_ok_with_a_lut_file_reopens_at_the_defaults() {
     std::fs::write(&path, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    ok_with(&mut app, id, json!({"file": path.to_str().unwrap(), "dither": true}));
+    ok_with(&mut app, id, json!({"file": path.to_str().unwrap()}));
 
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
     assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "after OK with a LUT file");
@@ -84,7 +89,7 @@ fn color_lookup_ok_with_a_lut_file_reopens_at_the_defaults() {
 fn color_lookup_step_dialog_without_recorded_values_opens_at_the_defaults() {
     let mut app = app_with_doc();
     let id = open(&mut app, COLOR_LOOKUP).unwrap();
-    ok_with(&mut app, id, json!({"lut": "cool", "dither": true}));
+    ok_with(&mut app, id, json!({"lut": "cool"}));
 
     let id = step_dialog(&mut app, json!({}));
     assert_defaults(&app.ui.dialog_mut(id).unwrap().fields, "the scripted step with no values");
