@@ -388,6 +388,12 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
     if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
         return;
     }
+    // The engine remembers the chosen Proof Setup itself, an .icc path included: it is the
+    // proof condition after a restart (#12820). Writing the listed choices here would drop a
+    // custom profile from it.
+    if command == photocraft_engine::color_cmds::PROOF_SETUP_PREF {
+        return;
+    }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
     let mut saved: Map<String, Value> =
         parse_spec(spec.params).into_iter().filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v)).map(|v| (p.key, v.clone()))).collect();

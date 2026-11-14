@@ -1599,8 +1599,8 @@ impl Session {
     }
 
     /// Push engine-relevant preferences into live state: every document's history limit and
-    /// linearity, the transform and layer-effect cache budgets and the text engine's
-    /// missing-glyph protection.
+    /// linearity, the transform and layer-effect cache budgets, the text engine's
+    /// missing-glyph protection and the remembered Proof Setup documents start from.
     pub fn apply_prefs(&mut self) {
         self.scratch_runtime.get_or_insert_with(crate::scratch::Runtime::default);
         crate::scratch::configure(self.prefs());
@@ -1620,6 +1620,8 @@ impl Session {
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
         crate::plugin_cmds::sync_prefs(self);
+        let proof = self.prefs.get().dialogs.get(crate::color_cmds::PROOF_SETUP_PREF).cloned();
+        self.color.sync_default_proof(proof.as_ref());
     }
 
     /// Re-apply History's byte limit after the scratch disk paused (a write, create or
