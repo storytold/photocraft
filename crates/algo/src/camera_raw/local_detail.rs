@@ -27,7 +27,7 @@
 use super::Encoding;
 use super::local_detail_tables as t;
 use crate::fxutil::try_gauss_blur_n;
-use crate::photo_util::{linear_to_srgb, srgb_to_linear};
+use crate::photo_util::{linear_to_srgb, par_rows, par_rows2, srgb_to_linear};
 
 /// Knots of `l`: 0, 1/7, … 1.
 pub(super) const KNOTS: usize = 8;
@@ -113,7 +113,7 @@ fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
 }
 
 /// Applies `model` at slider `v` (−100 … 100) to straight RGBA pixels (`w × h`, encoded with
-/// `enc`). Without the memory for its working planes (about 80 bytes a pixel for Texture, a
+/// `enc`). Without the memory for its working planes (about 96 bytes a pixel for Texture, a
 /// little more with transparency) or for a blur's scratch row the pixels are left unchanged
 /// and an error says so, so a result without the stage is never taken for a complete one.
 /// The blurs weight each pixel by its alpha, so the colour hidden under transparent pixels takes
@@ -140,8 +140,9 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
     let weighted = px.iter().any(|q| cover(q) < 1.0);
     let nb = np + usize::from(weighted);
     let (Some(planes_len), Some(blur_len)) = (n.checked_mul(np), n.checked_mul(nb)) else { return Err(no_memory()) };
-    // Planes and blur (and its weighted source) of f32, knots, luminance and moves.
-    let floats = planes_len.saturating_add(blur_len.saturating_mul(1 + usize::from(weighted)));
+    // Planes and blur (its weighted source, and the blur's own copy) of f32, knots, luminance
+    // and moves.
+    let floats = planes_len.saturating_add(blur_len.saturating_mul(2 + usize::from(weighted)));
     let bytes = floats.saturating_mul(4).saturating_add(n.saturating_mul(size_of::<(usize, f32)>() + 4 + 12));
     if bytes > budget {
         return Err(no_memory());
@@ -156,29 +157,44 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
     ) else {
         return Err(no_memory());
     };
-    for (i, q) in px.iter().enumerate() {
-        // A value that is not a number would spread through the blurs to its neighbours.
-        let s = to(q).map(|v| if v.is_finite() { v } else { 0.0 });
-        let lin = s.map(srgb_to_linear);
-        let y = (0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]).max(0.0);
-        let sy = linear_to_srgb(y);
-        lum[i] = y;
-        planes[i * np] = sy;
-        if model.colour {
-            for c in 0..3 {
-                planes[i * np + 1 + c] = s[c] - sy;
+    // Row by row in parallel (here and below): each pixel's arithmetic is unchanged.
+    par_rows2(&mut lum, &mut knot, w, |y, lum, knot| {
+        for (x, (l, kn)) in lum.iter_mut().zip(knot.iter_mut()).enumerate() {
+            let Some(q) = px.get(y * w + x) else { continue };
+            // A value that is not a number would spread through the blurs to its neighbours.
+            let lin = to(q).map(|v| srgb_to_linear(if v.is_finite() { v } else { 0.0 }));
+            let yl = (0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]).max(0.0);
+            *l = yl;
+            let f = (lstar(yl) / 100.0).clamp(0.0, 1.0) * (KNOTS - 1) as f32;
+            let j = (f as usize).min(KNOTS - 2);
+            *kn = (j, f - j as f32);
+        }
+    });
+    par_rows(&mut planes, w, np, |y, row| {
+        for (x, p) in row.chunks_exact_mut(np).enumerate() {
+            let (Some(q), Some(&yl)) = (px.get(y * w + x), lum.get(y * w + x)) else { continue };
+            let s = to(q).map(|v| if v.is_finite() { v } else { 0.0 });
+            let sy = linear_to_srgb(yl);
+            p[0] = sy;
+            if model.colour {
+                for c in 0..3 {
+                    p[1 + c] = s[c] - sy;
+                }
             }
         }
-        if weighted {
-            let a = cover(q);
-            for c in 0..np {
-                src[i * nb + c] = planes[i * np + c] * a;
+    });
+    if weighted {
+        par_rows(&mut src, w, nb, |y, row| {
+            for (x, d) in row.chunks_exact_mut(nb).enumerate() {
+                let i = y * w + x;
+                let (Some(q), Some(p)) = (px.get(i), planes.get(i * np..(i + 1) * np)) else { continue };
+                let a = cover(q);
+                for c in 0..np {
+                    d[c] = p[c] * a;
+                }
+                d[np] = a;
             }
-            src[i * nb + np] = a;
-        }
-        let f = (lstar(y) / 100.0).clamp(0.0, 1.0) * (KNOTS - 1) as f32;
-        let j = (f as usize).min(KNOTS - 2);
-        knot[i] = (j, f - j as f32);
+        });
     }
     let coef = |block: usize, i: usize| -> f32 {
         let (j, t) = knot[i];
@@ -194,9 +210,11 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
         v
     };
     // Moves: one per channel (Texture) or one for the luminance (Clarity, in `mv[i][0]`).
-    for (i, m) in mv.iter_mut().enumerate() {
-        *m = [coef(0, i); 3];
-    }
+    par_rows(&mut mv, w, 1, |y, row| {
+        for (x, m) in row.iter_mut().enumerate() {
+            *m = [coef(0, y * w + x); 3];
+        }
+    });
     let ns = model.scales.len();
     for (si, s) in model.scales.iter().enumerate() {
         blur.copy_from_slice(if weighted { &src } else { &planes });
@@ -213,40 +231,46 @@ fn apply_within(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, 
             let a = blur[i * nb + np];
             if a > 1e-6 { blur[i * nb + c] / a } else { planes[i * np + c] }
         };
-        for (i, m) in mv.iter_mut().enumerate() {
-            let dl = term(1 + ps * si, i, planes[i * np] - blurred(i, 0));
-            for c in 0..3 {
-                m[c] += dl;
-                if model.colour {
-                    m[c] += term(1 + ps * ns + ps * si, i, planes[i * np + 1 + c] - blurred(i, 1 + c));
+        par_rows(&mut mv, w, 1, |y, row| {
+            for (x, m) in row.iter_mut().enumerate() {
+                let i = y * w + x;
+                let dl = term(1 + ps * si, i, planes[i * np] - blurred(i, 0));
+                for c in 0..3 {
+                    m[c] += dl;
+                    if model.colour {
+                        m[c] += term(1 + ps * ns + ps * si, i, planes[i * np + 1 + c] - blurred(i, 1 + c));
+                    }
                 }
             }
-        }
+        });
     }
-    for ((q, m), y) in px.iter_mut().zip(&mv).zip(&lum) {
-        let inside = q[..3].iter().all(|x| (0.0..=1.0).contains(x));
-        let fit = |s: f32| if inside { s.clamp(0.0, 1.0) } else { s };
-        // A document in other primaries is kept to 0 … 1 in its own: its gamut may reach past
-        // sRGB's, so the sRGB values are left unclamped.
-        let srgb = enc.srgb_primaries();
-        let fit_srgb = |s: f32| if srgb { fit(s) } else { s };
-        let s = to(q);
-        let out = if model.colour {
-            std::array::from_fn(|c| fit_srgb(s[c] + m[c].clamp(-1.0, 1.0)))
-        } else {
-            // The luminance moves, the chromaticity stays: linear RGB scaled.
-            let target = srgb_to_linear(fit(linear_to_srgb(*y) + m[0].clamp(-1.0, 1.0)));
-            let r = if *y > 1e-6 { target / y } else { 1.0 };
-            s.map(|v| {
-                let lin = srgb_to_linear(v) * r;
-                linear_to_srgb(if inside && srgb { lin.clamp(0.0, 1.0) } else { lin })
-            })
-        };
-        let out = enc.back_from_srgb_encoded(out);
-        for c in 0..3 {
-            q[c] = if srgb { out[c] } else { fit(out[c]) };
+    par_rows2(px, &mut mv, w, |yr, row, mvs| {
+        for (x, (q, m)) in row.iter_mut().zip(mvs.iter()).enumerate() {
+            let Some(y) = lum.get(yr * w + x) else { continue };
+            let inside = q[..3].iter().all(|x| (0.0..=1.0).contains(x));
+            let fit = |s: f32| if inside { s.clamp(0.0, 1.0) } else { s };
+            // A document in other primaries is kept to 0 … 1 in its own: its gamut may reach past
+            // sRGB's, so the sRGB values are left unclamped.
+            let srgb = enc.srgb_primaries();
+            let fit_srgb = |s: f32| if srgb { fit(s) } else { s };
+            let s = to(q);
+            let out = if model.colour {
+                std::array::from_fn(|c| fit_srgb(s[c] + m[c].clamp(-1.0, 1.0)))
+            } else {
+                // The luminance moves, the chromaticity stays: linear RGB scaled.
+                let target = srgb_to_linear(fit(linear_to_srgb(*y) + m[0].clamp(-1.0, 1.0)));
+                let r = if *y > 1e-6 { target / y } else { 1.0 };
+                s.map(|v| {
+                    let lin = srgb_to_linear(v) * r;
+                    linear_to_srgb(if inside && srgb { lin.clamp(0.0, 1.0) } else { lin })
+                })
+            };
+            let out = enc.back_from_srgb_encoded(out);
+            for c in 0..3 {
+                q[c] = if srgb { out[c] } else { fit(out[c]) };
+            }
         }
-    }
+    });
     Ok(())
 }
 
