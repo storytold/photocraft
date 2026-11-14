@@ -4,6 +4,7 @@ mod adversarial_native;
 mod ext;
 mod mosaic;
 mod selection_mix;
+mod wave_scale;
 
 #[test]
 fn relight_admission_tracks_the_document_dependent_working_set() {
@@ -132,6 +133,8 @@ fn all_filters() -> Vec<FilterParams> {
             wavelength_max: 20.0,
             amplitude_min: 1.0,
             amplitude_max: 4.0,
+            scale_horizontal: 100.0,
+            scale_vertical: 60.0,
             wave_type: WaveType::Triangle,
             undefined: UndefinedAreas::Repeat,
             seed: 9,

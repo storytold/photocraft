@@ -80,6 +80,8 @@ fn core_filter_numbers_reject_wrong_types_and_documented_range_violations() {
         ("distort.wave", "wavelengthMax", 2.0, 999.0),
         ("distort.wave", "amplitudeMin", 1.0, 998.0),
         ("distort.wave", "amplitudeMax", 1.0, 999.0),
+        ("distort.wave", "scaleHorizontal", 1.0, 100.0),
+        ("distort.wave", "scaleVertical", 1.0, 100.0),
         ("distort.ripple", "amount", -999.0, 999.0),
         ("other.highPass", "radius", 0.1, 1000.0),
         ("other.minimum", "radius", 0.2, 500.0),
