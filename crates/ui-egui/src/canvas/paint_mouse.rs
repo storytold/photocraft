@@ -537,9 +537,11 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
         let frame = egui::Frame::popup(ui.style()).show(ui, |ui| {
-            // The Background Eraser has its own compact popup, without presets (#11910).
-            if app.ui.tool == Tool::BackgroundEraser {
-                crate::bg_eraser_popup::body(ui, &mut b, &mut app.ui.tool_options.bg_tolerance_control);
+            // The Background Eraser (#11910) and Quick Selection (#12928) have the compact popup,
+            // without presets; only the Background Eraser's has the Tolerance row.
+            if matches!(app.ui.tool, Tool::BackgroundEraser | Tool::QuickSelection) {
+                let tolerance = (app.ui.tool == Tool::BackgroundEraser).then_some(&mut app.ui.tool_options.bg_tolerance_control);
+                crate::bg_eraser_popup::body(ui, &mut b, tolerance);
                 Vec::new()
             } else {
                 crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content)
@@ -592,3 +594,7 @@ mod pencil_reset_defaults_tests;
 #[cfg(test)]
 #[path = "remove_right_click_tests.rs"]
 mod remove_right_click_tests;
+
+#[cfg(test)]
+#[path = "../quick_selection_brush_picker_tests.rs"]
+mod quick_selection_brush_picker_tests;
