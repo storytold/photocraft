@@ -248,7 +248,7 @@ fn auto_name_follows_the_text() {
     assert_eq!(layer_name_of(&s, id), "Lorem Ipsum");
     s.execute("type.edit", json!({"layer": id, "replace": {"start": 0, "end": 11, "text": "H"}, "coalesce": "k"})).unwrap();
     s.execute("type.edit", json!({"layer": id, "replace": {"start": 1, "end": 1, "text": "eading\nsecond line"}, "coalesce": "k"})).unwrap();
-    assert_eq!(layer_name_of(&s, id), "Heading");
+    assert_eq!(layer_name_of(&s, id), "Headingsecond line", "every line, run together (#12047)");
     // Emptied, the name is the default one and keeps following.
     s.execute("type.edit", json!({"layer": id, "text": ""})).unwrap();
     assert_eq!(layer_name_of(&s, id), "Type Layer");
@@ -428,10 +428,89 @@ fn size_keys_need_a_type_layer() {
 fn auto_name_skips_leading_blank_lines() {
     let mut s = session();
     let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "\n  \nHello\nworld"})).unwrap()["layer"].as_u64().unwrap();
-    assert_eq!(layer_name_of(&s, id), "Hello");
+    assert_eq!(layer_name_of(&s, id), "Helloworld", "the blank lines add nothing, the rest is run together");
     s.execute("type.edit", json!({"layer": id, "replace": {"start": 0, "end": 0, "text": "\n"}})).unwrap();
     s.execute("type.edit", json!({"layer": id, "text": "\n\nGoodbye"})).unwrap();
     assert_eq!(layer_name_of(&s, id), "Goodbye");
+}
+
+/// #12047: the name comes from every line of the text, run together without a separator, and is
+/// cut at 63 characters, counted as characters so a multi-byte line is not cut in half.
+#[test]
+fn a_layer_name_takes_every_line_and_cuts_at_63_characters() {
+    assert_eq!(layer_name("Hello\nB CA"), "HelloB CA");
+    assert_eq!(layer_name("  Hello  \n\n B CA  "), "HelloB CA", "spaces are trimmed, a blank line adds nothing");
+    assert_eq!(layer_name("\n\n"), "Type Layer");
+    // 80 characters of two-byte text: the cut is after the 63rd character, not the 63rd byte.
+    let text = format!("{}\n{}", "é".repeat(40), "ü".repeat(40));
+    let name = layer_name(&text);
+    assert_eq!(name.chars().count(), 63, "63 characters, not 63 bytes ({} bytes)", name.len());
+    assert_eq!(name, format!("{}{}", "é".repeat(40), "ü".repeat(23)));
+    assert_eq!(layer_name("a".repeat(200).as_str()), "a".repeat(63));
+}
+
+/// #12047: a layer named by the previous rule (first non-empty line, cut at 40 characters) came
+/// from its text too, so it keeps following the text after the rule changed.
+#[test]
+fn a_name_the_previous_rule_gave_still_follows_the_text() {
+    let mut s = session();
+    let multi = s.execute("type.create", json!({"x": 0, "y": 0, "text": "Hello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+    let long_text = "x".repeat(50);
+    let long = s.execute("type.create", json!({"x": 0, "y": 40, "text": long_text})).unwrap()["layer"].as_u64().unwrap();
+    // As a document saved before the rule changed has them.
+    s.execute("layer.renameLayer", json!({"layer": multi, "name": "Hello"})).unwrap();
+    s.execute("layer.renameLayer", json!({"layer": long, "name": "x".repeat(40)})).unwrap();
+    for id in [multi, long] {
+        let l = s.active().unwrap().doc.layer(LayerId(id)).unwrap();
+        assert!(is_auto_named(l, None), "layer {id}: {} was its text's name", l.name);
+    }
+    s.execute("type.edit", json!({"layer": multi, "text": "Bye"})).unwrap();
+    assert_eq!(layer_name_of(&s, multi), "Bye");
+    s.execute("type.edit", json!({"layer": long, "text": "Short"})).unwrap();
+    assert_eq!(layer_name_of(&s, long), "Short");
+    // A name that is neither rule's is still the user's.
+    let mine = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Hello\nworld"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.renameLayer", json!({"layer": mine, "name": "Hell"})).unwrap();
+    assert!(!is_auto_named(s.active().unwrap().doc.layer(LayerId(mine)).unwrap(), None));
+}
+
+/// #12047: `is_auto_named` still recognises the names the new rule gives, including a
+/// Duplicate Layer copy of one, so those layers keep following their text; a name the user gave
+/// is theirs. The Type tool's generic "Layer N" name is not an automatic one: it stands while the
+/// text is edited, and the commit's `type.edit` with `name` is what renames the layer.
+#[test]
+fn the_new_auto_names_and_their_copies_are_recognised() {
+    let auto_named = |s: &Session, id: u64, typed: Option<&str>| is_auto_named(s.active().unwrap().doc.layer(LayerId(id)).unwrap(), typed);
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hello\nB CA"})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(layer_name_of(&s, id), "HelloB CA");
+    assert!(auto_named(&s, id, None), "the name came from all its lines");
+    s.execute("layer.select", json!({"layer": id})).unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    let copy = s.active().unwrap().active_layer.unwrap().0;
+    assert_eq!(layer_name_of(&s, copy), "HelloB CA copy");
+    assert!(auto_named(&s, copy, None), "so is its Duplicate Layer copy");
+    assert!(auto_named(&s, copy, Some("HelloB CA")), "and the copy of a layer the user named");
+    s.execute("type.edit", json!({"layer": copy, "text": "Goodbye"})).unwrap();
+    assert_eq!(layer_name_of(&s, copy), "Goodbye", "the copy follows its new text");
+    s.execute("layer.select", json!({"layer": id})).unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    let second = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("layer.renameLayer", json!({"layer": second, "name": "My Brand"})).unwrap();
+    assert!(!auto_named(&s, second, Some("My Brand")), "a name the user typed is kept");
+    s.execute("type.edit", json!({"layer": second, "text": "Fine"})).unwrap();
+    assert_eq!(layer_name_of(&s, second), "My Brand");
+    // The Type tool's flow: "Layer N" while the text is edited, the text's name from the commit.
+    let tool =
+        s.execute("type.create", json!({"x": 0, "y": 80, "text": "Lorem Ipsum", "name": "Layer 3", "coalesce": "k"})).unwrap()["layer"].as_u64().unwrap();
+    assert!(!auto_named(&s, tool, Some("Layer 3")), "the generic name is not one its text gave it");
+    s.execute("type.edit", json!({"layer": tool, "replace": {"start": 0, "end": 11, "text": "Hi\nthere"}, "coalesce": "k"})).unwrap();
+    assert_eq!(layer_name_of(&s, tool), "Layer 3", "it keeps \"Layer N\" while the text is edited");
+    s.execute("type.edit", json!({"layer": tool, "name": layer_name("Hi\nthere"), "coalesce": "k"})).unwrap();
+    assert_eq!(layer_name_of(&s, tool), "Hithere", "the commit names it after all its lines");
+    assert!(auto_named(&s, tool, Some("Hithere")), "and from then on it follows its text");
+    s.execute("type.edit", json!({"layer": tool, "text": "Later", "coalesce": "k"})).unwrap();
+    assert_eq!(layer_name_of(&s, tool), "Later");
 }
 
 #[test]

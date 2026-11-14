@@ -342,6 +342,13 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let text = if placeholder { PLACEHOLDER } else { "" };
     let mut p = default_style_params(app);
     p["text"] = json!(text);
+    // #12047: the reference application shows a new type layer under the document's generic
+    // "Layer N" name while its text is still being edited, and names it after the text only at
+    // the first commit (`commit_here` in editing.rs sends `type.edit` with `name`). A name given
+    // here is the tool's, not one its text derived, so the engine leaves it alone while typing.
+    if let Some(st) = app.session.active() {
+        p["name"] = json!(st.doc.next_layer_name("Layer"));
+    }
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
     if w >= min && h >= min {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
