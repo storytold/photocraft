@@ -65,6 +65,7 @@ mod steps_shape_blur;
 mod steps_stack;
 mod steps_stylize;
 mod steps_video;
+mod steps_video_import;
 mod tables;
 
 #[cfg(test)]
@@ -202,6 +203,9 @@ mod measurement_tests;
 
 #[cfg(test)]
 mod selection_tests;
+
+#[cfg(test)]
+mod video_import_tests;
 
 #[cfg(test)]
 mod render_tests;
