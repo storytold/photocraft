@@ -48,10 +48,6 @@ fn moved_by(d: [f64; 2]) -> Vec<[f64; 2]> {
     SQUARE.iter().map(|p| [p[0] + d[0], p[1] + d[1]]).collect()
 }
 
-/// "Drag Anchor Points" today; PR #13541 renames a one-anchor drag to the singular.
-fn is_anchor_drag_label(label: Option<&str>) -> bool {
-    matches!(label, Some("Drag Anchor Points" | "Drag Anchor Point"))
-}
 
 #[test]
 fn ctrl_drag_on_an_anchor_moves_only_that_anchor_in_one_step() {
@@ -59,7 +55,7 @@ fn ctrl_drag_on_an_anchor_moves_only_that_anchor_in_one_step() {
     let before = undo_label(&app);
     drag(&mut app, [100.0, 300.0], [80.0, 280.0], Modifiers::COMMAND);
     assert_eq!(anchors(&app), vec![[80.0, 280.0], SQUARE[1], SQUARE[2], SQUARE[3]], "only the pressed anchor moved");
-    assert!(is_anchor_drag_label(undo_label(&app).as_deref()), "one anchor-drag step: {:?}", undo_label(&app));
+    assert_eq!(undo_label(&app).as_deref(), Some("Drag Anchor Point"), "singular name for one anchor: {:?}", undo_label(&app));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(anchors(&app), SQUARE.to_vec(), "one undo restores the square");
     assert_eq!(undo_label(&app), before, "the drag was a single History step");
