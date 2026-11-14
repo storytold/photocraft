@@ -99,7 +99,7 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 ### Affinity import notes (moved from `roadmap.md`)
 
 2026-10-08: Affinity `.af`, `.afdesign`, `.afphoto` and `.afpub` documents (container versions
-8–12) open **natively** ([format notes](../crates/affinity/README.md)): pages and artboards, layers
+8–12) open **natively** ([format notes](https://github.com/storytold/craft-libs/blob/main/crates/affinity/README.md)): pages and artboards, layers
 and groups, curves and geometric shapes with fills, gradients and strokes, text as type layers,
 placed images as smart objects, pixel layers and masks, as an 8-bit RGB document without a source
 save path. Measured against the thumbnail Affinity embeds in each file, 21 pinned public documents
