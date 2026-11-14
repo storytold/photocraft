@@ -768,8 +768,18 @@ fn add_name_border(one: &mut Document, o: &NameBorder, cmd: &str) -> Result<()> 
         if dx.is_finite() && dy.is_finite() {
             t.transform = Affine::translate(dx, dy);
             crate::type_cmds::refresh_at(dpi, fmt, &mut t);
-            let name = t.text.clone();
-            one.layers.push(Layer::new(name, LayerContent::Text(t)));
+            // Only the top border takes the name: ink of a size taller than the border is cut
+            // there, never drawn over the board (the file is flat, so the type need not stay
+            // editable).
+            if let Some(cache) = &t.cache {
+                let r = cache.content_bounds().intersect(&Rect::new(0, 0, nwi, bi));
+                if !r.is_empty() {
+                    let px = cache.try_read_region(r).map_err(|e| bad(cmd, e.to_string()))?;
+                    let mut clipped = Surface::new(cache.format());
+                    clipped.write_region(r, &px);
+                    one.layers.push(Layer::new(t.text.clone(), LayerContent::Raster(clipped)));
+                }
+            }
         }
     }
     Ok(())

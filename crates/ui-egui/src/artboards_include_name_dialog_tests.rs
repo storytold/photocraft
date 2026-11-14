@@ -100,10 +100,9 @@ fn the_checkbox_is_kept_per_file_type() {
 fn ok_runs_the_export_with_the_name_options() {
     let mut h = harness();
     let dialog = open(&mut h, ARTBOARDS);
-    let dir = std::env::temp_dir().join(format!("photocraft-abname-ui-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    set(&mut h, dialog, "dir", json!(dir.to_string_lossy()));
+    // Removed when dropped, also when an assertion fails.
+    let dir = tempfile::tempdir().unwrap();
+    set(&mut h, dialog, "dir", json!(dir.path().to_string_lossy()));
     h.get_by_role_and_label(Role::CheckBox, INCLUDE).click();
     h.run_steps(4);
     set(&mut h, dialog, "extension", json!("black"));
@@ -117,7 +116,6 @@ fn ok_runs_the_export_with_the_name_options() {
     set(&mut h, dialog, "fontSize", json!("abc"));
     let p = params(&mut h, dialog);
     assert!(h.state_mut().run(ARTBOARDS, p).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

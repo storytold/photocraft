@@ -31,11 +31,23 @@ fn board(s: &mut Session, name: &str, rect: [i32; 4], px: Rect, rgba: [f32; 4]) 
     .unwrap();
 }
 
-fn tmp(tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("photocraft-abname-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.to_string_lossy().into_owned()
+/// An empty export folder, removed when dropped (also when an assertion fails).
+struct Tmp {
+    _dir: tempfile::TempDir,
+    path: String,
+}
+
+impl std::ops::Deref for Tmp {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.path
+    }
+}
+
+fn tmp(tag: &str) -> Tmp {
+    let dir = tempfile::Builder::new().prefix(&format!("photocraft-abname-{tag}-")).tempdir().unwrap();
+    let path = dir.path().to_string_lossy().into_owned();
+    Tmp { _dir: dir, path }
 }
 
 /// Runs the export and reads every written PNG back, keyed by the board name in its file name.
@@ -119,8 +131,27 @@ fn the_name_sits_in_the_top_border_from_the_boards_left_edge() {
         assert!((x0 - border).abs() <= 1, "{name}: ink starts at the board's left edge, got {x0}");
         let (y0, y1) = (dark.iter().map(|p| p.1).min().unwrap(), dark.iter().map(|p| p.1).max().unwrap());
         assert!(y0 > 0 && y1 < border - 1, "{name}: ink inside the border, rows {y0}..{y1}");
-        // Black text by default.
-        assert!(dark.iter().any(|&(x, y)| close(img.get(x, y), BLACK)), "{name}");
+        // Black text by default: the darkest ink is near black and neutral (small anti-aliased
+        // glyphs may not reach pure black with every font).
+        let ink = dark.iter().map(|&(x, y)| img.get(x, y)).min_by(|a, b| a[0].total_cmp(&b[0])).unwrap();
+        assert!(ink[0] < 0.3 && (ink[0] - ink[1]).abs() < 0.02 && (ink[0] - ink[2]).abs() < 0.02, "{name}: {ink:?}");
+    }
+}
+
+#[test]
+fn a_name_taller_than_the_border_never_draws_over_the_board() {
+    let mut s = session(8);
+    let plain = export(&mut s, &tmp("plain-big"), json!({}));
+    for size in [72, 400, 1296] {
+        let named = export(&mut s, &tmp("big"), json!({"includeName": true, "fontSize": size}));
+        let (before, after) = (photocraft_compose::flatten(find(&plain, "Red")), photocraft_compose::flatten(find(&named, "Red")));
+        for y in 0..150 {
+            for x in (0..200).step_by(3) {
+                assert!(close(before.get(x, y), after.get(x + 18, y + 18)), "{size} pt at {x},{y}");
+            }
+        }
+        // The cut name still shows in the border.
+        assert!((0..18).any(|y| (18..236).any(|x| after.get(x, y)[0] < 0.5)), "{size} pt");
     }
 }
 
@@ -152,7 +183,7 @@ fn without_the_option_the_output_is_todays() {
     }
     // PSD keeps its layers: the option leaves it as it is today.
     let d = tmp("psd");
-    let r = s.execute("file.export.artboardsToFiles", json!({"dir": d, "format": "psd", "includeName": true})).unwrap();
+    let r = s.execute("file.export.artboardsToFiles", json!({"dir": &*d, "format": "psd", "includeName": true})).unwrap();
     for f in r["files"].as_array().unwrap() {
         let psd = photocraft_io::import("x.psd", &std::fs::read(f.as_str().unwrap()).unwrap()).unwrap().document;
         assert!(matches!((psd.size.width, psd.size.height), (200, 150) | (200, 200)), "{:?}", psd.size);
@@ -165,9 +196,9 @@ fn a_size_that_is_not_a_positive_number_fails_and_writes_nothing() {
     for size in [json!("abc"), json!(""), json!("0"), json!(0), json!(-3), json!("-1"), json!("inf"), json!({"x": 1}), json!([12])] {
         let d = tmp("bad");
         let before = s.active().unwrap().doc.clone();
-        let err = s.execute("file.export.artboardsToFiles", json!({"dir": d, "includeName": true, "fontSize": size})).unwrap_err().to_string();
+        let err = s.execute("file.export.artboardsToFiles", json!({"dir": &*d, "includeName": true, "fontSize": size})).unwrap_err().to_string();
         assert!(err.contains("size"), "{size}: {err}");
-        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0, "{size}: no file written");
+        assert_eq!(std::fs::read_dir(&*d).unwrap().count(), 0, "{size}: no file written");
         assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len(), "{size}: source unchanged");
     }
     // A numeric string is its number, as the dialog's free text field sends it.
@@ -193,11 +224,11 @@ fn bad_name_options_never_panic() {
         json!({"includeName": "yes"}),
     ] {
         let mut p = p;
-        p["dir"] = json!(d);
+        p["dir"] = json!(&*d);
         if p.get("includeName").is_none() {
             p["includeName"] = json!(true);
         }
         let _ = s.execute("file.export.artboardsToFiles", p);
     }
-    assert!(s.execute("file.export.artboardsToFiles", json!({"dir": d, "includeName": true, "extension": "purple"})).is_err());
+    assert!(s.execute("file.export.artboardsToFiles", json!({"dir": &*d, "includeName": true, "extension": "purple"})).is_err());
 }
