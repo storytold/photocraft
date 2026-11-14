@@ -1,10 +1,16 @@
-//! Colour-mode side data: the Indexed Color table, Duotone inks, and smart-object stack modes.
+//! Colour-mode side data: the Indexed Color table and pixel indices, Duotone inks, and smart-object stack modes.
 //!
 //! Indexed, Bitmap and Duotone documents keep their pixels expanded (RGB / Gray, see
 //! [`crate::Document::pixel_format`]); these structs carry what the mode adds on top.
 
+use std::sync::Arc;
+
+use photocraft_color::PixelFormat;
+use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
+use crate::LayerId;
 use crate::adjust::CurvePoint;
 
 /// Image › Mode › Color Table: the palette of an Indexed Color document (at most 256 entries).
@@ -33,6 +39,54 @@ impl ColorTable {
     /// Entry `i` as RGB in 0..=1 (black past the end).
     pub fn rgb(&self, i: usize) -> [f32; 3] {
         self.colors.get(i).map_or([0.0; 3], |e| e.map(|v| f32::from(v) / 255.0))
+    }
+}
+
+/// The Color Table index of each pixel of an Indexed Color layer, where it is known (#14342).
+/// The layer's pixels are RGB, so two entries of one colour can't be told apart by colour.
+///
+/// The indices hold while the layer still has the very tiles recorded with them, at the same
+/// places. One tile can't prove where its pixels came from: a move shares tiles, and a solid tile
+/// can stand in for another solid tile of the same colour. A move or a paint stroke changes the
+/// tiles at the layer's edges or under the stroke, though, so after any change but Color Table's
+/// the indices are unknown and Color Table falls back to the nearest entry. Recording costs no
+/// pixel copy while the layer is unchanged. A save keeps the indices only while they hold, and an
+/// open pairs them with the layer it loads: identical tiles load as one, so loaded pixels can't
+/// prove they are unchanged.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorIndices {
+    /// The layer the indices are for.
+    pub layer: LayerId,
+    /// The layer's pixels when the indices were recorded.
+    pub pixels: Surface,
+    /// One gray 8-bit sample per pixel: its index.
+    pub indices: Surface,
+}
+
+impl ColorIndices {
+    /// Records `indices`, one byte per pixel row by row over `r`, for `layer`, whose pixels are
+    /// `pixels`. `None` when they don't cover `r` or there's no memory for them.
+    pub fn new(layer: LayerId, pixels: &Surface, r: Rect, indices: &[u8]) -> Option<Self> {
+        let mut map = Surface::new(PixelFormat::GRAY8);
+        map.try_write_interleaved(r, indices).ok()?;
+        Some(ColorIndices { layer, pixels: pixels.clone(), indices: map })
+    }
+
+    /// Whether the indices hold for `layer`, whose pixels are now `pixels`: it is the recorded
+    /// layer and has the very tiles recorded, at the same places. A damaged file can name another
+    /// format for the indices: they don't hold then, rather than give wrong ones.
+    pub fn holds(&self, layer: LayerId, pixels: &Surface) -> bool {
+        layer == self.layer
+            && self.indices.format() == PixelFormat::GRAY8
+            && pixels.format() == self.pixels.format()
+            && pixels.tile_count() == self.pixels.tile_count()
+            && pixels.tiles().zip(self.pixels.tiles()).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y))
+    }
+
+    /// The recorded indices over `r`, one byte per pixel row by row, while they
+    /// [hold](Self::holds).
+    pub fn known(&self, layer: LayerId, pixels: &Surface, r: Rect) -> Option<Vec<u8>> {
+        self.holds(layer, pixels).then(|| self.indices.to_interleaved(r))
     }
 }
 

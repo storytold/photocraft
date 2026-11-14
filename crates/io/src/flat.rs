@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
+use photocraft_doc::{AlphaChannel, ColorIndices, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
@@ -258,6 +258,57 @@ impl FlatBuilder {
     }
 }
 
+/// Each pixel's palette index in the palette PNG `bytes`, opened as `doc`, so Color Table can
+/// tell entries of one colour apart (#14342). `None`, and Color Table falls back to the nearest
+/// entry, when the document's one layer doesn't show each pixel's entry at the file's place for
+/// it (an EXIF orientation turned the pixels, which colours alone can't show when entries repeat,
+/// or a colour conversion changed them), or when the file is interlaced (not read here). One row at a time:
+/// next to the layer, only the indices themselves (a byte per pixel) are held.
+fn png_color_indices(bytes: &[u8], doc: &Document) -> Option<ColorIndices> {
+    let table = doc.color_table.as_ref()?;
+    let [layer] = doc.layers.as_slice() else { return None };
+    let surface = layer.surface()?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    decoder.set_ignore_text_chunk(true);
+    let mut reader = decoder.read_info().ok()?;
+    let info = reader.info();
+    let (w, h, bits) = (info.width, info.height, info.bit_depth as usize);
+    if info.color_type != png::ColorType::Indexed || info.interlaced || !matches!(bits, 1 | 2 | 4 | 8) || (w, h) != (doc.size.width, doc.size.height) {
+        return None;
+    }
+    let width = usize::try_from(w).ok()?;
+    let count = width.checked_mul(usize::try_from(h).ok()?)?;
+    let mut indices = Vec::new();
+    indices.try_reserve_exact(count).ok()?;
+    let mut shown = vec![[0u8; 4]; width];
+    let mut y = 0;
+    while let Some(row) = reader.next_row().ok()? {
+        if indices.len() >= count {
+            return None;
+        }
+        surface.read_rgba8_into(Rect::from_xywh(0, y, w, 1), &mut shown);
+        for (x, px) in shown.iter().enumerate() {
+            let bit = x * bits;
+            let byte = *row.data().get(bit / 8)?;
+            let i = (byte >> (8 - bits - bit % 8)) & (0xff >> (8 - bits));
+            let entry = table.colors.get(usize::from(i))?;
+            let ok = if px[3] == 0 { table.transparent == Some(i) } else { px[..3] == entry[..] };
+            if !ok {
+                return None;
+            }
+            indices.push(i);
+        }
+        y += 1;
+    }
+    // An eXIf after the pixels counts too.
+    reader.finish().ok()?;
+    if reader.info().exif_metadata.as_deref().is_some_and(|e| codecs::exif_orientation(e) != 1) || indices.len() != count {
+        return None;
+    }
+    ColorIndices::new(layer.id, surface, doc.bounds(), &indices)
+}
+
 /// What every flat format does to the document of its pixels: the palette mode, the save
 /// settings, a Targa's alpha channel and the profile an untagged image needs. `img` is the
 /// decoded image, when the document was built from one (a streamed PNG has none).
@@ -275,6 +326,9 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
     {
         r.document.mode = ColorMode::Indexed;
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
+        if format == Some(Format::Png) {
+            r.document.color_indices = png_color_indices(bytes, &r.document);
+        }
     }
     // The decoder's count of frames or pages left out (set above) stays alongside the encoding.
     let encoding = file_encoding_as(format, bytes);

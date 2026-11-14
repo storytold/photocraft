@@ -72,3 +72,6 @@ photocraft-testkit = { workspace = true }
 wat = "1.228"
 # Synthetic multi-part EXR fixtures for the parts-commands tests.
 exr = { version = "1.73", default-features = false }
+# Palette PNGs at 1, 2 and 4 bits and with an eXIf chunk for the Color Table index tests
+# (the png 0.18 already in the tree).
+png = "0.18"

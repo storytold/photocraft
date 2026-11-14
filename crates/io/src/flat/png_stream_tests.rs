@@ -159,6 +159,9 @@ fn assert_same(a: &ImportResult, b: &ImportResult, what: &str) {
     let mut db = db.clone();
     db.id = da.id;
     db.layers.iter_mut().zip(&da.layers).for_each(|(l, k)| l.id = k.id);
+    if let (Some(c), Some(k)) = (db.color_indices.as_mut(), &da.color_indices) {
+        c.layer = k.layer;
+    }
     assert!(da == &db, "{what}: documents differ");
 }
 

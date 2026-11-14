@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
-    AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+    AlphaChannel, ColorIndices, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask,
+    Metadata, NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::{
-    ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM, PatternM,
-    SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
+    ChannelM, ColorIndicesM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM,
+    PatternM, SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
 };
 use crate::{FormatError, Result};
 
@@ -278,6 +278,13 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
             .map(|p| PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) })
             .collect(),
         color_table: d.color_table.clone(),
+        // Only while they hold for the layer saved here (and the document is Indexed Color): on
+        // open, identical tiles load as one, so loaded pixels can't show a change made since.
+        color_indices: d
+            .color_indices
+            .as_ref()
+            .filter(|c| d.color_table.is_some() && d.layer(c.layer).and_then(Layer::surface).is_some_and(|p| c.holds(c.layer, p)))
+            .map(|c| ColorIndicesM { layer: c.layer.0, indices: surface_m(&c.indices, sink) }),
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
@@ -690,7 +697,7 @@ impl Loader<'_> {
             }
         }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
-        Ok(Document {
+        let mut doc = Document {
             id,
             name: m.name.clone(),
             size: m.size,
@@ -712,6 +719,7 @@ impl Loader<'_> {
             quick_mask_unselected: m.quick_mask_unselected,
             patterns,
             color_table: m.color_table.clone(),
+            color_indices: None,
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
@@ -723,7 +731,16 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
-        })
+        };
+        // Saved only while they held for the layer as saved, so they pair with its pixels as
+        // loaded. Optional side data: indices of a layer the file doesn't hold, or damaged ones,
+        // are dropped (Color Table then maps by nearest colour) rather than failing the open.
+        doc.color_indices = m.color_indices.as_ref().and_then(|c| {
+            let layer = *self.id_map.get(&c.layer)?;
+            let pixels = doc.layer(layer)?.surface()?.clone();
+            Some(ColorIndices { layer, pixels, indices: self.surface(&c.indices).ok()? })
+        });
+        Ok(doc)
     }
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {

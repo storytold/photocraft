@@ -53,6 +53,9 @@ serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
+# flat.rs reads a palette PNG's pixel indices (Color Table, #14342). The png 0.18 that
+# craft-image-codecs already links; naming it adds no crate to the graph.
+png = "0.18"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }

@@ -45,6 +45,9 @@ fn assert_same(a: &Document, b: &Document, what: &str) {
     for (x, y) in a.layers.iter_mut().zip(&mut b.layers) {
         y.id = x.id;
     }
+    if let (Some(x), Some(y)) = (&a.color_indices, b.color_indices.as_mut()) {
+        y.layer = x.layer;
+    }
     assert!(a == b, "{what}: the documents differ");
 }
 

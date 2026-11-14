@@ -12,7 +12,7 @@ use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShap
 use photocraft_algo::transform::{Homography, Interp};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
-use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
+use photocraft_doc::{ColorIndices, ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -244,6 +244,7 @@ fn single_layer_surface(doc: &mut Document, active: &mut Option<LayerId>, mode: 
     }
     doc.quick_mask = None;
     doc.color_table = None;
+    doc.color_indices = None;
     doc.duotone = None;
 }
 
@@ -363,9 +364,12 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
             None
         };
         let w = doc.size.width as usize;
-        quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
+        let indices = quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
+        // Each pixel's index is known here: keep it for Color Table (#14342).
+        let bounds = doc.bounds();
+        doc.color_indices = doc.layers.first().and_then(|l| ColorIndices::new(l.id, l.surface()?, bounds, &indices));
         Ok((pal.len(), transparent))
     })?;
     Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
@@ -461,7 +465,15 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     let out = report(&table);
     s.edit("Color Table", |doc, _| {
         let old = cur.clone();
-        for surf in doc.layers.iter_mut().filter_map(Layer::surface_mut) {
+        // A pixel keeps its index where it is known, so entries of one colour keep their own
+        // pixels; elsewhere it takes the nearest entry (#14342). The indices written here are
+        // known afterwards, for the recorded layer (Indexed documents have one).
+        let known = doc.color_indices.take();
+        let has_pixels = |id: LayerId| doc.layers.iter().any(|l| l.id == id && l.surface().is_some());
+        let record = known.as_ref().map(|k| k.layer).filter(|&id| has_pixels(id)).or_else(|| doc.layers.iter().find(|l| l.surface().is_some()).map(|l| l.id));
+        for l in doc.layers.iter_mut() {
+            let id = l.id;
+            let Some(surf) = l.surface_mut() else { continue };
             let r = surf.content_bounds();
             if r.is_empty() {
                 continue;
@@ -469,7 +481,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             let fmt = surf.format();
             let n = fmt.channels();
             let mut data = surf.read_region(r);
-            for q in data.chunks_exact_mut(n) {
+            let indices = known.as_ref().and_then(|k| k.known(id, surf, r)).unwrap_or_default();
+            let mut written = vec![0u8; if record == Some(id) { data.len() / n } else { 0 }];
+            for (k, q) in data.chunks_exact_mut(n).enumerate() {
                 let c = photocraft_raster::to_rgba(&fmt, q);
                 let rgb = [c[0], c[1], c[2]];
                 let i = if c[3] <= 0.0 {
@@ -479,8 +493,13 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     i
                 } else {
-                    old.nearest(rgb)
+                    // A known index past the table stays: its pixel shows black until the table
+                    // grows back over it.
+                    indices.get(k).map_or_else(|| old.nearest(rgb), |&i| usize::from(i))
                 };
+                if let Some(w) = written.get_mut(k) {
+                    *w = i as u8;
+                }
                 let alpha = if table.transparent == Some(i as u8) {
                     0.0
                 } else if c[3] <= 0.0 {
@@ -496,6 +515,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             }
             surf.write_region(r, &data);
             surf.prune();
+            if record == Some(id) {
+                doc.color_indices = ColorIndices::new(id, surf, r, &written);
+            }
         }
         doc.color_table = Some(table.clone());
         Ok(())

@@ -241,6 +241,8 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         // Compared by `patterns_pixels_equal`.
         patterns: _,
         color_table,
+        // Not composited: Color Table reads it, and recolours the layer pixels it changes.
+        color_indices: _,
         duotone,
         layer_comps: _,
         last_applied_comp: _,
@@ -389,6 +391,8 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         quick_mask_unselected,
         patterns: _,
         color_table: _,
+        // Changes only with the layer pixels or the colour table, compared there.
+        color_indices: _,
         duotone: _,
         layer_comps,
         last_applied_comp,
