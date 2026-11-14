@@ -510,3 +510,7 @@ mod tests {
 #[cfg(test)]
 #[path = "type_spell_enabled_tests.rs"]
 mod enabled_tests;
+
+#[cfg(test)]
+#[path = "type_spell_order_tests.rs"]
+mod order_tests;
