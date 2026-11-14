@@ -526,13 +526,20 @@ pub fn keep_after_commit(app: &mut PhotocraftApp, layer: LayerId, before: Option
     }
 }
 
-/// Display scale for a 256-bin histogram: bar heights are `v / top` clamped to 1, linear
-/// to the tallest bin like Photoshop. A percentile of the sorted bins degenerates on
-/// sparse histograms (few occupied levels sort 0 into every low index), drawing tiny
-/// counts as tall as the real peaks (#6574).
+/// How many of the tallest occupied bins are clipped to the full height.
+const CLIPPED_SPIKES: usize = 5;
+
+/// Display scale for a 256-bin histogram: bar heights are `v / top` clamped to 1. `top` is the
+/// sixth tallest occupied bin, so up to five isolated spikes (pure white, one flat colour) are
+/// clipped instead of squashing the rest of the distribution flat (#13513). With six or fewer
+/// occupied bins it is the tallest bin: a percentile of the sorted bins degenerates on sparse
+/// histograms (the empty bins sort first), drawing tiny counts as tall as the real peaks (#6574).
 /// Extracted from [`draw_histogram`] so the scaling is unit-testable.
 pub fn histogram_scale_top(h: &[u32; 256]) -> f32 {
-    h.iter().copied().max().unwrap_or(1).max(1) as f32 * 1.1
+    let mut occupied: Vec<u32> = h.iter().copied().filter(|v| *v > 0).collect();
+    occupied.sort_unstable_by(|a, b| b.cmp(a));
+    let level = if occupied.len() > CLIPPED_SPIKES { occupied.get(CLIPPED_SPIKES) } else { occupied.first() };
+    level.copied().unwrap_or(1).max(1) as f32 * 1.1
 }
 
 pub fn draw_histogram(p: &egui::Painter, r: Rect, h: &[u32; 256], color: Color32) {
@@ -820,6 +827,47 @@ mod tests {
         assert!(top > h[128] as f32, "scale {top} must exceed the tiny middle bin");
         let tiny = (h[128] as f32 / top).min(1.0);
         assert!(tiny < 0.05, "tiny bin draws near-flat, got {tiny}");
+    }
+
+    /// #13513: a few huge spikes (pure white, one flat colour) must not flatten the rest.
+    #[test]
+    fn histogram_scale_ignores_a_few_isolated_spikes() {
+        let mut h = [100u32; 256];
+        h[255] = 1_000_000;
+        let top = histogram_scale_top(&h);
+        assert!(top < 200.0, "one spike set the scale to {top}");
+        let median_bar = (h[128] as f32 / top).min(1.0);
+        assert!(median_bar > 0.25, "median bar draws at {median_bar} of the height");
+        assert_eq!((h[255] as f32 / top).min(1.0), 1.0, "the spike is clipped to the full height");
+    }
+
+    /// #13513: five spikes are still clipped (the k = 6 rule), a sixth tall bin is not.
+    #[test]
+    fn histogram_scale_clips_the_five_tallest_bins() {
+        let mut h = [100u32; 256];
+        h[..5].fill(1_000_000);
+        assert!(histogram_scale_top(&h) < 200.0);
+        h[5] = 1_000_000;
+        assert!(histogram_scale_top(&h) > 900_000.0, "six equally tall bins are the real peak");
+    }
+
+    /// #6574 stays fixed: fewer than six occupied bins scale to the tallest one.
+    #[test]
+    fn histogram_scale_uses_the_tallest_bin_when_fewer_than_six_are_occupied() {
+        let mut h = [0u32; 256];
+        h[10] = 5;
+        h[20] = 7;
+        h[30] = 1000;
+        let top = histogram_scale_top(&h);
+        assert!((1000.0..=1100.0).contains(&top), "scale {top}");
+        assert!((h[10] as f32 / top) < 0.01);
+    }
+
+    /// Empty and all-zero histograms give a finite, positive scale.
+    #[test]
+    fn histogram_scale_is_finite_for_an_empty_histogram() {
+        let top = histogram_scale_top(&[0u32; 256]);
+        assert!(top.is_finite() && top > 0.0, "{top}");
     }
 
     /// A white document with black filled over columns `0..split` (a layer above the background).
