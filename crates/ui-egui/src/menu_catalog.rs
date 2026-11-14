@@ -137,10 +137,10 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Edit", "Purge"], "---", None, "---"),
     (&["Edit", "Purge"], "All", None, "edit.purge.all"),
     (&["Edit"], "---", None, "---"),
+    // Edit › Presets as in the reference application (#14625): two rows, no separator. Exporting
+    // and importing presets is the engine's `edit.presets.exportImportPresets`, for automation.
     (&["Edit", "Presets"], "Preset Manager…", None, "edit.presets.presetManager"),
-    (&["Edit", "Presets"], "---", None, "---"),
     (&["Edit", "Presets"], "Migrate Presets", None, "edit.presets.migratePresets"),
-    (&["Edit", "Presets"], "Export/Import Presets…", None, "edit.presets.exportImportPresets"),
     (&["Edit"], "---", None, "---"),
     (&["Edit"], "Color Settings…", Some("Cmd+Shift+K"), "edit.colorSettings"),
     (&["Edit"], "Assign Profile…", None, "edit.assignProfile"),

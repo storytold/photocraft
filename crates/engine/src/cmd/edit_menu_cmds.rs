@@ -446,7 +446,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.presets.exportImportPresets",
             "Export/Import Presets…",
-            ["Edit", "Presets"],
+            // No menu item: the reference application has none (#14625). Automation only.
+            [],
             None,
             r##"{"action":"export|import","kinds":["brushes","customShapes","tools"]?,"data":json (import),"includeBuiltins":bool=false}"##,
             always,

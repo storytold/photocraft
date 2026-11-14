@@ -1139,3 +1139,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod edit_presets_submenu_tests;
