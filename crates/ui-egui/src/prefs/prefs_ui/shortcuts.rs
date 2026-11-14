@@ -606,6 +606,10 @@ fn set_row(
     };
     let names: Vec<(String, String)> = std::iter::once(String::new()).chain(sets.keys().cloned()).map(|n| (n.clone(), shown(&n))).collect();
     let mut new_name: Option<String> = f.get("newSetName").and_then(Value::as_str).map(str::to_string);
+    // #14326: a set chosen while this one has unsaved edits waits for Yes / No / Cancel, and
+    // after Yes, for the edits to be saved under a new name.
+    let mut switch_to: Option<String> = f.get("switchTo").and_then(Value::as_str).map(str::to_string);
+    let mut switch_after_save: Option<String> = f.get("switchAfterSave").and_then(Value::as_str).map(str::to_string);
     let set_label = if active.is_empty() { defaults.clone() } else { active.clone() };
     let mut export = false;
     let mut summarize = false;
@@ -614,10 +618,15 @@ fn set_row(
         let mut chosen = active.clone();
         let pairs: Vec<(String, &str)> = names.iter().map(|(n, l)| (n.clone(), l.as_str())).collect();
         if crate::widgets::dropdown(ui, "shortcut-set", tl!("Set:"), &mut chosen, &pairs, 220.0) && chosen != active {
-            // As `useSet`: the set's bindings, keeping the actions' F-keys.
-            sets.get(&chosen).cloned().unwrap_or_default().apply(overrides, alternates);
-            active = chosen;
-            message.clear();
+            if modified {
+                // Unsaved edits: ask first (an action's F-key is no edit, see `differs`).
+                switch_to = Some(chosen);
+            } else {
+                // As `useSet`: the set's bindings, keeping the actions' F-keys.
+                sets.get(&chosen).cloned().unwrap_or_default().apply(overrides, alternates);
+                active = chosen;
+                message.clear();
+            }
         }
         if ui.button(tl!("New Set…")).on_hover_text(tl!("Save these shortcuts as a new set")).clicked() {
             new_name = Some(String::new());
@@ -636,6 +645,26 @@ fn set_row(
         export = ui.button(tl!("Export…")).on_hover_text(tl!("Save these shortcuts as a .kys file")).clicked();
         summarize = ui.button(tl!("Summarize…")).on_hover_text(tl!("Save a list of these shortcuts as a web page")).clicked();
     });
+    if let Some(target) = switch_to.clone() {
+        ui.horizontal(|ui| {
+            ui.label(tl!(SWITCH_SET_QUESTION));
+            if ui.button(tl!("Yes")).clicked() {
+                // Save first, under a name asked for as New Set… asks, then switch.
+                new_name = Some(crate::i18n::fmt(tl!("{set} Copy"), &[("set", &set_label)]));
+                switch_after_save = Some(target.clone());
+                switch_to = None;
+            }
+            if ui.button(tl!("No")).clicked() {
+                sets.get(&target).cloned().unwrap_or_default().apply(overrides, alternates);
+                active = target.clone();
+                switch_to = None;
+                message.clear();
+            }
+            if ui.button(tl!("Cancel")).clicked() {
+                switch_to = None;
+            }
+        });
+    }
     if let Some(name) = new_name.as_mut() {
         let mut create = false;
         let mut cancel = false;
@@ -658,6 +687,11 @@ fn set_row(
                     new_name = None;
                     *message = tl!("Set saved.").into();
                     *warning = false;
+                    // Yes to the switch question: the edits are saved, so switch now.
+                    if let Some(target) = switch_after_save.take() {
+                        sets.get(&target).cloned().unwrap_or_default().apply(overrides, alternates);
+                        active = target;
+                    }
                 }
                 Err(e) => {
                     *message = e;
@@ -665,7 +699,9 @@ fn set_row(
                 }
             }
         } else if cancel {
+            // Not measured: cancelling the name after Yes keeps this set and its edits.
             new_name = None;
+            switch_after_save = None;
         }
     }
     if export || summarize {
@@ -703,7 +739,12 @@ fn set_row(
     f.insert("sets".into(), json!(sets));
     f.insert("activeSet".into(), json!(active));
     f.insert("newSetName".into(), new_name.map_or(Value::Null, Value::String));
+    f.insert("switchTo".into(), switch_to.map_or(Value::Null, Value::String));
+    f.insert("switchAfterSave".into(), switch_after_save.map_or(Value::Null, Value::String));
 }
+
+/// The reference application's question when another set is chosen over unsaved edits (#14326).
+const SWITCH_SET_QUESTION: &str = "Selecting a different set will result in a loss of all unsaved shortcuts.  Save your changes before switching sets?";
 
 /// Save `text` through the save dialog under the suggested file name.
 fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<Value, String> {
@@ -715,3 +756,7 @@ fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<V
         Ok(json!({"path": path}))
     })
 }
+
+#[cfg(test)]
+#[path = "shortcut_set_switch_tests.rs"]
+mod shortcut_set_switch_tests;
