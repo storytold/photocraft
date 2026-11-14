@@ -449,6 +449,10 @@ mod place_job_tests;
 mod open_as_smart_object_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/open_as_error_name_tests.rs"]
+mod open_as_error_name_tests;
+
+#[cfg(test)]
 mod aces_exr_tests {
     use super::*;
 
