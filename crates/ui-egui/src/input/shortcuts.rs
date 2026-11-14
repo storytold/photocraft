@@ -733,6 +733,14 @@ fn handle_pen_and_work_path_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         crate::vector_ui::pen_end(app);
         return true;
     }
+    // Freeform Pen: right after a stroke, ↩ deselects the Work Path it went into (#12833).
+    if focus == crate::shortcut_dispatch::Focus::None
+        && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(Key::Enter))
+        && crate::vector_ui::freeform_enter(app)
+    {
+        ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+        return true;
+    }
     // A shape box handle drag: Esc drops it, the shapes keep their size (#11107).
     if app.ui.shape_box.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         crate::shape_bounds_box::cancel(app);

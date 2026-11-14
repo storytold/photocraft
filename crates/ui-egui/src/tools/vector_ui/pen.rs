@@ -348,6 +348,23 @@ pub fn pen_enter(app: &mut PhotocraftApp) {
     }
 }
 
+/// ↩ with the Freeform Pen right after a stroke into the Work Path. The stroke was committed on
+/// release, so there is no draft to finish: as in Photoshop, ↩ deselects the Work Path and the
+/// next stroke replaces it instead of joining it (#12833). Once per stroke: `false`, with nothing
+/// changed, in any other case (not measured): the Work Path selected in the Paths panel or after
+/// Undo or Redo, a saved path or a layer's path, or a ⌥-click trace still being drawn, which keeps
+/// its own ↩.
+pub fn freeform_enter(app: &mut PhotocraftApp) -> bool {
+    let ready = app.ui.freeform_enter_ready.take();
+    let after_stroke = app.session.active().is_some_and(|st| ready == Some((st.doc.id, st.revision)) && st.doc.work_path.is_some());
+    let applies =
+        after_stroke && app.ui.tool == Tool::FreeformPen && app.ui.pen.is_none() && app.drag.is_none() && app.ui.selected_path.as_deref() == Some("work");
+    if applies {
+        deselect_finished_work_path(app);
+    }
+    applies
+}
+
 /// Deselect and hide the Work Path a finished path just went into. Callers check that it did: a
 /// draft drawn into a vector mask leaves the Work Path selected without changing it.
 fn deselect_finished_work_path(app: &mut PhotocraftApp) {
@@ -950,10 +967,17 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
     };
     let (mut pen, closed) = pen;
     pen.owner = Some(owner);
-    if let Err(e) = commit_path_named(app, &pen, closed, true) {
-        app.ui.pen = Some(PenPath { commit_failed: true, ..pen });
-        app.ui.status = e;
-        app.ui.status_error = true;
+    let work_path = app.session.active().map(|st| st.doc.work_path.clone());
+    match commit_path_named(app, &pen, closed, true) {
+        // Only a stroke into the Work Path arms ↩: a saved path or a new shape layer does not.
+        Ok(()) => {
+            app.ui.freeform_enter_ready = app.session.active().filter(|st| Some(&st.doc.work_path) != work_path.as_ref()).map(|st| (st.doc.id, st.revision));
+        }
+        Err(e) => {
+            app.ui.pen = Some(PenPath { commit_failed: true, ..pen });
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 
@@ -1111,3 +1135,7 @@ mod pen_alt_drag_segment_tests;
 #[cfg(test)]
 #[path = "freeform_close_tolerance_tests.rs"]
 mod freeform_close_tolerance_tests;
+
+#[cfg(test)]
+#[path = "freeform_enter_deselects_tests.rs"]
+mod freeform_enter_deselects_tests;

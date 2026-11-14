@@ -71,7 +71,7 @@ fn move_to(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2]
 
 /// A drag from `pts[0]` through the other points; `alt_from` is the index of the point from
 /// which ⌥/Alt is held (`Some(0)`: before the press).
-fn drag(h: &mut Harness<'static, PhotocraftApp>, pts: &[[f32; 2]], alt_from: Option<usize>) {
+pub(super) fn drag(h: &mut Harness<'static, PhotocraftApp>, pts: &[[f32; 2]], alt_from: Option<usize>) {
     let held = |i: usize| if alt_from.is_some_and(|a| i >= a) { Modifiers::ALT } else { Modifiers::NONE };
     let p = screen(h, pts[0]);
     mods(h, held(0));
