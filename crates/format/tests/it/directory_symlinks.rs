@@ -19,6 +19,9 @@ fn directory_cleanup_preserves_unrelated_zst_files() {
     let mut writer = PcraftWriter::new();
     writer.save_dir(&empty_doc(), &bundle, &SaveOptions::default()).unwrap();
 
+    // An empty document writes no objects, so a save creates neither folder.
+    std::fs::create_dir_all(bundle.join("tiles")).unwrap();
+    std::fs::create_dir_all(bundle.join("blobs")).unwrap();
     let unrelated = bundle.join("tiles/personal-notes.zst");
     let orphan = bundle.join("blobs").join(format!("{}.zst", "b".repeat(64)));
     std::fs::write(&unrelated, b"unrelated file").unwrap();
