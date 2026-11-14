@@ -48,6 +48,7 @@ mod fx;
 pub mod health;
 pub mod plan;
 mod prefix;
+mod suffix;
 pub mod timing;
 
 use std::collections::HashMap;
@@ -73,6 +74,8 @@ pub struct Compositor {
     residents: HashMap<ResKey, Resident>,
     fx: HashMap<FxKey, FxEntry>,
     prefix: prefix::Prefix,
+    /// The stack above a repeatedly edited layer, cached as three renders of it.
+    suffix: suffix::Suffix,
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, CachedPattern>,
