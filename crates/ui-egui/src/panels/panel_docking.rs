@@ -805,6 +805,8 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let locked = app.session.prefs().workspace_locked;
     let mut style = craft_ui::docking::DockStyle::from_ui(ui);
+    // Paint only a hairline between panes; craft-ui keeps its wider resize hit targets.
+    style.gap = 1.0;
     style.tab_height = if t.pro { 28.0 } else { 40.0 };
     style.min_pane = 0.0;
     style.background = t.card;
@@ -837,6 +839,8 @@ fn show_layout(app: &mut PhotocraftApp, ui: &mut egui::Ui, dock_only: bool) {
     record::clear_bodies(ui.ctx());
     // The panel windows' passes, inside this call, note their keyboard focus again.
     keyboard_focus(ui.ctx()).lock().unwrap_or_else(|e| e.into_inner()).clear();
+    // Pane backgrounds cover this fill, leaving the themed separator visible in the gaps.
+    ui.painter().rect_filled(ui.max_rect(), 0.0, t.separator);
     let mut output = dock.show_customized(
         ui,
         &layout,
