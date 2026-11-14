@@ -407,6 +407,23 @@ impl Para<'_> {
         Some(LineFrame { index, last: index + 1 == nlines, slot, baseline, ascent, descent })
     }
 
+    /// The tracking after a horizontal point line's last drawn character, which Photoshop leaves
+    /// out of the width it centres or right-aligns the line by: a centred line with tracking sat
+    /// half that tracking left of Photoshop's, a right-aligned one all of it. Box, area, path and
+    /// vertical lines keep it.
+    fn trailing_tracking(&self, slots: &[KernSlot]) -> f32 {
+        let env = self.env;
+        if env.wraps || env.vertical || env.path_range.is_some() {
+            return 0.0;
+        }
+        slots
+            .iter()
+            .rev()
+            .find(|s| !s.blank)
+            .and_then(|s| Some((s, env.styles.get(env.style_at(self.map_offset(s.start)))?)))
+            .map_or(0.0, |(s, st)| st.tracking / 1000.0 * s.size * scale_of(st))
+    }
+
     /// Appends one line's clusters, glyphs, decorations and `LineInfo` to `out`.
     pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame) {
         let env = self.env;
@@ -417,7 +434,7 @@ impl Para<'_> {
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
         let growth = if self.env.path_range.is_some() { slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth } else { 0.0 };
-        let dx = self.line_start(f, m.offset, adv, line_kern + growth);
+        let dx = self.line_start(f, m.offset, adv, line_kern + growth - self.trailing_tracking(&slots));
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
