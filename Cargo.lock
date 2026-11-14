@@ -1359,6 +1359,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crs"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+dependencies = [
+ "craft-metadata",
+ "craft-xml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-crw"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
@@ -1935,7 +1945,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5664,6 +5674,7 @@ dependencies = [
  "blake3",
  "craft-affinity",
  "craft-cms",
+ "craft-crs",
  "craft-docpath",
  "craft-file-formats",
  "craft-image-codecs",

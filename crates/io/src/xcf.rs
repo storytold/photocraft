@@ -6,8 +6,6 @@ mod tests;
 
 use std::sync::Arc;
 
-#[cfg(test)]
-pub(crate) use craft_xcf::Compression;
 use craft_xcf::{BaseType, Orientation, Pixels, TreeNode};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, LabelColor, Layer, LayerContent, LayerMask};

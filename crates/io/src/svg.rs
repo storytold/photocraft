@@ -24,8 +24,18 @@ use photocraft_raster::Surface;
 
 use crate::{ImportResult, IoError};
 
+/// Hard caps on the memory resvg needs to draw a subtree, checked before it draws: craft-svg's
+/// `tree::draw`, within this crate's peak pixel budget.
 #[cfg(test)]
-mod limits;
+mod limits {
+    use craft_svg::tree::{draw::tiny_skia, usvg};
+
+    pub(super) use craft_svg::tree::draw::{Refusal, px};
+
+    pub(super) fn check(nodes: &[usvg::Node], ts: tiny_skia::Transform, w: u32, h: u32, held: u64) -> Result<(), Refusal> {
+        craft_svg::tree::draw::check(nodes, ts, w, h, held, super::MAX_PEAK_PIXEL_BYTES)
+    }
+}
 
 /// Largest canvas side an SVG opens at; a larger drawing is scaled down to fit.
 pub const MAX_SIDE: u32 = 16_384;
