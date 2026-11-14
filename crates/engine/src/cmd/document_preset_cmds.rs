@@ -219,7 +219,8 @@ pub(crate) fn load(value: Value) -> Vec<DocumentPreset> {
     presets
 }
 
-/// Read the Recent list like [`load`]: a damaged entry is dropped, the rest kept, newest first.
+/// Read the Recent list like [`load`]: a damaged entry is dropped, the rest kept (equal ones
+/// too, as Photoshop lists each created document), newest first.
 pub(crate) fn load_recent(value: Value) -> Vec<DocumentSettings> {
     let Some(entries) = value.as_array() else { return Vec::new() };
     let mut recent: Vec<DocumentSettings> = Vec::new();
@@ -228,7 +229,7 @@ pub(crate) fn load_recent(value: Value) -> Vec<DocumentSettings> {
         if settings.mode == "grayscale" {
             settings.mode = "gray".into();
         }
-        if settings.validate().is_err() || recent.iter().any(|r| r.command_params() == settings.command_params()) {
+        if settings.validate().is_err() {
             continue;
         }
         recent.push(settings);
@@ -239,13 +240,12 @@ pub(crate) fn load_recent(value: Value) -> Vec<DocumentSettings> {
     recent
 }
 
-/// Record settings a document was just created with: first in Recent, an equal older entry
-/// (the same document, perhaps shown in other units) removed, the oldest dropped past the cap.
+/// Record settings a document was just created with: first in Recent, the oldest dropped past
+/// the cap. An equal older entry stays, as in Photoshop: two documents made alike are two items.
 fn add_recent(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.recent.add";
     let settings = DocumentSettings::from_params(s, p.get("settings").unwrap_or(&Value::Null), CMD)?;
     let recent = &mut s.presets.recent_documents;
-    recent.retain(|r| r.command_params() != settings.command_params());
     recent.insert(0, settings);
     recent.truncate(MAX_RECENT);
     s.presets_changed();
@@ -342,7 +342,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Recent Document Settings",
             menu: &[],
             shortcut: None,
-            params: r#"{"settings":{same fields as document.presets.save}} (File › New records each document it creates; newest first, max 20, duplicates collapsed)"#,
+            params: r#"{"settings":{same fields as document.presets.save}} (File › New records each document it creates; newest first, max 20, equal settings kept as separate entries)"#,
             enabled: always,
             run: add_recent,
             // Bookkeeping for File › New, not an editing step an action should replay.
@@ -550,14 +550,14 @@ mod tests {
         for w in 1..=MAX_RECENT as u32 + 5 {
             add(&mut s, w, "px").unwrap();
         }
-        // The same document again (shown in other units) moves to the front instead of repeating.
+        // The same document again (shown in other units) is a new first entry; the older one stays.
         add(&mut s, 10, "mm").unwrap();
         let mut s = reload(&s);
         let recent = s.execute("document.recent.list", json!({})).unwrap()["recent"].clone();
         let widths: Vec<u64> = recent.as_array().unwrap().iter().map(|r| r["width"].as_u64().unwrap()).collect();
         assert_eq!(widths.len(), MAX_RECENT);
         assert_eq!(&widths[..3], &[10, 25, 24]);
-        assert_eq!(widths.iter().filter(|w| **w == 10).count(), 1);
+        assert_eq!(widths.iter().filter(|w| **w == 10).count(), 2);
         assert_eq!(recent[0]["unit"], "mm");
         // Bad settings change nothing; damaged stored entries are dropped, the rest kept.
         let rev = s.prefs.rev();
@@ -569,7 +569,7 @@ mod tests {
         value["presets"]["recent_documents"] = json!([{"width":-1}, recent[1], "junk", recent[1], recent[2]]);
         let mut next = Session::new();
         next.load_prefs_json(&value.to_string()).unwrap();
-        assert_eq!(next.presets.recent_documents.iter().map(|r| r.width).collect::<Vec<_>>(), [25, 24]);
+        assert_eq!(next.presets.recent_documents.iter().map(|r| r.width).collect::<Vec<_>>(), [25, 25, 24]);
         assert!(next.documents().is_empty(), "recording never creates a document");
     }
 

@@ -926,6 +926,9 @@ mod psd_open_tests;
 mod save_identity_tests;
 
 #[cfg(test)]
+mod new_doc_recent_items_tests;
+
+#[cfg(test)]
 mod move_auto_select_tests;
 #[cfg(test)]
 mod move_shift_click_tests;
