@@ -486,6 +486,10 @@ fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
         }
         let n = stream.read(&mut buf).map_err(|e| Error::Protocol(format!("reading: {e}")))?;
         if n == 0 {
+            // A Content-Length body is complete only after every promised byte (RFC 9112).
+            if expected.is_some() && !chunked {
+                return Err(Error::Protocol("incomplete HTTP body".into()));
+            }
             return Ok(raw);
         }
         raw.extend_from_slice(buf.get(..n).unwrap_or_default());
