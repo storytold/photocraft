@@ -161,10 +161,10 @@ fn cancelling_one_damaged_open_does_not_open_the_next_damaged_file_without_conse
 fn damage_confirmation_precedes_the_profile_question() {
     let mut app = app();
     app.run("edit.colorSettings", json!({"askOnMismatch": true, "policyRgb": "preserve"})).unwrap();
-    let (mut file, _) = photocraft_psd::PsdFile::from_bytes_and_merged(&recovery_psd::make_psd(true), |_| false).unwrap();
-    file.resources.push(photocraft_psd::ImageResource::new(
-        photocraft_psd::resources::ids::ICC_PROFILE,
-        photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes().to_vec(),
+    let (mut file, _) = craft_psd::PsdFile::from_bytes_and_merged(&recovery_psd::make_psd(true), |_| false).unwrap();
+    file.resources.push(craft_psd::ImageResource::new(
+        craft_psd::resources::ids::ICC_PROFILE,
+        craft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes().to_vec(),
     ));
     app.open_bytes("profile.psd", &file.to_bytes().unwrap()).unwrap();
     let id = damage_dialog(&mut app);
@@ -569,6 +569,7 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
             order: None,
             question: Some(json!({"missing": false, "working": "sRGB", "embedded": "Adobe RGB"})),
             policy_applied: false,
+            smart_object: false,
         },
     );
 
@@ -600,6 +601,7 @@ fn mixed_prompts_follow_arrival_order_fifo() {
             order: None,
             question: None,
             policy_applied: false,
+            smart_object: false,
         },
     );
 
@@ -973,4 +975,35 @@ fn inline_drop_slot_survives_the_memory_prompt() {
             assert_eq!(names, ["dropped.psd", "first.psd", "second.psd"], "the approved drop keeps its tab slot");
         });
     });
+}
+
+/// A damaged PSD opened as a smart object, once confirmed, is admitted as one: the history says
+/// "Open As Smart Object" and two same-stem files get distinct names (#12212 review).
+#[test]
+fn confirmed_damaged_smart_object_opens_are_admitted_as_smart_objects_with_distinct_names() {
+    let mut app = app();
+    let bytes = recovery_psd::make_psd(true);
+    let dir = std::env::temp_dir().join(format!("photocraft-damaged-so-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut paths = Vec::new();
+    for sub in ["a", "b"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+        let path = dir.join(sub).join("dmg.psd");
+        std::fs::write(&path, &bytes).unwrap();
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    for path in &paths {
+        crate::jobs_ui::start_open_as_smart_object(&mut app, path, None).unwrap();
+    }
+    assert!(app.session.documents().is_empty());
+    for _ in 0..2 {
+        let id = damage_dialog(&mut app);
+        assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": id}))["ok"], true);
+    }
+    let names: Vec<_> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+    assert_eq!(names, ["dmg-1", "dmg-2"]);
+    for st in app.session.documents() {
+        assert_eq!(st.history.entries(), ["Open As Smart Object"]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
