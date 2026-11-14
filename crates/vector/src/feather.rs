@@ -20,8 +20,13 @@ const MAX_FEATHER_SIGMA: f32 = 1000.0 * FEATHER_SIGMA;
 /// `r` grown by a feather of Gaussian `sigma`: how far the blur carries a mask's edge (three
 /// sigmas and two pixels, beyond which it is constant to well under a level).
 pub fn grow(r: Rect, sigma: f32) -> Rect {
-    let m = (sigma * 3.0).ceil() as i32 + 2;
+    let m = reach(sigma);
     if r.is_empty() { r } else { Rect::new(r.x0.saturating_sub(m), r.y0.saturating_sub(m), r.x1.saturating_add(m), r.y1.saturating_add(m)) }
+}
+
+/// The margin [`grow`] adds on each side for a feather of Gaussian `sigma`.
+pub fn reach(sigma: f32) -> i32 {
+    (sigma * 3.0).ceil() as i32 + 2
 }
 
 /// Where a feathered path mask can differ from its value far outside the path: the path's control

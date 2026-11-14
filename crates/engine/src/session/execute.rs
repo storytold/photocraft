@@ -344,6 +344,7 @@ impl Session {
         st.bump_revision(keep_clean);
         st.last_damage = damage;
         self.samplers_removed += samplers_removed;
+        // An `Arc` clone (history keeps the same document); dropped when the command ends.
         #[cfg(any(test, debug_assertions))]
         {
             self.hint_before = Some(hint_before);

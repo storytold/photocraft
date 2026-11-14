@@ -153,6 +153,53 @@ fn a_mask_edit_damages_its_tiles_grown_by_the_feather() {
     assert!(unchanged_outside(&before, &after, d));
 }
 
+/// #11351: a Brush dab into a feathered layer mask changes the composite past the dab, as far as
+/// the feather blurs it. The stroke's own (dab-tight) hint must not narrow the edit's damage back
+/// to the dab, or the canvas redraws the stroke clipped to hard-edged blocks until something
+/// (moving the Feather slider) redraws everything. A mask without a feather keeps the tight hint.
+#[test]
+fn a_brush_dab_into_a_feathered_mask_damages_the_feathers_halo() {
+    let mut s = session(1024, 768);
+    let id = full_layer(&mut s);
+    let feather = 10.0;
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().mask = Some(photocraft_doc::LayerMask { feather, ..photocraft_doc::LayerMask::reveal_all() });
+        Ok(())
+    })
+    .unwrap();
+    s.select_layer(id).unwrap();
+    let dab_at = |s: &mut Session, x: i32, y: i32| {
+        let r = s.execute("paint.stroke", json!({"points": [[x, y]], "size": 20, "hardness": 100, "color": "#000000", "target": "mask"})).unwrap();
+        let v = |i: usize| r["damage"][i].as_i64().unwrap() as i32;
+        Rect::new(v(0), v(1), v(0) + v(2), v(1) + v(3))
+    };
+    let before = doc(&s);
+    let dab = dab_at(&mut s, 500, 400);
+    let after = doc(&s);
+    assert!(!dab.is_empty() && !same_pixels(&before, &after), "the dab painted the mask");
+    assert_eq!(s.damage_misses, 0);
+    let d = damage(&s).expect("a bounded dab");
+    let reach = photocraft_vector::feather::reach(photocraft_vector::feather::feather_sigma(feather));
+    // The session damage is the feather-grown hint clipped to the tiles the step actually
+    // changed: `step_damage` is tile-aligned, so its edge can sit a few pixels inside the
+    // grown hint's. `unchanged_outside` below is the cover proof: no changed pixel escapes.
+    let step = step_damage(&before, &after).unwrap();
+    assert_eq!(d, dab.inflate(reach).intersect(&step).intersect(&after.bounds()), "damage misses the feather around the dab");
+    assert!(d.size().area() < after.bounds().size().area() / 4, "still a local redraw: {d:?}");
+    assert!(unchanged_outside(&before, &after, d), "the feathered stroke changed pixels outside {d:?}");
+
+    // Without a feather the composite changes only under the dab: the hint stays tight.
+    s.edit("no feather", |doc, _| {
+        doc.layer_mut(id).unwrap().mask.as_mut().unwrap().feather = 0.0;
+        Ok(())
+    })
+    .unwrap();
+    let before = doc(&s);
+    let dab = dab_at(&mut s, 200, 200);
+    assert_eq!(damage(&s), Some(dab));
+    assert!(unchanged_outside(&before, &doc(&s), dab));
+}
+
 #[test]
 fn tile_damage_grows_by_the_layer_effect_margin() {
     let mut s = session(1024, 768);

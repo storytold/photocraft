@@ -190,6 +190,16 @@ pub fn has_feather(layer: &Layer) -> bool {
         || layer.vector_mask.as_ref().is_some_and(|v| v.enabled && feather_sigma(v.feather) > 0.0)
 }
 
+/// How far past a change to `layer`'s pixel mask the composite can change: its feather blurs the
+/// change outwards by this many pixels (`photocraft_vector::feather::grow`). 0 without an enabled,
+/// feathered pixel mask. A brush dab's own rect misses this halo, so redraws must add it (#11351).
+pub fn pixel_feather_reach(layer: &Layer) -> i32 {
+    match &layer.mask {
+        Some(m) if m.enabled && feather_sigma(m.feather) > 0.0 => photocraft_vector::feather::reach(feather_sigma(m.feather)),
+        _ => 0,
+    }
+}
+
 /// The layer's mask values (pixel mask with density × vector mask, each blurred by its feather,
 /// exactly as the CPU compositor applies them) as a single-channel f32 surface over `canvas`, or
 /// `None` when the layer has no enabled vector mask and no feathered pixel mask (use the pixel
