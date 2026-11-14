@@ -1,6 +1,7 @@
 //! Exporting one layer suggests a file name with every character a file name can't hold
 //! (`< > : " / \ | ? *`) turned into `_`, one for one (#14810). Other characters, spaces
-//! included, stay, and names without such characters suggest what they did before.
+//! included, stay, and names without such characters suggest what they did before. Unmeasured
+//! cases (control characters, very long names) follow what the shared `export_name` does.
 
 use super::*;
 use crate::file_dialog::FileDialogRequest;
@@ -16,7 +17,7 @@ fn suggested_for(name: &str) -> (String, String) {
     app.run("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
-    let _ = quick_export_layer_png(&mut app, layer);
+    quick_export_layer_png(&mut app, layer).unwrap();
     app.poll_file_dialog(&egui::Context::default(), None);
     let asked = asked.borrow();
     let [FileDialogRequest::Save { suggested }] = asked.as_slice() else { panic!("one Save dialog: {asked:?}") };
