@@ -258,7 +258,12 @@ pub(super) fn menu_tint(name: &str) -> Option<egui::Color32> {
         "orange" => egui::Color32::from_rgb(200, 120, 40),
         "yellow" => egui::Color32::from_rgb(190, 170, 40),
         "green" => egui::Color32::from_rgb(60, 150, 70),
+        // The reference application's four further colours (#14336), with the hue it measures.
+        "seafoam" => egui::Color32::from_rgb(60, 170, 160),
         "blue" => egui::Color32::from_rgb(50, 110, 200),
+        "indigo" => egui::Color32::from_rgb(70, 75, 200),
+        "magenta" => egui::Color32::from_rgb(200, 60, 125),
+        "fuchsia" => egui::Color32::from_rgb(180, 60, 180),
         "violet" => egui::Color32::from_rgb(130, 80, 190),
         "gray" => egui::Color32::from_rgb(120, 120, 120),
         _ => return None,
