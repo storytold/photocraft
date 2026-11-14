@@ -639,7 +639,8 @@ fn package_lists_a_missing_link_once() {
 #[test]
 fn paths_export_as_illustrator_postscript() {
     let mut s = session("rgb", 8);
-    assert!(!s.is_enabled("file.export.pathsToIllustrator"));
+    // Enabled without paths too: Document Bounds needs none (#13771).
+    assert!(s.is_enabled("file.export.pathsToIllustrator"));
     s.edit("paths", |d, _| {
         let tri = Subpath::polygon(&[(10.0, 10.0), (100.0, 10.0), (50.0, 90.0)]);
         let mut curve = Subpath::polyline(&[(0.0, 0.0), (300.0, 150.0)]);
