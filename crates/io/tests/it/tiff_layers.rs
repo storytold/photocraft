@@ -600,8 +600,7 @@ fn transparent_tiff_without_channels_keeps_image_alpha() {
         assert!(img.layout().has_alpha(), "{layers}");
         assert!(img.meta.extra_samples.is_empty(), "{layers}");
         let parsed = craft_tiff::Tiff::parse(&r.bytes).unwrap();
-        let extra: Vec<u16> =
-            parsed.ifds[0].value(craft_tiff::tags::EXTRA_SAMPLES).unwrap().to_u64_vec().into_iter().map(|x| x as u16).collect();
+        let extra: Vec<u16> = parsed.ifds[0].value(craft_tiff::tags::EXTRA_SAMPLES).unwrap().to_u64_vec().into_iter().map(|x| x as u16).collect();
         assert_eq!(extra, vec![2], "{layers}");
         assert!(!r.warnings.iter().any(|w| w.contains("Save Transparency")), "{layers}: {:?}", r.warnings);
         if layers {
