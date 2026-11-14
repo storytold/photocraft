@@ -302,6 +302,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             // The Smoothing Options gear, right after the field as on the Brush (#11963); the
             // Pencil keeps its own options, and at 0 % they are greyed (#11939).
             smoothing_options(ui, b, true);
+            // The brush tip's Angle, as the Background Eraser's bar has it (#11964): whole degrees
+            // −180…180, the same angle the Brush Settings panel edits.
+            crate::eraser_ui::angle_field(ui, b);
             widgets::vline(ui, 22.0);
             widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
                 .on_hover_text(tl!("Draws background color over foreground colors"));
