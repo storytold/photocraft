@@ -34,7 +34,7 @@ fn ok_on_the_defaults_saves_psd() {
     let (mut h, id) = opened();
     let dir = source_folder();
     let out = dir.path().join("out");
-    set(&mut h, id, "input", json!(dir.path().to_string_lossy()));
+    set(&mut h, id, "input", json!({"files": [dir.path().join("a.png")], "useFolder": false}));
     set(&mut h, id, "output", json!(out.to_string_lossy()));
     crate::dialogs::testing::confirm(h.state_mut(), id).expect("OK is accepted");
     h.run_steps(4);
