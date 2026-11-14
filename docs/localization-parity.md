@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-08 · **Last updated:** 2026-11-13 · **Change:** minor (Mongolian language registration prepared; shared catalog merge/pin and native review pending; previously minor: the catalogs moved to storytold/craft-i18n and are measured with `cargo xtask i18n-report`; Serbian is `sr-latn`; coverage re-measured on the merged tree, 2,449 keys; Arabic 92.1%; 35 registered languages; Hindi partial; Georgian, Azerbaijani, Hebrew, Romanian, Tamil, Thai and Urdu measured; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-11-08 · **Last updated:** 2026-11-08 · **Change:** minor (the catalogs moved to storytold/craft-i18n and are measured with `cargo xtask i18n-report`; Serbian is `sr-latn`; coverage re-measured on the merged tree, 2,449 keys; Arabic 92.1%; 35 registered languages; Hindi partial; Georgian, Azerbaijani, Hebrew, Romanian, Tamil, Thai and Urdu measured; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
