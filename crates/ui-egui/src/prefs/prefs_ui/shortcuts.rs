@@ -720,7 +720,7 @@ fn confirm_delete_set(ui: &egui::Ui, name: &str) -> Option<bool> {
     use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 
     let ctx = ui.ctx();
-    let prompt = egui::Modal::new(ui.id().with("delete-shortcut-set")).show(ctx, |ui| {
+    let prompt = egui::Modal::new(ui.scope_id().with("delete-shortcut-set")).show(ctx, |ui| {
         ui.set_max_width(360.0);
         ui.label(crate::i18n::fmt(tl!("Are you sure you want to delete {set}?"), &[("set", name)]));
         ui.add_space(8.0);
