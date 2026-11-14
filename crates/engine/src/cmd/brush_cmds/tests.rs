@@ -1545,3 +1545,17 @@ fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     assert_eq!(s.tools.foreground, foreground);
     assert_eq!(s.active().unwrap().revision, revision);
 }
+
+/// A spot channel's tone turns only the tiles the channel holds: bare paper reads as tone through
+/// the surface's default, so a stroke on a large, mostly bare channel doesn't fill the canvas
+/// (CodeRabbit on #10217).
+#[test]
+fn a_spot_channels_tone_holds_only_the_tiles_of_its_ink() {
+    let mut ink = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    ink.write_pixel(5, 5, &[1.0]);
+    let tone = tone_of(&ink).unwrap();
+    assert_eq!(tone.tile_count(), 1, "only the inked tile is held");
+    assert_eq!(tone.pixel(5, 5), vec![0.0], "solid ink reads black");
+    assert_eq!(tone.pixel(6, 5), vec![1.0], "bare paper in that tile reads white");
+    assert_eq!(tone.pixel(20_000, 20_000), vec![1.0], "bare paper far away reads white");
+}

@@ -9,7 +9,7 @@
 //! normal canvas shows. This is a screen approximation, not a press proof: each ink is its stored
 //! display colour blended by the Multichannel overprint formula (multiply at solidity 0, cover at
 //! solidity 1) over the sampled composite. A solo spot (all colour channels hidden) shows as its
-//! grayscale values instead. The texture is keyed by document revision, view state and display, and
+//! tone instead, ink dark. The texture is keyed by document revision, view state and display, and
 //! updated per damage rectangle while painting, so nothing is recomposited per frame.
 
 use std::borrow::Cow;
@@ -423,7 +423,13 @@ fn render_with_source(
     let mut out: Vec<[f32; 4]> = if vis == 0 {
         if !overlays.is_empty() {
             let first = overlays.remove(0);
-            gray(&doc.channels.get(first)?.surface)
+            let first = doc.channels.get(first)?;
+            // A spot channel alone reads as its tone, ink dark (as its thumbnail does).
+            let mut px: Vec<[f32; 4]> = gray(&first.surface);
+            if first.spot.is_some() {
+                px.iter_mut().for_each(|p| *p = [1.0 - p[0], 1.0 - p[1], 1.0 - p[2], 1.0]);
+            }
+            px
         } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
             solo_quick = true;
             gray(&q.surface)

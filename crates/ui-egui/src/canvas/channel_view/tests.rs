@@ -373,6 +373,21 @@ fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
     assert_eq!(px[0], Color32::BLACK, "the hidden mask reads black, not the red layer");
 }
 
+/// #10152: a spot channel viewed alone reads as its tone, as in Photoshop: ink is black, bare
+/// paper white (the channel stores ink, 1 = solid).
+#[test]
+fn a_spot_channel_alone_shows_its_ink_dark() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    let r = s.execute("channel.newSpot", json!({"color": "#ff0000", "solidity": 100})).unwrap();
+    let spot = r["channel"].as_u64().unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": spot})).unwrap();
+    let st = s.active().unwrap();
+    let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
+    assert_eq!((px[0], px[6]), (Color32::BLACK, Color32::WHITE), "ink dark, paper white");
+}
+
 /// A CMYK channel shows the document's ink, not the composite separated again from RGB: rich
 /// black 100/100/100/0 has no K, and full C, M and Y (#8359).
 #[test]
@@ -848,16 +863,17 @@ fn solo_spot_is_grayscale_and_edits_without_layer_mask() {
         assert_eq!(st.channel_view.visible_colors(color_count(&st.doc)), 0);
         let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer)
             .expect("solo spot channel must render without a layer mask");
-        // Selected half (x 0..4) has ink (1.0 -> white in grayscale tone), unselected half is black (0.0).
-        assert_eq!(px[0], Color32::WHITE, "{mode:?}: inked half is white tone");
-        assert_eq!(px[7], Color32::BLACK, "{mode:?}: uninked half is black tone");
+        // Selected half (x 0..4) has ink, which reads dark as in Photoshop (#10152); the unselected
+        // half is bare paper, white.
+        assert_eq!(px[0], Color32::BLACK, "{mode:?}: inked half is dark");
+        assert_eq!(px[7], Color32::WHITE, "{mode:?}: uninked half is paper white");
 
         // Editing the targeted spot channel updates the solo preview.
         app.run("select.rect", json!({"x": 4, "y": 0, "width": 4, "height": 4})).unwrap();
-        app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        app.run("edit.fill", json!({"contents": "black"})).unwrap();
         let st = app.session.active().unwrap();
         let px2 = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).expect("edited spot channel must render");
-        assert_eq!(px2[7], Color32::WHITE, "{mode:?}: newly filled area is now white");
+        assert_eq!(px2[7], Color32::BLACK, "{mode:?}: the area filled black now has ink, dark");
     }
 }
 
@@ -875,7 +891,7 @@ fn solo_spot_wins_over_an_unrelated_layer_mask() {
         assert_eq!(st.channel_view.visible_colors(color_count(&st.doc)), 0);
         let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).expect("solo spot renders");
         // A revealed layer mask is all white; the spot has ink on the left half only.
-        assert_eq!(px[0], Color32::WHITE, "{mode}: inked half");
-        assert_eq!(px[7], Color32::BLACK, "{mode}: uninked half shows the spot, not the mask");
+        assert_eq!(px[0], Color32::BLACK, "{mode}: inked half, dark");
+        assert_eq!(px[7], Color32::WHITE, "{mode}: uninked half shows the spot's paper, not the mask");
     }
 }
