@@ -85,7 +85,7 @@ fn the_four_sections_and_their_rows_follow_the_reference_order() {
         let top = |label: &str| h.query_all_by_label(label).map(|n| n.rect().top()).reduce(f32::min).unwrap_or_else(|| panic!("no {label}"));
         let order = [
             "Source Files",
-            "Input",
+            "Browse…",
             "Destination Folder",
             "File Type",
             "Output",
@@ -119,11 +119,11 @@ fn ok_runs_the_command_with_the_same_params() {
     let (mut h, id) = opened();
     assert_eq!(
         params(&h, id),
-        json!({"input": ".", "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
+        json!({"input": [], "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
     );
     let sources = source_folder();
     let results = tempfile::tempdir().unwrap();
-    set(&mut h, id, "input", json!(sources.path().to_string_lossy()));
+    set(&mut h, id, "input", json!({"files": [sources.path().join("a.png")], "useFolder": false}));
     set(&mut h, id, "output", json!(results.path().to_string_lossy()));
     crate::dialogs::testing::confirm(h.state_mut(), id).expect("OK is accepted");
     h.run_steps(4);
