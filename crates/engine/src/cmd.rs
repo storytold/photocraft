@@ -112,6 +112,8 @@ pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_css_cmds;
+#[cfg(test)]
+mod layer_from_background_visible_tests;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
