@@ -99,7 +99,6 @@ fn samples() -> Vec<Vec<u8>> {
             precision: 14,
             components: 2,
             slices: vec![16, 16, 8],
-            slices_long: None,
             borders: Some([8, 2, 39, 9]),
             wb_rggb: Some([2000, 1024, 1024, 1500]),
             orientation: 8,
@@ -128,7 +127,7 @@ fn samples() -> Vec<Vec<u8>> {
 fn exercise(b: &[u8]) {
     let _ = identify(b);
     let _ = embedded_preview(b);
-    let _ = embedded_previews(b);
+    let _ = embedded_preview(b);
     let _ = embedded_preview_color_space(b);
     let opts = DevelopOptions { limits: Limits { max_alloc: 64 << 20, ..Limits::default() }, ..Default::default() };
     if let Ok(s) = decode(b, &opts.limits) {

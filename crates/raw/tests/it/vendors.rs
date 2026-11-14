@@ -21,7 +21,6 @@ fn cr2_spec(w: usize, h: usize, comps: usize, slices: Vec<usize>) -> Cr2Spec {
         precision: 14,
         components: comps,
         slices,
-        slices_long: None,
         borders: Some([l as u16, t as u16, w as u16 - 1, h as u16 - 1]),
         wb_rggb: Some([2048, 1024, 1024, 1536]),
         orientation: 1,
@@ -128,9 +127,7 @@ fn embedded_preview_is_found() {
     raf[84..88].copy_from_slice(&100u32.to_be_bytes());
     raf[88..92].copy_from_slice(&(jpeg.len() as u32).to_be_bytes());
     raf.extend_from_slice(&jpeg);
-    let p = embedded_preview(&raf).unwrap();
-    assert_eq!((p.width, p.height), (0x30, 0x20));
-    assert_eq!(p.jpeg, &jpeg);
+    assert_eq!(embedded_preview(&raf).unwrap(), jpeg);
     // The lossless-JPEG raw data of a CR2 is not mistaken for a preview.
     assert!(embedded_preview(&cr2_spec(32, 8, 2, vec![]).build()).is_none());
 }
@@ -164,7 +161,6 @@ fn cr2_phase_spec(cfa: [u8; 4], l: usize, t: usize, model_id: Option<u32>) -> Cr
         precision: 14,
         components: 2,
         slices: vec![96, 96],
-        slices_long: None,
         borders: Some([l as u16, t as u16, w as u16 - 1, h as u16 - 1]),
         wb_rggb: Some([2048, 1024, 1024, 1536]),
         orientation: 1,

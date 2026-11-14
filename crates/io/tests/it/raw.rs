@@ -18,7 +18,7 @@ fn dng_opens_as_16_bit_prophoto() {
     assert_eq!(d.depth, SampleType::U16);
     assert_eq!(d.layers.len(), 1);
     let icc = d.icc_profile.as_ref().expect("profile");
-    assert_eq!(icc.as_slice(), &photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
+    assert_eq!(icc.as_slice(), &craft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
     assert!(r.warnings.iter().any(|w| w.contains("DNG") && w.contains("ProPhoto")), "{:?}", r.warnings);
 }
 
@@ -60,19 +60,8 @@ fn monochrome_dng_opens() {
 fn cr2_opens() {
     let (w, h) = (48, 16);
     let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 256, 12000);
-    let spec = Cr2Spec {
-        width: w,
-        height: h,
-        data,
-        precision: 14,
-        components: 2,
-        slices: vec![24, 24],
-        slices_long: None,
-        borders: None,
-        wb_rggb: None,
-        orientation: 6,
-        model_id: None,
-    };
+    let spec =
+        Cr2Spec { width: w, height: h, data, precision: 14, components: 2, slices: vec![24, 24], borders: None, wb_rggb: None, orientation: 6, model_id: None };
     let r = import("IMG_0001.CR2", &spec.build()).unwrap();
     // Orientation 6 rotates the 48×16 sensor image to 16×48.
     assert_eq!((r.document.size.width, r.document.size.height), (16, 48));
@@ -85,19 +74,8 @@ fn cr2_opens() {
 fn a_developed_raw_keeps_its_exif() {
     let (w, h) = (48, 16);
     let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 256, 12000);
-    let spec = Cr2Spec {
-        width: w,
-        height: h,
-        data,
-        precision: 14,
-        components: 2,
-        slices: vec![24, 24],
-        slices_long: None,
-        borders: None,
-        wb_rggb: None,
-        orientation: 6,
-        model_id: None,
-    };
+    let spec =
+        Cr2Spec { width: w, height: h, data, precision: 14, components: 2, slices: vec![24, 24], borders: None, wb_rggb: None, orientation: 6, model_id: None };
     let r = import("IMG_0001.CR2", &spec.build()).unwrap();
     assert!(r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "developed, not a preview: {:?}", r.warnings);
     let exif = r.document.metadata.exif.as_deref().expect("the raw's EXIF");
@@ -247,8 +225,8 @@ fn nef_with_preview_exif(adobe_rgb: bool) -> Vec<u8> {
 fn a_preview_fallback_keeps_the_colour_space_the_raw_states() {
     let tagged = import("DSC_0001.NEF", &nef_with_preview_exif(true)).unwrap();
     let icc = tagged.document.icc_profile.as_deref().expect("an Adobe RGB preview opens tagged");
-    let profile = photocraft_cms::Profile::parse(icc).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    let profile = craft_cms::Profile::parse(icc).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::AdobeRgbCompat.profile()));
     // Unstated: untagged sRGB, as before.
     assert!(import("DSC_0001.NEF", &nef_with_preview()).unwrap().document.icc_profile.is_none());
 }
@@ -261,7 +239,7 @@ fn unsupported_raw_falls_back_to_the_embedded_preview() {
 }
 
 /// A DNG 1.7 laid out as converters write one with JPEG XL raw data: an 8×6 JPEG thumbnail in
-/// IFD0, raw data this reader refuses (here floating-point LinearRaw), and a 40×30 preview
+/// IFD0, raw data this reader refuses (here 64-bit floating-point LinearRaw), and a 40×30 preview
 /// compressed with JPEG XL, stored as the raw is (IFD0 Orientation 6).
 fn dng_with_jxl_preview() -> Vec<u8> {
     use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions};
@@ -272,18 +250,18 @@ fn dng_with_jxl_preview() -> Vec<u8> {
     let mut preview = Vec::new();
     zune_jpegxl::JxlSimpleEncoder::new(&rgb, EncoderOptions::new(w, h, ColorSpace::RGB, BitDepth::Eight)).encode(&mut preview).unwrap();
     let mut t = TiffBuilder::default();
-    let raw_strip = t.blob(vec![0; 4 * 4 * 3 * 2]);
+    let raw_strip = t.blob(vec![0; 4 * 4 * 3 * 8]);
     let raw = t.ifd(vec![
         (254, Val::Long(vec![0])),
         (256, Val::Long(vec![4])),
         (257, Val::Long(vec![4])),
-        (258, Val::Short(vec![16, 16, 16])),
+        (258, Val::Short(vec![64, 64, 64])),
         (259, Val::Short(vec![1])),
         (262, Val::Short(vec![34892])),
         (273, Val::Blobs(vec![raw_strip])),
         (277, Val::Short(vec![3])),
         (278, Val::Long(vec![4])),
-        (279, Val::Long(vec![4 * 4 * 3 * 2])),
+        (279, Val::Long(vec![4 * 4 * 3 * 8])),
         (339, Val::Short(vec![3, 3, 3])),
     ]);
     let preview_len = preview.len() as u32;
