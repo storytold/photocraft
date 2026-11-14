@@ -1,7 +1,7 @@
-//! #12748: the Convert Point tool hits an anchor within 5 points, as measured at display scale 1:
-//! at 100 % a press 5 px from an anchor converts it and one 6 px away does nothing; at 200 % that
-//! is 2.5 document px. Other display scales weren't measured and scale it as every canvas
-//! tolerance. Direct Selection, the Pen's ⌥ and the tool's shown handles keep their 6 points.
+//! #12748, #13174: the Convert Point tool hits an anchor within 5 screen pixels, as measured: at
+//! 100 % a press 5 px from an anchor converts it and one 6 px away does nothing; at 200 % that is
+//! 2.5 document px. The reach stays 5 screen px on every display scale. Direct Selection, the
+//! Pen's ⌥ and the tool's shown handles keep their 6 points.
 
 use egui::{Modifiers, Pos2, Rect, vec2};
 use photocraft_doc::Knot;
@@ -52,33 +52,38 @@ fn at_100_percent_a_press_5_px_from_an_anchor_converts_it_and_6_px_does_nothing(
     assert!(!converts_from(&mut app(Tool::ConvertPoint, 1.0, 1.0), 6.0));
 }
 
-/// Not measured: the reach stays in points, so 5 points are 6.25 px at display scale 1.25 and
-/// 10 px at 2 (6 points were 7.5 and 12 px).
+/// #13174: the reach is 5 screen px on every display scale, not 5 points (6.25 px at display scale
+/// 1.25, 10 px at 2), also when the zoom isn't 100 %.
 #[test]
-fn the_reach_is_5_points_on_any_display_scale() {
-    for (ppp, inside, outside) in [(1.25, 6.25, 6.5), (2.0, 10.0, 11.0)] {
-        assert!(converts_from(&mut app(Tool::ConvertPoint, 1.0, ppp), inside), "{inside} px at display scale {ppp}");
-        assert!(!converts_from(&mut app(Tool::ConvertPoint, 1.0, ppp), outside), "{outside} px at display scale {ppp}");
+fn the_reach_is_5_screen_pixels_on_any_display_scale() {
+    for ppp in [0.75, 1.25, 1.5, 2.0] {
+        for zoom in [1.0, 2.0] {
+            let (inside, outside) = (5.0 / f64::from(zoom), 6.0 / f64::from(zoom));
+            let at = format!("display scale {ppp}, zoom {zoom}");
+            assert!(converts_from(&mut app(Tool::ConvertPoint, zoom, ppp), inside), "5 px at {at}");
+            assert!(!converts_from(&mut app(Tool::ConvertPoint, zoom, ppp), outside), "6 px at {at}");
+        }
     }
 }
 
-/// A press 5 or 6 points left of the corner, mapped to the document as the canvas maps it, on views
-/// panned to fractional centres: the f32 mapping never moves the 5-point press out of reach.
+/// A press 5 or 6 screen px left of the corner, mapped to the document as the canvas maps it (in
+/// points), on views panned to fractional centres: the f32 mapping never moves the 5 px press out
+/// of reach.
 #[test]
-fn a_press_mapped_from_the_screen_5_points_away_converts_and_6_does_nothing() {
-    for ppp in [1.0, 1.25] {
+fn a_press_mapped_from_the_screen_5_px_away_converts_and_6_does_nothing() {
+    for ppp in [1.0, 1.25, 2.0] {
         for i in 0..40u8 {
             let center = [100.0 + f32::from(i) * 7.31, 300.0 - f32::from(i) * 3.17];
-            for (pt, converts) in [(5.0, true), (6.0, false)] {
+            for (px, converts) in [(5.0, true), (6.0, false)] {
                 let mut app = app(Tool::ConvertPoint, 1.0, ppp);
                 app.last_canvas_rect = Rect::from_min_size(Pos2::new(37.3, 61.9), vec2(1013.7, 707.1));
                 app.ui.views[0].center = center;
                 let xf = ViewXform::active(&app).unwrap();
-                let at = xf.to_doc(xf.to_screen(100.0, 300.0) - vec2(pt, 0.0));
+                let at = xf.to_doc(xf.to_screen(100.0, 300.0) - vec2(px / ppp, 0.0));
                 let n = steps(&app);
                 drag(&mut app, at, [at[0], at[1] + 40.0], Modifiers::NONE);
                 let changed = work(&app).subpaths[0].knots[0] != Knot::corner(100.0, 300.0);
-                assert_eq!(changed, converts, "{pt} points at display scale {ppp}, centre {center:?}, press at {at:?}");
+                assert_eq!(changed, converts, "{px} px at display scale {ppp}, centre {center:?}, press at {at:?}");
                 assert_eq!(steps(&app), n + usize::from(converts));
             }
         }
