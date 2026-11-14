@@ -1068,9 +1068,6 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document")?;
-    if d.doc.selection.is_none() {
-        return Err("no selection".into());
-    }
     let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
     if matches!(l.content, LayerContent::Raster(_)) { Ok(()) } else { Err("active layer is not a pixel layer".into()) }
 }
@@ -1082,30 +1079,31 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.defineFromSelection";
     let name = name_param(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(cmd, "no selection"))?;
+    let sel = d.doc.selection.as_ref();
     let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
     let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad(cmd, "not a pixel layer"))?;
-    let area = sel.content_bounds().intersect(&d.doc.bounds());
+    let area = sel.map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
     if area.is_empty() {
         return Err(bad(cmd, "the selection is empty"));
     }
     // Paint amount = darkness × alpha × selection (black = full paint, like Photoshop).
     let (w, h) = (area.width() as usize, area.height() as usize);
-    // The sampled tip is one f32 buffer over the whole selection; a large selection must fail
+    // The sampled tip is one f32 buffer over the source area; a large area must fail
     // gracefully instead of aborting the process on allocation, so reserve it fallibly. The
     // multiply is checked too: on a 32-bit target (wasm32) it can overflow where the rest of
     // this command is already fallible.
     let len = w.checked_mul(h).ok_or_else(|| crate::allocation::error("defining a brush from the selection", "requested size overflowed"))?;
     let mut v = crate::allocation::filled(len, 0.0, "defining a brush from the selection")?;
-    let sc = sel.channels();
-    // The selection mask is a second buffer of the same size; it must fail gracefully too
+    let sc = sel.map_or(1, |sel| sel.channels());
+    // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
-    let sv = crate::allocation::read_region(sel, area, "defining a brush from the selection")?;
+    let sv = sel.map(|sel| crate::allocation::read_region(sel, area, "defining a brush from the selection")).transpose()?;
     for y in 0..h {
         for x in 0..w {
             let c = surf.rgba(area.x0 + x as i32, area.y0 + y as i32);
             let l = photocraft_color::blend::lum([c[0], c[1], c[2]]);
-            v[y * w + x] = ((1.0 - l) * c[3] * sv[(y * w + x) * sc]).clamp(0.0, 1.0);
+            let selected = sv.as_ref().map_or(1.0, |sv| sv[(y * w + x) * sc]);
+            v[y * w + x] = ((1.0 - l) * c[3] * selected).clamp(0.0, 1.0);
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
@@ -1489,3 +1487,6 @@ mod mixer_live_tests;
 #[cfg(test)]
 #[path = "color_replacement_history_name_tests.rs"]
 mod color_replacement_history_name_tests;
+
+#[cfg(test)]
+mod define_brush_no_selection_tests;
