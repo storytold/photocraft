@@ -87,6 +87,8 @@ pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
     let doc = app.session.active().map(|st| st.doc.id);
     if pending(app) && app.pcrop.doc.is_some() && app.pcrop.doc != doc {
         cancel(app);
+        // The "Crop the image?" prompt asked about that quad: it goes with it.
+        app.ui.dialogs.retain(|d| !owns_switch(&d.fields));
     }
     app.pcrop.doc = doc;
 }
