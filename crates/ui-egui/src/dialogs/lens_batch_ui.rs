@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 pub(crate) const COMMAND: &str = photocraft_engine::lens_cmds::LENS_BATCH;
 
-const FORMATS: [(&str, &str); 5] = [("same", "Same"), ("png", "Png"), ("jpg", "Jpg"), ("psd", "Psd"), ("tiff", "Tiff")];
+const FORMATS: [(&str, &str); 4] = [("jpg", "JPG"), ("png", "PNG"), ("psd", "PSD"), ("tiff", "TIFF")];
 const PROFILES: [(&str, &str); 3] = [("auto", "Auto"), ("generic", "Generic"), ("none", "None")];
 const EDGES: [(&str, &str); 4] = [("edgeExtension", "Edge Extension"), ("transparency", "Transparency"), ("black", "Black Color"), ("white", "White Color")];
 
@@ -22,7 +22,7 @@ pub(crate) fn choices() -> Value {
 /// What a field the form lacks, or holds with another type (`ui.dialog.set` with `null`), becomes:
 /// the dialog's defaults, with empty folders.
 fn fallback() -> Value {
-    json!({"input": "", "output": "", "format": "same", "profile": "auto", "correctDistortion": true, "correctVignette": true, "correctCA": true, "autoScale": true, "edge": "transparency"})
+    json!({"input": "", "output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
 }
 
 /// Whether `f` is the batch Lens Correction form.
