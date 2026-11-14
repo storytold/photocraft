@@ -97,9 +97,11 @@ in `ci.yml`. Build option: `docs/development.md` › Fonts.
   is signed first, then the bundle. There's no `--deep` on the final signature. The
   entitlements (`entitlements.plist`) are deliberately empty.
 - **Notarization:** the app is zipped and sent with `xcrun notarytool submit --wait`, then the
-  ticket is stapled to the app. The app goes on a DMG (`hdiutil`, with an `Applications` link
-  to drag onto). The DMG is signed, notarized and stapled too. The script checks the results
-  with `codesign --verify --strict`, `stapler validate` and `spctl -a -vvv`.
+  ticket is stapled to the app. The app goes on a DMG (`hdiutil create`, with an `Applications`
+  link to drag onto). The DMG is signed, notarized and stapled too. The script checks the results
+  with `codesign --verify --strict`, `stapler validate` and `spctl -a -vvv`, and mounts the signed
+  DMG to check the app in it, and a copy installed from it, with `codesign --verify --strict --deep`
+  (an image made with `makehybrid` failed that, #3034; `packaging/macos/dmg-test.sh` tests it).
   Its Finder window (background, icon size and positions) comes from
   [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `PhotoCraft`
   without the version, which the window's background needs; the DMG file name keeps the version.
@@ -117,7 +119,8 @@ in `ci.yml`. Build option: `docs/development.md` › Fonts.
   architectures, the hardened runtime flag, a `Developer ID Application` authority from
   `APPLE_TEAM_ID`, a timestamp, and `spctl --assess --type install` reporting
   `source=Notarized Developer ID` (the same online lookup Gatekeeper does). For the DMG it runs
-  `codesign --verify`, `stapler validate` and `spctl --type open`. The release workflow runs it
+  `codesign --verify`, `stapler validate` and `spctl --type open`, and checks the app in it, and a
+  copy installed from it, with `codesign --verify --strict --deep`. The release workflow runs it
   as its own step after packaging. With signing secrets it fails the job on any miss; without
   them it only checks signature integrity and warns, like `package.sh`. Run it locally after a
   build: `packaging/macos/verify.sh --arch aarch64`.
