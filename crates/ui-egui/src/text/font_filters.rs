@@ -178,14 +178,16 @@ pub(crate) fn class_list(ui: &mut egui::Ui, filters: &mut FontFilters) -> bool {
     let before = filters.class;
     ui.vertical(|ui| {
         ui.set_width(CLASS_COLUMN_WIDTH);
-        if ui.add(egui::Button::selectable(filters.class.is_none(), tl!("All Classes")).truncate()).clicked() {
-            filters.class = None;
-        }
-        for class in FontClass::ALL {
-            if ui.add(egui::Button::selectable(filters.class == Some(class), class_label(class)).truncate()).clicked() {
-                filters.class = Some(class);
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            if ui.add(egui::Button::selectable(filters.class.is_none(), tl!("All Classes")).truncate()).clicked() {
+                filters.class = None;
             }
-        }
+            for class in FontClass::ALL {
+                if ui.add(egui::Button::selectable(filters.class == Some(class), class_label(class)).truncate()).clicked() {
+                    filters.class = Some(class);
+                }
+            }
+        });
     });
     filters.class != before
 }
