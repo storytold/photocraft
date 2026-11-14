@@ -229,14 +229,17 @@ pub(crate) fn sample_target_cursor(painter: &egui::Painter, p: Pos2) -> egui::Cu
 /// Precise Other Cursors keeps the plain crosshair. Draws it at `p` and returns the OS cursor to
 /// set.
 pub(crate) fn object_selection_cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {
-    if precise_other_cursor(app) {
+    // The plain crosshair stays wherever Other Cursors is Precise or Caps Lock is on, as it was
+    // before this cursor existed: Caps Lock was not measured for it (#12865).
+    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise || app.caps_lock {
         return egui::CursorIcon::Crosshair;
     }
     super::tool_cursor::outline(painter, p, object_selection_rings(), false)
 }
 
 /// [`object_selection_cursor`]'s strokes around the hotspot: the four crosshair arms, then the
-/// dotted rectangle (x 4–12, y 4–10) as dashes 2 points long with 1 point gaps.
+/// dotted rectangle (x 4–12, y 4–10) as dots 1 point long with 2 point gaps: the cursor is drawn
+/// with a light stroke 1 point wide, so shorter gaps close up in the bitmap.
 pub(crate) fn object_selection_rings() -> Vec<Vec<egui::Vec2>> {
     let mut rings = vec![vec![vec2(-8.0, 0.0), vec2(8.0, 0.0)], vec![vec2(0.0, -8.0), vec2(0.0, 8.0)]];
     let (x0, y0, x1, y1) = (4.0f32, 4.0f32, 12.0f32, 10.0f32);
@@ -245,7 +248,7 @@ pub(crate) fn object_selection_rings() -> Vec<Vec<egui::Vec2>> {
         let dir = (b - a) / len;
         let mut t = 0.0;
         while t < len {
-            rings.push(vec![a + dir * t, a + dir * (t + 2.0).min(len)]);
+            rings.push(vec![a + dir * t, a + dir * (t + 1.0).min(len)]);
             t += 3.0;
         }
     };

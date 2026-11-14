@@ -101,3 +101,37 @@ fn precise_other_cursors_keep_the_plain_crosshair() {
     assert_eq!(cursor(&h), cursor(&marquee));
     assert_eq!(cursor(&h).0, CursorIcon::Crosshair);
 }
+
+/// CodeRabbit on #14675: the dotted rectangle has visible gaps once rasterized. Along its top edge
+/// (y 4, x 4 to 12) the light stroke must come and go, not run unbroken.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_dotted_rectangle_has_gaps_in_the_bitmap() {
+    let h = harness(Tool::ObjectSelection);
+    let (_, image) = cursor(&h);
+    let (size, [hx, hy], rgba) = image.expect("Object Selection's OS cursor bitmap");
+    let w = usize::from(size[0]);
+    let (hx, hy) = (usize::from(hx), usize::from(hy));
+    let scale = (size[0] as f32 / 30.0).max(1.0);
+    let at = |d: f32| (d * scale).round() as usize;
+    // A light (white-ish, nearly opaque) pixel; the dark halo alone is black and translucent.
+    let light = |x: usize, y: usize| rgba.get((y * w + x) * 4..(y * w + x) * 4 + 4).is_some_and(|p| p[0] > 200 && p[3] > 200);
+    let row: Vec<bool> = (at(4.0)..=at(12.0)).map(|dx| (at(4.0).saturating_sub(1)..=at(4.0) + 1).any(|dy| light(hx + dx, hy + dy))).collect();
+    let runs = row.windows(2).filter(|p| !p[0] && p[1]).count() + usize::from(row[0]);
+    assert!(runs >= 2, "the top edge shows separate dots, got {row:?}");
+}
+
+/// CodeRabbit on #14675: with Other Cursors Precise and Caps Lock on, the cursor was the plain
+/// crosshair before this change and stays it (Caps Lock was not measured).
+#[test]
+fn precise_other_cursors_with_caps_lock_keep_the_plain_crosshair() {
+    let mut h = harness(Tool::ObjectSelection);
+    let mut marquee = harness(Tool::RectMarquee);
+    for h in [&mut h, &mut marquee] {
+        set_pref(h, "cursors.other", json!("precise"));
+        h.state_mut().caps_lock = true;
+        h.run_steps(2);
+    }
+    assert_eq!(cursor(&h).0, CursorIcon::Crosshair);
+    assert_eq!(cursor(&h), cursor(&marquee));
+}
