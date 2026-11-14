@@ -1293,7 +1293,7 @@ fn layer_export_as_prepares_and_writes_in_the_background() {
     let path = "/tmp/photocraft-test/layer.png";
     let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
     let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
-    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
     h.state_mut().services.save_file = Some(gates.save(None));
     let ctx = h.ctx.clone();
     let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
@@ -1302,8 +1302,33 @@ fn layer_export_as_prepares_and_writes_in_the_background() {
     let fields = h.state().ui.dialogs.last().expect("the dialog opens once the layer is ready").fields.clone();
     assert!(fields.contains_key("__layer"));
     crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    // Encoding waits on its gate: a window close meanwhile waits for the export.
+    step_until(&mut h, PhotocraftApp::exporting);
+    assert!(h.state().exporting(), "a close waits while the export writes");
+    gates.encode.store(true, Ordering::Relaxed);
     step_until(&mut h, |a| a.ui.status.starts_with("Exported"));
+    assert!(!h.state().exporting());
     assert_eq!(gates.written(), [path], "written by the worker save");
     assert!(h.state().ui.status.starts_with(&format!("Exported {path}")), "{}", h.state().ui.status);
     assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
+}
+
+/// Without background jobs Export As composites and writes on this thread, as before, and lets
+/// go of the layer it composited before writing: nothing keeps it (gigabytes for a storyboard).
+#[test]
+fn layer_export_as_without_jobs_keeps_no_composite() {
+    let path = "/tmp/photocraft-test/sync.png";
+    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
+    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    h.state_mut().background_jobs = false;
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert!(r.get("dialog").is_some(), "opened at once: {r}");
+    let st = h.state().session.active().unwrap();
+    let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
+    let fields = h.state().ui.dialogs.last().unwrap().fields.clone();
+    // No exporter in these services: the write fails, after the composite was let go.
+    let _ = crate::export_dialog::confirm(h.state_mut(), &fields);
+    h.run_steps(4);
+    assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go before writing");
 }

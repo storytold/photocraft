@@ -1720,3 +1720,16 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A job that writes several files commits before each and ends that commit after it: a cancel
+/// is refused while a file is being replaced and accepted again before the next one.
+#[test]
+fn ending_a_commit_lets_a_cancel_stop_the_job_again() {
+    let ctx = JobCtx::new();
+    ctx.commit().unwrap();
+    assert!(!ctx.try_cancel(), "a file is being replaced: no cancel");
+    ctx.end_commit();
+    assert!(!ctx.committed());
+    assert!(ctx.try_cancel(), "between files a cancel stops the job");
+    assert!(ctx.check().is_err() && ctx.commit().is_err(), "and the next file is never started");
+}

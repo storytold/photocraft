@@ -198,6 +198,13 @@ impl JobCtx {
             .map_err(|_| EngineError::Cancelled)
     }
 
+    /// The irreversible step [`Self::commit`] guarded is done (one file of several written): a
+    /// cancel can stop the job again, before the next one. A job that writes several files
+    /// commits and ends a commit for each.
+    pub fn end_commit(&self) {
+        self.shared.state.fetch_and(!COMMITTED, Ordering::AcqRel);
+    }
+
     /// Has the job passed [`Self::commit`]?
     pub fn committed(&self) -> bool {
         self.shared.state.load(Ordering::Acquire) & COMMITTED != 0

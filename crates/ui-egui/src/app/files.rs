@@ -792,6 +792,11 @@ impl PhotocraftApp {
         self.session.jobs().iter().any(|j| matches!(j.command.as_str(), "file.print" | "file.printOneCopy"))
     }
 
+    /// Export As is writing files in the background (`export_dialog::EXPORT_JOB`).
+    pub(crate) fn exporting(&self) -> bool {
+        self.session.jobs().iter().any(|j| j.command == crate::export_dialog::EXPORT_JOB)
+    }
+
     /// A save is running in the background.
     pub(crate) fn saving(&self) -> bool {
         !self.jobs.saves.is_empty()
