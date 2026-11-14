@@ -454,6 +454,9 @@ what an agent can't finish alone.
 ## Localization gaps
 
 ### G13. Hindi, Arabic, Vietnamese, RTL and engine messages
+- **Progress (2026-11-11):** Mongolian Cyrillic registration and locale/switching/glyph tests
+  are prepared against shared catalogs. Catalog merge/pin and native review remain pending.
+  This does not close G13 or change estimates ([notes](localization-mn.md)).
 - **Missing:** catalogs for Hindi, Arabic and Vietnamese (3 of the 12 key languages); right-to-
   left UI layout; Devanagari fallback fonts (Thai #1909 and Khmer, Lao and Myanmar #3259 landed); engine error and status messages in
   English in every language; browser-locale detection and CJK fonts on the web; Japanese IME on
@@ -494,6 +497,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Mongolian Cyrillic registration prepared; shared catalog merge/pin and native review pending; estimates unchanged |
 | 2026-11-08 | minor | G9: Units & Rulers › Column Size takes effect as the Columns width unit of Image Size and Canvas Size (#6214); preferences that do nothing 10 → 8 of 199 |
 | 2026-10-27 | minor | G5: Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it after the presets, five handles set its silhouettes, edges, ellipse depths and wrap as in the reference (Bend, H and V stay greyed), and a smart object's stored cylinder opens in Warp mode as a cylinder and commits back as one; no estimate changed |
 | 2026-11-07 | minor | G14: Hasselblad 3FR/FFF, the X2D II 100C's uncompressed CFA, decodes; compressed 3FR still opens as the embedded preview |

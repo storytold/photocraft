@@ -87,12 +87,13 @@ pub fn dir_for_code(code: &str) -> Dir {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The registry. English first: it is the fallback and the source language. Plural forms follow
 /// each language's CLDR rules (the craft-i18n crate).
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     LangInfo { code: "en", complete_menus: false },
+    LangInfo { code: "mn", complete_menus: false },
     LangInfo { code: "ja", complete_menus: true },
     LangInfo { code: "zh-hans", complete_menus: true },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`

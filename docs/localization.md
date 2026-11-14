@@ -13,6 +13,7 @@ the commit in `craft-i18n.rev`; without it PhotoCraft builds and runs in English
 | Language | Preference code | Integer plural forms (CLDR) |
 |---|---|---|
 | English | `en` | one / other |
+| Монгол | `mn` | one / other (both use the same counted noun) |
 | 简体中文 | `zh-hans` | one form |
 | 日本語 | `ja` | one form |
 | 한국어 | `ko` | one form |
@@ -63,6 +64,11 @@ automation command IDs and user-provided document, layer and preset names.
 UI search and access-key comparisons use locale-aware dotted/dotless I rules for Azerbaijani
 and Turkish. English command aliases remain searchable using English casing. See the
 [Azerbaijani case-conversion audit](localization-az.md#ui-case-conversion-audit-2026-11-06).
+
+Mongolian Cyrillic (`mn`) is registered as **Монгол** when its shared catalogs are embedded.
+`mn-MN`, `mn-Cyrl-MN` and POSIX `mn_MN.UTF-8` resolve through the existing matcher.
+The catalogs are contributed separately to craft-i18n; the pin must reach that contribution
+before official builds can offer the language. See [Mongolian notes](localization-mn.md).
 
 ## Switch without restarting
 

@@ -350,5 +350,7 @@ sync_github_name = false
 display_name = "Tsieg"
 sync_github_name = true
 
+[people.bayarra]
+sync_github_name = true
 [people.slafebre]
 real_name = "Sven Lafebre"
