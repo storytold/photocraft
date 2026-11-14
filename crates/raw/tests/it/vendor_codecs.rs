@@ -144,7 +144,9 @@ fn craw_without_a_black_level_tag_reads_black_from_the_tone_curve() {
 fn rw2_round_trip_12_and_14_bit() {
     for (bits, w, h) in [(12u32, 120usize, 300usize), (14, 117, 260)] {
         let max = (1u16 << bits) - 1;
-        let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 128, max);
+        // Uniformly exercise the entire declared code range, without a sensor
+        // saturation plateau that would intentionally infer a lower white level.
+        let data: Vec<u16> = (0..w * h).map(|i| ((i * 23 + 191) % (usize::from(max) + 1)) as u16).collect();
         let b = rw2(w, h, &data, bits);
         assert!(b.len() > 3 * 0x4000, "spans several pages");
         assert_eq!(identify(&b), Some(RawFormat::Rw2));
@@ -158,6 +160,36 @@ fn rw2_round_trip_12_and_14_bit() {
         assert_eq!(s.crop, Rect::new(2, 2, w - 4, h - 4));
         let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
         assert_eq!((d.width as usize, d.height as usize), (w - 4, h - 4));
+    }
+}
+
+/// Keep the original smooth scene as a separate source-preservation control: its plateau is
+/// intentionally different from the uniform full-range samples in the packing regression above.
+#[test]
+fn rw2_scene_preserves_samples_and_infers_white_independently_of_linearity_tags() {
+    // The known active scene gives no accepted 12-bit plateau. At 14 bits, its top-band
+    // boundary is 12790 (maximum 12840, 50-code band), independently of decoded output.
+    for (bits, w, h, white) in [(12u32, 120usize, 300usize, 4095.0), (14, 117, 260, 12790.0)] {
+        let max = (1u16 << bits) - 1;
+        let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 128, max);
+        let bytes = rw2(w, h, &data, bits);
+        let sensor = decode(&bytes, &Limits::default()).unwrap();
+        assert_eq!((sensor.width, sensor.height), (w, h));
+        assert_eq!(sensor.data, data, "{bits}-bit scene samples are not lifted or quantized");
+        assert_eq!(sensor.white, [white; 3]);
+        assert_eq!(sensor.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
+        assert_eq!(sensor.black.values, vec![128.0, 129.0, 129.0, 130.0]);
+        assert_eq!(sensor.camera_wb, Some([2.0, 1.0, 1.5]));
+        assert_eq!(sensor.crop, Rect::new(2, 2, w - 4, h - 4));
+        // These standard tags are nominal linearity limits; craft-raw's documented
+        // policy infers white from active samples instead, including extended low ISO.
+        let mut lower_nominal = bytes.clone();
+        for tag in [0x000E, 0x000F, 0x0010] {
+            patch_ifd0_short(&mut lower_nominal, tag, max / 2);
+        }
+        let lower = decode(&lower_nominal, &Limits::default()).unwrap();
+        assert_eq!(lower.data, data);
+        assert_eq!(lower.white, [white; 3], "nominal linearity does not replace the scene-derived white");
     }
 }
 
@@ -196,7 +228,10 @@ fn rw2_format4_round_trip_is_exact() {
     assert_eq!(s.white, [4095.0; 3]);
     assert_eq!(s.camera_wb, Some([2.0, 1.0, 1.5]));
     assert_eq!(s.crop, Rect::new(2, 2, w - 4, h - 4));
-    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    // The decoded white is the full-range fallback. Keep every other decoder
+    // disclosure unexpected while preserving exact samples, CFA, levels and crop.
+    assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+    assert!(s.warnings[0].contains("white level") && s.warnings[0].contains("full sample range"), "{:?}", s.warnings);
     let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
     assert_eq!((d.width as usize, d.height as usize), (w - 4, h - 4));
 }
@@ -217,12 +252,14 @@ fn rw2_format4_crosses_pages() {
 }
 
 #[test]
-fn rw2_format4_rejects_other_block_widths() {
+fn rw2_format4_preserves_samples_with_a_partial_final_block() {
     let (w, h) = (42, 2);
     let data: Vec<u16> = (0..w * h).map(|i| 200 + (i % 14) as u16 * 3).collect();
     let mut b = rw2_format4(w, h, &data);
     patch_ifd0_short(&mut b, 0x0002, 41);
-    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Unsupported(_))));
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!((s.width, s.height), (41, h));
+    assert_eq!(s.data, data[..41 * h]);
 }
 
 #[test]
@@ -230,15 +267,17 @@ fn rw2_undecoded_formats_fall_back() {
     let data = vec![200u16; 20 * 4];
     let mut b = rw2(20, 4, &data, 12);
     assert!(decode(&b, &Limits::default()).is_ok());
-    patch_ifd0_short(&mut b, 0x002D, 6);
+    patch_ifd0_short(&mut b, 0x002D, 9);
     match decode(&b, &Limits::default()) {
-        Err(RawError::Unsupported(m)) => assert!(m.contains("raw format 6"), "{m}"),
+        Err(RawError::Unsupported(m)) => assert!(m.contains("raw format 9"), "{m}"),
         other => panic!("expected unsupported, got {other:?}"),
     }
-    // Width not made of whole blocks.
+    // The stream is continuous: a final partial block keeps exactly the declared samples.
     let mut b = rw2(20, 4, &data, 12);
     patch_ifd0_short(&mut b, 0x0002, 19);
-    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Unsupported(_))));
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!((s.width, s.height), (19, 4));
+    assert_eq!(s.data, data[..19 * 4]);
     // Sizes beyond the limits are refused before allocating.
     let mut b = rw2(20, 4, &data, 12);
     patch_ifd0_short(&mut b, 0x0003, 60000);
@@ -259,7 +298,10 @@ fn orf_uncompressed_round_trip() {
     assert_eq!(s.white, [4095.0; 3]);
     assert_eq!(s.camera_wb, Some([2.0, 1.0, 1.5]));
     assert_eq!(s.crop, Rect::new(2, 2, w - 4, h - 4));
-    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    // The decoded white is the full-range fallback. Keep every other decoder
+    // disclosure unexpected while preserving exact samples, CFA, levels and crop.
+    assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+    assert!(s.warnings[0].contains("white level") && s.warnings[0].contains("full sample range"), "{:?}", s.warnings);
     assert!(develop_sensor(&s, &DevelopOptions::default()).is_ok());
     // The maker-note preview is found too (used when the data is compressed).
     assert!(embedded_preview(&b).is_some());
