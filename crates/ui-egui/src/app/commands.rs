@@ -66,9 +66,20 @@ impl PhotocraftApp {
         // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a
         // command that can run; a transform refused or still being applied keeps the box open and
         // the command doesn't run.
-        if photocraft_engine::PRECHECKED.contains(&id) && self.ui.transform.is_some() {
-            // Bad params or a command that can't run leave the box as it is.
-            self.session.precheck(id, &params).map_err(|e| e.to_string())?;
+        // The clipboard commands join them: they read the document's pixels, and the reference
+        // application transforms the layer as the box is dragged, so the copy it takes is the
+        // transformed one. PhotoCraft applies the transform when the box is committed, so a copy
+        // taken before that held the untransformed layer and the pasted one came out at the old
+        // size.
+        if self.ui.transform.is_some() && (photocraft_engine::PRECHECKED.contains(&id) || transform_tool::reads_the_pixels(id)) {
+            let prechecked = photocraft_engine::PRECHECKED.contains(&id);
+            // Bad params or a command that can't run leave the box as it is. The clipboard
+            // commands aren't prechecked: their precheck isn't complete (whether they have
+            // anything to copy is known only when they run), so their own failure is what the
+            // user sees, as for Layer via Copy and Cut.
+            if prechecked {
+                self.session.precheck(id, &params).map_err(|e| e.to_string())?;
+            }
             transform_tool::commit(self);
             if transform_tool::committing(self).is_some() {
                 // A click stays a click: it runs when the commit lands (#9974). Only a click in the
