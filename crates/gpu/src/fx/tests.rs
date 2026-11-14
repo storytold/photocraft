@@ -317,3 +317,80 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!((bands[0].y0, bands[0].y1, bands[1].y1), (i32::MAX - 100, i32::MAX - 36, i32::MAX));
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
+
+/// #11949: the GPU blurs a Softer outer glow with Photoshop's whole-width tent
+/// (`glow_tent_kernel`), as the CPU's `glow_map` does, and an inner glow and a drop shadow with the
+/// shared `tent_kernel`; the two differ at even sizes only.
+#[test]
+fn softer_outer_glow_blurs_with_the_glow_tent() {
+    use photocraft_compose::effects::{glow_tent_kernel, tent_kernel};
+    use photocraft_doc::{FxPaint, GlowSource, GlowTechnique};
+    let light = GlobalLight::default();
+    let weights = |p: &MapProgram| -> Vec<Vec<f32>> {
+        p.stages.iter().filter(|s| s.kernel == crate::plan::Kernel::MBlur).filter_map(|s| s.lut.as_ref().map(|w| w.to_vec())).collect()
+    };
+    for size in [3.0f32, 4.0, 7.0, 10.0] {
+        let g = photocraft_doc::Glow {
+            common: FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        };
+        let outer = weights(&program(&Effect::OuterGlow(g.clone()), &light, false));
+        assert_eq!(outer, vec![glow_tent_kernel(size).1; 2], "outer glow size {size}");
+        if size == 10.0 {
+            // With spread, the dilation runs first and the blur sees the remaining
+            // width (10 x (1 - 0.4) = 6, even): that kernel is the glow tent too,
+            // not the shared tent (#12305 review).
+            let mut spread_glow = g.clone();
+            spread_glow.spread = 0.4;
+            let outer = weights(&program(&Effect::OuterGlow(spread_glow), &light, false));
+            assert_eq!(outer, vec![glow_tent_kernel(6.0).1; 2], "outer glow with spread");
+            // A spread whose product is fractional leaves a whole width too (#12305, measured):
+            // 10 x 15 % = 1.5 dilates by 2 and blurs over 8, not 8.5, so the even-width glow
+            // tent is chosen (the earlier split handed the shared tent 8.5).
+            let mut half_glow = g.clone();
+            half_glow.spread = 0.15;
+            let outer = weights(&program(&Effect::OuterGlow(half_glow), &light, false));
+            assert_eq!(outer, vec![glow_tent_kernel(8.0).1; 2], "outer glow, spread 15 %");
+            // A fractional size is cut down to whole pixels: 9.6 blurs over 9.
+            let mut frac = g.clone();
+            frac.size = 9.6;
+            let outer = weights(&program(&Effect::OuterGlow(frac), &light, false));
+            assert_eq!(outer, vec![glow_tent_kernel(9.0).1; 2], "outer glow, size 9.6");
+            // #12305 review (CodeRabbit's scope check): the whole-pixel split is the outer glow's
+            // only. Drop and inner shadow spread and the inner glow's choke keep the earlier fitted
+            // split, as on the CPU: 15 % of 10 dilates by 2 and blurs over 10 x 0.85 = 8.5 with the
+            // shared tent. Regression property: given the whole-pixel split they would blur over 8,
+            // a different kernel, and fail here.
+            let fitted = tent_kernel(10.0 * (1.0 - 0.15f32)).1;
+            assert_ne!(fitted, tent_kernel(8.0).1, "the two splits pick different kernels here");
+            let mut choke = g.clone();
+            choke.spread = 0.15;
+            let inner = weights(&program(&Effect::InnerGlow(choke), &light, false));
+            assert_eq!(inner, vec![fitted.clone(); 2], "inner glow, choke 15 %");
+            let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+            s.size = 10.0;
+            s.spread = 0.15;
+            let drop = weights(&program(&Effect::DropShadow(s.clone()), &light, false));
+            assert_eq!(drop, vec![fitted.clone(); 2], "drop shadow, spread 15 %");
+            let inner_shadow = weights(&program(&Effect::InnerShadow(s), &light, false));
+            assert_eq!(inner_shadow, vec![fitted; 2], "inner shadow, choke 15 %");
+        }
+        let inner = weights(&program(&Effect::InnerGlow(g), &light, false));
+        assert_eq!(inner, vec![tent_kernel(size).1; 2], "inner glow size {size}");
+        let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
+        s.size = size;
+        s.spread = 0.0;
+        let shadow = weights(&program(&Effect::DropShadow(s), &light, false));
+        assert_eq!(shadow, vec![tent_kernel(size).1; 2], "drop shadow size {size}");
+        assert_eq!(outer == inner, size % 2.0 == 1.0, "size {size}");
+    }
+}

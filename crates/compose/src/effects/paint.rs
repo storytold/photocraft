@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate};
+use super::blur::{blur, dilate, glow_blur};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -36,6 +36,119 @@ pub(super) fn lut_at(l: &[f32], v: f32) -> f32 {
 pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
     ranged_lut(&g.contour, g.range)
 }
+
+/// The coverage transfer a glow paints through (CPU `glow_map` and the GPU's `MFinish` stage
+/// alike): [`glow_lut`], and for an outer glow with a custom contour, capped by the glow's
+/// anti-aliased reach (#11361).
+///
+/// The contour remaps the falloff only within the glow's reach. Run through `glow_lut` alone,
+/// a contour that starts above 0 (Photoshop's flat "always 100 %" one, `(0,1)–(1,1)`) also
+/// lights every pixel the glow never reaches (coverage 0), out to the edge of the effect's
+/// rectangle. Here coverage `v` is also turned into how much of the pixel the reach covers
+/// (`glow_reach_edge`, 0 at and beyond the reach, rising to 1 inside it), and the transfer is
+/// `min(contour(u), max(edge, u))`, with `u = min(v / range, 1)` what a Linear contour paints.
+/// The edge is linear in `v` from 0 until it reaches 1 (`glow_edge_per_coverage`), so the
+/// table's linear interpolation follows it, its first step from entry 0 included (the knee is
+/// rounded down to a table entry for both techniques); the coverage where it reaches 1 is per
+/// technique:
+///
+/// - Precise: the falloff is linear in distance, so the edge is the distance left to the reach's
+///   end: the last pixel steps down by how far inside the reach its centre is (one soft pixel,
+///   as Photoshop's flat-contour band).
+/// - Softer: a fixed coverage, `SOFTER_FULL_COVERAGE` (0.12), whatever the size (#11651).
+///   Measured in Photoshop 2021 (flat contour, Range 50 %, spread 0, sizes 2–10): the band fades
+///   over several pixels at its outer edge and a single pixel's glow stays faint, and every
+///   measured pixel, along a straight edge or out from a 1 px dot, is `min(1, v / 0.12)` within
+///   one level, with `v` the coverage of Photoshop's tent (two integer-width boxes, taps
+///   `(w − |i|) / w²`; the Linear control row is exactly `2v` of it). That is 25/6 ≈ 4.17× the
+///   Linear glow at Range 50 % (the reporter's "roughly 4×": exactly 4× reads 5–9 levels low on
+///   every soft pixel). The outer glow is blurred with that tent at every whole width
+///   (`glow_tent_kernel`, #11949): the shared blur's half-weight end taps at even widths added
+///   `1 / (4w²)` to the coverage, 33 levels on size 4's soft pixel; see
+///   `softer_flat_contour_glow_matches_photoshop`.
+///
+/// So:
+///
+/// - coverage 0 always paints 0, for any contour (nothing beyond the reach);
+/// - a high contour is solid up to the edge's knee, then follows it down: one soft pixel for
+///   Precise, a fade over the outer pixels for Softer;
+/// - the reach cap is never below the Linear contour, so a contour that already follows or
+///   stays under the falloff (Linear, or a custom curve with `contour(0) = 0` rising no faster
+///   than the reach edge) is unchanged. The reach does not depend on Range: Range stretches the
+///   contour over the falloff, the falloff still ends where it ends.
+///
+/// Measured: the flat contour at Range 50 % (both techniques). Modelled: the `min` with other
+/// contours (a contour that is high but not flat could equally be scaled by the edge; only a
+/// mid-level flat contour can tell the two apart), other Ranges (the Softer knee is taken in
+/// coverage, so it does not move with Range), Softer spread and sizes over 10 px.
+///
+/// Inner glows keep `glow_lut` (`inner`): their unreached pixels are the shape's interior, where
+/// Photoshop's behaviour with a high contour is unmeasured. `None` = identity.
+pub fn glow_paint_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
+    let lut = glow_lut(g);
+    if inner || matches!(g.contour, Contour::Linear) {
+        return lut;
+    }
+    let lut = lut?;
+    let range = if g.range.is_finite() { g.range.clamp(0.01, 1.0) } else { 1.0 };
+    let per_coverage = glow_edge_per_coverage(g);
+    // The GPU samples a 4096-entry table (`compose.wgsl` `lut`), as `ranged_lut` builds.
+    Some(
+        (0..GLOW_LUT_LEN)
+            .map(|k| {
+                let v = k as f32 / (GLOW_LUT_LEN - 1) as f32;
+                let c = lut_at(&lut, v);
+                let linear = (v / range).min(1.0);
+                c.min(glow_reach_edge(per_coverage, v).max(linear))
+            })
+            .collect(),
+    )
+}
+
+/// Entries in a glow's transfer table: the GPU's `compose.wgsl` `lut` reads 4096, linearly
+/// interpolated, as the CPU's [`lut_at`] does.
+const GLOW_LUT_LEN: usize = 4096;
+
+/// How much of a pixel of glow coverage `v` the glow's reach covers, 0..=1: 0 at and beyond the
+/// reach (coverage 0, whatever `per_coverage` is), else `per_coverage · v` up to 1.
+fn glow_reach_edge(per_coverage: f32, v: f32) -> f32 {
+    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    if v == 0.0 {
+        return 0.0;
+    }
+    let edge = per_coverage * v;
+    if edge.is_finite() { edge.clamp(0.0, 1.0) } else { 1.0 }
+}
+
+/// The slope of [`glow_reach_edge`]: `1 / (the coverage at which the edge reaches 1)`, that
+/// coverage rounded down to a whole table step (at least one), so the knee lands on a table entry
+/// and the table interpolates the edge exactly (rounding down only widens what paints in full).
+///
+/// - Precise: `v = ½·(1 − (d − solid) / soft)`, which reaches 0 at `d = size + 1` (centre to
+///   centre), so the distance left to the reach's end is `size + 1 − d = 2·soft·v`: full at
+///   `v = 1 / (2·soft)`.
+/// - Softer: full at [`SOFTER_FULL_COVERAGE`].
+fn glow_edge_per_coverage(g: &Glow) -> f32 {
+    let full = match g.technique {
+        GlowTechnique::Precise => {
+            let solid = g.size * g.spread;
+            0.5 / (g.size + 1.0 - solid).max(1e-3)
+        }
+        GlowTechnique::Softer => SOFTER_FULL_COVERAGE,
+    };
+    let steps = (GLOW_LUT_LEN - 1) as f32;
+    // `max` also turns a NaN (never expected) into the one-step minimum.
+    steps / (full * steps).floor().max(1.0)
+}
+
+/// The tent coverage at which a Softer outer glow's reach edge reaches full strength (#11651),
+/// the same for every size: Photoshop 2021's flat-contour Softer glow (Range 50 %) paints
+/// `min(1, v / 0.12)`. Fitted on sizes 3, 4, 6 and 10, square edge and 1 px dot alike: the
+/// square's soft pixels alone pin the gain `1 / 0.12` to 8.31–8.35 (236 at size 3, 133 at 4,
+/// 59 and 177 at 6, 21, 64, 127 and 213 at 10), and the dot rows (79, 157 at size 3; 33, 66,
+/// 100 at 4; 10 … 49 at 6) agree within a level. Rounded down to a table entry it is 491 steps,
+/// a gain of 8.340.
+const SOFTER_FULL_COVERAGE: f32 = 0.12;
 
 /// A contour applied over a Range (`contour(min(v / range, 1))`); `None` = identity.
 pub fn ranged_lut(contour: &Contour, range: f32) -> Option<Vec<f32>> {
@@ -258,10 +371,43 @@ pub(super) fn paint_color(dst: &mut Buffer, m: &Map, c: [f32; 3], blend: BlendMo
     paint(dst, m, |_| [c[0], c[1], c[2], 1.0], blend, opacity);
 }
 
-/// Spread / choke of a soft effect: (dilation radius, blur width). The dilation is whole pixels
-/// (`size × spread` rounded: a 2 % spread of a 5 px shadow doesn't grow it at all), the blur
-/// keeps `size × (1 − spread)` (ag-psd effects 10.6 → 3.8 % of pixels off).
+/// Spread of a Softer outer glow: (dilation radius, blur width), both whole pixels. The size is
+/// cut down to whole pixels first (9.6 renders as 9, 10.5 as 10), the dilation is `size × spread`
+/// rounded, half up (15 % of 10 px grows it by 2), and the blur takes the whole width left,
+/// `size − r`: the two always add up to the size, so the reach stays `size − 1` px whatever the
+/// spread (#12305, measured on a Softer outer glow, flat contour Range 50 % and Linear Range
+/// 100 %: 23 sizes and spreads within a level at every pixel; size 10, spread 15 % reads 199, 100,
+/// 33 at 7–9 px and 0 at 10, a dilation of 2 and a tent of 8, where the earlier
+/// `size × (1 − spread)` blurred over 8.5 and read 237, 134, 61, 17). The reference never blurs
+/// that glow over a fractional width, so `glow_tent_kernel` only ever sees whole ones from it.
+///
+/// This law is measured on the Softer **outer** glow only. Drop and inner shadow spread and the
+/// Softer inner glow's choke use [`fitted_spread_split`] until they are measured themselves
+/// (#12305 review: CodeRabbit's scope check asked to keep shadows on their existing split).
 pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
+    let size = size.trunc();
+    // A spread is a whole percent stored as `pct / 100` in f32, which is a hair under the percent
+    // for some values, so a product that should be exactly k + ½ can round down. The nudge is far
+    // below the 0.01 steps whole sizes and percents land on, so it only settles those halves up.
+    let r = (size * spread + SPREAD_HALF_NUDGE).round();
+    (r, size - r)
+}
+
+/// See [`spread_split`]: rounds an f32 `size × spread` that should be exactly k + ½ up, as the
+/// reference does. f32 error at the largest reach (512 px) is about 6e-5; the next value whole
+/// percents allow is 0.01 away.
+const SPREAD_HALF_NUDGE: f32 = 1e-3;
+
+/// Spread / choke of the effects nobody has measured a split for: drop shadow and inner shadow
+/// spread, and the Softer inner glow's choke. Returns (dilation radius, blur width).
+///
+/// This is the earlier fitted split, kept as it was for those effects: the dilation is whole
+/// pixels (`size × spread` rounded, so a 2 % spread of a 5 px shadow doesn't grow it at all) and
+/// the blur keeps `size × (1 − spread)`, which can be fractional (fitted on ag-psd effects: 10.6 →
+/// 3.8 % of pixels off). The whole-pixel law of [`spread_split`] is measured on the Softer outer
+/// glow only (#12305), so CodeRabbit's scope check on #12305 asked to leave these effects alone
+/// until they have their own measurements. Don't move a caller to [`spread_split`] without them.
+pub fn fitted_spread_split(size: f32, spread: f32) -> (f32, f32) {
     ((size * spread).round(), size * (1.0 - spread))
 }
 
@@ -270,7 +416,8 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     let (dx, dy) = offset(angle, s.distance);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = src.shifted(dx, dy, if inner { 1.0 } else { 0.0 });
-    let (r, bw) = spread_split(s.size, s.spread);
+    // Unmeasured with the outer glow's whole-pixel split (#12305): the earlier fitted one.
+    let (r, bw) = fitted_spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
     let mut m = apply_contour(m, &s.contour);
@@ -306,13 +453,21 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             m
         }
         GlowTechnique::Softer => {
-            let (r, bw) = spread_split(g.size, g.spread);
+            // The whole-pixel split is measured on the outer glow only (#12305); an inner glow's
+            // choke keeps the earlier fitted split.
+            let (r, bw) = if inner { fitted_spread_split(g.size, g.spread) } else { spread_split(g.size, g.spread) };
             let mut m = dilate(&src, r);
-            blur(&mut m, bw);
+            // An outer glow falls off over Photoshop's whole-width tent, which differs from the
+            // shared one at even widths (#11949); inner glows keep the shared blur (unmeasured).
+            if inner {
+                blur(&mut m, bw)
+            } else {
+                glow_blur(&mut m, bw)
+            }
             m
         }
     };
-    m = apply_lut(m, glow_lut(g));
+    m = apply_lut(m, glow_paint_lut(g, inner));
     if inner && g.source == GlowSource::Center {
         m = m.map(|v| 1.0 - v);
     }
