@@ -1,6 +1,6 @@
 use super::*;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 
 const COMMAND: &str = "image.adjustments.colorBalance";
 
