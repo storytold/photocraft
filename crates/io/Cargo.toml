@@ -50,7 +50,7 @@ flate2 = { workspace = true }
 # xml.rs parses XML behind a depth guard (already in the tree through usvg).
 roxmltree = "0.21"
 # Reuse usvg's locked header reader to bound embedded SVG raster data before decoding.
-imagesize = "0.13"
+imagesize = "0.15"
 # SVG sniffing, SVGZ unpacking and the draw-memory check (craft-libs' craft-svg with its `tree` feature:
 # the usvg every Craft app shares).
 craft-svg = { workspace = true, features = ["tree"] }
@@ -70,7 +70,7 @@ kurbo = { version = "0.13", optional = true }
 resvg = { version = "0.48", default-features = false, features = ["text", "raster-images"] }
 
 [dev-dependencies]
-lopdf = { version = "0.38", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"
 craft-affinity = { workspace = true, features = ["synth"] }
