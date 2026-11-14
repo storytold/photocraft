@@ -125,13 +125,14 @@ fn mixer_live_current_layer_matches_reference_and_cancels() {
     assert_eq!(target(&s).rgba(30, 30)[3], 0.0, "clean brush must stay empty");
 }
 
-/// Sampling retains a spatial two-color load while leaving document pixels and history alone.
+/// Sampling retains a spatial two-color load while leaving document pixels alone (it adds one
+/// "Mixer Brush" history state, #11954).
 #[test]
-fn mixer_sample_is_spatial_and_never_edits_document() {
+fn mixer_sample_is_spatial_and_keeps_document_pixels() {
     let mut s = fixture(PixelFormat::RGBA8);
     let before = s.active().unwrap().doc.clone();
     s.execute("brush.mixer.sample", json!({"points":[[96,48]],"size":40,"brush":{"hardness":1.0,"pressureSize":false}})).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    assert!(*before == *s.active().unwrap().doc);
     let load = s.tools.mixer.spatial.as_ref().unwrap();
     assert_eq!(load.len(), 4096);
     assert!(load.iter().any(|p| p[0] > 0.9 && p[1] < 0.1 && p[3] > 0.9));
@@ -228,7 +229,8 @@ fn mixer_prepared_commit_uses_displayed_pixels_and_rejects_stale_documents() {
     assert!(stale.prepare_commit(&mut s).is_err());
 }
 
-/// Load and clean affect tool state without dropping a floating selection or creating document history.
+/// Load and clean affect tool state without dropping a floating selection or creating document
+/// history (a sample drops it: `mixer_alt_click_history_tests`, #11954).
 #[test]
 fn mixer_load_commands_preserve_floating_selection_and_history() {
     let mut s = fixture(PixelFormat::RGBA8);
@@ -236,8 +238,7 @@ fn mixer_load_commands_preserve_floating_selection_and_history() {
     s.execute("select.float", json!({"dx":8,"dy":0,"copy":true})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let steps = s.active().unwrap().history.past_len();
-    for (command, params) in [("brush.mixer.sample", json!({"points":[[96,48]],"size":24})), ("brush.mixer.load", json!({})), ("brush.mixer.clean", json!({}))]
-    {
+    for (command, params) in [("brush.mixer.load", json!({})), ("brush.mixer.clean", json!({}))] {
         s.execute(command, params).unwrap();
         assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
         assert_eq!(s.active().unwrap().history.past_len(), steps);
@@ -367,7 +368,7 @@ fn mixer_rotated_hard_tip_samples_safely_and_preserves_the_document() {
         assert_eq!(load.len(), 4096);
         assert!(load.iter().any(|c| c[3] == 0.0));
         assert!(load.iter().any(|c| c[0] > 0.9 && c[3] > 0.9));
-        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(*before == *s.active().unwrap().doc);
     }
 }
 

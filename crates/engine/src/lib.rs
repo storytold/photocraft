@@ -358,6 +358,8 @@ mod eraser_gray_background_tests;
 #[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
+mod mixer_alt_click_history_tests;
+#[cfg(test)]
 mod mixer_indexed_bitmap_tests;
 
 #[cfg(test)]
