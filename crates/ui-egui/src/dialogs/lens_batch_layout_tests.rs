@@ -185,14 +185,14 @@ fn alt_leaves_cancel_as_cancel_and_escape_cancels() {
     });
 }
 
-/// OK sends the params the form sent before the layout: the same keys and values.
+/// OK sends the params the form sent before the layout: the same keys.
 #[test]
 fn ok_runs_the_command_with_the_same_params() {
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let mut h = harness();
         assert_eq!(
             crate::filter_dialog::params_of(fields(&h)),
-            json!({"input": ".", "output": "./corrected", "format": "same", "profile": "auto", "correctDistortion": true, "correctVignette": true, "correctCA": true, "autoScale": true, "edge": "transparency"})
+            json!({"input": ".", "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
         );
         assert_eq!(shown(&h, "Input"), ".");
 
@@ -200,7 +200,7 @@ fn ok_runs_the_command_with_the_same_params() {
         let (input, output) = (dir.to_string_lossy().into_owned(), dir.join("out").to_string_lossy().into_owned());
         type_into(&mut h, "Input", &input);
         type_into(&mut h, "Output", &output);
-        pick(&mut h, "File Type", "Png");
+        pick(&mut h, "File Type", "PNG");
         pick(&mut h, "Profile", "None");
         pick(&mut h, "Edge", "White Color");
         for label in ["Geometric Distortion", "Chromatic Aberration", "Vignette", "Auto Scale Image"] {
@@ -209,7 +209,7 @@ fn ok_runs_the_command_with_the_same_params() {
         }
         assert_eq!(
             crate::filter_dialog::params_of(fields(&h)),
-            json!({"input": input, "output": output, "format": "png", "profile": "none", "correctDistortion": false, "correctVignette": false, "correctCA": false, "autoScale": false, "edge": "white"})
+            json!({"input": input, "output": output, "format": "png", "profile": "none", "correctDistortion": false, "correctVignette": true, "correctCA": true, "autoScale": false, "edge": "white"})
         );
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);
