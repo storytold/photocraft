@@ -1313,3 +1313,116 @@ fn style_click_does_not_mutate_document_until_confirm() {
     confirm(&mut app, &f).unwrap();
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().effects.items.len(), 1);
 }
+
+/// Alt-click splits a Blend If handle in place, as in Photoshop, so a plain drag then moves one
+/// half; Alt-click on halves that meet joins them again.
+#[test]
+fn blend_if_alt_click_splits_a_handle_in_place() {
+    use egui::{Event, Modifiers, PointerButton, Pos2};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 60.0)).build_ui_state(
+        |ui, q: &mut [u8; 4]| {
+            let id = ui.scope_id().with("bar");
+            blend_if_bar(ui, id, q);
+        },
+        [0u8, 0, 255, 255],
+    );
+    h.run_steps(2);
+    // The bar is 320 wide at the panel's 8 pt margin; its ramp is inset 6 and 12 tall, and the
+    // triangles hang under it.
+    let (left, right, y) = (8.0 + 6.0, 8.0 + 320.0 - 6.0, 8.0 + 12.0 + 6.0);
+    let x_of = |v: f32| left + (right - left) * v / 255.0;
+    let press = |h: &mut egui_kittest::Harness<'_, [u8; 4]>, x: f32, pressed: bool, modifiers: Modifiers| {
+        h.event(Event::PointerButton { pos: Pos2::new(x, y), button: PointerButton::Primary, pressed, modifiers });
+        h.run_steps(1);
+    };
+    let alt_click = |h: &mut egui_kittest::Harness<'_, [u8; 4]>, x: f32| {
+        h.event(Event::ModifiersChanged(Modifiers::ALT));
+        h.event(Event::PointerMoved(Pos2::new(x, y)));
+        h.run_steps(1);
+        press(h, x, true, Modifiers::ALT);
+        press(h, x, false, Modifiers::ALT);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(1);
+    };
+    let drag = |h: &mut egui_kittest::Harness<'_, [u8; 4]>, from: f32, to: f32| {
+        h.event(Event::PointerMoved(Pos2::new(from, y)));
+        h.run_steps(1);
+        press(h, from, true, Modifiers::NONE);
+        for i in 1..=8 {
+            h.event(Event::PointerMoved(Pos2::new(from + (to - from) * i as f32 / 8.0, y)));
+            h.run_steps(1);
+        }
+        press(h, to, false, Modifiers::NONE);
+    };
+
+    alt_click(&mut h, x_of(0.0));
+    assert_eq!(*h.state(), [0, 0, 255, 255], "a split by itself changes no value");
+    drag(&mut h, x_of(0.0) + 2.0, x_of(60.0));
+    assert_eq!(*h.state(), [0, 60, 255, 255], "a plain drag moves the black handle's right half");
+
+    alt_click(&mut h, x_of(255.0));
+    drag(&mut h, x_of(255.0) - 2.0, x_of(200.0));
+    assert_eq!(*h.state(), [0, 60, 200, 255], "and the white handle's left half");
+
+    // Bring the black halves together, join them, and they move as one again.
+    drag(&mut h, x_of(60.0) + 2.0, x_of(0.0));
+    assert_eq!(*h.state(), [0, 0, 200, 255]);
+    alt_click(&mut h, x_of(0.0));
+    drag(&mut h, x_of(0.0), x_of(30.0));
+    assert_eq!(*h.state(), [30, 30, 200, 255]);
+}
+
+/// The half a drag moves is the one pressed, even when the pointer crosses the split before egui
+/// calls it a drag.
+#[test]
+fn blend_if_drag_moves_the_pressed_half_when_it_starts_across_the_split() {
+    use egui::{Event, Modifiers, PointerButton, Pos2};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 60.0)).build_ui_state(
+        |ui, q: &mut [u8; 4]| {
+            let id = ui.scope_id().with("bar");
+            blend_if_bar(ui, id, q);
+        },
+        [80u8, 80, 255, 255],
+    );
+    h.run_steps(2);
+    let (left, right, y) = (8.0 + 6.0, 8.0 + 320.0 - 6.0, 8.0 + 12.0 + 6.0);
+    let x_of = |v: f32| left + (right - left) * v / 255.0;
+    let button = |h: &mut egui_kittest::Harness<'_, [u8; 4]>, x: f32, pressed: bool, modifiers: Modifiers| {
+        h.event(Event::PointerButton { pos: Pos2::new(x, y), button: PointerButton::Primary, pressed, modifiers });
+        h.run_steps(1);
+    };
+    let to = |h: &mut egui_kittest::Harness<'_, [u8; 4]>, x: f32| {
+        h.event(Event::PointerMoved(Pos2::new(x, y)));
+        h.run_steps(1);
+    };
+    // Split the black handle at 80.
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    to(&mut h, x_of(80.0));
+    button(&mut h, x_of(80.0), true, Modifiers::ALT);
+    button(&mut h, x_of(80.0), false, Modifiers::ALT);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    // Press its right half and jump left past the split in one move: the right half stays at
+    // 80 (it can't pass the left one), and only moves when the pointer comes back right.
+    to(&mut h, x_of(80.0) + 2.0);
+    button(&mut h, x_of(80.0) + 2.0, true, Modifiers::NONE);
+    to(&mut h, x_of(40.0));
+    assert_eq!(*h.state(), [80, 80, 255, 255], "the left half didn't move");
+    to(&mut h, x_of(120.0));
+    button(&mut h, x_of(120.0), false, Modifiers::NONE);
+    assert_eq!(*h.state(), [80, 120, 255, 255]);
+}
+
+#[test]
+fn blend_half_picks_the_nearer_half_or_the_pressed_side() {
+    let q = [0, 0, 255, 255];
+    assert_eq!(blend_half(&q, 0, 0), 1, "black at 0 can only open to the right");
+    assert_eq!(blend_half(&q, 2, 255), 2, "white at 255 can only open to the left");
+    let q = [40, 40, 200, 200];
+    assert_eq!(blend_half(&q, 0, 39), 0);
+    assert_eq!(blend_half(&q, 0, 41), 1);
+    assert_eq!(blend_half(&q, 2, 199), 2);
+    assert_eq!(blend_half(&q, 2, 201), 3);
+    let q = [10, 50, 200, 250];
+    assert_eq!(blend_half(&q, 0, 20), 0);
+    assert_eq!(blend_half(&q, 0, 45), 1);
+}
