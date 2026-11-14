@@ -283,7 +283,8 @@ pub fn to_params(adj: &Adjustment) -> Value {
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             let mut v = json!({"hue": hue, "saturation": saturation, "lightness": lightness, "colorize": colorize});
             for (key, r) in HUE_RANGES.iter().zip(ranges.iter()) {
-                v[*key] = json!({"hue": r.hue, "saturation": r.saturation, "lightness": r.lightness, "range": r.bounds});
+                let range = if r.bounds.iter().any(|&b| b >= 400.0) { r.bounds.map(|b| b - 360.0) } else { r.bounds };
+                v[*key] = json!({"hue": r.hue, "saturation": r.saturation, "lightness": r.lightness, "range": range});
             }
             v
         }
@@ -379,6 +380,19 @@ impl Reader<'_> {
         }
     }
 
+    fn num_strict(&self, key: &str, default: f32, lo: f32, hi: f32) -> Result<f32> {
+        match self.get(key) {
+            None => Ok(default.clamp(lo, hi)),
+            Some(v) => {
+                let x = v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(self.cmd, format!("`{key}` must be a number")))?;
+                if !(f64::from(lo)..=f64::from(hi)).contains(&x) {
+                    return Err(bad(self.cmd, format!("invalid settings: `{key}` must be in {lo}..{hi}")));
+                }
+                Ok(x as f32)
+            }
+        }
+    }
+
     fn boolean(&self, key: &str, default: bool) -> Result<bool> {
         match self.get(key) {
             None => Ok(default),
@@ -459,18 +473,27 @@ fn hue_saturation(r: &Reader<'_>, base: Option<&Adjustment>) -> Result<Adjustmen
         _ => (0.0, 0.0, 0.0, false, HueRange::defaults()),
     };
     let colorize = r.boolean("colorize", c)?;
-    // Colorize hue is 0..360, a shift is -180..180.
-    let hue = if colorize { r.num("hue", h.rem_euclid(360.0), 0.0, 360.0)? } else { r.num("hue", h, -180.0, 180.0)? };
+    // Colorize hue is 0..360 (clamped), a shift is -180..180 (strict).
+    let hue = if colorize { r.num("hue", h.rem_euclid(360.0), 0.0, 360.0)? } else { r.num_strict("hue", h, -180.0, 180.0)? };
     // Turning Colorize on starts at 25% saturation unless one is given, like the dialog's
     // checkbox and Photoshop; an explicit 0 stays 0, which colorizes to grey (#2326).
     let s = if colorize && !c { s.max(25.0) } else { s };
-    let (saturation, lightness) = (r.num("saturation", s, if colorize { 0.0 } else { -100.0 }, 100.0)?, r.num("lightness", l, -100.0, 100.0)?);
+    let (saturation, lightness) = if colorize {
+        (r.num("saturation", s, 0.0, 100.0)?, r.num("lightness", l, -100.0, 100.0)?)
+    } else {
+        (r.num_strict("saturation", s, -100.0, 100.0)?, r.num_strict("lightness", l, -100.0, 100.0)?)
+    };
     for (i, key) in HUE_RANGES.iter().enumerate() {
         let Some(o) = r.object(key)? else { continue };
         let Some(range) = ranges.get_mut(i) else { continue };
-        range.hue = o.num("hue", range.hue, -180.0, 180.0)?;
-        range.saturation = o.num("saturation", range.saturation, -100.0, 100.0)?;
-        range.lightness = o.num("lightness", range.lightness, -100.0, 100.0)?;
+        range.hue = o.num_strict("hue", range.hue, -180.0, 180.0)?;
+        range.saturation = o.num_strict("saturation", range.saturation, -100.0, 100.0)?;
+        range.lightness = o.num_strict("lightness", range.lightness, -100.0, 100.0)?;
+        if let Some(Value::Array(raw)) = o.get("range")
+            && raw.iter().filter_map(Value::as_f64).any(|v| v.is_finite() && v >= 400.0)
+        {
+            return Err(bad(r.cmd, "invalid settings: `range` values must be below 400"));
+        }
         if let Some(b) = o.numbers("range", 4)? {
             // Keep the four sliders ordered and within one turn of the first.
             range.bounds = HueRange::canonical_bounds([b[0], b[1], b[2], b[3]]);
@@ -1245,5 +1268,7 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod hue_saturation_range_tests;
 #[cfg(test)]
 mod tests;
