@@ -221,7 +221,7 @@ Every screenshot here is the real app at work on public-domain art, rendered off
 
 PhotoCraft's PSD support is a standalone crate written from Adobe's public specification and tested against a corpus of real-world files.
 
-- **Faithful round trips:** opening and re-saving a document renders the same for 307 of the 309 files in the psd-tools test set and 169 of 170 in our mixed ag-psd/psd-tools set (`crates/io/tests/it/corpus.rs`; fetch the psd-tools set with `cargo xtask corpus --psd-tools`), and anything we don't model yet (raw blocks, descriptors, extras) is carried over instead of being dropped. A re-saved file is not byte-identical to its source: PhotoCraft rewrites image resources, layer records and the composite. Only the standalone `photocraft-psd` crate, parsing and writing a file without the document model, reproduces every parseable corpus file byte for byte (`crates/psd/tests/it/corpus.rs`).
+- **Faithful round trips:** opening and re-saving a document renders the same for 307 of the 309 files in the psd-tools test set and 169 of 170 in our mixed ag-psd/psd-tools set (`crates/io/tests/it/corpus.rs`; fetch the psd-tools set with `cargo xtask corpus --psd-tools`), and anything we don't model yet (raw blocks, descriptors, extras) is carried over instead of being dropped. A re-saved file is not byte-identical to its source: PhotoCraft rewrites image resources, layer records and the composite. Only the standalone `craft-psd` crate, parsing and writing a file without the document model, reproduces every parseable corpus file byte for byte (`crates/psd/tests/it/corpus.rs`).
 - **Pixels that match:** a composite oracle compares our render with Photoshop's own merged image, covering gradient interpolation (Classic, Perceptual and Linear), layer effects, shape strokes, clipping and fill opacity.
 - **Large documents:** PSB, 16 and 32-bit files, and CMYK and Lab documents open natively.
 
@@ -242,9 +242,13 @@ photocraft-cli batch --actions grade.json --in ./raw --out ./graded
 # Every subcommand explains itself
 photocraft-cli batch --help
 
-# Let an agent drive it over MCP (headless, or bridged to the running app)
+# Let an agent drive it over MCP: the open window while agents are allowed, otherwise headless
 photocraft-cli mcp
+# Always without a window (scripts, tests)
+photocraft-cli mcp --headless
 ```
+
+To let Claude or another AI app drive the open PhotoCraft window without a terminal, turn on **ArtCraft Launcher › Settings › AI agents** and click **Add** next to the AI app (one entry for every Craft app). See [`docs/mcp.md`](docs/mcp.md). These settings are behind the Craft suite's `AI-MCP` feature flag: set `AI-MCP = true` in `ArtCraft/flags.toml`, or start PhotoCraft with `CRAFT_FLAGS=AI-MCP`.
 
 The desktop app also offers an authenticated, loopback-only control channel (`photocraft --control`) for inspecting UI state, driving tools with pointer events, and taking offscreen screenshots. Every image in this README was rendered that way. See [`docs/control-protocol.md`](docs/control-protocol.md).
 

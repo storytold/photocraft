@@ -33,6 +33,7 @@ mod save;
 
 pub use batch_naming::plan as plan_batch_names;
 use batch_run::batch;
+pub(crate) use batch_run::check_batch_depth;
 pub use batch_run::same_format as batch_same_format;
 use batch_run::same_format;
 #[cfg(not(target_arch = "wasm32"))]
@@ -434,6 +435,10 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_cmds/export_clut_cube_header_tests.rs"]
+mod export_clut_cube_header_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
