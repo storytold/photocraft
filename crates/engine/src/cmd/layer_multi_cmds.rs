@@ -159,8 +159,8 @@ pub fn specs() -> Vec<CommandSpec> {
             &["Layer", "New"],
             None,
             r##"{"layer":id?,"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent)} (no layer: every selected layer; the new group starts collapsed)"##,
-            has_layer,
-            group_layers
+            structure::can_group_from_layers,
+            structure::group_from_layers
         ),
         spec!("layer.arrange.reverse", "Reverse", &["Layer", "Arrange"], None, "{}", two_plus, |s, _| reverse(s)),
         spec!(
@@ -184,3 +184,6 @@ mod layers_panel_parity_tests;
 
 #[cfg(test)]
 mod tile_damage_tests;
+
+#[cfg(test)]
+mod group_from_layers_background_tests;
