@@ -3466,6 +3466,238 @@ fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
     }
 }
 
+/// #9650: the canvas shows the layer masked by the mask where the box puts it, rebuilt only
+/// when the box changes, and recomposites only where the mask moves.
+#[test]
+fn a_lone_mask_previews_live_through_its_layer() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let (id, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let mask_at = |d: &Document, x, y| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+    // Green over the white Background where the mask hides the red square, none where it shows.
+    let shows = |d: &Document, x, y| photocraft_compose::render(d, photocraft_geom::Rect::new(x, y, x + 1, y + 1)).px[0][1] < 0.01;
+    // Untouched, the canvas shows the mask where it is, not vacated.
+    let (first, k0) = crate::canvas::display_doc(&mut app, 0);
+    assert!(mask_at(&first, 4, 4) < 0.01 && mask_at(&first, 30, 4) > 0.99);
+    assert!(!shows(&first, 12, 12) && shows(&first, 20, 12), "x < 16 of the square is hidden");
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+        zoom: 2.0,
+        center: [32.0, 32.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    assert!(preview_meshes(&app, &xf).is_empty(), "no grey mesh over the layer");
+    // 6 px right: the hidden part follows the box, the pixels stay.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (moved, k1) = crate::canvas::display_doc(&mut app, 0);
+    assert_ne!(k0, k1);
+    assert!(!shows(&moved, 20, 12) && shows(&moved, 23, 12), "hidden up to x 22 now");
+    assert!(mask_at(&moved, 2, 4) > 0.99, "the vacated strip reveals");
+    assert_eq!(moved.layer(layer).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels untouched");
+    // The same box again builds nothing.
+    let (again, k2) = crate::canvas::display_doc(&mut app, 0);
+    assert_eq!(k1, k2);
+    assert!(Arc::ptr_eq(&moved, &again));
+    // Damage: where the mask's values are in either frame, not the whole canvas.
+    assert_eq!(live_mask_damage(&app, id, revision, k0, k1), Some(photocraft_geom::Rect::new(0, 0, 24, 64)));
+    let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+    assert_eq!(live_mask_damage(&app, id, revision, vacated, k1), Some(photocraft_geom::Rect::new(4, 0, 24, 64)));
+    assert_eq!(live_mask_damage(&app, id, revision + 1, k0, k1), None, "another revision");
+    assert_eq!(live_mask_damage(&app, id, revision, 12345, k1), None, "a key of no frame");
+    // A box the engine refuses falls back to the grey values over the vacated mask.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = [[0.0, 0.0], [1e7, 0.0], [1e7, 1e7], [0.0, 1e7]];
+    let (_, k3) = settled_live_mask(&mut app);
+    assert_eq!(k3, vacated);
+    assert!(!preview_meshes(&app, &xf).is_empty(), "the grey values show instead");
+    // The commit leaves the mask the preview showed.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = corners(t.rect).map(|[x, y]| [x + 6.0, y]);
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    for x in [2, 20, 23, 40] {
+        assert!((mask_at(&st.doc, x, 4) - mask_at(&moved, x, 4)).abs() < 0.01, "x {x}");
+    }
+}
+
+/// The canvas document once no live mask frame is building on a worker thread.
+fn settled_live_mask(app: &mut PhotocraftApp) -> (Arc<Document>, u64) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let shown = crate::canvas::display_doc(app, 0);
+        let running = app.transform_preview.as_ref().and_then(|pv| pv.live_mask.as_ref()).is_some_and(|l| l.running.is_some());
+        if !running || std::time::Instant::now() > until {
+            return shown;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// #9691: a large mask's frame builds on a worker thread, so a box change never stalls the UI
+/// (about 250 ms a frame at 24 MP). The frame before it shows meanwhile, and the box as it is
+/// once the worker is done wins.
+#[test]
+fn a_large_lone_mask_builds_its_frames_off_the_ui_thread() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let (id, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let mask_at = |d: &Document, x, y| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+    let running = |app: &PhotocraftApp| app.transform_preview.as_ref().unwrap().live_mask.as_ref().unwrap().running.is_some();
+    // Every frame counts as large.
+    app.transform_preview.as_mut().unwrap().live_mask.as_mut().unwrap().sync_limit = 0;
+    let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+    let (_, k) = crate::canvas::display_doc(&mut app, 0);
+    assert_eq!(k, vacated, "nothing built on this thread");
+    assert!(running(&app));
+    let (first, k0) = settled_live_mask(&mut app);
+    assert_ne!(k0, vacated);
+    assert!(mask_at(&first, 4, 4) < 0.01 && mask_at(&first, 30, 4) > 0.99, "the mask where it is");
+    // The box moves twice while the first move builds: the frame before stays on screen.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (stale, k1) = crate::canvas::display_doc(&mut app, 0);
+    assert!(k1 == k0 && Arc::ptr_eq(&stale, &first) && running(&app));
+    // Whether the first move's frame has landed by now is the worker's race: either way the
+    // latest box isn't shown yet, and a worker builds it (#9691 review).
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (_, k2) = crate::canvas::display_doc(&mut app, 0);
+    let live = app.transform_preview.as_ref().unwrap().live_mask.as_ref().unwrap();
+    let latest = (app.ui.transform.as_ref().unwrap().quad, false);
+    assert!(live.quad != Some(latest) && live.running.as_ref().is_some_and(|(q, _)| k2 == k0 || *q == latest));
+    // Then the latest box shows.
+    let (moved, k3) = settled_live_mask(&mut app);
+    assert_ne!(k3, k0);
+    assert!(mask_at(&moved, 26, 4) < 0.01 && mask_at(&moved, 30, 4) > 0.99 && mask_at(&moved, 2, 4) > 0.99, "moved 12 px");
+    assert_eq!(live_mask_damage(&app, id, revision, k0, k3), Some(photocraft_geom::Rect::new(0, 0, 30, 64)));
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+        zoom: 2.0,
+        center: [32.0, 32.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    assert!(preview_meshes(&app, &xf).is_empty(), "no grey mesh over the layer");
+}
+
+/// #9691 review: closing the box stops a worker still building one of its frames, so closing
+/// and reopening it on a large mask doesn't pile up builds.
+#[test]
+fn closing_the_box_stops_its_mask_worker() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let live = app.transform_preview.as_mut().unwrap().live_mask.as_mut().unwrap();
+    live.sync_limit = 0;
+    let stop = live.stop.clone();
+    crate::canvas::display_doc(&mut app, 0);
+    assert!(!stop.load(std::sync::atomic::Ordering::Relaxed));
+    cancel(&mut app);
+    assert!(app.transform_preview.is_none());
+    assert!(stop.load(std::sync::atomic::Ordering::Relaxed), "the worker is told to stop");
+}
+
+/// #9691 review: a feathered mask blurs its moved values past the box, so the canvas redraws
+/// as far as the feather reaches (3 sigmas and 2 px), not just the box.
+#[test]
+fn a_feathered_lone_mask_damages_its_feather_reach() {
+    let mut app = masked_app(false);
+    app.session
+        .edit("feather", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().mask.as_mut().unwrap().feather = 3.0;
+            Ok(())
+        })
+        .unwrap();
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let (id, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (_, k1) = crate::canvas::display_doc(&mut app, 0);
+    let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+    // Unfeathered this is 4..24 (`a_lone_mask_previews_live_through_its_layer`); 11 px more each side.
+    assert_eq!(live_mask_damage(&app, id, revision, vacated, k1), Some(photocraft_geom::Rect::new(0, 0, 35, 64)));
+}
+
+/// An alpha channel keeps the grey preview: it masks no layer.
+#[test]
+fn a_lone_alpha_channel_keeps_the_grey_preview() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
+    app.session
+        .edit("Fixture", |doc, _| {
+            doc.channels[0].surface.fill_rect(photocraft_geom::Rect::new(4, 4, 20, 20), &[1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Alpha(0);
+    begin(&mut app, &gpu_ctx()).unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!({"channel": 0})));
+    assert!(app.transform_preview.as_ref().unwrap().live_mask.is_none());
+    assert!(live_mask_doc(&mut app).is_none());
+}
+
+/// #9691 review: switching Nearest Neighbor on with the box still builds the lone mask's frame
+/// again, so the canvas shows the interpolation the commit uses.
+#[test]
+fn a_lone_mask_frame_follows_the_interpolation() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 2.5, y]);
+    let (smooth, k0) = crate::canvas::display_doc(&mut app, 0);
+    app.ui.transform.as_mut().unwrap().interpolation = "nearest".into();
+    let (sharp, k1) = crate::canvas::display_doc(&mut app, 0);
+    assert_ne!(k0, k1, "a new frame for Nearest Neighbor");
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let edge = |d: &Document| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(18, 4, 0);
+    assert!((edge(&smooth) - edge(&sharp)).abs() > 0.1, "the mask's edge pixel differs: {} vs {}", edge(&smooth), edge(&sharp));
+}
+
+/// #9691 review: a blend mode hovered in the Layers panel takes the canvas over from the lone
+/// mask's frame; the grey values then show the moving mask again.
+#[test]
+fn a_lone_mask_shows_its_grey_values_under_a_blend_mode_hover() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+        zoom: 2.0,
+        center: [32.0, 32.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let (_, live) = crate::canvas::display_doc(&mut app, 0);
+    assert!(preview_meshes(&app, &xf).is_empty(), "the frame shows the mask");
+    app.frame += 1;
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    crate::blend_preview::hover(&mut app, &[layer], Some(photocraft_color::BlendMode::Multiply));
+    let (_, hovered) = crate::canvas::display_doc(&mut app, 0);
+    assert_ne!(hovered, live, "the blend preview is shown");
+    assert!(!preview_meshes(&app, &xf).is_empty(), "the grey values show the moving mask");
+}
+
 /// Batch 16 review: ⌥⌘T with the unlinked mask of a linked layer targeted still copies; only the
 /// layer's own pixels take the link group's box without a copy.
 #[test]

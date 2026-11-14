@@ -1,10 +1,12 @@
+use std::collections::VecDeque;
+
 use super::commit::{cancel, commit, start_steps};
 #[cfg(test)]
 use super::draw::texture_quad;
 use super::preview::{Above, AbovePlan, preview_image};
 use super::{
-    Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, MadeLayer, OtherTexels, PhotocraftApp,
-    Several, Steps, TransformPreview, TransformSession, Warp, WarpStyle, corners, default_interpolation, json, swap_mode_texels,
+    Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, LiveMask, MadeLayer, OtherTexels,
+    PhotocraftApp, Several, Steps, TransformPreview, TransformSession, Warp, WarpStyle, corners, default_interpolation, json, swap_mode_texels,
 };
 
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
@@ -142,6 +144,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             path: None,
             content_aware: None,
             several: None,
+            live_mask: None,
         });
         app.ui.transform = Some(TransformSession {
             session,
@@ -349,6 +352,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         path: None,
         content_aware: None,
         several: Some(several),
+        live_mask: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -509,6 +513,7 @@ pub(crate) fn begin_content_aware(
         content_aware: Some(live),
         styled: None,
         several: None,
+        live_mask: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -606,6 +611,21 @@ fn begin_lone(
     };
     let (lifted, rest) = tc::split_gray_selected(&surf, sel).map_err(|e| e.to_string())?.ok_or("this channel can't be transformed")?;
     crate::type_tool::commit(app);
+    // Alpha channels and the Quick Mask keep the grey preview: only a layer mask shows through
+    // a layer.
+    let revision = app.session.active().map_or(0, |st| st.revision);
+    let live_mask = (target == json!("mask")).then(|| LiveMask {
+        lifted: lifted.clone(),
+        revision,
+        quad: None,
+        shown: None,
+        drawn: 0,
+        areas: VecDeque::new(),
+        running: None,
+        sync_limit: super::LIVE_MASK_SYNC_PIXELS,
+        ctx: ctx.clone(),
+        stop: Arc::default(),
+    });
     let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
     let mut pd = (*doc).clone();
     let tp = json!({ "target": target });
@@ -638,6 +658,7 @@ fn begin_lone(
         path: None,
         content_aware: None,
         several: None,
+        live_mask,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -694,6 +715,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         committing: None,
         other_texels: None,
         several: None,
+        live_mask: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -782,6 +804,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         path: None,
         content_aware: None,
         several: None,
+        live_mask: None,
     });
     app.ui.transform = Some(TransformSession {
         session,

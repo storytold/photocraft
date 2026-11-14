@@ -52,6 +52,7 @@ mod radial_blur_center;
 mod remove_channel_target;
 mod system_locale;
 mod tone_targets;
+mod transform_lone_mask_live;
 mod transform_readout_units;
 mod ui_scale_canvas;
 mod variables_data_sets;
