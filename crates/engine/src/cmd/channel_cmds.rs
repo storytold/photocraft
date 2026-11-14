@@ -26,6 +26,10 @@ use crate::{DocState, EngineError, Result, Session};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+#[path = "channel_cmds/calculations_new_channel_view_tests.rs"]
+mod calculations_new_channel_view_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Enabled predicates
 
