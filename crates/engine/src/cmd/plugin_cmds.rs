@@ -136,17 +136,22 @@ pub fn skin_smooth_color_supported(doc: &photocraft_doc::Document) -> std::resul
 
 /// Rejects unsupported Skin Smooth document profiles before filtering or reusing smart-filter stages.
 pub(crate) fn check_color(doc: &photocraft_doc::Document, params: &Value) -> Result<()> {
-    if let Some(plugin) = params.get("id").and_then(Value::as_str).and_then(registry::get)
-        && requires_srgb(&plugin)
-    {
+    if let Some(plugin) = params.get("id").and_then(Value::as_str).and_then(registry::get) {
+        check_plugin_color(doc, &plugin)?;
+    }
+    Ok(())
+}
+
+/// Check the captured instance: the registry can change while its edit job is waiting.
+fn check_plugin_color(doc: &photocraft_doc::Document, plugin: &Plugin) -> Result<()> {
+    if requires_srgb(plugin) {
         skin_smooth_color_supported(doc).map_err(|message| bad(RUN, message))?;
     }
     Ok(())
 }
 
 /// Validates parameters, then stages a cancellable layer, channel or smart-filter edit as one undo step.
-fn run(s: &mut Session, p: &Value) -> Result<Value> {
-    let plugin = plugin_by_id(RUN, p)?;
+fn run(s: &mut Session, p: &Value, plugin: std::sync::Arc<Plugin>) -> Result<Value> {
     let params = plugin_params(p);
     // Bad parameters fail before anything is touched.
     let resolved = Value::Object(plugin.manifest().resolve_params(&params).map_err(|e| bad(RUN, e.to_string()))?);
@@ -160,7 +165,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         &label,
         move |doc, _, ctx| {
             ctx.check()?;
-            check_color(doc, &p)?;
+            check_plugin_color(doc, &plugin)?;
             let selection = doc.selection.clone();
             let canvas = doc.bounds();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(layer), &p)? {
@@ -430,7 +435,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: r##"{"id":text,"params":json} (plug-in parameters under "params" or at the top level; see plugin.list)"##,
             enabled: crate::filters::has_filterable_layer,
-            run,
+            run: |s, p| run(s, p, plugin_by_id(RUN, p)?),
             journal: true,
         },
     ]

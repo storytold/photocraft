@@ -43,6 +43,11 @@ fn b64(b: &[u8]) -> String {
 /// A WAT plug-in with its own `id` whose `pc_filter` body is `filter`.
 fn wat_plugin(id: &str, params: &str, filter: &str) -> Vec<u8> {
     let manifest = format!(r#"{{"id":"{id}","name":"Test {id}","version":"1","kind":"filter","params":{params}}}"#);
+    wat_module(&manifest, filter)
+}
+
+/// A complete manifest lets accelerator fixtures use the same WAT filter body.
+fn wat_module(manifest: &str, filter: &str) -> Vec<u8> {
     let src = format!(
         r#"(module
   (memory (export "memory") 1)
@@ -483,6 +488,64 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
         s.execute("edit.redo", json!({})).unwrap();
         assert_eq!(pixels(&s), after);
     }
+}
+
+/// Mutate the registry after capture, then run the real edit body without racing a worker.
+#[test]
+fn captured_plugin_keeps_its_color_requirement_after_registry_changes() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    for replace in [false, true] {
+        let id = if replace { "test.cmds.captured-replaced" } else { "test.cmds.captured-removed" };
+        for depth in [8, 16, 32] {
+            for supported in [false, true] {
+                let manifest = json!({"id":id,"name":"Captured Skin Smooth","version":"1","kind":"filter","params":{},"accelerator":"skinsmooth.v2"});
+                let captured = registry::install_bytes(&wat_module(&manifest.to_string(), GREY)).unwrap();
+                let mut s = doc(depth);
+                let profile = if supported { Builtin::Srgb } else { Builtin::DisplayP3 };
+                Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(profile.profile().to_bytes());
+                let before = pixels(&s);
+                let state = s.active().unwrap();
+                let (revision, history) = (state.revision, state.history.past_len());
+                if replace {
+                    registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+                } else {
+                    assert!(registry::remove(id));
+                }
+                let params = json!({"id":id});
+                assert!(check_color(&s.active().unwrap().doc, &params).is_ok(), "ID lookup sees only the changed registry");
+                let result = run(&mut s, &params, captured);
+                if supported {
+                    result.unwrap();
+                    assert_ne!(pixels(&s), before, "sRGB remains filterable after registry changes");
+                } else {
+                    assert!(matches!(result, Err(EngineError::BadParams { .. })), "{id}, {depth}: {result:?}");
+                    assert_eq!(pixels(&s), before);
+                    let state = s.active().unwrap();
+                    assert_eq!((state.revision, state.history.past_len()), (revision, history));
+                }
+            }
+        }
+        registry::remove(id);
+    }
+}
+
+#[test]
+fn captured_plugin_does_not_inherit_a_replacements_color_requirement() {
+    use craft_cms::builtin::Builtin;
+    use std::sync::Arc;
+    let id = "test.cmds.captured-general";
+    let captured = registry::install_bytes(&wat_plugin(id, "{}", GREY)).unwrap();
+    let manifest = json!({"id":id,"name":"Replacement Skin Smooth","version":"1","kind":"filter","params":{},"accelerator":"skinsmooth.v2"});
+    registry::install_bytes(&wat_module(&manifest.to_string(), GREY)).unwrap();
+    let mut s = doc(8);
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    let before = pixels(&s);
+    let params = json!({"id":id});
+    assert!(check_color(&s.active().unwrap().doc, &params).is_err(), "ID lookup sees the replacement's restriction");
+    run(&mut s, &params, captured).unwrap();
+    assert_ne!(pixels(&s), before, "the captured ordinary filter accepts non-sRGB input");
+    registry::remove(id);
 }
 
 /// A +1-stop, tone-only run has an independent RGB oracle: double the input, then clamp.
