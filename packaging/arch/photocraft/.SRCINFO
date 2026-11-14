@@ -1,0 +1,27 @@
+pkgbase = photocraft
+	pkgdesc = Open-source, native image editor that works the way Photoshop users expect
+	pkgver = 0.2.0
+	pkgrel = 1
+	url = https://github.com/storytold/photocraft
+	arch = x86_64
+	arch = aarch64
+	license = MIT OR Apache-2.0
+	makedepends = cargo
+	depends = glibc
+	depends = gcc-libs
+	depends = libxkbcommon
+	depends = libxkbcommon-x11
+	depends = wayland
+	depends = libx11
+	depends = libxcb
+	depends = libxcursor
+	depends = libxi
+	depends = vulkan-icd-loader
+	depends = libglvnd
+	depends = hicolor-icon-theme
+	optdepends = vulkan-driver: GPU compositing through Vulkan
+	optdepends = xdg-desktop-portal: native file dialogs
+	source = photocraft-0.2.0.tar.gz::https://github.com/storytold/photocraft/archive/refs/tags/v0.2.0.tar.gz
+	sha256sums = aa6d2222b0d6d5c1f404031d23c6cd3da38154c764f4a66180995de2090fc7e9
+
+pkgname = photocraft
