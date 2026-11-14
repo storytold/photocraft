@@ -378,8 +378,7 @@ fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: boo
     let outcome = if !crate::menus::is_enabled(app, command_id) {
         let why = disabled_reason(app, command_id);
         let template = "{label} is not available: {reason}";
-        app.ui.status = crate::i18n::fmt(tl!(template), &[("label", crate::i18n::tr_id(crate::i18n::current(), id, &label(id))), ("reason", tl!(&why))]);
-        app.ui.status_error = true;
+        app.show_error(crate::i18n::fmt(tl!(template), &[("label", crate::i18n::tr_id(crate::i18n::current(), id, &label(id))), ("reason", tl!(&why))]));
         Outcome::Disabled(why)
     } else if ctx.data(|d| d.get_temp::<bool>(dry_run_id())).unwrap_or(false) {
         Outcome::Ran
@@ -404,8 +403,7 @@ fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: boo
         match r {
             Ok(_) => Outcome::Ran,
             Err(e) => {
-                app.ui.status = e.clone();
-                app.ui.status_error = true;
+                app.show_error(e.clone());
                 Outcome::Failed(e)
             }
         }

@@ -80,6 +80,7 @@ fn an_early_returning_pass_reinjects_the_batch_exactly_once() {
     assert!(hook(&mut app, &ctx).is_empty(), "then it is delivered once and done");
 }
 
+/// A document change before the queued input is delivered drops it and fails the waiting reply.
 #[test]
 fn a_document_change_before_injection_drops_the_batch_and_replies() {
     let ctx = Context::default();
@@ -87,7 +88,7 @@ fn a_document_change_before_injection_drops_the_batch_and_replies() {
     app.synthetic.extend([press(Key::V), release(Key::V)]);
     assert!(!hook(&mut app, &ctx).is_empty());
     let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
+    app.wait_for_input(tx);
     // The document changed while the events were still in flight: the next hook sees it before
     // the host consumes them, so it withdraws the batch and fails the waiting reply.
     app.run("file.new", json!({"width": 16, "height": 16})).expect("a second document");
@@ -98,6 +99,7 @@ fn a_document_change_before_injection_drops_the_batch_and_replies() {
     assert!(reply["error"].as_str().is_some_and(|e| e.contains("document or focus changed")));
 }
 
+/// A document change the input itself makes, inside its pass, doesn't cancel that input.
 #[test]
 fn a_document_change_inside_the_pass_is_delivered_and_not_reported_as_cancelled() {
     let ctx = Context::default();
@@ -105,7 +107,7 @@ fn a_document_change_inside_the_pass_is_delivered_and_not_reported_as_cancelled(
     app.synthetic.extend([press(Key::V), release(Key::V)]);
     assert!(!hook(&mut app, &ctx).is_empty());
     let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
+    app.wait_for_input(tx);
     // `logic` opens another document after the hook consumed the events into this pass. They
     // cannot be withdrawn now. Treat the batch as delivered (automation-gated) rather than
     // failing the reply while the input still lands.
@@ -133,6 +135,7 @@ fn a_preserved_batch_is_withdrawn_from_the_raw_input_on_a_document_change() {
     assert!(app.synthetic_batch.is_none());
 }
 
+/// An edit in the same document doesn't cancel the input queued for it.
 #[test]
 fn an_edit_in_the_same_document_does_not_cancel_the_queued_batch() {
     let ctx = Context::default();
@@ -140,7 +143,7 @@ fn an_edit_in_the_same_document_does_not_cancel_the_queued_batch() {
     app.synthetic.extend([press(Key::L), release(Key::L)]);
     assert!(!hook(&mut app, &ctx).is_empty());
     let (tx, rx) = std::sync::mpsc::channel();
-    app.input_waiters.push(tx);
+    app.wait_for_input(tx);
     // A command edits the same document while the step is in flight: the revision changes, the
     // document activation does not, so the step is not cancelled.
     app.run("layer.new.layer", json!({"name": "queued"})).expect("an edit");
