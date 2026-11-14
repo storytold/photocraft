@@ -132,7 +132,10 @@ fn saving_a_duplicate_clears_its_dirty_mark_and_allows_ask_to_close() {
         let mut s = layered_source(8);
         s.execute("image.duplicate", json!({"mergedOnly": merged})).unwrap();
         assert!(s.active().unwrap().is_dirty());
-        s.execute("file.saveAs", json!({"path": path})).unwrap();
+        let saved_path = path.to_str().unwrap();
+        crate::file_cmds::save_doc(&s.active().unwrap().doc, saved_path, None).unwrap();
+        // Save As is shell-owned; finish the successful write through its engine API.
+        s.active_mut().unwrap().saved_to(saved_path.into());
         assert!(path.is_file());
         assert!(!s.active().unwrap().is_dirty());
         assert_eq!(s.active().unwrap().path.as_deref(), path.to_str());
