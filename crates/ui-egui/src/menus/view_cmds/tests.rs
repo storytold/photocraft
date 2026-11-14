@@ -894,14 +894,16 @@ fn save_selection_opens_its_dialog_and_saves_on_confirm() {
     let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
     assert_eq!(fields["__command"], "select.saveSelection");
     assert_eq!(fields["channel"], "new");
-    assert_eq!(fields["__choices"]["operation"], json!(["new", "replace", "add", "subtract", "intersect"]));
+    assert_eq!(fields["operation"], "new");
     fields.insert("name".into(), json!("Keep"));
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     let names: Vec<_> = app.session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect();
     assert_eq!(names, ["Keep"]);
     // A second save lists the new channel as a destination.
     let dialog = menu(&mut app, &ctx, "select.saveSelection", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["__choices"]["channel"], json!(["new", "Keep"]));
+    let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
+    let channels: Vec<String> = crate::selection_channel_ui::channels(&app, &fields).into_iter().map(|(_, label)| label).collect();
+    assert_eq!(channels, ["New", "Keep"]);
 }
 
 #[test]
@@ -913,13 +915,13 @@ fn load_selection_opens_its_dialog_and_loads_on_confirm() {
     app.run("select.deselect", json!({})).unwrap();
     let dialog = menu(&mut app, &ctx, "select.loadSelection", json!({})).unwrap()["dialog"].as_u64().expect("Load Selection opens a dialog");
     assert!(app.session.active().unwrap().doc.selection.is_none(), "loaded before confirmation");
-    let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
+    let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
     assert_eq!(fields["__command"], "select.loadSelection");
-    assert_eq!(fields["channel"], "Keep");
+    assert_eq!(fields["channel"], json!(0), "the first alpha channel, Keep");
     assert_eq!(fields["invert"], false);
     assert_eq!(fields["operation"], "new");
-    let channels = fields["__choices"]["channel"].as_array().unwrap();
-    assert!(channels.contains(&json!("Keep")) && channels.contains(&json!("transparency")));
+    let channels: Vec<Value> = crate::selection_channel_ui::channels(&app, &fields).into_iter().map(|(v, _)| v).collect();
+    assert!(channels.contains(&json!(0)) && channels.contains(&json!("transparency")));
     // The layer has no mask, so its mask is not offered.
     assert!(!channels.contains(&json!("mask")), "{channels:?}");
     crate::dialogs::confirm(&mut app, dialog).unwrap();
