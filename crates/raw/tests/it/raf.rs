@@ -28,6 +28,16 @@ fn every_storage_decodes_exactly() {
         assert_eq!((s.width, s.height), (30, 18));
         assert_eq!(s.data, spec.data, "{packing:?}");
     }
+
+    // Four 14-bit samples occupy two padded words per row, as many bytes as
+    // unpacked 16-bit containers. The explicit packing flag must win over size.
+    let data = [1, 0x1FFF, 0x2000, 0x3FFF, 0x3FFE, 0x2001, 0x0100, 0].repeat(4);
+    let spec = RafSpec { packing: RafPacking::Words14, black: vec![0], ..RafSpec::new(4, 8, data, RGGB.to_vec()) };
+    let s = decode(&spec.build(), &Limits::default()).unwrap();
+    assert_eq!((s.width, s.height), (4, 8));
+    assert_eq!(s.data, spec.data);
+    assert_eq!(s.white, [16383.; 3]);
+    assert_eq!(s.black, BlackLevels::uniform(0.0));
 }
 
 #[test]

@@ -201,6 +201,7 @@ impl RafSpec {
         ]
         .into_iter()
         .chain(matches!(self.packing, RafPacking::Words14).then(|| (0xF005, vec![(self.width * 14).div_ceil(32) as u32])))
+        .chain(matches!(self.packing, RafPacking::Words14).then(|| (0xF006, vec![1])))
         .chain(self.wb_grb.map(|w| (0xF00E, w.to_vec())))
         .collect();
         let mut out = if le { b"II*\0".to_vec() } else { b"MM\0*".to_vec() };
