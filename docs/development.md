@@ -246,13 +246,13 @@ The trace has no clock of its own: it reads the per-frame stage record the app g
 
 ## Driving the app programmatically
 
-Start the app with a private token file. It then accepts authenticated JSON lines on `127.0.0.1:7878`:
+Start the app with a private token file. It then accepts authenticated JSON lines on `127.0.0.1:7878`. Every connection must use the challenge handshake: the token itself is never sent, so a raw client has to compute the HMAC proof. `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file .private/control.token` performs it for you, and `docs/control-protocol.md` gives the exact frames and message for a script.
 
-```sh
-TOKEN=$(tr -d '\r\n' < .private/control.token)
-printf '%s\n' "{\"id\":\"auth\",\"method\":\"auth\",\"params\":{\"token\":\"$TOKEN\"}}" \
-              '{"id":1,"method":"engine.execute","params":{"command":"layer.newAdjustmentLayer.hueSaturation","params":{"hue":30}}}' \
-              '{"id":2,"method":"ui.screenshot","params":{"path":"evidence/shot.png"}}' | nc 127.0.0.1 7878
+```json
+{"id":1,"method":"auth.challenge","params":{"clientNonce":"<64-hex>"}}
+{"id":2,"method":"auth","params":{"proof":"<64-hex>"}}
+{"id":3,"method":"engine.execute","params":{"command":"layer.newAdjustmentLayer.hueSaturation","params":{"hue":30}}}
+{"id":4,"method":"ui.screenshot","params":{"path":"evidence/shot.png"}}
 ```
 
 See `docs/control-protocol.md` for every method. Tips:

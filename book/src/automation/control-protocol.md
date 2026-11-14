@@ -1,10 +1,11 @@
 # Control protocol
 
-The desktop control protocol is newline-delimited JSON over a TCP listener bound to `127.0.0.1`. Every connection must first authenticate with the configured 256-bit token: either by challenge (`auth.challenge`, then `auth` with an HMAC proof; the token never crosses the wire and the server proves it holds the token first), or with the original single `auth` frame carrying the token. After authentication, each request carries `id`, `method`, and optional `params`; each reply includes the matching `id` and either a result or error.
+The desktop control protocol is newline-delimited JSON over a TCP listener bound to `127.0.0.1`. Every connection must first authenticate with the configured 256-bit token by challenge: `auth.challenge` with a client nonce, then `auth` with an HMAC proof. The token never crosses the wire, and the server proves it holds the token before the client sends its proof. A single `auth` frame carrying the token is refused. After authentication, each request carries `id`, `method`, and optional `params`; each reply includes the matching `id` and either a result or error.
 
 ```json
-{"id":"auth","method":"auth","params":{"token":"<64-hex>"}}
-{"id":1,"method":"ui.inspect","params":{}}
+{"id":1,"method":"auth.challenge","params":{"clientNonce":"<64-hex>"}}
+{"id":2,"method":"auth","params":{"proof":"<64-hex>"}}
+{"id":3,"method":"ui.inspect","params":{}}
 ```
 
 The current method catalog includes engine execution and discovery, application open/save operations, UI inspection and input, screenshots, and document/control helpers. The authoritative method and parameter tables are maintained in [`docs/control-protocol.md`](https://github.com/storytold/photocraft/blob/main/docs/control-protocol.md).
