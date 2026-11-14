@@ -4,11 +4,11 @@
 //! Reserve the sum of all possible retained tiles and the largest workspace, without credit
 //! for pruning or tile sharing. Reserving before any worker starts makes scheduling irrelevant.
 
-use photocraft_geom::TILE_SIZE;
-use photocraft_psd::{
+use craft_psd::{
     ChannelData, Compression, PsdFile,
     layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK, Rect},
 };
+use photocraft_geom::TILE_SIZE;
 
 use crate::IoError;
 
@@ -131,7 +131,7 @@ fn encoding(channel: &ChannelData) -> Encoded {
 }
 
 /// Peak bytes the row decoders of `channels` hold while their `w` × `h` planes are decoded
-/// together, `band` rows at a time (`photocraft_psd::RowDecoder`).
+/// together, `band` rows at a time (`craft_psd::RowDecoder`).
 ///
 /// Only a ZIP stream is inflated whole, because it cannot be entered part way. Raw and RLE
 /// channels are read a band at a time, so they cost a band whatever the size of the layer:
@@ -215,7 +215,7 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
     let sample = u64::from(h.depth.div_ceil(8));
     let cc = match h.color_mode {
         // Unknown modes use the RGB fallback, including its alpha channel.
-        photocraft_psd::ColorMode::Unknown(_) => 3,
+        craft_psd::ColorMode::Unknown(_) => 3,
         mode => u64::from(mode.color_channels().unwrap_or(3)),
     };
     if super::psd_import::can_recover_layers(file) {
@@ -257,18 +257,18 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
         budget.surface(canvas, cc + 1, sample.max(1))?;
         if super::psd_import::merged_in_bands(file) {
             // No plane is held whole: the background layer and the extra channels are written
-            // a band at a time from the row decoders, which all live until the import ends.
+            // a band at a time from the image's row decoder, which lives until the import ends.
             let (w, rows) = (u64::from(h.width), u64::from(h.height));
             let row_bytes = mul(w, mul(cc + 1, sample)?)?;
             let band = super::psd_import::max_band_rows(h.height as usize, usize::try_from(row_bytes).unwrap_or(usize::MAX)) as u64;
             let stored = (Some(file.image_data.compression), file.image_data.encoded_len());
             let decoders = decode_workspace(std::iter::repeat_n(stored, usize::from(h.channels)), w, rows, band, sample)?;
             if matches!(file.image_data.compression, Compression::Rle) {
-                // Each RLE decoder keeps the offsets of its plane's rows (8 bytes a row) while
+                // The RLE decoder keeps the offsets of every plane's rows (8 bytes a row) while
                 // the layers are built, so they add to the layers' workspace.
                 budget.retain(mul(mul(rows.saturating_add(1), channels)?, 8)?)?;
             }
-            // An RLE image has one row table for all its planes, read before each takes its part.
+            // An RLE image has one row table for all its planes, read when the decoder is made.
             let table = mul(mul(rows, channels)?.saturating_add(1), 8)?;
             // The band interleaved, and a tile row of float pixels while transparency is unmatted.
             let converted = mul(row_bytes, band)?.checked_add(mul(mul(w, rows.min(TILE_SIZE as u64))?, (cc + 1) * 4)?).ok_or_else(overflow)?;
@@ -282,15 +282,15 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
             budget.scratch(converted.checked_add(inflate_scratch(merged, 1)?).ok_or_else(overflow)?);
         }
     }
-    let mut patterns = photocraft_psd::patterns::PatternBudget::default();
+    let mut patterns = craft_psd::patterns::PatternBudget::default();
     for block in file.global_blocks.iter().filter(|b| crate::pattern_map::PATTERN_KEYS.contains(&b.key)) {
         // Earlier records can decode before a malformed later record discards the block.
-        let items = photocraft_psd::patterns::pattern_block_memory(&block.data, &mut patterns);
+        let items = craft_psd::patterns::pattern_block_memory(&block.data, &mut patterns);
         for p in items {
             let pixels = mul(u64::from(p.width), u64::from(p.height))?;
             let sample = u64::from(p.depth.div_ceil(8));
-            let color = if p.mode == 2 { 3 } else { photocraft_psd::patterns::mode_channels(p.mode) as u64 };
-            let alpha = u64::from(p.planes > photocraft_psd::patterns::mode_channels(p.mode));
+            let color = if p.mode == 2 { 3 } else { craft_psd::patterns::mode_channels(p.mode) as u64 };
+            let alpha = u64::from(p.planes > craft_psd::patterns::mode_channels(p.mode));
             budget.surface(Rect::from_xywh(0, 0, p.width, p.height), color + alpha, sample)?;
             // The block parser returns all planes together. Count them as retained so
             // previous converted patterns and later blocks cannot reuse this allowance.
