@@ -10,6 +10,7 @@ mod device_loss;
 mod parity;
 mod pipeline_errors;
 mod pipelines;
+mod shaders;
 mod timing;
 mod uniform_limits;
 mod vector_mask;

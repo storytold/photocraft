@@ -1043,6 +1043,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         Some(p) if result.is_ok() && running => p.committing = true,
         _ => app.filter_preview = None,
     }
+    // The GPU preview likewise (`filter_gpu_preview`).
+    let running = result.is_ok() && app.session.active().is_some_and(|st| app.session.job_on(st.doc.id).is_some());
+    crate::filter_gpu_preview::confirmed(app, running);
     if result.is_ok() && cmd == "path.toSelection" {
         crate::canvas_tool_menu::name_make_selection_step(app, &d.fields, &params, revision);
     }
@@ -1328,6 +1331,7 @@ pub(crate) mod fade_modes;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
+pub mod filter_gpu_preview;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
@@ -1360,6 +1364,7 @@ mod paths_export_default_tests;
 mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
+pub mod preview_session;
 pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
