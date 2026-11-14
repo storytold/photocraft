@@ -15,7 +15,7 @@ use crate::file_dialog::FileDialogAnswer;
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 /// The dialog, with the save picker answering `answers` and writes recorded.
-fn dialog(answers: Vec<&str>) -> (Harness<'static, PhotocraftApp>, u64, Written) {
+pub(super) fn dialog(answers: Vec<&str>) -> (Harness<'static, PhotocraftApp>, u64, Written) {
     let written: Written = Rc::default();
     let log = written.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -35,16 +35,16 @@ fn dialog(answers: Vec<&str>) -> (Harness<'static, PhotocraftApp>, u64, Written)
     (h, id, written)
 }
 
-fn field(h: &Harness<'_, PhotocraftApp>, id: u64, name: &str) -> Value {
+pub(super) fn field(h: &Harness<'_, PhotocraftApp>, id: u64, name: &str) -> Value {
     h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.get(name).cloned().unwrap_or(Value::Null)
 }
 
-fn set_field(h: &mut Harness<'_, PhotocraftApp>, id: u64, name: &str, v: Value) {
+pub(super) fn set_field(h: &mut Harness<'_, PhotocraftApp>, id: u64, name: &str, v: Value) {
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(name.into(), v);
     h.run_steps(2);
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+pub(super) fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
     // The first match: the set row's buttons come before the dialog's own (its Cancel).
     h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).next().expect("the button").click();
     h.run_steps(3);
@@ -95,11 +95,12 @@ fn choosing_a_set_loads_it_and_save_and_delete_wait_for_ok() {
     assert_eq!(field(&h, id, "sets")["A"]["shortcuts"]["edit.copy"], "F8");
     assert_eq!(h.state().session.prefs().shortcut_sets["A"].shortcuts["edit.copy"], "F9", "not before OK");
     click(&mut h, "Delete");
+    click(&mut h, "Yes");
     assert_eq!((field(&h, id, "sets"), field(&h, id, "activeSet")), (json!({}), json!("")));
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
     let p = h.state().session.prefs();
     assert!(p.shortcut_sets.is_empty() && p.shortcut_set.is_empty());
-    assert_eq!(p.shortcuts.get("edit.copy").map(String::as_str), Some("F8"), "the bindings stay");
+    assert!(!p.shortcuts.contains_key("edit.copy"), "PhotoCraft Defaults are restored");
 }
 
 #[test]
