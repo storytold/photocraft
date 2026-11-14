@@ -225,7 +225,7 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
     })
 }
 
-/// One grayscale plane (composites reduce to luminosity, as in Calculations).
+/// One grayscale plane (composites reduce to Gray, as in Calculations).
 pub(super) fn gray_plane(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r: ChanRef) -> Result<Vec<f32>> {
     let mut planes = ref_planes(doc, layer, active, r)?;
     if planes.len() == 1
@@ -234,6 +234,33 @@ pub(super) fn gray_plane(doc: &Document, layer: Option<LayerId>, active: Option<
         return Ok(only);
     }
     let fmt = doc.pixel_format();
+    // This CMS transform matches the measured default sRGB/RGB8 Gray values (#14512).
+    // Other profiles, depths and modes are unmeasured and must keep their existing conversion.
+    if fmt.mode == photocraft_color::ColorMode::Rgb
+        && fmt.sample == photocraft_color::SampleType::U8
+        && let [red, green, blue] = planes.as_slice()
+    {
+        use craft_cms::{Builtin, TransformOptions};
+        use rayon::prelude::*;
+
+        let profile = crate::color_cmds::document_profile(doc);
+        if profile.content_hash() == Builtin::Srgb.profile().content_hash() {
+            let error = |e| EngineError::Other(format!("RGB to Gray conversion failed: {e}"));
+            let transform = craft_cms::cached(&profile, Builtin::GrayGamma22.profile(), TransformOptions::default()).map_err(error)?;
+            return red
+                .par_iter()
+                .zip(green)
+                .zip(blue)
+                .map_init(
+                    || [0.0; 16],
+                    |out, ((&r, &g), &b)| {
+                        transform.eval(&[r, g, b], out).map_err(error)?;
+                        Ok(out[0])
+                    },
+                )
+                .collect();
+        }
+    }
     let n = planes.first().map_or(0, Vec::len);
     let mut px = vec![0.0f32; fmt.channels()];
     Ok((0..n)
@@ -362,3 +389,7 @@ pub(super) fn mask_plane(s: &Session, p: &Value, cmd: &str) -> Result<Option<Vec
         Some(m) => Ok(Some(source(s, &m, cmd, true)?.remove(0))),
     }
 }
+
+#[cfg(test)]
+#[path = "calculations_gray_channel_tests.rs"]
+mod calculations_gray_channel_tests;
