@@ -42,7 +42,12 @@ impl CmykSpace {
             }
         }
         let space = Self::build(bytes);
-        cache.lock().unwrap_or_else(|e| e.into_inner()).push((Arc::downgrade(bytes), space.clone()));
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+        // Another render may have cached this allocation while its transforms were built.
+        if let Some((_, cached)) = c.iter().find(|(w, _)| w.as_ptr() == Arc::as_ptr(bytes)) {
+            return cached.clone();
+        }
+        c.push((Arc::downgrade(bytes), space.clone()));
         space
     }
 
@@ -327,6 +332,32 @@ mod tests {
             let back = cmyk_to_rgb(rgb_to_cmyk([0.6, 0.4, 0.3]));
             assert!((back[0] - 0.6).abs() < 0.04 && (back[2] - 0.3).abs() < 0.04, "{back:?}");
         });
+    }
+
+    #[test]
+    fn concurrent_profile_requests_share_the_cached_space() {
+        const CALLERS: usize = 4;
+        let params = craft_cms::synth::CmykParams {
+            description: "Concurrent CMYK cache".into(),
+            tvi: [0.26, 0.26, 0.26, 0.3],
+            grid_a2b: 5,
+            grid_b2a: 9,
+            ..Default::default()
+        };
+        let bytes = craft_cms::synth::cmyk_profile(&params).unwrap().to_bytes();
+        let start = std::sync::Barrier::new(CALLERS);
+        let spaces = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..CALLERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        CmykSpace::for_profile(Some(&bytes)).expect("a synthetic CMYK space")
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+        });
+        assert!(spaces.iter().all(|space| Arc::ptr_eq(space, &spaces[0])), "parallel first callers must share one cached CMYK space");
     }
 
     /// Lab round-trips sRGB and puts white at L 100 and black at L 0.
