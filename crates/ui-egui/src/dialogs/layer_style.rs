@@ -786,20 +786,17 @@ fn find_light_angle(f: &Map<String, Value>, initial_light_angle: Option<f64>) ->
     light_angle
 }
 
-/// Runs the dialog's commands through `run`: blending options, then the whole
-/// effect list in one `layer.layerStyle.replace` (instances keep their order;
-/// their snapshots carry what the dialog doesn't model).
-fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Value, String>) -> Result<Value, String> {
+/// Apply the blending options, ordered effect snapshots, and any shared light change together.
+fn apply(f: &Map<String, Value>, run: impl FnOnce(&str, Value) -> Result<Value, String>) -> Result<Value, String> {
     validate_params(f)?;
     let layer = f.get("layer").cloned().unwrap_or(Value::Null);
     let initial_light_angle = f.get("globalLight").and_then(Value::as_f64);
+    let mut style = json!({"layer": layer});
     if let Some(bo) = f.get(&format!("p:{BLENDING}")).and_then(Value::as_object) {
         let mut bo = bo.clone();
         // Which Blend If channel the page shows is dialog state, not a parameter.
         bo.remove("blendIfChannel");
-        bo.insert("layer".into(), layer.clone());
-        let p = Value::Object(bo);
-        run("layer.layerStyle.blendingOptions", p)?;
+        style["blendingOptions"] = Value::Object(bo);
     }
     let mut entries = Vec::new();
     for e in effects_of(f) {
@@ -809,13 +806,14 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
         params["enabled"] = json!(on);
         entries.push(effect_entry(e, kind, params, initial_light_angle));
     }
-    run("layer.layerStyle.replace", json!({"layer": layer, "effects": entries}))?;
+    style["effects"] = json!(entries);
     // An effect lit by the global light follows the document's light angle, so the Angle slider
     // drives that shared angle rather than the per-effect angle the compositor ignores.
     let light_angle = find_light_angle(f, initial_light_angle);
     if let Some(angle) = f.get("pendingGlobalLight").and_then(Value::as_f64).or(light_angle) {
-        run("layer.layerStyle.globalLight", json!({"angle": angle}))?;
+        style["globalLight"] = json!({"angle": angle});
     }
+    run("layer.layerStyle.replace", style)?;
     Ok(Value::Null)
 }
 
@@ -1355,6 +1353,8 @@ impl MaxAlpha for Color32 {
     }
 }
 
+#[cfg(test)]
+mod ok_history_tests;
 #[cfg(test)]
 mod tests;
 
