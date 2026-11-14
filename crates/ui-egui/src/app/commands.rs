@@ -333,8 +333,7 @@ impl PhotocraftApp {
             }
         }
         if result.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
-            self.clip_external = false;
-            self.export_os_clipboard();
+            self.copied_to_clipboard();
         }
     }
 

@@ -591,7 +591,12 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             // An explicit vector paste needs the original OS source, not just an old pixel copy.
             app.run(id, p.clone())
         } else {
-            app.session.execute(id, p.clone()).map_err(|e| e.to_string())
+            let result = app.session.execute(id, p.clone()).map_err(|e| e.to_string());
+            if result.is_ok() && matches!(id.as_str(), "edit.copy" | "edit.cut" | "edit.copyMerged") {
+                // A recorded copy is a copy like Edit › Copy: newer than the OS clipboard's image.
+                app.copied_to_clipboard();
+            }
+            result
         };
         match result {
             // A called action that paused for a dialog continues here after it once confirmed.
