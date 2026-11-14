@@ -59,11 +59,6 @@ fn type_layers(doc: &Document) -> Vec<LayerId> {
     doc.walk().into_iter().rev().filter(|(p, _, l)| matches!(l.content, LayerContent::Text(_)) && !doc.locks_at(p).all).map(|(_, _, l)| l.id).collect()
 }
 
-fn has_type(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    if type_layers(&d.doc).is_empty() { Err("the document has no type layers".into()) } else { Ok(()) }
-}
-
 fn text(doc: &Document, id: LayerId) -> Option<&str> {
     match &doc.layer(id)?.content {
         LayerContent::Text(t) => Some(&t.text),
@@ -284,7 +279,8 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &["Edit"],
             shortcut: None,
             params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id|name? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"} (an action records only a call without "action", as {"allLayers"} with its dialog on)"#,
-            enabled: has_type,
+            // Any open document, also one without type layers, where it lists nothing.
+            enabled: crate::commands::has_doc,
             journal: true,
             run: check_spelling,
         },
@@ -467,11 +463,11 @@ mod tests {
     }
 
     #[test]
-    fn disabled_without_type() {
+    fn enabled_only_with_a_document() {
         let mut s = Session::new();
         assert!(!s.is_enabled("edit.checkSpelling"));
         s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
-        assert!(!s.is_enabled("edit.checkSpelling"));
+        assert!(s.is_enabled("edit.checkSpelling"));
         assert!(!s.is_enabled("type.insertText"));
     }
 
@@ -497,3 +493,7 @@ mod tests {
         assert_eq!(s.execute("type.caret", json!({"layer": id, "index": inserted["caret"]})).unwrap()["index"], inserted["caret"]);
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_enabled_tests.rs"]
+mod enabled_tests;

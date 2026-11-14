@@ -88,6 +88,10 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// `action`). `params.show` forces a panel open or closed.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "edit.checkSpelling" && params.get("action").is_none() && params.get("ui").is_none_or(|u| u.as_bool() != Some(false)) {
+        // A document without any type layer opens no dialog and shows nothing, as in the reference (#14172).
+        if app.session.active().is_some_and(|st| !photocraft_engine::type_extra_cmds::has_type_layers(&st.doc)) {
+            return Some(app.session.execute("edit.checkSpelling", json!({"action": "list"})).map_err(|e| e.to_string()));
+        }
         return Some(open_spelling(app, params.get("allLayers").and_then(Value::as_bool).unwrap_or(true)));
     }
     if !handles(id) {
@@ -1144,3 +1148,7 @@ mod tests {
         assert!(h.query_by_label("Hyphenate").is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "type_spell_enabled_ui_tests.rs"]
+mod spell_enabled_ui_tests;
