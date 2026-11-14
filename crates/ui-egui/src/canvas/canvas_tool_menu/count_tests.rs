@@ -129,3 +129,44 @@ fn the_other_tools_keep_their_menus() {
     assert_ne!(listed(&mut app, &ctx), WANT, "the marquee keeps its selection menu");
     assert!(!applies(Tool::Note), "a tool without a canvas menu still gets none");
 }
+
+/// The open menu's `ui.inspect` enabled state of row `id`.
+fn inspected_enabled(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) -> Option<bool> {
+    let inspected = call(app, ctx, "ui.inspect", json!({}));
+    let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).cloned().unwrap_or_default();
+    entries.iter().find(|e| e["id"] == id).and_then(|e| e["enabled"].as_bool())
+}
+
+/// #13491: with two pixel layers selected and no pixel selection, the reference greys Blending
+/// Options…, Color Range… and Load Selection…. With one layer, or with a pixel selection, they keep
+/// the Layers panel menu's states.
+#[test]
+fn several_selected_layers_grey_the_single_layer_rows() {
+    const SINGLE: [&str; 3] = ["layer.layerStyle.blendingOptions", "select.colorRange", "select.loadSelection"];
+    let (mut app, ctx) = app();
+    let ink = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.new.layer", json!({"name": "Paint"})).unwrap();
+    right_click(&mut app, &ctx, 50.0, 40.0);
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    for id in SINGLE {
+        assert_eq!(entry_enabled(&app, &menu, id), crate::menus::is_enabled(&app, id), "one layer: {id}");
+    }
+    app.ui.canvas_tool_menu = None;
+    app.run("layer.select", json!({"layer": ink.0, "mode": "add"})).unwrap();
+    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+    right_click(&mut app, &ctx, 50.0, 40.0);
+    for id in SINGLE {
+        assert_eq!(inspected_enabled(&mut app, &ctx, id), Some(false), "two layers: {id}");
+    }
+    // The rows that act on every selected layer stay enabled.
+    for id in ["layer.duplicate", "layer.delete", "layer.new.groupFromLayers", "edit.freeTransform"] {
+        assert_eq!(inspected_enabled(&mut app, &ctx, id), Some(true), "two layers: {id}");
+    }
+    app.ui.canvas_tool_menu = None;
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
+    right_click(&mut app, &ctx, 50.0, 40.0);
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    for id in SINGLE {
+        assert_eq!(entry_enabled(&app, &menu, id), crate::menus::is_enabled(&app, id), "with a pixel selection: {id}");
+    }
+}
