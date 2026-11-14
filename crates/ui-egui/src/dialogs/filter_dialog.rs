@@ -441,6 +441,17 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     }
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, fields);
+        // #14465: the reference dialog offers no interpolation choice; its resampling
+        // follows Preferences › General › Image Interpolation (the dropdown itself goes
+        // away with #14462). The *not measured* variants show and act as Bicubic, as the
+        // Free Transform options bar renders them.
+        use photocraft_engine::prefs::Interpolation;
+        let interp = match app.session.prefs().general.image_interpolation {
+            Interpolation::Nearest => "nearest",
+            Interpolation::Bilinear => "bilinear",
+            _ => "bicubic",
+        };
+        fields.insert("interpolation".into(), json!(interp));
     }
     if command == "type.warpText" {
         warp_defaults(app, fields);
