@@ -18,6 +18,9 @@ mod dialogs;
 mod dispatch;
 mod options;
 
+#[cfg(test)]
+mod file_info_title_labels_tests;
+
 pub use arrange::{Border, borders, cells, drag_border};
 pub(crate) use arrange::{document_is_floating, float_window};
 pub(crate) use dialogs::write_copy;
