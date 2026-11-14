@@ -279,6 +279,52 @@ pub fn rgba8_image(s: &Surface, area: Rect) -> Vec<[u8; 4]> {
     img
 }
 
+/// The surface's own stored channels over `area` as 0–255 levels: `channels()` bytes per pixel,
+/// no colour conversion and no reordering. Unlike [`rgba8_image`], which reads the picture as
+/// RGB, a Lab surface gives its stored Lightness, a and b and a CMYK surface its four inks, the
+/// alpha last when the surface has one. Read in parallel bands like [`rgba8_image`].
+///
+/// The Magic Wand measures a document's Tolerance on these channels for the modes and depths the
+/// reference measures it there (#11785), where reading the picture as RGB would measure the
+/// Tolerance in a colour space the document is not in. For an 8-bit surface the levels are the
+/// stored bytes exactly; a deeper surface is quantized to the 8-bit grid here, so where this is
+/// the right read stays the caller's decision.
+/// Band rows for the parallel readers of [`stored_levels_planes`]: `read_region_into` hands back
+/// f32 samples, so an unrestricted 256-row band stages ~25 MB per worker on a wide multi-channel
+/// area (6000 px CMYK: 16 workers × ~24 MB of floats before quantizing). Keep one worker's f32
+/// staging near 2 MB; the u8 output plane is the larger fixed cost either way (#11785 review).
+fn levels_band_rows(w: usize, ch: usize) -> usize {
+    let per_row = (w * ch * 4).max(1);
+    (2u64 << 20).checked_div(per_row as u64).unwrap_or(256).clamp(16, 256) as usize
+}
+
+pub fn stored_levels_planes(s: &Surface, area: Rect) -> Vec<u8> {
+    let (w, h, ch) = (area.width() as usize, area.height() as usize, s.channels());
+    let mut data = vec![0u8; w * h * ch];
+    if w == 0 || h == 0 {
+        return data;
+    }
+    let band = levels_band_rows(w, ch);
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let read = |bi: usize, chunk: &mut [u8]| {
+        let y0 = area.y0 + (bi * band) as i32;
+        let rows = chunk.len() / (w * ch);
+        let mut px = Vec::new();
+        s.read_region_into(Rect::new(area.x0, y0, area.x1, y0 + rows as i32), &mut px);
+        for (d, v) in chunk.iter_mut().zip(px) {
+            *d = q(v);
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        data.par_chunks_mut(w * band * ch).enumerate().for_each(|(bi, c)| read(bi, c));
+    }
+    #[cfg(target_arch = "wasm32")]
+    data.chunks_mut(w * band * ch).enumerate().for_each(|(bi, c)| read(bi, c));
+    data
+}
+
 /// A selected region: 8-bit coverage over `bbox` (row-major), the bounding box of the pixels
 /// touched (including the anti-aliased fringe).
 #[derive(Clone, Debug, PartialEq)]
@@ -296,6 +342,38 @@ impl Region {
         let row = (y.abs_diff(self.bbox.y0) as usize).checked_mul(self.bbox.width() as usize);
         let value = row.and_then(|i| i.checked_add(x.abs_diff(self.bbox.x0) as usize)).and_then(|i| self.mask.get(i)).copied().unwrap_or(0);
         f32::from(value) / 255.0
+    }
+}
+
+/// Whether a difference of exactly `tolerance` levels still matches a Magic Wand seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WandBound {
+    /// A difference of at most `tolerance` levels matches (≤). What the tools that sample the
+    /// picture as 8-bit RGBA do, and what their Tolerance has always meant.
+    AtMost,
+    /// A difference of *below* `tolerance` levels matches (<), with Tolerance 0 and 1 both
+    /// meaning "the same colour". The wand uses this on a document's own colour channels, where
+    /// the reference's Tolerance is measured finer than the document's 8-bit grid (#11785: see
+    /// [`wand_region_on`]).
+    Below,
+}
+
+/// Integer greatest difference still matching `bound`, in stored levels.
+fn wand_max_diff(tolerance: f32, bound: WandBound) -> i32 {
+    match bound {
+        WandBound::AtMost => (tolerance + 1e-3).floor().max(0.0) as i32,
+        // `d < tolerance` on whole levels, so Tolerance 5 keeps differences 0..=4. A NaN or a
+        // negative Tolerance keeps exactly the same colour rather than selecting nothing, and a
+        // Tolerance past the scale keeps every difference.
+        WandBound::Below => {
+            if tolerance.is_nan() || tolerance <= 1.0 {
+                0
+            } else if tolerance >= 256.0 {
+                255
+            } else {
+                tolerance.ceil() as i32 - 1
+            }
+        }
     }
 }
 
@@ -317,6 +395,28 @@ impl ColorDistance {
             Self::Spread if p[3] == 255 && seed[3] == 255 => d.iter().fold(0, |m, v| m.max(*v)) - d.iter().fold(0, |m, v| m.min(*v)),
             Self::LargestChannel | Self::Spread => d.iter().fold(0, |m, v| m.max(v.abs())),
         }
+    }
+}
+
+/// The most channels the Magic Wand compares at once: a CMYK document's four inks and an alpha.
+pub const MAX_WAND_CHANNELS: usize = 5;
+
+/// The picture the Magic Wand measures its Tolerance on: `channels` stored levels (0–255) per
+/// pixel over `area`, with `alpha` the index of the alpha channel when the picture has one.
+/// [`rgba8_image`] reads the picture as RGB; [`stored_levels_planes`] gives a document its own
+/// colour channels.
+#[derive(Clone, Copy, Debug)]
+pub struct WandPixels<'a> {
+    pub area: Rect,
+    pub data: &'a [u8],
+    pub channels: usize,
+    pub alpha: Option<usize>,
+}
+
+impl<'a> WandPixels<'a> {
+    /// Straight 8-bit RGBA over `area`: what [`rgba8_image`] reads, as `w * h * 4` bytes.
+    pub fn rgba(area: Rect, data: &'a [u8]) -> Self {
+        Self { area, data, channels: 4, alpha: Some(3) }
     }
 }
 
@@ -355,7 +455,8 @@ pub fn wand_region_by(
     within: Option<&[f32]>,
     distance: ColorDistance,
 ) -> Option<Region> {
-    region_by_rule(img, area, seed, tolerance, contiguous, anti_alias, within, distance, MatchRule::Wand)
+    let how = WandMatch { tolerance, contiguous, anti_alias, bound: WandBound::AtMost, within, distance };
+    wand_region_rule(&WandPixels::rgba(area, img.as_flattened()), seed, &how, MatchRule::Wand)
 }
 
 /// Which pixels count as "similar" to the clicked one.
@@ -364,7 +465,8 @@ enum MatchRule {
     /// The Magic Wand / Magic Eraser rule: colour and alpha each within Tolerance, except that
     /// two fully transparent pixels always match.
     Wand,
-    /// The Paint Bucket rule, see [`wand_region_bucket`].
+    /// The Paint Bucket rule, see [`wand_region_bucket`]. Only RGBA pictures have it; any other
+    /// picture is compared by the wand rule.
     Bucket,
 }
 
@@ -385,60 +487,129 @@ enum MatchRule {
 /// Only that one semi-transparent case was measured; unmeasured cases keep the previous
 /// behaviour. [`wand_region`] and [`wand_region_within`] are unchanged.
 pub(crate) fn wand_region_bucket(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
-    region_by_rule(img, area, seed, tolerance, contiguous, anti_alias, None, ColorDistance::LargestChannel, MatchRule::Bucket)
+    let how = WandMatch::new(tolerance, contiguous, anti_alias, WandBound::AtMost);
+    wand_region_rule(&WandPixels::rgba(area, img.as_flattened()), seed, &how, MatchRule::Bucket)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn region_by_rule(
-    img: &[[u8; 4]],
-    area: Rect,
-    seed: (i32, i32),
-    tolerance: f32,
-    contiguous: bool,
-    anti_alias: bool,
-    within: Option<&[f32]>,
-    distance: ColorDistance,
-    rule: MatchRule,
-) -> Option<Region> {
-    if !area.contains(seed.0, seed.1) {
+/// How [`wand_region_on`] matches pixels against the clicked one.
+#[derive(Clone, Copy, Debug)]
+pub struct WandMatch<'a> {
+    pub tolerance: f32,
+    pub contiguous: bool,
+    pub anti_alias: bool,
+    /// Whether a difference of exactly `tolerance` still matches.
+    pub bound: WandBound,
+    /// The selection's coverage over the area, which a contiguous fill stays inside (#11779).
+    pub within: Option<&'a [f32]>,
+    /// How an RGBA picture's colour difference is measured; other pictures compare each channel.
+    pub distance: ColorDistance,
+}
+
+impl WandMatch<'_> {
+    /// A plain match: no selection limit, the largest channel difference.
+    pub fn new(tolerance: f32, contiguous: bool, anti_alias: bool, bound: WandBound) -> Self {
+        Self { tolerance, contiguous, anti_alias, bound, within: None, distance: ColorDistance::LargestChannel }
+    }
+}
+
+/// [`wand_region`] over any [`WandPixels`] with the Tolerance bound chosen: RGBA with
+/// [`WandBound::AtMost`] is [`wand_region`] itself; [`WandBound::Below`] is how the Magic Wand
+/// measures a document's own colour channels (#11785). `None` when the seed is outside the area
+/// or the picture is not something the wand can compare.
+///
+/// Why the document-channel comparison is exclusive at the bound: the reference measures Tolerance
+/// on the document's channels, finer than an 8-bit document stores them. Its Lab row (8-bit
+/// document, grey ramp of ten 40 px blocks 100, 105, … 145, click on the 100 block) says
+/// Tolerance 5 reaches only the 100 block and Tolerance 32 up to the 130 block, while this
+/// document stores Lightness 108, 113, 118, 124, … 153 (L\* / 100 × 255): steps of 0, 5, 10, 16,
+/// …, 31, 36 levels, of which 5 (5.2 unrounded) must not match at Tolerance 5 and 31 (30.6) must
+/// at Tolerance 32. The re-measured dither-free CMYK ramp (same issue, comment 6705983844) has
+/// largest ink steps of 7, 13, 19, 25, 31, 37 from the seed, and its two required cells —
+/// Tolerance 5 to x 100-140 and Tolerance 32 to x 100-340 — fall out either way, so the document
+/// channels share this one bound.
+pub fn wand_region_on(px: &WandPixels, seed: (i32, i32), how: &WandMatch) -> Option<Region> {
+    wand_region_rule(px, seed, how, MatchRule::Wand)
+}
+
+/// [`wand_region_on`] under a [`MatchRule`].
+fn wand_region_rule(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: MatchRule) -> Option<Region> {
+    if !px.area.contains(seed.0, seed.1) || px.channels == 0 || px.channels > MAX_WAND_CHANNELS {
         return None;
     }
-    let (w, h) = (area.width() as usize, area.height() as usize);
-    if w.checked_mul(h).is_none_or(|n| n > img.len()) {
+    // One fill per channel count: the comparison runs per pixel over the canvas.
+    match px.channels {
+        1 => wand_fill::<1>(px, seed, how, rule),
+        2 => wand_fill::<2>(px, seed, how, rule),
+        3 => wand_fill::<3>(px, seed, how, rule),
+        4 => wand_fill::<4>(px, seed, how, rule),
+        _ => wand_fill::<5>(px, seed, how, rule),
+    }
+}
+
+/// [`wand_region_on`] for `CH` stored channels per pixel.
+fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: MatchRule) -> Option<Region> {
+    let (contiguous, anti_alias) = (how.contiguous, how.anti_alias);
+    let (w, h) = (px.area.width() as usize, px.area.height() as usize);
+    if w.checked_mul(h).is_none_or(|n| n > px.data.len() / CH) {
         return None;
     }
-    let within = within.filter(|_| contiguous).filter(|m| m.len() >= w * h);
+    let within = how.within.filter(|_| how.contiguous).filter(|m| m.len() >= w * h);
     let inside = |i: usize| within.is_none_or(|m| m.get(i).is_some_and(|v| *v >= 0.5));
-    if !inside((seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize) {
+    let seed_i = (seed.1 - px.area.y0) as usize * w + (seed.0 - px.area.x0) as usize;
+    if !inside(seed_i) {
         return None;
     }
-    let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
+    let so = seed_i * CH;
+    let mut target = [0u8; CH];
+    target.copy_from_slice(px.data.get(so..so + CH)?);
+    let alpha = px.alpha.filter(|&a| a < CH);
+    let tol = wand_max_diff(how.tolerance, how.bound);
+    let rgba = CH == 4 && alpha == Some(3);
+    // How far pixel `i` is from the clicked one in colour (alpha left out), and the lower of the
+    // two opacities (0-255; 255 without an alpha channel).
+    let colour_diff = |i: usize| -> Option<(i32, f32)> {
+        let v = px.data.get(i * CH..i * CH + CH)?;
+        let d = if rgba {
+            how.distance.rgb([v[0], v[1], v[2], v[3]], [target[0], target[1], target[2], target[3]])
+        } else {
+            (0..CH).filter(|&c| Some(c) != alpha).map(|c| (v[c] as i32 - target[c] as i32).abs()).max().unwrap_or(0)
+        };
+        Some((d, alpha.map_or(255.0, |a| f32::from(v[a].min(target[a])))))
+    };
+    // Copying a selection can leave colour under zero alpha. Those invisible colours must not
     // split a transparent region into pieces, as if the copied source were still visible.
-    let similar = |p: [u8; 4]| match rule {
-        MatchRule::Wand => (target[3] == 0 && p[3] == 0) || (distance.rgb(p, target) <= tol && (p[3] as i32 - target[3] as i32).abs() <= tol),
-        MatchRule::Bucket => match target[3] {
-            0 => p[3] == 0,
-            255 => distance.rgb(p, target) <= tol && (p[3] as i32 - 255).abs() <= tol,
-            _ => p[3] != 0 && distance.rgb(p, target) <= tol && (p[..3] == target[..3] || (p[3] as i32 - target[3] as i32).abs() <= tol),
-        },
+    let similar = |i: usize| -> bool {
+        let o = i * CH;
+        let Some(v) = px.data.get(o..o + CH) else { return false };
+        let d = colour_diff(i).map_or(i32::MAX, |(d, _)| d);
+        match (rule, alpha) {
+            // The Paint Bucket rule is measured on RGBA pictures only.
+            (MatchRule::Bucket, Some(a)) if rgba => match target[a] {
+                0 => v[a] == 0,
+                255 => d <= tol && (v[a] as i32 - 255).abs() <= tol,
+                _ => v[a] != 0 && d <= tol && (v[..a] == target[..a] || (v[a] as i32 - target[a] as i32).abs() <= tol),
+            },
+            _ => {
+                let alpha_ok = alpha.is_none_or(|a| (v[a] as i32 - target[a] as i32).abs() <= tol);
+                alpha.is_some_and(|a| target[a] == 0 && v[a] == 0) || (alpha_ok && d <= tol)
+            }
+        }
     };
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {
         // Span fill: fill a run, then scan the rows above and below it for new seeds.
-        let mut stack = vec![((seed.0 - area.x0) as usize, (seed.1 - area.y0) as usize)];
+        let mut stack = vec![((seed.0 - px.area.x0) as usize, (seed.1 - px.area.y0) as usize)];
         while let Some((x, y)) = stack.pop() {
             let row = y * w;
             if marks[row + x] != 0 {
                 continue;
             }
             let (mut l, mut r) = (x, x);
-            while l > 0 && marks[row + l - 1] == 0 && similar(img[row + l - 1]) && inside(row + l - 1) {
+            while l > 0 && marks[row + l - 1] == 0 && similar(row + l - 1) && inside(row + l - 1) {
                 l -= 1;
             }
-            while r + 1 < w && marks[row + r + 1] == 0 && similar(img[row + r + 1]) && inside(row + r + 1) {
+            while r + 1 < w && marks[row + r + 1] == 0 && similar(row + r + 1) && inside(row + r + 1) {
                 r += 1;
             }
             marks[row + l..=row + r].fill(255);
@@ -450,7 +621,7 @@ fn region_by_rule(
                 let nrow = ny * w;
                 let mut in_run = false;
                 for nx in l..=r {
-                    let ok = marks[nrow + nx] == 0 && similar(img[nrow + nx]) && inside(nrow + nx);
+                    let ok = marks[nrow + nx] == 0 && similar(nrow + nx) && inside(nrow + nx);
                     if ok && !in_run {
                         stack.push((nx, ny));
                     }
@@ -462,7 +633,7 @@ fn region_by_rule(
         let scan = |y: usize, row: &mut [u8]| -> Option<(usize, usize)> {
             let mut span: Option<(usize, usize)> = None;
             for (x, m) in row.iter_mut().enumerate() {
-                if similar(img[y * w + x]) {
+                if similar(y * w + x) {
                     *m = 255;
                     span = Some(span.map_or((x, x), |(a, _)| (a, x)));
                 }
@@ -500,9 +671,12 @@ fn region_by_rule(
             *o = v;
             // Same rule as `magic_wand`: the region stays fully selected; a pixel just outside
             // it gets a fringe by how far its colour is past the tolerance.
-            if anti_alias && v == 0 && touches_region(x, y, w, h, |nx, ny| at(nx, ny) != 0) {
-                let p = img[y * w + x];
-                *o = fringe_coverage((distance.rgb(p, target) - tol) as f32, f32::from(p[3].min(target[3])));
+            if anti_alias
+                && v == 0
+                && touches_region(x, y, w, h, |nx, ny| at(nx, ny) != 0)
+                && let Some((d, a)) = colour_diff(y * w + x)
+            {
+                *o = fringe_coverage((d - tol) as f32, a);
             }
         }
     };
@@ -513,7 +687,7 @@ fn region_by_rule(
     }
     #[cfg(target_arch = "wasm32")]
     mask.chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
-    let bbox = Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32);
+    let bbox = Rect::new(px.area.x0 + x0 as i32, px.area.y0 + y0 as i32, px.area.x0 + x1 as i32, px.area.y0 + y1 as i32);
     Some(Region { bbox, mask })
 }
 

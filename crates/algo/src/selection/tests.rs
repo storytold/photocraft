@@ -829,3 +829,14 @@ fn color_matcher_tree_reservation_failure_is_reported() {
         assert_eq!(tree.nodes.len(), ColorBvh::node_count(n));
     }
 }
+
+#[test]
+fn stored_levels_bands_bound_the_f32_staging_on_wide_areas() {
+    // #11785 review: one parallel reader's f32 staging stays near 2 MB. A 6000 px CMYK strip
+    // (the Magic Eraser/Wand worst case on 24 MP documents) shrinks from 256 rows to fit;
+    // narrow areas keep full bands; an absurdly wide one clamps to the 16-row floor.
+    let rows = levels_band_rows(6000, 4);
+    assert!(rows >= 16 && 6000 * 4 * 4 * rows <= (2u64 << 20) as usize, "6000 px CMYK band rows: {rows}");
+    assert_eq!(levels_band_rows(1, 1), 256, "narrow areas keep full 256-row bands");
+    assert_eq!(levels_band_rows(100_000, 5), 16, "an extreme width clamps to the floor");
+}
