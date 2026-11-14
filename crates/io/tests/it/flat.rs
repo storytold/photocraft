@@ -61,6 +61,38 @@ codec_rt!(cin_gray16, "cin", ColorMode::Grayscale, SampleType::U16, false, 0.5 /
 codec_rt!(cin_rgb16, "cin", ColorMode::Rgb, SampleType::U16, false, 0.5 / 1023.0);
 codec_rt!(iff_rgb8_opaque, "iff", ColorMode::Rgb, SampleType::U8, false, 0.0);
 
+/// #11640: a CMYK JPEG opens as a CMYK document that keeps the file's ink values, so a chart of
+/// pure cyan, magenta, yellow and black squares still holds pure inks. (The reporter's impure
+/// sampled colours came from the readout converting the RGB composite back to CMYK, which is
+/// lossy; fixed in `photocraft_engine::sampler_cmds::ink_cmyk`. This pins down the other half: an
+/// Adobe-APP14 CMYK scan must not be read as RGB or left inverted.) The scan is lossy, so an ink
+/// may be off by one 8-bit step; a square's own ink stays at full.
+#[test]
+fn a_cmyk_jpeg_opens_as_a_cmyk_document_with_pure_inks() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+    let inks = [[255u8, 0, 0, 0], [0, 255, 0, 0], [0, 0, 255, 0], [0, 0, 0, 255]];
+    let (w, h) = (16u32, 4u32);
+    let mut px = Vec::new();
+    for _ in 0..h {
+        for x in 0..w {
+            px.extend_from_slice(&inks[(x / (w / inks.len() as u32)) as usize]);
+        }
+    }
+    let img = Image::from_u8(w, h, ChannelLayout::Cmyk, px).expect("CMYK image");
+    let bytes = photocraft_codecs::encode(&img, Format::Jpeg, &EncodeOptions { jpeg_quality: 100, ..Default::default() }).expect("CMYK JPEG");
+    let doc = import("chart.jpg", &bytes).expect("import").document;
+    assert_eq!((doc.mode, doc.depth), (ColorMode::Cmyk, SampleType::U8), "a CMYK file opens as a CMYK document");
+    let surf = doc.layers[0].surface().expect("the Background layer");
+    for (i, ink) in inks.iter().enumerate() {
+        let p = surf.pixel(i as i32 * 4 + 2, 2);
+        for (c, want) in ink.iter().enumerate() {
+            let got = p.get(c).copied().unwrap_or_default() * 255.0;
+            assert!((got - f32::from(*want)).abs() <= 1.0, "square {i} (ink {ink:?}) channel {c} reads {got}");
+        }
+        assert_eq!(p.get(4), Some(&1.0), "an opaque CMYK file has no transparency");
+    }
+}
+
 fn indexed_bmp_8() -> Vec<u8> {
     const FILE_HEADER_SIZE: usize = 14;
     const INFO_HEADER_SIZE: usize = 40;
