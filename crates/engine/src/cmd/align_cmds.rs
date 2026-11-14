@@ -25,7 +25,7 @@ use photocraft_algo::panorama::Layout;
 use photocraft_algo::pyramid;
 use photocraft_algo::transform::Interp;
 use photocraft_algo::warp::warp_mesh_gray;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
+use photocraft_doc::{ColorMode, Document, Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
@@ -55,6 +55,14 @@ fn pinned(doc: &Document, id: LayerId) -> bool {
 fn two_layers(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document open")?;
     if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
+}
+
+fn auto_blend_enabled(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    if matches!(st.doc.mode, ColorMode::Cmyk | ColorMode::Lab) {
+        return Err(r#"The command "Auto-Blend Layers" is not currently available."#.into());
+    }
+    two_layers(s)
 }
 
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
@@ -184,6 +192,9 @@ const BLEND_BUFFERS: &str = "Auto-Blend Layers";
 
 fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.autoBlendLayers";
+    if matches!(s.active().ok_or(EngineError::NoDocument)?.doc.mode, ColorMode::Cmyk | ColorMode::Lab) {
+        return Err(EngineError::Other(r#"The command "Auto-Blend Layers" is not currently available."#.into()));
+    }
     let ids = selected_pixel_layers(s);
     if ids.len() < 2 {
         return Err(bad(cmd, "select two or more pixel layers"));
@@ -350,8 +361,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 macro_rules! spec {
-    ($id:literal, $label:literal, $params:literal, $run:expr) => {
-        CommandSpec { id: $id, label: $label, menu: &["Edit"], shortcut: None, params: $params, enabled: two_layers, run: $run, journal: true }
+    ($id:literal, $label:literal, $params:literal, $enabled:expr, $run:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &["Edit"], shortcut: None, params: $params, enabled: $enabled, run: $run, journal: true }
     };
 }
 
@@ -361,16 +372,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.autoAlignLayers",
             "Auto-Align Layers…",
             r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=the locked selected layer, else the bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
+            two_layers,
             auto_align
         ),
         spec!(
             "edit.autoBlendLayers",
             "Auto-Blend Layers…",
             r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##,
+            auto_blend_enabled,
             auto_blend
         ),
     ]
 }
 
+#[cfg(test)]
+mod auto_blend_color_mode_tests;
 #[cfg(test)]
 mod tests;
