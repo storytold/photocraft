@@ -306,6 +306,9 @@ impl Builder<'_> {
                 }
             }
             Kind::Artboard { rect, background, .. } => {
+                if n.class != craft_affinity::stream::Tag::of(b"ShpN") {
+                    self.warn("a converted artboard outline (imported at its bounding box)");
+                }
                 let r = self.bbox(to_doc, *rect);
                 let bg = match background.first() {
                     Some(ap::Paint::Solid(c)) => {
