@@ -66,6 +66,39 @@ pub(super) fn pattern_stamp_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut p
     }
 }
 
+/// The Paint Bucket's Mode dropdown: Normal · Dissolve · Behind · Clear, then the blend mode
+/// groups, as the reference application lists them (#12531). `current` and the result are
+/// `(mode, behind)`, `(None, false)` being Clear. Without `special_enabled` (the Background is
+/// the active layer) Behind and Clear are greyed and cannot be picked; a wheel notch onto them
+/// steps on past both. Returns the mode picked this frame.
+pub(super) fn bucket_mode_dropdown(
+    ui: &mut egui::Ui,
+    id: &str,
+    current: (Option<BlendMode>, bool),
+    special_enabled: bool,
+) -> Option<(Option<BlendMode>, bool)> {
+    let opts = crate::brush_mode_menu::choices();
+    let greyed = |m: &(Option<BlendMode>, bool)| !special_enabled && m.0.is_none();
+    let groups = |m: &(Option<BlendMode>, bool)| m.0.is_some_and(starts_blend_group);
+    let mut mode = current;
+    if widgets::dropdown_wheel_grouped_enabled(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, groups, |m| !greyed(m)).0.is_empty() {
+        return None;
+    }
+    if !greyed(&mode) {
+        return Some(mode);
+    }
+    let at = |m: (Option<BlendMode>, bool)| opts.iter().position(|o| o.0 == m);
+    let (from, to) = (at(current)?, at(mode)?);
+    let mut i = to;
+    loop {
+        i = if to > from { i.checked_add(1)? } else { i.checked_sub(1)? };
+        let next = opts.get(i)?.0;
+        if !greyed(&next) {
+            return Some(next);
+        }
+    }
+}
+
 /// The Eraser's Smoothing %: whole numbers 0..100 that say when a typed value was past them, for
 /// the reference's alert (#11938). Returns the field and whether to show the alert.
 pub(super) fn smoothing_field_alerting(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> (egui::Response, bool) {
