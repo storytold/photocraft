@@ -152,16 +152,82 @@ pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// The PostScript name of the installed face of `family` at exactly `weight`/`italic`. A PSD names
-/// a type layer by PostScript name, and Photoshop treats a name no font has as missing (#3556).
-/// Only an exact face is named: layout picks a named face before weight and italic, so naming a
-/// nearby face would override the requested weight (a variable font's axis, a weight between two
-/// faces) or italic. Without an exact face the style keeps no name and layout matches as before.
-fn installed_postscript(family: &str, weight: u16, italic: bool) -> Option<String> {
+/// Compares two user-space variation coordinates within a tolerance scaled to `[min, max]`.
+fn axis_matches(a: f32, b: f32, min: f32, max: f32) -> bool {
+    let tol = if (max - min).abs() >= 10.0 { 0.5 } else { 0.01 };
+    (a - b).abs() <= tol
+}
+
+/// Effective user-space coordinate of `s` on `tag` (`s.variations`, `wght`/`ital`, or `default`).
+fn effective_axis_coord(s: &CharStyle, tag: &str, min: f32, default: f32, max: f32) -> f32 {
+    let v = s.variations.iter().find(|v| v.axis == tag).map(|v| v.value).unwrap_or_else(|| match tag {
+        "wght" => f32::from(s.weight),
+        "ital" if s.italic => max,
+        _ => default,
+    });
+    let d = default.clamp(min, max);
+    if v.is_finite() { v.clamp(min, max) } else { d }
+}
+
+/// Synchronizes non-`wght` variation coordinates of a variable-font [`photocraft_text::NamedInstance`]
+/// onto `s`: axes differing from the owning face's default are stored in `s.variations`, and axes
+/// at the default are removed so `s` stays minimal.
+fn sync_instance_variations(s: &mut CharStyle, faces: &[photocraft_text::FaceInfo], inst: &photocraft_text::NamedInstance) {
+    let Some(face) = faces.get(inst.face_index) else { return };
+    for (tag, min, default, max) in &face.axes {
+        if tag == "wght" || tag == "opsz" {
+            continue;
+        }
+        s.variations.retain(|v| &v.axis != tag);
+        if let Some((_, val)) = inst.axes.iter().find(|(t, _)| t == tag)
+            && !axis_matches(*val, *default, *min, *max)
+        {
+            s.variations.push(FontVariation { axis: tag.clone(), value: *val });
+        }
+    }
+}
+
+/// The PostScript name (and matched subfamily) of the installed face or variable-font named
+/// instance of `s.font_family` matching `s`'s effective coordinates. A PSD names a type layer by
+/// PostScript name, and Photoshop treats a name no font has as missing (#3556). Only an exact face
+/// or matching variable instance is named: layout picks a named face/instance before weight and
+/// italic, so naming a nearby face (such as a variable font's default `<Family>-Regular`) would
+/// override the requested weight/width (#6085).
+fn installed_postscript_for(fonts: &mut photocraft_text::FontDb, s: &CharStyle) -> Option<(String, Option<String>)> {
+    let faces = fonts.faces(&s.font_family);
+    if let Some(face) = faces.iter().find(|f| f.axes.is_empty() && f.italic == s.italic && f.weight.round() as u16 == s.weight) {
+        return face.postscript_name.clone().map(|ps| (ps, Some(face.style.clone())));
+    }
+    if !faces.iter().any(|f| !f.axes.is_empty()) {
+        return None;
+    }
+    for inst in fonts.named_instances(&s.font_family) {
+        let Some(face) = faces.get(inst.face_index) else { continue };
+        if inst.italic != s.italic {
+            continue;
+        }
+        let all_match = face.axes.iter().all(|(tag, min, default, max)| {
+            let inst_val = inst.axes.iter().find(|(t, _)| t == tag).map_or(*default, |(_, v)| *v);
+            axis_matches(effective_axis_coord(s, tag, *min, *default, *max), inst_val, *min, *max)
+        });
+        if all_match && let Some(ps) = inst.postscript_name {
+            return Some((ps, Some(inst.style)));
+        }
+    }
+    for face in faces.iter().filter(|f| !f.axes.is_empty() && f.italic == s.italic) {
+        let at_default =
+            face.axes.iter().all(|(tag, min, default, max)| axis_matches(effective_axis_coord(s, tag, *min, *default, *max), *default, *min, *max));
+        if at_default && let Some(ps) = &face.postscript_name {
+            return Some((ps.clone(), Some(face.style.clone())));
+        }
+    }
+    None
+}
+
+/// Looks up [`installed_postscript_for`] `s` against the shared [`photocraft_text::FontDb`].
+fn installed_postscript(s: &CharStyle) -> Option<String> {
     let mut shared = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-    let faces = shared.fonts.faces(family);
-    let face = faces.iter().find(|f| f.italic == italic && f.weight.round() as u16 == weight)?;
-    face.postscript_name.clone()
+    installed_postscript_for(&mut shared.fonts, s).map(|(ps, _)| ps)
 }
 
 /// Photoshop's leading range in points.
@@ -265,6 +331,11 @@ fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
                 s.weight = resolved.weight;
                 s.italic = resolved.italic;
                 s.postscript_name = Some(v.to_string());
+                if let Some(inst) = text.fonts.instance_by_postscript(&s.font_family, v) {
+                    s.font_style = inst.style.clone();
+                    let faces = text.fonts.faces(&s.font_family);
+                    sync_instance_variations(s, &faces, &inst);
+                }
             }
         }
         hit(true);
@@ -279,10 +350,20 @@ fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
         s.italic = l.contains("italic") || l.contains("oblique");
         let g = photocraft_text::fonts::guess_from_postscript(&format!("X-{}", v.replace(' ', "")));
         s.weight = g.weight;
-        if let Some(face) = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.named_face(&s.font_family, v) {
+        let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(face) = text.fonts.named_face(&s.font_family, v) {
             s.weight = face.weight.round() as u16;
             s.italic = face.italic;
             s.postscript_name = face.postscript_name;
+            if !face.axes.is_empty() {
+                s.variations.retain(|var| !face.axes.iter().any(|(tag, ..)| tag == &var.axis && tag != "opsz"));
+            }
+        } else if let Some(inst) = text.fonts.named_style_instance(&s.font_family, v) {
+            s.weight = inst.weight.round() as u16;
+            s.italic = inst.italic;
+            s.postscript_name = inst.postscript_name.clone();
+            let faces = text.fonts.faces(&s.font_family);
+            sync_instance_variations(s, &faces, &inst);
         }
         hit(true);
     }
@@ -311,7 +392,7 @@ fn apply_font_props(s: &mut CharStyle, p: &Value) -> bool {
     // A font named by family (or a style that matched no face) has no PostScript name yet: fill in
     // the installed face's real name, so the PSD does not invent "<Family>-Regular" (#3556).
     if font_key && s.postscript_name.is_none() {
-        s.postscript_name = installed_postscript(&s.font_family, s.weight, s.italic);
+        s.postscript_name = installed_postscript(s);
     }
     any
 }
@@ -421,10 +502,53 @@ fn apply_char_features(s: &mut CharStyle, p: &Value) -> bool {
         hit(true);
     }
     if let Some(Value::Object(m)) = p.get("variations") {
+        let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        let faces = text.fonts.faces(&s.font_family);
+        let has_variable_face = faces.iter().any(|f| !f.axes.is_empty());
+        if has_variable_face
+            && p.get("postscriptName").is_none()
+            && let Some(ps) = s.postscript_name.clone()
+            && let Some(inst) = text.fonts.instance_by_postscript(&s.font_family, &ps)
+            && let Some(face) = faces.get(inst.face_index)
+        {
+            for (tag, min, default, max) in &face.axes {
+                if tag == "opsz" || s.variations.iter().any(|v| &v.axis == tag) {
+                    continue;
+                }
+                if let Some((_, val)) = inst.axes.iter().find(|(t, _)| t == tag)
+                    && !axis_matches(*val, *default, *min, *max)
+                {
+                    s.variations.push(FontVariation { axis: tag.clone(), value: *val });
+                }
+            }
+        }
         for (axis, v) in m {
             s.variations.retain(|f| &f.axis != axis);
             if let Some(x) = v.as_f64() {
                 s.variations.push(FontVariation { axis: axis.clone(), value: x as f32 });
+            }
+        }
+        if has_variable_face && p.get("postscriptName").is_none() {
+            if let Some(x) = m.get("wght").and_then(Value::as_f64).filter(|x| x.is_finite()) {
+                s.weight = x.clamp(1.0, 1000.0).round() as u16;
+            }
+            if let Some(x) = m.get("ital").and_then(Value::as_f64).filter(|x| x.is_finite()) {
+                s.italic = x >= 0.5;
+            } else if let Some(x) = m.get("slnt").and_then(Value::as_f64).filter(|x| x.is_finite()) {
+                s.italic = x < -0.5;
+            }
+            match installed_postscript_for(&mut text.fonts, s) {
+                Some((ps, Some(style_name))) => {
+                    s.postscript_name = Some(ps);
+                    s.font_style = style_name;
+                }
+                Some((ps, None)) => {
+                    s.postscript_name = Some(ps);
+                }
+                None => {
+                    s.postscript_name = None;
+                    s.font_style.clear();
+                }
             }
         }
         hit(true);

@@ -468,3 +468,74 @@ fn postscript_name_of_a_named_instance_lays_out_at_that_instance() {
     assert!(explicit < family * 0.8, "wdth 75 is narrower: {explicit} vs {family}");
     assert!((instance - explicit).abs() < 0.5, "instance: {instance} px, its axes: {explicit} px, default instance: {family} px");
 }
+
+/// Variable-font `fvar` named instances resolve as exact PostScript faces (including explicit
+/// `postScriptNameID` and name-25 `VARIATIONS_POSTSCRIPT_NAME_PREFIX` on split italic variable
+/// files such as `UbuntuSansItalic-BoldItalic`), recovering the true family instead of guessing
+/// a missing `"<Family> Italic"` family (#6085).
+#[test]
+fn named_instances_resolve_as_exact_postscript_faces() {
+    let mut split_italic = instance_font(&INTER_REGULAR);
+    // Rewrite the synthesized variable font's `name` table as an italic variable file of family
+    // "Split Var" whose PostScript variation prefix (name 25) is "SplitVarItalic".
+    let count = u16::from_be_bytes(split_italic[4..6].try_into().unwrap()) as usize;
+    let mut name_rec = 0;
+    for i in 0..count {
+        let r = 12 + i * 16;
+        let off = u32::from_be_bytes(split_italic[r + 8..r + 12].try_into().unwrap()) as usize;
+        match &split_italic[r..r + 4] {
+            b"name" => name_rec = r,
+            b"OS/2" => split_italic[off + 62..off + 64].copy_from_slice(&1u16.to_be_bytes()),
+            b"head" => split_italic[off + 44..off + 46].copy_from_slice(&2u16.to_be_bytes()),
+            _ => {}
+        }
+    }
+    let names = [
+        (1u16, "Split Var"),
+        (2, "Italic"),
+        (6, "SplitVar-Italic"),
+        (16, "Split Var"),
+        (17, "Italic"),
+        (25, "SplitVarItalic"),
+        (256, "Weight"),
+        (257, "Width"),
+        (258, "Bold Italic"),
+        (259, "SplitVarItalic-HeavyItalic"),
+        (260, "Heavy Italic"),
+    ];
+    let mut table = Vec::new();
+    let mut strings = Vec::new();
+    for v in [0u16, names.len() as u16, (6 + names.len() * 12) as u16] {
+        table.extend(v.to_be_bytes());
+    }
+    for (id, value) in names {
+        let encoded: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, 0x409, id, encoded.len() as u16, strings.len() as u16] {
+            table.extend(n.to_be_bytes());
+        }
+        strings.extend(encoded);
+    }
+    table.extend(strings);
+    let end = split_italic.len() as u32;
+    split_italic[name_rec + 8..name_rec + 12].copy_from_slice(&end.to_be_bytes());
+    split_italic[name_rec + 12..name_rec + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+    split_italic.extend(table);
+
+    let mut db = FontDb::new();
+    db.register_font_data(instance_font(&INTER_REGULAR));
+    db.register_font_data(split_italic);
+
+    let insts = db.named_instances("Instance Test");
+    assert_eq!(
+        insts.iter().map(|i| (i.style.as_str(), i.postscript_name.as_deref(), i.weight as u16, i.italic)).collect::<Vec<_>>(),
+        [("Light Condensed", Some("InstanceTest-LightCondensed"), 300, false), ("Heavy", Some("InstanceTest-Black"), 900, false)]
+    );
+    assert_eq!(db.named_style_instance("Instance Test", "light condensed").and_then(|i| i.postscript_name), Some("InstanceTest-LightCondensed".into()));
+
+    assert_eq!(db.resolve_postscript("InstanceTest-LightCondensed"), ResolvedFont { family: "Instance Test".into(), weight: 300, italic: false, exact: true });
+    assert_eq!(db.resolve_postscript("InstanceTest-Black"), ResolvedFont { family: "Instance Test".into(), weight: 900, italic: false, exact: true });
+    // Note: in `split_italic`, instance 258 ("Bold Italic") sits at the first `fvar` slot (coords
+    // 300, 75 from `instance_font`), and instance 260 ("Heavy Italic") at (900, 100).
+    assert_eq!(db.resolve_postscript("SplitVarItalic-BoldItalic"), ResolvedFont { family: "Split Var".into(), weight: 300, italic: true, exact: true });
+    assert_eq!(db.resolve_postscript("SplitVarItalic-HeavyItalic"), ResolvedFont { family: "Split Var".into(), weight: 900, italic: true, exact: true });
+}

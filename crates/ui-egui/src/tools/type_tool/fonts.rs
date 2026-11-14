@@ -104,26 +104,53 @@ fn weight_name(w: f32) -> &'static str {
 }
 
 /// Style names available for a family: each face's actual OpenType subfamily (including numeric
-/// and nonstandard ones), plus the standard weights a variable face's `wght` axis covers.
+/// and nonstandard ones), named instances from `fvar`, plus the standard weights a variable
+/// face's `wght` axis covers.
 pub fn styles(family: &str) -> Vec<String> {
-    let faces = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(family);
-    let v = style_names(&faces);
+    let (faces, instances) = {
+        let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        (eng.fonts.faces(family), eng.fonts.named_instances(family))
+    };
+    let v = style_names_with_instances(&faces, &instances);
     if v.is_empty() { vec!["Regular".into()] } else { v }
+}
+
+/// Style dropdown `(value, localized_label)` items for `family`, keeping `current` visible even
+/// when `family` is not installed or `current` came from a non-standard axis position.
+pub(super) fn style_options(family: &str, current: &str) -> Vec<(String, String)> {
+    let mut names = styles(family);
+    if !current.is_empty() && !names.iter().any(|s| s == current) {
+        names.push(current.to_string());
+    }
+    names
+        .into_iter()
+        .map(|s| {
+            let label = style_label(&s);
+            (s, label)
+        })
+        .collect()
 }
 
 /// [`styles`] of these faces, lightest first. A variable face reports only its default instance
 /// (Montserrat's is Thin), yet the layout draws any weight its `wght` axis covers, so the standard
 /// weights in that range are listed too.
+#[cfg(test)]
 pub(super) fn style_names(faces: &[photocraft_text::FaceInfo]) -> Vec<String> {
+    style_names_with_instances(faces, &[])
+}
+
+/// Combines face subfamilies, `fvar` named instances, and variable `wght` steps into sorted unique style names.
+pub(super) fn style_names_with_instances(faces: &[photocraft_text::FaceInfo], instances: &[photocraft_text::NamedInstance]) -> Vec<String> {
     let label = |weight: f32, italic: bool| {
         let name = match (weight_name(weight), italic) {
             ("Regular", true) => "Italic".to_string(),
             (w, true) => format!("{w} Italic"),
             (w, false) => w.to_string(),
         };
-        (weight.round() as i32, italic, name)
+        (weight.round() as i32, italic, 1u8, name)
     };
-    let mut v: Vec<(i32, bool, String)> = faces.iter().map(|f| (f.weight.round() as i32, f.italic, f.style.clone())).collect();
+    let mut v: Vec<(i32, bool, u8, String)> = faces.iter().map(|f| (f.weight.round() as i32, f.italic, 0, f.style.clone())).collect();
+    v.extend(instances.iter().filter(|i| !i.style.is_empty()).map(|i| (i.weight.round() as i32, i.italic, 0, i.style.clone())));
     for f in faces {
         if let Some((_, min, _, max)) = f.axes.iter().find(|a| a.0 == "wght") {
             v.extend((100..=900).step_by(100).map(|w| w as f32).filter(|w| (*min..=*max).contains(w)).map(|w| label(w, f.italic)));
@@ -131,8 +158,8 @@ pub(super) fn style_names(faces: &[photocraft_text::FaceInfo]) -> Vec<String> {
     }
     v.sort();
     let mut names: Vec<String> = Vec::new();
-    for (_, _, name) in v {
-        if !names.contains(&name) {
+    for (_, _, _, name) in v {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
             names.push(name);
         }
     }
@@ -162,9 +189,15 @@ pub(crate) fn slider_axes(faces: &[photocraft_text::FaceInfo], italic: bool) -> 
 }
 
 /// The value an axis slider shows: the style's own value for the axis, else what the layout
-/// draws (the style's weight on `wght`, the axis default otherwise), within the axis range.
+/// draws (a named instance's coordinate, the style's weight on `wght`, or the axis default),
+/// within the axis range.
 pub(crate) fn axis_value(c: &photocraft_doc::text::CharStyle, (tag, min, default, max): &Axis) -> f32 {
-    let v = c.variations.iter().find(|v| &v.axis == tag).map(|v| v.value).unwrap_or_else(|| match tag.as_str() {
+    let own = c.variations.iter().find(|v| &v.axis == tag).map(|v| v.value).or_else(|| {
+        let ps = c.postscript_name.as_deref()?;
+        let mut eng = photocraft_text::try_shared()?.lock().unwrap_or_else(PoisonError::into_inner);
+        eng.fonts.instance_by_postscript(&c.font_family, ps)?.axes.into_iter().find(|(t, _)| t == tag).map(|(_, v)| v)
+    });
+    let v = own.unwrap_or_else(|| match tag.as_str() {
         "wght" => f32::from(c.weight),
         "ital" if c.italic => *max,
         _ => *default,
@@ -225,12 +258,29 @@ pub(crate) fn selected_style(style: &photocraft_doc::text::CharStyle) -> String 
     if let Some(ps) = &style.postscript_name
         && let Some(engine) = photocraft_text::try_shared()
     {
-        let faces = engine.lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(&style.font_family);
-        if let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps)) {
+        let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(face) = eng.fonts.faces(&style.font_family).into_iter().find(|f| f.postscript_name.as_ref() == Some(ps))
+            && (face.axes.is_empty()
+                || (face.italic == style.italic
+                    && face.weight.round() as u16 == style.weight
+                    && face.axes.iter().all(|(tag, _, def, _)| {
+                        tag == "opsz" || style.variations.iter().find(|v| &v.axis == tag).is_none_or(|v| (v.value - def).abs() <= 0.5)
+                    })))
+        {
             return face.style;
         }
+        if let Some(inst) = eng.fonts.instance_by_postscript(&style.font_family, ps) {
+            return inst.style;
+        }
     }
-    if style.font_style.is_empty() { if style.italic { "Italic".into() } else { "Regular".into() } } else { style.font_style.clone() }
+    if !style.font_style.is_empty() {
+        return style.font_style.clone();
+    }
+    match (weight_name(f32::from(style.weight)), style.italic) {
+        ("Regular", true) => "Italic".into(),
+        (w, true) => format!("{w} Italic"),
+        (w, false) => w.into(),
+    }
 }
 
 /// Localized style label for the dropdown. The raw string stays the engine's `fontStyle` key;
