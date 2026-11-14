@@ -6,7 +6,7 @@
 //! - **macOS**: `NSEvent.mouseLocation`, converted into the content view of our window under it.
 //! - **X11**: `QueryPointer` on our window (a second, pure-Rust X connection).
 //! - **Windows**: `GetCursorPos`, relative to the window's client area.
-//! - **Wayland**: winit delivers file drops, and egui's last pointer position is used as fallback.
+//! - **Wayland**: winit reports the drag position through egui's `RawInput::file_drag_pos`.
 //!
 //! No `unsafe`: every OS call goes through a safe binding.
 //!
