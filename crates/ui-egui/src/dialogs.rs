@@ -1356,6 +1356,8 @@ pub mod open_prompt;
 pub mod palette;
 #[cfg(test)]
 mod paths_export_default_tests;
+#[cfg(test)]
+mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;

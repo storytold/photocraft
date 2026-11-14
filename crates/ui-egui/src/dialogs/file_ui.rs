@@ -142,17 +142,20 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         }
         "file.package" => form(app, id, "Package", json!({"dir": dir}), json!({})),
         "file.export.pathsToIllustrator" => {
-            let mut names = vec!["all".to_string()];
-            if let Some(d) = app.session.active() {
+            // Document Bounds comes first; a document without paths offers only it, selected (#13771).
+            let mut names = vec!["documentBounds".to_string()];
+            if let Some(d) = app.session.active().filter(|d| d.doc.work_path.is_some() || !d.doc.paths.is_empty()) {
+                names.push("all".into());
                 if d.doc.work_path.is_some() {
                     names.push("work".into());
                 }
                 names.extend(d.doc.paths.iter().map(|p| p.name.clone()));
             }
+            let fallback = if names.len() > 1 { "all" } else { "documentBounds" };
             // Opens on the Paths panel's selected row, as the reference application does (#13777).
             // A shape layer's path ("layer") is not an entry yet, and a row the document no longer
-            // has falls back to All Paths.
-            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or("all").to_string();
+            // has falls back to All Paths (Document Bounds without paths).
+            let paths = app.ui.selected_path.as_deref().filter(|s| *s != "layer" && names.iter().any(|n| n == s)).unwrap_or(fallback).to_string();
             form(app, id, "Export Paths to File", json!({"path": format!("{dir}/{stem}.ai"), "paths": paths}), json!({"paths": names}))
         }
         _ => return None,
