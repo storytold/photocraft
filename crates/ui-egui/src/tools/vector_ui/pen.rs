@@ -233,10 +233,9 @@ pub fn pen_grab_handle(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     let Some(pen) = app.ui.pen.as_mut() else { return false };
     let Some((i, k)) = pen.knots.len().checked_sub(1).zip(pen.knots.last()) else { return false };
     let dist = |p: [f64; 2]| (p[0] - x).hypot(p[1] - y);
-    // Both handles show only while the outgoing one is pulled out (`draw_overlay`).
-    if k[2] == k[0] {
-        return false;
-    }
+    // `draw_overlay` shows every handle the last anchor has, the incoming one alone too after a
+    // click on the anchor took the outgoing one. A retracted handle sits on the anchor: it isn't
+    // shown and can't be grabbed, and a press there is the anchor's (`pen_down`).
     let grabbed = |h: [f64; 2]| h != k[0] && dist(h) < tol && dist(h) < dist(k[0]);
     let incoming = if grabbed(k[2]) && dist(k[2]) <= dist(k[1]) {
         false
@@ -1111,3 +1110,7 @@ mod pen_alt_drag_segment_tests;
 #[cfg(test)]
 #[path = "freeform_close_tolerance_tests.rs"]
 mod freeform_close_tolerance_tests;
+
+#[cfg(test)]
+#[path = "pen_alt_click_last_anchor_tests.rs"]
+mod pen_alt_click_last_anchor_tests;

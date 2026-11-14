@@ -268,7 +268,11 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         for (i, k) in pen.knots.iter().enumerate() {
             let c = to_scr(k[0]);
             let last = i + 1 == pen.knots.len();
-            if (last && k[2] != k[0] && !pen.curvature) || (selected(i) && !last) {
+            // The last anchor shows the handles it has. A click on it takes its outgoing handle
+            // (#1482; ⌥/Alt-click in Photoshop) and the incoming one, which still shapes the
+            // curve into it, stays on screen, as in Photoshop. A retracted handle sits on the
+            // anchor and isn't drawn.
+            if (last && !pen.curvature) || (selected(i) && !last) {
                 for hnd in [k[1], k[2]].into_iter().filter(|h| *h != k[0]) {
                     draw_handle(painter, c, to_scr(hnd), accent);
                 }
