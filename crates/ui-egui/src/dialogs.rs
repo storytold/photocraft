@@ -1310,6 +1310,8 @@ pub mod channel_options_ui;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
+#[cfg(test)]
+mod color_table_open_name_tests;
 pub mod color_table_ui;
 pub mod credits;
 pub mod dds_options_ui;
