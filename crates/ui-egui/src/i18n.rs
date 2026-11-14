@@ -87,7 +87,7 @@ pub fn dir_for_code(code: &str) -> Dir {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The registry. English first: it is the fallback and the source language. Plural forms follow
 /// each language's CLDR rules (the craft-i18n crate).
@@ -120,6 +120,8 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
     LangInfo { code: "nl", complete_menus: true },
     LangInfo { code: "it", complete_menus: true },
+    // Lithuanian; incomplete menu coverage falls back to English for untranslated strings.
+    LangInfo { code: "lt", complete_menus: false },
     // Hungarian: a count takes the singular noun ("3 réteg"), so both plural forms read the same.
     LangInfo { code: "hu", complete_menus: true },
     // Turkish; `tr`, `tr-TR` and `tr_TR` locales resolve here.
