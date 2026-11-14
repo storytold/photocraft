@@ -45,7 +45,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
-pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
