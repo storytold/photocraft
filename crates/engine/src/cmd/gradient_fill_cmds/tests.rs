@@ -388,3 +388,108 @@ fn stop_rejects_huge_indices_without_panicking() {
     assert_eq!(midpoints, vec![0.25]);
     assert_eq!(s.active().unwrap().history.past_len(), h + 1);
 }
+
+/// The active fill layer's fill replaced by `f` (as a PSD import leaves it).
+fn set_active_fill(s: &mut Session, f: Fill) {
+    let id = s.active().unwrap().active_layer.unwrap();
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content = LayerContent::Fill(f);
+}
+
+/// A fill as PSD import leaves a Photoshop gradient with Smoothness 100: three stops (the first
+/// segment's midpoint at 30 %) kept, rendered as their bake.
+fn photoshop_fill() -> Fill {
+    use photocraft_doc::effects::GradientInterpolation;
+    let mut src = GradientInterpolation::new(
+        "classic",
+        100.0,
+        vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (0.5, Color::rgb(0.0, 1.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
+    );
+    src.midpoints = vec![0.3, 0.5];
+    let mut f = Fill::gradient(photocraft_io::gradient_bake::bake_interpolation(&src), 90.0, 1.0, GradientStyle::Linear, false);
+    if let Fill::Gradient { interpolation, .. } = &mut f {
+        *interpolation = Some(Box::new(src));
+    }
+    f
+}
+
+/// #13557: a fill that keeps Photoshop's gradient is described and edited through its three
+/// stops (not the 97 baked ones); edits bake it again, geometry edits leave the bake exact,
+/// and Classic at Smoothness 0 drops the record.
+#[test]
+fn gradient_fill_edits_photoshops_stops() {
+    let mut s = session(8, "white");
+    s.execute(CREATE, json!({"from": [0, 16], "to": [48, 16]})).unwrap();
+    let original = photoshop_fill();
+    set_active_fill(&mut s, original.clone());
+    let g = s.execute(GET, json!({})).unwrap();
+    assert_eq!(g["stops"].as_array().map(Vec::len), Some(3), "{g}");
+    assert_eq!((g["method"].as_str(), g["smoothness"].as_f64()), (Some("classic"), Some(100.0)));
+    assert!((g["midpoints"][0].as_f64().unwrap() - 0.3).abs() < 1e-6);
+    // A geometry edit keeps the baked stops exactly.
+    s.execute(SET, json!({"angle": 45})).unwrap();
+    let Fill::Gradient { stops, interpolation, angle, .. } = active_fill(&s) else { panic!() };
+    let Fill::Gradient { stops: s0, interpolation: i0, .. } = &original else { panic!() };
+    assert_eq!((&stops, &interpolation, angle), (s0, i0, 45.0));
+    // A stop colour edit changes the kept stop and bakes again; the midpoints stay.
+    s.execute(STOP, json!({"action": "color", "index": 1, "color": "#ffff00"})).unwrap();
+    let Fill::Gradient { stops, midpoints, interpolation: Some(src), .. } = active_fill(&s) else { panic!() };
+    assert_eq!(src.stops.len(), 3);
+    assert_eq!(src.stops[1].1.to_rgb(), [1.0, 1.0, 0.0]);
+    assert!((src.midpoints[0] - 0.3).abs() < 1e-6);
+    assert!(midpoints.is_empty() && stops.len() > 3);
+    assert_eq!(stops, photocraft_io::gradient_bake::bake_interpolation(&src));
+    // Adding a stop adds a segment, which starts halfway.
+    s.execute(STOP, json!({"action": "add", "location": 0.75})).unwrap();
+    let Fill::Gradient { interpolation: Some(src), .. } = active_fill(&s) else { panic!() };
+    assert_eq!(src.stops.len(), 4);
+    assert_eq!(src.midpoints.len(), 3, "{:?}", src.midpoints);
+    // Method and Smoothness are params too; Classic at 0 renders the stops as they are.
+    s.execute(SET, json!({"method": "perceptual", "smoothness": 40})).unwrap();
+    let Fill::Gradient { interpolation: Some(src), .. } = active_fill(&s) else { panic!() };
+    assert_eq!((src.method.as_str(), src.smoothness), ("perceptual", 40.0));
+    s.execute(SET, json!({"method": "classic", "smoothness": 0})).unwrap();
+    let Fill::Gradient { stops, midpoints, interpolation: None, .. } = active_fill(&s) else { panic!() };
+    assert_eq!(stops.len(), 4);
+    assert_eq!(midpoints.len(), 3);
+    // Bad values are refused, nothing changes.
+    let before = active_fill(&s);
+    for bad in [json!({"method": "wavy"}), json!({"method": 3}), json!({"smoothness": 101}), json!({"smoothness": "lots"}), json!({"smoothness": -1})] {
+        assert!(s.execute(SET, bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(active_fill(&s), before);
+}
+
+/// #13557: choosing a preset replaces the gradient, Photoshop's interpolation with it.
+#[test]
+fn a_preset_replaces_a_kept_photoshop_gradient() {
+    let mut s = session(8, "white");
+    s.execute(CREATE, json!({"from": [0, 16], "to": [48, 16]})).unwrap();
+    set_active_fill(&mut s, photoshop_fill());
+    let name = s.presets.gradients.iter().flat_map(|g| g.items.iter()).next().unwrap().name.clone();
+    s.execute("gradient.presets.select", json!({"preset": name})).unwrap();
+    assert!(matches!(active_fill(&s), Fill::Gradient { interpolation: None, .. }));
+}
+
+/// #13557: Classic at Smoothness 0 drops the kept gradient, but an opacity midpoint off the
+/// middle (which a fill can't hold) is baked into the opacity stops, so the transparency is
+/// half way at the midpoint.
+#[test]
+fn dropping_a_kept_gradient_keeps_its_opacity_midpoints() {
+    use photocraft_compose::gradient_fill::Ramp;
+    let mut s = session(8, "white");
+    s.execute(CREATE, json!({"from": [0, 16], "to": [48, 16]})).unwrap();
+    let mut f = photoshop_fill();
+    if let Fill::Gradient { opacity_stops, interpolation: Some(src), .. } = &mut f {
+        src.opacity_stops = vec![(0.0, 1.0), (1.0, 0.0)];
+        src.opacity_midpoints = vec![0.2];
+        *opacity_stops = photocraft_io::gradient_bake::bake_interpolation_opacity(src).unwrap();
+    }
+    set_active_fill(&mut s, f);
+    s.execute(SET, json!({"method": "classic", "smoothness": 0})).unwrap();
+    let after = active_fill(&s);
+    assert!(matches!(after, Fill::Gradient { interpolation: None, .. }), "{after:?}");
+    let ramp = Ramp::new(&after).unwrap();
+    let at = |t: f32| ramp.sample(t)[3];
+    assert!((at(0.2) - 0.5).abs() < 0.02, "half way at the 20 % midpoint: {}", at(0.2));
+    assert!((at(0.0) - 1.0).abs() < 1e-3 && at(1.0).abs() < 1e-3);
+}

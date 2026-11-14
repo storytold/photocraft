@@ -349,6 +349,7 @@ mod tests {
             offset: (0.0, 0.0),
             dither: false,
             align: true,
+            interpolation: None,
         };
         let r = Ramp::new(&f).unwrap();
         // Unsorted stops are sorted; the midpoint puts 50 % gray at t = 0.25.

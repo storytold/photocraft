@@ -751,7 +751,14 @@ fn convert_color(c: &mut Color, from: ColorMode, to: ColorMode, t: &Transform) {
 fn convert_fill(f: &mut Fill, cc: &mut dyn FnMut(&mut Color)) {
     match f {
         Fill::Solid(c) => cc(c),
-        Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|s| cc(&mut s.1)),
+        Fill::Gradient { stops, interpolation, .. } => {
+            stops.iter_mut().for_each(|s| cc(&mut s.1));
+            // Photoshop's own gradient too (#13557), as a Gradient Overlay's: the rendered stops
+            // keep their look, and the next edit bakes the converted gradient.
+            if let Some(source) = interpolation {
+                source.stops.iter_mut().for_each(|s| cc(&mut s.1));
+            }
+        }
         Fill::Pattern { .. } => {}
     }
 }

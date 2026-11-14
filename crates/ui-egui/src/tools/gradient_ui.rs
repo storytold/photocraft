@@ -184,6 +184,9 @@ struct Widget {
 
 impl Widget {
     fn new(f: &Fill, frame: Rect32) -> Option<Widget> {
+        // Photoshop's own stops when the fill keeps them, not the dense baked ones (#13557).
+        let view = cmds::source_view(f);
+        let f = &view;
         let Fill::Gradient { stops, midpoints, reverse, style, .. } = f else { return None };
         let (start, end) = gf::fill_handles(f, frame)?;
         let mut st: Vec<(f32, [f32; 4])> = stops
@@ -364,7 +367,7 @@ fn click(app: &mut PhotocraftApp, layer: LayerId, grab: Grab) {
 /// Opens the Color Picker on colour stop `i`; OK runs `gradient.fill.stop` (one history step).
 pub fn edit_stop_color(app: &mut PhotocraftApp, layer: LayerId, i: usize) {
     let Some(st) = app.session.active() else { return };
-    let Some(Fill::Gradient { stops, .. }) = st.doc.layer(layer).and_then(fill_of) else { return };
+    let Some(Fill::Gradient { stops, .. }) = st.doc.layer(layer).and_then(fill_of).map(cmds::source_view) else { return };
     let mut sorted = stops.clone();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
     let Some((_, c)) = sorted.get(i) else { return };
@@ -792,6 +795,7 @@ fn preset_fill(app: &PhotocraftApp) -> Option<Fill> {
         offset: (0.0, 0.0),
         dither: false,
         align: true,
+        interpolation: None,
     })
 }
 
@@ -830,7 +834,7 @@ fn stops_editor_for(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink, f: F
                 Sink::Preset => app.gradient.preset_stop = None,
             }
             let selected = ui.data(|d| d.get_temp::<Marker>(selection_key));
-            let selection = selection_after_edit(&f, &p, selected);
+            let selection = selection_after_edit(&cmds::source_view(&f), &p, selected);
             if app.run(sink.cmd(), sink.params(p)).is_ok()
                 && let Some(marker) = selection
             {
@@ -884,8 +888,10 @@ fn selection_after_edit(f: &Fill, p: &Value, previous: Option<Marker>) -> Option
 
 fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pending: Option<&Value>, colors: ([f32; 4], [f32; 4])) -> Option<StopAction> {
     // The stops as committed: a drag edit (and the two-stop minimum) addresses these, not the
-    // pending preview, which may already leave the dragged stop out.
-    let Fill::Gradient { stops, opacity_stops, .. } = f else { return None };
+    // pending preview, which may already leave the dragged stop out. A fill that keeps
+    // Photoshop's own gradient shows and edits its stops; the ramp shows it as rendered (#13557).
+    let view = cmds::source_view(f);
+    let Fill::Gradient { stops, opacity_stops, .. } = &view else { return None };
     let opacity_count = if opacity_stops.is_empty() { 2 } else { opacity_stops.len() };
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width().max(120.0);
@@ -908,7 +914,7 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
         paint_ramp(ui.painter(), bar, |u| ramp.sample(u));
     }
     ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    let (ss, os, mids) = match &shown {
+    let (ss, os, mids) = match &cmds::source_view(&shown) {
         Fill::Gradient { stops, opacity_stops, midpoints, .. } => (stops.clone(), opacity_stops.clone(), midpoints.clone()),
         _ => (Vec::new(), Vec::new(), Vec::new()),
     };

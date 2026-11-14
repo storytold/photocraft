@@ -41,14 +41,38 @@ pub struct Gradient {
     pub offset: (f32, f32),
 }
 
-/// Editable colour stops behind a Gradient Overlay's baked render stops.
+/// A gradient as Photoshop's Gradient Editor holds it, behind the dense stops baked from it for
+/// the compositors: a Gradient Overlay's or a Gradient Fill layer's (#13557) editable stops,
+/// midpoints, Smoothness and interpolation method.
 /// Older documents have no interpolation record and keep their existing appearance.
-/// Writers must rebake `gradient.stops` from this record, or clear it when replacing the curve.
+/// Writers must rebake the render stops from this record, or clear it when replacing the curve.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GradientInterpolation {
+    /// `classic`, `perceptual`, `linear` or `smooth`.
     pub method: String,
+    /// Photoshop's Smoothness, `0..=100`.
     pub smoothness: f32,
+    /// Colour stops (location `0..=1`), in location order.
     pub stops: Vec<(f32, Color)>,
+    /// Where each colour segment's halfway colour sits (`0.05..=0.95` of it), one per segment
+    /// between consecutive stops; missing entries (an empty list) are halfway (#13557).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midpoints: Vec<f32>,
+    /// Opacity stops `(location, opacity)` (both `0..=1`) as Photoshop holds them, when baking
+    /// changed them; empty = the render opacity stops are Photoshop's own (#13557).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opacity_stops: Vec<(f32, f32)>,
+    /// Midpoints of the opacity segments, as `midpoints` (empty = halfway).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opacity_midpoints: Vec<f32>,
+}
+
+impl GradientInterpolation {
+    /// A record with `method`, `smoothness` (`0..=100`) and colour stops, midpoints halfway and
+    /// no opacity record.
+    pub fn new(method: impl Into<String>, smoothness: f32, stops: Vec<(f32, Color)>) -> GradientInterpolation {
+        GradientInterpolation { method: method.into(), smoothness, stops, midpoints: Vec::new(), opacity_stops: Vec::new(), opacity_midpoints: Vec::new() }
+    }
 }
 
 impl Default for Gradient {

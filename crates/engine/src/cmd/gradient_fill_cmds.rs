@@ -21,6 +21,9 @@ use crate::commands::{CommandSpec, blend_from_str, check_pixels_unlocked, layer_
 use crate::presets::gradients::{GradientPreset, transparency_param};
 use crate::{EngineError, Result, Session};
 
+mod source;
+pub use source::source_view;
+
 pub const CREATE: &str = "gradient.fill.create";
 pub const SET: &str = "gradient.fill.set";
 pub const STOP: &str = "gradient.fill.stop";
@@ -172,10 +175,16 @@ fn frame_with_align(layer: &Layer, f: &Fill, canvas: Rect) -> Rect {
 /// Applies `gradient.fill.set` params to a gradient fill (`layer` gives its frame; `fg`/`bg`
 /// resolve stop colours). Pure, so the canvas previews a handle drag with exactly what the
 /// command will commit.
+///
+/// A fill that keeps Photoshop's own gradient (#13557) is edited through it: `stops`,
+/// `midpoints` and `transparency` are its stops, `method` and `smoothness` its interpolation,
+/// and the result is baked again ([`source_view`]).
 pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fill> {
     const CMD: &str = SET;
-    let mut out = f.clone();
-    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } = &mut out else {
+    let view = source_view(f);
+    let mut out = view.clone();
+    source::apply_interpolation_params(CMD, &mut out, p)?;
+    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, interpolation: _ } = &mut out else {
         return Err(bad(CMD, "not a gradient fill"));
     };
     let old_frame = frame_with_align(layer, f, canvas);
@@ -216,6 +225,7 @@ pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4],
             offset: *offset,
             dither: *dither,
             align: *align,
+            interpolation: None,
         };
         frame_with_align(layer, &tmp, canvas)
     };
@@ -282,7 +292,7 @@ pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4],
         }
         *midpoints = mids;
     }
-    Ok(out)
+    Ok(source::rebake(out, &view, f))
 }
 
 /// The Gradient Fill layer `gradient.fill.create` adds to `doc` for `p` (also the canvas's live
@@ -307,8 +317,20 @@ pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
         return Err(bad(CMD, "the document is empty"));
     }
     let (angle, scale, offset) = gf::from_handles(style, from, to, canvas, 0.0);
-    let fill = Fill::Gradient { stops, angle, scale: clamp_scale(scale), style, reverse, opacity_stops, midpoints: Vec::new(), offset, dither, align: false }
-        .in_mode(doc.mode);
+    let fill = Fill::Gradient {
+        stops,
+        angle,
+        scale: clamp_scale(scale),
+        style,
+        reverse,
+        opacity_stops,
+        midpoints: Vec::new(),
+        offset,
+        dither,
+        align: false,
+        interpolation: None,
+    }
+    .in_mode(doc.mode);
     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
     l.opacity = opacity;
     l.blend = blend;
@@ -374,10 +396,20 @@ fn unpair(v: Vec<(f32, Color, f32)>) -> (Vec<(f32, Color)>, Vec<f32>) {
     (v.into_iter().map(|(t, c, _)| (t, c)).collect(), mids)
 }
 
-/// Applies a `gradient.fill.stop` edit to a gradient fill. Pure (see [`apply_set`]).
+/// Applies a `gradient.fill.stop` edit to a gradient fill. Pure (see [`apply_set`]). A fill that
+/// keeps Photoshop's own gradient has its stops edited, then baked again (#13557).
 pub fn apply_stop(f: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fill> {
+    let view = source_view(f);
+    let edited = apply_stop_to(&view, f, p, fg, bg)?;
+    Ok(source::rebake(edited, &view, f))
+}
+
+/// [`apply_stop`] on `view`; `rendered` is the fill as it renders, which a new stop takes its
+/// colour from.
+fn apply_stop_to(view: &Fill, rendered: &Fill, p: &Value, fg: [f32; 4], bg: [f32; 4]) -> Result<Fill> {
     const CMD: &str = STOP;
-    let mut out = f.clone();
+    let f = rendered;
+    let mut out = view.clone();
     let Fill::Gradient { stops, opacity_stops, midpoints, .. } = &mut out else { return Err(bad(CMD, "not a gradient fill")) };
     let action = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(CMD, "missing `action` (add|move|delete|color|opacity|midpoint)"))?;
     let opacity_kind = match p.get("kind").and_then(Value::as_str).unwrap_or("color") {
@@ -504,6 +536,7 @@ fn ramp_color_alpha(f: &Fill, t: f32) -> f32 {
         offset: (0.0, 0.0),
         dither: false,
         align: true,
+        interpolation: None,
     };
     gf::Ramp::new(&bare).map_or(1.0, |r| r.sample(t)[3]).max(1e-6)
 }
@@ -519,10 +552,16 @@ fn stop(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A gradient fill layer's settings as JSON (`gradient.fill.get`).
+///
+/// A fill that keeps Photoshop's own gradient (#13557) describes its stops, midpoints and
+/// transparency, with its `method` and `smoothness` (0..100).
 pub fn describe_fill(f: &Fill, frame: Rect) -> Value {
-    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } = f else { return Value::Null };
+    let view = source_view(f);
+    let Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, interpolation } = &view else {
+        return Value::Null;
+    };
     let (from, to) = gf::handles(*style, *angle, *scale, *offset, frame);
-    json!({
+    let mut v = json!({
         "style": style_name(*style),
         "angle": angle,
         "scale": scale * 100.0,
@@ -535,7 +574,12 @@ pub fn describe_fill(f: &Fill, frame: Rect) -> Value {
         "stops": stops.iter().map(|(t, c)| json!([t, hex(c)])).collect::<Vec<_>>(),
         "transparency": opacity_stops.iter().map(|(t, a)| json!([t, a * 100.0])).collect::<Vec<_>>(),
         "midpoints": midpoints,
-    })
+    });
+    if let Some(src) = interpolation {
+        v["method"] = json!(src.method);
+        v["smoothness"] = json!(src.smoothness);
+    }
+    v
 }
 
 fn describe(s: &Session, id: LayerId) -> Result<Value> {
@@ -567,7 +611,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Fill",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"from":[x,y]?,"to":[x,y]?,"style":"linear|radial|angle|reflected|diamond"?,"angle":deg?,"scale":%?,"offset":[x%,y%]?,"reverse":bool?,"dither":bool?,"align":bool?,"stops":[[t,"#rrggbb"|"#rrggbbaa"|[r,g,b,a]|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]?,"midpoints":[0.05..0.95 per segment]?} → the gradient (see gradient.fill.get)"##,
+            params: r##"{"layer":id?,"from":[x,y]?,"to":[x,y]?,"style":"linear|radial|angle|reflected|diamond"?,"angle":deg?,"scale":%?,"offset":[x%,y%]?,"reverse":bool?,"dither":bool?,"align":bool?,"stops":[[t,"#rrggbb"|"#rrggbbaa"|[r,g,b,a]|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]?,"midpoints":[0.05..0.95 per segment]?,"method":"classic|perceptual|linear|smooth"?,"smoothness":0..100? (Photoshop's interpolation: stops, midpoints and transparency are then baked into the rendered gradient; classic with 0 renders them as they are)} → the gradient (see gradient.fill.get)"##,
             enabled: has_gradient_fill,
             run: set,
             journal: true,
@@ -587,7 +631,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Gradient Fill Settings",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?} → {"style","angle","scale":%,"offset":[%,%],"reverse","dither","align","from":[x,y],"to":[x,y],"stops":[[t,"#hex"]],"transparency":[[t,%]],"midpoints":[…]}"##,
+            params: r##"{"layer":id?} → {"style","angle","scale":%,"offset":[%,%],"reverse","dither","align","from":[x,y],"to":[x,y],"stops":[[t,"#hex"]],"transparency":[[t,%]],"midpoints":[…],"method"?,"smoothness"?} (a gradient read from a PSD with Smoothness or a method: Photoshop's own stops, not the baked ones)"##,
             enabled: has_gradient_fill,
             run: get,
             journal: false,

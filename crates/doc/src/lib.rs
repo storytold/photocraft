@@ -355,6 +355,12 @@ pub enum Fill {
         /// "Align with layer": lay out in the layer's frame (its masks' bounds), else the canvas.
         #[serde(default = "effects::yes")]
         align: bool,
+        /// Photoshop's own gradient (stops, midpoints, Smoothness, method) when the fill keeps
+        /// one (#13557): `stops` (and `opacity_stops`) are then it baked into dense linear stops
+        /// for rendering, with no `midpoints`. Editors show and edit these stops and a PSD save
+        /// writes them; `None` = `stops` are the gradient as edited.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interpolation: Option<Box<effects::GradientInterpolation>>,
     },
     /// A pattern from [`Document::patterns`] (looked up by `id`, then `name`).
     Pattern {
@@ -378,7 +384,19 @@ impl Fill {
     /// A gradient fill with the classic settings: opaque stops at their alpha, 50 % midpoints,
     /// centred, no dither, aligned with the layer.
     pub fn gradient(stops: Vec<(f32, Color)>, angle: f32, scale: f32, style: GradientStyle, reverse: bool) -> Fill {
-        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops: Vec::new(), midpoints: Vec::new(), offset: (0.0, 0.0), dither: false, align: true }
+        Fill::Gradient {
+            stops,
+            angle,
+            scale,
+            style,
+            reverse,
+            opacity_stops: Vec::new(),
+            midpoints: Vec::new(),
+            offset: (0.0, 0.0),
+            dither: false,
+            align: true,
+            interpolation: None,
+        }
     }
 
     /// This fill with its colours in `mode`'s model (see [`Color::in_mode`]): a fill layer's
@@ -386,7 +404,12 @@ impl Fill {
     pub fn in_mode(mut self, mode: ColorMode) -> Fill {
         match &mut self {
             Fill::Solid(c) => *c = c.in_mode(mode),
-            Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|(_, c)| *c = c.in_mode(mode)),
+            Fill::Gradient { stops, interpolation, .. } => {
+                stops.iter_mut().for_each(|(_, c)| *c = c.in_mode(mode));
+                if let Some(source) = interpolation {
+                    source.stops.iter_mut().for_each(|(_, c)| *c = c.in_mode(mode));
+                }
+            }
             Fill::Pattern { .. } => {}
         }
         self

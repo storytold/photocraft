@@ -495,11 +495,13 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
         s.edit("Change Gradient Fill", |doc, _| {
             let mode = doc.mode;
             if let Some(l) = doc.layer_mut(id)
-                && let LayerContent::Fill(Fill::Gradient { stops, opacity_stops, midpoints, .. }) = &mut l.content
+                && let LayerContent::Fill(Fill::Gradient { stops, opacity_stops, midpoints, interpolation, .. }) = &mut l.content
             {
                 *stops = stops_new.into_iter().map(|(t, c)| (t, c.in_mode(mode))).collect();
                 *opacity_stops = opacity_new;
                 midpoints.clear();
+                // A preset replaces the gradient, Photoshop's interpolation with it (#13557).
+                *interpolation = None;
             }
             Ok(())
         })?;
