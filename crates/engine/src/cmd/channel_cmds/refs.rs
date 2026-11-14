@@ -297,8 +297,8 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
 // ---------------------------------------------------------------------------------------------
 // Blending (Apply Image / Calculations)
 
-/// Apply Image / Calculations blending: the separable layer modes plus Add and Subtract with
-/// scale and offset.
+/// Apply Image / Calculations blending: the separable layer modes, Darker Color and Lighter Color,
+/// plus Add and Subtract with scale and offset.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Blending {
     Mode(BlendMode),
@@ -315,15 +315,32 @@ impl Blending {
             "add" => Ok(Blending::Add { scale, offset }),
             "subtract" => Ok(Blending::Subtract { scale, offset }),
             other => match crate::commands::blend_from_str(other) {
-                Some(m) if m.is_separable() && !matches!(m, BlendMode::Dissolve | BlendMode::PassThrough) => Ok(Blending::Mode(m)),
+                Some(m)
+                    if (m.is_separable() || matches!(m, BlendMode::DarkerColor | BlendMode::LighterColor))
+                        && !matches!(m, BlendMode::Dissolve | BlendMode::PassThrough) =>
+                {
+                    Ok(Blending::Mode(m))
+                }
                 _ => Err(format!("unsupported blending `{other}`")),
             },
         }
     }
 
-    /// Blend `top` (the source) onto `base` (the target).
+    /// Darker Color or Lighter Color: they take the whole pixel from whichever side has the lower
+    /// or higher luminosity, so a colour target blends them per pixel, not with [`Self::apply`].
+    pub fn whole_pixel(self) -> Option<BlendMode> {
+        match self {
+            Blending::Mode(m @ (BlendMode::DarkerColor | BlendMode::LighterColor)) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Blend `top` (the source) onto `base` (the target). On one plane Darker Color and Lighter
+    /// Color are Darken and Lighten.
     pub fn apply(self, base: f32, top: f32) -> f32 {
         match self {
+            Blending::Mode(BlendMode::DarkerColor) => blend_channel(BlendMode::Darken, base, top),
+            Blending::Mode(BlendMode::LighterColor) => blend_channel(BlendMode::Lighten, base, top),
             Blending::Mode(m) => blend_channel(m, base, top),
             Blending::Add { scale, offset } => (base + top) / scale + offset,
             Blending::Subtract { scale, offset } => (base - top) / scale + offset,
