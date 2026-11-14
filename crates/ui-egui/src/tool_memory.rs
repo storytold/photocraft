@@ -156,19 +156,11 @@ pub(crate) fn recover_legacy_cmyk_roles(saved: &Value) -> CmykRoles {
     let mut tools = photocraft_engine::ToolState::default();
     let mut pairs = [[tools.foreground, tools.background], tools.other_colors];
 
-    for (key, pair, role) in [
-        ("foreground", 0, 0),
-        ("background", 0, 1),
-        ("maskForeground", 1, 0),
-        ("maskBackground", 1, 1),
-    ] {
-        if let Some(Ok(c)) = saved
-            .get(key)
-            .map(|v| serde_json::from_value::<[f32; 4]>(v.clone()))
+    for (key, pair, role) in [("foreground", 0, 0), ("background", 0, 1), ("maskForeground", 1, 0), ("maskBackground", 1, 1)] {
+        if let Some(Ok(c)) = saved.get(key).map(|v| serde_json::from_value::<[f32; 4]>(v.clone()))
+            && c.iter().all(|v| v.is_finite())
         {
-            if c.iter().all(|v| v.is_finite()) {
-                pairs[pair][role] = c;
-            }
+            pairs[pair][role] = c;
         }
     }
 
@@ -179,10 +171,7 @@ pub(crate) fn recover_legacy_cmyk_roles(saved: &Value) -> CmykRoles {
             .filter_map(|v| {
                 serde_json::from_value::<([f32; 3], [f32; 4])>(v.clone())
                     .ok()
-                    .filter(|(rgb, inks)| {
-                        rgb.iter().all(|v| v.is_finite())
-                            && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-                    })
+                    .filter(|(rgb, inks)| rgb.iter().all(|v| v.is_finite()) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
             })
             .take(photocraft_engine::ToolState::CMYK_PICKS)
             .collect();
@@ -259,17 +248,13 @@ fn restore_colors(app: &mut PhotocraftApp) {
         }
     } else {
         // Recover legacy associations using the same rules as the save baseline.
-        let recovered = saved.get("cmykPicks").and_then(Value::as_array)
-            .map(|_| recover_legacy_cmyk_roles(&saved));
+        let recovered = saved.get("cmykPicks").and_then(Value::as_array).map(|_| recover_legacy_cmyk_roles(&saved));
 
         for pair in 0..2 {
             for role in 0..2 {
                 let c = pairs[pair][role];
                 let rgb = [c[0], c[1], c[2]];
-                let legacy = recovered
-                    .as_ref()
-                    .map(|roles| roles[pair][role])
-                    .unwrap_or_else(|| app.session.tools.picked_cmyk(rgb).map(|inks| (rgb, inks)));
+                let legacy = recovered.as_ref().map(|roles| roles[pair][role]).unwrap_or_else(|| app.session.tools.picked_cmyk(rgb).map(|inks| (rgb, inks)));
                 roles[pair][role] = valid_role(legacy, c);
             }
         }

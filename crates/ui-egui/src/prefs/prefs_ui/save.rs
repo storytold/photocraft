@@ -125,8 +125,9 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
                     if let Some(value) = colors.get_mut(key)
                         && let Ok(color) = serde_json::from_value::<[f32; 4]>(value.clone())
                         && color.iter().all(|v| v.is_finite())
+                        && let Ok(normalized) = serde_json::to_value(color)
                     {
-                        *value = serde_json::to_value(color).unwrap();
+                        *value = normalized;
                     }
                 }
             }
@@ -147,6 +148,12 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
                 let roles = crate::tool_memory::recover_legacy_cmyk_roles(&Value::Object(colors.clone()));
                 colors.insert("cmykRoles".into(), serde_json::json!(roles));
             }
+            // Legacy preferences may contain no pick history.
+            // An empty baseline lets two windows merge their new picks.
+            if let Some(colors) = base.get_mut("toolColors").and_then(Value::as_object_mut) {
+                colors.entry("cmykPicks").or_insert_with(|| serde_json::json!([]));
+            }
+
             merge_changes(&base, ours, &mut theirs);
             serde_json::to_string_pretty(&theirs)
         }
@@ -209,6 +216,62 @@ fn merge_cmyk_role_slots(base: &Value, ours: &Value, theirs: &mut Value) -> bool
     true
 }
 
+/// Read one native CMYK association from the stored role matrix.
+fn cmyk_role(value: &Value, pair: usize, role: usize) -> Option<&Value> {
+    value.get("cmykRoles")?.get(pair)?.get(role)
+}
+
+/// Merge a swatch and its native CMYK association as one selection.
+/// Independent pixel and mask roles can still be changed by separate windows.
+fn merge_tool_colors(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
+    if !base.is_object() || !ours.is_object() || !theirs.is_object() {
+        return false;
+    }
+
+    let remote = theirs.clone();
+
+    for pair in 0..2 {
+        for role in 0..2 {
+            if cmyk_role(base, pair, role).is_none() || cmyk_role(ours, pair, role).is_none() || cmyk_role(&remote, pair, role).is_none() {
+                return false;
+            }
+        }
+    }
+
+    // Merge unrelated fields, including the bounded CMYK pick history.
+    merge_changes(base, ours, theirs);
+
+    for (key, pair, role) in [("foreground", 0, 0), ("background", 0, 1), ("maskForeground", 1, 0), ("maskBackground", 1, 1)] {
+        let (Some(old_rgb), Some(local_rgb), Some(remote_rgb), Some(old_inks), Some(local_inks), Some(remote_inks)) =
+            (base.get(key), ours.get(key), remote.get(key), cmyk_role(base, pair, role), cmyk_role(ours, pair, role), cmyk_role(&remote, pair, role))
+        else {
+            continue;
+        };
+
+        // Local RGB changes carry their corresponding CMYK association.
+        // If the remote RGB changed but only local inks changed,
+        // retain the complete remote selection.
+        let (rgb, inks) = if local_rgb != old_rgb {
+            (local_rgb, local_inks)
+        } else if remote_rgb != old_rgb {
+            (remote_rgb, remote_inks)
+        } else if local_inks != old_inks {
+            (local_rgb, local_inks)
+        } else {
+            (remote_rgb, remote_inks)
+        };
+
+        if let Some(colors) = theirs.as_object_mut() {
+            colors.insert(key.to_owned(), rgb.clone());
+        }
+
+        if let Some(slot) = theirs.get_mut("cmykRoles").and_then(|v| v.get_mut(pair)).and_then(|v| v.get_mut(role)) {
+            *slot = inks.clone();
+        }
+    }
+
+    true
+}
 /// Merge recently picked CMYK colors without discarding picks from another window.
 /// Each RGB key retains its most recently supplied native inks.
 fn merge_cmyk_picks(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
@@ -216,20 +279,12 @@ fn merge_cmyk_picks(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
 
     let parse = |v: &Value| -> Option<Vec<Pick>> {
         let entries = v.as_array()?;
-        let picks: Vec<Pick> = entries.iter()
-            .map(|entry| serde_json::from_value::<Pick>(entry.clone()))
-            .collect::<Result<_, _>>()
-            .ok()?;
+        let picks: Vec<Pick> = entries.iter().map(|entry| serde_json::from_value::<Pick>(entry.clone())).collect::<Result<_, _>>().ok()?;
 
-        picks.iter().all(|(rgb, inks)| {
-            rgb.iter().all(|v| v.is_finite())
-                && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-        }).then_some(picks)
+        picks.iter().all(|(rgb, inks)| rgb.iter().all(|v| v.is_finite()) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(picks)
     };
 
-    let (Some(old), Some(local), Some(mut stored)) =
-        (parse(base), parse(ours), parse(theirs))
-    else {
+    let (Some(old), Some(local), Some(mut stored)) = (parse(base), parse(ours), parse(theirs)) else {
         return false;
     };
 
@@ -238,9 +293,7 @@ fn merge_cmyk_picks(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
     }
 
     for &(rgb, inks) in &local {
-        if !old.iter().any(|&(old_rgb, old_inks)| {
-            old_rgb == rgb && old_inks == inks
-        }) {
+        if !old.iter().any(|&(old_rgb, old_inks)| old_rgb == rgb && old_inks == inks) {
             stored.retain(|(existing_rgb, _)| *existing_rgb != rgb);
             stored.push((rgb, inks));
         }
@@ -264,6 +317,11 @@ pub(super) fn merge_changes(base: &Value, ours: &Value, theirs: &mut Value) {
         (Value::Object(b), Value::Object(o), Value::Object(t)) => {
             for (k, ov) in o {
                 match (b.get(k), t.get_mut(k)) {
+                    (Some(bv), Some(tv)) if k == "toolColors" => {
+                        if !merge_tool_colors(bv, ov, tv) {
+                            merge_changes(bv, ov, tv);
+                        }
+                    }
                     (Some(bv), Some(tv)) if k == "cmykPicks" => {
                         if !merge_cmyk_picks(bv, ov, tv) {
                             merge_changes(bv, ov, tv);
