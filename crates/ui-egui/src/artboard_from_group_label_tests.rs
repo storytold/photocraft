@@ -30,12 +30,16 @@ fn the_command_label_has_no_ellipsis() {
 }
 
 #[test]
-fn another_language_falls_back_to_the_english_label() {
-    // Every embedded language (German among them where the catalogs are built in): no entry for the
-    // new label, so the English one shows and nothing panics.
+fn no_language_shows_an_ellipsis() {
+    // English shows the label itself. Where craft-i18n's catalogs are embedded (CI and releases),
+    // most languages already translate "Artboard from Group" (Japanese: グループからアートボード),
+    // and `tr_id` skips an `@id` row whose trailing `…` differs from the label's; a language
+    // without a row shows the English. Either way no language shows an ellipsis.
     assert_eq!(tr_id(Lang::EN, ID, LABEL), LABEL);
     for lang in Lang::all() {
-        assert_eq!(tr_id(lang, ID, LABEL), LABEL, "{lang:?}");
+        let shown = tr_id(lang, ID, LABEL);
+        assert!(!shown.is_empty(), "{lang:?}");
+        assert!(!shown.ends_with('…') && !shown.ends_with("..."), "{lang:?}: {shown}");
     }
 }
 
