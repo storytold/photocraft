@@ -45,12 +45,12 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // Stamp, the Smudge tool and the Art History Brush start with their own measured tips
         // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684,
         // #13029, #12601, #12964, #12631); the Art History Brush's is at full opacity (#10263).
-        None if matches!(
-            tool,
-            Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge | Tool::ArtHistoryBrush
-        ) =>
-        {
+        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
             fresh_brush(tool, &current)
+        }
+        // Its pressure toggles are not measured, so its first use keeps the outgoing ones (#12631).
+        None if tool == Tool::ArtHistoryBrush => {
+            BrushSettings { pressure_size: current.pressure_size, pressure_opacity: current.pressure_opacity, ..fresh_brush(tool, &current) }
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.

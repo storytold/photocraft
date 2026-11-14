@@ -54,6 +54,19 @@ fn a_first_use_starts_with_the_tip() {
 }
 
 #[test]
+fn a_first_use_keeps_the_outgoing_pressure_toggles() {
+    // The pressure settings of the tip are not measured, so they stay what the first pick gave
+    // before: the outgoing brush's.
+    let mut app = app();
+    pick(&mut app, Tool::Brush);
+    (app.session.tools.brush.pressure_size, app.session.tools.brush.pressure_opacity) = (true, true);
+    pick(&mut app, Tool::ArtHistoryBrush);
+    let b = &app.session.tools.brush;
+    assert_eq!((b.pressure_size, b.pressure_opacity), (true, true));
+    assert_eq!(tip(&mut app), ART_HISTORY_TIP);
+}
+
+#[test]
 fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     let mut app = app();
     pick(&mut app, Tool::ArtHistoryBrush);
