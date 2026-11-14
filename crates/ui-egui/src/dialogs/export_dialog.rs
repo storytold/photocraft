@@ -194,10 +194,16 @@ fn layer_source(doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Result<Arc<
 /// [`layer_source`] on a job's worker: a job cancelled while it composited keeps nothing. The
 /// cancel is checked under the lock the cancel's clean-up takes, so that clean-up is never undone.
 fn layer_source_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Result<Arc<Document>, String> {
-    if let Some(out) = cached_layer_source(doc, id) {
+    // The generation is read under the lock the clean-up takes: a clean-up either comes before
+    // the read or moves the generation compared below.
+    let (cached, generation) = {
+        let kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let hit = kept.as_ref().filter(|(d, l, _)| Arc::ptr_eq(d, doc) && *l == id).map(|(_, _, out)| out.clone());
+        (hit, LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire))
+    };
+    if let Some(out) = cached {
         return Ok(out);
     }
-    let generation = LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire);
     let out = Arc::new(photocraft_engine::layer_menu_cmds::layer_document(doc, id).map_err(|e| e.to_string())?);
     let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let forgotten = LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire) != generation;
@@ -205,6 +211,21 @@ fn layer_source_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Doc
         *kept = Some((doc.clone(), id, out.clone()));
     }
     Ok(out)
+}
+
+/// Let go of the kept layer unless it was composited from `active`, the document as it is now: a
+/// prepare whose document changed keeps nothing, and the active document's own composite stays.
+/// The generation doesn't move, so a composite of the active document still being made is kept.
+fn release_layer_source_unless(active: Option<&Arc<Document>>) {
+    let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if kept.as_ref().is_some_and(|k| kept_for_another_document(k, active)) {
+        *kept = None;
+    }
+}
+
+/// Whether `kept` was composited from a document other than `active` (or none is active).
+fn kept_for_another_document(kept: &LayerSource, active: Option<&Arc<Document>>) -> bool {
+    !active.is_some_and(|a| Arc::ptr_eq(&kept.0, a))
 }
 
 /// Let go of the kept layer (it can be gigabytes) once its export is over.
@@ -264,6 +285,7 @@ pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs:
             // composite it again here, on the UI thread.
             let ready = app.session.active().zip(layers.first()).is_some_and(|(st, first)| cached_layer_source(&st.doc, *first).is_some());
             if !ready {
+                release_layer_source_unless(app.session.active().map(|st| &st.doc));
                 app.ui.status = tl!("Export As: the document changed while the layer was prepared; choose Export As again").to_string();
                 app.ui.status_error = false;
             } else if let Err(err) = open_layers(app, &layers) {
@@ -1333,6 +1355,12 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 fn record_export(session: &mut photocraft_engine::Session, step: Value) {
     photocraft_engine::actions_cmds::note_automation_step(session, COMMAND, &step);
     session.journal.push((COMMAND.into(), step));
+}
+
+#[cfg(test)]
+/// Composite layer `layer` of `doc` for export and keep it, as the dialog does ([`layer_source`]).
+pub(crate) fn keep_layer_composite(doc: &Arc<Document>, layer: photocraft_doc::LayerId) {
+    layer_source(doc, layer).expect("the layer composites");
 }
 
 #[cfg(test)]

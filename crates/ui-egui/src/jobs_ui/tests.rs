@@ -1355,3 +1355,22 @@ fn a_failed_export_does_not_close_the_window_over_its_error() {
     step_until(&mut h, |a| noticed(a, "disk full"));
     assert!(!h.state().jobs.close_after_saves, "the window stays open to show the error");
 }
+
+/// A prepare that lands after the active document changed opens no dialog and keeps nothing of
+/// the old document (`kept_for_another_document` decides what stays).
+#[test]
+fn a_prepare_for_a_document_no_longer_active_keeps_nothing_of_it() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    let st = h.state().session.active().unwrap();
+    let (first, layer) = (st.doc.clone(), st.active_layer.unwrap());
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    // Kept for the old document, as its worker keeps it (its result isn't polled before the
+    // next frame).
+    crate::export_dialog::keep_layer_composite(&first, layer);
+    h.state_mut().run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    step_until(&mut h, |a| a.ui.status.contains("the document changed"));
+    assert!(h.state().ui.dialogs.is_empty(), "no dialog for the old document");
+    assert!(!crate::export_dialog::layer_composite_kept(&first, layer), "the old document's composite is let go");
+}
