@@ -1,6 +1,6 @@
 //! #8832: File > New captures the working profile shown by the New Document dialog.
 
-use photocraft_cms::Builtin;
+use craft_cms::Builtin;
 use photocraft_color::ColorMode;
 use photocraft_engine::Session;
 use serde_json::{Value, json};
