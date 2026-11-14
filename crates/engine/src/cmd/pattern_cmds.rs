@@ -268,9 +268,9 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 /// stay a few tens of MB however large the pattern.
 const BAND_PIXELS: u32 = 1 << 20;
 
-/// The visible composite over `r` as a surface in the document's pixel format (with alpha), and
-/// whether every pixel of it is opaque.
-fn composite_surface(doc: &Document, r: Rect) -> (Surface, bool) {
+/// The visible composite over `r` as a surface in the document's pixel format (with alpha),
+/// whether every pixel of it is opaque, and whether any pixel is visible (alpha above zero).
+fn composite_surface(doc: &Document, r: Rect) -> (Surface, bool, bool) {
     composite_surface_in_bands(doc, r, (BAND_PIXELS / r.width().max(1)).max(1))
 }
 
@@ -278,13 +278,14 @@ fn composite_surface(doc: &Document, r: Rect) -> (Surface, bool) {
 /// time, and noting opacity as it goes, keeps an 8000 × 8000 pattern (64 MP, about 1 GB per full
 /// `f32` copy) from holding several full-size copies at once. Opacity is judged on the stored
 /// samples, as the surface quantizes them: an alpha of 0.999 in an 8-bit document is stored as 255.
-fn composite_surface_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surface, bool) {
+fn composite_surface_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surface, bool, bool) {
     let df = doc.pixel_format();
     let fmt = PixelFormat::new(df.mode, df.sample, true);
     let n = fmt.channels();
     let (width, height) = (r.width(), r.height());
     let mut s = Surface::new(fmt);
     let mut opaque = true;
+    let mut visible = false;
     let mut px = Vec::new();
     let mut top = 0;
     while top < height {
@@ -297,12 +298,14 @@ fn composite_surface_in_bands(doc: &Document, r: Rect, band_rows: u32) -> (Surfa
         }
         let band = Rect::new(0, top as i32, width as i32, (top + rows) as i32);
         s.write_region(band, &px);
-        if opaque {
-            opaque = s.read_region(band).chunks_exact(n).all(|q| q[n - 1] >= 1.0);
+        if opaque || !visible {
+            let alphas: Vec<f32> = s.read_region(band).chunks_exact(n).map(|q| q[n - 1]).collect();
+            opaque = opaque && alphas.iter().all(|&a| a >= 1.0);
+            visible = visible || alphas.iter().any(|&a| a > 0.0);
         }
         top += rows;
     }
-    (s, opaque)
+    (s, opaque, visible)
 }
 
 /// The name Define Pattern gives a pattern without one: the active document's name without its
@@ -323,6 +326,9 @@ pub fn default_name(s: &Session) -> String {
 /// (`Pattern::working_bytes`): 8000 x 8000 at 8 bits, and fewer pixels at 16 bits and float,
 /// where the working copy is larger per pixel. What is accepted always paints.
 const MAX_DEFINE_EDGE: u32 = 8000;
+
+/// Define Pattern's error for an area with no visible pixel, in the reference application's words.
+pub const EMPTY_AREA: &str = "Could not complete the Define Pattern command because the selected area is empty.";
 
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.definePattern";
@@ -349,7 +355,10 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     if u64::from(r.width()) * u64::from(r.height()) > max_px {
         return Err(bad(cmd, format!("patterns in a {}-bit document are limited to {max_px} px in all", sample.bytes() * 8)));
     }
-    let (mut surf, opaque) = composite_surface(doc, r);
+    let (mut surf, opaque, visible) = composite_surface(doc, r);
+    if !visible {
+        return Err(EngineError::Other(EMPTY_AREA.into()));
+    }
     // Opaque patterns drop their alpha channel (as Photoshop does).
     if opaque {
         let fmt = surf.format();
@@ -630,6 +639,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod define_empty_area_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use photocraft_doc::LayerId;
@@ -709,9 +721,9 @@ mod tests {
                 let doc = &s.active().unwrap().doc;
                 let area = Rect::new(2, 1, 38, 29);
                 let all = Rect::new(0, 0, 36, 28);
-                let (whole, whole_opaque) = composite_surface_in_bands(doc, area, 28);
+                let (whole, whole_opaque, _) = composite_surface_in_bands(doc, area, 28);
                 for band_rows in [1, 5, 27] {
-                    let (banded, opaque) = composite_surface_in_bands(doc, area, band_rows);
+                    let (banded, opaque, _) = composite_surface_in_bands(doc, area, band_rows);
                     assert_eq!(opaque, whole_opaque, "depth {depth}, transparent {transparent}, bands of {band_rows}");
                     assert_eq!(banded.read_region(all), whole.read_region(all), "depth {depth}, transparent {transparent}, bands of {band_rows}");
                 }
@@ -729,7 +741,7 @@ mod tests {
             s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
             s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
             s.execute("layer.setProps", json!({"opacity": 0.999})).unwrap();
-            let (_, all_opaque) = composite_surface_in_bands(&s.active().unwrap().doc, Rect::new(0, 0, 8, 8), 3);
+            let (_, all_opaque, _) = composite_surface_in_bands(&s.active().unwrap().doc, Rect::new(0, 0, 8, 8), 3);
             assert_eq!(all_opaque, opaque, "depth {depth}");
         }
     }

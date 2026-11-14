@@ -1071,6 +1071,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     } else {
         crate::actions::abandoned(app, &d.fields);
     }
+    if let Err(error) = &result {
+        crate::filter_dialog::alert_failure(app, &cmd, error);
+    }
     result
 }
 
