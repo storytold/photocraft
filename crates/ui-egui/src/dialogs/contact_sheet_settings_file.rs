@@ -260,3 +260,7 @@ fn escape(s: &str) -> String {
     // Line breaks and tabs as references: a parser turns literal ones in an attribute into spaces.
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\n', "&#10;").replace('\r', "&#13;").replace('\t', "&#9;")
 }
+
+#[cfg(test)]
+#[path = "contact_sheet_settings_file_tests.rs"]
+mod tests;

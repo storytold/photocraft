@@ -12,12 +12,12 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 
 /// The message of every open alert.
-fn alerts(h: &H) -> Vec<&str> {
+pub(super) fn alerts(h: &H) -> Vec<&str> {
     h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message").and_then(Value::as_str)).collect()
 }
 
 /// The Contact Sheet II dialog's fields, if it is open.
-fn sheet_dialog(h: &H) -> Option<&Map<String, Value>> {
+pub(super) fn sheet_dialog(h: &H) -> Option<&Map<String, Value>> {
     h.state().ui.dialogs.iter().find(|d| super::owns(&d.fields)).map(|d| &d.fields)
 }
 

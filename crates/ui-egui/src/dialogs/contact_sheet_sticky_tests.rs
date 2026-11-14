@@ -33,7 +33,7 @@ fn reopen(h: &mut H) {
 }
 
 /// The values the dialog holds: the command's params and the resolution unit.
-fn values(h: &H) -> Map<String, Value> {
+pub(super) fn values(h: &H) -> Map<String, Value> {
     fields(h).iter().filter(|(k, _)| !k.starts_with("__") || *k == RES_UNIT).map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
@@ -42,16 +42,16 @@ fn kept(h: &H) -> Option<Value> {
     h.state().session.prefs().dialogs.get(COMMAND).cloned()
 }
 
-fn click(h: &mut H, role: Role, label: &str) {
+pub(super) fn click(h: &mut H, role: Role, label: &str) {
     h.get_by_role_and_label(role, label).click();
     h.run_steps(3);
 }
 
-fn text_of(h: &H, role: Role, name: &str) -> String {
+pub(super) fn text_of(h: &H, role: Role, name: &str) -> String {
     h.get_by_role_and_label(role, name).accesskit_node().value().unwrap_or_default().to_string()
 }
 
-fn ticked(h: &H, name: &str) -> bool {
+pub(super) fn ticked(h: &H, name: &str) -> bool {
     h.get_by_role_and_label(Role::CheckBox, name).accesskit_node().toggled() == Some(Toggled::True)
 }
 
