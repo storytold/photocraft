@@ -144,7 +144,8 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_lowercase().replace('_', "-");
     let mut parts = tag.split('-');
     let lang = parts.next()?;
-    let rest: Vec<&str> = parts.collect();
+    // RFC 5646: a singleton starts extensions/private use; their values do not choose the script.
+    let rest: Vec<&str> = parts.take_while(|part| part.len() != 1).collect();
     Some(match lang {
         "ar" | "fa" | "ur" | "ps" | "ckb" | "sd" | "ug" => "Arab",
         "he" | "iw" | "yi" => "Hebr",
@@ -512,6 +513,12 @@ mod tests {
             ("zh-Hans-MO", Some("Hans")),
             ("zh-Hant-CN", Some("Hant")),
             ("zh-Hant-HK", Some("Hant")),
+            ("zh-Hant-TW-u-nu-hans", Some("Hant")),
+            ("zh-TW-u-nu-hans", Some("Hant")),
+            ("zh-CN-u-nu-hant", Some("Hans")),
+            ("zh-cmn-Hans-TW", Some("Hans")),
+            ("zh-cmn-Hant-CN", Some("Hant")),
+            ("zh-TW-x-hans", Some("Hant")),
             ("ko", Some("Kore")),
             ("en-US", None),
             ("ru", None),
