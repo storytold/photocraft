@@ -495,6 +495,9 @@ fn layer_from_background(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.edit("Layer From Background", |doc, active| {
         let l = doc.background_mut().ok_or(EngineError::Other("the document has no Background layer".into()))?;
         unlock_background(l);
+        // Only this explicit conversion shows a hidden Background, as in the reference
+        // application; implicit ones through `background_to_layer` keep its visibility.
+        l.visible = true;
         if select || active.is_none() {
             *active = Some(l.id);
         }
@@ -1196,5 +1199,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "layer_from_background_visible_tests.rs"]
+mod layer_from_background_visible_tests;
 #[cfg(test)]
 mod tests;
