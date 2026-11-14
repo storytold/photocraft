@@ -13,7 +13,7 @@
 //!   `doc.replaceSmartObject {path, layer?, index?}` (#8061: the same scope for
 //!   `layer.smartObjects.replaceContents`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
-//!   `doc.exportDataSets {dir, format?, dataSets?, naming?, index?}`,
+//!   `doc.exportDataSets {dir, extension?, dataSets?, naming?, index?}`,
 //!   `doc.importDataSets {path, delimiter?, index?}` (#3216: the same treatment for the export
 //!   and CSV half of #2810), `doc.save {path?, format?, quality?, index?}`, `doc.inspect {index?}`,
 //!   `doc.render {index?, maxSide?, path?}` (writes a PNG to `path`, else

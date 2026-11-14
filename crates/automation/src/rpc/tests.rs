@@ -646,8 +646,10 @@ fn doc_export_data_sets_refuse_collisions_and_import_reads_the_root() {
     .unwrap();
 
     let sets = root.join("sets");
-    let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy(), "format": "png"})).unwrap();
+    let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy()})).unwrap();
     assert_eq!(exported["count"].as_u64(), Some(2), "{exported}");
+    assert!(exported["files"].as_array().unwrap().iter().all(|f| f.as_str().unwrap().ends_with(".psd")), "{exported}");
+    assert!(exported["warnings"].is_array(), "{exported}");
     assert_eq!(std::fs::read_dir(&sets).unwrap().count(), 2, "{exported}");
     // Colliding names are refused as in the command, before any file is written.
     let clash = root.join("clash");
@@ -733,7 +735,7 @@ fn doc_export_data_sets_judges_pixel_replacement_paths_like_apply() {
     let applied = h.handle("engine.execute", json!({"command": "image.applyDataSet", "params": {"name": "swap"}})).unwrap_err().to_string();
     assert!(applied.contains("ambient filesystem paths"), "{applied}");
     let sets = root.join("sets");
-    let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
+    let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy()})).unwrap_err().to_string();
     assert!(exported.contains("ambient filesystem paths"), "{exported}");
     assert_eq!(std::fs::read_dir(&sets).map_or(0, Iterator::count), 0, "nothing of the refused batch is written");
     // Release directory capabilities before cleanup on Windows.

@@ -389,23 +389,24 @@ fn split_csv(line: &str, delim: u8) -> Vec<String> {
     out
 }
 
-/// Apply each data set in turn and export the flattened document, restoring the original after.
-/// `{dir, format?("png"), dataSets?[names]}` → `{files:[…],count}`.
+/// Apply each data set in turn and write it as its own layered PSD, leaving the document as it
+/// was. `{dir, extension?(".psd"|".PSD"), dataSets?[names], naming?}` →
+/// `{files:[…],count,warnings:[…]}`.
 fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad("file.export.dataSetsAsFiles", "need `dir`"))?.to_string();
     // The directory appears only once the batch has been planned, as it always did, so a batch
     // rejected for colliding names still leaves no directory behind.
     let mut made_dir = false;
-    let names = export_data_sets_with(s, p, |name, bytes| {
+    let exported = export_data_sets_with(s, p, |name, bytes| {
         if !made_dir {
             std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
             made_dir = true;
         }
         crate::file_cmds::write_file(&format!("{dir}/{name}"), bytes)
     })?;
-    let files: Vec<String> = names.iter().map(|name| format!("{dir}/{name}")).collect();
+    let files: Vec<String> = exported.files.iter().map(|name| format!("{dir}/{name}")).collect();
     let count = files.len();
-    Ok(json!({"files": files, "count": count}))
+    Ok(json!({"files": files, "count": count, "warnings": exported.warnings}))
 }
 
 /// The bodies of `file.export.dataSetsAsFiles`, streamed to `write` as a single-component
@@ -414,18 +415,7 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
 /// so colliding names are rejected before any file is written, and automation writes exactly
 /// these bytes beneath its write root (#3216) — the two paths cannot drift. Returns the
 /// filenames written, in order.
-pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<Vec<String>> {
-    // Only PSD is written; an old script that names `psd` still works (#13754).
-    if p.get("format").and_then(Value::as_str).is_some_and(|f| !f.eq_ignore_ascii_case("psd")) {
-        return Err(bad("file.export.dataSetsAsFiles", "Data Sets as Files writes PSD files"));
-    }
-    // `.psd` (default) or `.PSD`: only the case of the extension of a PSD changes (#13754).
-    let upper = match p.get("extension").and_then(Value::as_str) {
-        None | Some(".psd" | "psd") => false,
-        Some(".PSD" | "PSD") => true,
-        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("`extension` is `.psd` or `.PSD`, not `{other}`"))),
-    };
-    let extension = if upper { "PSD" } else { "psd" };
+pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<DataSetsExported> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let original = st.doc.clone();
     let vars = original.variables.clone();
@@ -438,6 +428,25 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     for set in &sets {
         authorize_pixel_paths(s, set)?;
     }
+    // Only PSD is written; an old script that names `psd` still works (#13754). Checked after
+    // the image paths so a refused path keeps its error. A value that is not a string is an
+    // error too, never silently ignored.
+    match p.get("format") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(f)) if f.trim_start_matches('.').eq_ignore_ascii_case("psd") => {}
+        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("Data Sets as Files writes PSD files, not {other}"))),
+    }
+    // `.psd` (default) or `.PSD`: only the case of the extension of a PSD changes (#13754).
+    let extension = match p.get("extension") {
+        None | Some(Value::Null) => "psd",
+        Some(Value::String(e)) if matches!(e.as_str(), ".psd" | "psd") => "psd",
+        Some(Value::String(e)) if matches!(e.as_str(), ".PSD" | "PSD") => "PSD",
+        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("`extension` is `.psd` or `.PSD`, not {other}"))),
+    };
+    let save = crate::file_cmds::SaveOpts::from_params(s, p, "file.export.dataSetsAsFiles")?;
+    // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
+    // into `encode`, so a PSD embeds no file a linked smart object names.
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
     // A document name is not a path: a separator in it, or a stem of `.` / `..` before a `/` in
@@ -474,17 +483,26 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         }
         names.push(name);
     }
-    let mut written = Vec::new();
+    let mut written = DataSetsExported::default();
     for (set, name) in sets.iter().zip(&names) {
         let mut doc = (*original).clone();
         apply_to_doc(&mut doc, &vars, set)?;
-        // An untrusted session's PSD export embeds no file a linked smart object names.
-        let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
-        let bytes = photocraft_io::export(&doc, "psd", &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
+        // The shared save path: the File Handling preferences, linked-file resolution and the
+        // allocation checkpoint apply as in Save As.
+        let (bytes, warnings) = crate::file_cmds::encode(&doc, "psd", save).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
         write(name, &bytes)?;
-        written.push(name.clone());
+        written.files.push(name.clone());
+        written.warnings.extend(warnings.into_iter().map(|w| format!("{}: {w}", set.name)));
     }
     Ok(written)
+}
+
+/// What [`export_data_sets_with`] wrote: the filenames in order, and the encoder's warnings
+/// (each prefixed with its data set's name).
+#[derive(Debug, Default, Clone)]
+pub struct DataSetsExported {
+    pub files: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 fn list(s: &mut Session) -> Result<Value> {
@@ -547,7 +565,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.dataSetsAsFiles",
             "Data Sets as Files…",
             &["File", "Export"],
-            "{dir, extension?:\".psd\"|\".PSD\", dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and write it as a layered PSD (a `format` other than psd is an error); colliding filenames are rejected before writing (include {index} to disambiguate)",
+            "{dir, extension?:\".psd\"|\".PSD\", dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count,warnings}: apply each data set and write it as a layered PSD (a `format` other than psd is an error); colliding filenames are rejected before writing (include {index} to disambiguate)",
             has_data_sets,
             |s, p| export_as_files(s, p)
         ),

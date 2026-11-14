@@ -479,7 +479,7 @@ fn export_data_sets_unique_paths_preserve_variations_and_document() {
         let dir = tmp(&format!("unique-{label}"));
         let result = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": naming, "dataSets": selected})).unwrap();
         let paths: Vec<_> = expected.iter().map(|name| format!("{dir}/{name}")).collect();
-        assert_eq!(result, json!({"files": paths, "count": paths.len()}));
+        assert_eq!(result, json!({"files": paths, "count": paths.len(), "warnings": []}));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), paths.len());
         for (i, path) in paths.iter().enumerate() {
             let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
@@ -553,6 +553,24 @@ fn applied_text_is_rendered_in_the_document_and_in_exports() {
     let path = out["files"][0].as_str().unwrap();
     let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
     assert!(dark(&exported) > 0, "the exported row keeps its text");
+    // The PSD's own stored type pixels (the layer cache the importer reads back, not a
+    // re-rasterisation), so an export with empty pixels fails here.
+    let stored_ink = |d: &Document| -> usize {
+        d.layers
+            .iter()
+            .filter_map(|l| match &l.content {
+                LayerContent::Text(t) => t.cache.as_ref(),
+                _ => None,
+            })
+            .map(|cache| {
+                let r = cache.content_bounds();
+                let mut px = vec![[0.0f32; 4]; (r.width() as usize) * (r.height() as usize)];
+                cache.read_rgba_into(r, &mut px);
+                px.iter().filter(|p| p[3] > 0.5 && p[0] < 0.5).count()
+            })
+            .sum()
+    };
+    assert!(stored_ink(&exported) > 0, "the exported PSD stores the text's pixels");
     s.execute("image.applyDataSet", json!({"name": "row1"})).unwrap();
     assert!(dark(doc(&s)) > 0, "the applied text is drawn");
     let _ = std::fs::remove_dir_all(&dir);
@@ -757,4 +775,24 @@ fn data_sets_as_files_only_writes_psd() {
     assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
+}
+
+#[test]
+fn data_sets_as_files_hostile_format_and_extension_are_errors() {
+    // A non-string `format` or `extension` is an error, never ignored (#13754).
+    let (mut s, _, _) = psd_export_session();
+    let dir = tmp("psd-hostile");
+    for key in ["format", "extension"] {
+        for bad in [json!(5), json!(true), json!(["png"]), json!({"a": 1}), json!(""), json!("png")] {
+            let mut p = json!({"dir": dir});
+            p[key] = bad.clone();
+            assert!(s.execute("file.export.dataSetsAsFiles", p).is_err(), "`{key}` = {bad} must be refused");
+        }
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing is written for a refused param");
+    // `null` means "not given".
+    let ok = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": null, "extension": null, "dataSets": ["Data Set 1"]})).unwrap();
+    assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
+    assert!(ok["warnings"].is_array(), "{ok}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
