@@ -538,16 +538,16 @@ fn wand_region_rule(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: Ma
     }
     // One fill per channel count: the comparison runs per pixel over the canvas.
     match px.channels {
-        1 => wand_fill::<1>(px, seed, how),
-        2 => wand_fill::<2>(px, seed, how),
-        3 => wand_fill::<3>(px, seed, how),
-        4 => wand_fill::<4>(px, seed, how),
-        _ => wand_fill::<5>(px, seed, how),
+        1 => wand_fill::<1>(px, seed, how, rule),
+        2 => wand_fill::<2>(px, seed, how, rule),
+        3 => wand_fill::<3>(px, seed, how, rule),
+        4 => wand_fill::<4>(px, seed, how, rule),
+        _ => wand_fill::<5>(px, seed, how, rule),
     }
 }
 
 /// [`wand_region_on`] for `CH` stored channels per pixel.
-fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch) -> Option<Region> {
+fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), how: &WandMatch, rule: MatchRule) -> Option<Region> {
     let (contiguous, anti_alias) = (how.contiguous, how.anti_alias);
     let (w, h) = (px.area.width() as usize, px.area.height() as usize);
     if w.checked_mul(h).is_none_or(|n| n > px.data.len() / CH) {
