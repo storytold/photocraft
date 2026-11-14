@@ -211,6 +211,9 @@ impl PhotocraftApp {
                 }
             }
             Err(e) => {
+                if id == "file.scripts.imageProcessor" && e == "There were no source files that could be opened by PhotoCraft." {
+                    crate::panels::options_bar::range_alert(&mut self.ui, e);
+                }
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
             }
@@ -437,3 +440,30 @@ const ADDS_LAYER_MASK: [&str; 5] = [
     "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency",
 ];
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_processor_empty_source_tests {
+    use super::*;
+
+    #[test]
+    fn confirming_image_processor_with_no_source_replaces_the_form_with_an_alert() {
+        let input = tempfile::tempdir().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+        let form = app.ui.dialogs.last_mut().unwrap();
+        let form_id = form.id;
+        form.fields.insert("input".into(), json!(input.path()));
+        let output = input.path().join("processed");
+        form.fields.insert("output".into(), json!(output));
+
+        let expected = "There were no source files that could be opened by PhotoCraft.";
+        assert_eq!(crate::dialogs::confirm(&mut app, form_id), Err(expected.into()));
+        assert_eq!(app.ui.dialogs.len(), 1);
+        let alert = &app.ui.dialogs[0];
+        assert_ne!(alert.id, form_id);
+        assert_eq!(alert.kind, state::DialogKind::Error);
+        assert_eq!(alert.fields.get("message"), Some(&json!(expected)));
+        assert!(!output.exists());
+    }
+}
