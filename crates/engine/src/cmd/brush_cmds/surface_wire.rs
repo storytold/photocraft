@@ -17,7 +17,7 @@ use photocraft_algo::surface::{DepthGeometry, PlaneSurface, ShadingBuilder, Shad
 use photocraft_color::ColorMode;
 use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::{Point, Rect};
-use photocraft_paint::surface::{Local, SampleMode, ShadeSource, SurfaceMap, surface_dab_shape};
+use photocraft_paint::surface::{Footprint, Local, SampleMode, ShadeSource, SurfaceMap, surface_dab_shape};
 use photocraft_paint::{BrushSettings, StrokeRenderer};
 use serde_json::{Value, json};
 
@@ -56,12 +56,18 @@ impl SurfaceMap for PlaneMap {
     fn local(&self, p: Point) -> Option<Local> {
         self.0.local([p.x, p.y]).map(|(scale, squash_angle, squash)| Local { scale, squash_angle, squash, offset: [0.0; 2] })
     }
+
+    /// The brush size is the size on the first plane's centre.
+    fn reference_scale(&self) -> Option<f32> {
+        self.0.reference_scale()
+    }
 }
 
 /// Follow Depth: the document's depth channel (white = near) as a surface map. Over a slope the
 /// dab is foreshortened along it, and with `size_by_depth` its size follows the depth (see
 /// `photocraft_algo::surface::DepthGeometry::local`, which this adapts). The brush's radius
-/// (size / 2) sets the scale the slope is measured at.
+/// (size / 2) sets the scale the slope is measured at. The brush size is the size at the photo's
+/// median depth (its middle distance); without `size_by_depth` the scale is 1 everywhere.
 pub(crate) struct DepthMap {
     geometry: Arc<DepthGeometry>,
     radius: f32,
@@ -77,11 +83,25 @@ impl DepthMap {
     /// The depth projection at `p`; `None` off the canvas, and where it is flat and unscaled.
     fn local(&self, p: Point) -> Option<Local> {
         let (scale, squash_angle, squash) = self.geometry.local(p.x, p.y, self.radius, self.relief, self.size_by_depth)?;
-        if scale == 1.0 && squash >= 0.9999 {
+        if !self.size_by_depth && squash >= 0.9999 {
             return None;
         }
         let local = Local { scale, squash_angle, squash, offset: [0.0; 2] };
         local.is_valid().then_some(local)
+    }
+
+    /// The outline of a dab of `radius` pixels at `p` bent over the depth (see
+    /// `DepthGeometry::footprint`); `None` at relief 0.
+    fn footprint(&self, p: Point, radius: f32) -> Option<Footprint> {
+        if self.relief <= 0.0 {
+            return None;
+        }
+        self.geometry.footprint(p.x, p.y, radius, self.relief).map(|rays| Footprint { rays })
+    }
+
+    /// The scale the brush size is meant at: the median depth's with `size_by_depth`, else 1.
+    fn reference_scale(&self) -> f32 {
+        if self.size_by_depth { self.geometry.reference_scale() } else { 1.0 }
     }
 }
 
@@ -94,7 +114,7 @@ fn local_matrix(l: &Local) -> [[f64; 2]; 2] {
 }
 
 /// Perspective `a` followed by depth `b`: their matrices multiplied and decomposed again, so the
-/// scale is the plane's times the depth's (the first dab anchors the product) and the squashes
+/// scale is the plane's times the depth's (their references' product anchors it) and the squashes
 /// compose. The offsets add.
 fn combine(a: &Local, b: &Local) -> Option<Local> {
     let (m, n) = (local_matrix(a), local_matrix(b));
@@ -115,8 +135,8 @@ fn combine(a: &Local, b: &Local) -> Option<Local> {
 
 /// Follow Perspective and Follow Depth together. With a plane map, a dab off every plane is left
 /// alone (depth or not): the stroke is anchored on the plane. On a plane both apply, as in
-/// [`combine`]. Without a plane map the depth scale itself is the anchored size (the first dab
-/// keeps the brush size; later ones scale with D relative to it).
+/// [`combine`]. Without a plane map the depth scale itself is the size, relative to the median
+/// depth.
 struct CombinedMap {
     persp: Option<Arc<PlaneMap>>,
     depth: Option<DepthMap>,
@@ -131,6 +151,28 @@ impl SurfaceMap for CombinedMap {
         let depth = self.depth.as_ref().and_then(|d| d.local(p));
         match (plane, depth) {
             (Some(a), Some(b)) => combine(&a, &b).or(Some(a)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// With depth, its footprint at the dab's own radius (which already holds the plane's scale);
+    /// with planes only, none: their ellipse is exact. The plane's foreshortening is not in it.
+    fn footprint(&self, p: Point, radius: f32, _local: &Local) -> Option<Footprint> {
+        let depth = self.depth.as_ref()?;
+        // Where the depth map has no projection (flat and unscaled) the dab stays as it is.
+        depth.local(p)?;
+        depth.footprint(p, radius)
+    }
+
+    /// The product of the plane's and the depth's references (as [`combine`] multiplies the scales).
+    fn reference_scale(&self) -> Option<f32> {
+        let plane = match &self.persp {
+            Some(m) => Some(m.reference_scale()?),
+            None => None,
+        };
+        let depth = self.depth.as_ref().map(DepthMap::reference_scale);
+        match (plane, depth) {
+            (Some(a), Some(b)) => Some(a * b),
             (a, b) => a.or(b),
         }
     }
@@ -438,7 +480,7 @@ pub(crate) fn plane_map(s: &Session) -> Option<Arc<PlaneMap>> {
     Some(map)
 }
 
-/// What the brush cursor draws: the dab a stroke starting at the pointer would lay down first.
+/// What the brush cursor draws: the dab a stroke would lay down at the pointer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CursorShape {
     pub radius: f32,
@@ -449,26 +491,39 @@ pub struct CursorShape {
     /// Where the outline's centre sits from the pointer, in image pixels (y down); always 0 for
     /// planes and depth (kept for the cursor drawing).
     pub offset: [f32; 2],
+    /// The outline of a round computed tip bent over the depth (see [`Footprint`]): 32 distances
+    /// in image pixels at angles `k · 2π / 32` (counter-clockwise, y up). `None`: the ellipse.
+    pub outline: Option<[f32; 32]>,
 }
 
 /// What the brush cursor draws at document point `(x, y)` with a tip of radius `base_radius` while
-/// Follow Perspective and/or Follow Depth is on: the dab a stroke starting there lays down first
-/// (it anchors the stroke's size, so it keeps `base_radius`; see [`surface_dab_shape`]), with the
+/// Follow Perspective and/or Follow Depth is on: the dab a stroke lays down at that point, wherever
+/// it started (sized against the map's reference scale, see [`surface_dab_shape`]), with the
 /// plane's foreshortening and the depth slope's. `None` when neither applies: the options are off,
 /// the document has no planes for this canvas, the point is off every plane (with Follow
 /// Perspective on), or the depth is flat and unscaled there. The cursor then stays a plain round
-/// outline. Follow Depth reads only an already cached depth geometry (a stroke builds it): with
-/// none, the outline stays plain, so hovering never builds anything.
+/// outline. Follow Depth builds the depth geometry on a cache miss (one read of the channel, kept until
+/// its content changes); without a usable channel the outline stays plain. The shading field is
+/// never built here.
 pub fn brush_cursor_shape(s: &mut Session, x: f64, y: f64, base_radius: f32) -> Option<CursorShape> {
     let opts = s.tools.brush.surface.clone();
     if !(opts.perspective || opts.depth) {
         return None;
     }
     let persp = if opts.perspective { Some(plane_map(s)?) } else { None };
-    let depth = if opts.depth { Some(DepthMap::new(cached_depth(s, &opts.depth_channel)?, base_radius, opts.relief, opts.size_by_depth)) } else { None };
-    let local = make_map(persp, depth)?.local(Point::new(x, y))?;
-    let (radius, proj_angle, proj_scale) = surface_dab_shape(base_radius, Some(local.scale), &local);
-    Some(CursorShape { radius, proj_angle, proj_scale, offset: local.offset })
+    let depth = if opts.depth {
+        // A missing or unusable channel leaves the outline plain; the first hover builds the grid.
+        let geometry = depth_geometry(s, CURSOR_SHAPE, &opts.depth_channel).ok()?;
+        Some(DepthMap::new(geometry, base_radius, opts.relief, opts.size_by_depth))
+    } else {
+        None
+    };
+    let map = make_map(persp, depth)?;
+    let local = map.local(Point::new(x, y))?;
+    let anchor = map.reference_scale().unwrap_or(local.scale);
+    let (radius, proj_angle, proj_scale) = surface_dab_shape(base_radius, Some(anchor), &local);
+    let outline = map.footprint(Point::new(x, y), radius, &local).filter(Footprint::is_valid).map(|f| f.rays);
+    Some(CursorShape { radius, proj_angle, proj_scale, offset: local.offset, outline })
 }
 
 fn cursor_shape(s: &mut Session, p: &Value) -> Result<Value> {
@@ -479,7 +534,7 @@ fn cursor_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (coord("x")?, coord("y")?);
     let base = (s.tools.brush.size / 2.0).max(0.5);
     Ok(match brush_cursor_shape(s, x, y, base) {
-        Some(c) => json!({"onPlane": true, "radius": c.radius, "projAngle": c.proj_angle, "projScale": c.proj_scale, "offset": c.offset}),
+        Some(c) => json!({"onPlane": true, "radius": c.radius, "projAngle": c.proj_angle, "projScale": c.proj_scale, "offset": c.offset, "outline": c.outline}),
         None => json!({"onPlane": false}),
     })
 }
@@ -490,7 +545,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Brush Cursor Shape",
         menu: &[],
         shortcut: None,
-        params: r##"{"x":px,"y":px} → {"onPlane":true,"radius":px,"projAngle":radians (counter-clockwise, y up),"projScale":0.05..1,"offset":[dx,dy] px (y down)} | {"onPlane":false}: the brush cursor's outline at that point while the brush's Surface › Follow Perspective or Follow Depth is on (the first dab of a stroke starting there)"##,
+        params: r##"{"x":px,"y":px} → {"onPlane":true,"radius":px,"projAngle":radians (counter-clockwise, y up),"projScale":0.05..1,"offset":[dx,dy] px (y down),"outline":32 distances px at angles k·2π/32 (counter-clockwise, y up) | null} | {"onPlane":false}: the brush cursor's outline at that point while the brush's Surface › Follow Perspective or Follow Depth is on (the dab a stroke lays down at that point)"##,
         enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
         run: cursor_shape,
         journal: false,

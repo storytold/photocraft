@@ -137,17 +137,22 @@ fn dabs_shrink_towards_the_far_edge_of_a_plane() {
     // Without the option the stroke is a plain 30 px line.
     let (pn, pf) = (row_width(&plain, 265, 400), row_width(&plain, 150, 400));
     assert!(pn.abs_diff(pf) <= 3, "plain {pn} vs {pf}");
-    // The first dab keeps the brush size exactly where the stroke starts (checked on the dabs: the
-    // painted width also has the edge's anti-aliasing and the dab spacing in it).
+    // The brush size is the size on the first plane's centre, wherever the stroke starts (checked
+    // on the dabs: the painted width also has the edge's anti-aliasing and the dab spacing in it).
     let map = super::surface_wire::plane_map(&s).unwrap() as Arc<dyn SurfaceMap>;
     let brush = BrushSettings { size: 30.0, ..BrushSettings::default() };
     let mut g = photocraft_paint::dynamics::DabGenerator::new(&brush, 1.0).with_surface(Some(map));
     let (mut dabs, mut dual) = (Vec::new(), Vec::new());
     g.push(&[StrokePoint::new(200.0, 270.0, 1.0), StrokePoint::new(200.0, 140.0, 1.0)], &mut dabs, &mut dual);
     g.finish(&mut dabs, &mut dual);
-    assert_eq!(dabs.first().map(|d| d.radius), Some(15.0));
-    assert!(dabs.last().is_some_and(|d| d.radius < 12.0));
-    assert!((near as f64 - 30.0).abs() <= 4.0, "{near}");
+    let reference = super::surface_wire::plane_map(&s).unwrap().reference_scale().unwrap();
+    let at_start = super::surface_wire::plane_map(&s).unwrap().local(photocraft_geom::Point::new(200.0, 270.0)).unwrap().scale;
+    let first = dabs.first().unwrap().radius;
+    assert!((first - 15.0 * at_start / reference).abs() < 1e-3, "{first}");
+    assert!(dabs.last().is_some_and(|d| d.radius < first * 0.8));
+    // A stroke starting at the far edge starts small, not at the brush size.
+    let far_start = dabs_with(&brush, super::surface_wire::plane_map(&s).unwrap(), &[StrokePoint::new(200.0, 140.0, 1.0)]);
+    assert!(far_start.first().is_some_and(|d| d.radius < first * 0.8 && d.radius < 15.0), "{:?}", far_start.first().map(|d| d.radius));
     // A live preview commits the same pixels.
     // (Layer ids differ from one session to the next: each side reads its own layer.)
     let preview = striped_with_planes();
@@ -199,7 +204,9 @@ fn the_cursor_shape_command_reads_and_fails_gracefully() {
     let journal = s.journal.len();
     let r = s.execute("brush.cursorShape", json!({"x": 200, "y": 270})).unwrap();
     assert_eq!(r["onPlane"], true);
-    assert_eq!(r["radius"].as_f64(), Some(15.0));
+    // Nearer than the first plane's centre: larger than the brush size.
+    assert!(r["radius"].as_f64().unwrap() > 15.0, "{r}");
+    assert!(r["outline"].is_null(), "planes alone keep the ellipse");
     assert!(r["projScale"].as_f64().unwrap() < 1.0);
     assert!(r["projAngle"].is_number());
     assert_eq!(s.execute("brush.cursorShape", json!({"x": 5, "y": 5})).unwrap(), json!({"onPlane": false}));
@@ -386,20 +393,22 @@ fn dabs_on_a_depth_slope_are_squashed_along_it_and_flat_ones_are_not() {
 }
 
 #[test]
-fn size_by_depth_shrinks_dabs_towards_the_far_side_from_the_first_dab() {
+fn size_by_depth_is_anchored_at_the_middle_distance_for_every_stroke() {
     let mut s = ramp_doc();
     s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true, "relief": 0}))).unwrap();
     let brush = s.tools.brush.clone();
     let map = wiring_map(&s);
+    // The median depth is 0.5: a dab at D = 0.5 is the brush size.
     let dabs = dabs_with(&brush, map, &[StrokePoint::new(100.0, 50.0, 1.0), StrokePoint::new(30.0, 50.0, 1.0)]);
-    assert_eq!(dabs.first().map(|d| d.radius), Some(6.0));
+    assert!((dabs.first().unwrap().radius - 6.0).abs() < 0.2, "{:?}", dabs.first().map(|d| d.radius));
     assert!(dabs.windows(2).all(|w| w[1].radius <= w[0].radius + 1e-6), "dabs only shrink towards low D");
     // D falls from 0.5 to 0.15 over the stroke: about 0.3 of the size.
     let last = dabs.last().unwrap().radius;
     assert!(last < 3.0 && last > 1.0, "{last}");
-    // The other way, the dabs grow.
-    let grow = dabs_with(&brush, wiring_map(&s), &[StrokePoint::new(30.0, 50.0, 1.0), StrokePoint::new(100.0, 50.0, 1.0)]);
-    assert!(grow.last().unwrap().radius > 6.0 * 2.0);
+    // A stroke that starts at the far side starts small, not at the brush size.
+    let far = dabs_with(&brush, wiring_map(&s), &[StrokePoint::new(30.0, 50.0, 1.0), StrokePoint::new(190.0, 50.0, 1.0)]);
+    assert!(far.first().unwrap().radius < 2.5, "{:?}", far.first().map(|d| d.radius));
+    assert!(far.last().unwrap().radius > far.first().unwrap().radius * 4.0);
 }
 
 fn assert_cursor_is_first_dab(s: &mut Session, x: f64, y: f64) {
@@ -446,20 +455,74 @@ fn depth_stroke(s: &mut Session, y: i32) -> Result<Value> {
 }
 
 #[test]
-fn the_depth_cursor_never_builds_and_a_stroke_builds_once() {
+fn the_depth_cursor_builds_on_the_first_hover_and_a_stroke_reuses_it() {
     let mut s = ramp_doc();
-    s.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
-    for x in [10.0, 100.0, 150.0] {
-        assert!(brush_cursor_shape(&mut s, x, 50.0, 6.0).is_none());
-    }
-    assert_eq!(s.surface_cache.depth_builds(), 0, "hovering builds nothing");
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true}))).unwrap();
+    assert_eq!(s.surface_cache.depth_builds(), 0);
+    // No stroke yet: the first hover gives the depth-derived size (median depth 0.5, radius 6).
+    let far = brush_cursor_shape(&mut s, 30.0, 50.0, 6.0).expect("hover builds the depth geometry");
+    assert_eq!(s.surface_cache.depth_builds(), 1);
+    let (mid, near) = (brush_cursor_shape(&mut s, 100.0, 50.0, 6.0).unwrap(), brush_cursor_shape(&mut s, 170.0, 50.0, 6.0).unwrap());
+    assert_eq!(s.surface_cache.depth_builds(), 1, "kept for the next hovers");
+    assert!(far.radius < mid.radius && mid.radius < near.radius, "{} {} {}", far.radius, mid.radius, near.radius);
+    assert!((mid.radius - 6.0).abs() < 0.2 && far.radius < 3.0 && near.radius > 7.5);
     depth_stroke(&mut s, 50).unwrap();
-    assert_eq!(s.surface_cache.depth_builds(), 1);
-    assert!(brush_cursor_shape(&mut s, 100.0, 50.0, 6.0).is_some());
-    assert_eq!(s.surface_cache.depth_builds(), 1);
+    assert_eq!(s.surface_cache.depth_builds(), 1, "the stroke reuses what the hover built");
     let r = s.execute("brush.cursorShape", json!({"x": 100, "y": 50})).unwrap();
     assert_eq!(r["onPlane"], true);
     assert_eq!(r["offset"], json!([0.0, 0.0]));
+    assert_eq!(r["outline"].as_array().map(Vec::len), Some(32));
+    // Without a depth channel the outline stays plain and nothing is built.
+    let mut none = striped(100, 100);
+    none.execute("tools.setBrush", depth_brush(json!({}))).unwrap();
+    assert!(brush_cursor_shape(&mut none, 50.0, 50.0, 6.0).is_none());
+    assert_eq!(none.surface_cache.depth_builds(), 0);
+}
+
+/// The dab of a stroke running from `from` to `to` that lies nearest to `to`.
+fn dab_near(s: &Session, from: (f64, f64), to: (f64, f64)) -> photocraft_paint::Dab {
+    let mut brush = s.tools.brush.clone();
+    brush.spacing = 0.01;
+    let dabs = dabs_with(&brush, wiring_map(s), &[StrokePoint::new(from.0, from.1, 1.0), StrokePoint::new(to.0, to.1, 1.0)]);
+    dabs.into_iter().min_by(|a, b| (a.center.x - to.0).hypot(a.center.y - to.1).total_cmp(&(b.center.x - to.0).hypot(b.center.y - to.1))).unwrap()
+}
+
+#[test]
+fn the_cursor_equals_the_dab_a_stroke_from_elsewhere_lays_down_there() {
+    let mut s = depth_doc(400, 300, "Depth", |x, y| (x as f32 / 400.0) * 0.7 + (y as f32 / 300.0) * 0.3);
+    s.execute("tools.setBrush", depth_brush(json!({"sizeByDepth": true}))).unwrap();
+    for (from, to) in [((350.0, 250.0), (60.0, 40.0)), ((40.0, 40.0), (330.0, 240.0)), ((200.0, 150.0), (210.0, 150.0))] {
+        let dab = dab_near(&s, from, to);
+        let cursor = brush_cursor_shape(&mut s, dab.center.x, dab.center.y, 6.0).unwrap();
+        assert!((cursor.radius - dab.radius).abs() < 1e-3 * dab.radius.max(1.0), "{from:?} -> {to:?}: {} vs {}", cursor.radius, dab.radius);
+        let foot = dab.footprint.expect("a depth dab carries its footprint");
+        let outline = cursor.outline.expect("and so does the cursor");
+        assert!(foot.rays.iter().zip(&outline).all(|(a, b)| (a - b).abs() < 1e-3), "{:?} vs {outline:?}", foot.rays);
+    }
+    // With the plane as well the dab's size is the plane's times the depth's, and still equal.
+    s.execute("perspective.setPlanes", json!({"planes": [FLOOR]})).unwrap();
+    s.execute("tools.setBrush", json!({"surface": {"perspective": true}})).unwrap();
+    for (from, to) in [((200.0, 270.0), (200.0, 160.0)), ((100.0, 150.0), (300.0, 270.0))] {
+        let dab = dab_near(&s, from, to);
+        let cursor = brush_cursor_shape(&mut s, dab.center.x, dab.center.y, 6.0).unwrap();
+        assert!((cursor.radius - dab.radius).abs() < 1e-3 * dab.radius.max(1.0), "{} vs {}", cursor.radius, dab.radius);
+    }
+}
+
+#[test]
+fn a_ridge_bends_the_footprint_and_flat_depth_keeps_it_round() {
+    // A sharp ridge at x = 100 (a gentle climb, a steep drop), then flat.
+    let mut s = depth_doc(240, 100, "Depth", |x, _| if x < 100 { 0.5 * x as f32 / 100.0 } else { (0.5 - 0.5 * (x as f32 - 100.0) / 20.0).max(0.0) });
+    s.execute("tools.setBrush", json!({"size": 40, "surface": {"depth": true, "relief": 1.0, "sizeByDepth": false}})).unwrap();
+    let c = brush_cursor_shape(&mut s, 92.0, 50.0, 20.0).unwrap();
+    let rays = c.outline.unwrap();
+    let across = rays[8].min(rays[24]);
+    assert!(rays[0] < across * 0.8 && rays[0] < rays[16] - 0.3, "east {} west {} across {across}", rays[0], rays[16]);
+    // Flat depth with sizeByDepth: a perfect circle.
+    let mut flat = depth_doc(100, 100, "Depth", |_, _| 0.6);
+    flat.execute("tools.setBrush", json!({"size": 20, "surface": {"depth": true, "relief": 1.0, "sizeByDepth": true}})).unwrap();
+    let f = brush_cursor_shape(&mut flat, 50.0, 50.0, 10.0).unwrap();
+    assert!(f.outline.unwrap().iter().all(|r| (r - f.radius).abs() < 1e-4));
 }
 
 #[test]

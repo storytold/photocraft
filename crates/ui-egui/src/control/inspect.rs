@@ -41,7 +41,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "depthDialog": app.ui.depth_dialog,
         // The surface-aware dab outline the brush cursor last drew (Follow Perspective, over a
         // plane); null for the plain outline.
-        "brushCursor": crate::brush_cursor::last_shape(ctx).map(|c| json!({"radius": c.radius, "projAngle": c.proj_angle, "projScale": c.proj_scale, "offset": c.offset})),
+        "brushCursor": crate::brush_cursor::last_shape(ctx).map(|c| json!({"radius": c.radius, "projAngle": c.proj_angle, "projScale": c.proj_scale, "offset": c.offset, "outline": c.outline})),
         "artboardTool": app.ui.artboard_tool,
         "perspectiveCrop": app.ui.perspective_crop,
         "strokeEditor": app.ui.stroke_editor,

@@ -349,12 +349,15 @@ impl BrushContext {
         let (fx, fy) = (if d.flip_x { -1.0 } else { 1.0 }, if d.flip_y { -1.0 } else { 1.0 });
         // Brush Projection: stretch the sampling coordinates along the tilt direction, which
         // foreshortens the tip there by `proj_scale`.
-        let proj = (!dual && d.proj_scale < 0.999).then(|| {
+        // A computed tip with a surface footprint is drawn inside that outline instead: the
+        // footprint already holds the foreshortening, so no projection, rotation or roundness.
+        let foot = surface_outline(d, dual, mips.is_some());
+        let proj = (!dual && foot.is_none() && d.proj_scale < 0.999).then(|| {
             let (ps, pc) = d.proj_angle.sin_cos();
             (pc, ps, 1.0 / d.proj_scale.max(0.05) - 1.0)
         });
         let r = d.radius;
-        let ro = d.roundness.max(0.5 / r).min(1.0);
+        let ro = tip_roundness(d, r, foot.is_some());
         let rm = (r * ro).max(0.5);
         let profile = TipProfile::new(rm, hardness);
         let reach = if aliased || mips.is_some() { rm } else { profile.reach().max(rm) };
@@ -378,6 +381,7 @@ impl BrushContext {
         if !(mips.is_some() || small || (aliased && b.square) || noise || tex_tip || wet)
             && depth.is_none()
             && proj.is_none()
+            && foot.is_none()
             // Rotation preserves a circle's distance; ellipses still need the transform.
             && (d.angle == 0.0 || ro == 1.0)
             && d.angle.is_finite()
@@ -414,6 +418,7 @@ impl BrushContext {
             fx,
             fy,
             proj,
+            foot,
             r,
             ro,
             rm,
@@ -1574,6 +1579,17 @@ impl RoundTip {
     }
 }
 
+/// The surface outline a dab's computed tip is drawn inside (`None`: a dual or sampled tip, or no
+/// valid footprint; those keep their ellipse).
+pub(super) fn surface_outline(d: &Dab, dual: bool, sampled: bool) -> Option<&crate::surface::Footprint> {
+    if dual || sampled { None } else { d.footprint.as_ref().filter(|f| f.is_valid()) }
+}
+
+/// The tip's roundness: 1 inside a surface outline (which holds the squash), else the dab's.
+pub(super) fn tip_roundness(d: &Dab, radius: f32, outlined: bool) -> f32 {
+    if outlined { 1.0 } else { d.roundness.max(0.5 / radius).min(1.0) }
+}
+
 /// The general rasterizer's per-dab state, one row at a time (see [`BrushContext::rasterize_into`]).
 #[derive(Clone, Copy)]
 struct GeneralTip<'a> {
@@ -1594,6 +1610,8 @@ struct GeneralTip<'a> {
     fx: f32,
     fy: f32,
     proj: Option<(f32, f32, f32)>,
+    /// The dab's surface outline (a round computed tip only).
+    foot: Option<&'a crate::surface::Footprint>,
     r: f32,
     ro: f32,
     rm: f32,
@@ -1664,6 +1682,9 @@ impl GeneralTip<'_> {
     #[inline(always)]
     fn to_tip(self, dx: f32, dy: f32) -> (f32, f32) {
         let (mut ux, mut uy) = (dx, -dy);
+        if let Some(f) = self.foot {
+            return f.to_tip(ux, uy, self.r);
+        }
         if let Some((ax, ay, k)) = self.proj {
             let t = (ux * ax + uy * ay) * k;
             ux += t * ax;

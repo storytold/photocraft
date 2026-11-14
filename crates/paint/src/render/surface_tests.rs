@@ -205,3 +205,40 @@ fn the_renderer_threads_the_map_through_to_its_dabs() {
     let expected = dabs_of(&b, &line(), Some(Arc::new(Receding)));
     assert_eq!(r.dabs(), &expected[..]);
 }
+
+fn coverage_of(ctx: &BrushContext, d: &Dab) -> (Rect, Vec<f32>) {
+    let rect = ctx.dab_rect(d, false);
+    let mut cov = Vec::new();
+    ctx.rasterize(d, false, rect, &mut cov);
+    (rect, cov)
+}
+
+#[test]
+fn a_circular_footprint_paints_the_plain_round_dab() {
+    for hardness in [0.0, 0.5, 1.0] {
+        let ctx = BrushContext::new(&BrushSettings { hardness, ..BrushSettings::default() });
+        let plain = Dab::round(Point::new(30.25, 30.75), 12.0, 0.8);
+        let mut foot = plain;
+        foot.footprint = Some(crate::surface::Footprint { rays: [12.0; 32] });
+        // The footprint ignores the projection a plane would give.
+        foot.proj_scale = 0.4;
+        let ((ra, a), (rb, b)) = (coverage_of(&ctx, &plain), coverage_of(&ctx, &foot));
+        assert_eq!(ra, rb);
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5), "hardness {hardness}");
+    }
+}
+
+#[test]
+fn a_footprint_cuts_the_dab_to_its_outline() {
+    let ctx = BrushContext::new(&BrushSettings { hardness: 1.0, ..BrushSettings::default() });
+    let mut d = Dab::round(Point::new(30.5, 30.5), 15.0, 1.0);
+    // Ray 0 (east, +x) is short; the others reach the full radius.
+    let mut rays = [15.0f32; 32];
+    rays[0] = 5.0;
+    d.footprint = Some(crate::surface::Footprint { rays });
+    let (rect, cov) = coverage_of(&ctx, &d);
+    let at = |x: i32, y: i32| cov[((y - rect.y0) * rect.width() as i32 + (x - rect.x0)) as usize];
+    assert!(at(40, 30) < 0.01, "east, 10 px out, is past the short ray");
+    assert!(at(21, 30) > 0.99, "west, 9 px out, is inside");
+    assert!(at(33, 30) > 0.99, "east, 3 px out, is inside");
+}

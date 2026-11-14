@@ -11,7 +11,7 @@ use photocraft_geom::Point;
 
 use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
-use crate::surface::{MapHandle, SurfaceMap, surface_dab_shape};
+use crate::surface::{Footprint, MapHandle, SurfaceMap, surface_dab_shape};
 use crate::{Dab, StrokePoint};
 
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
@@ -585,10 +585,10 @@ fn step_len_scaled(brush: &BrushSettings, p: &StrokePoint, factor: f32) -> f64 {
     f64::from(d * brush.spacing.max(0.01)).max(0.5)
 }
 
-/// How much a perspective plane scales the dab at `p` relative to the stroke's first on-plane dab
-/// (`anchor`, the plane's scale there): 1 before that dab or off the planes.
+/// How much a surface scales the dab at `p` relative to the anchor (the map's reference scale, else
+/// the scale at the stroke's first on-surface dab, `anchor`): 1 with neither yet, or off the surface.
 fn surface_factor(map: &dyn SurfaceMap, anchor: Option<f32>, p: &StrokePoint) -> f32 {
-    let Some(anchor) = anchor.filter(|a| a.is_finite() && *a > 0.0) else { return 1.0 };
+    let Some(anchor) = map.reference_scale().or(anchor).filter(|a| a.is_finite() && *a > 0.0) else { return 1.0 };
     match map.local(Point::new(p.x, p.y)) {
         Some(l) if l.is_valid() => (l.scale / anchor).clamp(0.01, 100.0),
         _ => 1.0,
@@ -605,7 +605,7 @@ pub struct DabBuilder {
     next_index: u64,
     /// Follow Perspective: the planes dabs are sized and foreshortened by.
     surface: Option<MapHandle>,
-    /// The plane's scale at the stroke's first on-plane dab (the size the brush means).
+    /// The scale the brush size means: the map's reference scale, else the one at the first on-surface dab.
     anchor: Option<f32>,
 }
 
@@ -699,9 +699,12 @@ impl DabBuilder {
                 }
             }
             // Follow Perspective: on a plane, the plane's projection replaces the pen-tilt one.
+            let mut footprint = None;
             if let Some(local) = self.surface.as_ref().and_then(|m| m.0.local(c)).filter(|l| l.is_valid()) {
-                let anchor = *self.anchor.get_or_insert(local.scale);
+                let reference = self.surface.as_ref().and_then(|m| m.0.reference_scale());
+                let anchor = *self.anchor.get_or_insert(reference.unwrap_or(local.scale));
                 (radius, proj_angle, proj_scale) = surface_dab_shape(radius, Some(anchor), &local);
+                footprint = self.surface.as_ref().and_then(|m| m.0.footprint(c, radius, &local)).filter(Footprint::is_valid);
                 // Follow Folds' bend: the map was read at the undisplaced centre.
                 c.x += f64::from(local.offset[0]);
                 c.y += f64::from(local.offset[1]);
@@ -743,6 +746,7 @@ impl DabBuilder {
                 proj_scale,
                 wet,
                 mix,
+                footprint,
             });
         }
     }
@@ -798,6 +802,7 @@ impl DualBuilder {
                 proj_scale: 1.0,
                 wet: 1.0,
                 mix: 1.0,
+                footprint: None,
             });
         }
     }
@@ -852,7 +857,7 @@ impl DabGenerator {
     }
 
     /// Follow the perspective planes of `map`: on a plane, dabs are sized by its local scale
-    /// (anchored at the stroke's first on-plane dab) and foreshortened by its squash, and spacing
+    /// (anchored at the map's reference scale, else the stroke's first on-surface dab) and foreshortened by its squash, and spacing
     /// follows the dab size. Off every plane, and with `None`, dabs are as without. Call it before
     /// feeding any point.
     pub fn with_surface(mut self, map: Option<Arc<dyn SurfaceMap>>) -> Self {

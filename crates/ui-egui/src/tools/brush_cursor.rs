@@ -148,7 +148,7 @@ pub(crate) fn surface_cursor(
     normal: bool,
     centre: bool,
 ) -> CursorIcon {
-    let plain = photocraft_engine::brush_cmds::CursorShape { radius: brush.size / 2.0, proj_angle: 0.0, proj_scale: 1.0, offset: [0.0; 2] };
+    let plain = photocraft_engine::brush_cmds::CursorShape { radius: brush.size / 2.0, proj_angle: 0.0, proj_scale: 1.0, offset: [0.0; 2], outline: None };
     let shape = shape.unwrap_or(plain);
     let axes = surface_axes(xf, shape.radius, shape.proj_angle, shape.proj_scale);
     let doc = xf.to_doc(p);
@@ -158,7 +158,34 @@ pub(crate) fn surface_cursor(
         let t = crate::theme::Tokens::get(painter.ctx());
         painter.line_segment([p, at], egui::Stroke::new(1.0, t.accent));
     }
+    // A dab bent over the depth: its own 32-point outline.
+    if let Some(ring) = shape.outline.and_then(|rays| outline_ring(xf, &rays)) {
+        let extent = ring.iter().fold(0.0f32, |m, v| m.max(v.length()));
+        if extent < MIN_RADIUS {
+            return crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
+        }
+        return crate::tool_cursor::outline(painter, at, vec![ring], centre);
+    }
     cursor(painter, at, brush, (shape.radius * xf.zoom).max(1.0), axes, normal, centre)
+}
+
+/// The screen vectors (from the dab centre) of the closed polygon through the rays of a surface
+/// outline (`k · 2π / 32`, counter-clockwise, y up in document pixels). `None` for a bad ray.
+pub(crate) fn outline_ring(xf: &crate::canvas::ViewXform, rays: &[f32]) -> Option<Vec<Vec2>> {
+    let n = rays.len();
+    if n < 3 || !rays.iter().all(|r| r.is_finite() && *r > 0.0) {
+        return None;
+    }
+    Some(
+        rays.iter()
+            .enumerate()
+            .map(|(k, r)| {
+                let (sn, cs) = (k as f32 * std::f32::consts::TAU / n as f32).sin_cos();
+                // Document y points down.
+                xf.map_vec(Vec2::new(r * cs, -r * sn))
+            })
+            .collect(),
+    )
 }
 
 fn shape_id() -> egui::Id {

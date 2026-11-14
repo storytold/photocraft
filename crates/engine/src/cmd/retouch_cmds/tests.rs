@@ -642,6 +642,7 @@ fn protect_detail_dabs_on_one_centre_apply_at_most_one_dab_at_each_pixel() {
         proj_scale: 1.0,
         wet: 1.0,
         mix: 1.0,
+        footprint: None,
     };
     let mut shares = super::dab::ProtectDetailShares::default();
     let (mut applied, mut largest) = (std::collections::HashMap::new(), std::collections::HashMap::new());

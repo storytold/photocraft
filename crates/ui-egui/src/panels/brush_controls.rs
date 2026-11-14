@@ -152,7 +152,8 @@ pub(super) fn surface_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mu
             if widgets::slider_row(ui, tl!("Relief"), &mut relief, 0.0..=100.0, "%", None).changed() {
                 s.relief = (relief.round() / 100.0).clamp(0.0, 1.0);
             }
-            widgets::checkbox(ui, &mut s.size_by_depth, tl!("Size by Depth"));
+            widgets::checkbox(ui, &mut s.size_by_depth, tl!("Size by Depth"))
+                .on_hover_text(tl!("Brush size is the size at the photo's middle distance; nearer is larger, farther smaller."));
         });
         let estimate = ui.add_enabled(!cfg!(target_arch = "wasm32"), egui::Button::new(tl!("Estimate Depth…")));
         let estimate = if cfg!(target_arch = "wasm32") { estimate.on_disabled_hover_text(tl!("Not available in this build")) } else { estimate };

@@ -90,12 +90,13 @@ fn ui_inspect_reports_the_cursor_shape() {
     assert!(before["result"]["brushCursor"].is_null());
     crate::brush_cursor::remember_shape(
         &ctx,
-        Some(photocraft_engine::brush_cmds::CursorShape { radius: 12.0, proj_angle: 0.5, proj_scale: 0.4, offset: [1.0, 2.0] }),
+        Some(photocraft_engine::brush_cmds::CursorShape { radius: 12.0, proj_angle: 0.5, proj_scale: 0.4, offset: [1.0, 2.0], outline: None }),
     );
     let v = inspect(&mut app);
     assert_eq!(v["result"]["brushCursor"]["projScale"], json!(0.4f32));
     assert_eq!(v["result"]["brushCursor"]["radius"], json!(12.0f32));
     assert_eq!(v["result"]["brushCursor"]["offset"], json!([1.0f32, 2.0f32]));
+    assert!(v["result"]["brushCursor"]["outline"].is_null());
 }
 
 #[test]

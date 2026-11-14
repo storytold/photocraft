@@ -118,6 +118,63 @@ pub struct Local {
 pub trait SurfaceMap: Send + Sync {
     /// The projection at image point `p`, or `None` off every plane.
     fn local(&self, p: Point) -> Option<Local>;
+
+    /// The scale (in [`Local::scale`] units) at which the brush size is meant: the same for every
+    /// stroke and for the brush cursor, so a stroke is as large at a place wherever it started.
+    /// `None` (the default) anchors each stroke at its own first on-surface dab instead.
+    fn reference_scale(&self) -> Option<f32> {
+        None
+    }
+
+    /// The dab's outline bent over the surface at the (undisplaced) centre `p`, for a dab of
+    /// `radius` image pixels whose projection is `local`; `None` (the default) keeps the ellipse
+    /// of `local`. Only a round computed tip follows it; it costs far more than
+    /// [`local`](Self::local), so the spacing never asks.
+    fn footprint(&self, _p: Point, _radius: f32, _local: &Local) -> Option<Footprint> {
+        None
+    }
+}
+
+/// Number of directions of a [`Footprint`].
+pub const FOOTPRINT_RAYS: usize = 32;
+
+/// A dab's outline in image space: the distance from its centre to the edge along
+/// [`FOOTPRINT_RAYS`] evenly spaced directions (ray `k` at angle `k · 2π / 32`, counter-clockwise,
+/// y up, like the projection angles), size scaling included. Every ray is in
+/// `(0, radius]` of the dab it belongs to. Held inline (128 bytes) so a [`Dab`](crate::Dab) stays `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Footprint {
+    pub rays: [f32; FOOTPRINT_RAYS],
+}
+
+impl Footprint {
+    /// Is every ray finite and positive?
+    pub fn is_valid(&self) -> bool {
+        self.rays.iter().all(|r| r.is_finite() && *r > 0.0)
+    }
+
+    /// The outline distance at `theta` (radians, y up): the linear interpolation of the two
+    /// nearest rays.
+    pub fn radius_at(&self, theta: f32) -> f32 {
+        let t = theta.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU * FOOTPRINT_RAYS as f32;
+        let k = (t.floor() as usize).min(FOOTPRINT_RAYS - 1);
+        let f = (t - k as f32).clamp(0.0, 1.0);
+        let at = |i: usize| self.rays.get(i % FOOTPRINT_RAYS).copied().unwrap_or(1.0);
+        at(k) * (1.0 - f) + at(k + 1) * f
+    }
+
+    /// The tip-space point of the pixel offset `(ux, uy)` (y up) from the centre of a dab of
+    /// `radius`: the offset stretched so the outline lands on the circle of `radius`. A tip
+    /// painted at the result has the outline of this footprint.
+    pub fn to_tip(&self, ux: f32, uy: f32, radius: f32) -> (f32, f32) {
+        let d = ux.hypot(uy);
+        if d <= 1e-6 {
+            return (ux, uy);
+        }
+        let edge = self.radius_at(uy.atan2(ux)).clamp(radius * 0.01, radius.max(0.01));
+        let k = radius / edge;
+        (ux * k, uy * k)
+    }
 }
 
 impl Local {
@@ -130,10 +187,10 @@ impl Local {
 /// A dab's `(radius, proj_angle, proj_scale)` on a plane.
 ///
 /// `base_radius` is the radius the dab would have off the plane (size and dynamics applied);
-/// `anchor_scale` is [`Local::scale`] at the stroke's first on-plane dab, `None` for that first dab
-/// itself. The first dab keeps `base_radius`, so the brush size means pixels where the stroke
-/// starts; later dabs grow and shrink with the plane's scale. The brush cursor uses this too, so
-/// it shows the first dab exactly.
+/// `anchor_scale` is the scale the brush size is meant at: [`SurfaceMap::reference_scale`] when
+/// the map has one, else [`Local::scale`] at the stroke's first on-surface dab (`None` for that
+/// first dab itself, which then keeps `base_radius`). A dab grows and shrinks with the surface's
+/// scale relative to it. The brush cursor uses this too, so it shows the dab at that point.
 pub fn surface_dab_shape(base_radius: f32, anchor_scale: Option<f32>, local: &Local) -> (f32, f32, f32) {
     let ratio = match anchor_scale {
         Some(a) if a.is_finite() && a > 0.0 && local.is_valid() => (local.scale / a).clamp(1e-3, 1e3),
