@@ -372,6 +372,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
                 egui::ScrollArea::vertical().id_salt(("file-info-body", d.id)).max_height(room).show(ui, |ui| crate::view_cmds::form_body(ui, fields));
+            } else if lens_batch_ui::owns(fields) {
+                lens_batch_ui::body(app, ui, fields, d.id);
             } else {
                 crate::view_cmds::form_body(ui, fields);
             }
@@ -489,7 +491,10 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && merge_channels_ui::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && merge_channels_ui::can_confirm(fields)
+            && lens_batch_ui::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -1057,6 +1062,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
         // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).
         crate::canvas_tool_menu::remember_simulate_pressure(app, &params);
     }
+    if result.is_ok() && lens_batch_ui::owns(&d.fields) {
+        lens_batch_ui::remember(&mut app.ui, &d.fields);
+    }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }
@@ -1183,6 +1191,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     image_processor_ui::preflight(&mut app.ui, id)?;
     fit_image_range::preflight(&mut app.ui, id)?;
+    lens_batch_ui::preflight(&app.ui, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -1344,6 +1353,8 @@ pub mod jpeg_options_ui;
 mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
+mod lens_batch_sources;
+pub(crate) mod lens_batch_ui;
 pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
