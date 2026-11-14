@@ -290,11 +290,13 @@ fn convert_tiles_converts_each_distinct_tile_once() {
         let tiles: Vec<_> = area.tiles().filter_map(|c| s.tile(c).map(|t| (c, t.clone()))).collect();
         assert_eq!(tiles.len(), 81, "{fmt:?}");
         let mut seen = Vec::new();
-        let converted = convert_tiles(&s, tiles, kind, |t, cs, bytes| {
-            for &c in cs {
-                assert!(s.tile(c).is_some_and(|own| Arc::ptr_eq(own, t)), "{fmt:?} {c:?}");
-                assert_eq!(bytes, convert_tile(&s, Some(t), kind, c).as_slice(), "{fmt:?} {c:?}");
-                seen.push(c);
+        let converted = convert_tiles(&s, tiles, kind, |groups, bytes| {
+            for ((t, cs), bytes) in groups.iter().zip(bytes) {
+                for &c in cs {
+                    assert!(s.tile(c).is_some_and(|own| Arc::ptr_eq(own, t)), "{fmt:?} {c:?}");
+                    assert_eq!(bytes, convert_tile(&s, Some(t), kind, c).as_slice(), "{fmt:?} {c:?}");
+                    seen.push(c);
+                }
             }
         });
         assert_eq!(converted, 3, "{fmt:?}: the shared tile once, plus the two edited ones");
@@ -311,13 +313,18 @@ fn convert_tiles_converts_each_distinct_tile_once() {
     }
     let tiles: Vec<_> = wide.tiles().filter_map(|c| s.tile(c).map(|t| (c, t.clone()))).collect();
     let mut n = 0;
-    let converted = convert_tiles(&s, tiles, TexKind::Rgba16F, |t, cs, bytes| {
-        for &c in cs {
-            assert_eq!(bytes, convert_tile(&s, Some(t), TexKind::Rgba16F, c).as_slice());
-            n += 1;
+    let mut batch_sizes = Vec::new();
+    let converted = convert_tiles(&s, tiles, TexKind::Rgba16F, |groups, bytes| {
+        batch_sizes.push(groups.len());
+        for ((t, cs), bytes) in groups.iter().zip(bytes) {
+            for &c in cs {
+                assert_eq!(bytes, convert_tile(&s, Some(t), TexKind::Rgba16F, c).as_slice());
+                n += 1;
+            }
         }
     });
     assert_eq!((converted, n), (CONVERT_BATCH + 5, CONVERT_BATCH + 5));
+    assert_eq!(batch_sizes, [CONVERT_BATCH, 5]);
 }
 
 /// The 16-bit and 32-bit float RGB/gray fast paths give exactly the general path's half
@@ -399,23 +406,29 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
         assert_eq!(tiles.len(), 3, "{fmt:?}");
         let mut seen = 0;
         with_cmyk_space(space.as_ref(), || {
-            convert_tiles(&s, tiles, kind, |_, cs, bytes| {
-                for &c in cs {
-                    // The old path: every pixel through `to_rgba` on this thread, in this scope.
-                    let want: Vec<u8> = s
-                        .read_region(c.rect())
-                        .chunks_exact(ch)
-                        .flat_map(|px| {
-                            let v = photocraft_raster::to_rgba(&fmt, px);
-                            match kind {
-                                TexKind::Rgba16F => v.iter().flat_map(|x| f32_to_f16(*x).to_le_bytes()).collect::<Vec<u8>>(),
-                                _ => v.map(|x| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).to_vec(),
-                            }
-                        })
-                        .collect();
-                    assert!(bytes == want.as_slice(), "{fmt:?} {c:?} with {}", if space.is_some() { "the document's profile" } else { "the built-in profile" });
-                    assert_eq!(convert_tile(&s, s.tile(c), kind, c), want, "{fmt:?} {c:?}");
-                    seen += 1;
+            convert_tiles(&s, tiles, kind, |groups, bytes| {
+                for ((_, cs), bytes) in groups.iter().zip(bytes) {
+                    for &c in cs {
+                        // The old path: every pixel through `to_rgba` on this thread, in this scope.
+                        let want: Vec<u8> = s
+                            .read_region(c.rect())
+                            .chunks_exact(ch)
+                            .flat_map(|px| {
+                                let v = photocraft_raster::to_rgba(&fmt, px);
+                                match kind {
+                                    TexKind::Rgba16F => v.iter().flat_map(|x| f32_to_f16(*x).to_le_bytes()).collect::<Vec<u8>>(),
+                                    _ => v.map(|x| (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).to_vec(),
+                                }
+                            })
+                            .collect();
+                        assert!(
+                            bytes == want.as_slice(),
+                            "{fmt:?} {c:?} with {}",
+                            if space.is_some() { "the document's profile" } else { "the built-in profile" }
+                        );
+                        assert_eq!(convert_tile(&s, s.tile(c), kind, c), want, "{fmt:?} {c:?}");
+                        seen += 1;
+                    }
                 }
             });
         });
