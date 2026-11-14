@@ -416,6 +416,82 @@ pub fn match_pairs(feats: &[ImageFeatures]) -> Vec<PairMatch> {
     out.into_iter().flatten().collect()
 }
 
+/// Keep the planar Auto layout for crops that share an integer translation. The feature fit
+/// proposes the displacement, and the pixels confirm it independently of gain and offset.
+/// If any verified pair disagrees, keep the ordinary projective fit.
+pub fn align_translated_crops(imgs: &[PreparedImage], feats: &[ImageFeatures], matches: &[PairMatch], opts: &AlignOptions) -> Option<Alignment> {
+    if opts.layout != Layout::Auto || opts.geometric || imgs.len() != feats.len() {
+        return None;
+    }
+    let mut translated = Vec::with_capacity(matches.len());
+    for pair in matches {
+        let a = imgs.get(pair.a)?;
+        let b = imgs.get(pair.b)?;
+        // The most frequent exact corner displacement is more stable than extrapolating a
+        // homography estimated from a narrow overlap. Coordinates from the detector are integers.
+        let mut votes = std::collections::BTreeMap::<(i32, i32), usize>::new();
+        for (pa, pb) in pair.pts_a.iter().zip(&pair.pts_b) {
+            let d = ((pa[0] - pb[0]).round() as i32, (pa[1] - pb[1]).round() as i32);
+            *votes.entry(d).or_default() += 1;
+        }
+        let ((dx, dy), count) = votes.into_iter().max_by_key(|&(_, count)| count)?;
+        if count < 8 || count < pair.pts_a.len().div_ceil(2) || !confirms_translation(a, b, dx, dy) {
+            return None;
+        }
+        // Feed only correspondences supporting the same shift to the existing global solver.
+        let (pts_a, pts_b) =
+            pair.pts_a.iter().zip(&pair.pts_b).filter(|(a, b)| a[0] - b[0] == f64::from(dx) && a[1] - b[1] == f64::from(dy)).map(|(&a, &b)| (a, b)).unzip();
+        translated.push(PairMatch { pts_a, pts_b, ..pair.clone() });
+    }
+    let a = align(feats, &translated, &AlignOptions { layout: Layout::Reposition, ..opts.clone() })?;
+    // Contradictory offsets around a loop or disconnected images still need the original path.
+    (a.rms < 1e-6 && a.placements.iter().all(Option::is_some)).then_some(Alignment { layout: Layout::Perspective, ..a })
+}
+
+/// Check four separate regions of the overlap. A mistaken shift on a largely flat image can
+/// correlate well overall; each region must carry enough detail and match after a tone change.
+fn confirms_translation(a: &PreparedImage, b: &PreparedImage, dx: i32, dy: i32) -> bool {
+    let (aw, ah, al, av) = a;
+    let (bw, bh, bl, bv) = b;
+    if aw.checked_mul(*ah) != Some(al.len()) || bw.checked_mul(*bh) != Some(bl.len()) || [aw, ah, bw, bh].iter().any(|&&side| side > i32::MAX as usize) {
+        return false;
+    }
+    let (dx, dy) = (i64::from(dx), i64::from(dy));
+    let (x0, y0) = (dx.max(0), dy.max(0));
+    let (x1, y1) = ((*aw as i64).min(dx + *bw as i64), (*ah as i64).min(dy + *bh as i64));
+    if x1 - x0 < 32 || y1 - y0 < 32 {
+        return false;
+    }
+    let (xm, ym) = ((x0 + x1) / 2, (y0 + y1) / 2);
+    let step = ((x1 - x0).max(y1 - y0) as usize).div_ceil(128);
+    [(x0, y0, xm, ym), (xm, y0, x1, ym), (x0, ym, xm, y1), (xm, ym, x1, y1)].into_iter().all(|(x0, y0, x1, y1)| {
+        let (mut n, mut sa, mut sb, mut aa, mut bb, mut ab) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        for y in (y0..y1).step_by(step) {
+            for x in (x0..x1).step_by(step) {
+                let i = y as usize * aw + x as usize;
+                let j = (y - dy) as usize * bw + (x - dx) as usize;
+                if av.as_ref().is_some_and(|v| v.get(i) != Some(&true)) || bv.as_ref().is_some_and(|v| v.get(j) != Some(&true)) {
+                    continue;
+                }
+                let (Some(&u), Some(&v)) = (al.get(i), bl.get(j)) else { return false };
+                let (u, v) = (f64::from(u), f64::from(v));
+                n += 1.0;
+                sa += u;
+                sb += v;
+                aa += u * u;
+                bb += v * v;
+                ab += u * v;
+            }
+        }
+        if n < 64.0 {
+            return false;
+        }
+        let (va, vb) = (aa - sa * sa / n, bb - sb * sb / n);
+        let covariance = ab - sa * sb / n;
+        va > n * 0.0001 && vb > n * 0.0001 && covariance > 0.95 * (va * vb).sqrt()
+    })
+}
+
 /// Focal length (px) of a rotating camera from a homography between two of its images (image
 /// px, both centred at `c`), or `None` when the homography doesn't constrain it.
 pub fn focal_from_homography(h: &Homography, ca: [f64; 2], cb: [f64; 2]) -> Option<f64> {
@@ -1004,3 +1080,6 @@ mod tests {
 /// replaced, kept below verbatim as the reference. Every output must stay bit for bit the same.
 #[cfg(test)]
 mod parallel_tests;
+
+#[cfg(test)]
+mod photomerge_tone_drift_tests;
