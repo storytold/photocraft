@@ -7,7 +7,9 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::{SIZE_RANGE_ALERT, owns};
+use super::{owns, size_range_alert};
+
+const SIZE_RANGE_ALERT: &str = "A value between 1.00 Pixels and 300000.00 Pixels is required. Closest value inserted.";
 use crate::PhotocraftApp;
 use crate::state::{DialogKind, Tool};
 
@@ -152,4 +154,11 @@ fn a_cancel_mouse_press_and_release_in_separate_frames_discards_the_warning() {
     h.run_steps(4);
     assert!(h.state().ui.dialogs.is_empty());
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
+}
+
+#[test]
+fn the_alert_uses_the_system_decimal_separator() {
+    assert_eq!(size_range_alert(), SIZE_RANGE_ALERT);
+    let comma = crate::i18n::with_decimal_separator(Some(','), size_range_alert);
+    assert_eq!(comma, "A value between 1,00 Pixels and 300000,00 Pixels is required. Closest value inserted.");
 }

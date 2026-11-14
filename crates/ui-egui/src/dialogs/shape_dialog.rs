@@ -15,8 +15,16 @@ use crate::state::{DialogKind, Tool};
 const MARK: &str = "__createShape";
 /// Largest side the dialog accepts, in pixels (Photoshop's document limit).
 const MAX_PX: f64 = 300_000.0;
-/// The reference's alert for a Width or Height typed past `1..=MAX_PX` px (#13358).
-const SIZE_RANGE_ALERT: &str = "A value between 1.00 Pixels and 300000.00 Pixels is required. Closest value inserted.";
+/// The reference's alert for a Width or Height typed past `1..=MAX_PX` px (#13358): Perspective
+/// Crop's text, with the limits in two decimals and the system's decimal separator ("1,00" there).
+fn size_range_alert() -> String {
+    let number = |v: f64| {
+        let text = format!("{v:.2}");
+        if crate::i18n::decimal_separator() == Some(',') { text.replace('.', ",") } else { text }
+    };
+    let (lo, hi) = (number(1.0), number(MAX_PX));
+    crate::i18n::fmt(tl!(crate::tools::crop_size::LENGTH_RANGE_ALERT), &[("min", &lo), ("max", &hi), ("unit", tl!("Pixels"))])
+}
 /// Set in the dialog's fields by [`body`] when a typed size was out of range; [`open_owed_alert`] takes it.
 const ALERT_OWED: &str = "__sizeRangeAlert";
 /// Remembered values (document pixels; sides and radii come from the options bar).
@@ -196,7 +204,7 @@ pub fn open_owed_alert(app: &mut PhotocraftApp, ctx: &egui::Context, f: &mut Map
     // pending until then, so Cancel can discard it instead of opening an orphaned alert.
     if !ctx.input(|i| i.pointer.any_down()) {
         f.remove(ALERT_OWED);
-        crate::panels::options_bar::range_alert(&mut app.ui, SIZE_RANGE_ALERT);
+        crate::panels::options_bar::range_alert(&mut app.ui, &size_range_alert());
     }
     true
 }
