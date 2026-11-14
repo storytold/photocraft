@@ -533,7 +533,8 @@ fn dropped_files_open_with_path_and_recent() {
             // through egui's whole-file `std::fs::read`.
             dropped(abs, Err("egui's reader must not be used".into())),
             // Unreadable and undecodable drops are errors; no path means no recent entry.
-            dropped("gone.psd", Err("permission denied".into())),
+            // They open in name order: "dropped" (no name), dropped.psd, rel.psd, unreadable.psd.
+            dropped("unreadable.psd", Err("permission denied".into())),
             dropped("rel.psd", Ok(b"x".to_vec())),
             dropped("", Ok(b"bad".to_vec())),
         ],
@@ -1579,6 +1580,53 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     let id = app.session.documents()[index].doc.id;
     jobs_ui::finish_open_tab(&mut app, &late, &json!({"document": index, "docId": id.0})).unwrap();
     assert_eq!(doc_names(&app), ["dropped.psd", "existing.psd", "f0.psd", "f1.psd", "f2.psd", "f3.psd", "late.psd"]);
+}
+
+/// #12806: files dropped together open in name order, not the order the OS lists them in.
+#[test]
+fn dropped_files_open_in_name_order() {
+    let ctx = egui::Context::default();
+    let pages = || ["page_10.png", "page_2.png", "Page_01.png", "page_03.png"].map(|name| dropped(name, Ok(b"x".to_vec()))).to_vec();
+    // Where the pointer can't be read: after the documents already there.
+    let (mut app, _) = app_with(Vec::new());
+    app.open_bytes("existing.psd", b"x").unwrap();
+    app.open_dropped(&ctx, pages(), None);
+    assert_eq!(doc_names(&app), ["existing.psd", "Page_01.png", "page_2.png", "page_03.png", "page_10.png"]);
+    assert!(app.jobs.batches.is_empty(), "nothing left opening");
+    // On the tab strip: in name order from the slot.
+    let mut app = app_with_canvas();
+    let tab = egui::Rect::from_min_max(egui::pos2(100.0, 20.0), egui::pos2(200.0, 46.0));
+    let strip = egui::Rect::from_min_max(egui::pos2(92.0, 14.0), egui::pos2(700.0, 50.0));
+    app.tab_strip = Some(crate::canvas::TabStrip { rect: strip, tabs: vec![(0, tab)] });
+    app.open_dropped(&ctx, pages(), Some(egui::pos2(120.0, 30.0)));
+    assert_eq!(doc_names(&app), ["Page_01.png", "page_2.png", "page_03.png", "page_10.png", "canvas.psd"]);
+    assert!(app.jobs.batches.is_empty(), "a slot needs no set");
+}
+
+/// #12806: dropped files opening in the background are a set, like File › Open's: their tabs
+/// end up in name order however the opens finish.
+#[test]
+fn dropped_files_opening_in_the_background_keep_their_name_order() {
+    use crate::jobs_ui;
+    let ctx = egui::Context::default();
+    let (mut app, _) = app_with(Vec::new());
+    app.open_bytes("existing.psd", b"x").unwrap();
+    app.background_jobs = true;
+    let pages = ["page_10.png", "page_2.png", "page_1.png"].map(|name| dropped(name, Ok(b"x".to_vec()))).to_vec();
+    app.open_dropped(&ctx, pages, None);
+    let opening: Vec<_> = app.jobs.opens.iter().map(|o| (o.name.clone(), o.slot, o.order.map(|x| x.seq))).collect();
+    assert_eq!(opening, [("page_1.png".to_string(), None, Some(0)), ("page_2.png".to_string(), None, Some(1)), ("page_10.png".to_string(), None, Some(2))]);
+    assert_eq!(app.jobs.batches.len(), 1, "kept while its members are opening");
+    // They finish last, first, middle.
+    for seq in [2usize, 0, 1] {
+        let i = app.jobs.opens.iter().position(|o| o.order.is_some_and(|x| x.seq == seq)).unwrap();
+        let tab = app.jobs.opens.remove(i);
+        let index = app.session.add_document(Document::new(&tab.name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
+        let id = app.session.documents()[index].doc.id;
+        jobs_ui::finish_open_tab(&mut app, &tab, &json!({"document": index, "docId": id.0})).unwrap();
+    }
+    assert_eq!(doc_names(&app), ["existing.psd", "page_1.png", "page_2.png", "page_10.png"]);
+    assert!(app.jobs.batches.is_empty(), "forgotten once every member opened");
 }
 
 /// #4373: Save a Copy is recorded in an action, like Save and Save As, and played back as a copy:
