@@ -1189,7 +1189,7 @@ fn grayscale_curves_layer_with_lab_records_follows_a_preset() {
     match layer(&h).1 {
         Adjustment::Curves { space, master, .. } => {
             assert_eq!(space, ToneSpace::Rgb, "the Gray curve's tone space");
-            assert!((master[1].input * 255.0 - 128.0).abs() < 0.01 && (master[1].output * 255.0 - 104.0).abs() < 0.01, "Darker: {master:?}");
+            assert!((master[1].input * 255.0 - 128.0).abs() < 0.01 && (master[1].output * 255.0 - 99.0).abs() < 0.01, "Darker: {master:?}");
         }
         other => panic!("{other:?}"),
     }

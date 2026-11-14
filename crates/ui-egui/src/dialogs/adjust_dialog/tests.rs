@@ -423,7 +423,7 @@ fn curves_preset_menu_loads_a_preset_and_reads_custom_after_an_edit() {
     h.get_by_label("Strong Contrast").click();
     h.run_steps(3);
     let fields = &h.state().ui.dialogs[0].fields;
-    assert_eq!(fields["points"], json!([[0.0, 0.0], [64.0, 36.0], [192.0, 220.0], [255.0, 255.0]]));
+    assert_eq!(fields["points"], json!([[0.0, 0.0], [72.0, 45.0], [144.0, 142.0], [160.0, 167.0], [192.0, 208.0], [255.0, 255.0]]));
     assert_eq!(fields["red"], json!([[0.0, 0.0], [255.0, 255.0]]), "a tone preset leaves the channels straight");
     assert_eq!(preset(&h).as_deref(), Some("Strong Contrast"), "the menu shows the preset");
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 0], [64, 30], [192, 220], [255, 255]]));
@@ -522,7 +522,7 @@ fn grayscale_curves_preset_over_a_recalled_red_curve_renders_the_preset_alone() 
     // Darker's gray, from a Curves with no channel curves.
     let mut app = app_in_mode("grayscale");
     darker(&mut app);
-    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 104.0], [255.0, 255.0]]})).unwrap();
+    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 99.0], [255.0, 255.0]]})).unwrap();
     let expected = gray(&mut app);
     let mut app = app_in_mode("rgb");
     let id = open(&mut app, "image.adjustments.curves").unwrap();
@@ -559,7 +559,7 @@ fn grayscale_curves_preset_over_a_recalled_pencil_red_map_renders_the_preset_alo
     let gray = |app: &mut PhotocraftApp| app.run("document.pixel", json!({"x": 8, "y": 8})).unwrap()[0].as_f64().unwrap();
     let mut app = app_in_mode("grayscale");
     darker(&mut app);
-    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 104.0], [255.0, 255.0]]})).unwrap();
+    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 99.0], [255.0, 255.0]]})).unwrap();
     let expected = gray(&mut app);
     let mut app = app_in_mode("rgb");
     let id = open(&mut app, "image.adjustments.curves").unwrap();
