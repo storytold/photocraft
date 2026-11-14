@@ -10,15 +10,17 @@ use craft_cms::Intent;
 use photocraft_algo::transform::Interp;
 use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
+use super::{affine_homography, authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
 use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
 /// The smart object's contents as layers in `doc`'s colour model, profile and depth, still in
 /// source pixel coordinates. A Background becomes a normal layer (it can't sit above others).
-fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
+/// The contents' layers, and the canvas they are placed by (the smart object's box).
+fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<(Vec<Layer>, photocraft_geom::Rect)> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
     let mut src = decode_source(&name, &bytes)?;
@@ -33,6 +35,7 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         crate::image_cmds::convert_layers_depth(&mut src.layers, doc.depth);
     }
     let background_id = src.background().map(|l| l.id);
+    let canvas = src.bounds();
     let mut layers = std::mem::take(&mut src.layers);
     for l in &mut layers {
         if Some(l.id) == background_id {
@@ -41,7 +44,7 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         }
         embed_nested(&src.metadata, l);
     }
-    Ok(layers)
+    Ok((layers, canvas))
 }
 
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
@@ -64,8 +67,11 @@ fn embed_nested(meta: &Metadata, l: &mut Layer) {
 
 /// Moves unpacked layers from source pixels to where the smart object placed them: an exact
 /// shift for whole-pixel moves, else its transform (type, shapes and nested smart objects stay
-/// live; Distort and Perspective need them rasterized, as Free Transform does).
-fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) -> Result<()> {
+/// live; Distort and Perspective need them rasterized, as Free Transform does). A smart object
+/// only scaled and moved is drawn in a box snapped to whole pixels (`canvas`, its contents'
+/// canvas, snapped): the layers go to that box, and pixel layers are resized as it draws them,
+/// so they look as the smart object did.
+fn place(s: &Session, doc: &Document, sm: &SmartObject, canvas: photocraft_geom::Rect, layers: &mut [Layer]) -> Result<()> {
     if sm.warp.as_ref().is_some_and(|w| !w.is_identity()) {
         return Err(other("a warped smart object can't be converted to layers; rasterize it instead (Layer › Smart Objects › Rasterize)"));
     }
@@ -87,19 +93,84 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
             pending.extend(l.children().into_iter().flatten());
         }
     }
-    let h = placement(sm);
-    let affine = sm.perspective.is_none().then_some(sm.transform);
+    // Scaled and moved only: to the snapped box, as the smart object is drawn.
+    let snapped = sm
+        .perspective
+        .is_none()
+        .then_some(())
+        .filter(|_| b.abs() < 1e-9 && c.abs() < 1e-9)
+        .and_then(|_| photocraft_algo::warp::snapped_scale(canvas, [a, d, e, f]));
+    let (h, affine) = match snapped {
+        Some([kx, ky, dx, dy]) => {
+            let t = photocraft_geom::Affine { m: [kx, 0.0, 0.0, ky, dx, dy] };
+            (affine_homography(&t), Some(t))
+        }
+        None => (placement(sm), sm.perspective.is_none().then_some(sm.transform)),
+    };
     if let SmartSource::Embedded { bytes, .. } = &sm.source
         && photocraft_io::svg::is_svg(bytes)
         && let Some(transform) = affine
     {
         check_destination_shapes(layers, transform, doc.size, doc.pixel_format().bytes_per_pixel()).map_err(other)?;
     }
+    // A pixel layer's own pixels, resized as the smart object draws them.
+    let render = |surface: &Surface| -> Option<Surface> {
+        if snapped.is_some() {
+            return photocraft_algo::warp::scale_snapped(surface, canvas, [a, d, e, f]);
+        }
+        match sm.perspective {
+            // Rotated or skewed (not in perspective): as the smart object draws it.
+            None => {
+                let (cx, cy) = (f64::from(canvas.x0), f64::from(canvas.y0));
+                photocraft_algo::smart_affine::render(surface, canvas, [a, b, c, d, e + a * cx + c * cy, f + b * cx + d * cy])
+            }
+            // In a one-way perspective: as the smart object draws it.
+            Some(p) => {
+                let corner = photocraft_algo::smart_perspective::from_corner(p, f64::from(canvas.x0), f64::from(canvas.y0));
+                photocraft_algo::smart_perspective::render(surface, canvas, corner)
+            }
+        }
+    };
     for l in layers {
+        // The pixel layers in it, a group's too, drawn before the transform moves the layer.
+        let mut pixels = std::collections::HashMap::new();
+        rendered(l, &render, 0, &mut pixels);
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
+        put_rendered(l, &mut pixels, 0);
         crate::transform_cmds::refresh_text(doc, l);
     }
     Ok(())
+}
+
+/// Each pixel layer in `l` (itself, or any layer in it when it is a group), drawn by `render`,
+/// by id. Nesting stops at [`photocraft_doc::MAX_GROUP_DEPTH`].
+fn rendered(l: &Layer, render: &dyn Fn(&Surface) -> Option<Surface>, depth: usize, out: &mut std::collections::HashMap<LayerId, Surface>) {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return;
+    }
+    if let LayerContent::Raster(surface) = &l.content
+        && let Some(p) = render(surface)
+    {
+        out.insert(l.id, p);
+    }
+    for child in l.children().unwrap_or_default() {
+        rendered(child, render, depth + 1, out);
+    }
+}
+
+/// Puts the pixels [`rendered`] drew back into their layers in `l`.
+fn put_rendered(l: &mut Layer, pixels: &mut std::collections::HashMap<LayerId, Surface>, depth: usize) {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return;
+    }
+    if let (Some(p), LayerContent::Raster(surface)) = (pixels.remove(&l.id), &mut l.content) {
+        *surface = p;
+    }
+    if let Some(children) = l.children_mut() {
+        for child in children {
+            put_rendered(child, pixels, depth + 1);
+        }
+    }
 }
 
 /// Runs `f` with every lock and mask link in `l`'s tree released, so a transform moves all of
@@ -179,8 +250,8 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &st.doc;
     let so = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let sm = smart(doc, id)?;
-    let mut layers = contents(s, doc, sm, intent, bpc)?;
-    place(s, doc, sm, &mut layers)?;
+    let (mut layers, canvas) = contents(s, doc, sm, intent, bpc)?;
+    place(s, doc, sm, canvas, &mut layers)?;
     let discarded = sm.smart_filters.len();
     let out = unpacked(so, layers);
     let (new_id, group) = (out.id, out.is_group());

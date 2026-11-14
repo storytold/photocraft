@@ -159,8 +159,9 @@ fn rows<T: Send>(out: &mut [T], width: usize, y0: i32, row: impl Fn(i32, &mut [T
 
 /// The moving texels (`image`, premultiplied, of which `uv` covers the box's source rectangle)
 /// drawn over `rect` as straight-alpha floats. `to_unit` takes a work pixel to the unit square
-/// of the source rectangle, and `inside` is a work point within the box. The edges of the
-/// rectangle fade over one texel, as a resampled layer's do; `nearest` keeps texels whole.
+/// of the source rectangle, and `inside` is a work point within the box. A pixel on the
+/// rectangle's outline is as opaque as the area of it inside the box, as the commit draws it
+/// (`photocraft_algo::transform::edge_coverage`); `nearest` keeps texels whole.
 pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: [f64; 2], rect: Rect, nearest: bool) -> Buffer {
     let mut out = Buffer::transparent(rect);
     let [iw, ih] = image.size;
@@ -175,7 +176,16 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
         let (x, y) = (x.clamp(0, iw as i64 - 1) as usize, y.clamp(0, ih as i64 - 1) as usize);
         image.pixels.get(y * iw + x).map_or([0.0; 4], |c| c.to_array().map(f32::from))
     };
-    let fade = |t: f64, n: f64| (t + 0.5).min(n - t + 0.5).clamp(0.0, 1.0) as f32;
+    // The area of a pixel inside the box along one axis: `t` texels in from the near edge of `n`,
+    // whose gradient `(gx, gy)` (texels per work pixel) gives the distance in pixels and the
+    // edge's direction.
+    let cover = |t: f64, n: f64, (gx, gy): (f64, f64)| -> f32 {
+        let len = gx.hypot(gy);
+        if !(len.is_finite() && len > 1e-12) {
+            return if t >= 0.0 && t <= n { 1.0 } else { 0.0 };
+        }
+        photocraft_algo::transform::edge_coverage(t.min(n - t) / len, gx / len, gy / len) as f32
+    };
     let straight = |p: [f32; 4]| -> [f32; 4] {
         let c = Color32::from_rgba_premultiplied(p[0].round() as u8, p[1].round() as u8, p[2].round() as u8, p[3].round() as u8);
         let [r, g, b, _] = c.to_srgba_unmultiplied();
@@ -201,7 +211,8 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
                 }
                 continue;
             }
-            let cover = fade(tx, tw) * fade(ty, th);
+            let grad = |a: f64, b: f64, t: f64, n: f64| ((a - t / n * m[6]) / w * n, (b - t / n * m[7]) / w * n);
+            let cover = cover(tx, tw, grad(m[0], m[1], tx, tw)) * cover(ty, th, grad(m[3], m[4], ty, th));
             if cover <= 0.0 {
                 continue;
             }

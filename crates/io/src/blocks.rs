@@ -773,7 +773,14 @@ pub fn parse_smart(key: &[u8; 4], data: &[u8]) -> (String, Affine) {
     if let (Some(Value::List(pts)), Some(sz)) = (d.get("Trnf"), get_desc(&d, "Sz  ")) {
         let p: Vec<f64> = pts.iter().filter_map(|v| num(Some(v))).collect();
         let (w, h) = (num(sz.get("Wdth")).unwrap_or(0.0), num(sz.get("Hght")).unwrap_or(0.0));
-        if let (Ok(p), true) = (<[f64; 8]>::try_from(p), w > 0.0 && h > 0.0) {
+        if let (Ok(mut p), true) = (<[f64; 8]>::try_from(p), w > 0.0 && h > 0.0) {
+            // A quad that putting its sides on their axes makes a parallelogram is placed by
+            // those corners ([`parse_smart_perspective`] leaves it to this affine).
+            let q = [[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]];
+            let n = on_axis(q);
+            if !parallelogram(q) && parallelogram(n) {
+                p = [n[0][0], n[0][1], n[1][0], n[1][1], n[2][0], n[2][1], n[3][0], n[3][1]];
+            }
             affine = corners_affine(&p, placed_frame(parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
         }
     }
@@ -866,8 +873,8 @@ pub fn parse_plld_warp(data: &[u8]) -> PlldWarp {
 
 /// The projective placement of a `SoLd` / `SoLE` block whose corners aren't a parallelogram
 /// (Distort, Perspective): source pixels → document pixels, row-major 3×3. Read from
-/// `nonAffineTransform` (the placed corners), else `Trnf`. `None` for affine placements, which
-/// [`parse_smart`]'s affine holds exactly.
+/// `nonAffineTransform` (the placed corners), else `Trnf`, with sides a hair off an axis put on it
+/// ([`on_axis`]). `None` for affine placements, which [`parse_smart`]'s affine holds exactly.
 pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
     if key != b"SoLd" && key != b"SoLE" {
         return None;
@@ -880,10 +887,27 @@ pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
         let p: Vec<f64> = pts.iter().filter_map(|v| num(Some(v))).collect();
         (p.len() == 8 && p.iter().all(|v| v.is_finite())).then(|| [[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]])
     };
-    let q = quad("nonAffineTransform").or_else(|| quad("Trnf"))?;
+    let q = on_axis(quad("nonAffineTransform").or_else(|| quad("Trnf"))?);
     // The warp `parse_placed_warp` reads: a split warp's `quiltWarp` comes first.
     let warp = get_desc(&d, "quiltWarp").or_else(|| get_desc(&d, "warp")).and_then(warp_of).flatten();
     corners_perspective_in(q, perspective_frame(warp.as_ref(), w, h))
+}
+
+/// Placed corners `q` (top-left, top-right, bottom-right, bottom-left) with every side that is
+/// less than a pixel off an axis put on that axis, at the mean of its two ends: the reference
+/// application draws such a side straight (measured on placements sheared by a fraction of a
+/// pixel, where the slanted side cost a row of pixels along the whole edge).
+fn on_axis(mut q: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
+    // The left and right sides hold an `x`, the top and bottom ones a `y`.
+    for (i, j, ax) in [(0usize, 3usize, 0usize), (1, 2, 0), (0, 1, 1), (3, 2, 1)] {
+        let off = (q[i][ax] - q[j][ax]).abs();
+        if off > 1e-9 && off < 1.0 && (q[i][1 - ax] - q[j][1 - ax]).abs() > off {
+            let mean = (q[i][ax] + q[j][ax]) / 2.0;
+            q[i][ax] = mean;
+            q[j][ax] = mean;
+        }
+    }
+    q
 }
 
 /// The projective placement of a `w` × `h` source onto corners `q` that aren't a parallelogram;
@@ -894,11 +918,17 @@ pub fn corners_perspective(q: [[f64; 2]; 4], (w, h): (f64, f64)) -> Option<[f64;
 
 /// [`corners_perspective`] for the source-space box `frame` (left, top, right, bottom; see
 /// [`perspective_frame`]).
-pub(crate) fn corners_perspective_in(q: [[f64; 2]; 4], frame: [f64; 4]) -> Option<[f64; 9]> {
-    // A parallelogram (top-left + bottom-right = top-right + bottom-left) is affine.
+/// Whether corners `q` make a parallelogram (top-left + bottom-right = top-right + bottom-left),
+/// which an affine places.
+fn parallelogram(q: [[f64; 2]; 4]) -> bool {
     let tol = 1e-6 * (1.0 + q.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs())));
+    (0..2).all(|i| (q[0][i] + q[2][i] - q[1][i] - q[3][i]).abs() <= tol)
+}
+
+pub(crate) fn corners_perspective_in(q: [[f64; 2]; 4], frame: [f64; 4]) -> Option<[f64; 9]> {
+    // A parallelogram is affine.
     let ok = frame.iter().all(|v| v.is_finite()) && frame[2] > frame[0] && frame[3] > frame[1];
-    if (0..2).all(|i| (q[0][i] + q[2][i] - q[1][i] - q[3][i]).abs() <= tol) || !ok {
+    if parallelogram(q) || !ok {
         return None;
     }
     photocraft_algo::transform::Homography::rect_to_quad(frame, q).map(|m| m.0)

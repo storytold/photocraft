@@ -490,7 +490,8 @@ fn transforms_re_render_from_source_losslessly() {
     let (es, er) = (mean_diff(&smart_result, &original), mean_diff(&raster_result, &original));
     assert!(es < 1e-6, "smart error {es}");
     assert!(er > 0.02, "raster error {er}");
-    // A non-integer move re-renders with bicubic; moving back is exact again.
+    // A non-integer move snaps to whole pixels, halves up (-5.5 to -5), as the reference
+    // application draws it; moving back is exact again.
     smart.execute("edit.transform", json!({"layer": sid, "matrix": [1, 0, 0, 1, 0.5, 0.25]})).unwrap();
     assert!(max_diff(&flat(&smart), &original) > 0.01);
     smart.execute("edit.transform", json!({"layer": sid, "matrix": [1, 0, 0, 1, -0.5, -0.25]})).unwrap();
@@ -1036,7 +1037,10 @@ fn identity_mesh_on_a_skewed_smart_object_changes_nothing() {
     let mesh = photocraft_geom::warp::BezierMesh::fit(&place, vec![0.0, 1.0], vec![0.0, 0.25, 1.0]);
     let rect = [x0, y0, x1, y1 + 10.0];
     s.execute("layer.smartObjects.warp", json!({"layer": id, "style": "custom", "rect": rect, "mesh": mesh})).unwrap();
-    assert!(mean_diff(&before, &flat(&s)) < 0.01, "mean diff {}", mean_diff(&before, &flat(&s)));
+    // The same geometry, though a warp samples bilinearly where the plain placement is bicubic:
+    // on this per-pixel noise that alone is a mean of 0.012. A placement lost or shifted (#10325)
+    // is far more.
+    assert!(mean_diff(&before, &flat(&s)) < 0.02, "mean diff {}", mean_diff(&before, &flat(&s)));
 }
 
 fn convert_to_layers(s: &mut Session) -> Value {
@@ -1145,6 +1149,28 @@ fn convert_to_layers_applies_the_placement() {
     let before = flat(&s);
     convert_to_layers(&mut s);
     assert!(mean_diff(&flat(&s), &before) < 2e-3);
+}
+
+/// A pixel layer inside a group is drawn as the smart object draws it, as one outside a group
+/// is: a rotated smart object converts back to the same pixels either way.
+#[test]
+fn convert_to_layers_draws_a_grouped_pixel_layer_as_an_ungrouped_one() {
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let unpacked = |grouped: bool| {
+        let mut s = session(8);
+        paint(&mut s);
+        if grouped {
+            s.execute("layer.groupLayers", json!({})).unwrap();
+        }
+        let id = convert(&mut s);
+        s.execute("edit.transform", json!({"layer": id, "matrix": [cos, sin, -sin, cos, 12.0, 3.0]})).unwrap();
+        convert_to_layers(&mut s);
+        flat(&s)
+    };
+    // The group composites its layer in float: a rounding apart, where a different sampling
+    // is whole levels apart.
+    let d = max_diff(&unpacked(true), &unpacked(false));
+    assert!(d < 1e-6, "{d}");
 }
 
 #[test]
@@ -1584,6 +1610,42 @@ fn native_digest_cache_misses_after_copy_on_write_and_keeps_recently_used_source
     let weak = Arc::downgrade(&newest);
     drop(newest);
     assert!(weak.upgrade().is_none());
+}
+
+/// Reset Transform takes a linked layer mask back with the contents and refuses a
+/// position-locked smart object.
+#[test]
+fn reset_transform_takes_the_linked_mask_along_and_respects_locks() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let _ = s.execute("select.deselect", json!({}));
+    let id = s.active().unwrap().active_layer.unwrap();
+    let mask_box = |s: &Session| {
+        let m = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.clone();
+        let px = m.read_region(photocraft_geom::Rect::new(0, 0, 128, 128));
+        let on: Vec<usize> = (0..128 * 128).filter(|k| px[*k] > 0.5).collect();
+        let (xs, ys): (Vec<usize>, Vec<usize>) = on.iter().map(|k| (k % 128, k / 128)).unzip();
+        (*xs.iter().min().unwrap(), *ys.iter().min().unwrap(), *xs.iter().max().unwrap(), *ys.iter().max().unwrap())
+    };
+    let original = mask_box(&s);
+    s.execute("edit.transform", json!({"scaleX": 50, "scaleY": 50})).unwrap();
+    assert_ne!(mask_box(&s), original, "the transform moved the mask");
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(id).unwrap().locks.position = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err(), "locked");
+    s.undo();
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let back = mask_box(&s);
+    let near = |a: usize, b: usize| (a as i64 - b as i64).abs() <= 1;
+    assert!(near(back.0, original.0) && near(back.1, original.1) && near(back.2, original.2) && near(back.3, original.3), "{back:?} vs {original:?}");
 }
 
 /// `replace` makes `params` the filter's whole settings, so a key the edit left out stops

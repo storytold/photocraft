@@ -108,7 +108,7 @@ pub(super) fn cylinder_hit(w: &Warp, p: [f64; 2], tol: f64) -> Option<CylinderHa
     let nearest = cylinder_handles(&v).into_iter().map(|(q, h)| (d(q), h)).filter(|(dist, _)| *dist < tol).min_by(|a, b| a.0.total_cmp(&b.0));
     match nearest {
         Some((_, h)) => Some(h),
-        None => surface_at(w.mesh.as_ref()?, p).map(|_| CylinderHandle::Surface),
+        None => surface_at(w.mesh.as_ref()?, p, 1.0).map(|_| CylinderHandle::Surface),
     }
 }
 
