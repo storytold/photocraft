@@ -358,11 +358,11 @@ fn a_refused_connection_is_unreachable_and_keeps_why() {
     // is a parameter, so this test cannot race for an ephemeral port with anything.
     let addr: SocketAddr = "192.0.2.9:631".parse().unwrap();
     let asked_for = std::cell::RefCell::new(None);
-    let open = |seen: SocketAddr| -> std::io::Result<TcpStream> {
+    let open = |seen: SocketAddr, _timeout: Duration| -> std::io::Result<TcpStream> {
         *asked_for.borrow_mut() = Some(seen);
         Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nobody is listening on this port"))
     };
-    let e = match open_tcp("printserver", 631, addr, open) {
+    let e = match open_tcp("printserver", 631, [addr], open) {
         Ok(_) => panic!("nothing opens {addr}"),
         Err(e) => e,
     };
@@ -670,4 +670,39 @@ fn a_header_trickled_a_byte_at_a_time_is_found() {
     let raw = read_response(&mut stream).unwrap();
     assert!(raw.ends_with(b"\r\n\r\nok"), "{:?}", String::from_utf8_lossy(&raw));
     server.join().unwrap();
+}
+
+#[test]
+fn a_failed_address_does_not_hide_a_reachable_print_server() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let reachable = listener.local_addr().unwrap();
+    let refused: SocketAddr = "[::1]:631".parse().unwrap();
+    let mut asked_for = Vec::new();
+    let mut timeouts = Vec::new();
+    let result = open_tcp("printserver", 631, [refused, reachable], |addr, timeout| {
+        asked_for.push(addr);
+        timeouts.push(timeout);
+        if addr == refused {
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "first address refused"))
+        } else {
+            TcpStream::connect_timeout(&addr, timeout)
+        }
+    });
+    assert!(result.is_ok(), "the second address was not tried");
+    assert_eq!(asked_for, [refused, reachable]);
+    assert!(timeouts.iter().all(|timeout| !timeout.is_zero() && *timeout <= CONNECT));
+    assert!(timeouts.windows(2).all(|pair| pair[1] <= pair[0]));
+    listener.accept().unwrap();
+}
+
+#[test]
+fn failed_addresses_keep_the_last_error_and_empty_resolution_stays_clear() {
+    let first: SocketAddr = "[::1]:631".parse().unwrap();
+    let last: SocketAddr = "127.0.0.1:631".parse().unwrap();
+    let result = open_tcp("printserver", 631, [first, last], |addr, _timeout| {
+        Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, if addr == last { "last refusal" } else { "first refusal" }))
+    });
+    assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: last refusal"));
+    let result = open_tcp("printserver", 631, [], |_, _| panic!("an empty resolution must not connect"));
+    assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: no address"));
 }
