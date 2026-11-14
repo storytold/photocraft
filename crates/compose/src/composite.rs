@@ -342,6 +342,9 @@ pub(crate) fn composite_pixel_layer(layer: &Layer, surf: &Surface, backdrop: &mu
     recycle_mask(mv);
 }
 
+/// Composite ordinary content, including pass-through groups whose children affect the backdrop.
+/// Clipping reconstructs the group's premultiplied contribution; F32 keeps signed and above-white
+/// RGB while integer depths remain bounded. Alpha and transparent-black normalization stay bounded.
 pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
     let rect = backdrop.rect;
     // A TSL-off stroke base that is transparent here can still have visible clipped siblings;
@@ -409,6 +412,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
             blend_into(&mut without, &iso, BlendMode::Normal, opacity);
             let mut with = before;
             blend_into(&mut with, &clipped_iso, BlendMode::Normal, opacity);
+            let hdr = cx.depth == photocraft_color::SampleType::F32;
             for ((p, w), wo) in backdrop.px.iter_mut().zip(&with.px).zip(&without.px) {
                 // Work premultiplied so transparent areas stay consistent.
                 let pa = p[3];
@@ -418,7 +422,15 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
                 }
                 pm[3] += w[3] - wo[3];
                 let a = pm[3].clamp(0.0, 1.0);
-                *p = if a > 0.0 { [(pm[0] / a).clamp(0.0, 1.0), (pm[1] / a).clamp(0.0, 1.0), (pm[2] / a).clamp(0.0, 1.0), a] } else { [0.0; 4] };
+                *p = if a > 0.0 {
+                    let channel = |c: usize| {
+                        let value = pm[c] / a;
+                        if hdr { value } else { value.clamp(0.0, 1.0) }
+                    };
+                    [channel(0), channel(1), channel(2), a]
+                } else {
+                    [0.0; 4]
+                };
             }
         }
         return;
