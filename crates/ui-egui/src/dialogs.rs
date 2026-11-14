@@ -335,15 +335,16 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
         _ if crate::tool_reset::owns(fields) => crate::tool_reset::body(ui),
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
-        _ => return command_body_more(app, ui, d, fields, id),
+        _ => return command_body_more(app, ui, d, fields, id, interactive),
     }
     outcome
 }
 
 /// The rest of the command dialogs: files, colour, export, sizing, filters and forms.
-fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
+fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::panels::apply_data_set_ui::owns(fields) => outcome = crate::panels::apply_data_set_ui::body(app, ui, fields, interactive),
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
@@ -739,7 +740,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
             }
-            if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
+            if d.kind == DialogKind::LayerStyle
+                || crate::guide_layout_ui::owns(&fields)
+                || crate::brush_preset_dialog::owns(&fields)
+                || crate::panels::apply_data_set_ui::owns(&fields)
+            {
                 // These dialogs own their right-side actions and validate Enter themselves.
             } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -932,6 +937,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::stack_dialog::owns,
     crate::tool_reset::owns,
     crate::crop_presets::owns,
+    crate::panels::apply_data_set_ui::owns,
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
@@ -1161,6 +1167,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 /// The rest of the command dialogs: files, colour, preferences and export, then any other command.
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::panels::apply_data_set_ui::owns(&d.fields) => crate::panels::apply_data_set_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
