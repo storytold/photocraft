@@ -322,6 +322,11 @@ pub struct ToolOptions {
     /// Eyedropper › Show Sampling Ring.
     #[serde(default = "yes")]
     pub eyedropper_ring: bool,
+    /// Magic Wand › Sample Size: 1 = Point Sample, else the side of the averaged square the
+    /// click compares against (`select.magicWand`'s `sampleSize`). The wand's own value, not the
+    /// Eyedropper's.
+    #[serde(default = "one_u32")]
+    pub magic_wand_sample_size: u32,
     /// Art History Brush: dab layout, Area (0–100), Tolerance (0–100).
     #[serde(default = "default_art_history_style")]
     pub art_history_style: String,
@@ -607,6 +612,7 @@ impl Default for ToolOptions {
             red_eye_pupil_size: 50.0,
             red_eye_darken: 50.0,
             eyedropper_size: 1,
+            magic_wand_sample_size: 1,
             eyedropper_sample: default_eyedropper_sample(),
             eyedropper_ring: true,
             art_history_style: default_art_history_style(),
