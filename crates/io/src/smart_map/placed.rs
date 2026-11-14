@@ -20,17 +20,22 @@ pub struct PlacedSpec<'a> {
 }
 
 /// Where the frame corners land (top-left, top-right, bottom-right, bottom-left), as x, y pairs.
-/// The frame is [`crate::blocks::placed_frame`] of `warp`, the warp the block stores, for an
+/// The frame is [`crate::blocks::sold_frame`] of `warp`, the warp the block stores, for an
 /// affine placement (the inverse of `parse_smart`), [`crate::blocks::perspective_frame`] of it
 /// for a projective one (as `parse_smart_perspective` reads it).
 fn quad_points(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> [f64; 8] {
+    quad_points_in(s, warp, crate::blocks::sold_frame)
+}
+
+/// [`quad_points`] with `frame` as the affine placement's frame.
+fn quad_points_in(s: &PlacedSpec<'_>, warp: Option<&Warp>, frame: fn(Option<&Warp>, f64, f64) -> [f64; 4]) -> [f64; 8] {
     let (w, h) = s.size;
     let [a, b, c, d, e, f] = s.transform.m;
     let map = |x: f64, y: f64| match &s.perspective {
         Some(p) => photocraft_algo::transform::Homography(*p).apply(x, y),
         None => (a * x + c * y + e, b * x + d * y + f),
     };
-    let [x0, y0, x1, y1] = if s.perspective.is_some() { crate::blocks::perspective_frame(warp, w, h) } else { crate::blocks::placed_frame(warp, w, h) };
+    let [x0, y0, x1, y1] = if s.perspective.is_some() { crate::blocks::perspective_frame(warp, w, h) } else { frame(warp, w, h) };
     let mut out = [0.0; 8];
     for (i, (x, y)) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().enumerate() {
         (out[2 * i], out[2 * i + 1]) = map(x, y);
@@ -254,12 +259,9 @@ pub fn plld_bytes(s: &PlacedSpec<'_>, warnings: &mut Vec<String>) -> Vec<u8> {
     for v in [1i32, 1, 16, 2] {
         out.extend_from_slice(&v.to_be_bytes());
     }
-    if let Value::List(q) = quad(s, warp) {
-        for v in q {
-            if let Value::Double(x) = v {
-                out.extend_from_slice(&x.to_be_bytes());
-            }
-        }
+    // `PlLd` frames its corners as `plld_transform` reads them back ([`crate::blocks::placed_frame`]).
+    for x in quad_points_in(s, warp, crate::blocks::placed_frame) {
+        out.extend_from_slice(&x.to_be_bytes());
     }
     out.extend_from_slice(&0u32.to_be_bytes());
     let Value::Descriptor(w) = warp_desc(warp, s.size, warnings) else { return pad4(out) };
