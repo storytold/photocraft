@@ -175,6 +175,10 @@ type LayerSource = (Arc<Document>, photocraft_doc::LayerId, Arc<Document>);
 /// for a large storyboard, the first and last on the UI thread.
 static LAYER_SOURCE: std::sync::Mutex<Option<LayerSource>> = std::sync::Mutex::new(None);
 
+/// Moves on each time [`forget_layer_source`] lets the kept layer go: a composite started before
+/// that (a preview worker still running after the export) isn't kept.
+static LAYER_SOURCE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Layer `id` of `doc` composited for export, if it is the one [`layer_source`] made last.
 fn cached_layer_source(doc: &Arc<Document>, id: photocraft_doc::LayerId) -> Option<Arc<Document>> {
     let kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -193,9 +197,11 @@ fn layer_source_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Doc
     if let Some(out) = cached_layer_source(doc, id) {
         return Ok(out);
     }
+    let generation = LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire);
     let out = Arc::new(photocraft_engine::layer_menu_cmds::layer_document(doc, id).map_err(|e| e.to_string())?);
     let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !job.is_some_and(photocraft_engine::jobs::JobCtx::cancelled) {
+    let forgotten = LAYER_SOURCE_GENERATION.load(std::sync::atomic::Ordering::Acquire) != generation;
+    if !forgotten && !job.is_some_and(photocraft_engine::jobs::JobCtx::cancelled) {
         *kept = Some((doc.clone(), id, out.clone()));
     }
     Ok(out)
@@ -203,7 +209,9 @@ fn layer_source_for(job: Option<&photocraft_engine::jobs::JobCtx>, doc: &Arc<Doc
 
 /// Let go of the kept layer (it can be gigabytes) once its export is over.
 fn forget_layer_source() {
-    *LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    let mut kept = LAYER_SOURCE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *kept = None;
+    LAYER_SOURCE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 }
 
 /// Layer › Export As… from the menu, for the selected `layers` ([`open_layers`]). With
