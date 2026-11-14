@@ -244,7 +244,7 @@ pub(super) fn gray_plane(doc: &Document, layer: Option<LayerId>, active: Option<
         use rayon::prelude::*;
 
         let profile = crate::color_cmds::document_profile(doc);
-        if profile.content_hash() == Builtin::Srgb.profile().content_hash() {
+        if profile.same_bytes(Builtin::Srgb.profile()) {
             let error = |e| EngineError::Other(format!("RGB to Gray conversion failed: {e}"));
             let transform = craft_cms::cached(&profile, Builtin::GrayGamma22.profile(), TransformOptions::default()).map_err(error)?;
             return red
