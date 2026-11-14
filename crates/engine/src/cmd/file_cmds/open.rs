@@ -196,7 +196,7 @@ pub fn open_bytes_as_with_options(
     let mut opts = crate::jobs::import_options(s.prefs());
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
-    let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes)?;
+    let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), as_ext, path.as_deref(), bytes)?;
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
