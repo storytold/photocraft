@@ -1,4 +1,6 @@
 //! File › Print…, Print One Copy, File › Package… and File › Export › Paths to Illustrator….
+//! `file.printSettings` stores what the Print dialog's Done button chose while an action recorded
+//! (#11655): the settings of `file.print` without a print.
 //!
 //! Printing renders the flattened document into a PDF page (paper size, orientation, position,
 //! scale, colour handling with printer profile / intent / black-point compensation, corner and
@@ -1183,19 +1185,24 @@ fn native_rgb_compatible(page: &PrintPage, handling: &str) -> bool {
 /// Where the settings of the last print are kept in Preferences' remembered dialog settings.
 pub const REMEMBERED: &str = "file.print";
 
+/// The settings of a print as they are kept. Output and dry-run choices are not remembered, so a
+/// send override must not survive them; the driver's printable area belongs to the printer and
+/// paper chosen now: the dialog reads it again, and a later print to PDF or another printer must
+/// not inherit it.
+fn kept_print_settings(p: &Value) -> Value {
+    let mut kept = p.clone();
+    if let Some(o) = kept.as_object_mut() {
+        for key in ["output", "dryRun", "send", "printable"] {
+            o.remove(key);
+        }
+    }
+    kept
+}
+
 /// Print One Copy repeats these, and Print opens with them. They are kept in the preferences as
 /// well, so they survive a relaunch, as Photoshop's do (#7410).
 fn remember_print(s: &mut Session, p: &Value) {
-    let mut remembered = p.clone();
-    if let Some(o) = remembered.as_object_mut() {
-        o.remove("output");
-        o.remove("dryRun");
-        // Output and dry-run choices are not remembered, so a send override must not survive them.
-        o.remove("send");
-        // The driver's printable area belongs to the printer and paper chosen now: the dialog
-        // reads it again, and a later print to PDF or another printer must not inherit it.
-        o.remove("printable");
-    }
+    let remembered = kept_print_settings(p);
     let kept = remembered.clone();
     s.prefs.edit(|prefs| {
         prefs.dialogs.insert(REMEMBERED.into(), kept);
@@ -1219,6 +1226,103 @@ fn drop_vanished_printer(q: &mut Value, listed: &[&str]) {
 /// The settings of the last print: this session's, else those remembered from an earlier one.
 pub fn last_print(s: &Session) -> Option<Value> {
     s.file_menu.last_print.clone().or_else(|| s.prefs().dialogs.get(REMEMBERED).filter(|v| v.is_object()).cloned())
+}
+
+// ---------- Recording print settings ----------
+
+/// Print's checkboxes: a value that is neither `true` nor `false` would take the default in
+/// silence when a recorded step replays, so [`check_print_settings`] refuses it.
+const SETTINGS_FLAGS: [&str; 9] =
+    ["center", "scaleToFit", "bpc", "cornerCropMarks", "centerCropMarks", "registrationMarks", "description", "labels", "emulsionDown"];
+
+/// Checks the settings [`record_print_settings`] stores and returns the layout they give with the
+/// copies. No printer, driver, profile or render is asked: what is checked is what `file.print`
+/// checks on its way to the spooler (paper and orientation, position, scale, marks, colour
+/// handling by name, copies), plus the types of the keys the dialog writes, so a step recorded
+/// while an action is open replays with the settings it was set up with (#11655).
+fn check_print_settings(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintLayout, i64)> {
+    for key in SETTINGS_FLAGS {
+        if p.get(key).is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+            return Err(bad(cmd, format!("\"{key}\" is a checkbox: true or false")));
+        }
+    }
+    for key in ["printer", "printServer"] {
+        if p.get(key).is_some_and(|v| !v.is_null() && !v.is_string()) {
+            return Err(bad(cmd, format!("\"{key}\" is a name")));
+        }
+    }
+    // The driver's own settings travel with the step as hex (Windows). Only a print reads them,
+    // but a step that cannot hold them is refused now rather than at the printer; an empty one is
+    // the dialog's "the printer's own".
+    if let Some(v) = p.get("printerSettings").filter(|v| !v.is_null())
+        && !v.as_str().is_some_and(|h| h.is_empty() || craft_print::rgb::DevMode::from_hex(h).is_ok())
+    {
+        return Err(bad(cmd, "\"printerSettings\" is the printer driver's settings as hex"));
+    }
+    if let Some(v) = p.get("orientation").filter(|v| !v.is_null())
+        && !matches!(v.as_str(), Some("portrait" | "landscape"))
+    {
+        return Err(bad(cmd, "orientation is \"portrait\" or \"landscape\""));
+    }
+    // The dialog's display units, kept so it reopens as the user left them; the settings
+    // themselves are points and inches.
+    if let Some(v) = p.get("units").filter(|v| !v.is_null())
+        && !matches!(v.as_str(), Some("cm" | "mm" | "in"))
+    {
+        return Err(bad(cmd, "units is \"cm\", \"mm\" or \"in\""));
+    }
+    let copies = if p.get("copies").is_some_and(|v| !v.is_null()) {
+        let copies = crate::commands::int(p, "copies").ok_or_else(|| bad(cmd, "\"copies\" is a whole number of copies"))?;
+        if !(1..=999).contains(&copies) {
+            return Err(bad(cmd, format!("copies is 1..999, not {copies}")));
+        }
+        copies
+    } else {
+        1
+    };
+    let handling = match p.get("colorHandling") {
+        None | Some(Value::Null) => "printerManages",
+        Some(Value::String(h)) => h.as_str(),
+        Some(_) => return Err(bad(cmd, "colorHandling is a name (printerManages|photocraftManages|noColorManagement)")),
+    };
+    match handling {
+        "photocraftManages" | "photoshopManages" => {
+            if p.get("printerProfile").and_then(Value::as_str).is_none_or(str::is_empty) {
+                return Err(bad(cmd, "\"photocraftManages\" needs a \"printerProfile\""));
+            }
+            // The profile is only read when a page is rendered; the intent is a name, like `file.print`'s.
+            if p.get("intent").is_some_and(|v| !v.is_null() && !matches!(v.as_str(), Some("perceptual" | "relative" | "saturation" | "absolute"))) {
+                return Err(bad(cmd, "intent is \"perceptual\", \"relative\", \"saturation\" or \"absolute\""));
+            }
+        }
+        "printerManages" | "noColorManagement" => {}
+        "separations" => return Err(bad(cmd, "Separations printing is not supported; use photocraftManages with a CMYK printer profile")),
+        h => return Err(bad(cmd, format!("unknown colorHandling `{h}` (printerManages|photocraftManages|noColorManagement)"))),
+    }
+    Ok((layout(doc, p, cmd)?, copies))
+}
+
+/// Photoshop's Print dialog answers with **Done** while an action is recording: the settings the
+/// user chose become a step and the dialog closes without printing (#11655). They go to the same
+/// store a print leaves behind, so Print opens with them again and Print One Copy is what sends
+/// the job. Nothing here touches a printer, a file or the document, so the step also replays
+/// headless, and no history step: the document is unchanged.
+fn record_print_settings(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "file.printSettings";
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let doc = d.doc.clone();
+    let (layout, copies) = check_print_settings(&doc, p, CMD)?;
+    remember_print(s, p);
+    let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, .. } = layout;
+    Ok(json!({
+        "settings": kept_print_settings(p),
+        "paper": [pw, ph],
+        "imageRect": [x, y, w, h],
+        "scale": scale * 100.0,
+        "copies": copies,
+        // Print One Copy sends them; this command never does.
+        "sent": false,
+    }))
 }
 
 /// The `printer` parameter, or the system's default printer.
@@ -1637,6 +1741,7 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     const PRINT_PARAMS: &str = r##"{"printerSettings":hex? (Windows driver settings),"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"printable":[x,y,w,h] pt? (the driver's printable area from the paper's top-left, as file.print.page reports it; Scale to Fit Media fits it, else the paper minus 18 pt; a native Windows print reads the driver's own instead),"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"bleed":in=0 (Functions › Bleed: corner crop marks this far inside the image edge, on the trim line),"description":bool,"labels":bool,"emulsionDown":bool=false (mirror the page left to right, for sublimation and other transfer printing),"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"printServer":"host[:port]|socket path"? (default: the system's CUPS; a named server is always printed to over IPP),"dryRun":bool=false (render the PDF, report the backend command, don't spool; write a PDF only at an explicit output path)} → {pdf:path|null (null without explicit output), imageRect, command:diagnostic array|null, sent, spooler:where the job went|null, backend:"lp|windows|ipp|portal"|null}"##;
+    const PRINT_SETTINGS_PARAMS: &str = r##"{"printer":name? (default printer),"printerSettings":hex? (Windows driver settings),"printServer":"host[:port]|socket path"? (the server the stored settings print to),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"bleed":in=0,"description":bool,"labels":bool,"emulsionDown":bool=false,"units":"cm|mm|in"="cm" (the dialog's display units)} → {settings:object (what is stored: the keys here, as Print opens with them and Print One Copy repeats them), paper:[w,h] pt, imageRect:[x,y,w,h] pt, scale:%, copies, sent:false} (Photoshop's Print-dialog Done while an action records: stores the settings as a step, and prints nothing. No printer, driver, file or document is touched, so the step replays headless. `output`, `send`, `dryRun` and the driver's `printable` area are not stored: they say how one job went out, not how the page looks.)"##;
 
     vec![
         spec!("file.print", "Print…", &["File"], Some("Cmd+P"), PRINT_PARAMS, native_doc, print),
@@ -1679,6 +1784,7 @@ pub fn specs() -> Vec<CommandSpec> {
             native_doc,
             print_one_copy
         ),
+        spec!("file.printSettings", "Record Print Settings", &[], None, PRINT_SETTINGS_PARAMS, native_doc, record_print_settings),
         spec!(
             "file.package",
             "Package…",

@@ -1290,3 +1290,38 @@ fn the_web_preview_selects_slices_and_saves_only_the_selected_ones() {
     assert_eq!(files.len(), 1, "only the selected slice is saved: {files:?}");
     assert!(!files[0].contains("left"), "{files:?}");
 }
+
+/// The review's edge on #11750: when automation authorization refuses a Done confirm the dialog
+/// stays open, and the Done marker must not survive that refusal - otherwise the next Print
+/// click or Enter records settings instead of printing.
+#[test]
+fn a_refused_done_clears_the_marker_so_the_next_answer_prints() {
+    let (mut app, _) = app();
+    app.session.execute("actions.record", json!({"name": "Print setup"})).expect("record");
+    let id = photocraft_engine::print_cmds::with_spooler(|| open_print(&mut app));
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let d = app.ui.dialog_mut(id).expect("the print dialog is open");
+        d.fields.insert("paper".into(), json!("a4"));
+        d.fields.insert("scale".into(), json!(150.0));
+        d.fields.insert("dryRun".into(), json!(true));
+        d.fields.insert("output".into(), json!(dir.path().join("preview.pdf").to_string_lossy().into_owned()));
+        // A Done click installs the marker; the gate then refuses the command it routes to.
+        d.fields.insert(RECORD_DONE.into(), json!(true));
+    }
+    app.automation_input = true;
+    app.services.automation_command = Some(Box::new(|command, _| if command == "file.printSettings" { Err("printing denied".into()) } else { Ok(()) }));
+    let refused = crate::dialogs::confirm(&mut app, id);
+    assert!(refused.is_err(), "the gate refuses the settings command: {refused:?}");
+    let open = app.ui.dialogs.iter().find(|d| d.id == id).expect("a refused confirm leaves the dialog open").fields.clone();
+    assert!(!open.contains_key(RECORD_DONE), "the refusal clears the Done marker: {open:?}");
+    // The next answer is a plain print again: file.print, not file.printSettings, lands in the action.
+    let printed = crate::dialogs::confirm(&mut app, id);
+    assert!(printed.is_ok(), "the second confirm prints a preview instead: {printed:?}");
+    app.automation_input = false;
+    let _ = app.services.automation_command.take();
+    let stopped = app.session.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(stopped["steps"], json!(1), "one step, the print itself: {stopped}");
+    let action = app.session.execute("actions.get", json!({"action": "Print setup"})).unwrap();
+    assert_eq!(action["steps"][0][0], json!("file.print"), "the refused Done recorded nothing: {action}");
+}

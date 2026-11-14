@@ -190,7 +190,20 @@ pub struct ActionState {
 
 /// Visibility gestures name a layer for replay, since document-local ids change on another image.
 pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
-    if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
+    if s.actions.recording.is_none() {
+        return p;
+    }
+    // The driver's printable area belongs to the printer of the session that recorded the step:
+    // a replay on another printer must re-derive it, or the stale margins fail validation
+    // (#11750 review). The live command still accepts and checks it, so today's dialog is
+    // unchanged; only the recorded step loses it.
+    if matches!(id, "file.print" | "file.printSettings") {
+        if let Some(object) = p.as_object_mut() {
+            object.remove("printable");
+        }
+        return p;
+    }
+    if id != "layer.setProps" || p.get("visible").is_none() {
         return p;
     }
     let Some(st) = s.active() else { return p };

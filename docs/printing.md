@@ -95,6 +95,27 @@ Scale to Fit Media fills the printable area the driver reports for that page (`p
 paper, and a print sent to a Windows printer reads it from the driver itself. Without a driver
 page (CUPS, IPP, a PDF or a preview) it fits the paper less an 18 pt margin, as before.
 
+## Recording the settings (Done)
+
+While an action is recording, the Print dialog shows a **Done** button beside Print, as Photoshop's
+does (#11655). Done closes the dialog without printing and keeps the settings the user chose as the
+action's step; Print One Copy is then what sends them, one copy. `file.printSettings` writes them
+where a print leaves them, so Print opens with the same settings again and they survive a relaunch
+with the remembered dialog settings.
+
+What is stored is `file.print`'s settings — printer and driver settings, paper and orientation,
+position and scale, marks, colour handling, Emulsion Down — and not what only said how one job went
+out: `output`, `send`, `dryRun` and the driver's printable area are dropped, as they are after a
+print. The values are checked the way `file.print` checks them on its way to the spooler, so a step
+recorded today replays with the settings it was set up with rather than failing at the printer
+later. Nothing is asked and nothing is written: no printer, driver, file or profile, so the command
+also works headless (CLI, tests, Batch, `PHOTOCRAFT_NO_PRINT`), and the document is untouched — the
+step adds no history entry, since Photoshop's Done changes no document either.
+
+The button follows Photoshop in appearing only while an action records, which is how the app knows
+(`Session::actions.recording`); Cancel still records nothing. Only the button sets the dialog's
+`__recordPrintSettings` marker, and a dialog an agent confirms (`ui.dialog.confirm`) still prints.
+
 ## Results
 
 `file.print` returns `sent`, `backend` (`lp`, `windows`, `ipp`, `portal`), `spooler` (where the
