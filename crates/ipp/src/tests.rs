@@ -585,8 +585,8 @@ fn a_last_chunk_pattern_inside_a_value_does_not_end_the_reply() {
     assert_eq!(list[0].name, "Of\r\n0\r\n\r\nfice");
     // The boundary walk itself: complete only at a zero-size chunk, never on payload bytes.
     assert!(!complete(b"5\r\nab\r\n0"));
-    assert!(!complete(b"7\r\n\r\n0\r\n\r\nx\r\n"));
-    assert!(complete(b"7\r\n\r\n0\r\n\r\nx\r\n0\r\n\r\n"));
+    assert!(!complete(b"8\r\n\r\n0\r\n\r\nx\r\n"));
+    assert!(complete(b"8\r\n\r\n0\r\n\r\nx\r\n0\r\n\r\n"));
     assert!(complete(b"zz\r\n") && dechunk(b"zz\r\n").is_err());
 }
 
@@ -677,4 +677,42 @@ fn a_header_trickled_a_byte_at_a_time_is_found() {
     let raw = read_response(&mut stream).unwrap();
     assert!(raw.ends_with(b"\r\n\r\nok"), "{:?}", String::from_utf8_lossy(&raw));
     server.join().unwrap();
+}
+
+#[test]
+fn malformed_chunk_ends_complete_the_reply() {
+    for body in [b"1\r\naXX", b"1\r\na\n\r", b"1\r\na\rX"] {
+        assert!(chunked_complete(body, &mut 0), "malformed separator must reach dechunk: {body:?}");
+    }
+    for body in [b"1\r\na".as_slice(), b"1\r\na\r"] {
+        assert!(!chunked_complete(body, &mut 0), "partial separator still needs bytes: {body:?}");
+    }
+    let body = b"1\r\na\r\n2\r\nbc\r\n0\r\n\r\n";
+    let mut resume = 0;
+    for end in 0..=body.len() {
+        assert_eq!(chunked_complete(&body[..end], &mut resume), chunked_complete(&body[..end], &mut 0), "prefix {end}");
+    }
+}
+
+#[test]
+fn a_malformed_chunk_reply_finishes_without_waiting_for_close() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release, held) = mpsc::channel();
+    let (ready, written) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\naXX").unwrap();
+        ready.send(()).unwrap();
+        held.recv().unwrap();
+    });
+    let socket = TcpStream::connect(addr).unwrap();
+    socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    written.recv().unwrap();
+    let result = read_response(&mut Stream::Tcp(socket));
+    release.send(()).unwrap();
+    server.join().unwrap();
+    let raw = result.expect("a malformed chunk must finish while the server keeps the socket open");
+    let (_, _, body) = http_response(&raw).unwrap();
+    assert!(matches!(dechunk(body), Err(Error::Protocol(message)) if message == "invalid chunk end"));
 }
