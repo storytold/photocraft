@@ -27,18 +27,23 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// `points` and `target`): shared by the live preview and the commit. `None` when no source
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
+    clone_params_for(app, app.ui.tool)
+}
+
+// A release can arrive after a tool switch, while the stroke still belongs to its press tool.
+fn clone_params_for(app: &PhotocraftApp, tool: Tool) -> Option<Value> {
     // Refused there (`healing_refused`): no live preview either.
-    if healing_in_indexed(app, app.ui.tool) {
+    if healing_in_indexed(app, tool) {
         return None;
     }
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
-    let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
+    let mode = crate::blend_keys::brush_tool_mode(tool, app.session.tools.brush.mode);
     // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
-    let sample = if clone_stamp_indexed(app) { "current" } else { o.clone_sample.as_str() };
-    let aligned = if app.ui.tool == Tool::Healing { o.healing_aligned } else { o.clone_aligned };
+    let sample = if clone_stamp_indexed_for(app, tool) { "current" } else { o.clone_sample.as_str() };
+    let aligned = if tool == Tool::Healing { o.healing_aligned } else { o.clone_aligned };
     let mut p = json!({"aligned": aligned, "sampleLayer": sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
-    if app.ui.tool == Tool::CloneStamp {
+    if tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
@@ -53,7 +58,11 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 /// The Clone Stamp in an Indexed Color document, where the reference greys Sample at Current Layer
 /// and names the Normal Mode "Threshold" (#12613).
 pub(crate) fn clone_stamp_indexed(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::CloneStamp && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
+    clone_stamp_indexed_for(app, app.ui.tool)
+}
+
+fn clone_stamp_indexed_for(app: &PhotocraftApp, tool: Tool) -> bool {
+    tool == Tool::CloneStamp && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
 }
 
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
@@ -207,7 +216,7 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
 /// A Clone Stamp press with no source point yet: the reference application's alert, opened at
 /// the press (#12609) and once while it is up. Returns whether it refused the stroke.
 pub(crate) fn clone_stamp_without_source(app: &mut PhotocraftApp, tool: Tool) -> bool {
-    if tool != Tool::CloneStamp || clone_params(app).is_some() {
+    if tool != Tool::CloneStamp || clone_params_for(app, tool).is_some() {
         return false;
     }
     let message = if cfg!(target_os = "macos") {
@@ -244,7 +253,7 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
             if healing_refused(app, tool) {
                 return true;
             }
-            let Some(p) = clone_params(app) else {
+            let Some(p) = clone_params_for(app, tool) else {
                 if clone_stamp_without_source(app, tool) {
                     return true;
                 }
