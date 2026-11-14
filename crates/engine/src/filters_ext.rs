@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use photocraft_algo::{
     self as algo, BlurPath, BlurQuality, BlurShape, DepthSource, DiffuseMode, Distribution, ExtrudeType, FieldPin, FilterParams, HsbModel, IrisPin, LensType,
-    Light, LightKind, MezzotintType, SmartBlurMode, SpinPin, TextureChannel, TileFill, UndefinedAreas, WindMethod, ZigZagStyle,
+    Light, LightKind, MezzotintType, RELIGHT_MAX_LIGHTS, RelightLight, SmartBlurMode, SpinPin, TextureChannel, TileFill, UndefinedAreas, WindMethod,
+    ZigZagStyle,
 };
 use photocraft_doc::{Document, Layer};
 use photocraft_geom::Rect;
@@ -189,6 +190,7 @@ const PARAMS: &[(&str, Build)] = &[
         ambient: f(p, "ambient", 55.0).clamp(0.0, 100.0),
         warmth: f(p, "warmth", 0.0).clamp(-100.0, 100.0),
         softness: f(p, "softness", 25.0).clamp(1.0, 100.0),
+        lights: relight_lights(p),
     }),
     ("filter.render.lightingEffects", lighting_effects),
     // Noise
@@ -641,6 +643,65 @@ pub(crate) fn resolve_in_layer(fp: &mut FilterParams, layer: &Layer, bounds: Rec
     }
 }
 
+/// The `lights` param with every field clamped to its range and at most `RELIGHT_MAX_LIGHTS` kept.
+fn relight_lights(p: &Value) -> Vec<RelightLight> {
+    let mut v = list::<RelightLight>(p, "lights").unwrap_or_default();
+    v.truncate(RELIGHT_MAX_LIGHTS);
+    for l in &mut v {
+        let fix = |x: f32, lo: f32, hi: f32, d: f32| if x.is_finite() { x.clamp(lo, hi) } else { d };
+        l.x = fix(l.x, -0.5, 1.5, 0.3);
+        l.y = fix(l.y, -0.5, 1.5, 0.25);
+        l.height = fix(l.height, 0.01, 2.0, 0.5);
+        l.angle = fix(l.angle, -180.0, 180.0, 45.0);
+        l.elevation = fix(l.elevation, 0.0, 90.0, 40.0);
+        l.intensity = fix(l.intensity, 0.0, 100.0, 40.0);
+        l.diffusion = fix(l.diffusion, 0.0, 100.0, 0.0);
+        for c in &mut l.color {
+            *c = fix(*c, 0.0, 1.0, 1.0);
+        }
+    }
+    v
+}
+
+fn validate_relight_lights(p: &Value) -> Result<()> {
+    let Some(lights) = p.get("lights") else { return Ok(()) };
+    let Some(arr) = lights.as_array() else {
+        return Err(relight_bad("\"lights\" must be an array"));
+    };
+    if arr.is_empty() || arr.len() > RELIGHT_MAX_LIGHTS {
+        return Err(relight_bad(&format!("\"lights\" holds at most {RELIGHT_MAX_LIGHTS} lights (and at least 1)")));
+    }
+    for l in arr {
+        if !l.is_object() {
+            return Err(relight_bad("each light must be a JSON object"));
+        }
+        match l.get("kind") {
+            None => {}
+            Some(Value::String(k)) if k == "point" || k == "directional" => {}
+            Some(_) => return Err(relight_bad("light \"kind\" must be \"point\" or \"directional\"")),
+        }
+        relight_num(l, "x", 0.3, -0.5, 1.5)?;
+        relight_num(l, "y", 0.25, -0.5, 1.5)?;
+        relight_num(l, "height", 0.5, 0.01, 2.0)?;
+        relight_num(l, "angle", 45.0, -180.0, 180.0)?;
+        relight_num(l, "elevation", 40.0, 0.0, 90.0)?;
+        relight_num(l, "intensity", 40.0, 0.0, 100.0)?;
+        relight_num(l, "diffusion", 0.0, 0.0, 100.0)?;
+        if let Some(c) = l.get("color") {
+            let Some(rgb) = c.as_array().filter(|a| a.len() == 3) else {
+                return Err(relight_bad("light \"color\" must be an array of 3 numbers"));
+            };
+            for ch in rgb {
+                match ch.as_f64() {
+                    Some(x) if x.is_finite() && (0.0..=1.0).contains(&x) => {}
+                    _ => return Err(relight_bad("light \"color\" values must be finite numbers in 0..1")),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn relight_bad(msg: &str) -> EngineError {
     EngineError::BadParams { cmd: "filter.render.relight".into(), msg: msg.into() }
 }
@@ -678,6 +739,7 @@ fn validate_relight(p: &Value) -> Result<()> {
     relight_num(p, "ambient", 55.0, 0.0, 100.0)?;
     relight_num(p, "warmth", 0.0, -100.0, 100.0)?;
     relight_num(p, "softness", 25.0, 1.0, 100.0)?;
+    validate_relight_lights(p)?;
     Ok(())
 }
 
@@ -793,7 +855,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Relight…",
             menu: &["Filter", "Render"],
             shortcut: None,
-            params: r##"{"angle":-180..180=45,"elevation":0..90=40,"intensity":0..100=40,"ambient":0..100=55,"warmth":-100..100=0,"softness":1..100=25}"##,
+            params: r##"{"angle":-180..180=45,"elevation":0..90=40,"intensity":0..100=40,"ambient":0..100=55,"warmth":-100..100=0,"softness":1..100=25,"lights":json}"##,
             enabled: relight_enabled,
             run: run_relight,
             journal: true,

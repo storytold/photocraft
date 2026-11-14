@@ -7,7 +7,7 @@ mod selection_mix;
 
 #[test]
 fn relight_admission_tracks_the_document_dependent_working_set() {
-    let params = FilterParams::Relight { angle: 0.0, elevation: 45.0, intensity: 50.0, ambient: 50.0, warmth: 0.0, softness: 100.0 };
+    let params = FilterParams::Relight { angle: 0.0, elevation: 45.0, intensity: 50.0, ambient: 50.0, warmth: 0.0, softness: 100.0, lights: vec![] };
     let small = Rect::new(0, 0, 128, 128);
     let large = Rect::new(0, 0, 86400, 43200);
     assert!(working_bytes(&params, small, small, 4) < working_bytes(&params, small, large, 4));

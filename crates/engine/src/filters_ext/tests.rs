@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_algo::RelightLightKind;
 use photocraft_geom::Rect;
 
 fn session() -> Session {
@@ -312,7 +313,7 @@ fn params_map_to_algorithm_units() {
     assert!(params_for("filter.nope", &json!({})).is_none());
     assert_eq!(
         params_for("filter.render.relight", &json!({})),
-        Some(FilterParams::Relight { angle: 45.0, elevation: 40.0, intensity: 40.0, ambient: 55.0, warmth: 0.0, softness: 25.0 })
+        Some(FilterParams::Relight { angle: 45.0, elevation: 40.0, intensity: 40.0, ambient: 55.0, warmth: 0.0, softness: 25.0, lights: vec![] })
     );
 }
 
@@ -442,4 +443,71 @@ fn relight_honours_the_selection() {
     let far = (28 * 48 + 40) * 4;
     assert_eq!(after[far..far + 4], before[far..far + 4]);
     assert_ne!(after[..12 * 4], before[..12 * 4]);
+}
+
+fn relight_lights_of(p: Option<FilterParams>) -> Vec<RelightLight> {
+    let Some(FilterParams::Relight { lights, .. }) = p else { panic!("not relight params") };
+    lights
+}
+
+#[test]
+fn relight_lights_parse_and_clamp() {
+    let p = json!({"lights": [
+        {"kind": "directional", "angle": 400, "elevation": 120, "intensity": 250, "diffusion": -5, "color": [2, -1, 0.5]},
+        {"x": 9, "y": -9, "height": 0},
+        {}, {}
+    ]});
+    let lights = relight_lights_of(params_for("filter.render.relight", &p));
+    assert_eq!(lights.len(), RELIGHT_MAX_LIGHTS);
+    assert_eq!(lights[0].kind, RelightLightKind::Directional);
+    assert_eq!(lights[0].angle, 180.0);
+    assert_eq!(lights[0].elevation, 90.0);
+    assert_eq!(lights[0].intensity, 100.0);
+    assert_eq!(lights[0].diffusion, 0.0);
+    assert_eq!(lights[0].color, [1.0, 0.0, 0.5]);
+    assert_eq!(lights[1].kind, RelightLightKind::Point);
+    assert_eq!((lights[1].x, lights[1].y, lights[1].height), (1.5, -0.5, 0.01));
+    assert_eq!(lights[2], RelightLight::default());
+    assert!(relight_lights_of(params_for("filter.render.relight", &json!({}))).is_empty());
+}
+
+#[test]
+fn relight_validate_rejects_bad_lights() {
+    let bad = [
+        json!({"lights": [{}, {}, {}, {}]}),
+        json!({"lights": []}),
+        json!({"lights": "x"}),
+        json!({"lights": [1]}),
+        json!({"lights": [{"kind": "spot"}]}),
+        json!({"lights": [{"color": [1, 1]}]}),
+        json!({"lights": [{"color": [1, 1, 2]}]}),
+        json!({"lights": [{"color": [1, "a", 1]}]}),
+        json!({"lights": [{"x": 2}]}),
+        json!({"lights": [{"height": 0}]}),
+        json!({"lights": [{"intensity": 101}]}),
+        json!({"lights": [{"diffusion": null}]}),
+        json!({"lights": [{"angle": "45"}]}),
+    ];
+    for p in bad {
+        let mut s = relight_session(16, 16);
+        assert!(s.execute("filter.render.relight", p.clone()).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn relight_with_lights_changes_pixels() {
+    let read = |s: &Session| {
+        let d = s.active().unwrap();
+        d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 48, 48))
+    };
+    let mut s = relight_session(48, 48);
+    let before = read(&s);
+    let p = json!({"lights": [
+        {"kind": "point", "x": 0.0, "y": 0.5, "height": 0.4, "intensity": 80, "color": [1, 0.8, 0.6]},
+        {"kind": "directional", "angle": 0, "elevation": 30, "intensity": 30, "unknown": true}
+    ]});
+    s.execute("filter.render.relight", p).unwrap();
+    let after = read(&s);
+    assert_ne!(after, before);
+    assert!(after.iter().all(|v| v.is_finite()));
 }

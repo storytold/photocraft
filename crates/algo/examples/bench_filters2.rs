@@ -80,7 +80,7 @@ fn main() {
             height: 50.0,
             white_is_high: true,
         },
-        FilterParams::Relight { angle: 45.0, elevation: 40.0, intensity: 40.0, ambient: 55.0, warmth: 0.0, softness: 25.0 },
+        FilterParams::Relight { angle: 45.0, elevation: 40.0, intensity: 40.0, ambient: 55.0, warmth: 0.0, softness: 25.0, lights: vec![] },
     ];
     let mut rows: Vec<(String, Vec<f64>)> = Vec::new();
     for p in cases {
