@@ -50,6 +50,7 @@ pub mod lens;
 mod lens_flare;
 mod lens_flare_data;
 pub mod liquify;
+pub mod luminosity;
 pub mod magnetic;
 pub mod matting;
 mod noise;
