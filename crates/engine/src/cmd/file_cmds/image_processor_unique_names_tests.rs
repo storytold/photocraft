@@ -1,11 +1,20 @@
-use std::{fs, path::Path, sync::Barrier, thread};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Barrier,
+    thread,
+};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::Session;
 
 const COMMAND: &str = "file.scripts.imageProcessor";
 const PIXELS: &[u8] = b"P6\n2 1\n255\n\xff\0\0\0\xff\0";
+
+fn files(result: &Value) -> Result<Vec<PathBuf>, serde_json::Error> {
+    serde_json::from_value(result["files"].clone())
+}
 
 #[test]
 fn selects_the_first_free_suffix_and_reports_every_written_format() {
@@ -19,9 +28,11 @@ fn selects_the_first_free_suffix_and_reports_every_written_format() {
     }
     let result = Session::new().execute(COMMAND, json!({"input":[source],"output":output,"jpeg":{},"psd":{},"tiff":{}})).unwrap();
     let expected = ["a.b_2.jpg", "a.b.psd", "a.b_1.tif"];
-    assert_eq!(result, json!({"files":expected.map(|name| output.join(name)), "errors":[]}));
+    assert_eq!(files(&result).unwrap(), expected.map(|name| output.join(name)));
+    assert_eq!(result["errors"], json!([]));
     let next = Session::new().execute(COMMAND, json!({"input":[source],"output":output,"format":"jpg"})).unwrap();
-    assert_eq!(next, json!({"files":[output.join("a.b_4.jpg")], "errors":[]}));
+    assert_eq!(files(&next).unwrap(), [output.join("a.b_4.jpg")]);
+    assert_eq!(next["errors"], json!([]));
     for name in ["a.b.jpg", "a.b_1.jpg", "a.b_3.jpg", "a.b.tif"] {
         assert_eq!(fs::read(output.join(name)).unwrap(), name.as_bytes());
     }
@@ -45,15 +56,17 @@ fn same_stem_inputs_get_separate_results_without_changing_shared_processing() {
     }
     let mut session = Session::new();
     let result = session.execute(COMMAND, json!({"input":[a,b],"output":output,"format":"png"})).unwrap();
-    assert_eq!(result, json!({"files":[output.join("same.png"),output.join("same_1.png")],"errors":[]}));
+    assert_eq!(files(&result).unwrap(), [output.join("same.png"), output.join("same_1.png")]);
+    assert_eq!(result["errors"], json!([]));
 
     let result = session.execute(COMMAND, json!({"input":source.path(),"output":output,"format":"png","includeSubfolders":true})).unwrap();
-    assert_eq!(result, json!({"files":[output.join("a/same.png"),output.join("b/same.png")],"errors":[]}));
+    assert_eq!(files(&result).unwrap(), [output.join("a/same.png"), output.join("b/same.png")]);
+    assert_eq!(result["errors"], json!([]));
 
     let legacy = source.path().join("legacy");
     let inputs = [a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()];
     let result = super::super::batch_run::process_files(&session, &inputs, &legacy.to_string_lossy(), "png", Default::default(), "", &|_| Ok(()));
-    assert_eq!(result["files"], json!([legacy.join("same.png")]));
+    assert_eq!(files(&result).unwrap(), [legacy.join("same.png")]);
     let errors = result["errors"].as_array().unwrap();
     assert_eq!(errors.len(), 1);
     assert!(errors[0]["error"].as_str().unwrap().contains("same output name"));
@@ -105,7 +118,8 @@ fn directory_and_dangling_symlink_names_stay_occupied() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(output.join("missing.png"), output.join("example_1.png")).unwrap();
     let result = Session::new().execute(COMMAND, json!({"input":[source],"output":output,"format":"png"})).unwrap();
-    assert_eq!(result, json!({"files":[output.join(format!("example_{counter}.png"))],"errors":[]}));
+    assert_eq!(files(&result).unwrap(), [output.join(format!("example_{counter}.png"))]);
+    assert_eq!(result["errors"], json!([]));
     assert!(output.join("example.png").is_dir());
     #[cfg(unix)]
     assert_eq!(fs::read_link(output.join("example_1.png")).unwrap(), output.join("missing.png"));
