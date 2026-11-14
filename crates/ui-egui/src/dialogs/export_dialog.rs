@@ -1054,6 +1054,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let doc = source_document(app, f)?;
     let source_profile = effective_source_profile(app, &doc);
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
+    // A layer's name may hold characters a file name can't (#14810): `a/b:c*?` suggests
+    // `a_b_c__`, sanitised by the same `export_name` the multi-layer export uses.
+    let stem = if f.get("__layer").and_then(Value::as_u64).is_some() { export_name(&stem) } else { stem };
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
     let f = f.clone();
@@ -1190,6 +1193,8 @@ mod enter_key_tests;
 
 #[cfg(test)]
 mod jpg_progressive_tests;
+#[cfg(test)]
+mod layer_name_sanitise_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
