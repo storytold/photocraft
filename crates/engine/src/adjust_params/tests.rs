@@ -706,3 +706,13 @@ fn gradient_map_source_params() {
         assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");
     }
 }
+
+/// #14417: tone values are whole percentages; scripted fractions round like the dialog's own
+/// slider pass (away from zero on halves, which no measured case pins to).
+#[test]
+fn color_balance_tones_round_to_whole_numbers() {
+    let a = from_params("colorBalance", &json!({"midtones": [12.7, -0.4, 100.4], "highlights": [-100.4, 0.0, 0.0]}), None, ColorMode::Rgb).unwrap();
+    let Adjustment::ColorBalance { midtones, highlights, .. } = a else { panic!("wrong kind") };
+    assert_eq!(midtones, [13.0, 0.0, 100.0], "12.7 to 13, -0.4 to 0, 100.4 rounds into the clamp");
+    assert_eq!(highlights, [-100.0, 0.0, 0.0], "-100.4 to -100");
+}
