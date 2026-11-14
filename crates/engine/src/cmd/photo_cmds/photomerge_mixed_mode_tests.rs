@@ -8,8 +8,8 @@ fn mixed_eight_bit_sources_keep_rgb_and_gray_samples_in_either_order() {
         let mut session = Session::new();
         let mut gray = tile(&pixels, 0, ColorMode::Grayscale, SampleType::U8);
         let mut rgb = tile(&pixels, 200, ColorMode::Rgb, SampleType::U8);
-        gray.icc_profile = Some(photocraft_cms::builtin::linear_gray().to_bytes());
-        let rgb_profile = photocraft_cms::Builtin::Srgb.profile().to_bytes();
+        gray.icc_profile = Some(craft_cms::builtin::linear_gray().to_bytes());
+        let rgb_profile = craft_cms::Builtin::Srgb.profile().to_bytes();
         rgb.icc_profile = Some(rgb_profile.clone());
         let gray_sample = gray.layers[0].surface().unwrap().rgba(22, 100);
         let rgb_sample = rgb.layers[0].surface().unwrap().rgba(150, 170);
