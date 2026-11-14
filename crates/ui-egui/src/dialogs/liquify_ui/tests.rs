@@ -1,11 +1,15 @@
 use super::*;
 
+mod held_history;
+
+/// Hover follows the pointer; an active resize keeps its outline at the original anchor
+/// even when hover disappears before the owning button is released.
 #[test]
 fn the_brush_outline_follows_the_pointer_except_while_resizing() {
     let (hover, anchor) = (pos2(30.0, 40.0), pos2(10.0, 20.0));
     assert_eq!(brush_circle_at(None, Some(hover)), Some(hover));
-    assert_eq!(brush_circle_at(Some((anchor, 40.0, 50.0)), Some(hover)), Some(anchor));
-    assert_eq!(brush_circle_at(Some((anchor, 40.0, 50.0)), None), Some(anchor));
+    assert_eq!(brush_circle_at(Some((anchor, 40.0, 50.0, egui::PointerButton::Secondary)), Some(hover)), Some(anchor));
+    assert_eq!(brush_circle_at(Some((anchor, 40.0, 50.0, egui::PointerButton::Secondary)), None), Some(anchor));
     assert_eq!(brush_circle_at(None, None), None);
 }
 
