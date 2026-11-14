@@ -21,10 +21,16 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
-    p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
+    // Compression suffixes alone also name unrelated archives; only XCF compounds
+    // participate in batch discovery, matching the engine's recursive listing.
+    let wrapped_xcf = p.file_name().is_some_and(|name| {
+        let lower = name.to_string_lossy().to_ascii_lowercase();
+        [".xcf.gz", ".xcf.bz2", ".xcf.xz"].iter().any(|suffix| lower.ends_with(suffix))
+    });
+    p.is_file() && (wrapped_xcf || p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase())))
 }
 
 /// Drops the Save and view steps the desktop records from `action` (Batch saves each result
@@ -127,7 +133,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
             h.session.actions.list = set.clone();
-            h.open_with_approval(input, a.approve_high_memory)?;
+            h.open_with_parameters(input, &json!({"approveHighMemory":a.approve_high_memory,"historicalXcfSampleOrder":a.historical_xcf_sample_order}))?;
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)
                     || photocraft_engine::actions_cmds::shell_save_command(id)
@@ -189,6 +195,9 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     }
     if failed > 0 { Err(CliError::FilesFailed(failed)) } else { Ok(()) }
 }
+
+#[cfg(test)]
+mod historical_order_tests;
 
 pub(crate) fn droplet(a: &DropletArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (file, inputs) = (&a.file, &a.inputs);

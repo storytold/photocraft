@@ -380,6 +380,7 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
             return Err(bad(UPDATE, "SVG placement caches exceed the 24 million pixel limit"));
         }
         sm.source = source.clone();
+        sm.historical_xcf_sample_order = None;
         sm.vector_preview = vector_preview.clone();
         replacements.push(replacement);
     }
@@ -392,6 +393,7 @@ fn update_contents_with_frame_budget(s: &mut Session, p: &Value, native: bool, f
             let mut display = replacement.clone();
             let LayerContent::Smart(sm) = &mut display.content else { return Err(EngineError::NoLayer(display.id)) };
             sm.source = SmartSource::Embedded { file_name: "Artwork.svg".into(), bytes: preview.svg.clone() };
+            sm.historical_xcf_sample_order = None;
             sm.vector_preview = None;
             if !crate::smart_cmds::refresh_layer(doc, &mut display)? {
                 return Err(bad(UPDATE, "SVG contents could not be rendered"));

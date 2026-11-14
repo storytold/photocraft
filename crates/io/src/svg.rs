@@ -448,13 +448,9 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
         let opt = options_with_isolation(fontdb, MAX_XML_DEPTH.saturating_sub(depth), isolated, Arc::clone(&image_resolver));
         let tree = guarded_parse(|| craft_svg::tree::parse_text(text, &tree_limits(MAX_XML_DEPTH, MAX_RASTER_PIXELS), &opt))?;
         let tree = tree.map_err(svg_parse_error)?;
-        let usage = image_resolver.usage();
-        if usage.raster_limit_images > 0 {
-            return Err(IoError::Svg("embedded SVG raster images exceed the decoded pixel budget".into()));
-        }
-        if usage.svg_limit_images > 0 {
-            return Err(IoError::Svg("embedded SVG images exceed the byte or nesting budget".into()));
-        }
+        // The resolver already rejects each over-budget optional image before decode.
+        // Ordinary Open keeps the usable outer drawing, as before the shared-parser
+        // migration; strict stored previews enforce completeness in their separate path.
         Ok(Parsed { tree, fontless_text })
     })
     .map_err(IoError::from)
@@ -555,9 +551,11 @@ fn parse_image_bounded_with(
         counter.xml_bytes = counter.xml_bytes.saturating_sub(u64::try_from(usage.embedded_svg_bytes).unwrap_or(u64::MAX));
         counter.svg_images = usage.embedded_svg_count as u64;
         counter.svg_chain = usage.embedded_svg_depth as u64;
+        // Resource overruns fail bounded renders; non-strict renders may omit a child
+        // whose XML depth exceeds the allowance left by the outer drawing.
         if usage.raster_limit_images > 0 {
             counter.error.get_or_insert_with(|| "embedded SVG raster images exceed the decoded pixel budget".into());
-        } else if counter.strict && usage.svg_limit_images > 0 {
+        } else if usage.svg_resource_limit_images > 0 || (counter.strict && usage.svg_limit_images > 0) {
             counter.error.get_or_insert_with(|| "embedded SVG images exceed the byte or nesting budget".into());
         } else if counter.strict && (usage.invalid_raster_images > 0 || usage.invalid_svg_images > 0) {
             counter.error.get_or_insert_with(|| "can't parse an embedded SVG image".into());
@@ -1037,7 +1035,7 @@ fn import_parsed_with_limits(
     if doc.layers.is_empty() && !conv.noted.contains(&"raster-panic") {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
 }
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at
@@ -1727,3 +1725,6 @@ fn knots(path: &tiny_skia::Path) -> Vec<Subpath> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod optional_image_review_tests;

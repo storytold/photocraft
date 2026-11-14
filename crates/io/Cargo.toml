@@ -24,6 +24,7 @@ pdf-editable = ["dep:kurbo"]
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
+craft-raster-codecs = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
@@ -41,7 +42,6 @@ craft-pdf = { workspace = true }
 craft-docpath = { workspace = true }
 craft-ora = { workspace = true }
 craft-kra = { workspace = true }
-craft-xcf = { workspace = true }
 craft-pdn = { workspace = true }
 craft-svg = { workspace = true }
 craft-tiff = { workspace = true }
@@ -53,6 +53,11 @@ serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
+# Enhanced XCF transport uses safe decoders with explicit memory limits.
+crabz2 = { workspace = true }
+lzma-rust2 = { workspace = true }
+# XCF text and metadata packet parsing.
+roxmltree = "0.21"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }

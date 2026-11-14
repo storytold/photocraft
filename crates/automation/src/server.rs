@@ -60,6 +60,9 @@ pub struct OpenParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// Explicit order for ambiguous XCF 7–11 samples: little-endian or big-endian. No default is inferred.
+    #[serde(default)]
+    pub historical_xcf_sample_order: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -783,17 +786,21 @@ impl PhotocraftMcp {
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        let mut params = json!({"path": p.path, "approveHighMemory": p.approve_high_memory});
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        // Validate even bridge-mode requests before sending them to an import host.
+        if let Err(error) = crate::files::import_options_from_params(&params) {
+            return to_result(Err(error));
+        }
+        let headless_params = params.clone();
+        if let Some(r) = self.headless_op(move |h| h.open_with_parameters(&path, &headless_params)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        let mut params = json!({"path": p.path});
-        if approve {
-            params["approveHighMemory"] = json!(true);
-        }
         to_result(b.call("app.open", params).await)
     }
 
@@ -1707,6 +1714,19 @@ mod tests {
         assert_eq!(v["soft"], 3000);
         assert_eq!(v["hard"], 9000);
         assert_eq!(v["available"], 12000);
+    }
+
+    #[test]
+    fn mcp_open_order_parameter_remains_explicit_and_strict() {
+        for order in ["little-endian", "big-endian"] {
+            let parsed: OpenParams = serde_json::from_value(json!({"path":"source.xcf","historical_xcf_sample_order":order})).unwrap();
+            let opts = crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":parsed.historical_xcf_sample_order})).unwrap();
+            assert_eq!(opts.historical_xcf_sample_order.unwrap().to_string(), order);
+        }
+        let omitted: OpenParams = serde_json::from_value(json!({"path":"source.xcf"})).unwrap();
+        assert!(omitted.historical_xcf_sample_order.is_none());
+        assert!(serde_json::from_value::<OpenParams>(json!({"path":"source.xcf","historical_xcf_sample_order":1})).is_err());
+        assert!(crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":"native"})).is_err());
     }
 
     /// #10897: the MCP `doc_place` tool takes the same strict, defaulted approval as `doc_open`

@@ -85,7 +85,13 @@ impl PhotocraftApp {
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
-        if self.background_jobs {
+        // Wrapper header parsing can itself decompress a block or scan a gzip header.
+        // Let the engine's worker probe it under the existing transport limits instead
+        // of performing that work once here before the background open even starts.
+        if self.background_jobs
+            || photocraft_engine::jobs::has_compressed_import_signature(bytes)
+            || photocraft_io::historical_xcf_sample_order_request(name, bytes).map_err(|error| error.to_string())?.is_some()
+        {
             jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
             return Ok(Vec::new());
         }
@@ -99,7 +105,7 @@ impl PhotocraftApp {
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
         // string. Every other format keeps the shell's import service.
         let typed_open = photocraft_io::is_psd(bytes) || photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Tiff);
-        let (mut doc, warnings, damaged) = if typed_open {
+        let (r, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never
             // sets it: its layered import has no damaged-content confirmation.
@@ -111,11 +117,11 @@ impl PhotocraftApp {
                 }
                 Err(error) => return Err(error.to_string()),
             };
-            (r.document, r.warnings, damaged)
+            (r, damaged)
         } else {
-            let (doc, warnings) = import(name, bytes, &opts)?;
-            (doc, warnings, false)
+            (import(name, bytes, &opts)?, false)
         };
+        let photocraft_io::ImportResult { document: mut doc, warnings, source_read_only, initial_view, .. } = r;
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -126,11 +132,13 @@ impl PhotocraftApp {
         let developed = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
         let question = self.session.color.open_question(&doc).filter(|_| !developed);
         let wants_raw = camera_raw_ui::wants_open_dialog(self, &warnings);
-        open_prompt::arrive(
+        open_prompt::arrive_checked(
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
+                // Keep preview sources protected even when a host importer omits the flag.
+                read_only: source_read_only || photocraft_io::affinity::is_affinity(bytes),
+                initial_view,
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -142,7 +150,7 @@ impl PhotocraftApp {
                 policy_applied: false,
                 smart_object: false,
             },
-        );
+        )?;
         Ok(warnings)
     }
 
@@ -156,13 +164,20 @@ impl PhotocraftApp {
 
     /// [`Self::open_automation_bytes`] with the caller's high-memory approval for the imported bytes.
     pub fn open_automation_bytes_with_approval(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        opts.psd_high_memory_approved = approved;
+        self.open_automation_bytes_with_options(name, bytes, &opts)
+    }
+
+    /// Open authenticated bytes with explicit per-import options, without changing global preferences.
+    pub fn open_automation_bytes_with_options(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes, approved),
+            None => self.import_automation_document(name, bytes, options),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -172,17 +187,19 @@ impl PhotocraftApp {
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        opts.psd_high_memory_approved = approved;
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        let opts = photocraft_engine::file_cmds::fresh_import_options(*options);
+        let photocraft_io::ImportResult { document: mut doc, mut warnings, source_read_only, initial_view, .. } = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // The caller records the path it read from.
-        self.session.add_document(doc, None);
-        if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
-        }
+        // The source signature remains authoritative for preview-only Affinity files.
+        let read_only = source_read_only || photocraft_io::affinity::is_affinity(bytes);
+        let (_, (), view_warning) = self
+            .session
+            .admit_import_with_initial_view(read_only, initial_view, |session| (session.add_document(doc, None), ()))
+            .map_err(|error| error.to_string())?;
+        warnings.extend(view_warning);
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
         self.ui.status_error = false;
@@ -978,3 +995,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32"), target_pointer_width = "64"))]
+mod fresh_source_approval_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod compressed_open_tests;

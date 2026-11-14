@@ -47,6 +47,8 @@ photocraft-ipp = { path = "crates/ipp" }
 # external
 # ICC colour management: the shared crate (replaces crates/cms; craft-libs#779).
 craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
+# XCF text uses the strict X11 palette lookup from the shared raster codecs.
+craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # HEIC/HEIF: the shared decoder (replaces crates/heif; craft-libs#784).
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
@@ -55,13 +57,13 @@ craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
-craft-pcraft-bundle = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
-craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
+craft-pcraft-bundle = { git = "https://github.com/storytold/craft-libs", rev = "d61afc4a3bb4d489a528542ab46682fb13e71a55" }
+craft-zip = { git = "https://github.com/storytold/craft-libs", rev = "d61afc4a3bb4d489a528542ab46682fb13e71a55" }
 craft-ora = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-kra = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-xcf = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
-craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3", features = ["tree-render", "tree-render-system-fonts"] }
+craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "d61afc4a3bb4d489a528542ab46682fb13e71a55", features = ["tree-render", "tree-render-system-fonts"] }
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
@@ -71,6 +73,8 @@ craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3"
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
+crabz2 = { version = "=0.7.0", default-features = false, features = ["std"] }
+lzma-rust2 = { version = "=0.23.0", default-features = false, features = ["std", "xz"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -195,8 +199,8 @@ opt-level = "z"
 # Colour-management transforms are built once and cached (`transform::cached`), so "z" costs
 # little runtime. The browser app composites per frame on the GPU (`crates/gpu`, WebGPU/WebGL2),
 # so the CPU compositor is not the browser's hot path there; "z" for compose keeps the wasm
-# under the 24 MiB gate (measured −122 KB vs opt-level 3). algo's filters run per pixel on
-# every interactive filter application; "z" there is the size lever of last resort (−331 KB),
+# under the 24 MiB gate (measured âˆ’122 KB vs opt-level 3). algo's filters run per pixel on
+# every interactive filter application; "z" there is the size lever of last resort (âˆ’331 KB),
 # taken because the gate is enforced in CI: if browser filters feel too slow, restore 3 here
 # and reclaim the bytes from a feature-gated decoder instead.
 [profile.wasm-release.package.photocraft-raster]

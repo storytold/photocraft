@@ -293,7 +293,7 @@ pub fn start_open(
 }
 
 /// A file opening in the background gets its tab: focused, with the status line naming it.
-fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
+pub(crate) fn track_open(app: &mut PhotocraftApp, tab: OpenTab) {
     app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", &tab.name)]);
     app.jobs.focus = Some(tab.job);
     app.jobs.opens.push(tab);
@@ -345,8 +345,13 @@ pub(crate) fn opened_in_order(jobs: &mut JobsUi, order: OpenOrder) {
 /// Every member of the set has been started: forget it unless some are still opening, waiting on
 /// their prompt (memory, profile or damage), or waiting for a prompt to clear.
 pub(crate) fn end_batch(app: &mut PhotocraftApp) {
-    let waiting: Vec<u64> =
-        app.held_memory_prompts.iter().filter_map(|m| m.order.map(|o| o.batch)).chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch))).collect();
+    let waiting: Vec<u64> = app
+        .held_memory_prompts
+        .iter()
+        .filter_map(|m| m.order.map(|o| o.batch))
+        .chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch)))
+        .chain(app.historical_opens.iter().filter_map(|h| h.order.map(|o| o.batch)))
+        .collect();
     let JobsUi { opens, batches, .. } = &mut app.jobs;
     batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id)) || waiting.contains(&b.id));
 }
@@ -371,7 +376,11 @@ pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Opti
 /// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set. A memory
 /// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
+    let historical = crate::dialogs::historical_xcf::for_job(app, tab.job);
     let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order);
+    if let Some(id) = historical {
+        crate::dialogs::historical_xcf::complete(app, id, r.is_ok());
+    }
     end_batch(app);
     r
 }
@@ -607,6 +616,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             true
         }
     });
+    if crate::dialogs::historical_replace::on_event(app, &e) {
+        return;
+    }
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
     if crate::prefs_ui::on_recovery_event(app, &e) {
@@ -638,14 +650,23 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     if e.command == OPEN_JOB || app.jobs.opens.iter().any(|o| o.job == e.id) {
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
+        let historical = crate::dialogs::historical_xcf::for_job(app, e.id);
         match e.outcome {
             JobOutcome::Done(v) => {
                 if let Err(err) = finish_open_tab(app, &tab, &v) {
                     app.open_failed(&tab.name, &err);
                 }
             }
-            JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
+            JobOutcome::Failed(err) => {
+                if let Some(id) = historical {
+                    crate::dialogs::historical_xcf::complete(app, id, false);
+                }
+                app.open_failed(&tab.name, &err);
+            }
             JobOutcome::Cancelled => {
+                if let Some(id) = historical {
+                    crate::dialogs::historical_xcf::complete(app, id, false);
+                }
                 app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
             }
@@ -696,7 +717,32 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// (`{document, docId, warnings, color}` or `{held, …}`). `slot` and `order` are the tab position
 /// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
 /// document, so an inline completion lands where a background tab would.
-fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+pub(crate) fn finish_open(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<&str>,
+    v: &Value,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
+    if let Some(id) = v.get("heldHistoricalXcfOpen").and_then(Value::as_u64) {
+        let question = v.get("historicalXcfSampleOrderRequired").ok_or("missing historical XCF requirement")?;
+        crate::dialogs::historical_xcf::arrive(
+            app,
+            crate::dialogs::historical_xcf::Historical {
+                id,
+                name: name.into(),
+                path: path.map(str::to_string),
+                slot,
+                order,
+                version: question.get("version").and_then(Value::as_u64).ok_or("missing historical XCF version")?,
+                bits: question.get("bitsPerSample").and_then(Value::as_u64).ok_or("missing historical XCF precision")?,
+                job: None,
+            },
+        );
+        return Ok(());
+    }
+
     if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
         let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
         let available = v.get("availableRam").and_then(Value::as_u64);
@@ -718,9 +764,10 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
+    let held = |doc, read_only, initial_view, question, policy_applied| crate::open_prompt::Held {
         doc,
         read_only,
+        initial_view,
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -734,8 +781,8 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     };
     // Held back for the profile prompt (Ask When Opening).
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
-        let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        let (doc, read_only, initial_view) = app.session.take_held_open_with_view(id).ok_or("the open job's document is gone")?;
+        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, v.get("color").filter(|q| !q.is_null()).cloned(), false));
         return Ok(());
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
@@ -747,8 +794,27 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         && let Some(st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
+        let initial_view = v.get("hasInitialView").and_then(Value::as_bool).unwrap_or(false).then(|| photocraft_io::NativeInitialView {
+            selected_layers: st.selected_layers.clone(),
+            active_layer: st.active_layer,
+            target: match st.channel_view.target {
+                photocraft_engine::channel_cmds::ChannelTarget::LayerMask => photocraft_io::NativeImportTarget::LayerMask,
+                photocraft_engine::channel_cmds::ChannelTarget::Alpha(index) => photocraft_io::NativeImportTarget::AlphaChannel(index),
+                _ => photocraft_io::NativeImportTarget::Composite,
+            },
+            samplers: st.color_samplers.clone(),
+            // A preceding job event may already have synchronized the active UI and consumed
+            // its one-time path hint. The open result retains the exact index, even for duplicate names.
+            selected_path: st.initial_path_selection.or_else(|| v.get("initialPathSelection").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())),
+            visible_alpha_channels: st.channel_view.alpha_visible.iter().enumerate().filter_map(|(i, visible)| visible.then_some(i)).collect(),
+            show_layer_mask: st.channel_view.layer_mask.is_some(),
+        });
+        // Closing a queued import restores the older active document before any UI refresh.
+        // Its channel target, rather than the pending import's mask, owns the tool palette.
+        app.session.sync_tools_mask_target();
+        app.sync_views();
         let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        crate::open_prompt::arrive(app, held(doc, read_only, initial_view, None, true));
         return Ok(());
     }
     if let Some(slot) = tab_slot(app, slot, order) {

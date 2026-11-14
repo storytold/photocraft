@@ -514,12 +514,32 @@ pub struct VectorPreview {
     pub svg: Arc<Vec<u8>>,
 }
 
+/// Explicit sample byte order for development XCF7–11 high-depth pixel data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoricalXcfSampleOrder {
+    BigEndian,
+    LittleEndian,
+}
+
+impl std::fmt::Display for HistoricalXcfSampleOrder {
+    /// Formats the explicit historical sample-order choice for user and agent diagnostics.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BigEndian => "big-endian",
+            Self::LittleEndian => "little-endian",
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
     pub contents_id: SmartContentsId,
     /// Embedded source file bytes (PSD, PNG, …) or linked path.
     pub source: SmartSource,
+    /// Explicit interpretation of ambiguous historical XCF sample bytes; never inferred.
+    pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
     /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
     pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
@@ -553,6 +573,7 @@ impl SmartObject {
         Self {
             contents_id: SmartContentsId::fresh(),
             source,
+            historical_xcf_sample_order: None,
             vector_preview: None,
             transform,
             smart_filters: Vec::new(),

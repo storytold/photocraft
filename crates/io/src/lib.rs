@@ -80,8 +80,10 @@ pub mod psd_thumbnail;
 pub mod raw;
 pub mod renderer;
 pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
+mod initial_view;
 pub mod slices_map;
 pub mod smart_map;
+mod smart_xcf_order;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;
@@ -90,8 +92,12 @@ pub mod vector_map;
 pub mod vector_preview;
 mod xcf;
 
+#[cfg(any(unix, windows))]
+use std::sync::Arc;
+
 use craft_psd::{PsdError, PsdFile};
 pub use export_estimate::estimate_export_bytes;
+pub use initial_view::{MAX_INITIAL_SAMPLERS, NativeImportTarget, NativeInitialView};
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
@@ -112,6 +118,9 @@ pub use psd_import::{psd_to_document, psd_to_document_with};
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// Development XCF files did not record their high-depth sample byte order.
+    #[error("{0}")]
+    HistoricalXcfSampleOrderRequired(HistoricalXcfSampleOrderRequest),
     /// Paint.NET document decode failure.
     #[error("PDN: {0}")]
     Pdn(String),
@@ -124,6 +133,9 @@ pub enum IoError {
     /// A GIMP XCF file that could not be read.
     #[error("XCF: {0}")]
     Xcf(String),
+    /// Optional XCF metadata reached its shared retained-storage allowance.
+    #[error("optional XCF metadata exceeds the document allowance")]
+    XcfMetadataLimit,
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -190,6 +202,11 @@ impl From<RenderError> for IoError {
 /// Result of [`import`].
 #[derive(Debug, Clone)]
 pub struct ImportResult {
+    /// Optional native view hints. Hosts carry them through open prompts, then validate
+    /// and apply them atomically against the admitted document once. An invalid optional hint
+    /// is discarded with a warning; the imported document keeps its default view and usable pixels.
+    /// Unavailable view affordances must be reported rather than silently discarded.
+    pub initial_view: Option<NativeInitialView>,
     /// The imported document.
     pub document: Document,
     /// Human-readable notes about anything approximated or dropped.
@@ -280,6 +297,16 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
+    use photocraft_doc::import_conversion::ImportConversion;
+    match doc.metadata.import_conversion.as_deref() {
+        Some(ImportConversion::Report(_)) if import_report_needs_notice(doc) => {
+            out.push("a historical import conversion report records approximations or unapplied source data; view Import Conversion Report for details".into());
+        }
+        Some(ImportConversion::Opaque { .. }) => {
+            out.push("an import conversion report from a newer version is retained without interpretation".into());
+        }
+        _ => {}
+    }
     // Iterative, so no document's nesting can make this recurse.
     let mut stack: Vec<&Layer> = doc.layers.iter().rev().collect();
     while let Some(l) = stack.pop() {
@@ -301,6 +328,24 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
         }
     }
     out
+}
+
+/// Retained parser properties are inert history, not evidence that native content was lost.
+/// Keep notices for actual approximations/unapplied content, missing property bytes and future reports.
+fn import_report_needs_notice(doc: &Document) -> bool {
+    use photocraft_doc::import_conversion::{ConversionDisposition as D, ConversionReason as R, ImportConversion};
+    match doc.metadata.import_conversion.as_deref() {
+        Some(ImportConversion::Report(report)) => report.entries.iter().any(|entry| {
+            entry.disposition != D::NativeEquivalent
+                && !(entry.disposition == D::RetainedUnapplied
+                    && entry.feature_code.starts_with("xcf.source_property.")
+                    && matches!(entry.reason, R::MissingMapping | R::NativePolicy)
+                    && !entry.attachments.is_empty()
+                    && entry.attachments.iter().all(|index| report.attachments.get(*index as usize).is_some()))
+        }),
+        Some(ImportConversion::Opaque { .. }) => true,
+        None => false,
+    }
 }
 
 /// Result of [`export`].
@@ -499,12 +544,47 @@ pub fn is_psd(bytes: &[u8]) -> bool {
     bytes.starts_with(b"8BPS")
 }
 
+/// Supported compressed input envelopes. Their magic alone does not identify the inner format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportCompression {
+    Gzip,
+    Bzip2,
+    Xz,
+}
+
+/// Cheap bounded signature classification shared by import routing, transport and background jobs.
+pub fn import_compression(bytes: &[u8]) -> Option<ImportCompression> {
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        Some(ImportCompression::Gzip)
+    } else if bytes.starts_with(b"BZh") {
+        Some(ImportCompression::Bzip2)
+    } else if bytes.starts_with(b"\xfd7zXZ\0") {
+        Some(ImportCompression::Xz)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+thread_local! { pub(crate) static COMPRESSED_DETECTOR_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// The shared detector may inflate SVGZ internally. Compressed candidates must be
+/// probed only by our bounded, cancellable transport; before that, use filename policy.
+fn central_format(name: &str, bytes: &[u8]) -> Option<photocraft_formats::Format> {
+    let bytes = if import_compression(bytes).is_some() { &[] } else { bytes };
+    #[cfg(test)]
+    if import_compression(bytes).is_some() {
+        COMPRESSED_DETECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
+    }
+    photocraft_formats::detect(name, bytes)
+}
+
 /// PSD/PSB/PSDT by magic, or by a declared Photoshop extension when no other raster
 /// signature is present. A PNG/JPEG/TIFF downloaded as `.psd` still opens from its bytes
 /// (#5258 review).
 #[cfg(test)]
 fn is_psd_input(name: &str, bytes: &[u8]) -> bool {
-    photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Psd)
+    central_format(name, bytes) == Some(photocraft_formats::Format::Psd)
 }
 
 /// How an import bounds its pixel memory before decoding pixels, for a caller that must fit
@@ -530,22 +610,11 @@ pub enum ImportPreflight {
 ///
 /// The order matches [`import_stages`]; keep the two in step.
 pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
-    match photocraft_formats::detect(name, bytes) {
-        Some(photocraft_formats::Format::Psd) => ImportPreflight::Psd,
-        Some(photocraft_formats::Format::Tiff) => ImportPreflight::Tiff,
-        Some(
-            photocraft_formats::Format::Pcraft
-            | photocraft_formats::Format::Affinity
-            | photocraft_formats::Format::Ora
-            | photocraft_formats::Format::Kra
-            | photocraft_formats::Format::Xcf
-            | photocraft_formats::Format::Pdn
-            | photocraft_formats::Format::Raw
-            | photocraft_formats::Format::Svg
-            | photocraft_formats::Format::Svgz
-            | photocraft_formats::Format::Pdf,
-        ) => ImportPreflight::Unbounded,
-        _ => ImportPreflight::Flat,
+    match route(name, bytes) {
+        Route::Psd | Route::NamedPsd => ImportPreflight::Psd,
+        Route::Tiff => ImportPreflight::Tiff,
+        Route::Flat => ImportPreflight::Flat,
+        _ => ImportPreflight::Unbounded,
     }
 }
 
@@ -577,6 +646,50 @@ pub fn import_with_svg_group_depth_and_interrupt(
     import_with_options_and_interrupt(name, bytes, &ImportOptions { max_group_depth, ..Default::default() }, ctl)
 }
 
+pub use photocraft_doc::HistoricalXcfSampleOrder;
+
+/// An explicit user decision required by a historical format ambiguity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoricalXcfSampleOrderRequest {
+    pub version: u32,
+    pub bits_per_sample: u32,
+}
+
+impl std::fmt::Display for HistoricalXcfSampleOrderRequest {
+    /// Explains why a historical XCF needs an explicit sample-order decision before import.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Historical XCF version {} with {}-bit samples does not record sample byte order; choose little-endian or big-endian sample byte order before importing",
+            self.version, self.bits_per_sample
+        )
+    }
+}
+
+/// Detect the historical choice without decoding drawable samples. Wrapped XCFs
+/// decode only the fixed header prefix; import validates the full stream. Unrelated files return None.
+pub fn historical_xcf_sample_order_request(name: &str, bytes: &[u8]) -> Result<Option<HistoricalXcfSampleOrderRequest>, IoError> {
+    historical_xcf_sample_order_request_with(name, bytes, &photocraft_raster::Interrupt::NONE)
+}
+
+/// Cancellable counterpart of [`historical_xcf_sample_order_request`].
+pub fn historical_xcf_sample_order_request_with(
+    name: &str,
+    bytes: &[u8],
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<HistoricalXcfSampleOrderRequest>, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let request = if xcf::is_xcf(bytes) {
+        xcf::historical_sample_order_request(bytes)?
+    } else if let Some(inflated) = xcf::transport::header_prefix(name, bytes, ctl)? {
+        xcf::historical_sample_order_request(&inflated)?
+    } else {
+        None
+    };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    Ok(request)
+}
+
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {
@@ -584,6 +697,9 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// Required only for multibyte development XCF7–11 samples. No default is
+    /// inferred from the current machine, file name, producer or pixel values.
+    pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
     /// Keep a developed raw's sensor data for its open-time Camera Raw dialog
     /// ([`raw::take_kept_decode`]) instead of decoding the file again there.
     pub keep_raw: bool,
@@ -615,10 +731,13 @@ pub struct ImportOptions {
 }
 
 impl Default for ImportOptions {
+    /// Uses standard native import limits and demosaicing without guessing ambiguous historical XCF sample
+    /// order.
     fn default() -> Self {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
+            historical_xcf_sample_order: None,
             keep_raw: false,
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
@@ -784,7 +903,7 @@ fn import_psd(
     *damaged = psd_damaged;
     document.name = name.to_string();
     text_import::prepare(&mut document, txt2.as_ref());
-    Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings, source_read_only: false, preview_only: false })
 }
 
 /// [`import_for_open_with`] for the file at `path`. A PSD/PSB is parsed from the open file
@@ -826,6 +945,39 @@ pub fn import_file_for_open_verified(
     ctl: &photocraft_raster::Interrupt,
     identity_out: &mut Option<FileIdentity>,
 ) -> Result<(ImportResult, bool), IoError> {
+    import_file_for_open_verified_inner(name, path, expected, opts, ctl, identity_out, None)
+}
+
+/// Verified interactive import that can return the already-read encoded source with a historical-order question.
+/// Only the bounded fixed header is inflated before asking; a later explicit-order import validates the full stream.
+/// The output is published only after rechecking the same opened handle's identity and cancellation.
+/// A returned [`IoError::HistoricalXcfSampleOrderRequired`] always supplies the exact encoded
+/// source in `historical_source_out`; hosts must keep that allocation rather than reread the path.
+#[cfg(any(unix, windows))]
+pub fn import_file_for_open_verified_with_historical_source(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    historical_source_out: &mut Option<Arc<Vec<u8>>>,
+) -> Result<(ImportResult, bool), IoError> {
+    *historical_source_out = None;
+    import_file_for_open_verified_inner(name, path, expected, opts, ctl, identity_out, Some(historical_source_out))
+}
+
+#[cfg(any(unix, windows))]
+fn import_file_for_open_verified_inner(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    historical_source_out: Option<&mut Option<Arc<Vec<u8>>>>,
+) -> Result<(ImportResult, bool), IoError> {
+    let mut historical_source = None;
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
@@ -855,7 +1007,7 @@ pub fn import_file_for_open_verified(
         // layouts, and EXR headers the band decoder refuses, are read whole below.
         let mut streamed = None;
         let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
-        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
+        if central_format(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
             let before = photocraft_raster::spill::read_error_generation();
             if let Some(mut result) = exr_native::import(&mut file, ctl)? {
                 // A rewrite in place while the blocks were read must not become the document.
@@ -874,18 +1026,30 @@ pub fn import_file_for_open_verified(
             Some(result) => Ok((result, false)),
             None => {
                 let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
-                import_for_open_with(name, &bytes, opts, ctl)
+                if historical_source_out.is_some()
+                    && opts.historical_xcf_sample_order.is_none()
+                    && let Some(question) = historical_xcf_sample_order_request_with(name, &bytes, ctl)?
+                {
+                    historical_source = Some(Arc::new(bytes));
+                    Err(IoError::HistoricalXcfSampleOrderRequired(question))
+                } else {
+                    import_for_open_with(name, &bytes, opts, ctl)
+                }
             }
         }
     };
     // An approval pause must describe a file that still has the identity it was estimated with;
     // an approved resume must have decoded that file, not a rewrite that raced the decode.
-    if expected.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. })) {
+    if expected.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. } | IoError::HistoricalXcfSampleOrderRequired(_))) {
         let after = FileIdentity::of_handle(&watch).map_err(read_failed)?;
         if after != identity {
             return Err(IoError::SourceChanged);
         }
         *identity_out = Some(after);
+    }
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if let Some(output) = historical_source_out {
+        *output = historical_source;
     }
     result
 }
@@ -938,10 +1102,13 @@ pub(crate) enum Route {
     Ora,
     Kra,
     Xcf,
-    GzippedXcf,
     Pdn,
     Raw,
     Svg,
+    Pdf,
+    Tiff,
+    /// A supported envelope whose inner format must be probed by the bounded transport reader.
+    Compressed,
     /// A `.psd`/`.psb`/`.psdt` with no raster signature.
     NamedPsd,
     /// A flat raster format, through the codecs.
@@ -950,18 +1117,26 @@ pub(crate) enum Route {
 
 /// Which importer takes the file `name` holding `bytes`. The checks run in this order.
 pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
-    match photocraft_formats::detect(name, bytes) {
+    if import_compression(bytes).is_some() {
+        return Route::Compressed;
+    }
+    detected_route(name, bytes)
+}
+
+fn detected_route(name: &str, bytes: &[u8]) -> Route {
+    match central_format(name, bytes) {
         Some(photocraft_formats::Format::Pcraft) => Route::Pcraft,
         Some(photocraft_formats::Format::Psd) if is_psd(bytes) => Route::Psd,
         Some(photocraft_formats::Format::Psd) => Route::NamedPsd,
         Some(photocraft_formats::Format::Affinity) => Route::Affinity,
         Some(photocraft_formats::Format::Ora) => Route::Ora,
         Some(photocraft_formats::Format::Kra) => Route::Kra,
-        Some(photocraft_formats::Format::Xcf) if xcf::is_gzipped_xcf(name, bytes) => Route::GzippedXcf,
         Some(photocraft_formats::Format::Xcf) => Route::Xcf,
         Some(photocraft_formats::Format::Pdn) => Route::Pdn,
         Some(photocraft_formats::Format::Raw) => Route::Raw,
         Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz) => Route::Svg,
+        Some(photocraft_formats::Format::Pdf) => Route::Pdf,
+        Some(photocraft_formats::Format::Tiff) => Route::Tiff,
         _ => Route::Flat,
     }
 }
@@ -978,10 +1153,8 @@ fn route_forced(ext: &str) -> Route {
         Route::Ora
     } else if kra::EXTENSIONS.contains(&ext.as_str()) {
         Route::Kra
-    } else if ext == "xcf" {
+    } else if matches!(ext.as_str(), "xcf" | "xcf.gz" | "xcfgz" | "xcf.bz2" | "xcfbz2" | "xcf.xz" | "xcfxz") {
         Route::Xcf
-    } else if matches!(ext.as_str(), "xcf.gz" | "xcfgz") {
-        Route::GzippedXcf
     } else if ext == "pdn" {
         Route::Pdn
     } else if ext == "raw" || raw::EXTENSIONS.contains(&ext.as_str()) {
@@ -1003,36 +1176,44 @@ fn import_stages(
     opts: &ImportOptions,
     damaged: &mut bool,
 ) -> Result<ImportResult, IoError> {
-    let selected = if let Some(ext) = as_ext {
+    let mut selected = if let Some(ext) = as_ext {
         let ext = ext.trim_start_matches('.').to_ascii_lowercase();
         if matches!(ext.as_str(), "pdf" | "ai") {
             return pdf_import::import(name, bytes, opts, ctl);
         }
         route_forced(&ext)
     } else {
-        // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
-        // before PDF).
-        if is_svg_input(name, bytes) {
-            return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
-        }
-        // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
-        // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
-        if photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Pdf) {
-            return pdf_import::import(name, bytes, opts, ctl);
-        }
         route(name, bytes)
     };
+    // Only an automatic route may change format after probing. Forced Open As keeps
+    // precedence, while explicitly forcing XCF still accepts its supported envelopes.
+    let decoded = if selected == Route::Compressed || (selected == Route::Xcf && import_compression(bytes).is_some()) {
+        // The shared detector deliberately prioritizes the explicit .af alias over
+        // SVG sniffing. Keep that policy while still letting actual XCF magic win.
+        let affinity_alias = name.rsplit(['/', '\\']).next().and_then(|name| name.rsplit_once('.')).is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("af"));
+        let svg = selected == Route::Compressed && !affinity_alias;
+        let decoded = xcf::transport::decode_import(name, bytes, ctl, svg)?;
+        selected = match &decoded {
+            Some(value) if value.is_xcf => Route::Xcf,
+            Some(_) => Route::Svg,
+            None if selected == Route::Compressed => detected_route(name, bytes),
+            None => selected,
+        };
+        decoded
+    } else {
+        None
+    };
+    let bytes = decoded.as_ref().map_or(bytes, |value| value.bytes.as_slice());
     match selected {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
-            Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
+            Ok(ImportResult { initial_view: None, warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
         Route::Affinity => affinity::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
-        Route::Xcf => xcf::import(name, bytes, ctl),
-        Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
+        Route::Xcf => xcf::import_with_sample_order(name, bytes, opts.historical_xcf_sample_order, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => {
             if opts.keep_raw {
@@ -1042,7 +1223,9 @@ fn import_stages(
             }
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
-        Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
+        Route::Pdf => pdf_import::import(name, bytes, opts, ctl),
+        Route::Flat | Route::Tiff => flat::import_flat_with_options(name, bytes, opts, ctl),
+        Route::Compressed => Err(IoError::Unsupported("compressed import format was not resolved".into())),
     }
 }
 
@@ -1050,7 +1233,7 @@ fn import_stages(
 /// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
 /// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
 pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
-    matches!(photocraft_formats::detect(name, bytes), Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz))
+    matches!(central_format(name, bytes), Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz))
 }
 
 fn extension(name_or_ext: &str) -> String {
@@ -1134,7 +1317,7 @@ fn checked_stages(
     let mut renderer = renderer;
     // `as_deref_mut` would tie the trait object's lifetime to this function's; the closure shortens it.
     #[allow(clippy::option_as_ref_deref)]
-    let r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
+    let mut r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
     if let Err(e) = photocraft_raster::spill::check_since(scratch_generation)
         .map_err(IoError::Unsupported)
         .and_then(|()| doc.scratch_health().map_err(IoError::Unsupported))
@@ -1147,6 +1330,9 @@ fn checked_stages(
             }
         }
         return Err(e);
+    }
+    if import_report_needs_notice(doc) && extension(name_or_ext) != photocraft_format::EXTENSION {
+        r.warnings.push("the import conversion report and retained source configuration are not exported in this format; save as .pcraft to keep them".into());
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)
@@ -1433,6 +1619,12 @@ mod tests {
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
+        // Wrapper probing happens before suffix dispatch, without inflating data here.
+        for prefix in [&b"\x1f\x8b"[..], &b"BZh"[..], &b"\xfd7zXZ\0"[..]] {
+            for name in ["x.data", "misnamed.psd", "x.xcf.gz", "x.xcf.bz2", "x.xcf.xz"] {
+                assert_eq!(import_preflight(name, prefix), ImportPreflight::Unbounded);
+            }
+        }
     }
 
     /// Verifies a valid PSD remains editable after import.
@@ -1630,7 +1822,7 @@ mod tests {
         assert!(!is_svg_input("drawing.svg", pdf));
         assert!(!is_svg_input("drawing.svgz", pdf));
         assert!(is_svg_input("drawing.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
-        assert_eq!(crate::route("drawing.svg", pdf), crate::Route::Flat);
+        assert_eq!(crate::route("drawing.svg", pdf), crate::Route::Pdf);
     }
 
     /// `.ai` files that start with `%PDF-` are PDFs: both preflight and dispatch send them to the
@@ -1667,3 +1859,9 @@ mod tests {
         assert_eq!(result.document.artboards().len(), 1);
     }
 }
+
+#[cfg(all(test, any(unix, windows)))]
+mod historical_source_tests;
+
+#[cfg(test)]
+mod import_report_warning_tests;

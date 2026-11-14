@@ -273,6 +273,8 @@ fn preview(name: &str, archive: &mut craft_kra::Archive<'_>, why: String) -> Res
     Ok(result)
 }
 
+/// Validate the Krita archive and bounded canvas, then import supported native layers, profile and resolution.
+/// Unsupported color spaces use preview fallback, and the original document remains read only.
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
     let mut archive = craft_kra::Archive::open(bytes).map_err(map_error)?;
     let image = archive.image().clone();
@@ -300,5 +302,5 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if image.assistants || image.reference_images {
         reader.warnings.note("drawing assistants and reference images were left out");
     }
-    Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false })
 }

@@ -1,8 +1,8 @@
 # GIMP XCF documents
 
-PhotoCraft opens GIMP's native `.xcf` files (and `.xcf.gz`) with their layers, read only. File ›
+PhotoCraft opens GIMP's native `.xcf` files, including gzip, bzip2 and XZ wrappers, with their layers, read only. File ›
 Open, recent files, drops, the CLI (`convert`, `info`, `batch`) and automation (`doc.open`, MCP)
-use the same import in `photocraft-io` (`crates/io/src/xcf.rs`), on craft-libs' `craft-xcf` reader. A file is recognised by its
+use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This adapter retains the precision, metadata and editable-content decoder while the other format adapters use shared craft-libs readers. A file is recognised by its
 `gimp xcf ` signature, so an XCF with another extension still opens as one. Save suggests
 `.pcraft`, which keeps everything PhotoCraft holds; exporting as `.xcf` fails with a message.
 
@@ -21,13 +21,12 @@ use the same import in `photocraft-io` (`crates/io/src/xcf.rs`), on craft-libs' 
 | Colour profile (`icc-profile` parasite), resolution, guides, comment | yes |
 | Grayscale, RGB | as such; indexed images open as RGB |
 | Extra channels, the saved selection | yes (alpha channels, the selection) |
-| Text, vector and link layers | as their pixels, with a note |
-| Compression | none, RLE, zlib |
+| Text and vector layers | supported records become editable native content; other records keep usable saved pixels and a conversion report |
+| Linked content | inert references and saved pixels; external resources are not fetched |
+| Compression | none, RLE, zlib; gzip, bzip2 and XZ transport wrappers |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
-Not kept, each with a note on open: non-destructive layer effects (GIMP 3's layer filters; the
-layer opens unfiltered), paths, floating selections, item sets, sample points. Layer effects are
-not representable without GEGL's operations; paths could follow later.
+Saved paths, guides and supported editing-view selections are imported. Floating pixels remain separate raster layers. Unsupported layer effects and optional records are disclosed in the conversion report. Retention limits omit optional data while preserving usable pixels; structural and pixel allocation limits still reject unsafe inputs.
 
 ## Blend modes
 

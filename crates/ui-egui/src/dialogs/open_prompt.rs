@@ -21,8 +21,10 @@ const DAMAGE_FIELD: &str = "__psdDamagedOpen";
 /// A file read and decoded, waiting to open.
 pub struct Held {
     pub doc: Document,
-    /// The source is read-only (an Affinity file): Save doesn't write back to it.
+    /// The decoder marks this source read-only: Save does not write back to it.
     pub read_only: bool,
+    /// Applied once, only after this pending document is admitted.
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
     /// Ask whether to continue before adding a damaged PSD or showing its profile prompt.
     /// Discarded after the answer: it does not become a document or save restriction.
     pub damage_pending: bool,
@@ -56,6 +58,9 @@ pub const MEMORY_FIELD: &str = "__psdMemoryOpen";
 pub(crate) enum PromptKind {
     Memory,
     Open,
+    Historical(u64),
+    Replacement(u64),
+    Resuming(u64),
 }
 
 /// An un-decoded PSD file whose preflight estimate requires user approval.
@@ -78,7 +83,7 @@ pub struct MemoryPrompt {
 
 /// Whether a file that just finished reading has to wait: one earlier in the queue does.
 pub fn waiting(app: &PhotocraftApp) -> bool {
-    !app.held_opens.is_empty() || !app.held_memory_prompts.is_empty()
+    !app.held_opens.is_empty() || !app.held_memory_prompts.is_empty() || !app.historical_opens.is_empty() || !app.historical_replacements.is_empty()
 }
 
 /// Opens `held` now, or queues it behind the file whose prompt is up.
@@ -88,9 +93,26 @@ pub fn arrive(app: &mut PhotocraftApp, held: Held) {
     advance(app);
 }
 
+/// Preserve synchronous File › Open errors when no earlier file or question delays admission.
+/// Deferred opens report their eventual failure through the existing queue notices.
+pub(crate) fn arrive_checked(app: &mut PhotocraftApp, held: Held) -> Result<(), String> {
+    if !waiting(app) && app.prompt_order.is_empty() && !has_open_dialog(app) && !held.damage_pending && held.question.is_none() {
+        open(app, held, None).map(|_| ())
+    } else {
+        arrive(app, held);
+        Ok(())
+    }
+}
+
 /// Whether any open prompt (damage, profile or high-memory) is currently on screen.
 pub fn has_open_dialog(app: &PhotocraftApp) -> bool {
-    app.ui.dialogs.iter().any(|d| owns(&d.fields) || owns_damage(&d.fields) || owns_memory(&d.fields))
+    app.ui.dialogs.iter().any(|d| {
+        owns(&d.fields)
+            || owns_damage(&d.fields)
+            || owns_memory(&d.fields)
+            || super::historical_xcf::owns(&d.fields)
+            || super::historical_replace::owns(&d.fields)
+    })
 }
 
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
@@ -106,6 +128,17 @@ pub fn advance(app: &mut PhotocraftApp) {
     loop {
         match app.prompt_order.front() {
             None => return,
+            Some(PromptKind::Historical(id)) => {
+                let id = *id;
+                super::historical_xcf::show(app, id);
+                return;
+            }
+            Some(PromptKind::Replacement(id)) => {
+                let id = *id;
+                super::historical_replace::show(app, id);
+                return;
+            }
+            Some(PromptKind::Resuming(_)) => return,
             Some(PromptKind::Memory) => {
                 if let Some(front) = app.held_memory_prompts.front().cloned() {
                     show_memory(app, &front);
@@ -132,7 +165,10 @@ pub fn advance(app: &mut PhotocraftApp) {
                     continue;
                 };
                 app.prompt_order.pop_front();
-                let _ = open(app, held, None);
+                let name = held.name.clone();
+                if let Err(error) = open(app, held, None) {
+                    app.open_failed(&name, &error);
+                }
                 if has_open_dialog(app) {
                     return;
                 }
@@ -140,6 +176,9 @@ pub fn advance(app: &mut PhotocraftApp) {
         }
     }
 }
+
+#[cfg(test)]
+mod error_tests;
 
 /// Shows the Embedded Profile Mismatch (or missing profile) prompt for the first queued file.
 fn show(app: &mut PhotocraftApp) {
@@ -192,16 +231,21 @@ pub fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 /// The prompt's answer: `Some(action)` (OK) opens the first queued file with it and moves on to
 /// the next; `None` (Cancel) drops every queued file and stops the reads still running.
 pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, String> {
+    if action.is_some() && matches!(app.prompt_order.front(), Some(PromptKind::Historical(_) | PromptKind::Resuming(_) | PromptKind::Replacement(_))) {
+        return Err("answer the historical XCF choice first".into());
+    }
     if app.held_opens.front().is_some_and(|h| h.damage_pending) {
         return Err("answer the damaged PSD confirmation first".into());
     }
     let Some(action) = action else {
-        let dropped = app.held_opens.len() + app.held_memory_prompts.len();
+        let dropped = app.held_opens.len() + app.held_memory_prompts.len() + app.historical_opens.len() + app.historical_replacements.len();
         let name = app.held_opens.front().map(|h| h.name.clone()).or_else(|| app.held_memory_prompts.front().map(|m| m.name.clone())).unwrap_or_default();
         for m in app.held_memory_prompts.drain(..) {
             app.session.cancel_pending_preflight(m.id);
         }
         app.session.clear_pending_preflights();
+        super::historical_xcf::cancel_all(app);
+        super::historical_replace::cancel_all(app);
         app.held_opens.clear();
         app.prompt_order.clear();
         for job in app.jobs.opens.iter().map(|o| o.job).collect::<Vec<_>>() {
@@ -209,7 +253,13 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         }
         app.jobs.opens.clear();
         app.jobs.batches.clear();
-        app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields));
+        app.ui.dialogs.retain(|d| {
+            !owns(&d.fields)
+                && !owns_damage(&d.fields)
+                && !owns_memory(&d.fields)
+                && !super::historical_xcf::owns(&d.fields)
+                && !super::historical_replace::owns(&d.fields)
+        });
         app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
         return Ok(json!({"cancelled": dropped}));
@@ -229,6 +279,9 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
 /// already waiting with a mismatch in the same mode were asked before that and get the same
 /// answer; any other question still asks.
 pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value, String> {
+    if matches!(app.prompt_order.front(), Some(PromptKind::Historical(_) | PromptKind::Resuming(_) | PromptKind::Replacement(_))) {
+        return Err("answer the historical XCF choice first".into());
+    }
     if app.held_opens.front().is_some_and(|h| h.damage_pending) {
         return Err("answer the damaged PSD confirmation first".into());
     }
@@ -326,29 +379,35 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if held.damage_pending {
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
-    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, order, question, policy_applied, smart_object } = held;
-    let index = if question.is_some() || policy_applied {
-        if let Some(action) = action
-            && let Err(e) = app.session.color.resolve_open(&mut doc, action)
-        {
-            app.open_failed(&name, &e.to_string());
-            return Err(e.to_string());
-        }
-        if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc) } else { app.session.add_document(doc, None) }
-    } else if smart_object {
-        // A damage-only hold has no colour question: apply the policy as the engine's open does,
-        // then admit it as the smart object document it is (name, history label, snapshot).
-        let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
-        app.session.color.open_policy(&mut doc, ignore_exif);
-        photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
-    } else {
-        app.session.open_document(doc, None).0
-    };
+    let Held { mut doc, read_only, initial_view, damage_pending: _, name, path, mut warnings, bytes, slot, order, question, policy_applied, smart_object } =
+        held;
+    if (question.is_some() || policy_applied)
+        && let Some(action) = action
+        && let Err(e) = app.session.color.resolve_open(&mut doc, action)
+    {
+        app.open_failed(&name, &e.to_string());
+        return Err(e.to_string());
+    }
+    let (index, (), view_warning) = app
+        .session
+        .admit_import_with_initial_view(read_only, initial_view, |session| {
+            let index = if question.is_some() || policy_applied {
+                if smart_object { photocraft_engine::file_cmds::admit_as_smart_object(session, doc) } else { session.add_document(doc, None) }
+            } else if smart_object {
+                // A damage-only hold has no colour question: apply the policy as the engine's open does,
+                // then admit it as the smart object document it is (name, history label, snapshot).
+                let ignore_exif = session.prefs().file_handling.ignore_exif_profile_tag;
+                session.color.open_policy(&mut doc, ignore_exif);
+                photocraft_engine::file_cmds::admit_as_smart_object(session, doc)
+            } else {
+                session.open_document(doc, None).0
+            };
+            (index, ())
+        })
+        .map_err(|error| error.to_string())?;
+    warnings.extend(view_warning);
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;
-    if let Some(st) = app.session.active_mut() {
-        st.source_read_only = read_only;
-    }
     let slot = crate::jobs_ui::tab_slot(app, slot, order);
     let index = match slot {
         Some(slot) => app

@@ -762,9 +762,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation = self::automation(automation);
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
-            crate::crash_guard::guard("Open", || {
-                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-            })
+            crate::crash_guard::guard("Open", || photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let opts = export_options(settings);

@@ -1,0 +1,293 @@
+//! Optional source metadata translated into ordinary native data and one-time view hints.
+//! Wire fields follow the public XCF property layout; source-only settings stay inert.
+
+use photocraft_color::Color;
+use photocraft_doc::{AlphaChannel, ColorIndicates, Document};
+
+use super::{Prop, Result, be_f32, be_i32, be_u32, conversion, parasites};
+use crate::initial_view::{MAX_INITIAL_SAMPLERS, NativeInitialView};
+
+#[cfg(test)]
+mod resolution_review_tests;
+
+/// Decode the last matching metadata property as an unsigned word; malformed payloads yield no value.
+fn word(props: &[Prop<'_>], kind: u32) -> Option<u32> {
+    props.iter().rev().find(|p| p.kind == kind).and_then(|p| be_u32(p.data))
+}
+
+/// Validate both source axes together; a malformed optional pair cannot change native DPI.
+fn resolution_pair(data: &[u8]) -> Option<(f32, f32)> {
+    be_f32(data).zip(data.get(4..).and_then(be_f32)).filter(|(x, y)| [*x, *y].iter().all(|axis| axis.is_finite() && *axis > 0.0 && *axis < 1.0e6))
+}
+
+/// Source properties apply in order: the last valid pair wins, while invalid pairs leave the earlier DPI intact.
+/// Text decoding and document metadata must share this final resolution and validation policy.
+pub(super) fn image_resolution(props: &[Prop<'_>], fallback: f32) -> f32 {
+    effective_resolution(props).map(|(x, _)| x).unwrap_or(fallback)
+}
+
+/// Resolve the same final valid pair for native DPI and its physical-size warning.
+fn effective_resolution(props: &[Prop<'_>]) -> Option<(f32, f32)> {
+    props.iter().filter(|property| property.kind == 19).filter_map(|property| resolution_pair(property.data)).next_back()
+}
+
+/// PROP_UNIT controls source dialog display only; documented physical units do not change native DPI.
+pub(super) fn unit_reason(data: &[u8]) -> photocraft_doc::import_conversion::ConversionReason {
+    use photocraft_doc::import_conversion::ConversionReason as Reason;
+    if data.len() != 4 {
+        Reason::InvalidOptionalData
+    } else if be_u32(data).is_some_and(|unit| (1..=4).contains(&unit)) {
+        Reason::NativePolicy
+    } else {
+        Reason::NativeLimitation
+    }
+}
+
+/// Channel colours are explicitly stored as nonlinear RGB, independently of image precision.
+/// This is the same RGB colour value used by native channel overlays, not document samples.
+pub(super) fn channel_overlay(channel: &mut AlphaChannel, props: &[Prop<'_>]) -> Vec<u32> {
+    let mut handled = Vec::new();
+    if let Some(p) = props.iter().rev().find(|p| p.kind == 16)
+        && let Some(&[r, g, b]) = p.data.as_array::<3>()
+    {
+        channel.color = Color::rgb(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
+        handled.push(16);
+    }
+    // A valid float property takes precedence over the compatibility byte property.
+    if let Some(p) = props.iter().rev().find(|p| p.kind == 38)
+        && p.data.len() == 12
+    {
+        let rgb = be_f32(p.data).zip(p.data.get(4..).and_then(be_f32)).zip(p.data.get(8..).and_then(be_f32));
+        if let Some(((r, g), b)) = rgb.filter(|&((r, g), b)| [r, g, b].iter().all(|c| c.is_finite())) {
+            channel.color = Color::rgb(r, g, b);
+            handled.push(38);
+        }
+    }
+    if let Some(v) = word(props, 6).filter(|v| *v <= 255) {
+        channel.opacity = v as f32 / 255.0;
+        handled.push(6);
+    }
+    if let Some(v) = props.iter().rev().find(|p| p.kind == 33).and_then(|p| be_f32(p.data)).filter(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
+        channel.opacity = v;
+        handled.push(33);
+    }
+    if let Some(v) = word(props, 14).filter(|v| *v <= 1) {
+        channel.indicates = if v == 0 { ColorIndicates::SelectedAreas } else { ColorIndicates::MaskedAreas };
+        handled.push(14);
+    }
+    handled
+}
+
+/// Recognize a source active-item marker only when its declared payload is empty.
+pub(super) fn active(props: &[Prop<'_>], kind: u32) -> bool {
+    props.iter().any(|p| p.kind == kind && p.data.is_empty())
+}
+
+/// Interpret the last decodable metadata word as a nonzero flag without inventing an absent value.
+pub(super) fn flag(props: &[Prop<'_>], kind: u32) -> bool {
+    word(props, kind).is_some_and(|v| v != 0)
+}
+
+/// Map native document metadata without changing native DPI, unit, guide or sampler semantics.
+#[allow(clippy::too_many_arguments)] // One reader-owned set of bounded outputs, without a new persistent model.
+pub(super) fn image<'a>(
+    doc: &mut Document,
+    props: &[Prop<'a>],
+    version: u32,
+    view: &mut NativeInitialView,
+    outcomes: &mut conversion::Outcomes<'a>,
+    owner: usize,
+    budget: &mut usize,
+    warnings: &mut crate::ora::Warnings,
+) -> Result<()> {
+    use photocraft_doc::import_conversion::ConversionReason as Reason;
+    doc.resolution_dpi = image_resolution(props, doc.resolution_dpi);
+    // Only the effective pair describes the admitted document's physical size.
+    // This warning must survive optional report truncation and invalid trailing pairs.
+    if let Some((x, y)) = effective_resolution(props)
+        && let Some(warning) = crate::unequal_resolution_warning(f64::from(x), f64::from(y))
+    {
+        warnings.note(&warning);
+    }
+    let mut metadata_incomplete = false;
+    for p in props {
+        match p.kind {
+            18 => {
+                let (guides, tail) = p.data.as_chunks::<5>();
+                let mut skipped = !tail.is_empty();
+                let mut limited = false;
+                for &[a, b, c, d, orientation] in guides {
+                    let position = i32::from_be_bytes([a, b, c, d]);
+                    let limit = match orientation {
+                        1 => doc.size.height,
+                        2 => doc.size.width,
+                        _ => {
+                            skipped = true;
+                            continue;
+                        }
+                    };
+                    if version < 15 && (position < 0 || i64::from(position) > i64::from(limit)) {
+                        skipped = true;
+                        continue;
+                    }
+                    if !charge(budget, 8) {
+                        skipped = true;
+                        limited = true;
+                        break;
+                    }
+                    let target = if orientation == 1 { &mut doc.guides.horizontal } else { &mut doc.guides.vertical };
+                    target.push(f64::from(position));
+                }
+                if skipped {
+                    outcomes.detail(
+                        owner,
+                        "xcf.guides",
+                        if limited { Reason::RetentionLimit } else { Reason::InvalidOptionalData },
+                        "Unknown/truncated guides, legacy off-canvas positions or metadata allowance exceeded".into(),
+                        "Documented valid native guide positions imported within allowance; raw source property retained within report limits".into(),
+                    )?;
+                }
+            }
+            19 => {
+                if let Some((x, y)) = resolution_pair(p.data) {
+                    if x != y {
+                        outcomes.detail(
+                            owner,
+                            "xcf.resolution",
+                            Reason::NativeLimitation,
+                            format!("Horizontal {x} DPI; vertical {y} DPI"),
+                            "Native document uses horizontal DPI for both axes; source axis values retained".into(),
+                        )?;
+                    }
+                } else {
+                    outcomes.detail(
+                        owner,
+                        "xcf.resolution",
+                        Reason::InvalidOptionalData,
+                        "Invalid or truncated source resolution".into(),
+                        "Existing native DPI retained; source property remains inert".into(),
+                    )?;
+                }
+            }
+            22 if unit_reason(p.data) == Reason::NativePolicy => {}
+            22 | 24 => {
+                outcomes.detail(
+                    owner,
+                    "xcf.unit",
+                    if p.kind == 22 { unit_reason(p.data) } else { Reason::NativeLimitation },
+                    "Source image display unit or custom unit definition".into(),
+                    "Native document has no per-document unit; native ruler and DPI semantics retained".into(),
+                )?;
+            }
+            21 => {
+                for (name, data) in parasites(p.data) {
+                    match name.as_str() {
+                        "gimp-comment" => {
+                            if let Ok(text) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(&data))
+                                && !text.is_empty()
+                            {
+                                metadata_incomplete |= !push_text(doc, "Comment", text, budget);
+                            }
+                        }
+                        "exif-data" => {
+                            let raw = data.strip_prefix(b"Exif\0\0").unwrap_or(&data);
+                            // Native EXIF is a TIFF payload. Other legacy container layouts stay inert.
+                            if raw.starts_with(b"II\x2a\0") || raw.starts_with(b"MM\0\x2a") {
+                                if charge(budget, raw.len()) {
+                                    doc.metadata.exif = Some(std::sync::Arc::new(raw.to_vec()));
+                                } else {
+                                    metadata_incomplete = true;
+                                }
+                            }
+                        }
+                        "gimp-image-metadata" | "gimp-metadata" => {
+                            if let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(&data))
+                                && let Ok(tree) = parse_xml(xml)
+                                && tree.root_element().has_tag_name("metadata")
+                            {
+                                for node in tree.root_element().children().filter(|n| n.has_tag_name("tag")) {
+                                    if node.attribute("encoding").is_some() {
+                                        metadata_incomplete = true;
+                                        continue;
+                                    }
+                                    if let (Some(key), Some(value)) = (node.attribute("name"), node.text())
+                                        && matches!(key.split('.').next(), Some("Exif" | "Xmp" | "Iptc"))
+                                    {
+                                        metadata_incomplete |= !push_text(doc, key, value, budget);
+                                    }
+                                }
+                                let packets = super::metadata_packets::translate(doc, &tree, budget);
+                                outcomes.detail(owner, "xcf.metadata", Reason::NativePolicy,
+                                    "Serialized source EXIF/XMP/IPTC tag values".into(),
+                                    format!("Plain tags retained as native image text. Known unambiguous schema fields translated into native XMP packet: {}; native EXIF packet: {}. Existing raw packets take priority. Unknown, binary or ambiguous source structures remain inert; full packet equivalence is not claimed", packets.0, packets.1))?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if metadata_incomplete {
+        outcomes.detail(
+            owner,
+            "xcf.metadata_partial",
+            Reason::MissingMapping,
+            "Source binary/oversized metadata tags or shared native metadata allowance exceeded".into(),
+            "Representable plain tags imported within native allowance; remaining source metadata retained inert subject to report limits".into(),
+        )?;
+    }
+    // New records take precedence over compatibility old records regardless of property order.
+    let modern = props.iter().rev().find(|p| p.kind == 39);
+    let samples = modern.or_else(|| props.iter().rev().find(|p| p.kind == 27));
+    if let Some(p) = samples {
+        let stride = if p.kind == 39 { 20 } else { 8 };
+        for record in p.data.chunks_exact(stride) {
+            if let Some((x, y)) = be_i32(record).zip(record.get(4..).and_then(be_i32))
+                && x >= 0
+                && y >= 0
+                && (x as u32) < doc.size.width
+                && (y as u32) < doc.size.height
+                && view.samplers.len() < MAX_INITIAL_SAMPLERS
+            {
+                view.samplers.push([f64::from(x), f64::from(y)]);
+            }
+        }
+        outcomes.detail(
+            owner,
+            "xcf.sample_points",
+            Reason::NativeLimitation,
+            "Source sample positions, pick modes and padding; original records retained inert".into(),
+            format!(
+                "{} valid positions handed to session-only native samplers (capacity 10); native sampling modes/history/save rules apply",
+                view.samplers.len()
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// Parse bounded optional metadata XML with the parser defaults that reject DTD processing.
+fn parse_xml(xml: &str) -> std::result::Result<roxmltree::Document<'_>, roxmltree::Error> {
+    roxmltree::Document::parse_with_options(xml, roxmltree::ParsingOptions { nodes_limit: 4096, ..Default::default() })
+}
+
+/// Debit optional metadata bytes only when the complete requested amount fits.
+fn charge(budget: &mut usize, amount: usize) -> bool {
+    let Some(remaining) = budget.checked_sub(amount) else {
+        return false;
+    };
+    *budget = remaining;
+    true
+}
+
+/// Append a bounded native text-metadata entry while preserving meaningful duplicate values and shared-budget accounting.
+fn push_text(doc: &mut Document, key: &str, value: &str, budget: &mut usize) -> bool {
+    if key.len() > super::MAX_STRING || value.len() > super::MAX_STRING || !charge(budget, key.len().saturating_add(value.len())) {
+        return false;
+    }
+    // Duplicate tag values are meaningful (XMP bags, sequences and language alternatives).
+    doc.metadata.text.push((key.to_owned(), value.to_owned()));
+    true
+}

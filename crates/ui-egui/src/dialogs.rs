@@ -304,11 +304,25 @@ fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
     }
 }
 
+fn opening_prompt(fields: &Fields) -> bool {
+    historical_replace::owns(fields) || historical_xcf::owns(fields) || crate::open_prompt::owns_memory(fields) || crate::open_prompt::owns_damage(fields)
+}
+
+/// Called only for opening_prompt fields; keep their existing routing priority.
+fn opening_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
+    if historical_replace::owns(fields) || historical_xcf::owns(fields) {
+        historical_xcf::body(ui, fields);
+    } else if crate::open_prompt::owns_memory(fields) {
+        crate::open_prompt::memory_body(ui, fields);
+    } else {
+        crate::open_prompt::damage_body(ui, fields);
+    }
+}
+
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
-        _ if crate::open_prompt::owns_memory(fields) => crate::open_prompt::memory_body(ui, fields),
-        _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
+        _ if opening_prompt(fields) => opening_prompt_body(ui, fields),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
         _ if crate::fill_ui::owns(fields) => crate::fill_ui::body(app, ui, fields),
@@ -489,7 +503,11 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && merge_channels_ui::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && merge_channels_ui::can_confirm(fields)
+            && historical_xcf::can_confirm(fields)
+            && historical_replace::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -1078,6 +1096,12 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
 /// Equalize checks its document, layer and selection. A rejected preset choice leaves the prompt
 /// and its pending import available for retry.
 pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    if let Some(dialog) = app.ui.dialogs.iter().find(|dialog| dialog.id == id && historical_replace::owns(&dialog.fields)) {
+        historical_replace::validate(app, &dialog.fields)?;
+    }
+    if let Some(dialog) = app.ui.dialogs.iter().find(|dialog| dialog.id == id && historical_xcf::owns(&dialog.fields)) {
+        historical_xcf::validate(app, &dialog.fields)?;
+    }
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
@@ -1115,6 +1139,19 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     Ok(())
 }
 
+/// Called only for opening_prompt fields, after the normal dialog preflight.
+fn confirm_opening_prompt(app: &mut PhotocraftApp, fields: &Fields) -> Result<Value, String> {
+    if historical_replace::owns(fields) {
+        historical_replace::answer(app, fields, true)
+    } else if historical_xcf::owns(fields) {
+        historical_xcf::answer(app, fields, true)
+    } else if crate::open_prompt::owns_memory(fields) {
+        crate::open_prompt::answer_memory(app, true)
+    } else {
+        crate::open_prompt::answer_damage(app, true)
+    }
+}
+
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 /// Confirm a command dialog through the first handler whose marker its fields carry; the prompts
 /// and small editors are here, the rest in `confirm_command_more`.
@@ -1126,8 +1163,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         return crate::actions::menu_item::confirm(app, d.id, &d.fields);
     }
     match d.kind {
-        _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),
-        _ if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
+        _ if opening_prompt(&d.fields) => confirm_opening_prompt(app, &d.fields),
         _ if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         _ if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
         _ if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
@@ -1237,7 +1273,11 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }
     // Cancel on a profile prompt opens neither its file nor the ones still to come.
-    if crate::open_prompt::owns_memory(&closed.fields) {
+    if historical_replace::owns(&closed.fields) {
+        historical_replace::answer(app, &closed.fields, false)?;
+    } else if historical_xcf::owns(&closed.fields) {
+        historical_xcf::answer(app, &closed.fields, false)?;
+    } else if crate::open_prompt::owns_memory(&closed.fields) {
         crate::open_prompt::answer_memory(app, false)?;
     } else if crate::open_prompt::owns_damage(&closed.fields) {
         crate::open_prompt::answer_damage(app, false)?;
@@ -1337,6 +1377,8 @@ mod fit_image_range_tests;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
+pub(crate) mod historical_replace;
+pub(crate) mod historical_xcf;
 pub mod history_options_ui;
 mod image_processor_ui;
 pub mod jpeg_options_ui;

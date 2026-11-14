@@ -600,6 +600,7 @@ fn a_linked_fifo_is_not_read() {
     let mut doc = document(8, 6);
     let smart = photocraft_doc::SmartObject {
         contents_id: SmartContentsId::fresh(),
+        historical_xcf_sample_order: None,
         source: photocraft_doc::SmartSource::Linked { path: fifo.to_string_lossy().into_owned() },
         transform: photocraft_geom::Affine::IDENTITY,
         smart_filters: vec![],

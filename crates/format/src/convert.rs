@@ -179,6 +179,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
             },
+            historical_xcf_sample_order: s.historical_xcf_sample_order,
             vector_preview: s.vector_preview.as_ref().map(|preview| VectorPreviewM { source_hash: preview.source_hash, svg: sink.blob(&preview.svg) }),
             transform: s.transform,
             smart_filters: s.smart_filters.clone(),
@@ -516,6 +517,7 @@ impl Loader<'_> {
             ContentM::Smart {
                 contents_id,
                 source,
+                historical_xcf_sample_order,
                 vector_preview,
                 transform,
                 smart_filters,
@@ -532,6 +534,7 @@ impl Loader<'_> {
                     SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
                     SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
                 },
+                historical_xcf_sample_order: *historical_xcf_sample_order,
                 vector_preview: match vector_preview {
                     // A display-only preview must not prevent recovery of the native source
                     // and cached pixels if its optional blob is missing or damaged.

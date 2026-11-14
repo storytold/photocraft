@@ -87,7 +87,7 @@ pub(super) fn list_files(dir: &str, _include_non_images: bool) -> Result<Vec<Str
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
-    lower.ends_with(".xcf.gz")
+    [".xcf.gz", ".xcf.bz2", ".xcf.xz"].iter().any(|suffix| lower.ends_with(suffix))
         || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read))
 }
 
@@ -346,4 +346,17 @@ pub(crate) fn is_windows_device_name(component: &str) -> bool {
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
         || stem.strip_prefix("COM").is_some_and(port)
         || stem.strip_prefix("LPT").is_some_and(port)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod xcf_compound_suffix_tests {
+    #[test]
+    fn batch_openable_names_require_xcf_compounds_for_compressed_inputs() {
+        for name in ["/in/pixel.xcf", "/in/pixel.xcfgz", "/in/pixel.xcf.gz", "/in/pixel.xcf.bz2", "/in/pixel.xcf.xz", "/in/PIXEL.XCF.XZ"] {
+            assert!(super::openable_name(name), "{name}");
+        }
+        for name in ["/in/archive.tar.gz", "/in/notes.gz", "/in/notes.bz2", "/in/notes.xz", "/in/pixel.xcf.gz.backup"] {
+            assert!(!super::openable_name(name), "{name}");
+        }
+    }
 }

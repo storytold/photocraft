@@ -1559,3 +1559,42 @@ fn csh_import_with_inline_data_ignores_an_unreadable_path() {
     assert_eq!(result["names"], serde_json::json!(["Inline"]), "{result}");
     assert_eq!(result["group"], "Inline Set", "{result}");
 }
+
+#[test]
+fn suite_format_recognition_cannot_grant_replacement_of_existing_non_image_files() {
+    let (inside, _, workspace) = roots("non-image-replacement");
+    for (name, contents) in [
+        ("notes.txt", b"keep".as_slice()),
+        ("README.md", b"keep markdown".as_slice()),
+        ("settings.json", b"{}".as_slice()),
+        ("table.csv", b"a,b\n1,2\n".as_slice()),
+        ("document.docx", b"existing document".as_slice()),
+        ("unnamed-rtf", br"{\rtf1\ansi keep}".as_slice()),
+        ("unnamed-tagged", b"<ASCII-WIN>keep".as_slice()),
+        ("unnamed-pdf", b"%PDF-1.7\nkeep".as_slice()),
+    ] {
+        std::fs::write(inside.join(name), contents).unwrap();
+        let mut called = false;
+        let result = workspace.write_stream(name, &mut |writer| {
+            called = true;
+            writer.write_all(b"replacement")
+        });
+        assert!(
+            matches!(result, Err(AutomationError::BadRequest(message)) if message.contains("already exists") && message.contains("save to a new name")),
+            "{name}"
+        );
+        assert!(!called, "refuse {name} before invoking an encoder");
+        assert_eq!(std::fs::read(inside.join(name)).unwrap(), contents);
+        assert!(temp_files(&inside).is_empty());
+    }
+    // Preserve name-based document replacement and raster magic under an arbitrary name.
+    for name in ["output.psd", "output.psb", "output.ora", "output.pdf", "output.pcraft", "output.png"] {
+        std::fs::write(inside.join(name), b"old document").unwrap();
+        workspace.write_stream(name, &mut |writer| writer.write_all(b"new document")).unwrap();
+        assert_eq!(std::fs::read(inside.join(name)).unwrap(), b"new document");
+    }
+    std::fs::write(inside.join("extensionless-image"), b"\x89PNG\r\n\x1a\n").unwrap();
+    workspace.write_stream("extensionless-image", &mut |writer| writer.write_all(b"replacement image")).unwrap();
+    assert_eq!(std::fs::read(inside.join("extensionless-image")).unwrap(), b"replacement image");
+    assert!(temp_files(&inside).is_empty());
+}
