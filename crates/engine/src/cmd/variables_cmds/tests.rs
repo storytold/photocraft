@@ -796,3 +796,16 @@ fn data_sets_as_files_hostile_format_and_extension_are_errors() {
     assert!(ok["warnings"].is_array(), "{ok}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn data_sets_as_files_ignores_other_formats_save_params() {
+    // A shared options object may carry other formats' save params; they are not this
+    // command's, so a Targa or TIFF value never fails the PSD export.
+    let (mut s, _, _) = psd_export_session();
+    let dir = tmp("psd-foreign-params");
+    let ok = s
+        .execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["Data Set 1"], "tgaBits": 16, "tiffCompression": "jpeg", "ddsCompression": 7}))
+        .unwrap();
+    assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}

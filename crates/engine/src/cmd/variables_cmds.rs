@@ -424,7 +424,7 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
 /// `.psd`). The whole batch is planned first,
 /// so colliding names are rejected before any file is written, and automation writes exactly
 /// these bytes beneath its write root (#3216) — the two paths cannot drift. Returns the
-/// filenames written, in order.
+/// filenames written, in order, and the encoder's warnings.
 pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<DataSetsExported> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let original = st.doc.clone();
@@ -453,10 +453,20 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         Some(Value::String(e)) if matches!(e.as_str(), ".PSD" | "PSD") => "PSD",
         Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("`extension` is `.psd` or `.PSD`, not {other}"))),
     };
-    let save = crate::file_cmds::SaveOpts::from_params(s, p, "file.export.dataSetsAsFiles")?;
+    // Only the PSD options of the shared save path, from Preferences › File Handling (Ask When
+    // Saving has no dialog here, so it saves them, as Save As does). Other formats' save params
+    // are not this command's.
+    let file_handling = &s.prefs().file_handling;
+    let save = crate::file_cmds::SaveOpts {
+        image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
+        psd_maximize_compatibility: file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never,
+        ..Default::default()
+    };
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
-    // into `encode`, so a PSD embeds no file a linked smart object names.
+    // and the document's path into `encode` and `apply_to_doc`: a PSD embeds no file a linked
+    // smart object names, and stored relative paths resolve as they do through the command.
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
     // A document name is not a path: a separator in it, or a stem of `.` / `..` before a `/` in
@@ -497,9 +507,14 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     for (set, name) in sets.iter().zip(&names) {
         let mut doc = (*original).clone();
         apply_to_doc(&mut doc, &vars, set)?;
-        // The shared save path: the File Handling preferences, linked-file resolution and the
+        // The shared PSD encoder: the File Handling preferences, linked-file resolution and the
         // allocation checkpoint apply as in Save As.
-        let (bytes, warnings) = crate::file_cmds::encode(&doc, "psd", save).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
+        // `encode` names its format (`psd: …`); the data set's name replaces it. Other errors
+        // (memory) keep their own kind.
+        let (bytes, warnings) = crate::file_cmds::encode(&doc, "psd", save).map_err(|e| match e {
+            EngineError::Other(m) => EngineError::Other(format!("export `{}`: {}", set.name, m.strip_prefix("psd: ").unwrap_or(&m))),
+            other => other,
+        })?;
         write(name, &bytes)?;
         written.files.push(name.clone());
         written.warnings.extend(warnings.into_iter().map(|w| format!("{}: {w}", set.name)));
