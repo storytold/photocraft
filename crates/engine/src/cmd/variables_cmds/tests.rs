@@ -763,16 +763,18 @@ fn data_sets_as_files_extension_changes_only_the_case() {
 }
 
 #[test]
-fn data_sets_as_files_only_writes_psd() {
+fn data_sets_as_files_keeps_other_formats_for_scripts() {
     let (mut s, _, _) = psd_export_session();
     let dir = tmp("psd-png");
-    // An old script naming `psd` still works; any other format is a clear error and writes nothing.
+    // `psd` (and no format) writes a layered PSD; an explicit other format keeps the flattening
+    // exporter the command always used, for agents and scripts (#13754 "Done when").
     let ok = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": "psd", "dataSets": ["Data Set 1"]})).unwrap();
     assert_eq!(ok["files"], json!([format!("{dir}/Data_Set_1.psd")]));
-    let other = tmp("psd-png-none");
-    let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "format": "png"})).unwrap_err();
-    assert!(err.to_string().contains("Data Sets as Files writes PSD files"), "{err}");
-    assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
+    assert!(std::fs::read(format!("{dir}/Data_Set_1.psd")).unwrap().starts_with(b"8BPS"));
+    let other = tmp("psd-png-flat");
+    let png = s.execute("file.export.dataSetsAsFiles", json!({"dir": other, "format": "png", "dataSets": ["Data Set 1"]})).unwrap();
+    assert_eq!(png["files"], json!([format!("{other}/Data_Set_1.png")]));
+    assert!(std::fs::read(format!("{other}/Data_Set_1.png")).unwrap().starts_with(b"\x89PNG"), "a real PNG, not a PSD");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
 }
@@ -784,11 +786,18 @@ fn data_sets_as_files_hostile_format_and_extension_are_errors() {
     let dir = tmp("psd-hostile");
     for key in ["format", "extension"] {
         for bad in [json!(5), json!(true), json!(["png"]), json!({"a": 1}), json!(""), json!("png")] {
+            // `format: "png"` is a real format (it stays available to scripts, #13754).
+            if key == "format" && bad == json!("png") {
+                continue;
+            }
             let mut p = json!({"dir": dir});
             p[key] = bad.clone();
             assert!(s.execute("file.export.dataSetsAsFiles", p).is_err(), "`{key}` = {bad} must be refused");
         }
     }
+    // `extension` is PSD-only: with another format it is an error, not silently dropped.
+    let p = json!({"dir": dir, "format": "png", "extension": ".PSD"});
+    assert!(s.execute("file.export.dataSetsAsFiles", p).is_err(), "extension with format png must be refused");
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing is written for a refused param");
     // `null` means "not given".
     let ok = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "format": null, "extension": null, "dataSets": ["Data Set 1"]})).unwrap();

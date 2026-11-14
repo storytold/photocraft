@@ -400,7 +400,7 @@ fn split_csv(line: &str, delim: u8) -> Vec<String> {
 }
 
 /// Apply each data set in turn and write it as its own layered PSD, leaving the document as it
-/// was. `{dir, extension?(".psd"|".PSD"), dataSets?[names], naming?}` →
+/// was (or, for an explicit non-PSD `format`, a flattened file). `{dir, format?, extension?(".psd"|".PSD"), dataSets?[names], naming?}` →
 /// `{files:[…],count,warnings:[…]}`.
 fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad("file.export.dataSetsAsFiles", "need `dir`"))?.to_string();
@@ -438,20 +438,27 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     for set in &sets {
         authorize_pixel_paths(s, set)?;
     }
-    // Only PSD is written; an old script that names `psd` still works (#13754). Checked after
-    // the image paths so a refused path keeps its error. A value that is not a string is an
-    // error too, never silently ignored.
-    match p.get("format") {
-        None | Some(Value::Null) => {}
-        Some(Value::String(f)) if f.trim_start_matches('.').eq_ignore_ascii_case("psd") => {}
-        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("Data Sets as Files writes PSD files, not {other}"))),
-    }
-    // `.psd` (default) or `.PSD`: only the case of the extension of a PSD changes (#13754).
-    let extension = match p.get("extension") {
-        None | Some(Value::Null) => "psd",
-        Some(Value::String(e)) if matches!(e.as_str(), ".psd" | "psd") => "psd",
-        Some(Value::String(e)) if matches!(e.as_str(), ".PSD" | "PSD") => "PSD",
-        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("`extension` is `.psd` or `.PSD`, not {other}"))),
+    // The dialog writes only PSD (#13754); the command's `format` keeps every other format for
+    // agents and scripts, through the flattening exporter it always used. Omitted or null means
+    // a layered PSD. Checked after the image paths so a refused path keeps its error. A value
+    // that is not a string is an error, never silently ignored.
+    let other_format: Option<&str> = match p.get("format") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(f)) if f.trim_start_matches('.').eq_ignore_ascii_case("psd") => None,
+        Some(Value::String(f)) => Some(f.as_str()),
+        Some(other) => return Err(bad("file.export.dataSetsAsFiles", format!("`format` is a format name, not {other}"))),
+    };
+    // A PSD's extension is `.psd` (default) or `.PSD`: only the case changes (#13754). Another
+    // format names its files after the format, as it always did; `extension` is PSD-only.
+    let extension = match (p.get("extension"), other_format) {
+        (None | Some(Value::Null), Some(f)) => f,
+        (Some(other), Some(f)) => {
+            return Err(bad("file.export.dataSetsAsFiles", format!("`extension` applies to PSD only, not to format `{f}` (got {other})")));
+        }
+        (None | Some(Value::Null), None) => "psd",
+        (Some(Value::String(e)), None) if matches!(e.as_str(), ".psd" | "psd") => "psd",
+        (Some(Value::String(e)), None) if matches!(e.as_str(), ".PSD" | "PSD") => "PSD",
+        (Some(other), None) => return Err(bad("file.export.dataSetsAsFiles", format!("`extension` is `.psd` or `.PSD`, not {other}"))),
     };
     // Only the PSD options of the shared save path, from Preferences › File Handling (Ask When
     // Saving has no dialog here, so it saves them, as Save As does). Other formats' save params
@@ -507,14 +514,23 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     for (set, name) in sets.iter().zip(&names) {
         let mut doc = (*original).clone();
         apply_to_doc(&mut doc, &vars, set)?;
-        // The shared PSD encoder: the File Handling preferences, linked-file resolution and the
-        // allocation checkpoint apply as in Save As.
-        // `encode` names its format (`psd: …`); the data set's name replaces it. Other errors
-        // (memory) keep their own kind.
-        let (bytes, warnings) = crate::file_cmds::encode(&doc, "psd", save).map_err(|e| match e {
-            EngineError::Other(m) => EngineError::Other(format!("export `{}`: {}", set.name, m.strip_prefix("psd: ").unwrap_or(&m))),
-            other => other,
-        })?;
+        let (bytes, warnings) = match other_format {
+            // Another format: the flattening exporter the command always used. An untrusted
+            // session's export embeds no file a linked smart object names.
+            Some(format) => {
+                let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
+                let bytes =
+                    photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
+                (bytes, Vec::new())
+            }
+            // The shared PSD encoder: the File Handling preferences, linked-file resolution and
+            // the allocation checkpoint apply as in Save As. `encode` names its format
+            // (`psd: …`); the data set's name replaces it. Other errors (memory) keep their kind.
+            None => crate::file_cmds::encode(&doc, "psd", save).map_err(|e| match e {
+                EngineError::Other(m) => EngineError::Other(format!("export `{}`: {}", set.name, m.strip_prefix("psd: ").unwrap_or(&m))),
+                other => other,
+            })?,
+        };
         write(name, &bytes)?;
         written.files.push(name.clone());
         written.warnings.extend(warnings.into_iter().map(|w| format!("{}: {w}", set.name)));
@@ -591,7 +607,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.dataSetsAsFiles",
             "Data Sets as Files…",
             &["File", "Export"],
-            "{dir, extension?:\".psd\"|\".PSD\", dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count,warnings}: apply each data set and write it as a layered PSD (a `format` other than psd is an error); colliding filenames are rejected before writing (include {index} to disambiguate)",
+            "{dir, format?:psd|png|jpg|tiff|webp|bmp, extension?:\".psd\"|\".PSD\" (PSD only), dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count,warnings}: apply each data set and write it as a layered PSD (default), or as a flattened file in another `format`; colliding filenames are rejected before writing (include {index} to disambiguate)",
             has_data_sets,
             |s, p| export_as_files(s, p)
         ),
