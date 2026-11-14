@@ -45,7 +45,7 @@ fn background_contents_comes_before_advanced_options_and_color_profile() {
 fn collapsing_advanced_options_hides_color_profile_and_keeps_the_choice() {
     let mut h = harness();
     let nd = h.state().ui.dialogs[0].id;
-    let profile = photocraft_cms::Builtin::AdobeRgbCompat.id().to_string();
+    let profile = craft_cms::Builtin::AdobeRgbCompat.id().to_string();
     h.state_mut().ui.dialog_mut(nd).unwrap().fields.insert("profile".into(), json!(profile));
     h.run_steps(3);
     assert!(count(&h, "Color Profile") > 0, "expanded by default");
