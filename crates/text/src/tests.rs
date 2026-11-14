@@ -384,6 +384,101 @@ fn alignment_point_and_box() {
     assert!((l.lines[0].x1 - 200.0).abs() < 0.5, "{:?}", l.lines[0]);
 }
 
+/// Centred and right-aligned point text is placed around its anchor by its scaled width: a
+/// 63% title and a 90% right-aligned column drifted left by the width horizontal scale removed.
+#[test]
+fn point_alignment_uses_the_scaled_width() {
+    let mut e = TextEngine::new();
+    let scaled = |text: &str, hs: f32, align: TextAlign| {
+        let t = styled(text, CharStyle { size_pt: 20.0, horizontal_scale: hs, ..Default::default() });
+        with_para(t, ParagraphStyle { align, ..Default::default() })
+    };
+    let c = e.layout(&scaled("Saab 900 Turbo 16", 0.63, TextAlign::Center), 72.0);
+    let ln = &c.lines[0];
+    assert!((ln.x0 + ln.x1).abs() < 0.5, "centred on the anchor: {ln:?}");
+    let last_glyph_x = c.glyphs.iter().map(|g| g.x).fold(f32::MIN, f32::max);
+    assert!(last_glyph_x < ln.x1, "glyphs inside the line: {last_glyph_x} {ln:?}");
+    let r = e.layout(&scaled("230\r265/195\r7900\r7\r1985\r4", 0.9, TextAlign::Right), 72.0);
+    assert_eq!(r.lines.len(), 6);
+    for ln in &r.lines {
+        assert!(ln.x1.abs() < 0.5, "ends at the anchor: {ln:?}");
+    }
+}
+
+/// Styles that differ only in horizontal scale (applied after shaping) share a shaping run: each
+/// character still counts at its own scale, so a 50% "ab" before a 100% "cd" right-aligns with
+/// the d ending at the anchor (it overshot by most of the d when the run's first scale was used
+/// for all four). Caret positions agree with the glyphs.
+#[test]
+fn point_alignment_scales_each_character_in_a_shared_run() {
+    let mut e = TextEngine::new();
+    let style = |hs: f32| CharStyle { font_family: "Inter".into(), size_pt: 40.0, horizontal_scale: hs, ..Default::default() };
+    let d = e.layout(&runs_of("d", &[(1, style(1.0))]), 72.0).lines[0].x1;
+    let t = with_para(runs_of("abcd", &[(2, style(0.5)), (2, style(1.0))]), ParagraphStyle { align: TextAlign::Right, ..Default::default() });
+    let l = e.layout(&t, 72.0);
+    let last = l.glyphs.last().map_or(f32::NAN, |g| g.x);
+    assert!((last + d).abs() < 0.01, "the d ends at the anchor: {last} + {d}");
+    assert!(l.lines[0].x1.abs() < 0.01, "{:?}", l.lines[0]);
+    let c = l.clusters.last().map_or(f32::NAN, |c| c.x + c.advance);
+    assert!(c.abs() < 0.01, "the last caret stop is at the anchor: {c}");
+}
+
+/// A ligature's later characters have no glyph but share its advance, and so its horizontal
+/// scale: a line ending in one isn't trailing whitespace. Inter's contextual alternates draw
+/// "->" as one arrow glyph; at 50% the line is half as wide and a right-aligned one ends at the
+/// anchor (a quarter of the arrow's width short of it when the ">" was counted as trailing).
+#[test]
+fn point_alignment_keeps_a_closing_ligature_in_the_width() {
+    let mut e = TextEngine::new();
+    let mut arrow = |hs: f32, align: TextAlign| {
+        let st = CharStyle {
+            font_family: "Inter".into(),
+            size_pt: 40.0,
+            horizontal_scale: hs,
+            features: vec![FontFeature { tag: "calt".into(), value: 1 }],
+            ..Default::default()
+        };
+        e.layout(&with_para(runs_of("a->", &[(3, st)]), ParagraphStyle { align, ..Default::default() }), 72.0)
+    };
+    let full = arrow(1.0, TextAlign::Left);
+    assert_eq!(full.glyphs.len(), 2, "the arrow is one glyph");
+    let half = arrow(0.5, TextAlign::Left);
+    assert!((half.lines[0].x1 - full.lines[0].x1 / 2.0).abs() < 0.01, "{:?} vs {:?}", half.lines[0], full.lines[0]);
+    let arrow_advance = full.lines[0].x1 - full.glyphs[1].x;
+    let r = arrow(0.5, TextAlign::Right);
+    let end = r.glyphs[1].x + arrow_advance * 0.5;
+    assert!(end.abs() < 0.01 && r.lines[0].x1.abs() < 0.01, "ends at the anchor: {end} {:?}", r.lines[0]);
+}
+
+/// A ligature over characters of different horizontal scales is drawn at its first character's
+/// scale, so its later characters count at that scale too: Inter's "->" arrow with the "-" at
+/// 50% and the ">" at 100% (or the other way round) right-aligns with the arrow ending at the
+/// anchor, and the last caret stop is there too (the ">" at its own scale overshot or fell short
+/// by a quarter of the arrow).
+#[test]
+fn point_alignment_scales_a_ligature_by_its_first_character() {
+    let mut e = TextEngine::new();
+    let style = |hs: f32| CharStyle {
+        font_family: "Inter".into(),
+        size_pt: 40.0,
+        horizontal_scale: hs,
+        features: vec![FontFeature { tag: "calt".into(), value: 1 }],
+        ..Default::default()
+    };
+    let full = e.layout(&runs_of("->", &[(2, style(1.0))]), 72.0);
+    assert_eq!(full.glyphs.len(), 1, "the arrow is one glyph");
+    let arrow = full.lines[0].x1;
+    for (first, second) in [(0.5, 1.0), (1.0, 0.5)] {
+        let t = with_para(runs_of("->", &[(1, style(first)), (1, style(second))]), ParagraphStyle { align: TextAlign::Right, ..Default::default() });
+        let l = e.layout(&t, 72.0);
+        assert_eq!(l.glyphs.len(), 1, "{first}/{second}: still one arrow");
+        let end = l.glyphs[0].x + arrow * first;
+        assert!(end.abs() < 0.01 && l.lines[0].x1.abs() < 0.01, "{first}/{second}: ends at the anchor: {end} {:?}", l.lines[0]);
+        let caret = l.clusters.last().map_or(f32::NAN, |c| c.x + c.advance);
+        assert!(caret.abs() < 0.01, "{first}/{second}: last caret stop {caret}");
+    }
+}
+
 #[test]
 fn rtl_text_is_reordered() {
     let mut e = TextEngine::new();
