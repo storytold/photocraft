@@ -1014,7 +1014,7 @@ fn bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
 /// Each level of embedded SVG image adds the parser's and renderer's frames on top of the one it
 /// sits in. Every chain the bounded path takes (base64 grows each level, so the XML byte budget
 /// ends it before [`MAX_EMBEDDED_SVG_DEPTH`]) parses and renders on a 1 MB thread stack (Windows'
-/// main-thread size); deeper ones are refused.
+/// main-thread size); over-budget images are omitted by the non-strict renderer.
 #[test]
 fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
     fn base64(bytes: &[u8]) -> String {
@@ -1045,8 +1045,14 @@ fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
             for levels in 1..=MAX_EMBEDDED_SVG_DEPTH + 1 {
                 match rasterize_bounded(chain(levels).as_bytes(), 1.0, MAX_RASTER_PIXELS) {
                     Ok(buf) => {
-                        assert!(buf.px[4 * 8 + 4][3] > 0.99, "{levels} levels: the innermost rect draws through every level");
-                        accepted = levels;
+                        if levels <= MAX_EMBEDDED_SVG_DEPTH {
+                            assert!(buf.px[4 * 8 + 4][3] > 0.99, "{levels} levels: the innermost rect draws through every level");
+                            accepted = levels;
+                        } else {
+                            // Non-strict rasterization omits an over-budget embedded
+                            // image instead of rejecting the outer SVG.
+                            assert!(buf.px[4 * 8 + 4][3] < 0.01, "{levels} levels: the over-budget image is omitted");
+                        }
                     }
                     Err(_) => assert!(accepted > 0, "a one-level chain renders"),
                 }

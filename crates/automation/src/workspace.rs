@@ -252,7 +252,9 @@ impl Drop for TempRemoval<'_> {
 fn written_kind(name: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else { return false };
     let ext = ext.to_ascii_lowercase();
-    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || photocraft_formats::from_extension(&ext).is_some()
+    // The shared file registry also recognizes notes and source formats. Only
+    // raster codecs and PhotoCraft's document outputs authorize replacement.
+    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || photocraft_codecs::from_extension(&ext).is_some()
 }
 
 /// Whether the file at `relative` starts like an image PhotoCraft reads (PSD/PSB or a codec's

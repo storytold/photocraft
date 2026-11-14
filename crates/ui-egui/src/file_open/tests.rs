@@ -1866,11 +1866,16 @@ fn error_titles(app: &PhotocraftApp) -> Vec<String> {
 fn files_dropped_with_no_document_open_all_open() {
     let dir = scratch("home");
     let names = ["a.png", "b.jpg", "c.psd", "d.tif"];
+    // TIFF opens use the typed IO path, including with an injected importer.
+    // Give that path a real file rather than the fake importer's placeholder.
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
+    let tiff = photocraft_io::export(&session.active().unwrap().doc, "d.tif", &Default::default()).unwrap().bytes;
     let files: Vec<_> = names
         .iter()
         .map(|n| {
             let p = dir.join(n);
-            std::fs::write(&p, b"x").unwrap();
+            std::fs::write(&p, if *n == "d.tif" { tiff.as_slice() } else { b"x" }).unwrap();
             dropped(p, Err("read from the path".into()))
         })
         .collect();

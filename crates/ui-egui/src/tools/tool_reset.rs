@@ -291,6 +291,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             shape_mode,
             shape_path_op,
             shape_fill,
+            use_aligned_rendering,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,
