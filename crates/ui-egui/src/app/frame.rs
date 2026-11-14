@@ -21,6 +21,12 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Canvas drops still waiting to be placed. A running transform pauses the queue, so the
+    /// browser admission lease has to outlive the inbox drain.
+    pub fn has_pending_drop_places(&self) -> bool {
+        !self.drop_places.is_empty()
+    }
+
     /// Whether the Home screen is what the canvas area shows this frame. Files opening in the
     /// background (#210) have tabs before they have documents, so they win over Home. The frame
     /// draws no tool strip, options bar, status bar or docks under Home, and the canvas area
