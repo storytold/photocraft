@@ -163,6 +163,64 @@ fn stamp_region(
     }
 }
 
+/// The reference application's alerts for the refusals below (#12638); a hidden target is
+/// [`crate::hidden_target::ART_HISTORY_HIDDEN`].
+pub const LOCKED: &str = "Could not use the art history brush because the layer is locked.";
+pub const GROUP: &str = "Could not use the art history brush because the pixels in a group cannot be edited without merging the group.";
+pub const LACKS_LAYER: &str = "Could not use the art history brush because the history state lacks a corresponding layer.";
+pub const CANVAS_SIZE: &str = "Could not use the art history brush because the current canvas size does not match that of the history state.";
+pub const NO_SOURCE: &str = "Could not use the art history brush because no history state has been designated as the source for painting.";
+
+/// The command's precondition: a pixel layer, as the other retouching tools, with the alert text
+/// when a group is active.
+pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
+    super::has_pixel_layer(s).map_err(|why| if crate::active_layer_of(s).is_ok_and(|l| l.is_group()) { GROUP.into() } else { why })
+}
+
+/// The targeted layer's pixels can't be painted: a group's (also one with a mask, which the
+/// precondition lets through for its mask), or Lock All or Lock Image Pixels, refused with the
+/// alert texts. A mask or channel target keeps the shared checks (not measured).
+fn refuse_layer(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<()> {
+    let (Some(id), Some(st)) = (id, s.active()) else { return Ok(()) };
+    let Some(layer) = st.doc.layer(id).filter(|_| pixel_target(p)) else { return Ok(()) };
+    if layer.is_group() {
+        return Err(EngineError::Other(GROUP.into()));
+    }
+    let locks = st.doc.effective_locks(id);
+    if locks.all || locks.pixels { Err(EngineError::Other(LOCKED.into())) } else { Ok(()) }
+}
+
+fn pixel_target(p: &Value) -> bool {
+    crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
+}
+
+/// The source the stroke paints from, the History Brush's (the `state` or `snapshot` passed, else
+/// the History panel's source, through the shared [`super::history_source`]), refused with the
+/// alert texts: no source, then another canvas size, then another colour mode or a depth but 8
+/// bits ([`refuse_format`]), then a target layer the source state lacks. A mask or channel target
+/// keeps the History Brush's texts for the source refusals (not measured).
+fn source_surface(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<photocraft_raster::Surface> {
+    use crate::history_source_cmds::{SourceRefusal, checked_source, paint_source};
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let pixels = pixel_target(p);
+    let doc = if pixels {
+        checked_source(st, p, CMD)?.map_err(|why| {
+            EngineError::Other(
+                match why {
+                    SourceRefusal::NoSource => NO_SOURCE,
+                    SourceRefusal::CanvasSize { .. } => CANVAS_SIZE,
+                }
+                .into(),
+            )
+        })?
+    } else {
+        paint_source(st, p, CMD)?
+    };
+    refuse_format(&st.doc, &doc)?;
+    super::history_source(s, id, p, CMD)
+        .map_err(|e| if pixels && crate::channel_cmds::read_target_surface(&doc, id, p).is_err() { EngineError::Other(LACKS_LAYER.into()) } else { e })
+}
+
 /// A source of another colour mode, then any document but an 8-bit one, refused with the reference
 /// application's alert texts (#12637). The 16-bit text was seen with one layer only; two layers,
 /// or a depth change after the source, showed "not directly editable", so that text covers every
@@ -215,13 +273,9 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     let _ = stroke;
-    // The same source as the History Brush: the `state` or `snapshot` passed, else the History
-    // panel's source, refused after a canvas size change, then after a colour mode change (#12826)
-    // or at a depth other than 8 bits, as Photoshop does, before a layer missing from it. Compare
-    // document modes: the pixel format reads Indexed and Multichannel as RGB.
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    refuse_format(&st.doc, &*crate::history_source_cmds::paint_source(st, p, CMD)?)?;
-    let src_surface = super::history_source(s, id, p, CMD)?;
+    refuse_layer(s, id, p)?;
+    // Compare document modes: the pixel format reads Indexed and Multichannel as RGB (#12826).
+    let src_surface = source_surface(s, id, p)?;
     // Truncating a huge row index only changes the seed.
     let seed = RNG_SEED ^ p.get("state").and_then(Value::as_u64).map_or(0, |i| i as u32);
     let dabs = art_history::place_dabs(&pts, size, area, style, seed).map_err(|e| match e {
@@ -567,3 +621,7 @@ mod art_history_mode_mismatch_tests;
 #[cfg(test)]
 #[path = "art_history_depth_tests.rs"]
 mod art_history_depth_tests;
+
+#[cfg(test)]
+#[path = "art_history_refusal_tests.rs"]
+mod refusal_tests;
