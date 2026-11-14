@@ -68,6 +68,8 @@ pub mod brush_cmds;
 pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
 pub mod channel_cmds;
+#[cfg(test)]
+mod color_balance_identity_tests;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
@@ -1343,6 +1345,21 @@ fn build() -> Vec<CommandSpec> {
                 // re-runs from the source instead of baking into a copy of the pixels.
                 if crate::adjust_cmds::adjust_as_smart_filter(s, &kind, &label, recorded.as_ref().unwrap_or(p))? {
                     return Ok(Value::Null);
+                }
+                // A neutral Color Balance on a pixel layer leaves History and Redo alone.
+                // Action playback and isolated targets keep their ordinary edit path.
+                if matches!(&adj, Adjustment::ColorBalance { shadows, midtones, highlights, .. }
+                    if [shadows, midtones, highlights].into_iter().flatten().all(|v| *v == 0.0))
+                    && !crate::actions_cmds::history_policy_in_use(s)
+                    && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
+                    && crate::color_channels::target(s, p)?.is_none()
+                {
+                    let id = layer_param(s, p)?;
+                    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+                    check_pixels_unlocked(doc, id)?;
+                    if matches!(doc.layer(id).map(|layer| &layer.content), Some(LayerContent::Raster(_))) {
+                        return Ok(Value::Null);
+                    }
                 }
                 destructive_adjust(s, &label, adj, p)
             },
