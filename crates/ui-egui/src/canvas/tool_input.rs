@@ -910,12 +910,16 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
     let clicky = matches!(tool, Tool::PolygonLasso | Tool::MagicWand);
+    // The Quick Selection in New mode replaces the selection, so a press inside it moves the
+    // outline (or cuts it with ⌘) like a marquee's, and the mode stays New.
+    let quick_new = tool == Tool::QuickSelection && app.ui.tool_options.quick_selection_mode == 0;
     // Object Selection with Object Finder on drags the outline like a marquee in New mode (#12853).
     // With Object Finder off a press stays a Quick Selection dab or a rectangle, as before (the
     // issue measured only Finder on). Unlike the marquees, ⌘ with it is the Move tool
     // (`hold_keys::cmd_moves`), which moves the pixels itself: a ⌘ press must not start a cut here
     // first.
     let marquee = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee)
+        || quick_new
         || (tool == Tool::ObjectSelection && app.ui.tool_options.object_finder);
     if tool == Tool::ObjectSelection && mods.command {
         return None;
@@ -928,6 +932,10 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     if !(clicky || marquee || tool == Tool::Lasso) || (clicky && !app.ui.polygon.is_empty()) {
         return None;
     }
+    // The mode that says a press inside the selection replaces it: the Quick Selection's own
+    // mode when it is in effect, the document's otherwise.
+    let replaces =
+        if quick_new { crate::canvas::tool_feedback::document_selection_mode(app, tool, mods) == "replace" } else { selection_mode(app, mods) == "replace" };
     // ⌘ cuts, ⌘⌥ copies (`select.float`'s `copy`).
     let cut = mods.command && !mods.shift;
     if let Some(f) = app.session.active().and_then(photocraft_engine::float_cmds::floating) {
@@ -942,7 +950,7 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
         if cut {
             return Some(true);
         }
-        return (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false);
+        return (!clicky && !mods.command && replaces).then_some(false);
     }
     if !inside_selection(app, p) {
         return None;
@@ -953,7 +961,7 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     // The Magic Wand in New mode drags the outline like a marquee: a click deselects, a drag
     // moves the outline (#11782).
     let outline = !clicky || tool == Tool::MagicWand;
-    (outline && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
+    (outline && !mods.command && replaces).then_some(false)
 }
 
 /// The tool a pointer event with `mods` goes to: ⌘ held is the Move tool (`hold_keys::cmd_moves`).

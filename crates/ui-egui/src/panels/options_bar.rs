@@ -1,7 +1,7 @@
 use super::brush_controls::{
     brush_preset_chip, mixer_combination_dropdown, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown,
 };
-use super::properties::{select_and_mask_button, selection_mode_buttons};
+use super::properties::{quick_selection_mode_buttons, select_and_mask_button, selection_mode_buttons};
 use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
 
@@ -132,6 +132,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // The options bar shows the active tool's brush: switch it in before drawing the
                         // chip, so a tool change swaps the brush with it (Photoshop keeps one per tool).
                         crate::paint_mouse::sync_tool_brush(app);
+                        if tool == Tool::QuickSelection {
+                            quick_selection_mode_buttons(app, ui);
+                            widgets::vline(ui, 22.0);
+                        }
                         // Brush edits here go through `tools.setBrush`, one journal entry per gesture (Rule 1).
                         if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser))
                             || tool == Tool::QuickSelection

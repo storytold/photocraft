@@ -275,11 +275,21 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         },
         Tool::QuickSelection => {
             let size = app.session.tools.brush.size;
-            let mode = if mods.alt { "subtract" } else { "add" };
+            let mode = crate::canvas::tool_feedback::document_selection_mode(app, tool, mods);
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
             let (sample_all, enhance) = (o.sample_all.quick_selection, o.enhance_edge);
+            // Select All followed by Inverse leaves `Some(empty)`: that is no selection for the
+            // New-to-Add transition, or the stroke that just made one would keep New and let the
+            // next stroke replace it.
+            let had_selection = app.session.active().is_some_and(|st| st.doc.selection.as_ref().is_some_and(|s| !s.content_bounds().is_empty()));
             let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
+            let changed = matches!(r, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(true));
             report_smart_result(app, r, tl!("Quick Selection found nothing there"));
+            // New flips to Add after its first stroke on an empty selection. A stroke with a
+            // selection there replaces it and keeps New, as in Photoshop.
+            if o.quick_selection_mode == 0 && changed && !had_selection {
+                app.ui.tool_options.quick_selection_mode = 1;
+            }
             return true;
         }
         _ => return false,
@@ -1157,6 +1167,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
+            crate::widgets::vline(ui, 22.0);
+            crate::panels::properties::select_and_mask_button(app, ui);
         }
         Tool::ObjectSelection => {
             crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
