@@ -181,12 +181,17 @@ fn env_launch_options_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> 
     ENV_LAUNCH_OPTIONS.iter().filter(|(name, _, is_on)| get(name).is_some_and(|v| is_on(&v.to_string_lossy()))).map(|(_, option, _)| *option).collect()
 }
 
+/// `--new-instance`, or `PHOTOCRAFT_NEW_INSTANCE` set to anything but empty or `0`.
+pub fn new_instance_requested(flag: bool, env: Option<&str>) -> bool {
+    flag || env.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 /// Why this launch runs as its own instance, or `None` to take part in single-instance.
 pub fn skip_reason(c: &LaunchContext) -> Option<String> {
     if !c.per_user_settings {
         return Some("the settings folder isn't the per-user one (portable or PHOTOCRAFT_CONFIG_DIR)".into());
     }
-    if c.new_instance_flag || c.new_instance_env.is_some_and(|v| !v.is_empty() && v != "0") {
+    if new_instance_requested(c.new_instance_flag, c.new_instance_env) {
         return Some("--new-instance".into());
     }
     if c.control {
