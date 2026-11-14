@@ -51,7 +51,16 @@ pub struct CountGroup {
 
 impl Default for CountGroup {
     fn default() -> Self {
-        Self { name: "Count Group 1".into(), color: Color::rgb(1.0, 0.0, 0.0), marker_size: 1, label_size: 8, visible: true, points: Vec::new() }
+        // The reference application's first group before any edit: #97FBFD, Marker Size 2,
+        // Label Size 8 (#11767; later groups follow the last edit, `CountGroupDefaults`).
+        Self {
+            name: "Count Group 1".into(),
+            color: Color::rgb(151.0 / 255.0, 251.0 / 255.0, 253.0 / 255.0),
+            marker_size: 2,
+            label_size: 8,
+            visible: true,
+            points: Vec::new(),
+        }
     }
 }
 
