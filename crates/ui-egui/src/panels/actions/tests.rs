@@ -3044,3 +3044,391 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
 }
+
+/// A 16×16 document whose left half is red and right half blue, nothing selected.
+fn two_tone_app() -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+    app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+    app.run("select.rect", json!({"x": 8, "y": 0, "width": 8, "height": 16})).unwrap();
+    app.run("edit.fill", json!({"contents": "color", "color": "#0000ff"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app
+}
+
+/// The red channel of the first layer (the one filled), whatever layer a later step made active.
+fn red_at(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
+    let st = app.session.active().unwrap();
+    let walk = st.doc.walk();
+    walk.first().unwrap().2.surface().unwrap().pixel(x, y)[0]
+}
+
+fn has_selection(app: &PhotocraftApp) -> bool {
+    app.session.active().unwrap().doc.selection.is_some()
+}
+
+fn named_layers(app: &PhotocraftApp, name: &str) -> usize {
+    layer_names(app).iter().filter(|n| *n == name).count()
+}
+
+const RANGE_STEP: &str = "select.colorRange";
+const FILL_STEP: &str = "edit.fill";
+
+fn recorded_range() -> Value {
+    json!({"select": "sampledColors", "fuzziness": 25.0, "points": [[2.0, 8.0]], "invert": false})
+}
+
+fn recorded_fill() -> Value {
+    json!({"contents": "color", "color": "#000000", "mode": "normal", "opacity": 50.0, "preserveTransparency": false})
+}
+
+#[test]
+fn color_range_step_with_dialog_toggle_opens_its_dialog() {
+    let mut app = two_tone_app();
+    let mut a = Action::new("Range", vec![(RANGE_STEP.into(), recorded_range()), ("layer.new.layer".into(), json!({"name": "after"}))]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    let v = play(&mut app, &json!({"action": "Range"})).unwrap();
+    assert_eq!(v["paused"]["step"], 0, "{v}");
+    let id = v["paused"]["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(crate::color_range_ui::owns(fields), "the Color Range dialog opened");
+    assert_eq!(fields["fuzziness"], 25.0, "the dialog shows the recorded values");
+    assert_eq!(fields["points"], json!([[2.0, 8.0]]));
+    assert!(!has_selection(&app), "nothing selected while the dialog is open");
+    assert_eq!(named_layers(&app, "after"), 0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(has_selection(&app), "OK selected the range");
+    assert_eq!(named_layers(&app, "after"), 1, "the step after the dialog ran once");
+    assert!(app.paused_playbacks.paused.is_empty());
+    assert!(app.ui.status.starts_with("Played"), "{}", app.ui.status);
+}
+
+#[test]
+fn fill_step_with_dialog_toggle_opens_its_dialog() {
+    let mut app = two_tone_app();
+    let mut a = Action::new("Fill", vec![(FILL_STEP.into(), recorded_fill()), ("layer.new.layer".into(), json!({"name": "after"}))]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    // What one fill with these values does, on an identical document.
+    let mut reference = two_tone_app();
+    reference.run(FILL_STEP, recorded_fill()).unwrap();
+    let once = red_at(&reference, 2, 2);
+    let before = red_at(&app, 2, 2);
+    assert!((once - before).abs() > 0.05, "the reference fill changes the pixel");
+
+    let v = play(&mut app, &json!({"action": "Fill"})).unwrap();
+    assert_eq!(v["paused"]["step"], 0, "{v}");
+    let id = v["paused"]["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(crate::fill_ui::owns(fields), "the Fill dialog opened");
+    assert_eq!(fields["opacity"], 50.0, "the dialog shows the recorded values");
+    assert_eq!(fields["color"], "#000000");
+    assert_eq!(red_at(&app, 2, 2), before, "pixels unchanged while the dialog is open");
+    assert_eq!(named_layers(&app, "after"), 0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((red_at(&app, 2, 2) - once).abs() < 1e-4, "the fill was applied exactly once");
+    assert_eq!(named_layers(&app, "after"), 1, "the step after the dialog ran once");
+    assert!(app.paused_playbacks.paused.is_empty());
+}
+
+#[test]
+fn color_range_then_fill_both_toggled_in_one_action() {
+    let mut app = two_tone_app();
+    let mut a = Action::new(
+        "Both",
+        vec![(RANGE_STEP.into(), recorded_range()), (FILL_STEP.into(), recorded_fill()), ("layer.new.layer".into(), json!({"name": "after"}))],
+    );
+    a.dialogs.extend([0, 1]);
+    app.session.actions.list.push(a);
+    let mut reference = two_tone_app();
+    reference.run(RANGE_STEP, recorded_range()).unwrap();
+    reference.run(FILL_STEP, recorded_fill()).unwrap();
+    let (inside, outside) = (red_at(&reference, 2, 8), red_at(&reference, 12, 8));
+
+    let v = play(&mut app, &json!({"action": "Both"})).unwrap();
+    let first = v["paused"]["dialog"].as_u64().unwrap();
+    assert!(crate::color_range_ui::owns(&app.ui.dialog_mut(first).unwrap().fields));
+    crate::dialogs::confirm(&mut app, first).unwrap();
+    // The first OK opens the Fill dialog; the later steps wait for its OK.
+    assert!(has_selection(&app));
+    assert_eq!(app.ui.dialogs.len(), 1, "only the Fill dialog is open");
+    let second = app.ui.dialogs[0].id;
+    assert!(crate::fill_ui::owns(&app.ui.dialog_mut(second).unwrap().fields));
+    assert_eq!(named_layers(&app, "after"), 0);
+    crate::dialogs::confirm(&mut app, second).unwrap();
+    assert!(app.ui.dialogs.is_empty());
+    assert_eq!(named_layers(&app, "after"), 1);
+    assert!((red_at(&app, 2, 8) - inside).abs() < 1e-4, "inside the range: filled once");
+    assert!((red_at(&app, 12, 8) - outside).abs() < 1e-4, "outside the range: untouched");
+    assert!(app.paused_playbacks.paused.is_empty());
+}
+
+/// Play `step` as a one-step action with its dialog toggled; returns the paused dialog's id.
+fn pause_on(app: &mut PhotocraftApp, step: (&str, Value)) -> u64 {
+    let mut a = Action::new("One", vec![(step.0.into(), step.1)]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    let v = play(app, &json!({"action": "One"})).unwrap();
+    v["paused"]["dialog"].as_u64().unwrap()
+}
+
+/// Paint the selection black (a probe), then read the red channel on the red half and the blue
+/// channel on the blue half of the first layer: 0 where the selection covered, 1 where it didn't.
+fn probe(app: &mut PhotocraftApp) -> (f32, f32) {
+    app.run("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
+    let st = app.session.active().unwrap();
+    let walk = st.doc.walk();
+    let px = walk.first().and_then(|l| l.2.surface()).map(|s| (s.pixel(2, 8)[0], s.pixel(12, 8)[2]));
+    px.unwrap()
+}
+
+#[test]
+fn color_range_tonal_step_dialog_shows_recorded_range() {
+    let step = json!({"select": "midtones", "fuzziness": 30, "tonalRange": [90, 160]});
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (RANGE_STEP, step.clone()));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["toneFuzziness"], 30.0);
+    assert_eq!(fields["midtonesLow"], 90.0);
+    assert_eq!(fields["midtonesHigh"], 160.0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let mut reference = two_tone_app();
+    reference.run(RANGE_STEP, step).unwrap();
+    assert_eq!(has_selection(&app), has_selection(&reference));
+    assert_eq!(probe(&mut app), probe(&mut reference));
+}
+
+#[test]
+fn color_range_step_dialog_keeps_unedited_params() {
+    let step = json!({"select": "sampledColors", "color": "#0000ff", "fuzziness": 10, "mode": "subtract"});
+    let setup = || {
+        let mut app = two_tone_app();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 16})).unwrap();
+        app
+    };
+    let mut app = setup();
+    let id = pause_on(&mut app, (RANGE_STEP, step.clone()));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let mut reference = setup();
+    reference.run(RANGE_STEP, step).unwrap();
+    let want = probe(&mut reference);
+    assert!(want.0 < 0.1 && want.1 > 0.9, "the reference took the blue half out of the selection: {want:?}");
+    assert_eq!(probe(&mut app), want);
+}
+
+#[test]
+fn fill_legacy_color_step_dialog_fills_recorded_color() {
+    let mut app = two_tone_app();
+    app.session.tools.foreground = [0.0, 0.0, 1.0, 1.0];
+    let id = pause_on(&mut app, (FILL_STEP, json!({"color": "#ff0000"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((red_at(&app, 12, 8) - 1.0).abs() < 1e-4, "filled red, not the foreground");
+}
+
+#[test]
+fn fill_step_dialog_ignores_remembered_prefs_and_keeps_them() {
+    let mut app = two_tone_app();
+    let remembered = json!({"mode": "multiply", "opacity": 30.0});
+    app.session.prefs.edit(|p| p.dialogs.insert("edit.fill".into(), remembered.clone()));
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "black"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(red_at(&app, 2, 8) < 1e-4, "black at 100% normal");
+    assert_eq!(app.session.prefs().dialogs.get("edit.fill"), Some(&remembered), "playback left the remembered choices alone");
+}
+
+#[test]
+fn fill_step_dialog_keeps_recorded_target() {
+    let mut app = two_tone_app();
+    app.run("layer.new.layer", json!({"name": "top"})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color", "color": "#00ff00", "layer": "Background"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let st = app.session.active().unwrap();
+    let walk = st.doc.walk();
+    let bg = walk.iter().find(|(_, _, l)| l.name == "Background").unwrap();
+    assert!(bg.2.surface().unwrap().pixel(2, 8)[0] < 1e-4, "the recorded layer was filled, not the active one");
+}
+
+#[test]
+fn fill_step_dialog_keeps_recorded_channel_target() {
+    let mut app = two_tone_app();
+    app.run("channel.new", json!({"name": "saved", "fill": "white"})).unwrap();
+    app.run("channel.target", json!({"channel": "composite"})).unwrap();
+    let before = red_at(&app, 2, 8);
+    let target = json!({"target": {"channel": 0}});
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "black", "target": {"channel": 0}})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+
+    let st = app.session.active().unwrap();
+    let channel = photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &target).unwrap();
+    assert_eq!(channel.sample_channel(2, 8, 0), 0.0);
+    assert_eq!(red_at(&app, 2, 8), before);
+}
+
+#[test]
+fn color_range_step_dialog_preview_matches_ok() {
+    let mut app = two_tone_app();
+    let step = json!({"select": "sampledColors", "color": "#0000ff", "fuzziness": 10, "mode": "subtract"});
+    let id = pause_on(&mut app, (RANGE_STEP, step));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    let shown = crate::color_range_ui::params(fields);
+    assert_eq!(shown["color"], "#0000ff", "the preview uses the recorded colour: {shown}");
+    assert_eq!(shown["mode"], "subtract", "{shown}");
+    assert!(!crate::dialogs::is_route_marker("__kept"));
+}
+
+#[test]
+fn color_range_resampled_drops_recorded_color() {
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (RANGE_STEP, json!({"select": "sampledColors", "color": "#ff0000", "fuzziness": 10})));
+    sample_in_dialog(&mut app, id, [12.0, 8.0], egui::Modifiers::NONE);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(probe(&mut app), (1.0, 0.0), "only the blue half was selected: the red half is untouched");
+}
+
+/// Click the eyedropper at `at` in the paused dialog `id`, through the dialog's own handler.
+fn sample_in_dialog(app: &mut PhotocraftApp, id: u64, at: [f64; 2], mods: egui::Modifiers) {
+    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    crate::color_range_ui::pick(app, &mut fields, at, mods);
+    app.ui.dialog_mut(id).unwrap().fields = fields;
+}
+
+#[test]
+fn color_range_step_dialog_keeps_points_and_color() {
+    let mut app = two_tone_app();
+    let step = json!({"select": "sampledColors", "color": "#ff0000", "points": [[12.0, 8.0]], "fuzziness": 10});
+    let id = pause_on(&mut app, (RANGE_STEP, step));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(probe(&mut app), (0.0, 0.0), "the recorded red and the clicked blue are both selected");
+}
+
+#[test]
+fn color_range_shift_sample_keeps_recorded_color() {
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (RANGE_STEP, json!({"select": "sampledColors", "color": "#ff0000", "fuzziness": 10})));
+    sample_in_dialog(&mut app, id, [12.0, 8.0], egui::Modifiers { shift: true, ..Default::default() });
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(probe(&mut app), (0.0, 0.0), "red (recorded) and blue (added) are selected");
+}
+
+#[test]
+fn fill_step_dialog_switch_to_pattern_fills_pattern() {
+    let mut app = two_tone_app();
+    assert!(!app.session.patterns.items.is_empty(), "the library has a pattern");
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "black"})));
+    app.ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("pattern"));
+    assert!(app.ui.dialog_mut(id).unwrap().fields.get("pattern").and_then(Value::as_str).is_some_and(|p| !p.is_empty()));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+}
+
+/// A recorded Fill that names its layer and no target fills that layer's pixels, as headless
+/// playback does, even while the active layer's mask is the Layers panel's target.
+#[test]
+fn fill_step_dialog_on_a_named_layer_ignores_the_active_layers_mask_target() {
+    let mut app = two_tone_app();
+    app.run("layer.new.layer", json!({"name": "top"})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    let top_mask = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        let top = walk.iter().find(|(_, _, l)| l.name == "top").unwrap();
+        top.2.mask.as_ref().unwrap().surface.sample_channel(2, 8, 0)
+    };
+    let before = red_at(&app, 2, 8);
+    assert_eq!(top_mask(&app), 1.0);
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color", "color": "#000000", "layer": "Background"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(red_at(&app, 2, 8) < before, "the named layer's pixels were filled");
+    assert_eq!(top_mask(&app), 1.0, "the active layer's mask is untouched");
+}
+
+/// A recorded pattern name is not overridden by the library's first pattern.
+#[test]
+fn fill_step_dialog_keeps_a_recorded_pattern_name() {
+    let mut app = two_tone_app();
+    let items = &app.session.patterns.items;
+    let (first, name) = (items.first().unwrap().name.clone(), items.last().unwrap().name.clone());
+    assert_ne!(first, name, "the library has more than one pattern");
+    let step = json!({"contents": "pattern", "patternName": name});
+    let mut reference = two_tone_app();
+    reference.run("select.all", json!({})).unwrap();
+    reference.run(FILL_STEP, step.clone()).unwrap();
+    let mut other = two_tone_app();
+    other.run("select.all", json!({})).unwrap();
+    other.run(FILL_STEP, json!({"contents": "pattern", "patternName": first})).unwrap();
+    let grid = |app: &PhotocraftApp| -> Vec<Vec<f32>> {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        let s = walk.first().unwrap().2.surface().unwrap();
+        (0..16).flat_map(|y| (0..16).map(move |x| (x, y))).map(|(x, y)| s.pixel(x, y)).collect()
+    };
+    assert_ne!(grid(&reference), grid(&other), "the two patterns paint differently");
+    app.run("select.all", json!({})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, step));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(fields.get("pattern").is_none(), "no pattern id shadows the name: {fields:?}");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(grid(&app), grid(&reference), "the named pattern was painted");
+}
+
+#[test]
+fn fill_step_dialog_ignores_remembered_color_adaptation() {
+    let mut app = two_tone_app();
+    app.session.prefs.edit(|p| p.dialogs.insert("edit.fill".into(), json!({"colorAdaptation": false})));
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "contentAware"})));
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["colorAdaptation"], true);
+}
+
+#[test]
+fn fill_step_contents_case_insensitive() {
+    let mut app = two_tone_app();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "Color", "color": "#ff0000"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((red_at(&app, 12, 8) - 1.0).abs() < 1e-4, "filled red");
+}
+
+#[test]
+fn fill_unedited_color_keeps_translucent_foreground() {
+    let pixel = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        walk.first().unwrap().2.surface().unwrap().pixel(12, 8)
+    };
+    let fg = [0.2, 0.9, 0.31, 0.5];
+    let mut headless = two_tone_app();
+    headless.session.tools.foreground = fg;
+    headless.run("select.all", json!({})).unwrap();
+    headless.run(FILL_STEP, json!({"contents": "color"})).unwrap();
+    let want = pixel(&headless);
+
+    let mut app = two_tone_app();
+    app.session.tools.foreground = fg;
+    app.run("select.all", json!({})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color"})));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(pixel(&app), want, "OK sends what headless playback sends");
+}
+
+#[test]
+fn fill_picked_color_is_sent_even_if_it_equals_the_foreground() {
+    let pixel = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let walk = st.doc.walk();
+        walk.first().unwrap().2.surface().unwrap().pixel(12, 8)
+    };
+    let mut app = two_tone_app();
+    app.session.tools.foreground = [0.2, 0.9, 0.31, 0.5];
+    app.run("select.all", json!({})).unwrap();
+    let id = pause_on(&mut app, (FILL_STEP, json!({"contents": "color"})));
+    let shown = app.ui.dialog_mut(id).unwrap().fields["color"].as_str().unwrap().to_string();
+    // OK in the Color Picker on the very hex the field already shows.
+    let picker = crate::color_picker_ui::open_for_field(&mut app, "Color Picker", crate::color_picker_ui::parse_hex(&shown).unwrap(), id, "color");
+    crate::dialogs::confirm(&mut app, picker).unwrap();
+    let step = crate::fill_ui::params(&app.ui.dialog_mut(id).unwrap().fields);
+    assert_eq!(step.get("color"), Some(&json!(shown)), "a picked colour is sent: {step:?}");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!((pixel(&app)[3] - 1.0).abs() < 1e-4, "filled with the opaque colour picked: {:?}", pixel(&app));
+}

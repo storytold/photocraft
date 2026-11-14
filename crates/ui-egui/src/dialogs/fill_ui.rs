@@ -27,6 +27,13 @@ pub const CONTENTS: [(&str, &str); 9] = [
     ("white", "White"),
 ];
 
+/// The marker holding the colour field as `load_step` showed it for a step without `color`; while
+/// the field still equals it, `color` is left out of the params (the engine then uses the
+/// foreground itself). OK in the Color Picker removes it.
+fn loaded_color() -> String {
+    crate::color_picker_ui::loaded_marker("color")
+}
+
 /// Params the dialog edits and remembers.
 const KEYS: [&str; 7] = ["contents", "color", "pattern", "colorAdaptation", "mode", "opacity", "preserveTransparency"];
 
@@ -98,13 +105,25 @@ pub fn reset(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
 
 /// Open Fill with the current editing target, so live UI changes cannot redirect confirmation.
 pub fn open(app: &mut PhotocraftApp) -> u64 {
+    open_with_params(app, &json!({}))
+}
+
+/// Open the recorded Fill on its effective target and capture that target for confirmation.
+pub(crate) fn open_with_params(app: &mut PhotocraftApp, params: &Value) -> u64 {
     let mut f = fields(app);
-    let target = app.with_mask_target(COMMAND, json!({}));
-    let target = target.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app));
+    let named_layer = params.get("layer").is_some_and(|l| !l.is_null());
+    let target = if named_layer {
+        // Headless playback of a named-layer step targets pixels unless the step says otherwise;
+        // an explicit target also stops `app.run` adding the active layer's mask target.
+        params.get("target").cloned().unwrap_or_else(|| json!("pixels"))
+    } else {
+        let t = app.with_mask_target(COMMAND, params.clone());
+        t.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app))
+    };
     if let Some(st) = app.session.active() {
         f.insert("__document".into(), json!(st.doc.id.0));
         // Alpha and Quick Mask belong to the document, independently of its active layer.
-        if target.as_str() != Some("quickMask") && target.get("channel").is_none() {
+        if params.get("layer").is_none_or(Value::is_null) && target.as_str() != Some("quickMask") && target.get("channel").is_none() {
             f.insert("__layer".into(), json!(st.active_layer));
         }
     }
@@ -112,13 +131,80 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(crate::state::DialogKind::Command, f)
 }
 
+/// The `edit.fill` params the dialog can produce. Any other recorded param (`layer`, `target`,
+/// pattern placement, ...) is not the dialog's to change; `load_step` keeps it in `__kept`.
+const PARAM_KEYS: &[&str] = &["contents", "mode", "opacity", "preserveTransparency", "color", "pattern", "colorAdaptation"];
+/// The dialog field holding the recorded params outside `PARAM_KEYS`.
+const KEPT: &str = "__kept";
+
+/// The foreground colour as the dialog's hex string, for [`load_step`].
+pub fn foreground_hex(app: &PhotocraftApp) -> String {
+    hex(app.session.tools.foreground)
+}
+
+/// Show a recorded step in the dialog: what the step carries, and the engine's defaults for the
+/// rest (not the remembered choices): contents `color`, colour = `foreground` (a hex string),
+/// Normal 100%, no transparency lock, colour adaptation on, the library's first pattern
+/// (`first_pattern`, none when the library is empty; not shown when the step names its pattern).
+pub fn load_step(f: &mut Map<String, Value>, step: &Value, foreground: &str, first_pattern: Option<&str>) {
+    let Some(o) = step.as_object() else { return };
+    let kept: Map<String, Value> =
+        o.iter().filter(|(k, _)| !PARAM_KEYS.contains(&k.as_str()) && !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    f.insert(KEPT.into(), Value::Object(kept));
+    let is_set = |k: &str| o.get(k).is_some_and(|v| !v.is_null());
+    // The engine matches `contents` case-insensitively; the dialog knows the canonical names.
+    let contents = match o.get("contents") {
+        Some(Value::String(c)) => CONTENTS.iter().find(|(k, _)| k.eq_ignore_ascii_case(c)).map_or(c.as_str(), |(k, _)| *k),
+        _ => "color",
+    };
+    // The recorded values first (the caller needn't have copied them), then the defaults.
+    for k in PARAM_KEYS {
+        if let Some(v) = o.get(*k).filter(|v| !v.is_null()) {
+            f.insert((*k).into(), v.clone());
+        }
+    }
+    f.insert("contents".into(), json!(contents));
+    f.remove(&loaded_color());
+    for (k, v) in [("mode", json!("normal")), ("opacity", json!(100.0)), ("preserveTransparency", json!(false)), ("colorAdaptation", json!(true))] {
+        if !is_set(k) {
+            f.insert(k.into(), v);
+        }
+    }
+    if !is_set("color") {
+        // Shown as the foreground's hex, but not sent until the user changes it or picks a colour
+        // in the Color Picker: headless playback uses the foreground itself (full precision and
+        // alpha).
+        f.insert("color".into(), json!(foreground));
+        f.insert(loaded_color(), json!(foreground));
+    }
+    if !is_set("pattern") {
+        if is_set("patternName") {
+            // The step names its pattern; a default id would win over the name in the engine.
+            f.remove("pattern");
+        } else if let Some(p) = first_pattern {
+            f.insert("pattern".into(), json!(p));
+        }
+    }
+}
+
 /// The `edit.fill` params of the dialog's fields: only the options of the chosen contents.
 pub fn params(f: &Map<String, Value>) -> Value {
+    let mut p = own_params(f);
+    if let Some(kept) = f.get(KEPT).and_then(Value::as_object) {
+        for (k, v) in kept {
+            p.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    Value::Object(p)
+}
+
+fn own_params(f: &Map<String, Value>) -> Map<String, Value> {
     let contents = f.get("contents").and_then(Value::as_str).unwrap_or("foreground");
-    let mut p = json!({ "contents": contents });
+    let mut p = Map::new();
+    p.insert("contents".into(), json!(contents));
     for k in ["mode", "opacity", "preserveTransparency"] {
         if let Some(v) = f.get(k) {
-            p[k] = v.clone();
+            p.insert(k.into(), v.clone());
         }
     }
     let extra = match contents {
@@ -129,24 +215,37 @@ pub fn params(f: &Map<String, Value>) -> Value {
     };
     if let Some(k) = extra
         && let Some(v) = f.get(k)
+        && !(k == "color" && f.get(&loaded_color()) == Some(v))
     {
-        p[k] = v.clone();
+        p.insert(k.into(), v.clone());
     }
     if let Some(target) = f.get("__target") {
-        p["target"] = target.clone();
+        p.insert("target".into(), target.clone());
     }
     p
 }
 
 /// OK: remember the choices, then fill.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let st = app.session.active().ok_or(tl!("The document is closed"))?;
-    if f.get("__document").and_then(Value::as_u64) != Some(st.doc.id.0) || f.get("__layer").is_some_and(|layer| layer != &json!(st.active_layer)) {
-        return Err(tl!("The document or active layer changed. Open Fill again.").into());
+    let paused = crate::actions::is_paused_step(f);
+    let target_check = app.session.active().ok_or(tl!("The document is closed")).and_then(|st| {
+        if f.get("__document").and_then(Value::as_u64) != Some(st.doc.id.0) || f.get("__layer").is_some_and(|layer| layer != &json!(st.active_layer)) {
+            Err(tl!("The document or active layer changed. Open Fill again."))
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(error) = target_check {
+        if paused {
+            crate::actions::abandoned(app, f);
+        }
+        return Err(error.into());
     }
-    let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
-    app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
-    app.run(COMMAND, params(f))
+    if !paused {
+        let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
+    }
+    crate::actions::run_dialog_command(app, f, COMMAND, params(f))
 }
 
 /// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.

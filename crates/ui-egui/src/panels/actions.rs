@@ -379,10 +379,7 @@ fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str,
 fn open_step_editor(app: &mut PhotocraftApp, command: &str) -> Result<u64, String> {
     if crate::sizing::is_sizing(command) {
         crate::sizing::open(app, command).ok_or_else(|| tl!("No document.").into())
-    } else if crate::filter_dialog::has_dialog(command)
-        || crate::adjust_dialog::has_dialog(command)
-        || (command == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app))
-    {
+    } else if step_has_dialog(app, command) {
         Ok(crate::dialogs::open_command_dialog(app, command, &label_of(command)))
     } else {
         crate::filter_dialog::open(app, command).ok_or_else(|| tl!("The step has no command editor.").into())
@@ -400,14 +397,23 @@ fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &Value) -> Re
         // Private keys belong to the dialog, not the recorded Action step.
         object.retain(|key, _| !key.starts_with("__"));
     }
-    let dialog = crate::adjust_dialog::open_with_params(app, id, &values).map(Ok).unwrap_or_else(|| open_step_editor(app, id))?;
+    let dialog = if id == crate::fill_ui::COMMAND {
+        crate::fill_ui::open_with_params(app, &values)
+    } else {
+        crate::adjust_dialog::open_with_params(app, id, &values).map(Ok).unwrap_or_else(|| open_step_editor(app, id))?
+    };
+    let fill_defaults =
+        (id == crate::fill_ui::COMMAND).then(|| (crate::fill_ui::foreground_hex(app), app.session.patterns.items.first().map(|p| p.id.to_string())));
     // Adjustment dialogs normalized their effective target already. Raw parameters here
     // would restore discarded Lab/CMYK records or override the normalized tone controls.
-    if !adjustment
-        && let Some(d) = app.ui.dialog_mut(dialog)
-        && let Some(object) = values.as_object()
-    {
-        d.fields.extend(object.iter().map(|(key, value)| (key.clone(), value.clone())));
+    if !adjustment && let Some(d) = app.ui.dialog_mut(dialog) {
+        if id == crate::color_range_ui::COMMAND {
+            crate::color_range_ui::load_step(&mut d.fields, &values);
+        } else if let Some((foreground, pattern)) = &fill_defaults {
+            crate::fill_ui::load_step(&mut d.fields, &values, foreground, pattern.as_deref());
+        } else if let Some(object) = values.as_object() {
+            d.fields.extend(object.iter().map(|(key, value)| (key.clone(), value.clone())));
+        }
     }
     Ok(dialog)
 }
@@ -536,12 +542,7 @@ fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
-        if action.dialogs.contains(&i)
-            && interactive
-            && (crate::filter_dialog::has_dialog(id)
-                || crate::adjust_dialog::has_dialog(id)
-                || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app)))
-        {
+        if action.dialogs.contains(&i) && interactive && step_has_dialog(app, id) {
             match pause_for_dialog(app, &action, i, id, p) {
                 Ok(dialog) => paused = Some(json!({"step": i, "id": id, "dialog": dialog})),
                 Err(error) => failed = Some(json!({"step": i, "id": id, "error": error})),
@@ -1378,6 +1379,37 @@ pub(crate) fn run_step_dialog(app: &mut PhotocraftApp, fields: &serde_json::Map<
     let result = app.run(command, params);
     app.session.authorize = saved;
     result
+}
+
+/// Confirm a dedicated dialog (Color Range, Fill) that runs its own command. With no pause
+/// behind the dialog this is exactly `app.run(command, params)`. Behind a pause the params go
+/// through the paused action's gate and history, then the action goes on after it. A failure
+/// ends the paused action.
+pub(crate) fn run_dialog_command(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>, command: &str, params: Value) -> Result<Value, String> {
+    if !is_paused_step(fields) {
+        return app.run(command, params);
+    }
+    match run_step_dialog(app, fields, command, params) {
+        Ok(value) => resume(app, fields).map(|()| value),
+        Err(error) => {
+            abandoned(app, fields);
+            Err(error)
+        }
+    }
+}
+
+/// Whether these dialog fields belong to a paused action's step (not to a dialog opened by hand).
+pub(crate) fn is_paused_step(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(RESUME)
+}
+
+/// Whether the dialog toggle of a recorded step shows a dialog of its own during playback.
+fn step_has_dialog(app: &PhotocraftApp, id: &str) -> bool {
+    crate::filter_dialog::has_dialog(id)
+        || crate::adjust_dialog::has_dialog(id)
+        || id == crate::color_range_ui::COMMAND
+        || id == crate::fill_ui::COMMAND
+        || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app))
 }
 
 /// Bind the dialog's own edit to its suspended action before it runs or starts a worker.
