@@ -676,26 +676,45 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
 }
 
 /// File › Export › Artboards to Files: `<prefix>_<index:04>_<artboard name>.<format>` per board.
+/// From the desktop app ([`Session::start`]) the boards are flattened and written on a worker:
+/// on a storyboard of large boards that took over a minute, and a frame that long on the UI
+/// thread got the window closed by the compositor.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
+    let dir = expand_home(str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?);
+    check_folder(&dir)?;
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
-    let mut files = Vec::new();
-    for (i, one) in chosen_documents(&doc, p)?.into_iter().enumerate() {
-        // Names may be identical, or collide after sanitizing or filesystem case folding.
-        let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
-        let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, save)?;
-        files.push(path);
-    }
-    if files.is_empty() {
-        return Err(bad(cmd, "no matching artboards"));
-    }
-    Ok(json!({"files": files}))
+    let p = p.clone();
+    crate::jobs::run(
+        s,
+        "Artboards to Files",
+        false,
+        move |ctx| {
+            ctx.progress(0.0, "Artboards to Files");
+            let boards = chosen_documents(&doc, &p)?;
+            let n = boards.len();
+            let mut files = Vec::new();
+            for (i, one) in boards.into_iter().enumerate() {
+                ctx.check()?;
+                ctx.progress(i as f32 / n as f32, &format!("Artboard {} of {n}", i + 1));
+                // Names may be identical, or collide after sanitizing or filesystem case folding.
+                let name =
+                    if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
+                let path = join(&dir, &format!("{name}.{format}"));
+                save_doc(&one, &path, save)?;
+                files.push(path);
+            }
+            if files.is_empty() {
+                return Err(bad(cmd, "no matching artboards"));
+            }
+            Ok(json!({"files": files}))
+        },
+        |_, v| Ok(v),
+    )
 }
 
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
@@ -745,29 +764,101 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
 }
 
 /// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// From the desktop app ([`Session::start`]) the pages are made on a worker, as for
+/// [`artboards_to_files`]; nothing is written until every page is ready.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
-    let path = str_param(p, "path", cmd)?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let path = pdf_destination(str_param(p, "path", cmd)?, &d.doc.name)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
-    let mut pages = Vec::new();
-    for one in chosen_documents(&doc, p)? {
-        let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
-        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
-        let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
-        let mut surf = Surface::new(fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
-        surf.write_region(one.bounds(), &vals);
-        flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-        let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+    let p = p.clone();
+    crate::jobs::run(
+        s,
+        "Artboards to PDF",
+        false,
+        move |ctx| {
+            ctx.progress(0.0, "Artboards to PDF");
+            let boards = chosen_documents(&doc, &p)?;
+            let n = boards.len();
+            let mut pages = Vec::new();
+            for (i, one) in boards.into_iter().enumerate() {
+                ctx.check()?;
+                ctx.progress(i as f32 / n as f32, &format!("Artboard {} of {n}", i + 1));
+                pages.push(pdf_page(&one, doc.resolution_dpi, quality)?);
+            }
+            if pages.is_empty() {
+                return Err(bad(cmd, "no matching artboards"));
+            }
+            ctx.check()?;
+            write_file(&path, &raster_pdf(&pages))?;
+            Ok(json!({"path": path, "pages": pages.len()}))
+        },
+        |_, v| Ok(v),
+    )
+}
+
+/// A path typed into an export dialog with a leading `~` (`~/boards.pdf`): the home folder.
+/// Nothing else expands it, so the PDF went to a folder named `~` under the working directory,
+/// or failed once every page was made.
+#[cfg(not(target_arch = "wasm32"))]
+fn expand_home(path: &str) -> String {
+    let rest = path.strip_prefix('~').filter(|r| r.is_empty() || r.starts_with('/') || (cfg!(windows) && r.starts_with('\\')));
+    if let Some(rest) = rest
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return format!("{}{rest}", home.to_string_lossy());
     }
-    if pages.is_empty() {
-        return Err(bad(cmd, "no matching artboards"));
+    path.to_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn expand_home(path: &str) -> String {
+    path.to_string()
+}
+
+/// An export's destination folder must exist and be a folder: checked before any board is
+/// flattened, so a mistyped folder (or a file in its place) fails at once instead of after the
+/// whole export. Other filesystem errors (permissions, say) are left to the write.
+#[cfg(not(target_arch = "wasm32"))]
+fn check_folder(dir: &str) -> Result<()> {
+    if dir.is_empty() {
+        return Ok(());
     }
-    write_file(&path, &raster_pdf(&pages))?;
-    Ok(json!({"path": path, "pages": pages.len()}))
+    match std::fs::metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(EngineError::Other(format!("Destination does not exist: {dir}"))),
+        Ok(m) if !m.is_dir() => Err(EngineError::Other(format!("Destination is not a folder: {dir}"))),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn check_folder(_: &str) -> Result<()> {
+    Ok(())
+}
+
+/// Where Artboards to PDF writes `path`: `~` expanded, and `<document name>.pdf` inside it when it
+/// names a folder (`~/`). Its folder must exist ([`check_folder`]).
+fn pdf_destination(path: &str, doc_name: &str) -> Result<String> {
+    let path = expand_home(path);
+    let folder = path.ends_with(['/', '\\']) || (cfg!(not(target_arch = "wasm32")) && std::path::Path::new(&path).is_dir());
+    let path = if folder { join(&path, &format!("{}.pdf", stem(doc_name))) } else { path };
+    let parent = std::path::Path::new(&path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    check_folder(&parent)?;
+    Ok(path)
+}
+
+/// One board's PDF page: (width px, height px, dpi, JPEG bytes) for [`raster_pdf`].
+fn pdf_page(one: &Document, dpi: f32, quality: Option<f64>) -> Result<(u32, u32, f32, Vec<u8>)> {
+    let buf = photocraft_compose::flatten(one).over_background([1.0, 1.0, 1.0]);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
+    let mut surf = Surface::new(fmt);
+    let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
+    surf.write_region(one.bounds(), &vals);
+    flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+    let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
+    Ok((one.size.width, one.size.height, dpi, jpeg))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
