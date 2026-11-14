@@ -945,3 +945,33 @@ fn masked_smart_objects_open_with_their_masks_however_many_their_sources_add_up_
         );
     }
 }
+
+/// A source is given back after the last layer that names it is built. A folder record naming
+/// it too is a group, never built as a smart object, so it doesn't hold the source for the rest
+/// of the open: a later smart object that needs the room still fits.
+#[test]
+fn a_folder_naming_a_source_does_not_keep_it_held() {
+    let mut file = testgen::small(Version::Psb, Compression::Raw);
+    let (first, first_item) = masked_smart_object(&file, "p1", Rect::new(0, 0, 4, 3), Rect::new(0, 0, 4, 3), 0.5);
+    let (second, second_item) = masked_smart_object(&file, "p2", Rect::new(0, 0, 4, 3), Rect::new(0, 0, 4, 3), 0.5);
+    // [p1 smart object, group end, p2 smart object inside the group, the folder]: p1 is built
+    // first, and the folder names p1 as well.
+    let mut folder = file.layers()[3].clone();
+    assert!(folder.section_type().is_folder());
+    folder.blocks.push(first.block(b"SoLd").unwrap().clone());
+    let divider = file.layers()[1].clone();
+    file.layers_mut().clear();
+    file.layers_mut().extend([first, divider, second, folder]);
+    let mut fx = craft_psd::filter_effects::FilterEffects { version: 3, items: vec![first_item, second_item] }.to_bytes();
+    fx.resize(fx.len().next_multiple_of(4), 0);
+    file.global_blocks.push(TaggedBlock::new(*b"FEid", fx));
+    let bytes = file.to_bytes().unwrap();
+    // Room for both masks and one source at a time.
+    let cap = 2 * photocraft_raster::stored_tiles_bytes(1, &PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false))
+        + photocraft_raster::stored_tiles_bytes(1, &PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+    let imported = crate::smart_map::with_test_cache_cap(cap, || crate::import("folder.psb", &bytes)).unwrap();
+    assert!(!imported.warnings.iter().any(|w| w.contains("filter mask was ignored")), "{:?}", imported.warnings);
+    let group = imported.document.layers.iter().find(|l| l.is_group()).expect("the folder");
+    let inner = group.children().and_then(|c| c.first()).expect("the second smart object");
+    assert!(matches!(&inner.content, LayerContent::Smart(sm) if sm.filter_mask.is_some()), "the second object keeps its mask");
+}

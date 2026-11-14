@@ -21,6 +21,10 @@ type OwnedSourceHash = (std::sync::Arc<Vec<u8>>, [u8; 32]);
 #[cfg(test)]
 thread_local! { pub(crate) static EMBED_HASHED_SOURCE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+// Source composites rendered on this thread (redraws are admitted before rendering).
+#[cfg(test)]
+thread_local! { pub(crate) static SOURCE_RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 /// The actual payload digest used by the source-conversion cache, separate from preview checks.
 pub(super) fn embed_source_hash(bytes: &[u8]) -> [u8; 32] {
     #[cfg(test)]

@@ -900,7 +900,9 @@ fn a_redrawn_filter_cache_is_charged_to_the_save_budget() {
     let within = crate::export(&doc, "x.psb", &crate::ExportOptions::default()).unwrap();
     assert_eq!(fx_ids(&within.bytes).len(), 2, "both caches, the duplicate's redrawn under its own id: {:?}", within.warnings);
 
+    let renders = smart::SOURCE_RENDERS.with(std::cell::Cell::get);
     let spent = crate::smart_map::with_test_cache_cap(1, || crate::export(&doc, "x.psb", &crate::ExportOptions::default())).unwrap();
+    assert_eq!(smart::SOURCE_RENDERS.with(std::cell::Cell::get), renders, "refused before the source is rendered");
     assert!(fx_ids(&spent.bytes).is_empty(), "no cache redrawn past the budget");
     assert!(spent.warnings.iter().any(|w| w.contains("\"duplicate\"") && w.contains("smart filter cache was left out")), "{:?}", spent.warnings);
     let file = PsdFile::from_bytes(&spent.bytes).unwrap();

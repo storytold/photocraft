@@ -129,17 +129,30 @@ fn added_tiles_bytes(source: &Surface, stored: &Surface, fmt: &PixelFormat) -> u
     photocraft_raster::stored_tiles_bytes(added as u64, fmt)
 }
 
-/// How many layer records name each placed id in their `SoLd`/`SoLE`.
-fn count_placed_uses(file: &PsdFile) -> std::collections::HashMap<String, usize> {
-    let mut uses = std::collections::HashMap::new();
-    for rec in file.layers() {
-        if let Some(p) = rec.block(b"SoLd").or_else(|| rec.block(b"SoLE")).and_then(|b| crate::smart_map::parse_sold(&b.data))
-            && !p.placed.is_empty()
-        {
-            *uses.entry(p.placed).or_insert(0) += 1;
+/// How many smart objects [`Ctx::build`] makes of `nodes` (to `depth` groups deep, as it does)
+/// that name each placed id in their `SoLd`/`SoLE`: the layers whose build counts the use down
+/// ([`Ctx::used_placed`]). Folders are groups, and records [`Ctx::layer_from_record`] makes
+/// adjustment or type layers don't name a source.
+fn count_placed_uses(records: &[LayerRecord], nodes: &[LayerNode], depth: usize, uses: &mut std::collections::HashMap<String, usize>) {
+    for node in nodes {
+        match node {
+            LayerNode::Layer { index } => {
+                let Some(rec) = records.get(*index) else { continue };
+                let smart = !ADJUSTMENT_KEYS.into_iter().any(|k| rec.block(k).is_some())
+                    && rec.block(b"TySh").is_none()
+                    && SMART_KEYS.into_iter().any(|k| rec.block(k).is_some());
+                if let Some(p) = rec.block(b"SoLd").or_else(|| rec.block(b"SoLE")).and_then(|b| crate::smart_map::parse_sold(&b.data))
+                    && smart
+                    && !p.placed.is_empty()
+                {
+                    *uses.entry(p.placed).or_insert(0) += 1;
+                }
+            }
+            // The nesting cap `build` applies: deeper children are not imported.
+            LayerNode::Group { children, .. } if depth < photocraft_doc::MAX_GROUP_DEPTH => count_placed_uses(records, children, depth + 1, uses),
+            LayerNode::Group { .. } => {}
         }
     }
-    uses
 }
 
 fn import_format(file: &PsdFile) -> (ColorMode, bool, bool, SampleType) {
@@ -1521,9 +1534,6 @@ fn psd_to_document_global(
             Err(e) => cx.warn(format!("smart filter masks ({}) could not be read: {e}", String::from_utf8_lossy(key))),
         }
     }
-    if !cx.filter_effects.is_empty() {
-        cx.placed_uses = count_placed_uses(file);
-    }
     if ctl.cancelled() {
         return None;
     }
@@ -1616,6 +1626,9 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     let DecodedImport { file, merged, sizes, canvas, depth, fmt, .. } = import;
     let cc = fmt.mode.color_channels();
     let tree = file.layer_tree_max_depth(photocraft_doc::MAX_GROUP_DEPTH);
+    if !cx.filter_effects.is_empty() {
+        count_placed_uses(file.layers(), &tree, 0, &mut cx.placed_uses);
+    }
     let space = photocraft_compose::cmyk_space(doc);
     doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0));
     mark_background(file, &mut doc.layers);

@@ -760,33 +760,42 @@ impl Ex<'_> {
         upsert(raw, &key, sold, None);
         if !stack.filters.is_empty() {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
-            let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
-                (None, Some((img, img_bounds))) => match self.redraw_admission(sm, img_bounds, bounds) {
-                    Ok(_working) => {
-                        let unfiltered = match &sm.perspective {
-                            Some(p) => {
-                                photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
-                            }
-                            None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
-                        };
-                        match unfiltered {
-                            Ok(unfiltered) => {
-                                let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
-                                if item.is_some() && masked(sm) {
-                                    let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
-                                    // Held until the record is unmixed with it, then given back.
-                                    let held = photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt);
-                                    let held = if self.smart.fx_budget.try_charge(held) { held } else { 0 };
-                                    self.smart.unfiltered.insert(l.id, (u, held));
+            // Admitted before the source is read or rendered: from its size as the placement
+            // records it, which the source must then match.
+            let source = source_rect(src.size);
+            let item = match (sm.stack_mode, source) {
+                (None, Some(source)) => match self.redraw_admission(sm, source, bounds, !self.smart.composites.contains_key(&src.uuid)) {
+                    Ok(_working) => match self.source_composite(&src.uuid, source) {
+                        Some((img, img_bounds)) => {
+                            let unfiltered = match &sm.perspective {
+                                Some(p) => photocraft_algo::warp::place_source_projective(
+                                    &img,
+                                    img_bounds,
+                                    &photocraft_algo::transform::Homography(*p),
+                                    sm.warp.as_ref(),
+                                ),
+                                None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
+                            };
+                            match unfiltered {
+                                Ok(unfiltered) => {
+                                    let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
+                                    if item.is_some() && masked(sm) {
+                                        let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
+                                        // Held until the record is unmixed with it, then given back.
+                                        let held = photocraft_raster::stored_tiles_bytes(u.tile_count() as u64, &self.fmt);
+                                        let held = if self.smart.fx_budget.try_charge(held) { held } else { 0 };
+                                        self.smart.unfiltered.insert(l.id, (u, held));
+                                    }
+                                    item
                                 }
-                                item
-                            }
-                            Err(e) => {
-                                warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
-                                None
+                                Err(e) => {
+                                    warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                                    None
+                                }
                             }
                         }
-                    }
+                        None => None,
+                    },
                     Err(why) => {
                         self.warnings.push(format!(
                             "layer \"{}\": {why}; its smart filter cache was left out, so Photoshop renders its filters again, without the filter mask",
@@ -838,8 +847,8 @@ impl Ex<'_> {
         blocks::plld_transform(&corners, size, warp.as_ref()) != (sm.transform, sm.perspective)
     }
 
-    /// Admits redrawing a placed layer's filter cache from its source (`src` bounds) over
-    /// `bounds`, before anything is drawn: what it keeps until the record is unmixed (the placed
+    /// Admits redrawing a placed layer's filter cache from its source (`src` bounds, rendered
+    /// for it when `render_source`) over `bounds`, before the source is read or anything drawn: what it keeps until the record is unmixed (the placed
     /// unfiltered pixels, for a mask that shows) must fit the save's smart-filter cache budget,
     /// and its working set (the placed source, and the cache's planes over it and `bounds`, read
     /// as floats) the process's working memory. The reservation is held while it draws.
@@ -848,6 +857,7 @@ impl Ex<'_> {
         sm: &photocraft_doc::SmartObject,
         src: photocraft_geom::Rect,
         bounds: photocraft_geom::Rect,
+        render_source: bool,
     ) -> Result<photocraft_raster::memory::Reservation, String> {
         let too_large = || crate::smart_map::FilterCacheError::TooLarge.to_string();
         let placed = placed_area(src, sm).ok_or_else(too_large)?;
@@ -859,9 +869,12 @@ impl Ex<'_> {
         let area = placed.union(&bounds);
         let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
         let per_px = (fmt.channels() as u64).saturating_mul(4).saturating_add((fmt.bytes_per_pixel() as u64).saturating_mul(3));
+        // The source's composite too, when it isn't rendered yet (kept for this save).
+        let composite = if render_source { photocraft_raster::tile_storage_bytes(src, &fmt) } else { 0 };
         let working = photocraft_raster::tile_storage_bytes(placed, &fmt)
             .saturating_add(photocraft_raster::tile_storage_bytes(area, &fmt))
-            .saturating_add(px.saturating_mul(per_px));
+            .saturating_add(px.saturating_mul(per_px))
+            .saturating_add(composite);
         photocraft_raster::memory::try_reserve_operation(working)
     }
 
@@ -1020,9 +1033,11 @@ impl Ex<'_> {
 
     /// The composite of the source `uuid` (an embedded file of this export or of the imported
     /// document) in the document's pixel format, its top-left at the origin; decoded once.
-    fn source_composite(&mut self, uuid: &str) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
+    /// The composite of the source `uuid` (rendered once per save) and its bounds. A source
+    /// larger than `within`, the size its redraw was admitted for, is neither read nor rendered.
+    fn source_composite(&mut self, uuid: &str, within: photocraft_geom::Rect) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
         if let Some(c) = self.smart.composites.get(uuid) {
-            return c.clone();
+            return c.clone().filter(|(_, b)| within.contains_rect(b));
         }
         let doc = match self.smart.docs.get(uuid) {
             Some(d) => Some(d.clone()),
@@ -1034,10 +1049,26 @@ impl Ex<'_> {
                     };
                     crate::linked::find_linked_file(&meta, uuid)
                 });
+                // Its header says how large it is: past the admitted size it isn't decoded (nor
+                // remembered as unavailable: another object may be admitted for more).
+                let fits = |f: &crate::linked::LinkedFile| {
+                    crate::linked::source_geometry(&f.file_name, &f.bytes, &Interrupt::NONE)
+                        .ok()
+                        .and_then(|(size, _)| source_rect(size))
+                        .is_some_and(|r| within.contains_rect(&r))
+                };
+                if file.as_ref().is_some_and(|f| !fits(f)) {
+                    return None;
+                }
                 file.and_then(|f| crate::import(&f.file_name, &f.bytes).ok()).map(|r| r.document)
             }
         };
+        if doc.as_ref().is_some_and(|d| !within.contains_rect(&d.bounds())) {
+            return None;
+        }
         let c = doc.map(|d| {
+            #[cfg(test)]
+            smart::SOURCE_RENDERS.with(|n| n.set(n.get() + 1));
             let mut s = Surface::new(self.fmt);
             let fmt = self.fmt;
             let _ = photocraft_compose::render_bands(&d, d.bounds(), 0, |band| -> Result<(), ()> {
@@ -1239,6 +1270,13 @@ impl Ex<'_> {
             }
         }
     }
+}
+
+/// The bounds of a source document of `size` pixels (at the origin, as its composite is);
+/// `None` for a size that isn't a finite, representable one.
+fn source_rect(size: (f64, f64)) -> Option<photocraft_geom::Rect> {
+    let side = |v: f64| (v.is_finite() && v >= 0.0 && v < f64::from(i32::MAX / 2)).then(|| v.ceil() as i32);
+    Some(photocraft_geom::Rect::new(0, 0, side(size.0)?, side(size.1)?))
 }
 
 /// Where a placed layer's source of bounds `src` lands in the document ([`photocraft_algo::warp::place_source`]):
