@@ -63,7 +63,7 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
-lopdf = { version = "0.38", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"
 craft-affinity = { workspace = true, features = ["synth"] }
