@@ -5,31 +5,27 @@ signed installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball,
 or updates a **draft** GitHub Release named `PhotoCraft v<version>`. Nobody sees a draft until a
 maintainer publishes it.
 
-This is PhotoCraft's implementation of the shared
-[release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
-and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
+User-facing names say **PhotoCraft**. Files, binaries and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
+
+## In-app update checks
+
+The native desktop app checks the public GitHub latest-release endpoint in a background
+thread once at launch, with no periodic checks or automatic retries. Preferences › General › Automatically
+Check for Updates disables the startup check; Help › Check for Updates runs one manually.
+Checks use a 15-second timeout and a 1 MiB response limit, need no GitHub token, and send
+no document or personal data. Network failures are quiet during automatic checks and visible
+in the manual check window. Concurrent requests share one check.
+HTTPS validates certificates and host names against the operating system's trust store.
+
+Tags must be semantic versions (`v0.8.0` or `0.8.0`); only published stable versions newer
+than the installed workspace version trigger a notice. Drafts and prereleases do not trigger it.
+Flatpak builds also check for releases; repository-managed installations are updated through
+their package manager. Web/headless frontends have no update transport. No release-workflow
+changes are required: publishing a newer stable GitHub Release makes it discoverable.
 
 ## Cutting a release
 
-1. **Refresh contributor credits on the latest `main`, before bumping the version.**
-   With a clean checkout and the official craftrules checkout available, run:
-
-   ```sh
-   python3 ../../craftrules/scripts/contributors.py .
-   python3 ../../craftrules/scripts/contributors.py --check .
-   ```
-
-   The first command regenerates and verifies; `--check` verifies `people.toml` only,
-   not snapshot freshness. Review the generated `contributors/contributors.json`: its
-   `repo` must identify PhotoCraft, `head` must identify the `main` commit just used,
-   and the contributor records and totals must match the generator's report. Commit
-   the original generated output through normal review before updating `release`.
-   Do not hand-edit statistics or other people's names or consent entries. See
-   [contributor refresh requirements](contributors.md#refreshing-maintainers).
-   If the official generator is unavailable, ask a maintainer to refresh; do not
-   substitute another generator. If more development lands before release, refresh
-   again on that new `main`.
-2. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
+1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
    in the root `Cargo.toml`:
 
    ```sh
@@ -38,19 +34,19 @@ and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.stor
    ```
 
    Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
-3. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
-4. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
+2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
+3. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
    Releases page has a draft `PhotoCraft v0.2.0`, tagged `v0.2.0` on the pushed commit, with
    every artifact and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
-5. **Check it.** Download an installer or two and look at the job summaries. Any
+4. **Check it.** Download an installer or two and look at the job summaries. Any
    `::warning::` there means a signing secret was missing and that artifact is unsigned.
-6. **Add the scorecard deltas** to the draft's notes: what moved in
+5. **Add the scorecard deltas** to the draft's notes: what moved in
    [`docs/scorecard.md`](scorecard.md) since the previous release. Compare the summary table
    and the performance table of both tags (`git diff v<previous> v<this> -- docs/scorecard.md`)
    and list each area's done / partial / missing change, the scenarios that newly meet their
    budget or got slower, corpus floors raised, and the change in settings that do nothing.
    Quote numbers with the baseline's machine and load average.
-7. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
+6. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
    pre-release suffix (`-rc.1`) are marked as pre-releases.
 
 Pushing to `release` again before you publish rebuilds the same draft and replaces its assets.
@@ -62,44 +58,34 @@ it with `cargo xtask version set` before building, so the binaries report it too
 needs the `release` environment, which only the `release` branch can use, so pick that branch
 in the dialog.
 
-## Inspecting snapshot freshness without a build
+## Inspecting the committed contributor snapshot
 
-After committing the refresh and version bump, before updating `release`, run:
+The [Release workflow](../.github/workflows/release.yml) generates and validates a snapshot
+for the release commit before packaging. The shared `credits` job supplies the snapshot to
+all release builds; it does not commit the generated file back. See the
+[contributor data sources](contributors.md#decision).
+
+To inspect the snapshot committed to a branch or historical revision, run this optional
+read-only diagnostic from the PhotoCraft repository root with Python 3.11+ and complete Git history:
 
 ```sh
-python3 scripts/check_contributor_snapshot.py
-python3 -m unittest discover -s scripts -p 'test_contributor_snapshot.py'
+python3 scripts/check_contributor_snapshot.py --revision <commit>
 ```
 
-This optional, read-only diagnostic reads the committed snapshot, not uncommitted
-edits. It requires Python 3.11+ and complete Git history. It checks the snapshot's
-schema/repository and commit ancestry, then examines every intervening commit rather
-than using an age or commit-count threshold. Snapshot-only commits and empty commits
-are allowed. Version-only changes to the root workspace version and corresponding
-local-package lockfile versions are allowed; dependency upgrades are not. Other
-changes, even if later reverted, require another refresh. A merge with extra content
-may conservatively require a refresh on the merged `main`.
-
-Exit status 0 means no uncovered change was detected under those allowances; 1
-means refresh or investigate the reported error. It does not reproduce the private
-generator, verify names/consent, or prove the numerical statistics correct. The
-refresh/version commits themselves are intentionally outside the counted snapshot.
-
-This tool is **not a release gate**: `release.yml` and its shared workflow are unchanged.
-A maintainer must validate the policy against the official generator and release
-history before wiring it into a blocking preflight. The same diagnostic can inspect
-any committed release candidate (`--revision <commit>`), including the source of a
-manual run. A manual `version` override is applied later by the shared workflow and
-is not a new Git commit, so it does not change this history check. No signing secrets
-or release environment are needed, and this command does not dispatch a workflow.
+Omit `--revision` to inspect `HEAD`. The check compares the snapshot's recorded commit with
+its history, allowing snapshot-only commits, empty commits and workspace-version-only updates.
+Other changes can require a newer snapshot even if they were later reverted. Exit status 0
+means no uncovered changes were found under these rules; 1 reports an invalid or stale snapshot
+or incomplete local history. This checker is specific to PhotoCraft's committed snapshot and
+is not a release preflight; a stale result does not describe the freshly generated artifact.
 
 ## What gets built
 
 | Platform | Artifacts | Built on |
 |---|---|---|
 | macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
+| Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip`, `photocraft-<v>-windows-x64-symbols.zip` | `windows-latest` |
+| Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip`, `photocraft-<v>-windows-x86-symbols.zip` | `windows-latest` |
 | Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
 | Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
 | Linux riscv64 (glibc 2.39+) | `photocraft-<v>-linux-riscv64.tar.gz` | cross-compiled on `ubuntu-24.04` (ports.ubuntu.com riscv64 libs); CLI smoke-tested under QEMU |
@@ -117,7 +103,7 @@ at the `craft-fonts-ref` commit in `.github/workflows/release.yml` and builds wi
 `docs/development.md` › Fonts) and fail rather than ship without them. The packages carry each font's licence as
 `OFL-<family>.txt` (`copy_font_licences` in `packaging/env.sh`; the portable zip on Windows;
 `Contents/Resources/Licenses` in the macOS app). Bump the pin deliberately, together with the one
-in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/development.md` › Fonts.
+in `ci.yml`. Build option: `docs/development.md` › Fonts.
 
 ### macOS
 
@@ -138,7 +124,11 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   Its Finder window (background, icon size and positions) comes from
   [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `PhotoCraft`
   without the version, which the window's background needs; the DMG file name keeps the version.
-- **CLI:** the universal `photocraft-cli` is signed with the same Developer ID, the hardened
+- **CLI:** `PhotoCraft.app/Contents/MacOS/photocraft-cli` is bundled and signed so generated
+  droplet scripts can run without installing the separate CLI download. The scripts prefer
+  `PHOTOCRAFT_CLI` when set, then the bundled CLI in `/Applications` or `~/Applications`, then
+  `photocraft-cli` on `PATH`. Finder drag-and-drop onto droplets still requires an app wrapper.
+  The universal standalone `photocraft-cli` is signed with the same Developer ID, the hardened
   runtime and a secure timestamp (identifier `ai.storyteller.photocraft-cli`), zipped, and the zip
   is sent to `notarytool`. Only `.app`, `.dmg` and `.pkg` can hold a stapled ticket, not a bare
   Mach-O, so Gatekeeper looks the CLI's ticket up online the first time a downloaded
@@ -185,18 +175,31 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   not panic.
 - Release builds use the GUI subsystem, so Start Menu launches don't open a console window.
   The CLI stays console subsystem 3 so its output reaches the terminal.
-- `photocraft.wxs` (WiX v5) is a per-machine install into Program Files with an advertised
-  Start Menu shortcut. PhotoCraft becomes the default app for `.pcraft` and is listed under
-  "Open with" for PSD/PSB and image files. It also registers App Paths (Win+R `photocraft`).
+- `photocraft.wxs` (WiX v5) is a dual-scope package (Microsoft "Single Package Authoring"):
+  it installs per-user by default, without a UAC prompt, into `%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft`
+  (Windows Installer redirects the ProgramFiles folder in a per-user install); the setup
+  wizard's "Everyone on this computer" option, or `msiexec ... ALLUSERS=1`, installs per-machine into
+  `Program Files\ArtCraft\PhotoCraft` (`Program Files (x86)` for the 32-bit build). It installs an advertised Start Menu shortcut associated with the
+  `PhotocraftExe` file component. PhotoCraft
+  becomes the default app for `.pcraft` and is listed under "Open with" for PSD/PSB and image
+  files (in a per-user install those registrations and the `InstallDir` record live under
+  HKCU instead of HKLM; the package's registry roots follow the context automatically). It also
+  registers App Paths (Win+R `photocraft`). An install updates the copy registered in its own
+  context; installing in the other context while a copy already exists is stopped with a
+  message, not a silent duplicate (a scope change needs an explicit uninstall first).
   The MSI version is the numeric `X.Y.Z`, because MSI has no pre-release field. Same-version
   upgrades are allowed so that release candidates replace each other.
-- Double-clicking the MSI opens a setup wizard (WixUI_InstallDir without the licence page):
-  Welcome, install folder (remembered for upgrades in `HKLM\Software\PhotoCraft\InstallDir`),
+- Double-clicking the MSI opens a setup wizard (WixUI_InstallDir without the licence page; the scope page appears only for a new full-UI install, not for
+  maintenance, uninstall or reduced and silent runs):
+  a scope page ("Only for me" or "Everyone on this computer"), Welcome, the install folder
+  (remembered for upgrades in `HKLM` or `HKCU\Software\PhotoCraft\InstallDir` according to context),
   Ready, a progress page, and a Finish page that says where to find the app, with a ticked "Launch
   PhotoCraft" box. The pages name the full version (`photocraft.en-us.wxl`). `package.ps1` draws
   the wizard's banner and side bitmaps from the app icon, so no WiX stock art ships. `msiexec /qn`
-  still installs silently. Building needs the WiX UI and Util extensions:
-  `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`.
+  installs a new product silently per-user unless `ALLUSERS=1` is passed. Maintenance keeps the
+  existing installation context, and a major upgrade of an existing per-machine installation without
+  `ALLUSERS=1` is rejected rather than installed per-user. Building needs the WiX UI
+  and Util extensions: `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`.
 - Shortcut icon identifiers keep the executable's `.exe` extension: MSI uses the identifier
   as the cached icon filename, and an extensionless filename can render as a blank document
   icon. `packaging/windows/check-icons.ps1` checks the references and extensions in CI;
@@ -207,12 +210,19 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   of `%APPDATA%\Photocraft`. If that folder isn't writable the app warns and uses `%APPDATA%`.
   The MSI has no marker. The logic is in `apps/photocraft/src/app_dirs.rs` and works the same
   on macOS and Linux.
+- **Symbols zip:** `photocraft.pdb` and `photocraft_cli.pdb` from the same release build, plus
+  `packaging/windows/symbols.txt` (how to load them in a profiler). An optional download, so the
+  MSI and portable zip stay their size; it lets anyone profile the released exes with function
+  names (#688). Only that build's PDBs match its exes, so they can't be rebuilt later; the
+  release profile has no line tables, so they carry function names, not source lines.
 - **Signing:** `packaging/windows/sign.ps1` signs both `.exe` files and then the `.msi` with
   `signtool`, using SHA-256 and an RFC 3161 timestamp. It uses whichever material is present:
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
      DigiCert, or
   2. Azure Trusted Signing (`AZURE_*`): the script downloads the
-     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server.
+     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server. The package
+     is pinned to a version and SHA-256 at the top of `sign.ps1` and refused on a mismatch, so an
+     upgrade is a deliberate change to both.
 
   The script is the single place to change when the Windows signing setup changes.
 
@@ -224,8 +234,12 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 
 `packaging/linux/package.sh` stages one FHS tree and makes every format from it. The tree
 holds both binaries, `ai.storyteller.photocraft.desktop`, hicolor icons from 16 px to 512 px
-plus a scalable SVG, AppStream metainfo, and a shared-mime-info file for `.pcraft`, `.psb` and
-`.qoi`.
+plus a scalable SVG, AppStream metainfo, a shared-mime-info file for `.pcraft`, `.psb` and
+`.qoi`, and `photocraft-cli`'s man pages and bash, zsh and fish completions. The
+`man-and-completions` example, built with the binaries, writes those; a cross build runs it
+through `EMULATOR` and leaves them out without one. The zsh completion is in
+`/usr/share/zsh/site-functions`, which Fedora's and openSUSE's zsh read; the `.deb` also links it
+from `/usr/share/zsh/vendor-completions`, which Debian's zsh reads instead.
 
 Why these formats:
 
@@ -253,6 +267,12 @@ Why these formats:
   ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
   ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
   covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.
+  A leading `--cli` launches the bundled `usr/bin/photocraft-cli`, without desktop
+  integration: `./photocraft-<version>-linux-x86_64.AppImage --cli mcp` serves MCP on
+  stdio. A symlink named `photocraft-cli` also selects that binary via the runtime's
+  `ARGV0`. Arguments and process streams pass through unchanged; the entry point
+  uses `exec` so signals and exit status reach the caller directly. CLI routing is
+  covered by `packaging/linux/apprun-cli-test.sh` in the same workflow.
 - **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
   and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
   `postinst.sh` hook) and uninstall cleanly. Both are built by
@@ -277,11 +297,11 @@ Why these formats:
   ```
 
   Sandbox permissions (justified in the manifest): Wayland with X11 fallback, IPC (X11
-  shared memory), `dri` for the GPU, and read/write access to Pictures and Documents. Every
-  other file goes through the file-chooser and document portals. There's no network, so the
-  `--control` server is only reachable from inside the sandbox until the user runs
-  `flatpak override --user --share=network ai.storyteller.photocraft`. Host fonts are read from
-  `/run/host/fonts` and `/run/host/user-fonts`. Locally (on Linux, with `flatpak` and
+  shared memory), `dri` for the GPU, the CUPS socket, Avahi and `~/.cups` (read-only) for
+  printing, and read/write access to Pictures and Documents. Every
+  other file goes through the file-chooser and document portals. Network access enables update
+  checks and makes the optional loopback `--control` server reachable from the host. Host fonts
+  are read from `/run/host/fonts` and `/run/host/user-fonts`. Locally (on Linux, with `flatpak` and
   `flatpak-builder`): `packaging/linux/package.sh --formats tar && packaging/linux/flatpak-bundle.sh`.
 - **Flathub**: `packaging/linux/flatpak/ai.storyteller.photocraft.yml` builds from source and
   is ready for a Flathub submission (it keeps the same runtime and `finish-args` as the bundle
@@ -303,6 +323,48 @@ one is missing, prints the package to install and exits with status 1 instead of
 Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/install/), then
 `packaging/linux/package.sh` (or `--formats "deb tar"`).
 
+#### Packaged automation and offline documentation
+
+Both Flatpak manifests install `photocraft-cli`, alongside the GUI. To start the stdio MCP
+server with a project in the sandbox's allowed Documents directory:
+
+```sh
+flatpak run --command=photocraft-cli ai.storyteller.photocraft mcp \
+  --automation-read-root "$HOME/Documents/project" \
+  --automation-write-root "$HOME/Documents/project"
+```
+
+The automation roots restrict PhotoCraft's file access; they do not grant Flatpak access to
+other host directories. For a project elsewhere, also grant that directory with Flatpak's
+`--filesystem=/absolute/project` run option. Stdio MCP needs no network permission.
+
+Linux packages include the original `mcp.md` and `control-protocol.md` for offline use:
+
+| Format | Documentation directory |
+|---|---|
+| `.deb`, `.rpm` | `/usr/share/doc/photocraft/` |
+| Extracted `.tar.gz` | `share/doc/photocraft/` inside the extracted release directory |
+| Flatpak (source or bundle) | `/app/share/doc/photocraft/` inside the sandbox |
+| Extracted AppImage | `squashfs-root/usr/share/doc/photocraft/` |
+
+For example, read the Flatpak's MCP guide without opening the GUI:
+
+```sh
+flatpak run --command=cat ai.storyteller.photocraft /app/share/doc/photocraft/mcp.md
+```
+
+To read an AppImage's guides, run `./PhotoCraft.AppImage --appimage-extract` in a directory
+where you want its `squashfs-root` contents, using the downloaded file's actual name. Then
+open either guide in `squashfs-root/usr/share/doc/photocraft/`. Extraction is an explicit user
+action; launching the app does not extract documentation into the home directory. These two
+Markdown files are included as written; links to other repository documents still need a
+checkout or the online documentation.
+
+`bash packaging/linux/package-docs-test.sh` checks the real Linux staging/tar commands,
+AppDir retention and both Flatpak manifests' install commands with fixture binaries and
+stubbed AppImage tooling. Packaging lint runs it through `extra-checks-script`; it does not
+compile Rust, build a real AppImage, or run a Flatpak sandbox.
+
 ### FreeBSD
 
 GitHub has no FreeBSD runners, so the `freebsd` job runs `packaging/freebsd/package.sh` in a
@@ -313,7 +375,9 @@ binaries with `CARGO_BUILD_JOBS=4` (more runs the 12 GB VM out of memory) and wr
 `x86_64` like the other artifacts. The tarball is a `/usr/local`-style tree: `bin/photocraft`,
 `bin/photocraft-cli`, and under `share/` the same desktop entry, MIME type, AppStream metainfo
 and hicolor icons as Linux, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
-`share/doc/photocraft/`. Users install it with:
+`share/doc/photocraft/`, and `photocraft-cli`'s man pages (`man/man1/`) and bash, zsh and fish
+completions (`share/bash-completion`, `share/zsh/site-functions`, `share/fish`), written by the
+`man-and-completions` example built with the binaries. Users install it with:
 
 ```sh
 pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib

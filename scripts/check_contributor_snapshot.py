@@ -2,7 +2,7 @@
 
 Allow the snapshot commit itself and narrowly defined version-only operations.
 Inspect each intervening commit, so reverting a change cannot hide missing credit.
-The official generator is still required to verify statistics and consent.
+Release builds generate and validate their own snapshot in the shared credits job.
 """
 
 import argparse
@@ -15,13 +15,22 @@ import sys
 import tomllib
 
 SNAPSHOT = 'contributors/contributors.json'
-REFRESH = 'python3 ../../craftrules/scripts/contributors.py .'
+
+
+def git_environment():
+    """Let Git discover the repository at -C, even when launched from a hook."""
+    env = os.environ.copy()
+    for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_IMPLICIT_WORK_TREE',
+                 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
+        env.pop(name, None)
+    env['GIT_NO_LAZY_FETCH'] = '1'
+    return env
 
 
 def git(root, *args):
     result = subprocess.run(
         ['git', '-C', str(root), *args], capture_output=True, text=True,
-        encoding='utf-8', env={**os.environ, 'GIT_NO_LAZY_FETCH': '1'},
+        encoding='utf-8', env=git_environment(),
     )
     if result.returncode:
         raise ValueError('Git history/object unavailable: ' + ' '.join(args[:2]))
@@ -104,8 +113,9 @@ def main(argv=None):
     try:
         head, target = check(args.repo, args.revision)
     except (ValueError, OSError, KeyError, TypeError) as error:
-        print(f'Snapshot needs attention: {error}.\nRefresh on latest main: {REFRESH}\n'
-              'Review and commit the generated JSON, then recheck before updating release.\n'
+        print(f'Committed snapshot needs attention: {error}.\n'
+              'For release credits, check the credits job in the Release workflow; '
+              'it generates a separate snapshot for the release commit.\n'
               'If Git objects are missing, fetch complete history first.', file=sys.stderr)
         return 1
     print(f'No uncovered changes detected: {head} -> {target} (diagnostic only).')

@@ -30,9 +30,14 @@ impl CameraInfo {
     }
 }
 
+/// Text bytes decoded per EXIF read (real Make/Model/Lens/Date strings are a few dozen bytes).
+const MAX_TEXT_BYTES: usize = 1 << 20;
+
 struct Tiff<'a> {
     b: &'a [u8],
     le: bool,
+    /// Text bytes this read may still decode: duplicate tags can share one large blank value.
+    text_left: std::cell::Cell<usize>,
 }
 
 impl Tiff<'_> {
@@ -87,15 +92,22 @@ impl Tiff<'_> {
         }
     }
     fn text(&self, typ: u16, count: u32, field: usize) -> Option<String> {
+        #[cfg(test)]
+        TEXT_DECODES.with(|c| c.set(c.get() + 1));
         if typ != 2 {
             return None;
         }
         let at = self.data_at(typ, count, field)?;
-        let s = self.b.get(at..at.checked_add(usize::try_from(count).ok()?)?)?;
+        let n = usize::try_from(count).ok()?;
+        self.text_left.set(self.text_left.get().checked_sub(n)?);
+        let s = self.b.get(at..at.checked_add(n)?)?;
         let s = String::from_utf8_lossy(s).trim_end_matches('\0').trim().to_string();
         (!s.is_empty()).then_some(s)
     }
 }
+
+#[cfg(test)]
+thread_local!(static TEXT_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
 
 /// Reads [`CameraInfo`] from a TIFF-structured EXIF payload (an `Exif\0\0` prefix is skipped).
 pub fn read(exif: &[u8]) -> CameraInfo {
@@ -106,7 +118,7 @@ pub fn read(exif: &[u8]) -> CameraInfo {
         Some([b'M', b'M', 0, 42]) => false,
         _ => return info,
     };
-    let t = Tiff { b, le };
+    let t = Tiff { b, le, text_left: std::cell::Cell::new(MAX_TEXT_BYTES) };
     let Some(ifd0) = t.u32(4) else { return info };
     let mut queue = vec![ifd0 as usize];
     let mut seen = Vec::new();
@@ -117,15 +129,17 @@ pub fn read(exif: &[u8]) -> CameraInfo {
         seen.push(off);
         for (tag, typ, count, field) in t.ifd(off) {
             match tag {
-                0x010F => info.make = t.text(typ, count, field),
-                0x0110 => info.model = t.text(typ, count, field),
+                // Duplicate TIFF text tags can point at the same large payload. Keep the first
+                // recognized value and do not repeatedly decode/copy later duplicates.
+                0x010F if info.make.is_none() => info.make = t.text(typ, count, field),
+                0x0110 if info.model.is_none() => info.model = t.text(typ, count, field),
                 0x829A => info.exposure_time = t.number(typ, count, field),
                 0x829D => info.f_number = t.number(typ, count, field),
                 0x8827 => info.iso = t.number(typ, count, field),
                 0x920A => info.focal_length = t.number(typ, count, field),
                 0xA405 => info.focal_length_35mm = t.number(typ, count, field).filter(|v| *v > 0.0),
-                0xA434 => info.lens = t.text(typ, count, field),
-                0x9003 => info.date_taken = t.text(typ, count, field),
+                0xA434 if info.lens.is_none() => info.lens = t.text(typ, count, field),
+                0x9003 if info.date_taken.is_none() => info.date_taken = t.text(typ, count, field),
                 0x8769 => {
                     if let Some(p) = t.u32(field) {
                         queue.push(p as usize);
@@ -252,6 +266,72 @@ mod tests {
 
     /// Hostile payloads: huge counts, offsets near `u32::MAX`, self-referencing IFDs and random
     /// bytes read as `None` fields instead of panicking or overflowing (usize is 32 bits on wasm).
+    #[test]
+    fn blank_duplicate_text_tags_share_one_decode_budget() {
+        // Blank values never fill `make`, so every duplicate would decode the same 1 MiB again;
+        // the per-read budget stops after the first, so the later real value is not reached.
+        let blank = MAX_TEXT_BYTES;
+        let entry = |count: u32, off: u32| {
+            let mut e = Vec::new();
+            e.extend_from_slice(&0x010Fu16.to_le_bytes());
+            e.extend_from_slice(&2u16.to_le_bytes());
+            e.extend_from_slice(&count.to_le_bytes());
+            e.extend_from_slice(&off.to_le_bytes());
+            e
+        };
+        let mut b = b"II*\0".to_vec();
+        b.extend_from_slice(&8u32.to_le_bytes());
+        b.extend_from_slice(&3u16.to_le_bytes());
+        b.extend(entry(blank as u32, 50));
+        b.extend(entry(blank as u32, 50));
+        b.extend(entry(2, u32::from_le_bytes(*b"M\0\0\0")));
+        b.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(b.len(), 50);
+        b.extend(std::iter::repeat_n(b' ', blank));
+        assert_eq!(read(&b).make, None);
+    }
+
+    #[test]
+    fn duplicate_text_tags_keep_the_first_value_without_copying_large_duplicates() {
+        let value = vec![b'X'; 2 * 1024 * 1024];
+        let mut b = b"II*\0".to_vec();
+        b.extend_from_slice(&8u32.to_le_bytes());
+        // IFD0: Make="M", a duplicate Make pointing at a 2 MiB payload, and the Exif IFD link.
+        b.extend_from_slice(&3u16.to_le_bytes());
+        b.extend_from_slice(&0x010Fu16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(b"M\0\0\0");
+        b.extend_from_slice(&0x010Fu16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        b.extend_from_slice(&80u32.to_le_bytes());
+        b.extend_from_slice(&0x8769u16.to_le_bytes());
+        b.extend_from_slice(&4u16.to_le_bytes());
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&50u32.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        // Exif IFD at 50: DateTimeOriginal="D" and the same large duplicate payload at offset 80.
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&0x9003u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(b"D\0\0\0");
+        b.extend_from_slice(&0x9003u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        b.extend_from_slice(&80u32.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&value);
+
+        TEXT_DECODES.with(|c| c.set(0));
+        let info = read(&b);
+        assert_eq!(info.make.as_deref(), Some("M"));
+        assert_eq!(info.date_taken.as_deref(), Some("D"));
+        // One decode per tag: duplicates must be skipped before `text` copies their payload.
+        assert_eq!(TEXT_DECODES.with(|c| c.get()), 2);
+    }
+
     #[test]
     fn hostile_payloads_never_panic() {
         let entry = |tag: u16, typ: u16, count: u32, value: u32| {

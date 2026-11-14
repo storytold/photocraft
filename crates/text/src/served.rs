@@ -11,7 +11,7 @@
 //!
 //! Script fallback: the manifest's `scripts` field says which scripts a font is for. The first
 //! served family listed for a script the bundled fonts don't cover (Arabic, Hebrew, Devanagari,
-//! Thai, Khmer, Lao, Burmese, Japanese, Chinese, Korean) is that script's fallback: text in that script asks for it
+//! Thai, Khmer, Lao, Burmese, Georgian, Japanese, Chinese, Korean) is that script's fallback: text in that script asks for it
 //! ([`request_for_text`], from layout), the font database puts it in the fallback stack once it
 //! arrives, and the web shell asks up front for the scripts of the browser's languages
 //! ([`request_for_languages`]). The manifest's SHA-256 becomes the fetch's Subresource Integrity
@@ -40,30 +40,65 @@ pub struct ServedFont {
 pub fn parse_manifest(text: &str) -> (Vec<ServedFont>, Vec<String>) {
     let mut fonts = Vec::new();
     let mut skipped = Vec::new();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-        let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let raw_fields: Vec<&str> = trimmed.split(" | ").collect();
+        let f: Vec<&str> = raw_fields.iter().map(|s| s.trim()).collect();
+        let raw_file = raw_fields.get(2).copied().unwrap_or("");
+        let valid_file = raw_file == f.get(2).copied().unwrap_or("") && is_relative_path(raw_file);
         match f.as_slice() {
-            [family, _style, file, rest @ ..] if !family.is_empty() && is_relative_path(file) => {
+            [family, _style, file, rest @ ..] if !family.is_empty() && valid_file => {
                 let scripts = rest.first().map(|s| s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default();
                 let integrity = rest.get(3).and_then(|sha| sri(sha));
                 fonts.push(ServedFont { family: (*family).to_string(), file: (*file).to_string(), scripts, integrity });
             }
-            [_, _, file, ..] if !is_relative_path(file) => skipped.push(format!("{line}: the file must be a relative path inside the site")),
-            _ => skipped.push(format!("{line}: expected `family | style | file | …`")),
+            [_, _, _, ..] if !valid_file => skipped.push(format!("{trimmed}: the file must be a relative path inside the site")),
+            _ => skipped.push(format!("{trimmed}: expected `family | style | file | …`")),
         }
     }
     (fonts, skipped)
 }
 
 /// A relative path that stays inside the site: no scheme, no leading `/`, no `..` segment, no
-/// query or fragment.
-fn is_relative_path(p: &str) -> bool {
-    !p.is_empty() && !p.starts_with('/') && !p.contains(['\\', '?', '#', ':']) && p.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+/// query or fragment, no ASCII control characters or whitespace, and no percent-encoded control,
+/// whitespace or separator characters.
+pub fn is_relative_path(p: &str) -> bool {
+    if p.is_empty()
+        || p.starts_with('/')
+        || p.bytes().any(|b| b <= b' ' || b == 0x7f || matches!(b, b'\\' | b'?' | b'#' | b':'))
+        || !p.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+    {
+        return false;
+    }
+    let b = p.as_bytes();
+    let mut decoded = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let Some(hex) = p.get(i + 1..i + 3) else { return false };
+            let Ok(byte) = u8::from_str_radix(hex, 16) else { return false };
+            // Never allow encoded path syntax (including '%' for a second decode), ASCII
+            // separators, or controls. High bytes are allowed only as valid UTF-8 below.
+            if byte <= b' ' || byte == 0x7f || matches!(byte, b'%' | b'/' | b'\\' | b'.' | b'?' | b'#' | b':') {
+                return false;
+            }
+            decoded.push(byte);
+            i = i.saturating_add(2);
+        } else {
+            let Some(&byte) = b.get(i) else { return false };
+            decoded.push(byte);
+        }
+        i = i.saturating_add(1);
+    }
+    std::str::from_utf8(&decoded).is_ok()
 }
 
 /// The scripts a served font can be the fallback for: those the bundled fonts (Inter, which covers
 /// Latin, Greek and Cyrillic) lack, as ISO 15924 codes.
-const FALLBACK_SCRIPTS: &[&str] = &["Arab", "Hebr", "Deva", "Thai", "Khmr", "Laoo", "Mymr", "Jpan", "Hans", "Hant", "Kore"];
+const FALLBACK_SCRIPTS: &[&str] = &["Arab", "Hebr", "Deva", "Thai", "Khmr", "Laoo", "Mymr", "Geor", "Jpan", "Hans", "Hant", "Kore"];
 
 /// The script fallbacks in `fonts`: for each script in [`FALLBACK_SCRIPTS`], the first family in
 /// manifest order that lists it, as `(script, family)` in order of first appearance.
@@ -99,6 +134,7 @@ pub fn script_of(c: char, order: &[crate::cjk::CjkScript; 4]) -> Option<&'static
         0x1780..=0x17FF | 0x19E0..=0x19FF => "Khmr",
         0x0E80..=0x0EFF => "Laoo",
         0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F => "Mymr",
+        0x10A0..=0x10FF | 0x1C90..=0x1CBF | 0x2D00..=0x2D2F => "Geor",
         _ => return None,
     })
 }
@@ -117,6 +153,7 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
         "km" => "Khmr",
         "lo" => "Laoo",
         "my" => "Mymr",
+        "ka" => "Geor",
         "ja" => "Jpan",
         "ko" => "Kore",
         "zh" if rest.iter().any(|r| matches!(*r, "hant" | "tw" | "hk" | "mo")) => "Hant",
@@ -251,6 +288,11 @@ pub fn request_for_languages<'a>(languages: impl IntoIterator<Item = &'a str>) {
     }
 }
 
+/// The served fallback family for the script `language` (a BCP 47 tag) is written in, if any.
+pub fn fallback_for_language(language: &str) -> Option<String> {
+    fallback_for(&state().fallbacks, language_script(language)?)
+}
+
 /// Families the host can serve, installed or not (for font menus).
 pub fn families() -> Vec<String> {
     state().families.clone()
@@ -318,8 +360,31 @@ mod tests {
         assert_eq!(skipped.len(), 9, "{skipped:?}");
     }
 
-    /// One test for the whole queue: the catalog and the queue are process-wide, and parallel
-    /// tests taking each other's requests would be flaky.
+    #[test]
+    fn rejects_encoded_path_separators_and_malformed_escapes() {
+        for path in [
+            "fonts/%2e%2e/private.ttf",
+            "fonts%2fprivate.ttf",
+            "fonts%5cprivate.ttf",
+            "fonts/%00.ttf",
+            "fonts/a%7F.ttf",
+            "fonts/%20.ttf",
+            "fonts/%zz.ttf",
+            "fonts/%2.ttf",
+            "fonts/%C0%AF.ttf",
+            "fonts/%25%32%65%25%32%65/private.ttf",
+            "fonts/%C3%28.ttf",
+        ] {
+            assert!(!is_relative_path(path), "accepted {path}");
+        }
+        for path in ["fonts/OpenSans[wdth,wght].ttf", "fonts/é.ttf", "fonts/%C3%A9.ttf"] {
+            assert!(is_relative_path(path), "rejected {path}");
+        }
+        let (fonts, skipped) = parse_manifest("A | Regular | fonts/%2e%2e/a.ttf\nB | Regular | fonts/%zz.ttf\n");
+        assert!(fonts.is_empty());
+        assert_eq!(skipped.len(), 2);
+    }
+
     #[test]
     fn requests_are_limited_to_the_catalog_and_reach_layout() {
         let served = "Served Test Sans";
@@ -411,6 +476,7 @@ mod tests {
             ('ລ', Some("Laoo")),
             ('မ', Some("Mymr")),
             ('ၡ', Some("Mymr")),
+            ('ა', Some("Geor")),
             ('あ', Some("Jpan")),
             ('한', Some("Kore")),
         ] {
@@ -433,6 +499,7 @@ mod tests {
             ("km-KH", Some("Khmr")),
             ("lo", Some("Laoo")),
             ("my-MM", Some("Mymr")),
+            ("ka-GE", Some("Geor")),
             ("ja-JP", Some("Jpan")),
             ("zh-CN", Some("Hans")),
             ("zh-TW", Some("Hant")),

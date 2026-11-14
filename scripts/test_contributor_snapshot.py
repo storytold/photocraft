@@ -3,12 +3,14 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from check_contributor_snapshot import check, main, REFRESH, SNAPSHOT
+from check_contributor_snapshot import SNAPSHOT, check, git_environment, main
 
 
 class SnapshotTests(unittest.TestCase):
@@ -27,7 +29,7 @@ class SnapshotTests(unittest.TestCase):
         self.base = self.commit()
 
     def git(self, *args):
-        return subprocess.check_output(['git', '-C', str(self.root), *args], text=True).strip()
+        return subprocess.check_output(['git', '-C', str(self.root), *args], text=True, env=git_environment()).strip()
 
     def write(self, path, text):
         p = self.root / path
@@ -83,7 +85,7 @@ class SnapshotTests(unittest.TestCase):
                     self.commit()
                 with contextlib.redirect_stderr(io.StringIO()) as err:
                     self.assertEqual(main(['--repo', str(self.root)]), 1)
-                self.assertIn(REFRESH, err.getvalue())
+                self.assertIn('check the credits job in the Release workflow', err.getvalue())
 
     def test_required_fields(self):
         for field in ['head', 'head_date', 'repo', 'branch', 'commits', 'contributors', 'schema']:
@@ -151,6 +153,17 @@ class SnapshotTests(unittest.TestCase):
         self.snapshot()
         self.write(SNAPSHOT, '{bad uncommitted JSON')
         self.assertEqual(check(self.root)[0], self.base)
+
+    def test_inherited_git_paths_cannot_redirect_the_selected_repository(self):
+        target = self.snapshot()
+        with tempfile.TemporaryDirectory() as other:
+            self.git('init', '-q', other)
+            other = Path(other)
+            for variable, path in [('GIT_DIR', other / '.git'), ('GIT_WORK_TREE', other),
+                                   ('GIT_COMMON_DIR', other / '.git'), ('GIT_OBJECT_DIRECTORY', other / '.git' / 'objects')]:
+                with self.subTest(variable=variable), patch.dict(os.environ, {variable: str(path)}):
+                    self.assertEqual(check(self.root), (self.base, target))
+                    self.assertEqual(Path(self.git('rev-parse', '--show-toplevel')).resolve(), self.root.resolve())
 
 
 if __name__ == '__main__':

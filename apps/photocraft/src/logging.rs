@@ -244,6 +244,17 @@ pub struct LogFile {
 /// One formatted log line: `<timestamp> <LEVEL> [<thread>] <target>: <message>\n`.
 pub fn format_line(ts: &str, level: log::Level, thread: &str, target: &str, message: &str) -> String {
     let message = message.strip_suffix('\n').unwrap_or(message);
+    // A message cannot forge a record or inject terminal controls: continuation lines are
+    // indented (a record starts with a timestamp) and other control characters are escaped.
+    let message: String = message
+        .chars()
+        .flat_map(|c| match c {
+            '\n' => "\n    ".chars().collect::<Vec<_>>(),
+            '\r' => vec!['\\', 'r'],
+            c if c.is_control() && c != '\t' => c.escape_default().collect(),
+            c => vec![c],
+        })
+        .collect();
     format!("{ts} {level:<5} [{thread}] {target}: {message}\n")
 }
 
@@ -315,21 +326,30 @@ pub struct AppLogger {
     filter: Filter,
     stderr: bool,
     sink: Mutex<Sink>,
+    /// The file [`AppLogger::attach_dir`] opened, so a failure can tell the user what to attach.
+    path: Mutex<Option<PathBuf>>,
     /// The lock that marks the attached log file as in use (see [`rotate`]); held until exit.
     owner: Mutex<Option<File>>,
 }
 
 impl AppLogger {
     pub fn new(filter: Filter, stderr: bool) -> AppLogger {
-        AppLogger { filter, stderr, sink: Mutex::new(Sink::new(MAX_FILE_BYTES)), owner: Mutex::new(None) }
+        AppLogger { filter, stderr, sink: Mutex::new(Sink::new(MAX_FILE_BYTES)), path: Mutex::new(None), owner: Mutex::new(None) }
     }
 
     /// Rotate the logs in `dir` and send records to the fresh file; returns its path.
     pub fn attach_dir(&self, dir: &Path) -> Result<PathBuf, String> {
         let LogFile { path, file, owner } = rotate(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         self.sink.lock().unwrap_or_else(PoisonError::into_inner).attach(file);
+        *self.path.lock().unwrap_or_else(PoisonError::into_inner) = Some(path.clone());
         *self.owner.lock().unwrap_or_else(PoisonError::into_inner) = owner;
         Ok(path)
+    }
+
+    /// The log file records are written to, once [`AppLogger::attach_dir`] opened one: `None` when
+    /// the file could not be created (standard error is the only sink, see [`install`]).
+    pub fn path(&self) -> Option<PathBuf> {
+        self.path.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
 
@@ -377,6 +397,21 @@ mod tests {
         let d = std::env::temp_dir().join(format!("photocraft-logging-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// The startup-failure dialog names the log file, so the logger has to remember it (#7643).
+    /// A start that couldn't create one keeps `None` and the dialog leaves the line out.
+    #[test]
+    fn path_names_the_attached_log_file() {
+        let _spawns = crate::no_child_spawns();
+        let dir = temp_dir("path");
+        let logger = AppLogger::new(Filter::parse(DEFAULT_FILTER), false);
+        assert_eq!(logger.path(), None, "nothing is written before a file is attached");
+        let path = logger.attach_dir(&dir).expect("attach");
+        assert_eq!(path, dir.join(LOG_FILE));
+        assert_eq!(logger.path(), Some(path));
+        drop(logger);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -536,8 +571,10 @@ mod tests {
             format_line("2026-10-08T07:59:17.728Z", log::Level::Warn, "main", "photocraft::gpu_startup", "GPU startup marker: denied"),
             "2026-10-08T07:59:17.728Z WARN  [main] photocraft::gpu_startup: GPU startup marker: denied\n"
         );
-        // A multi-line message (a panic with a backtrace) keeps its lines; the record still ends in one newline.
-        assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\nb\n"));
+        // A multi-line message (a panic with a backtrace) keeps its lines, indented; the record still ends in one newline.
+        assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\n    b\n"));
+        let forged = format_line("t", log::Level::Error, "w", "x", "a\r\n2026 INFO forged\x1b[2J");
+        assert!(forged.lines().all(|l| !l.starts_with("2026")) && !forged.contains('\x1b') && !forged.contains('\r'));
     }
 
     #[test]

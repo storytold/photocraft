@@ -7,10 +7,10 @@
 
 use std::time::Instant;
 
+use craft_psd::abr::{AbrSample, write_v6};
+use craft_psd::descriptor::{Descriptor, UnicodeString, Value};
 use photocraft_color::PixelFormat;
 use photocraft_paint::{StrokePoint, render_stroke};
-use photocraft_psd::abr::{AbrSample, write_v6};
-use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value};
 use photocraft_raster::Surface;
 
 fn prc(v: f64) -> Value {
@@ -62,7 +62,7 @@ fn main() {
     // `--write <path>`: also save a small showcase file (procedural tips) for UI snapshots.
     let args: Vec<String> = std::env::args().collect();
     if let Some(path) = args.iter().position(|a| a == "--write").and_then(|i| args.get(i + 1)) {
-        use photocraft_paint::procedural::*;
+        use photocraft_paint::procedural::{charcoal_tip, leaf_tip, sponge_tip, star_tip};
         let tips = [("Leafy", leaf_tip(96)), ("Charcoal Stick", charcoal_tip(96, 3)), ("Sea Sponge", sponge_tip(96, 5)), ("Star Burst", star_tip(96))];
         let samples: Vec<AbrSample> = tips
             .iter()
