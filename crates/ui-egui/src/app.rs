@@ -319,3 +319,6 @@ impl eframe::App for PhotocraftApp {
 
 #[cfg(test)]
 mod clipboard_tests;
+
+#[cfg(test)]
+mod apply_data_set_alert_tests;

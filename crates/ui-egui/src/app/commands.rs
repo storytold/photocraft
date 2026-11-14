@@ -213,6 +213,11 @@ impl PhotocraftApp {
             Err(e) => {
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
+                if id == "image.applyDataSet" && e == photocraft_engine::DATA_SET_LAYER_LOCKED {
+                    // The reference application refuses a locked type layer with an alert (#14499).
+                    let message = json!({"message": tl!(photocraft_engine::DATA_SET_LAYER_LOCKED)});
+                    self.ui.open_dialog(state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
+                }
             }
         }
         if suppress_events {
