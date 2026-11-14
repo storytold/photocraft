@@ -61,6 +61,37 @@ fn decode_limits(opts: &crate::ImportOptions) -> codecs::Limits {
     limits
 }
 
+/// Largest side a JPEG frame can declare: it is stored in 16 bits.
+const JPEG_MAX_SIDE: u32 = 65_535;
+
+/// [`decode_limits`] for a JPEG: past their pixel count, up to the format's own sides, when the
+/// whole-image decode (to which `zune-jpeg` allocates one buffer) is admitted against `available`
+/// bytes first (see [`crate::memory::available`]). The byte budget is unchanged, and the decoder's
+/// scan-size guard still needs a byte of scan data per 2,048 pixels before it allocates.
+///
+/// Sizes the default limits open, the files the whole-coefficient decoder takes (whose working
+/// set is several times the image: [`codecs::JpegInfo::whole_coefficients`]) and 32-bit targets
+/// keep the default limits, and so does every file where free memory isn't known: the decoder
+/// allocates its output infallibly, so a decode the machine can't hold would end the process.
+fn jpeg_limits(bytes: &[u8], opts: &crate::ImportOptions, available: Option<u64>) -> Result<codecs::Limits, IoError> {
+    let limits = decode_limits(opts);
+    let Some(info) = codecs::jpeg_info(bytes) else { return Ok(limits) };
+    let (w, h) = (info.width, info.height);
+    if info.whole_coefficients || !cfg!(target_pointer_width = "64") || !needs_memory_check(w, h, info.layout, CSample::U8) {
+        return Ok(limits);
+    }
+    let Some(available) = available else { return Ok(limits) };
+    // Linux overcommits: a decode the machine can't hold is allocated, and writing it has the
+    // process killed. Checked first: the decoded image and the document built from it, or the
+    // decoded image and the coefficients the decode holds beside it (a progressive frame, or a
+    // sequential one whose components come in separate scans), whichever is more.
+    let decoded = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.layout.channels() as u64);
+    let decoding = decoded.saturating_add(info.held_coefficients);
+    let needed = flattened_import_bytes(w, h, info.layout, CSample::U8, 0, 0).max(decoding);
+    crate::memory::check_fits(w, h, needed, Some(available))?;
+    Ok(codecs::Limits { max_width: JPEG_MAX_SIDE, max_height: JPEG_MAX_SIDE, max_pixels: u64::from(JPEG_MAX_SIDE).pow(2), ..limits })
+}
+
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_flat_with_options(name, bytes, &crate::ImportOptions::default(), &photocraft_raster::Interrupt::NONE)
 }
@@ -119,7 +150,7 @@ fn import_flat_impl_with_options(
     let (mut r, img) = match streamed {
         Some(r) => (r, None),
         None => {
-            let limits = decode_limits(opts);
+            let limits = if format == Some(Format::Jpeg) { jpeg_limits(bytes, opts, crate::memory::available())? } else { decode_limits(opts) };
             let img = codecs::decode_as_with(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes, &codecs::DecodeOptions { limits, ..Default::default() })?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
             ctl.progress(0.6);
@@ -3199,5 +3230,112 @@ mod bilevel_tiff_tests {
         assert_eq!(second.document.mode, ColorMode::Bitmap);
         let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
         assert_eq!(first.document.mode, ColorMode::Grayscale);
+    }
+}
+
+#[cfg(test)]
+mod jpeg_limits_tests {
+    use super::*;
+
+    /// A JPEG of markers only: SOI, one frame (`marker`, `precision` bits, `w` × `h`, `n`
+    /// components), EOI. Its header is all [`jpeg_limits`] reads.
+    fn jpeg_header(marker: u8, precision: u8, w: u16, h: u16, n: u8) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, marker];
+        b.extend_from_slice(&(8 + 3 * u16::from(n)).to_be_bytes());
+        b.push(precision);
+        b.extend_from_slice(&h.to_be_bytes());
+        b.extend_from_slice(&w.to_be_bytes());
+        b.push(n);
+        for c in 1..=n {
+            b.extend_from_slice(&[c, 0x11, 0]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    /// A JPEG past the default pixel count opens up to the format's own sides, once its decode is
+    /// admitted against free memory; the byte budget is unchanged.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_jpeg_past_the_pixel_cap_is_admitted_against_free_memory_first() {
+        let opts = crate::ImportOptions::default();
+        // A 48,000 × 34,200 RGB frame: 1.64 GP, past the default 2^30.
+        let big = jpeg_header(0xC0, 8, 48_000, 34_200, 3);
+        let e = jpeg_limits(&big, &opts, Some(0)).unwrap_err().to_string();
+        assert!(e.contains("not enough memory to open this 48000 × 34200 px image"), "{e}");
+        let limits = jpeg_limits(&big, &opts, Some(u64::MAX)).unwrap();
+        assert!(limits.check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_ok());
+        assert!(decode_limits(&opts).check(48_000, 34_200, ChannelLayout::Rgb, CSample::U8).is_err(), "the default cap");
+        assert_eq!(limits.max_alloc, decode_limits(&opts).max_alloc, "the byte budget");
+        assert!(limits.check(65_535, 1, ChannelLayout::Gray, CSample::U8).is_ok(), "a JPEG's own side");
+        assert!(limits.check(65_536, 1, ChannelLayout::Gray, CSample::U8).is_err(), "past a JPEG's own side");
+        assert_eq!(jpeg_limits(&big, &opts, None).unwrap(), decode_limits(&opts), "unknown free memory keeps the default cap");
+        // Admitted with exactly what it needs free, refused a byte short: the RGBA layer's 256 px
+        // tiles, the decoded RGB image, the 16 bands of 32 MiB it converts through, and the
+        // 512 MiB reserve.
+        let need = 48_128 * 34_304 * 4 + 48_000 * 34_200 * 3 + 16 * (32 << 20) + (512 << 20);
+        assert!(jpeg_limits(&big, &opts, Some(need)).is_ok());
+        assert!(jpeg_limits(&big, &opts, Some(need - 1)).is_err());
+        // One row past 2^30 px is checked.
+        assert!(jpeg_limits(&jpeg_header(0xC0, 8, 32_768, 32_769, 1), &opts, Some(0)).is_err());
+        // The largest frame: 65,535² gray fits the byte budget; RGB doesn't, and stays refused.
+        let max = jpeg_limits(&jpeg_header(0xC0, 8, 65_535, 65_535, 1), &opts, Some(u64::MAX)).unwrap();
+        assert!(max.check(65_535, 65_535, ChannelLayout::Gray, CSample::U8).is_ok());
+        assert!(max.check(65_535, 65_535, ChannelLayout::Rgb, CSample::U8).is_err(), "the byte budget");
+    }
+
+    /// A frame whose decode holds every coefficient (progressive, or sequential with its
+    /// components in separate scans) is admitted against that peak: the decoded image and the
+    /// coefficients, which for a 4:4:4 frame is more than the image and its document.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_jpeg_whose_decode_holds_its_coefficients_is_admitted_against_them() {
+        let opts = crate::ImportOptions::default();
+        let (w, h) = (48_000u32, 34_200u32);
+        let document = flattened_import_bytes(w, h, ChannelLayout::Rgb, CSample::U8, 0, 0);
+        // 3 bytes of image and 3 × 2 bytes of coefficients per pixel, the MCUs filling 48,000 × 34,200.
+        let decoding = u64::from(w * h) * 3 + 6_000 * 4_275 * 3 * 128;
+        assert!(decoding > document);
+        // `header` with a first scan (before EOI) of its first `n` components.
+        let with_scan = |mut header: Vec<u8>, n: u8| {
+            let mut sos = vec![0xFF, 0xDA, 0, 6 + 2 * n, n];
+            for c in 1..=n {
+                sos.extend_from_slice(&[c, 0]);
+            }
+            sos.extend_from_slice(&[0, 63, 0]);
+            let eoi = header.len() - 2;
+            header.splice(eoi..eoi, sos);
+            header
+        };
+        let baseline = with_scan(jpeg_header(0xC0, 8, 48_000, 34_200, 3), 3);
+        let progressive = with_scan(jpeg_header(0xC2, 8, 48_000, 34_200, 3), 1);
+        let split = with_scan(jpeg_header(0xC0, 8, 48_000, 34_200, 3), 1);
+        // Room for the document but not for the coefficients: the baseline frame with every
+        // component in its first scan opens, the other two are refused.
+        let room = document + crate::memory::RESERVE;
+        assert!(jpeg_limits(&baseline, &opts, Some(room)).is_ok());
+        assert!(jpeg_limits(&baseline, &opts, Some(room - 1)).is_err());
+        for (what, b) in [("progressive", &progressive), ("split scans", &split)] {
+            let e = jpeg_limits(b, &opts, Some(room)).unwrap_err().to_string();
+            assert!(e.contains("not enough memory"), "{what}: {e}");
+            assert!(jpeg_limits(b, &opts, Some(decoding + crate::memory::RESERVE)).is_ok(), "{what}");
+            assert!(jpeg_limits(b, &opts, Some(decoding + crate::memory::RESERVE - 1)).is_err(), "{what}");
+        }
+    }
+
+    /// Sizes the default limits open (up to exactly 2^30 px) are not checked, and a file for the
+    /// whole-coefficient decoder (12-bit, arithmetic-coded or lossless) keeps the default cap
+    /// however large it is, as does a frame whose components aren't a layout `decode` returns.
+    #[test]
+    fn other_jpegs_keep_the_default_limits_unchecked() {
+        let opts = crate::ImportOptions::default();
+        let default = |b: &[u8]| jpeg_limits(b, &opts, Some(0)).unwrap() == decode_limits(&opts);
+        assert!(default(&jpeg_header(0xC0, 8, 4000, 3000, 3)));
+        assert!(default(&jpeg_header(0xC0, 8, 32_768, 32_768, 3)), "exactly 2^30 px");
+        for (marker, precision) in [(0xC1, 12), (0xC9, 8), (0xC3, 8)] {
+            assert!(default(&jpeg_header(marker, precision, 48_000, 34_200, 3)), "{marker:#x}");
+        }
+        assert!(default(&jpeg_header(0xC0, 8, 48_000, 34_200, 2)), "two components");
+        assert!(default(b"not a jpeg"));
     }
 }
