@@ -21,6 +21,9 @@ pub(crate) enum CliError {
     ReadDir { path: PathBuf, source: std::io::Error },
     #[error("--params must follow a --cmd")]
     ParamsBeforeCmd,
+    /// A `--cmd` value that carries its parameters (#8673); both parts are shortened already.
+    #[error("--cmd takes only a command id; pass the parameters with --params: --cmd {id} --params '{params}'")]
+    InlineParams { id: String, params: String },
     #[error("--new: {0}")]
     New(#[source] AutomationError),
     #[error("`{id}`: {source}")]
