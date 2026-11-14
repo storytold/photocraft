@@ -565,13 +565,16 @@ fn color_lookup(c: vec3<f32>, n: i32, tetra: bool) -> vec3<f32> {
 // One Selective Color range: its CMYK percentages (LUT row 0, 4 per range) weighted by `w`.
 fn selective_row(r: i32, w: f32, c: vec3<f32>, relative: bool) -> vec3<f32> {
     let k = lut_at(r * 4 + 3) / 100.0;
-    var d = vec3(lut_at(r * 4), lut_at(r * 4 + 1), lut_at(r * 4 + 2)) / 100.0 + k;
+    var d = vec3(lut_at(r * 4), lut_at(r * 4 + 1), lut_at(r * 4 + 2)) / 100.0;
     if (relative) {
         d = d * (1.0 - c);
     } else {
         // Absolute: scaled by the room the ink has (adding: 2 × (1 − ink), removing: 2 × ink, capped at 1).
         d = d * select(min(2.0 * (1.0 - c), vec3(1.0)), min(2.0 * c, vec3(1.0)), d > vec3(0.0));
     }
+    // Black: every channel moves down by k (Absolute) or k × its ink (Relative), clipped to 0..1.
+    let s = select(vec3(k), k * (1.0 - c), relative);
+    d += select(vec3(0.0), c - clamp(c - s, vec3(0.0), vec3(1.0)), k != 0.0);
     return select(vec3(0.0), d * w, w > 0.0);
 }
 
