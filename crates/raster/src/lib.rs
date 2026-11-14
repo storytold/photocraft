@@ -1413,34 +1413,85 @@ impl Surface {
 
     /// Convert to another pixel format (depth and/or model; colour models via [`convert_pixel`]).
     pub fn convert(&self, to: PixelFormat) -> Surface {
-        let mut out = Surface::with_default(to, &convert_pixel(&self.format, &to, &self.default_pixel()));
+        let mut out = self.converted_empty(to);
         let from_n = self.channels();
         let mut src = vec![0.0f32; from_n];
         // Each distinct tile converts once; coordinates sharing it share the result (#4531).
         let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
         for (c, t) in &self.tiles {
-            if let Some(converted) = done.get(&Arc::as_ptr(t)) {
-                out.tiles.insert(*c, converted.clone());
-                continue;
-            }
-            let source = t.bytes();
-            let mut dst = out.tile_mut(*c).bytes_mut();
-            let px_count = (TILE_SIZE * TILE_SIZE) as usize;
-            for i in 0..px_count {
-                for (k, v) in src.iter_mut().enumerate() {
-                    *v = read_sample(&source, self.format.sample, i * from_n + k);
-                }
-                let px = convert_pixel(&self.format, &to, &src);
-                for (k, v) in px.iter().enumerate() {
-                    write_sample(&mut dst, to.sample, i * to.channels() + k, *v);
-                }
-            }
-            drop(dst);
-            if let Some(converted) = out.tiles.get(c) {
-                done.insert(Arc::as_ptr(t), converted.clone());
-            }
+            self.convert_tile(&mut out, *c, t, &mut src, &mut done);
         }
         out
+    }
+
+    /// An empty surface in `to` whose default pixel is this one's converted, as [`Surface::convert`]
+    /// starts from.
+    fn converted_empty(&self, to: PixelFormat) -> Surface {
+        Surface::with_default(to, &convert_pixel(&self.format, &to, &self.default_pixel()))
+    }
+
+    /// Convert tile `t` (at `c`) into `out`, sharing the result with earlier coordinates that
+    /// shared the source tile (`done`); `src` is a one-pixel scratch buffer.
+    fn convert_tile(&self, out: &mut Surface, c: TileCoord, t: &Arc<Tile>, src: &mut [f32], done: &mut std::collections::HashMap<*const Tile, Arc<Tile>>) {
+        if let Some(converted) = done.get(&Arc::as_ptr(t)) {
+            out.tiles.insert(c, converted.clone());
+            return;
+        }
+        let to = out.format;
+        let from_n = self.channels();
+        let source = t.bytes();
+        let mut dst = out.tile_mut(c).bytes_mut();
+        let px_count = (TILE_SIZE * TILE_SIZE) as usize;
+        for i in 0..px_count {
+            for (k, v) in src.iter_mut().enumerate() {
+                *v = read_sample(&source, self.format.sample, i * from_n + k);
+            }
+            let px = convert_pixel(&self.format, &to, src);
+            for (k, v) in px.iter().enumerate() {
+                write_sample(&mut dst, to.sample, i * to.channels() + k, *v);
+            }
+        }
+        drop(dst);
+        if let Some(converted) = out.tiles.get(&c) {
+            done.insert(Arc::as_ptr(t), converted.clone());
+        }
+    }
+
+    /// [`Surface::convert`] limited to `r`: only the tiles `r` touches are converted, so the
+    /// result reads exactly as the full conversion does inside `r` (bit for bit) and as the
+    /// converted default pixel elsewhere. A brush stroke that reads a few tiles of a large source
+    /// in another format converts just those (#11594).
+    pub fn convert_region(&self, to: PixelFormat, r: Rect) -> Surface {
+        let mut out = self.converted_empty(to);
+        self.convert_region_into(&mut out, r);
+        out
+    }
+
+    /// Extend `out`, a [`Surface::convert_region`] of this surface, to cover `r` as well:
+    /// converts the tiles `r` touches that `out` doesn't hold yet (a live stroke converting its
+    /// source as it grows). This surface must not have changed since `out` was started.
+    pub fn convert_region_into(&self, out: &mut Surface, r: Rect) {
+        // Walk whichever is smaller: the tiles `r` spans or the tiles this surface holds.
+        let coords: Vec<TileCoord> = if r.tile_count() <= self.tiles.len() as u64 {
+            r.tiles().filter(|c| self.tiles.contains_key(c) && !out.tiles.contains_key(c)).collect()
+        } else {
+            self.tiles.keys().filter(|c| !c.rect().intersect(&r).is_empty() && !out.tiles.contains_key(c)).copied().collect()
+        };
+        if out.format == self.format {
+            for c in coords {
+                if let Some(t) = self.tiles.get(&c) {
+                    out.tiles.insert(c, t.clone());
+                }
+            }
+            return;
+        }
+        let mut src = vec![0.0f32; self.channels()];
+        let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
+        for c in coords {
+            if let Some(t) = self.tiles.get(&c) {
+                self.convert_tile(out, c, t, &mut src, &mut done);
+            }
+        }
     }
 
     /// Convert a surface while reserving each replacement tile fallibly.

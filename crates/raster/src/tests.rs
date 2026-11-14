@@ -1341,3 +1341,84 @@ fn benchmark_u16_rgba_reads() {
         }
     }
 }
+
+/// A surface of distinct tiles over 3×2 tiles (with one tile shared at two coordinates, as
+/// copy-on-write leaves them) and a non-zero default pixel.
+fn region_convert_source(fmt: PixelFormat) -> Surface {
+    let n = fmt.channels();
+    let default: Vec<f32> = (0..n).map(|k| 0.2 + 0.1 * k as f32).collect();
+    let mut s = Surface::with_default(fmt, &default);
+    let r = Rect::new(0, 0, 3 * TILE_SIZE, 2 * TILE_SIZE - 40);
+    let mut data = Vec::with_capacity(r.width() as usize * r.height() as usize * n);
+    for y in r.y0..r.y1 {
+        for x in r.x0..r.x1 {
+            for k in 0..n {
+                data.push(((x * 7 + y * 13 + k as i32 * 29) % 251) as f32 / 250.0);
+            }
+        }
+    }
+    s.write_region(r, &data);
+    if let Some(t) = s.tile(TileCoord::new(0, 0)).cloned() {
+        s.put_tiles([(TileCoord::new(2, 1), t)]);
+    }
+    s
+}
+
+/// #11594: `convert_region` reads exactly as `convert` inside its rect (bit for bit), for every
+/// depth pair and across colour models, at tile seams, on and past the surface's edge, and for an
+/// empty rect; it converts only the tiles the rect touches; `convert_region_into` extends it.
+#[test]
+fn convert_region_matches_a_full_conversion_inside_the_region() {
+    let models = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
+    let ts = TILE_SIZE;
+    let rects = [
+        Rect::new(10, 10, 40, 30),                                     // inside one tile
+        Rect::new(ts - 5, ts - 5, ts + 5, ts + 5),                     // four tiles around a seam
+        Rect::new(-20, -20, 15, 15),                                   // over the top-left edge
+        Rect::new(3 * ts - 10, 2 * ts - 60, 3 * ts + 30, 2 * ts + 30), // past the bottom-right
+        Rect::new(-500, -500, -400, -400),                             // wholly outside
+        Rect::new(2 * ts + 3, ts + 3, 2 * ts + 9, ts + 9),             // the shared tile
+        Rect::EMPTY,
+    ];
+    for from_mode in models {
+        for to_mode in models {
+            for from_s in SampleType::ALL {
+                for to_s in SampleType::ALL {
+                    let from = PixelFormat::new(from_mode, from_s, true);
+                    let to = PixelFormat::new(to_mode, to_s, to_mode != ColorMode::Lab);
+                    let src = region_convert_source(from);
+                    let full = src.convert(to);
+                    for r in rects {
+                        let part = src.convert_region(to, r);
+                        assert_eq!(part.format(), to);
+                        assert!(part.tile_count() as u64 <= r.tile_count(), "{from:?}->{to:?} {r:?}: converted tiles outside the rect");
+                        let (a, b) = (part.read_region(r), full.read_region(r));
+                        let diff = a.iter().zip(&b).position(|(x, y)| x.to_bits() != y.to_bits());
+                        assert!(diff.is_none(), "{from:?}->{to:?} {r:?}: first difference at {diff:?}");
+                        // Outside the rect it reads as the converted default pixel.
+                        assert_eq!(part.default_pixel(), full.default_pixel());
+                    }
+                    // Grown rect by rect, as a live stroke does, it ends up as the full conversion.
+                    let mut grown = src.convert_region(to, rects[0]);
+                    for r in &rects[1..] {
+                        src.convert_region_into(&mut grown, *r);
+                    }
+                    let all = Rect::new(-500, -500, 4 * ts, 3 * ts);
+                    src.convert_region_into(&mut grown, all);
+                    let (a, b) = (grown.read_region(all), full.read_region(all));
+                    assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()), "{from:?}->{to:?}: grown");
+                }
+            }
+        }
+    }
+}
+
+/// A region conversion to the same format shares the source's tiles instead of copying them.
+#[test]
+fn convert_region_to_the_same_format_shares_tiles() {
+    let src = region_convert_source(PixelFormat::RGBA8);
+    let part = src.convert_region(PixelFormat::RGBA8, Rect::new(10, 10, 20, 20));
+    assert_eq!(part.tile_count(), 1);
+    let (a, b) = (part.tile(TileCoord::new(0, 0)).unwrap(), src.tile(TileCoord::new(0, 0)).unwrap());
+    assert!(Arc::ptr_eq(a, b));
+}

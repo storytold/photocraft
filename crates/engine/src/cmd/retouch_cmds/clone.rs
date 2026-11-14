@@ -278,10 +278,66 @@ enum LivePaint {
     /// blends it on release).
     Clone { which: SampleLayers, source: CloneFrom, map: crate::presets::clone_source::Mapping, cmd: &'static str },
     /// The History Brush's history state.
-    History(Surface),
+    History(HistoryPaint),
     /// The Pattern Stamp's pattern, tiled from its aligned placement (Impressionist strokes are
     /// laid dab by dab: `pattern_stamp::live_impressionist`).
     Pattern { tile: std::sync::Arc<photocraft_compose::pattern::Tile>, place: photocraft_compose::pattern::Placement, behind: bool },
+}
+
+/// The History Brush's source while a live stroke is drawn. A source in another format than the
+/// layer (after an Image › Mode change) is converted tile by tile as the stroke reaches new tiles,
+/// never as a whole (#11594); each tile converts once per stroke.
+struct HistoryPaint {
+    src: Surface,
+    /// The tiles of `src` converted so far, when its format isn't the layer's.
+    converted: Option<Surface>,
+    /// The box `converted` covers: every tile of `src` inside it is converted. A read inside it
+    /// converts nothing and walks no tiles (`src` never changes during the stroke).
+    covered: Rect,
+}
+
+impl HistoryPaint {
+    fn new(src: Surface, fmt: photocraft_color::PixelFormat) -> Self {
+        let converted = (src.format() != fmt).then(|| super::heal::convert_source(&src, fmt, Rect::EMPTY));
+        Self { src, converted, covered: Rect::EMPTY }
+    }
+
+    /// The source over `r`, in the layer's format.
+    fn read(&mut self, r: Rect) -> Region {
+        match &mut self.converted {
+            None => Region::read(&self.src, r),
+            Some(c) => {
+                if !self.covered.contains_rect(&r) {
+                    // Grow to the box around the stroke so far, so `covered` stays exact (the
+                    // commit reads that box anyway), converting only the strips it adds: a
+                    // growth step walks the new strips' tiles, not the whole box again.
+                    let grown = self.covered.union(&r);
+                    for strip in added_strips(self.covered, grown) {
+                        self.src.convert_region_into(c, strip);
+                    }
+                    self.covered = grown;
+                }
+                Region::read(c, r)
+            }
+        }
+    }
+}
+
+/// The parts of `grown` outside `covered`, which lies inside it: the whole of `grown` when
+/// `covered` is empty, else up to four strips (above, below, left and right of `covered`).
+fn added_strips(covered: Rect, grown: Rect) -> Vec<Rect> {
+    if covered.is_empty() {
+        return vec![grown];
+    }
+    [
+        Rect::new(grown.x0, grown.y0, grown.x1, covered.y0),
+        Rect::new(grown.x0, covered.y1, grown.x1, grown.y1),
+        Rect::new(grown.x0, covered.y0, covered.x0, covered.y1),
+        Rect::new(covered.x1, covered.y0, grown.x1, covered.y1),
+    ]
+    .into_iter()
+    .filter(|r| !r.is_empty())
+    .collect()
 }
 
 /// A retouching stroke shown while it is drawn: the dabs so far composited onto a copy of the
@@ -338,7 +394,7 @@ impl LiveRetouch {
                     cmd: if cmd == "paint.healingBrush" { "paint.healingBrush" } else { "paint.cloneStamp" },
                 }
             }
-            "paint.historyBrush" => LivePaint::History(history_source(s, id, p, cmd)?),
+            "paint.historyBrush" => LivePaint::History(HistoryPaint { src: history_source(s, id, p, cmd)?, converted: None, covered: Rect::EMPTY }),
             other => return Err(bad(other, "live retouching strokes are the Clone Stamp, Healing Brush, History Brush and Pattern Stamp")),
         };
         Self::with_paint(s, cmd, p, stroke, id, paint, mode)
@@ -359,7 +415,7 @@ impl LiveRetouch {
         let opacity = stroke.brush.opacity;
         let brush = Box::new(stroke.brush.clone());
         let paint = match paint {
-            LivePaint::History(src) if src.format() != pre_surf.format() => LivePaint::History(src.convert(pre_surf.format())),
+            LivePaint::History(h) => LivePaint::History(HistoryPaint::new(h.src, pre_surf.format())),
             other => other,
         };
         let mut live = Self {
@@ -502,11 +558,11 @@ impl LiveRetouch {
         if r.is_empty() {
             return Ok(r);
         }
-        let paint = match &self.paint {
+        let paint = match &mut self.paint {
             LivePaint::Clone { which, source, map, cmd } => {
                 clone_sample(&self.pre, self.id, &self.pre_surf, *which, source, r, map, *cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false), cmd)?
             }
-            LivePaint::History(src) => Region::read(src, r),
+            LivePaint::History(h) => h.read(r),
             LivePaint::Pattern { tile, place, .. } => pattern_stamp::paint_region(tile, place, &self.pre_surf.format(), r),
         };
         // The Pattern Stamp's Behind goes beneath the pixels, as its commit lays it.
@@ -520,5 +576,60 @@ impl LiveRetouch {
             pattern_stamp::lay_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, behind)
         };
         Ok(damage.union(&r))
+    }
+}
+
+#[cfg(test)]
+mod history_paint_tests {
+    use super::{HistoryPaint, PixelFormat, Rect, Region, Surface, added_strips};
+
+    /// The strips a growth adds tile exactly what the old box didn't cover: disjoint, inside the
+    /// new box, outside the old one, and as much area as the difference.
+    #[test]
+    fn added_strips_cover_exactly_the_growth() {
+        let area = |r: Rect| i64::from(r.width()) * i64::from(r.height());
+        let cases = [
+            (Rect::EMPTY, Rect::new(0, 0, 10, 10)),
+            (Rect::new(10, 10, 20, 20), Rect::new(10, 10, 20, 20)),
+            (Rect::new(10, 10, 20, 20), Rect::new(0, 10, 20, 20)),
+            (Rect::new(10, 10, 20, 20), Rect::new(10, 10, 20, 35)),
+            (Rect::new(10, 10, 20, 20), Rect::new(-5, -5, 40, 40)),
+            (Rect::new(10, 10, 20, 20), Rect::new(10, 0, 30, 20)),
+        ];
+        for (covered, grown) in cases {
+            let strips = added_strips(covered, grown);
+            for (i, a) in strips.iter().enumerate() {
+                assert!(grown.contains_rect(a) && a.intersect(&covered).is_empty(), "{covered:?} -> {grown:?}: {a:?}");
+                for b in &strips[i + 1..] {
+                    assert!(a.intersect(b).is_empty(), "{a:?} overlaps {b:?}");
+                }
+            }
+            let added: i64 = strips.iter().map(|r| area(*r)).sum();
+            assert_eq!(added, area(grown) - area(covered.intersect(&grown)), "{covered:?} -> {grown:?}");
+        }
+    }
+
+    /// A live stroke growing in every direction, step by step, over a sparse source in another
+    /// format reads what a full conversion reads, and converts only the source tiles its box
+    /// reaches, never the far ones.
+    #[test]
+    fn repeated_growth_over_a_sparse_source_reads_as_a_full_conversion() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        // Three tiles, far apart: the box never reaches the last one.
+        for (x, y, v) in [(300, 300, 0.25), (900, 120, 0.75), (40_000, 40_000, 0.5)] {
+            src.write_pixel(x, y, &[v, 1.0 - v, 0.5, 1.0]);
+        }
+        let full = src.convert(PixelFormat::RGBA16);
+        let mut paint = HistoryPaint::new(src.clone(), PixelFormat::RGBA16);
+        let mut x = 280;
+        let steps = [(0, 0, 30, 30), (30, 0, 30, 30), (-60, -20, 30, 30), (0, 60, 30, 30), (640, -200, 30, 30), (10, 10, 5, 5)];
+        for (dx, dy, w, h) in steps {
+            x += dx;
+            let r = Rect::new(x, 280 + dy, x + w, 280 + dy + h);
+            assert_eq!(paint.read(r), Region::read(&full, r), "{r:?}");
+        }
+        let converted = paint.converted.as_ref().map_or(0, Surface::tile_count);
+        assert_eq!(converted, 2, "only the two tiles the stroke's box reaches are converted");
+        assert_eq!(paint.covered, Rect::new(250, 80, 920, 370), "the box around every read");
     }
 }
