@@ -86,6 +86,18 @@ impl PhotocraftApp {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
             }
         }
+        // Clipboard commands during Free Transform: commit the box first, as Photoshop does.
+        // Unlike PRECHECKED commands these skip Session::precheck (it is not complete for
+        // clipboard commands); only the transform commit is needed before the command runs.
+        if self.ui.transform.is_some() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
+            transform_tool::commit(self);
+            if transform_tool::committing(self).is_some() {
+                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+            }
+            if self.ui.transform.is_some() {
+                return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
+            }
+        }
         actions::suspended_guard(self, id)?;
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
