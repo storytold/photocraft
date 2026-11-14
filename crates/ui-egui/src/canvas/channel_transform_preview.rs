@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn linear_solo_channel_preview_keeps_dark_detail() {
         let mut doc = Document::with_background("linear shadow", Size::new(4, 4), ColorMode::Rgb, SampleType::F32, Color::rgb(0.001, 0.002, 0.003));
-        doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
         let mut session = Session::new();
         session.add_document(doc, None);
         let mut a = PhotocraftApp::new(session, crate::Services::default());
@@ -1082,7 +1082,7 @@ mod tests {
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut doc = gpu_oracle_document(depth, 0);
-            doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
             let mut a = app();
             a.session.add_document(doc, None);
             a.run("channel.target", json!({"channel":"green"})).unwrap();
@@ -1381,13 +1381,14 @@ mod tests {
             let mut session = Session::new();
             let mut doc = Document::with_background("CMYK preview", Size::new(32, 24), ColorMode::Cmyk, SampleType::F32, Color::WHITE);
             doc.icc_profile = Some(
-                photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+                craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
                     description: "Preview Uncoated".into(),
                     tvi: [0.26, 0.26, 0.26, 0.3],
                     grid_a2b: 5,
                     grid_b2a: 9,
                     ..Default::default()
                 })
+                .unwrap()
                 .to_bytes(),
             );
             let bounds = doc.bounds();

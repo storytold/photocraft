@@ -475,13 +475,14 @@ fn interactive_guard_allows_inline_mesh_edits_but_refuses_stored_warp_edits() {
 
 #[test]
 fn vacated_cmyk_components_use_the_embedded_profile_for_affine_and_warp() {
-    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+    let profile = craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
         description: "Channel Test Uncoated".into(),
         tvi: [0.26, 0.26, 0.26, 0.3],
         grid_a2b: 5,
         grid_b2a: 9,
         ..Default::default()
     })
+    .unwrap()
     .to_bytes();
     let space = photocraft_color::convert::CmykSpace::for_profile(Some(&profile)).unwrap();
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
