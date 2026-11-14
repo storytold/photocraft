@@ -55,6 +55,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(());
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+        // Lock Transparent Pixels works as Preserve Transparency, ticked or not.
+        let preserve = preserve || doc.effective_locks(id).transparency;
         let fmt = doc.pixel_format();
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let sf = surf.format();
