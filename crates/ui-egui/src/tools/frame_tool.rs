@@ -619,7 +619,7 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
             _ => CursorIcon::Crosshair,
         });
     }
-    frame_at(app, p).map(|_| CursorIcon::Move)
+    frame_at(app, p).map(|_| CursorIcon::Default)
 }
 fn stroke_json(s: &photocraft_doc::ShapeStroke) -> Value {
     let fill = match &s.paint {
@@ -789,6 +789,8 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer) {
         }
     }
 }
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod tests;
 
