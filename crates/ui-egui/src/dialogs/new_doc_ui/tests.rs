@@ -787,12 +787,12 @@ mod dialog {
         type_into(&mut h, 0, "512");
         h.get_by_label("Photo").click();
         h.run_steps(2);
-        // The first card ("Landscape, 6 x 4") sits under the presets heading.
+        // The first card ("Default PhotoCraft Size") sits under the presets heading.
         let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
         click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
-        assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Landscape, 6 x 4"));
+        assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default PhotoCraft Size"));
         enter(&mut h);
-        assert_eq!(created(&h), (1800, 1200, 300.0));
+        assert_eq!(created(&h), (2100, 1500, 300.0));
     }
 
     #[test]

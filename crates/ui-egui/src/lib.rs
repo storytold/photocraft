@@ -968,6 +968,9 @@ mod filter_preview_locator_tests;
 mod move_outline_tests;
 
 #[cfg(test)]
+mod new_doc_preset_lists_tests;
+
+#[cfg(test)]
 mod move_bar_distribute_gear_tests;
 
 #[cfg(test)]
