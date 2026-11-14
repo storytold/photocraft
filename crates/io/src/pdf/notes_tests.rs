@@ -176,3 +176,17 @@ fn hand_made(annot: &[u8]) -> Vec<u8> {
     out.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
     out
 }
+
+/// CodeRabbit on #14798: a string without a byte-order mark is PDFDocEncoding, which differs from
+/// Latin-1 at 0x18–0x1F, 0x80–0x9E and 0xA0 (the euro sign, the dashes, curly quotes, …).
+#[test]
+fn bom_less_strings_are_read_as_pdfdocencoding() {
+    // \240 = euro, \204 = em dash, \215/\216 = curly double quotes, \031 = caron, \351 = é as in Latin-1.
+    let pdf = hand_made(b"<< /Type /Annot /Subtype /Text /Rect [150 650 170 670] /Contents (\\240 \\204 \\215x\\216 \\031 caf\\351) /T (A\\200B) >>");
+    let (notes, _) = read_notes(&pdf).unwrap();
+    assert_eq!(notes[0].text, "€ — “x” \u{2C7} café");
+    assert_eq!(notes[0].author, "A\u{2022}B");
+    assert_eq!(decode_text_string(&[0xFE, 0xFF, 0x00, 0x41]), "A", "a UTF-16 string is unchanged");
+    assert_eq!(decode_text_string(&[0xEF, 0xBB, 0xBF, 0xC3, 0xA9]), "é", "a UTF-8 string is unchanged");
+    assert_eq!(decode_text_string(b"plain ASCII"), "plain ASCII");
+}
