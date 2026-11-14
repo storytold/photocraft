@@ -149,11 +149,13 @@ fn dabs_shrink_towards_the_far_edge_of_a_plane() {
     assert!(dabs.last().is_some_and(|d| d.radius < 12.0));
     assert!((near as f64 - 30.0).abs() <= 4.0, "{near}");
     // A live preview commits the same pixels.
-    let live = LiveStroke::begin_with(&striped_with_planes(), "paint.stroke", &p).unwrap();
+    // (Layer ids differ from one session to the next: each side reads its own layer.)
+    let preview = striped_with_planes();
+    let live = LiveStroke::begin_with(&preview, "paint.stroke", &p).unwrap();
+    let live_id = preview.active().unwrap().active_layer.unwrap();
     let mut fresh = striped_with_planes();
     fresh.execute("paint.stroke", p).unwrap();
-    let id = fresh.active().unwrap().active_layer.unwrap();
-    assert!(same(live.doc.layer(id).unwrap().surface().unwrap(), &layer_surface(&fresh), Rect::new(0, 0, 400, 300)));
+    assert!(same(live.doc.layer(live_id).unwrap().surface().unwrap(), &layer_surface(&fresh), Rect::new(0, 0, 400, 300)));
 }
 
 fn striped_with_planes() -> Session {
@@ -183,7 +185,7 @@ fn the_cursor_shape_is_the_first_dab_and_absent_off_plane() {
         g.finish(&mut dabs, &mut dual);
         let d = dabs.first().unwrap();
         assert_eq!((d.radius, d.proj_angle, d.proj_scale), (r, a, k), "({x}, {y})");
-        assert!(k < 1.0 && k >= 0.05);
+        assert!((0.05..1.0).contains(&k));
     }
     // No planes: nothing.
     s.execute("perspective.clearPlanes", json!({})).unwrap();

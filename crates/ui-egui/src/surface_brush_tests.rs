@@ -19,7 +19,7 @@ fn app(tool: Tool) -> PhotocraftApp {
 }
 
 fn open_popover(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1800.0, 400.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder().with_size(vec2(1800.0, 1000.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h.get_by_label("Surface options").click();
@@ -85,15 +85,17 @@ fn ui_inspect_reports_the_cursor_shape() {
         let Outcome::Done(v) = handle(app, &ctx, &req) else { panic!("ui.inspect replies at once") };
         v
     };
-    assert!(inspect(&mut app)["brushCursor"].is_null());
+    let before = inspect(&mut app);
+    assert_eq!(before["ok"], true, "{before}");
+    assert!(before["result"]["brushCursor"].is_null());
     crate::brush_cursor::remember_shape(
         &ctx,
         Some(photocraft_engine::brush_cmds::CursorShape { radius: 12.0, proj_angle: 0.5, proj_scale: 0.4, offset: [1.0, 2.0] }),
     );
     let v = inspect(&mut app);
-    assert_eq!(v["brushCursor"]["projScale"], json!(0.4f32));
-    assert_eq!(v["brushCursor"]["radius"], json!(12.0f32));
-    assert_eq!(v["brushCursor"]["offset"], json!([1.0f32, 2.0f32]));
+    assert_eq!(v["result"]["brushCursor"]["projScale"], json!(0.4f32));
+    assert_eq!(v["result"]["brushCursor"]["radius"], json!(12.0f32));
+    assert_eq!(v["result"]["brushCursor"]["offset"], json!([1.0f32, 2.0f32]));
 }
 
 #[test]

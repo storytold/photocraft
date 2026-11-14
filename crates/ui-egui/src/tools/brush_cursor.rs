@@ -105,6 +105,21 @@ pub(crate) fn surface_shape(app: &mut crate::PhotocraftApp, tool: crate::Tool, d
         .filter(|c| c.radius.is_finite() && c.radius > 0.0 && c.proj_angle.is_finite() && c.proj_scale.is_finite() && c.offset.iter().all(|v| v.is_finite()))
 }
 
+/// [`surface_shape`] for the cursor under the painting-cursor preference `pref` (only the tip
+/// outlines follow the surface), remembered for `ui.inspect`.
+pub(crate) fn surface_for_cursor(
+    app: &mut crate::PhotocraftApp,
+    ctx: &egui::Context,
+    tool: crate::Tool,
+    doc: [f64; 2],
+    pref: photocraft_engine::prefs::PaintingCursor,
+) -> Option<photocraft_engine::brush_cmds::CursorShape> {
+    use photocraft_engine::prefs::PaintingCursor;
+    let shape = surface_shape(app, tool, doc).filter(|_| matches!(pref, PaintingCursor::NormalTip | PaintingCursor::FullSizeTip));
+    remember_shape(ctx, shape);
+    shape
+}
+
 /// [`tip_axes`] for a dab of `radius` document pixels foreshortened by `proj_scale` along the
 /// direction `proj_angle` (radians, counter-clockwise, y up: the renderer's convention).
 pub(crate) fn surface_axes(xf: &crate::canvas::ViewXform, radius: f32, proj_angle: f32, proj_scale: f32) -> [Vec2; 2] {
@@ -119,6 +134,31 @@ pub(crate) fn surface_axes(xf: &crate::canvas::ViewXform, radius: f32, proj_angl
     let x = project(Vec2::new(1.0, 0.0));
     let y = project(Vec2::new(0.0, 1.0));
     [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
+}
+
+/// The brush cursor for a dab shaped by the surface (`shape`): the outline at the dab's centre,
+/// and, when that is off the pointer (`p`, , the crosshair at the
+/// pointer joined to it by a thin line.
+pub(crate) fn surface_cursor(
+    painter: &Painter,
+    xf: &crate::canvas::ViewXform,
+    p: Pos2,
+    brush: &BrushSettings,
+    shape: Option<photocraft_engine::brush_cmds::CursorShape>,
+    normal: bool,
+    centre: bool,
+) -> CursorIcon {
+    let plain = photocraft_engine::brush_cmds::CursorShape { radius: brush.size / 2.0, proj_angle: 0.0, proj_scale: 1.0, offset: [0.0; 2] };
+    let shape = shape.unwrap_or(plain);
+    let axes = surface_axes(xf, shape.radius, shape.proj_angle, shape.proj_scale);
+    let doc = xf.to_doc(p);
+    let at = xf.to_screen(doc[0] as f32 + shape.offset[0], doc[1] as f32 + shape.offset[1]);
+    if (at - p).length() > 1.0 {
+        crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+        let t = crate::theme::Tokens::get(painter.ctx());
+        painter.line_segment([p, at], egui::Stroke::new(1.0, t.accent));
+    }
+    cursor(painter, at, brush, (shape.radius * xf.zoom).max(1.0), axes, normal, centre)
 }
 
 fn shape_id() -> egui::Id {

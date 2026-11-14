@@ -431,9 +431,12 @@ fn enabled_estimate(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Composite the visible image and reduce it: RGB for the network and luma for the guide.
-fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Vec<f32>, (usize, usize), Vec<f32>, (usize, usize))> {
+/// A reduced plane set: (pixels, (width, height)).
+type Reduced = (Vec<f32>, (usize, usize));
+
+fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Reduced, Reduced)> {
     let rect = doc.bounds();
-    let (w, h) = (rect.width().max(0) as usize, rect.height().max(0) as usize);
+    let (w, h) = (rect.width() as usize, rect.height() as usize);
     if w == 0 || h == 0 {
         return Err(bad("the document is empty"));
     }
@@ -457,7 +460,7 @@ fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Vec<f32>, (u
         let end = y.saturating_add(band).min(rect.y1);
         let px = flat.read_region(Rect::new(rect.x0, y, rect.x1, end));
         for (r, line) in px.chunks_exact(w * 4).enumerate() {
-            for (x, p) in line.chunks_exact(4).enumerate() {
+            for (x, p) in line.as_chunks::<4>().0.iter().enumerate() {
                 let (rr, gg, bb) = (p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0), p[2].clamp(0.0, 1.0));
                 row_rgb[x * 3..x * 3 + 3].copy_from_slice(&[rr, gg, bb]);
                 row_luma[x] = 0.299 * rr + 0.587 * gg + 0.114 * bb;
@@ -469,14 +472,14 @@ fn read_image(doc: &Document, ctx: &crate::jobs::JobCtx) -> Result<(Vec<f32>, (u
         y = end;
     }
     let (rd, ld) = ((rgb.dw, rgb.dh), (luma.dw, luma.dh));
-    Ok((rgb.finish(), rd, luma.finish(), ld))
+    Ok(((rgb.finish(), rd), (luma.finish(), ld)))
 }
 
 /// Run the estimator and refine its map to the document size: edges follow the photo.
 fn estimate_plane(doc: &Document, ctx: &crate::jobs::JobCtx, estimator: &EstimateFn) -> Result<Vec<f32>> {
     let rect = doc.bounds();
     let (w, h) = (rect.width() as usize, rect.height() as usize);
-    let (rgb, (rw, rh), luma, (lw, lh)) = read_image(doc, ctx)?;
+    let ((rgb, (rw, rh)), (luma, (lw, lh))) = read_image(doc, ctx)?;
     ctx.progress(0.15, "Estimating depth");
     let map = estimator(&rgb, rw as u32, rh as u32, &|p| {
         ctx.progress(0.15 + 0.65 * p, "");
