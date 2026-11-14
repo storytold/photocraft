@@ -1272,3 +1272,7 @@ mod spell_per_layer_tests;
 #[cfg(test)]
 #[path = "type_spell_selected_ui_tests.rs"]
 mod spell_selected_ui_tests;
+
+#[cfg(test)]
+#[path = "type_spell_edit_mode_tests.rs"]
+mod spell_edit_mode_tests;
