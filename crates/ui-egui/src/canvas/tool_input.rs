@@ -433,6 +433,26 @@ fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
     }
 }
 
+/// A Magic Wand click at document `(x, y)`; one that leaves nothing selected says so, as the
+/// reference does (#11781). With nothing selected, an options-bar Subtract or Intersect click
+/// makes a new selection there, as the reference's does (measured), rather than warning.
+fn magic_wand_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let o = app.ui.tool_options.clone();
+    let selected = app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
+    let chosen = selection_mode(app, mods);
+    if wand_pasteboard_click(app, x, y, chosen) {
+        return;
+    }
+    let mode = match chosen {
+        "subtract" | "intersect" if !selected => "replace",
+        m => m,
+    };
+    let r = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+    if r.is_ok_and(|v| v["selected"] == json!(false)) {
+        crate::wand_no_pixels::warn(app);
+    }
+}
+
 /// A Red Eye click. CMYK, Grayscale and Indexed Color documents get the reference's alert
 /// (#12575), once even if more clicks arrive while it is open (`ui.pointer` can send them).
 fn red_eye_click(app: &mut PhotocraftApp, x: f64, y: f64) {
@@ -623,12 +643,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    if wand_pasteboard_click(app, x, y, mode) {
-                        return;
-                    }
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    magic_wand_click(app, x, y, mods);
                     return;
                 }
                 Tool::MagicEraser => {

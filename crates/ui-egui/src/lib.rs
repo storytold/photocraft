@@ -190,6 +190,7 @@ pub use dialogs::stroke_ui;
 pub use dialogs::targa_options_ui;
 pub use dialogs::tiff_options_ui;
 pub use dialogs::vp_ui;
+pub use dialogs::wand_no_pixels;
 pub use dialogs::wide_angle_ui;
 use input::alt_grab;
 use input::blend_keys;
@@ -819,6 +820,8 @@ mod patch_shift_constrain_tests;
 mod pencil_pressure_toggles_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
+#[cfg(test)]
+mod wand_no_pixels_warning_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
