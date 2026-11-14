@@ -10,8 +10,7 @@
 //! * Alt (tapped) does only that alert: it neither puts the keyboard on the menu bar nor leaves
 //!   the field.
 //! * A click, with either button, on the pasteboard (the canvas around the image), anywhere on the
-//!   title bar (menu titles, the empty drag area, the workspace switcher, search, the theme
-//!   button, Minimise / Maximise / Close), or on an open menu or dropdown (Help's "Search menus"
+//!   title bar (menu titles, the empty drag area, Minimise / Maximise / Close), or on an open menu or dropdown (Help's "Search menus"
 //!   field included), keeps the typed number unapplied, rewritten and selected as Tab does it.
 //! * Whatever the key or click, a typed number is never applied while the window is not focused.
 //! * Only digits, `/` and the system's decimal separator ([`crate::i18n::decimal_separator`]: `,` on
@@ -469,8 +468,8 @@ pub(crate) fn alert_pending(ctx: &Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(alert_id())).unwrap_or(false)
 }
 
-/// Remembers the rectangle of the whole title bar (menus, the empty drag area, workspace switcher,
-/// search and theme buttons, the caption buttons) for [`on_title_bar`].
+/// Remembers the rectangle of the whole title bar (menus, the empty drag area, the caption buttons)
+/// for [`on_title_bar`].
 pub(crate) fn set_title_bar_rect(ctx: &Context, rect: egui::Rect) {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| d.insert_temp(title_bar_rect_id(), (rect, pass)));
@@ -534,8 +533,8 @@ pub fn tick(app: &mut crate::PhotocraftApp, ctx: &Context) {
     track_pasteboard(ctx, press.is_some_and(|pos| on_pasteboard(app, ctx, pos) || on_menu_bar(ctx, pos) || on_title_bar(ctx, pos) || on_open_popup(ctx, pos)));
 }
 
-/// Is screen point `pos` anywhere on the title bar: the menu titles and the gaps between them, the
-/// workspace switcher (Essentials), search, the theme button, Minimise / Maximise / Close?
+/// Is screen point `pos` anywhere on the title bar: the menu titles and the gaps between them,
+/// Minimise / Maximise / Close?
 fn on_title_bar(ctx: &Context, pos: egui::Pos2) -> bool {
     fresh_rect_contains(ctx, title_bar_rect_id(), pos)
 }
@@ -645,7 +644,7 @@ mod tests {
         let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 32.0));
         assert!(!on_title_bar(&ctx, egui::pos2(10.0, 10.0)), "nothing drawn yet");
         set_title_bar_rect(&ctx, bar);
-        assert!(on_title_bar(&ctx, egui::pos2(790.0, 10.0)), "the far end: Essentials, Minimise, Close");
+        assert!(on_title_bar(&ctx, egui::pos2(790.0, 10.0)), "the far end: Minimise, Close");
         assert!(on_title_bar(&ctx, egui::pos2(400.0, 10.0)), "the empty drag area between the menus and them");
         assert!(!on_title_bar(&ctx, egui::pos2(10.0, 100.0)), "below the bar is the app");
     }

@@ -14,7 +14,7 @@ use photocraft_doc::DocId;
 use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 #[cfg(test)]
 use photocraft_engine::prefs::Theme;
-use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS, Theme as SavedTheme};
+use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS};
 use photocraft_engine::snap::{SnapLine, SnapOptions, SnapTargets};
 use serde_json::{Map, Value, json};
 
@@ -79,9 +79,9 @@ mod shortcuts;
 mod startup;
 
 #[cfg(test)]
-use appearance::{DARK_THEME_OPTIONS, LIGHT_THEME_OPTIONS, display_scale, favorite_theme_groups, selected_theme};
-pub(crate) use appearance::{appearance_context_menu, cycle_appearance, step_brightness, sync_appearance};
+use appearance::{DARK_THEME_OPTIONS, LIGHT_THEME_OPTIONS, display_scale, selected_theme};
 pub use appearance::{canvas_style, pasteboard_color};
+pub(crate) use appearance::{cycle_appearance, step_brightness, sync_appearance};
 pub use dialogs::{
     PREFERENCES_SIZE, apply, confirm, invoke, is_preferences, open_mismatch, open_preferences, open_shortcuts, owns, preferences_changed, width,
 };

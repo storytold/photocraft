@@ -84,7 +84,7 @@ fn x_of(h: &Harness<'static, PhotocraftApp>, label: &str) -> f32 {
 }
 
 /// Left x of the text `text` where it is painted (for widgets without an accessible label).
-fn text_x(h: &Harness<'static, PhotocraftApp>, text: &str) -> f32 {
+fn painted_x(h: &Harness<'static, PhotocraftApp>, text: &str) -> Option<f32> {
     fn find(shape: &egui::Shape, text: &str) -> Option<f32> {
         match shape {
             egui::Shape::Text(t) if t.galley.job.text == text => Some(t.pos.x),
@@ -92,7 +92,7 @@ fn text_x(h: &Harness<'static, PhotocraftApp>, text: &str) -> f32 {
             _ => None,
         }
     }
-    h.output().shapes.iter().find_map(|s| find(&s.shape, text)).unwrap_or_else(|| panic!("`{text}` painted"))
+    h.output().shapes.iter().find_map(|s| find(&s.shape, text))
 }
 
 fn dock_x(h: &Harness<'static, PhotocraftApp>) -> f32 {
@@ -106,16 +106,29 @@ fn the_shell_mirrors_in_a_right_to_left_ui() {
         let _dir = direction_scope(dir);
         let h = harness();
         let mid = 600.0;
-        let (file, help, toolbar, dock, workspace) = (x_of(&h, "File"), x_of(&h, "Help"), x_of(&h, "Toolbar"), dock_x(&h), text_x(&h, "Essentials"));
+        let (file, help, toolbar, dock) = (x_of(&h, "File"), x_of(&h, "Help"), x_of(&h, "Toolbar"), dock_x(&h));
         if dir == Dir::Rtl {
             assert!(file > help, "File starts the menu bar at the right: {file} vs {help}");
             assert!(toolbar > mid && dock < mid, "toolbox right, dock left: {toolbar}, {dock}");
-            assert!(workspace < help, "the workspace switcher is at the far (left) end: {workspace}");
         } else {
             assert!(file < help, "{file} vs {help}");
             assert!(toolbar < mid && dock > mid, "{toolbar}, {dock}");
-            assert!(workspace > help, "{workspace}");
         }
+    }
+}
+
+/// The top bar holds the menus, the title and the window buttons only, as in the reference
+/// application: no workspace switcher, command search or appearance button at its far end. Each is
+/// in a menu instead: Window › Workspace, Edit › Search, Window › Theme (#13577).
+#[test]
+fn the_top_bar_has_no_workspace_search_or_appearance_controls() {
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let h = harness();
+        assert!(painted_x(&h, "Essentials").is_none(), "{dir:?}: no workspace switcher");
+        assert!(h.query_by_label_contains("Search commands").is_none(), "{dir:?}: no search button");
+        assert!(h.query_by_label_contains("Appearance Mode:").is_none(), "{dir:?}: no appearance button");
     }
 }
 

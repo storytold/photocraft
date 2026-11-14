@@ -1,12 +1,12 @@
-use super::{PhotocraftApp, Sense, Tokens, icons, theme, vec2, widgets};
+use super::{PhotocraftApp, Sense, Tokens, theme, vec2};
 
 // ----------------------------------------------------------------------------- title bar
 
-/// The app's top bar: brand mark, menus, the document title and the workspace controls. With
+/// The app's top bar: brand mark, menus and the document title. With
 /// [`PhotocraftApp::custom_titlebar`] (Windows and Linux) it is also the window's title bar, as in
 /// Photoshop on Windows: the caption buttons take its ends (`titlebar`). With the system
 /// title bar (Windows and Linux, `system_title_bar`) the OS draws its own icon and title, so the
-/// in-app bar shows menus and workspace controls only: no brand mark, no centred title.
+/// in-app bar shows the menus only: no brand mark, no centred title.
 pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let custom = app.custom_titlebar;
@@ -26,7 +26,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
-            // Only the free gap between the menus and the far-end controls drags the window: a
+            // Only the free gap between the menus and the far end drags the window: a
             // press on a menu title must open the menu, never move the window. The gap is last
             // frame's, as the menus are laid out after this.
             let span_id = ui.scope_id().with("titledrag-span");
@@ -50,10 +50,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .active()
                 .map(|d| format!("{}{}", if show_name { d.doc.name.as_str() } else { "PhotoCraft" }, if d.is_dirty() { "  •" } else { "" }))
                 .unwrap_or_else(|| "PhotoCraft".into());
-            // The menus and the far-end controls are laid out first; the title is centred in
-            // whatever room is left between them (`free`, left to right: menus then controls, or
-            // controls then menus in a right-to-left UI), shortened or dropped rather than drawn
-            // over them.
+            // The menus are laid out first; the title is centred in whatever room is left between
+            // them and the bar's far end (`free`, left to right: menus then far end, or far end
+            // then menus in a right-to-left UI), shortened or dropped rather than drawn over them.
             let rtl = crate::direction::is_rtl();
             let mut free = (full.left(), full.right());
             crate::direction::horizontal_centered(ui, |ui| {
@@ -75,59 +74,18 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else {
                     crate::menus::menu_bar(app, ui)
                 };
-                // The menu bar takes the whole row, so the far-end group gets its own rect: from
-                // the menus to the bar's end, or to the caption buttons.
-                let group = if rtl {
-                    let left_edge = if caption_left > 0.0 { full.left() + caption_left + 4.0 } else { full.left() };
-                    egui::Rect::from_min_max(egui::pos2(left_edge, full.top()), egui::pos2((menus_end - TITLE_GAP).max(left_edge), full.bottom()))
+                // The bar's far end, or the caption buttons' inner edge: nothing else sits there,
+                // as in the reference application. The workspace switcher, command search and
+                // appearance button live in Window › Workspace, Edit › Search and Preferences
+                // instead (#13577).
+                let far_end = if rtl {
+                    if caption_left > 0.0 { full.left() + caption_left + 4.0 } else { full.left() }
+                } else if caption_right > 0.0 {
+                    full.right() - caption_right - 4.0
                 } else {
-                    let right_edge = if caption_right > 0.0 { full.right() - caption_right - 4.0 } else { full.right() };
-                    egui::Rect::from_min_max(egui::pos2((menus_end + TITLE_GAP).min(right_edge), full.top()), egui::pos2(right_edge, full.bottom()))
+                    full.right()
                 };
-                let mut group_ui = ui.new_child(egui::UiBuilder::new().max_rect(group).layout(crate::direction::trailing()));
-                let controls_end = {
-                    let ui = &mut group_ui;
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let mut ws = app.ui.workspace.clone();
-                    let options = crate::workspace_ui::switcher_options(app);
-                    let opts: Vec<(String, &str)> = options.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
-                    // A narrow bar drops what is also in a menu, the theme toggle first
-                    // (Preferences), then search (Edit › Search), and narrows the switcher
-                    // (Window › Workspace) before anything runs over.
-                    let room = ui.available_width();
-                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
-                        2
-                    } else if room >= WORKSPACE_MIN + ICON_SLOT {
-                        1
-                    } else {
-                        0
-                    };
-                    let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
-                    if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", tl!("Workspace"), &mut ws, &opts, ws_width) {
-                        app.ui.workspace = ws;
-                        crate::menus::apply_workspace(app);
-                    }
-                    if icons_shown >= 1
-                        && icons::button(ui, "search", 28.0, app.ui.palette_open, &crate::shortcuts::tip_label(app, "Search commands", "edit.search")).clicked()
-                    {
-                        app.ui.palette_open = !app.ui.palette_open;
-                    }
-                    let (theme_icon, appearance_label) = match app.session.prefs().interface.appearance_mode {
-                        photocraft_engine::prefs::AppearanceMode::Auto => ("monitor", tl!("Auto")),
-                        photocraft_engine::prefs::AppearanceMode::Dark => ("moon", tl!("Dark")),
-                        photocraft_engine::prefs::AppearanceMode::Light => ("sun", tl!("Light")),
-                    };
-                    let appearance_tip = format!("{}: {}", tl!("Appearance Mode"), appearance_label);
-                    if icons_shown >= 2 {
-                        let button = icons::button(ui, theme_icon, 28.0, false, &appearance_tip);
-                        if button.clicked() {
-                            crate::prefs_ui::cycle_appearance(app, ui.ctx());
-                        }
-                        button.context_menu(|ui| crate::prefs_ui::appearance_context_menu(app, ui));
-                    }
-                    if rtl { ui.min_rect().right() } else { ui.min_rect().left() }
-                };
-                free = if rtl { (controls_end, menus_end) } else { (menus_end, controls_end) };
+                free = if rtl { (far_end, menus_end) } else { (menus_end, far_end) };
             });
             ui.ctx().data_mut(|d| d.insert_temp(span_id, free));
             if system {
@@ -193,16 +151,11 @@ pub(crate) fn title_job(title: &str, font: egui::FontId, color: egui::Color32) -
     job
 }
 
-/// Minimum space kept between the window title and the menus or controls beside it.
+/// Minimum space kept between the window title and the menus or the bar's far end beside it.
 const TITLE_GAP: f32 = 16.0;
 
-/// The workspace switcher's narrowest width, and one 28 pt title-bar icon with its spacing.
-const WORKSPACE_MIN: f32 = 90.0;
-
-const ICON_SLOT: f32 = 34.0;
-
 /// Left edge for a title `width` wide: centred on `center` when it fits in the free gap from
-/// `left` to `right` (the menus' and the controls' facing edges, whichever side each is on),
+/// `left` to `right` (the menus' inner edge and the bar's far end, whichever side each is on),
 /// else slid into that gap; None when the gap is too small for the whole title.
 pub(super) fn title_x(center: f32, left: f32, right: f32, width: f32) -> Option<f32> {
     let (lo, hi) = (left + TITLE_GAP, right - TITLE_GAP - width);
