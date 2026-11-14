@@ -59,7 +59,7 @@ const TANG_TOL: f64 = 0.5;
 /// Distance (document px) of an inner control point before its chord's start that splits a
 /// segment, as the reference application's creases show (rows pulled back over themselves split
 /// later there than past the chord's end).
-const BEFORE_TOL: f64 = 1.35;
+const BEFORE_TOL: f64 = 1.3;
 /// Distance (document px) of an inner control point past its chord's end that splits a segment.
 const AFTER_TOL: f64 = 1.0;
 /// A segment that turns back only a little (the fold's apex lies inside it: no inner control point
