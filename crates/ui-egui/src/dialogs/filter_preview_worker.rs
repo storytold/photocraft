@@ -11,7 +11,9 @@ use photocraft_engine::jobs::JobCtx;
 use crate::filter_dialog::FilterPreviewKey;
 
 pub(crate) struct Computed {
-    pub result: Option<(std::sync::Arc<photocraft_doc::Document>, photocraft_compose::Buffer)>,
+    /// The preview document and, unless the canvas renders just what it shows
+    /// ([`crate::canvas::filter_preview::flattens_whole`]), its whole composite.
+    pub result: Option<(std::sync::Arc<photocraft_doc::Document>, Option<photocraft_compose::Buffer>)>,
     pub ms: f64,
 }
 
@@ -37,6 +39,12 @@ pub(crate) struct Worker {
 impl Worker {
     pub fn busy(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// The request the worker is computing.
+    #[cfg(test)]
+    pub fn running(&self) -> Option<&FilterPreviewKey> {
+        self.running.as_ref().map(|r| &r.key)
     }
 
     /// Never wait for a previous computation and never spawn a second concurrent preview.
