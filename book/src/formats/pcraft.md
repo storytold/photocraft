@@ -24,11 +24,15 @@ The manifest is versioned and describes the document tree. Tiles and blobs are c
 
 Default `LoadOptions` apply these maximums:
 
-| Limit | Default |
-|---|---:|
-| `manifest.json` | 256 MiB |
-| One decompressed blob | 1 GiB |
-| Total decompressed tiles and blobs | 16 GiB |
+| Limit | Desktop | Browser |
+|---|---:|---:|
+| `manifest.json` | 256 MiB | 256 MiB |
+| One decompressed blob | 1 GiB | 512 MiB |
+| Total decompressed tiles and blobs | Up to 16 GiB | 1 GiB |
+
+On desktop, the total-byte budget is lowered to the available RAM plus remaining scratch-disk
+capacity, with a 1 GiB floor and a 16 GiB cap. If neither figure is available, the 16 GiB cap
+applies. These are decoded tile and blob bytes, not a limit on the process's total memory.
 
 Layer groups may nest at most 100 levels (`MAX_GROUP_DEPTH`). Saving a deeper document fails with an error instead of writing a bundle that can't be opened, and a manifest whose JSON nesting goes beyond what that depth needs is rejected before it is parsed, so a hostile file can't exhaust the stack.
 
