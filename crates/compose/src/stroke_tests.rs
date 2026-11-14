@@ -323,3 +323,31 @@ fn outside_stroke_on_partial_fill_raster_layer_keeps_interior_free_of_stroke() {
     let stroke_pixel = px(&d, 13, 20);
     assert!(close4(stroke_pixel, [0.0, 0.0, 1.0, 1.0]), "outside stroke must be blue: {stroke_pixel:?}");
 }
+
+/// An open line (no fill) with an outside stroke: the stroke fills the rest of every anti-aliased
+/// edge pixel beneath the line, so the backdrop never shows between them (#9659). Rendered one
+/// pixel at a time, as a tile would: the edge coverage comes from the whole layer.
+#[test]
+fn outside_stroke_fills_the_edge_pixels_beneath_an_unfilled_line() {
+    let mut d = doc(80, 50);
+    let red = ShapeStroke { width: 6.0, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), align: StrokeAlign::Center, ..ShapeStroke::default() };
+    let path = Path::new(vec![Subpath::polyline(&[(5.0, 12.3), (40.0, 22.7), (75.0, 30.1)])]);
+    let mut sh = ShapeLayer { path, fill: None, stroke: Some(red), live: None, cache: None, psd_raw: None, ..ShapeLayer::default() };
+    sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 80, 50)));
+    let mut layer = Layer::new("line", LayerContent::Shape(sh));
+    layer.effects.items = vec![stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.1, 0.0, 0.0)))];
+    d.layers.push(layer);
+    let mut light = Vec::new();
+    for y in 0..50 {
+        for x in 8..72 {
+            let xf = x as f32;
+            let centre = if xf < 40.0 { 12.3 + (xf - 5.0) * 10.4 / 35.0 } else { 22.7 + (xf - 40.0) * 7.4 / 35.0 };
+            // On the line and its stroke: red and the stroke's dark red have no green, the white backdrop does.
+            let p = px(&d, x, y);
+            if (y as f32 + 0.5 - centre).abs() < 3.6 && p[1] > 0.12 {
+                light.push((x, y, p));
+            }
+        }
+    }
+    assert!(light.is_empty(), "the backdrop shows between the line and its stroke at {:?}", &light[..light.len().min(6)]);
+}
