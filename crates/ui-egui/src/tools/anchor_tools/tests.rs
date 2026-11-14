@@ -386,28 +386,28 @@ fn an_added_anchor_on_a_curve_is_selected_smooth_and_shows_its_handles() {
     assert_eq!(work(&app), before);
 }
 
-/// #8653: a drag from the click moves the anchor it adds, handles and all; the
-/// add and the move are one history step, for the Add Anchor Point tool and the Pen's Auto Add.
+/// #8653: with the Pen's Auto Add a drag from the click moves the anchor it adds, handles and all;
+/// the add and the move are one history step. (Add Anchor Point's drag pulls out the handles
+/// instead, #12707: `add_anchor_drag_tests`.)
 #[test]
 fn dragging_from_an_add_moves_the_new_anchor_in_one_step() {
-    for tool in [Tool::AddAnchorPoint, Tool::Pen] {
-        let mut app = app(tool);
-        with_path(&mut app);
-        let (before, n) = (work(&app), steps(&app));
-        let on = photocraft_vector::edit::eval(&before.subpaths[0].segments()[0], 0.5);
-        drag(&mut app, [on.x, on.y], [on.x + 5.0, on.y + 15.0]);
-        let (mut want, k) = added_at(&before, on);
-        photocraft_vector::edit::move_anchors(&mut want, &[k], [5.0, 15.0]).unwrap();
-        assert_close(&work(&app), &want, &format!("{tool:?}: the new anchor moved with its handles"));
-        assert_smooth(&work(&app).subpaths[0].knots[1]);
-        assert_eq!(steps(&app), n + 1, "{tool:?}: one step");
-        assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
-        assert!(app.ui.pen.is_none(), "{tool:?}: no Pen path was started");
-        assert_eq!(app.ui.direct_selection.anchors, vec![k], "{tool:?}: it stays selected");
-        assert!(crate::direct_select::shows(&app, Modifiers::NONE), "{tool:?}: its handles show");
-        assert!(app.session.undo());
-        assert_eq!(work(&app), before, "{tool:?}: one undo takes back the add and the move");
-    }
+    let tool = Tool::Pen;
+    let mut app = app(tool);
+    with_path(&mut app);
+    let (before, n) = (work(&app), steps(&app));
+    let on = photocraft_vector::edit::eval(&before.subpaths[0].segments()[0], 0.5);
+    drag(&mut app, [on.x, on.y], [on.x + 5.0, on.y + 15.0]);
+    let (mut want, k) = added_at(&before, on);
+    photocraft_vector::edit::move_anchors(&mut want, &[k], [5.0, 15.0]).unwrap();
+    assert_close(&work(&app), &want, &format!("{tool:?}: the new anchor moved with its handles"));
+    assert_smooth(&work(&app).subpaths[0].knots[1]);
+    assert_eq!(steps(&app), n + 1, "{tool:?}: one step");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
+    assert!(app.ui.pen.is_none(), "{tool:?}: no Pen path was started");
+    assert_eq!(app.ui.direct_selection.anchors, vec![k], "{tool:?}: it stays selected");
+    assert!(crate::direct_select::shows(&app, Modifiers::NONE), "{tool:?}: its handles show");
+    assert!(app.session.undo());
+    assert_eq!(work(&app), before, "{tool:?}: one undo takes back the add and the move");
 }
 
 /// A Pen path being drawn: a corner at (40, 40), then a smooth anchor at (120, 40) dragged down,

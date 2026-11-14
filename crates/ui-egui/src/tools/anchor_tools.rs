@@ -6,7 +6,8 @@
 //! * Add Anchor Point: hovering a segment highlights it and shows where the anchor would go; a
 //!   click inserts it there (`path.addAnchor`). A curve is split without changing its shape, into
 //!   a smooth anchor; a straight segment gets a corner. The new anchor is selected with its
-//!   direction handles showing, and a drag from the click moves it, as in Photoshop (#8653).
+//!   direction handles showing (#8653), and a drag from the click pulls out its handles as the Pen
+//!   does (#12707, [`Pull`]): ⇧ turns them to 45°, ⌥ breaks the pair and Space moves the anchor.
 //! * Delete Anchor Point: hovering an anchor highlights it; a click removes it
 //!   (`path.deleteAnchor`), joining its neighbours.
 //! * ⌥ swaps the two tools and ⌘/Ctrl is Direct Selection (`direct_select`) while held; ⌥-click
@@ -169,7 +170,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         if r == PathRef::Pen {
             edit_pen(app, path, hit, [x, y]);
         } else {
-            apply(app, r, hit, [x, y]);
+            apply(app, r, hit, [x, y], false);
         }
         return true;
     }
@@ -263,12 +264,12 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
             select_shown(app, r, vec![s], vec![[s, k]]);
             return;
         }
-        if apply(app, r, hit, p) {
+        if apply(app, r, hit, p, false) {
             select_follower(app, r, &path, [s, k]);
         }
         return;
     }
-    apply(app, r, hit, p);
+    apply(app, r, hit, p, true);
 }
 
 /// Show the anchors of `subpaths` of `r` only, with `anchors` selected: a view change, no history step.
@@ -325,11 +326,12 @@ fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
 }
 
 /// Add an anchor where `hit` is on a segment of `r`, or delete the anchor it is on: one command.
-/// An added anchor is selected and follows a drag from the press at `p`; the add and the move are
-/// one history step.
+/// An added anchor is selected and a drag from the press at `p` pulls out its handles (`pull`, Add
+/// Anchor Point, #12707) or moves it (the Pen's Auto Add, #8653); the add and the drag are one
+/// history step.
 /// Whether the engine ran the edit: not at a full History (it records a step and evicts the oldest, so
 /// the step count does not change), nor when a live-shape prompt or an error stopped it.
-fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
+fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2], pull: bool) -> bool {
     let (id, mut params, coalesce) = match hit {
         Hit::Segment([s, k], t) => {
             let key = format!("add-anchor-{}", app.ui.alloc_id());
@@ -353,6 +355,7 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
             let n = |f: &str| v["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
             let base = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
             match (n("subpath"), n("knot"), base) {
+                (Some(s), Some(k), Some(base)) if pull => start_pull(app, r, base, [s, k], p, coalesce),
                 (Some(s), Some(k), Some(base)) => crate::direct_select::grab_added(app, r, base, [s, k], p, coalesce),
                 _ => app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() },
             }
@@ -366,6 +369,136 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) -> bool {
         }
     }
     ok
+}
+
+/// Select the anchor Add Anchor Point just put at knot `k` of `target` and start pulling out its
+/// handles from the press `p` ([`Pull`]); `coalesce` joins the drag to the add's history step.
+fn start_pull(app: &mut PhotocraftApp, target: PathRef, base: Path, k: [usize; 2], p: [f64; 2], coalesce: Option<String>) {
+    use crate::direct_select::{Drag, Edit};
+    let Some(anchor) = base.subpaths.get(k[0]).and_then(|sp| sp.knots.get(k[1])).map(|kn| kn.anchor) else {
+        app.ui.direct_selection = DirectSelection { target: Some(target), ..Default::default() };
+        return;
+    };
+    app.ui.direct_selection = DirectSelection { target: Some(target), anchors: vec![k], coalesce, owner: Owner::current(app), ..Default::default() };
+    app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Pull(Pull::new(k, anchor, p)), start: p, end: p, preview: None });
+}
+
+/// Add Anchor Point's drag from the anchor it just added (#12707), as the Pen pulls out a new
+/// anchor's handles and as measured in the reference application: the outgoing handle follows the
+/// pointer and the incoming one mirrors it through the anchor. ⇧ turns the handle to the nearest
+/// 45° ([`snap45_handle`]); ⌥ pressed during the drag breaks the pair, so from then on only the
+/// outgoing handle follows; Space held moves the anchor with its handles, and letting it go goes
+/// back to the handle. Committed on release in the add's history step ([`Pull::commands`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pull {
+    /// The added knot, `[subpath, knot]`.
+    pub(crate) knot: [usize; 2],
+    /// Where the add put the anchor.
+    from: Point,
+    /// The anchor now (Space moves it).
+    anchor: Point,
+    /// The outgoing handle.
+    out: Point,
+    /// The incoming handle once ⌥ broke the pair; `None` mirrors `out`.
+    broken_in: Option<Point>,
+    /// The pointer at the last event: Space moves the anchor by the pointer's steps.
+    last: [f64; 2],
+    /// Space is held (set each frame by the canvas, [`set_reposition`]).
+    reposition: bool,
+}
+
+impl Pull {
+    fn new(knot: [usize; 2], anchor: Point, press: [f64; 2]) -> Self {
+        Self { knot, from: anchor, anchor, out: anchor, broken_in: None, last: press, reposition: false }
+    }
+
+    fn in_ctrl(&self) -> Point {
+        self.broken_in.unwrap_or(Point::new(2.0 * self.anchor.x - self.out.x, 2.0 * self.anchor.y - self.out.y))
+    }
+
+    /// The pointer moved to `p` with `mods` held.
+    pub(crate) fn step(&mut self, p: [f64; 2], mods: Modifiers) {
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            return;
+        }
+        if self.reposition {
+            let d = [p[0] - self.last[0], p[1] - self.last[1]];
+            let by = |q: Point| Point::new(q.x + d[0], q.y + d[1]);
+            self.anchor = by(self.anchor);
+            self.out = by(self.out);
+            self.broken_in = self.broken_in.map(by);
+        } else {
+            if mods.alt && self.broken_in.is_none() {
+                self.broken_in = Some(self.in_ctrl());
+            }
+            let [x, y] = if mods.shift { snap45_handle([self.anchor.x, self.anchor.y], p) } else { p };
+            self.out = Point::new(x, y);
+        }
+        self.last = p;
+    }
+
+    /// Has Space moved the anchor off where the add put it?
+    pub(crate) fn repositioned(&self) -> bool {
+        self.anchor != self.from
+    }
+
+    /// `path` with the knot as the drag has it so far: the preview.
+    pub(crate) fn apply(&self, path: &mut Path) -> Result<(), String> {
+        let k = path.subpaths.get_mut(self.knot[0]).and_then(|sp| sp.knots.get_mut(self.knot[1])).ok_or("no such anchor")?;
+        (k.anchor, k.in_ctrl, k.out_ctrl) = (self.anchor, self.in_ctrl(), self.out);
+        k.smooth = self.broken_in.is_none();
+        Ok(())
+    }
+
+    /// The commands that make the knot what [`Pull::apply`] shows (without target or coalesce):
+    /// move the anchor if Space did, set the mirrored handles, and with the pair broken the
+    /// incoming handle on its own.
+    pub(crate) fn commands(&self) -> Vec<(&'static str, serde_json::Value)> {
+        let [s, k] = self.knot;
+        let mut cmds = Vec::new();
+        let d = [self.anchor.x - self.from.x, self.anchor.y - self.from.y];
+        if d != [0.0, 0.0] {
+            cmds.push(("path.moveAnchors", serde_json::json!({"anchors": [[s, k]], "move": d})));
+        }
+        cmds.push(("path.convertPoint", serde_json::json!({"subpath": s, "knot": k, "out": [self.out.x, self.out.y]})));
+        if let Some(i) = self.broken_in {
+            cmds.push(("path.moveHandle", serde_json::json!({"subpath": s, "knot": k, "handle": "in", "to": [i.x, i.y], "independent": true})));
+        }
+        cmds
+    }
+}
+
+/// ⇧ on a handle being pulled out (#12707): the nearest 45° direction from the anchor at `origin`,
+/// as measured in the reference application. An axis keeps the drag's major component, a diagonal
+/// takes min(|dx|, |dy|) for both: (+30, +80) → (+0, +80), (+70, +40) → (+40, +40).
+fn snap45_handle(origin: [f64; 2], p: [f64; 2]) -> [f64; 2] {
+    let (dx, dy) = (p[0] - origin[0], p[1] - origin[1]);
+    if !(dx.is_finite() && dy.is_finite()) {
+        return p;
+    }
+    let (ax, ay) = (dx.abs(), dy.abs());
+    // tan 22.5°: below it the drag is nearer the axis than the diagonal.
+    let tan = std::f64::consts::FRAC_PI_8.tan();
+    if ay <= ax * tan {
+        [p[0], origin[1]]
+    } else if ax <= ay * tan {
+        [origin[0], p[1]]
+    } else {
+        let m = ax.min(ay);
+        [origin[0] + m.copysign(dx), origin[1] + m.copysign(dy)]
+    }
+}
+
+/// Space held or not (`held`) for Add Anchor Point's handle drag, if one is going on: true when it
+/// is, so the canvas keeps Space from panning, as it does for the Pen's drag.
+pub fn set_reposition(app: &mut PhotocraftApp, held: bool) -> bool {
+    match app.ui.direct_selection.drag.as_mut() {
+        Some(crate::direct_select::Drag::Edit { edit: crate::direct_select::Edit::Pull(pull), .. }) => {
+            pull.reposition = held;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// The hover feedback over the Direct Selection overlay: Add highlights the segment under the
@@ -435,3 +568,6 @@ mod delete_anchor_shown_anchors_tests;
 
 #[cfg(test)]
 mod delete_anchor_alt_tests;
+
+#[cfg(test)]
+mod add_anchor_drag_tests;
