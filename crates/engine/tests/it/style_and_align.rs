@@ -142,3 +142,22 @@ fn paste_layer_style_onto_several_layers_sets_each_opacity() {
         assert!((layer(&s, id).opacity - 0.4).abs() < 1e-6, "layer {id}");
     }
 }
+
+/// An API client can put any value in the public style clipboard; Paste refuses an opacity or
+/// fill outside 0..1 (or NaN) and changes nothing.
+#[test]
+fn paste_layer_style_refuses_an_invalid_copied_opacity() {
+    let mut s = Session::new();
+    let (a, b) = new_doc(&mut s, "rgb");
+    s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": a})).unwrap();
+    let good = s.style_clipboard.clone().unwrap();
+    for (opacity, fill) in [(f32::NAN, 1.0), (1.5, 1.0), (-0.1, 1.0), (1.0, f32::NAN), (1.0, 2.0), (f32::INFINITY, 1.0)] {
+        let mut bad = good.clone();
+        bad.opacity = opacity;
+        bad.fill = fill;
+        s.style_clipboard = Some(bad);
+        assert!(s.execute("layer.layerStyle.pasteLayerStyle", json!({"layer": b})).is_err(), "{opacity} / {fill}");
+        assert_eq!(layer(&s, b).opacity, 1.0);
+        assert_eq!(layer(&s, b).fill_opacity, 1.0);
+    }
+}

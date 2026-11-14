@@ -978,6 +978,12 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 let style = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
+                // The clipboard is public on Session: an API client can put anything there.
+                for (what, v) in [("opacity", style.opacity), ("fill opacity", style.fill)] {
+                    if !(0.0..=1.0).contains(&v) {
+                        return Err(EngineError::Other(format!("the copied layer style's {what} must be 0..1, not {v}")));
+                    }
+                }
                 let mut fx = style.effects;
                 s.edit("Paste Layer Style", |doc, _| {
                     // A style copied from a document in another mode takes this one's colours.
