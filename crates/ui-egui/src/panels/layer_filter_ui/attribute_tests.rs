@@ -119,10 +119,10 @@ fn rename_active(s: &mut photocraft_engine::Session, name: &str) {
 
 /// The names `attribute` lists.
 fn listed(doc: &Document, attribute: Attribute) -> BTreeSet<String> {
-    let mut filter = Filter::of(&UiState { layer_filter_by: FilterBy::Attribute, layer_filter_attribute: attribute, ..UiState::default() });
-    // As the panel does ([`Filter::of_app`]): Empty knows the canvas.
-    filter.empty = Some(std::sync::Arc::new(super::attribute::empty_layers_of(doc)));
-    crate::layer_tree_ui::display_rows(doc, filter.active()).into_iter().filter(|(_, l)| filter.shows(l)).map(|(_, l)| l.name.clone()).collect()
+    let filter = Filter { on: true, by: FilterBy::Attribute, attribute, ..Filter::default() };
+    // As the panel does: Empty knows the canvas through derived context.
+    let context = super::FilterContext { empty: Some(std::sync::Arc::new(super::attribute::empty_layers_of(doc))), ..Default::default() };
+    crate::layer_tree_ui::display_rows(doc, filter.active()).into_iter().filter(|(_, l)| filter.shows_with(l, &context)).map(|(_, l)| l.name.clone()).collect()
 }
 
 fn names(list: &[&str]) -> BTreeSet<String> {
@@ -220,28 +220,33 @@ fn the_empty_layers_are_found_once_per_document() {
     s.execute("file.new", json!({"width": 40, "height": 30, "background": "transparent"})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     let mut app = PhotocraftApp::new(s, crate::Services::default());
-    app.ui.layer_filter_by = FilterBy::Attribute;
-    app.ui.layer_filter_attribute = Attribute::Empty;
-    let first = Filter::of_app(&app).empty.expect("found for Empty");
+    super::apply(&mut app, Filter { on: true, by: FilterBy::Attribute, attribute: Attribute::Empty, ..Filter::default() });
+    let first = super::FilterContext::of_app(&app, &Filter::of(&app)).empty.expect("found for Empty");
     assert!(first.is_empty(), "the filled layer has pixels");
-    let again = Filter::of_app(&app).empty.unwrap();
+    let again = super::FilterContext::of_app(&app, &Filter::of(&app)).empty.unwrap();
     assert!(std::sync::Arc::ptr_eq(&first, &again), "the same document reuses the result");
     // Selecting a layer moves the revision but changes no pixels.
     let id = app.session.active().unwrap().doc.layers[0].id;
     app.session.select_layer(id).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&first, &Filter::of_app(&app).empty.unwrap()), "a selection reuses the result");
+    assert!(std::sync::Arc::ptr_eq(&first, &super::FilterContext::of_app(&app, &Filter::of(&app)).empty.unwrap()), "a selection reuses the result");
     app.session.execute("paint.stroke", json!({"points": [[20, -10], [20, 40]], "size": 60, "erase": true, "brush": {"hardness": 1.0}})).unwrap();
-    let after = Filter::of_app(&app);
+    let filter = Filter::of(&app);
+    let after = super::FilterContext::of_app(&app, &filter);
     assert_eq!(after.empty.as_ref().map(|set| set.len()), Some(1), "an edit finds them again");
     let doc = &app.session.active().unwrap().doc;
-    assert!(doc.walk().into_iter().all(|(_, _, l)| after.shows(l)), "the erased layer is listed");
-    app.ui.layer_filter_attribute = Attribute::NotEmpty;
-    assert!(Filter::of_app(&app).empty.is_some(), "Not Empty uses them too");
+    assert!(doc.walk().into_iter().all(|(_, _, l)| filter.shows_with(l, &after)), "the erased layer is listed");
+    let mut filter = Filter::of(&app);
+    filter.attribute = Attribute::NotEmpty;
+    super::apply(&mut app, filter);
+    assert!(super::FilterContext::of_app(&app, &Filter::of(&app)).empty.is_some(), "Not Empty uses them too");
     // Another document, with no empty layer, gets its own result.
     app.session.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
-    assert_eq!(Filter::of_app(&app).empty.map(|set| set.len()), Some(0), "the new document's layers");
-    app.ui.layer_filter_attribute = Attribute::Visible;
-    assert!(Filter::of_app(&app).empty.is_none(), "other attributes don't read pixels");
+    super::apply(&mut app, Filter { on: true, by: FilterBy::Attribute, attribute: Attribute::NotEmpty, ..Filter::default() });
+    assert_eq!(super::FilterContext::of_app(&app, &Filter::of(&app)).empty.map(|set| set.len()), Some(0), "the new document's layers");
+    let mut filter = Filter::of(&app);
+    filter.attribute = Attribute::Visible;
+    super::apply(&mut app, filter);
+    assert!(super::FilterContext::of_app(&app, &Filter::of(&app)).empty.is_none(), "other attributes don't read pixels");
 }
 
 #[test]
@@ -262,33 +267,34 @@ fn each_opposite_lists_the_rest_groups_included() {
 
 #[test]
 fn attribute_filters_at_once_with_visible() {
-    let f = Filter::of(&UiState { layer_filter_by: FilterBy::Attribute, ..UiState::default() });
+    let f = super::patched(&Filter::default(), &json!({"by": "attribute"})).unwrap();
     assert_eq!(f.attribute, Attribute::Visible);
     assert!(f.active(), "Attribute filters as soon as it's picked");
 }
 
 #[test]
 fn ui_set_picks_the_attribute_by_id() {
-    let mut ui = UiState::default();
+    let mut filter = Filter::default();
     for attribute in Attribute::ALL {
-        let f = super::patched(&ui, &json!({"by": "attribute", "attribute": attribute.id()})).unwrap();
-        super::apply(&mut ui, f);
-        assert_eq!((ui.layer_filter_by, ui.layer_filter_attribute), (FilterBy::Attribute, attribute));
+        let f = super::patched(&filter, &json!({"by": "attribute", "attribute": attribute.id()})).unwrap();
+        filter = f;
+        assert_eq!((filter.by, filter.attribute), (FilterBy::Attribute, attribute));
     }
     assert_eq!(Attribute::NoAdvancedBlending.id(), "noAdvancedBlending");
-    let err = super::patched(&ui, &json!({"attribute": "hidden"})).unwrap_err();
+    let err = super::patched(&filter, &json!({"attribute": "hidden"})).unwrap_err();
     assert!(err.contains("hidden") && err.contains("notVisible") && err.contains("noAdvancedBlending"), "{err}");
-    assert!(super::patched(&ui, &json!({"attribute": 3})).is_err());
-    assert!(super::patched(&ui, &json!({"attribute": null})).is_err());
+    assert!(super::patched(&filter, &json!({"attribute": 3})).is_err());
+    assert!(super::patched(&filter, &json!({"attribute": null})).is_err());
 }
 
 #[test]
-fn saved_settings_without_the_attribute_still_load() {
-    let mut saved = serde_json::to_value(UiState { layer_filter_attribute: Attribute::NotLinked, ..UiState::default() }).unwrap();
-    assert_eq!(saved["layer_filter_attribute"], "notLinked");
-    saved.as_object_mut().unwrap().remove("layer_filter_attribute");
+fn legacy_attribute_settings_do_not_initialize_document_filters() {
+    let mut saved = serde_json::to_value(UiState::default()).unwrap();
+    assert!(saved.get("layer_filter_attribute").is_none());
+    saved["layer_filter_attribute"] = json!("notLinked");
     let ui: UiState = serde_json::from_value(saved).unwrap();
-    assert_eq!(ui.layer_filter_attribute, Attribute::Visible);
+    assert!(ui.layer_filters.is_empty());
+    assert_eq!(Filter::default().attribute, Attribute::Visible);
 }
 
 /// The names of the rows the Layers panel drew.
@@ -303,19 +309,21 @@ fn the_panel_filters_by_the_attribute_picked_in_the_dropdown() {
     let session = session();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(session, crate::Services::default())
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        super::apply(&mut app, Filter { on: true, ..Filter::default() });
+        app
     });
     h.run_steps(8);
     h.get_by_value("Kind").click();
     h.run_steps(4);
     h.query_all_by_label("Attribute").last().expect("Attribute in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Attribute);
+    assert_eq!(Filter::of(h.state()).by, FilterBy::Attribute);
     assert!(!drawn(&h).contains("hidden"), "Visible at first");
     h.get_by_value("Visible").click();
     h.run_steps(4);
     h.query_all_by_label("Not Visible").last().expect("Not Visible in the open list").click();
     h.run_steps(4);
-    assert_eq!(h.state().ui.layer_filter_attribute, Attribute::NotVisible);
+    assert_eq!(Filter::of(h.state()).attribute, Attribute::NotVisible);
     assert_eq!(drawn(&h), names(&["hidden", "hidden group"]));
 }

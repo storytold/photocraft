@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use super::FilterBy;
+use super::{Filter, FilterBy};
 use crate::{PhotocraftApp, widgets};
 
 /// The egui memory flag: focus the Name field the next time it is drawn.
@@ -48,23 +48,29 @@ pub(crate) fn params_for_run(app: &PhotocraftApp, params: Value) -> Value {
         return params;
     }
     let mut params = if params.is_object() { params } else { json!({}) };
-    params["name"] = json!(app.ui.layer_filter_name);
+    params["name"] = json!(Filter::of(app).name);
     params
 }
 
-/// Apply the Name filter in a `select.findLayers` reply to the Layers panel: switch to Name and set
-/// the text when the reply has one. [`PhotocraftApp::run`] calls it after every Find Layers.
+/// Apply the Name filter in a `select.findLayers` reply to the active document's Layers panel:
+/// switch to Name, set the text when the reply has one and turn the filter on, as in Photoshop
+/// (also after a manual Off). The selected layers it hides are deselected, as for any filter edit
+/// (#10879). [`PhotocraftApp::run`] calls it after every Find Layers.
 pub(crate) fn apply(app: &mut PhotocraftApp, reply: &Value) {
-    app.ui.layer_filter_by = FilterBy::Name;
+    let mut f = Filter::of(app);
+    f.by = FilterBy::Name;
     if let Some(name) = reply["layerFilter"]["name"].as_str() {
-        app.ui.layer_filter_name = name.to_string();
+        f.name = name.to_string();
     }
+    f.on = true;
+    super::apply(app, f);
+    super::selection::follow(app);
 }
 
 /// The Name filter's text field, taking the focus with its text selected after [`invoke`]. The
 /// focus waits for a frame without a pointer press or release: egui drops the focus at the end of
 /// a frame in which the pointer was clicked elsewhere, as it is when the menu item is clicked.
-pub fn name_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn name_field(name: &mut String, ui: &mut egui::Ui) {
     let id = ui.scope_id().with("layer-filter-name");
     let pending = ui.ctx().data(|d| d.get_temp::<bool>(focus_flag())).unwrap_or(false);
     let clicking = ui.input(|i| i.pointer.any_pressed() || i.pointer.any_released() || i.pointer.any_down());
@@ -73,8 +79,8 @@ pub fn name_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else if pending {
         ui.ctx().data_mut(|d| d.remove_temp::<bool>(focus_flag()));
         ui.memory_mut(|m| m.request_focus(id));
-        widgets::field_tab::select_all(ui.ctx(), id, &app.ui.layer_filter_name);
+        widgets::field_tab::select_all(ui.ctx(), id, name);
     }
     let width = ui.available_width().max(48.0);
-    widgets::text_field(ui, id, &mut app.ui.layer_filter_name, tl!("Search"), width, false);
+    widgets::text_field(ui, id, name, tl!("Search"), width, false);
 }

@@ -130,6 +130,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::layer_filter_ui::bar(app, ui);
         ui.add_space(4.0);
     }
+    // A hidden row still filters, so a changed filter still deselects what it hides.
+    crate::layer_filter_ui::selection::follow(app);
     if let Some(l) = active_layer {
         // With several layers selected, blend mode, Opacity, Fill and the locks change every one
         // of them, as in Photoshop; the controls show the active layer's values.
@@ -276,7 +278,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.scroll_with_delta(vec2(0.0, delta));
                 ctx.request_repaint();
             }
-            let filter = crate::layer_filter_ui::Filter::with_selection(app, &doc, &selection);
+            let filter = crate::layer_filter_ui::Filter::of(app);
+            let filter_context = crate::layer_filter_ui::FilterContext::with_selection(app, &filter, &doc, &selection);
             let fx_collapsed = app.session.active().map(|d| d.fx_collapsed.clone()).unwrap_or_default();
             crate::layer_row_ui::begin(ui.ctx());
             // The drawn rows, top to bottom (#1721): the space between them and below the last
@@ -287,7 +290,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
                     continue;
                 }
-                if !filter.shows(l) {
+                if !filter.shows_with(l, &filter_context) {
                     continue;
                 }
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
@@ -304,8 +307,16 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
             // The bottom of everything drawn: the last layer's effect and Smart Filter rows sit
-            // under its own row (#8764).
+            // under its own row (#8764). Taken before the no-match text, which sits in the empty space
+            // and keeps its right-click menu.
             let rows_bottom = ui.min_rect().bottom();
+            if filter.active_with(&filter_context) && drawn.is_empty() {
+                // A short panel sizes the list to its rows: one row's height keeps the footer in view.
+                let height = if rows_h.is_finite() { rows_h } else { 24.0 };
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), height), egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
+                    ui.label(tl!("No layers match the filter."));
+                });
+            }
             // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
             // between two rows lands above the lower one, the empty space below the bottom-most
             // row below it. Both copy with ⌥ held, move without.

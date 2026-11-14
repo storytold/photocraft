@@ -28,11 +28,11 @@ fn listed(doc: &Document, filter: &Filter) -> Vec<String> {
 }
 
 fn kinds(kinds: &[&str]) -> Filter {
-    Filter::of(&UiState { layer_filter_by: FilterBy::Kind, layer_filter: kinds.iter().map(|k| k.to_string()).collect(), ..UiState::default() })
+    Filter { on: true, by: FilterBy::Kind, kinds: kinds.iter().map(|k| k.to_string()).collect(), ..Filter::default() }
 }
 
 fn mode(mode: BlendMode) -> Filter {
-    Filter::of(&UiState { layer_filter_by: FilterBy::Mode, layer_filter_mode: mode, ..UiState::default() })
+    Filter { on: true, by: FilterBy::Mode, mode, ..Filter::default() }
 }
 
 /// Every kind of fill layer, a solid fill with a vector mask, and a Gradient Map adjustment.
@@ -92,7 +92,7 @@ fn a_normal_group_is_listed_by_mode_and_a_pass_through_group_never_is() {
 
 #[test]
 fn the_mode_filter_takes_no_pass_through() {
-    let ui = UiState::default();
+    let ui = Filter::default();
     let err = super::patched(&ui, &json!({"mode": "Pass Through"})).unwrap_err();
     assert!(err.contains("Pass Through"), "the error names what was asked for: {err}");
     for m in BlendMode::LAYER_MODES {
@@ -105,13 +105,15 @@ fn the_mode_filter_takes_no_pass_through() {
 }
 
 #[test]
-fn a_stored_pass_through_filter_mode_loads_as_normal() {
+fn legacy_stored_modes_do_not_restore_open_document_criteria() {
     let mut stored = serde_json::to_value(UiState::default()).unwrap();
     stored["layer_filter_mode"] = serde_json::to_value(BlendMode::PassThrough).unwrap();
     let ui: UiState = serde_json::from_value(stored.clone()).unwrap();
-    assert_eq!(ui.layer_filter_mode, BlendMode::Normal);
-    // Any other stored mode is kept as it was.
+    assert!(ui.layer_filters.is_empty());
+    assert_eq!(Filter::default().mode, BlendMode::Normal);
+    // A legacy global mode never seeds a newly opened document.
     stored["layer_filter_mode"] = serde_json::to_value(BlendMode::Screen).unwrap();
     let ui: UiState = serde_json::from_value(stored).unwrap();
-    assert_eq!(ui.layer_filter_mode, BlendMode::Screen);
+    assert!(ui.layer_filters.is_empty());
+    assert_eq!(Filter::default().mode, BlendMode::Normal);
 }

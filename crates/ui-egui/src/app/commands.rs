@@ -19,6 +19,7 @@ impl PhotocraftApp {
             self.session.authorize = gate;
         }
         let result = self.run_command(id, params);
+        crate::layer_filter_ui::retain_open(self);
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -340,6 +341,7 @@ impl PhotocraftApp {
 
     /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
+        crate::layer_filter_ui::retain_open(self);
         crate::type_path_placement::cancel_stale(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
