@@ -119,6 +119,7 @@ fn caf_props_panel(
     ui: &mut egui::Ui,
     w: &mut CafWorkspace,
     t: &Tokens,
+    multi_layer: bool,
     reset_what: &mut Option<&str>,
     new_sampling: &mut Option<&str>,
     rebase_needed: &mut bool,
@@ -158,9 +159,14 @@ fn caf_props_panel(
             }
         }
     });
-    if widgets::checkbox(ui, &mut w.opts.sample_all, tl!("Sample All Layers")).changed() {
-        *rebase_needed = true;
+    if !multi_layer {
+        w.opts.sample_all = false;
     }
+    ui.add_enabled_ui(multi_layer, |ui| {
+        if widgets::checkbox(ui, &mut w.opts.sample_all, tl!("Sample All Layers")).changed() {
+            *rebase_needed = true;
+        }
+    });
     widgets::hairline(ui);
     ui.horizontal(|ui| {
         widgets::section_label(ui, tl!("Fill Settings"));
@@ -279,6 +285,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut reset_what: Option<&str> = None;
     let mut rebase_needed = false;
     let mut dragging = false;
+    let multi_layer = app.session.active().is_some_and(|st| st.doc.layer_count() > 1);
     egui::Area::new(egui::Id::unique("caf-workspace")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(w) = app.distort.caf.as_mut() else { return };
         let before = w.opts.clone();
@@ -326,7 +333,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.new_child(egui::UiBuilder::new().max_rect(ERect::from_min_max(right.min + vec2(14.0, 12.0), pos2(right.right() - 14.0, right.bottom() - 60.0))));
         egui::ScrollArea::vertical()
             .id_salt("caf-props")
-            .show(&mut props, |ui| caf_props_panel(ui, w, &t, &mut reset_what, &mut new_sampling, &mut rebase_needed));
+            .show(&mut props, |ui| caf_props_panel(ui, w, &t, multi_layer, &mut reset_what, &mut new_sampling, &mut rebase_needed));
         // Footer, in Photoshop's order on every platform: reset all at the left, then OK, Apply,
         // Cancel against the right edge.
         let foot = ERect::from_min_size(pos2(right.left() + 10.0, right.bottom() - 48.0), vec2(PANEL_W - 20.0, 32.0));

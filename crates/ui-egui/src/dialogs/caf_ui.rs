@@ -404,4 +404,6 @@ impl CafWorkspace {
 }
 
 #[cfg(test)]
+mod sample_all_one_layer_tests;
+#[cfg(test)]
 mod tests;
