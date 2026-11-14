@@ -508,11 +508,12 @@ impl<'a> Planner<'a> {
 
         if let LayerContent::Shape(sh) = &layer.content
             && !visible_clipped.is_empty()
+            && sh.fill.is_some()
             && let Some((fill, stroke)) = photocraft_compose::shape_split::split(sh, self.cx.canvas, self.cx.depth)
         {
             // The vector stroke goes above the clipped layers: the fill is the clipping base,
             // the stroke is laid over the clipped result, then the masks apply to both
-            // (compose::shape_parts).
+            // (compose::shape_parts). Without a fill the stroke is the base, as for any layer.
             let mut content = self.shape_part(layer, Role::Content, fill);
             for c in visible_clipped {
                 content = self.atop(c, content)?;

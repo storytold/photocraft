@@ -151,6 +151,28 @@ fn vector_stroke_stays_above_interior_effects_and_below_the_stroke_effect() {
     assert!(close4(px(&d, 20, 20), [0.0, 0.0, 1.0, 1.0]), "overlay on the fill: {:?}", px(&d, 20, 20));
 }
 
+/// A shape with its fill turned off is its stroke for the layers clipped to it: they paint over
+/// the stroke, as in Photoshop, instead of the stroke being laid over them with nothing to clip to.
+#[test]
+fn an_unfilled_shapes_clipped_layers_paint_over_its_stroke() {
+    let mut d = doc(40, 40);
+    let vs = ShapeStroke { width: 4.0, align: StrokeAlign::Inside, paint: Fill::Solid(Color::WHITE), ..ShapeStroke::default() };
+    let mut l = shape(10.0, 30.0, Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), Some(vs));
+    if let LayerContent::Shape(sh) = &mut l.content {
+        sh.fill = None;
+        let cache = photocraft_vector::render_shape(sh, PixelFormat::RGBA8, Rect::new(0, 0, 40, 40));
+        sh.cache = Some(cache);
+    }
+    let mut clip = Layer::raster("clip", PixelFormat::RGBA8);
+    clip.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 40, 40), &[0.0, 0.0, 1.0, 1.0]);
+    clip.clipped = true;
+    d.layers.push(l);
+    d.layers.push(clip);
+    assert!(close4(px(&d, 12, 20), [0.0, 0.0, 1.0, 1.0]), "the clipped layer over the stroke: {:?}", px(&d, 12, 20));
+    assert!(close4(px(&d, 20, 20), [1.0; 4]), "nothing inside the ring: {:?}", px(&d, 20, 20));
+    assert!(close4(px(&d, 5, 20), [1.0; 4]), "nothing outside it: {:?}", px(&d, 5, 20));
+}
+
 #[test]
 fn a_stroked_shapes_mask_applies_to_fill_and_stroke_together() {
     let mut d = Document::new("t", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
