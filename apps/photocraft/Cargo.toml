@@ -27,6 +27,7 @@ photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
+craft-flags = { workspace = true }
 # Pen tablet pressure/tilt on macOS and X11 (the workspace's one isolated unsafe helper crate).
 photocraft-tablet = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "wayland", "x11", "persistence", "clipboard"] }
@@ -83,7 +84,7 @@ plist = { version = "=1.10.3", features = ["enable_unstable_features_that_may_br
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
-photocraft-cms = { workspace = true }
+craft-cms = { workspace = true }
 # The print portal's PDF: a private (0600) temporary file, removed when the dialog is done.
 tempfile = "3"
 x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
