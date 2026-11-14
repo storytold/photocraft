@@ -27,7 +27,7 @@ const LAYERS: [(&str, &str); 10] = [
 
 const HIDDEN: [&str; 2] = ["T4 hidden", "T9 hidden2"];
 
-fn document() -> Session {
+pub(super) fn document() -> Session {
     let mut s = blank();
     for (i, (name, text)) in LAYERS.into_iter().enumerate() {
         let y = 30.0 + 40.0 * i as f64;
@@ -53,7 +53,7 @@ fn name_of(s: &Session, id: &Value) -> String {
 }
 
 /// (layer name, word) of each misspelling `{"action":"list"}` returns with `params` added.
-fn listed(s: &mut Session, params: Value) -> Vec<(String, String)> {
+pub(super) fn listed(s: &mut Session, params: Value) -> Vec<(String, String)> {
     let mut p = json!({"action": "list"});
     p.as_object_mut().unwrap().extend(params.as_object().unwrap().clone());
     let r = s.execute(CMD, p).unwrap();
@@ -68,7 +68,7 @@ fn check_from(s: &mut Session, start: &str) -> Vec<(String, String)> {
 
 /// The words of the visible unlocked layers, as "layer: word". T7's "Hallo" is left out: only the
 /// English dictionary flags it, and checking T7 in German is #14189.
-fn words(list: &[(String, String)]) -> Vec<String> {
+pub(super) fn words(list: &[(String, String)]) -> Vec<String> {
     list.iter()
         .filter(|(l, w)| !HIDDEN.contains(&l.as_str()) && !l.contains("locked") && !(l == "T7 german" && w == "Hallo"))
         .map(|(l, w)| format!("{l}: {w}"))
@@ -76,7 +76,7 @@ fn words(list: &[(String, String)]) -> Vec<String> {
 }
 
 /// Asserts the listed layers come in `order` (a layer not listed is passed over).
-fn assert_layer_order(list: &[(String, String)], order: &[&str]) {
+pub(super) fn assert_layer_order(list: &[(String, String)], order: &[&str]) {
     let mut visited: Vec<&str> = list.iter().map(|(l, _)| l.as_str()).collect();
     visited.dedup();
     let expected: Vec<&str> = order.iter().copied().filter(|l| visited.contains(l)).collect();
