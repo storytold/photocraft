@@ -211,7 +211,8 @@ pub fn liquify_surface(surf: &Surface, strokes: &[LiquifyStroke], cell: f64, can
 /// Puppet-warps a surface's content; `None` when the result would span more than
 /// [`photocraft_algo::puppet::MAX_WARP_PIXELS`].
 pub fn puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Option<Surface> {
-    let b = surf.content_bounds();
+    // Size by what is covered, not by what is stored: clear pixels stored white or black warp alike (#10639).
+    let b = surf.covered_bounds();
     if w.is_identity() || b.is_empty() {
         return Some(surf.clone());
     }
@@ -220,7 +221,8 @@ pub fn puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Option<
 
 /// Perspective-warps a surface's content.
 pub fn perspective_surface(surf: &Surface, planes: &[Plane], interp: Interp) -> Surface {
-    let b = surf.content_bounds();
+    // Size by what is covered, not by what is stored: clear pixels stored white or black warp alike (#10639).
+    let b = surf.covered_bounds();
     if PerspectiveMap::is_identity(planes) || b.is_empty() {
         return surf.clone();
     }
@@ -240,7 +242,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
         PUPPET | PUPPET_SMART => {
             // A mesh stored with the filter (from a Photoshop file) is drawn as it is; one that
             // can't be drawn leaves the pins to solve.
-            let b = surf.content_bounds();
+            let b = surf.covered_bounds();
             if let Some((mesh, deformed)) = stored_puppet_mesh(params).filter(|_| !b.is_empty())
                 && let Some(out) = warp_with_mesh(surf, b, &mesh, &deformed, interp(params))
             {
@@ -400,7 +402,7 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let moved_mask: RefCell<Option<Surface>> = RefCell::new(None);
     let layer_fn = |surf: &Surface, sel: Option<&Surface>, _: Rect| {
         deform_selected(surf, sel, &|x| {
-            let b = x.content_bounds();
+            let b = x.covered_bounds(); // clear pixels stored white or black warp alike (#10639)
             if b.is_empty() {
                 return Ok(x.clone());
             }

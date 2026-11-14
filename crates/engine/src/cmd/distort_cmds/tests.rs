@@ -541,3 +541,73 @@ fn a_stored_puppet_mesh_is_drawn_only_on_the_placement_it_was_made_for() {
     bare.smart_filters[0].params["mesh"].as_object_mut().unwrap().remove("placement");
     assert_eq!(render(&bare), Rect::new(16, 14, 66, 44), "no placement: solved");
 }
+
+/// Two 32x32 RGBA8 surfaces holding an opaque 8x8 red square in the middle of a fully clear surround,
+/// stored as white (255,255,255,0) in one and black (0,0,0,0) in the other. The white one's
+/// `content_bounds()` is the whole area.
+fn white_and_black_clear_squares() -> (Surface, Surface) {
+    let mut white = Surface::new(PixelFormat::RGBA8);
+    white.fill_rect(Rect::new(0, 0, 32, 32), &[1.0, 1.0, 1.0, 0.0]);
+    let mut black = Surface::new(PixelFormat::RGBA8);
+    black.fill_rect(Rect::new(0, 0, 32, 32), &[0.0, 0.0, 0.0, 0.0]);
+    for s in [&mut white, &mut black] {
+        s.fill_rect(Rect::new(12, 12, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
+    }
+    (white, black)
+}
+
+fn assert_alike(a: &Surface, b: &Surface, what: &str) {
+    let r = a.tile_bounds().union(&b.tile_bounds()).inflate(8);
+    for y in r.y0..r.y1 {
+        for x in r.x0..r.x1 {
+            let (pa, pb) = (a.pixel(x, y), b.pixel(x, y));
+            assert!((pa[3] - pb[3]).abs() <= 1e-4, "{what} ({x}, {y}): alpha {} vs {}", pa[3], pb[3]);
+            if pa[3] > 0.0 {
+                for c in 0..3 {
+                    assert!((pa[c] * pa[3] - pb[c] * pb[3]).abs() <= 1e-4, "{what} ({x}, {y}) channel {c}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn perspective_warps_white_and_black_clear_pixels_alike() {
+    let (white, black) = white_and_black_clear_squares();
+    assert_eq!(white.content_bounds(), Rect::new(0, 0, 32, 32));
+    let planes = [Plane { src: [[0.0, 0.0], [32.0, 0.0], [32.0, 32.0], [0.0, 32.0]], dst: [[4.0, 2.0], [28.0, 6.0], [34.0, 30.0], [-2.0, 26.0]] }];
+    for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+        assert_alike(&perspective_surface(&white, &planes, interp), &perspective_surface(&black, &planes, interp), &format!("{interp:?}"));
+    }
+}
+
+#[test]
+fn puppet_warps_white_and_black_clear_pixels_alike() {
+    let (white, black) = white_and_black_clear_squares();
+    let w: PuppetWarp =
+        serde_json::from_value(json!({"pins": [{"src": [16, 16], "dst": [20, 12]}, {"src": [12, 12], "dst": [12, 12]}], "density": "more"})).unwrap();
+    for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+        let (Some(a), Some(b)) = (puppet_surface(&white, &w, interp), puppet_surface(&black, &w, interp)) else { panic!("too large") };
+        assert_alike(&a, &b, &format!("{interp:?}"));
+    }
+}
+
+#[test]
+fn puppet_command_warps_white_and_black_clear_pixels_alike() {
+    let pins = json!({"pins": [{"src": [16, 16], "dst": [20, 12]}, {"src": [12, 12], "dst": [12, 12]}], "density": "more"});
+    let run = |clear: f32| {
+        let mut s = session(8);
+        s.edit("paint", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let surf = l.surface_mut().unwrap();
+            surf.fill_rect(Rect::new(0, 0, 80, 60), &[clear, clear, clear, 0.0]);
+            surf.fill_rect(Rect::new(12, 12, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let r = s.execute(PUPPET, pins.clone()).unwrap();
+        assert_eq!(r["changed"], true);
+        active_surface(&s)
+    };
+    assert_alike(&run(1.0), &run(0.0), "puppet command");
+}
