@@ -126,3 +126,27 @@ fn the_group_menu_lists_rename_after_the_groups() {
     assert_eq!(dialog_name(&h).as_deref(), Some("Second"), "Rename… renames the current group");
     assert_eq!(groups(&h).len(), 2, "picking Rename… doesn't switch groups");
 }
+
+/// CodeRabbit on #14707: the dialog belongs to the document that opened it. Switching documents
+/// drops it, so OK can't rename a group of another document or name its new group, and nothing is
+/// made.
+#[test]
+fn switching_documents_drops_the_dialog() {
+    for rename in [false, true] {
+        let mut h = harness();
+        if rename {
+            crate::count_group_name_ui::open_rename(h.state_mut(), 0);
+        } else {
+            h.get_by_label("Create a new count group").click();
+        }
+        h.run_steps(3);
+        assert!(h.state().ui.analysis.dialog.is_some(), "the dialog is open (rename {rename})");
+        h.event(egui::Event::Text("Wrong place".into()));
+        h.state_mut().run("file.new", json!({"width": 100, "height": 100})).unwrap();
+        // A count group in the new document, which the old index would name.
+        h.state_mut().run("count.newGroup", json!({"name": "Mine"})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped (rename {rename})");
+        assert_eq!(groups(&h), vec!["Mine".to_string()], "the other document's groups are untouched (rename {rename})");
+    }
+}

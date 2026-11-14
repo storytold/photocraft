@@ -1104,6 +1104,10 @@ pub fn dialog_command(kind: &str, f: &Map<String, Value>) -> Option<(&'static st
 
 fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some((kind, mut f)) = app.ui.analysis.dialog.clone() else { return };
+    if kind == crate::count_group_name_ui::KIND && crate::count_group_name_ui::stale(app, &f) {
+        app.ui.analysis.dialog = None;
+        return;
+    }
     let t = Tokens::get(ctx);
     let title = match kind.as_str() {
         "scale" => "Measurement Scale",

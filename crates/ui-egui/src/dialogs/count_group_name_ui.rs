@@ -30,8 +30,18 @@ pub fn open_rename(app: &mut PhotocraftApp, group: usize) {
 }
 
 fn open(app: &mut PhotocraftApp, fields: Value) {
-    let fields = fields.as_object().cloned().unwrap_or_default();
+    let mut fields = fields.as_object().cloned().unwrap_or_default();
+    // The document that opened it: the group index and the default name mean something only there.
+    if let Some(doc) = app.session.active().map(|d| d.doc.id.0) {
+        fields.insert("doc".into(), json!(doc));
+    }
     app.ui.analysis.dialog = Some((KIND.to_string(), fields));
+}
+
+/// Has another document become active since the dialog opened? Then it is dropped, with whatever
+/// was typed, so OK can't name a group of the wrong document.
+pub fn stale(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
+    f.get("doc").and_then(Value::as_u64) != app.session.active().map(|d| d.doc.id.0)
 }
 
 /// The dialog's body: the name field, focused with its text selected when the dialog opens.
