@@ -130,3 +130,31 @@ fn the_other_selection_tools_keep_their_menus() {
         }
     }
 }
+
+/// CodeRabbit on #14668: the issue did not measure the no-selection menu over a Background, type
+/// or shape layer, so those keep the menu they had (Select All, Reselect, Color Range…, Load
+/// Selection…); only a pixel layer gets the layer menu.
+#[test]
+fn no_selection_over_a_background_type_or_shape_layer_keeps_the_old_menu() {
+    for kind in ["Background", "Type", "Shape"] {
+        let mut app = app();
+        let background = app.session.active().and_then(|st| st.active_layer).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        match kind {
+            "Background" => app.session.set_active_layer(Some(background)),
+            "Type" => {
+                app.run("type.create", json!({"x": 4, "y": 20, "text": "A", "size": 12})).unwrap();
+            }
+            _ => {
+                app.run("shape.create", json!({"kind": "rect", "rect": [4, 4, 20, 20], "fill": "#ff0000"})).unwrap();
+            }
+        }
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(if st.doc.is_background(layer.id) { "Background" } else { layer.content.kind_name() }, kind);
+        app.ui.tool = Tool::QuickSelection;
+        assert!(open(&mut app, &Context::default(), Tool::QuickSelection, [10.0, 10.0]), "{kind}");
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        assert_eq!(labels(rows(&menu)), labels(NO_SELECTION_MENU), "{kind}");
+    }
+}
