@@ -82,7 +82,34 @@ pub(super) fn levels_complete(p: &Value) -> bool {
     whole(p) && CHANNELS.iter().filter_map(|(_, k)| p.get(*k).filter(|v| !v.is_null())).all(|v| v.is_object() && whole(v))
 }
 
+/// Whether the Levels, Hue/Saturation or Color Balance settings in `p` (for `kind`) are whole
+/// numbers wherever their descriptors store integers. The writers round such a value, so
+/// `inBlack: 13.4` would reload as 13 (#11505, #11506, #11507). Gamma is a double and may be
+/// fractional. Other kinds have nothing to check here.
+pub(super) fn whole_settings(kind: &str, p: &Value) -> bool {
+    let whole = |v: &Value, keys: &[&str]| keys.iter().all(|k| v.get(*k).and_then(Value::as_f64).is_none_or(|n| n.fract() == 0.0));
+    match kind {
+        "levels" => {
+            let keys = ["inBlack", "inWhite", "outBlack", "outWhite"];
+            whole(p, &keys) && CHANNELS.iter().filter_map(|(_, k)| p.get(*k)).all(|c| whole(c, &keys))
+        }
+        "hueSaturation" => {
+            let keys = ["hue", "saturation", "lightness"];
+            let bounds = |r: &Value| r.get("range").and_then(Value::as_array).is_none_or(|a| a.iter().all(|b| b.as_f64().is_none_or(|n| n.fract() == 0.0)));
+            whole(p, &keys) && HUE_RANGES.iter().filter_map(|k| p.get(*k)).all(|r| whole(r, &keys) && bounds(r))
+        }
+        "colorBalance" => ["shadows", "midtones", "highlights"]
+            .iter()
+            .filter_map(|k| p.get(*k).and_then(Value::as_array))
+            .all(|a| a.iter().all(|v| v.as_f64().is_none_or(|n| n.fract() == 0.0))),
+        _ => true,
+    }
+}
+
 pub(super) fn levels_to(p: &Value) -> Option<Descriptor> {
+    if !whole_settings("levels", p) {
+        return None;
+    }
     let mut entries = vec![D::Descriptor(levels_entry(None, p))];
     for (_, k) in CHANNELS {
         if let Some(c) = p.get(*k).filter(|v| v.is_object()) {
@@ -198,6 +225,9 @@ fn hue_entry(p: &Value, range: Option<(usize, &Value)>) -> Option<Descriptor> {
 // preserve luminosity off, Canvas Size anchored top left, Apply Image Normal) or refuses the
 // step (Paint Bucket without a tolerance).
 fn hue_sat_to(p: &Value) -> Option<Descriptor> {
+    if !whole_settings("hueSaturation", p) {
+        return None;
+    }
     let d = desc("HStr").with("presetKind", enm("presetKindType", "presetKindCustom")).with("Clrz", D::Boolean(jbool(p, "colorize").unwrap_or(false)));
     let mut entries = vec![D::Descriptor(hue_entry(p, None)?)];
     for (i, name) in HUE_RANGES.iter().enumerate() {
@@ -232,6 +262,9 @@ fn color_balance_from(d: &Descriptor) -> Option<Value> {
 }
 
 fn color_balance_to(p: &Value) -> Option<Descriptor> {
+    if !whole_settings("colorBalance", p) {
+        return None;
+    }
     let mut d = desc("ClrB");
     for (key, param) in [("ShdL", "shadows"), ("MdtL", "midtones"), ("HghL", "highlights")] {
         d = d.with(key, triple_to(p, param).unwrap_or_else(|| D::List(vec![long(0.0), long(0.0), long(0.0)])));
