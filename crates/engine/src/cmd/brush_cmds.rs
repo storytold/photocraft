@@ -1098,12 +1098,36 @@ fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     // A selection mask, when present, is a second buffer of the same size; it must fail gracefully too
     // (review of #5469), so read it through the fallible allocator.
     let sv = sel.map(|sel| crate::allocation::read_region(sel, area, "defining a brush from the selection")).transpose()?;
+    // RGB surfaces keep the document's encoding. The other surface models are
+    // already read as the existing sRGB numeric view (gray repeats its value).
+    let source = if d.doc.mode == photocraft_color::ColorMode::Rgb {
+        crate::color_cmds::document_profile(&d.doc)
+    } else {
+        crate::color_cmds::working_profile(photocraft_color::ColorMode::Rgb)
+    };
+    let options = craft_cms::TransformOptions { intent: craft_cms::Intent::RelativeColorimetric, bpc: true, ..Default::default() };
+    let gray =
+        craft_cms::cached(&source, craft_cms::Builtin::SGray.profile(), options).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+    let mut converted = [0.0f32; 16];
     for y in 0..h {
         for x in 0..w {
-            let c = surf.rgba(area.x0 + x as i32, area.y0 + y as i32);
-            let l = photocraft_color::blend::lum([c[0], c[1], c[2]]);
             let selected = sv.as_ref().map_or(1.0, |sv| sv[(y * w + x) * sc]);
-            v[y * w + x] = ((1.0 - l) * c[3] * selected).clamp(0.0, 1.0);
+            // Known-zero contributions leave the freshly zeroed density alone.
+            if selected == 0.0 {
+                continue;
+            }
+            let c = surf.rgba(area.x0 + x as i32, area.y0 + y as i32);
+            if c[3] == 0.0 {
+                continue;
+            }
+            // Composite over white before the nonlinear gray conversion. The
+            // selection scales the resulting density once; alpha is already in it.
+            let over_white = [c[0], c[1], c[2]].map(|channel| channel * c[3] + (1.0 - c[3]));
+            gray.eval(&over_white, &mut converted).map_err(|e| bad(cmd, format!("cannot convert brush source to gray: {e}")))?;
+            if !converted[0].is_finite() {
+                return Err(bad(cmd, "brush source converted to a non-finite gray value"));
+            }
+            v[y * w + x] = ((1.0 - converted[0]) * selected).clamp(0.0, 1.0);
         }
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
@@ -1490,3 +1514,6 @@ mod color_replacement_history_name_tests;
 
 #[cfg(test)]
 mod define_brush_no_selection_tests;
+
+#[cfg(test)]
+mod define_brush_color_density_tests;
