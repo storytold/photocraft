@@ -1,30 +1,38 @@
 use super::PhotocraftApp;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
+/// Hash dimensions and the complete RGBA payload for a process-local freshness check.
+/// Sampling can miss changed channels even in a 1×1 image. This finite signature is a
+/// comparison hint, not a persistent identifier or a guarantee against hash collisions.
 fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
-    let mut sig = (w as u64) << 32 | h as u64;
-    for b in px.iter().step_by(997) {
-        sig = sig.rotate_left(5) ^ *b as u64;
-    }
-    sig
+    let mut sig = DefaultHasher::new();
+    w.hash(&mut sig);
+    h.hash(&mut sig);
+    sig.write(px);
+    sig.finish()
 }
 
-/// Match the bitmap signature by sampling the bounded SVG mirror, without another full pixel buffer.
-fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
+/// Hash the SVG raster mirror in row order with the bitmap's signature algorithm.
+/// A fixed scratch buffer avoids duplicating the full image. This must stay consistent
+/// with `clip_signature`, or an unchanged SVG mirror can replace a newer internal copy.
+fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> Result<u64, String> {
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
-    let mut sig = (u64::from(w) << 32) | u64::from(h);
-    if w == 0 || h == 0 {
-        return sig;
+    let mut sig = DefaultHasher::new();
+    w.hash(&mut sig);
+    h.hash(&mut sig);
+    let mut pixels = [[0u8; 4]; 256];
+    for y in b.y0..b.y1 {
+        let mut x = b.x0;
+        while x < b.x1 {
+            let count = (i64::from(b.x1) - i64::from(x)).min(256) as usize;
+            let chunk = pixels.get_mut(..count).ok_or("invalid SVG clipboard signature chunk")?;
+            clip.surface.read_rgba8_into(photocraft_geom::Rect::from_xywh(x, y, count as u32, 1), chunk);
+            sig.write(chunk.as_flattened());
+            x = x.saturating_add(count as i32);
+        }
     }
-    for i in (0..b.size().area().saturating_mul(4)).step_by(997) {
-        let x = b.x0.saturating_add((i / 4 % u64::from(w)) as i32);
-        let y = b.y0.saturating_add((i / 4 / u64::from(w)) as i32);
-        let mut pixel = [[0; 4]];
-        clip.surface.read_rgba8_into(photocraft_geom::Rect::from_xywh(x, y, 1, 1), &mut pixel);
-        let value = pixel[0].get((i % 4) as usize).copied().unwrap_or_default();
-        sig = sig.rotate_left(5) ^ u64::from(value);
-    }
-    sig
+    Ok(sig.finish())
 }
 
 impl PhotocraftApp {
@@ -63,7 +71,7 @@ impl PhotocraftApp {
             self.ui.status_error = true;
             error
         })?;
-        self.os_clip_sig = Some(svg_clip_signature(&clip));
+        self.os_clip_sig = Some(svg_clip_signature(&clip)?);
         self.os_clip_svg = clip.svg.clone();
         self.session.clipboard = Some(clip);
         self.clip_external = true;
@@ -172,5 +180,33 @@ impl PhotocraftApp {
         self.clip_external = true;
         self.clip_unmirrored = false;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    /// The streamed SVG mirror must match the whole bitmap at row and scratch-buffer edges,
+    /// including translated bounds, transparent pixels and an empty mirror.
+    #[test]
+    fn streamed_svg_signature_matches_bitmap() {
+        use photocraft_color::PixelFormat;
+        use photocraft_geom::Rect;
+        use photocraft_raster::Surface;
+        for (width, height) in [(0, 0), (1, 1), (255, 2), (256, 3), (257, 2), (513, 3)] {
+            let bounds = Rect::from_xywh(-3, 5, width, height);
+            let mut surface = Surface::new(PixelFormat::RGBA8);
+            for y in bounds.y0..bounds.y1 {
+                for x in bounds.x0..bounds.x1 {
+                    surface.write_pixel(x, y, &[0.2, 0.4, 0.8, if x % 2 == 0 { 0.5 } else { 1.0 }]);
+                }
+            }
+            let mut pixels = vec![[0; 4]; (width * height) as usize];
+            surface.read_rgba8_into(bounds, &mut pixels);
+            let clip =
+                photocraft_engine::edit_cmds::Clip { surface, bounds, layers: None, resolution: None, source: None, board: None, svg: None, components: None };
+            assert_eq!(svg_clip_signature(&clip).unwrap(), clip_signature(width, height, pixels.as_flattened()));
+        }
     }
 }
