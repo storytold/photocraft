@@ -609,6 +609,53 @@ fn save_paths_get_a_lowercase_extension_when_the_preference_is_on() {
     assert_eq!(*written.borrow(), ["/pics/CAT.PSD"], "off keeps the user's spelling");
 }
 
+/// #9630: a sandbox's document portal grants only the name the dialog answered, so an answer the
+/// app would rewrite (Lowercase Extension's `CAT.psd`, or a bare name given `.psd`) is not written:
+/// the dialog opens again under the rewritten name, and that answer is written as granted. The app
+/// asks nothing about replacing: the portal's dialog does that for the name it grants.
+#[test]
+fn sandboxed_save_asks_the_dialog_again_under_a_rewritten_name() {
+    let ctx = egui::Context::default();
+    for (answered, rewritten) in
+        [("/run/user/1000/doc/id/CAT.PSD", "/run/user/1000/doc/id/CAT.psd"), ("/run/user/1000/doc/id/cat", "/run/user/1000/doc/id/cat.psd")]
+    {
+        let (mut app, open, written) = app();
+        app.services.sandboxed = true;
+        let disk = on_disk(&mut app);
+        changed_by_another_app(&disk, rewritten);
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        answer(&open, Some(FileDialogAnswer::SaveTo(answered.into())));
+        app.poll_file_dialog(&ctx, None);
+        assert!(written.borrow().is_empty(), "{answered} must not be written");
+        assert!(!app.ui.dialogs.iter().any(|d| crate::replace_prompt::owns(&d.fields)), "{answered}: no replace question");
+        app.poll_file_dialog(&ctx, None);
+        assert!(
+            matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == rewritten),
+            "{answered}: asked again as {rewritten}: {:?}",
+            open.borrow().first().map(|(r, _)| r.clone())
+        );
+        assert!(!app.ui.status_error, "{answered}: {}", app.ui.status);
+        answer(&open, Some(FileDialogAnswer::SaveTo(rewritten.into())));
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(*written.borrow(), [rewritten], "{answered}");
+    }
+}
+
+/// An answer the app keeps as it is is written at once in a sandbox too.
+#[test]
+fn sandboxed_save_writes_an_answer_it_keeps() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written) = app();
+    app.services.sandboxed = true;
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo("/run/user/1000/doc/id/cat.psd".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(*written.borrow(), ["/run/user/1000/doc/id/cat.psd"]);
+    assert!(open.borrow().is_empty(), "asked once");
+}
+
 /// #5039: a name typed without an extension (where file extensions are hidden) gets the
 /// suggested file's extension, so the save picks its format instead of failing.
 #[test]
@@ -1849,4 +1896,35 @@ fn the_last_export_folder_is_a_preference_that_old_files_lack() {
     json["export"].as_object_mut().unwrap().remove("lastFolder");
     let old: photocraft_engine::prefs::Preferences = serde_json::from_value(json).unwrap();
     assert_eq!(old.export.last_folder, "");
+}
+
+/// Inline close/quit saves must wait through portal retries, including cancellation.
+#[test]
+fn sandboxed_save_continuation_waits_for_the_final_outcome() {
+    for outcome in [Ok(json!({"saved": true})), Err(CANCELLED.to_string()), Err("disk full".to_string())] {
+        let (mut app, open, _) = app();
+        app.services.sandboxed = true;
+        let completed = Rc::new(RefCell::new(Vec::new()));
+        let log = completed.clone();
+        let save_result = outcome.clone();
+        app.pick_save("cat.psd", move |_, _| save_result).unwrap();
+        app.after_file_dialog(move |_, result| {
+            log.borrow_mut().push(result.clone());
+            result
+        });
+        let ctx = egui::Context::default();
+        for name in ["cat", "CAT.PSD"] {
+            app.poll_file_dialog(&ctx, None);
+            answer(&open, Some(FileDialogAnswer::SaveTo(name.into())));
+            app.poll_file_dialog(&ctx, None);
+            assert!(app.file_dialog_open());
+            assert!(completed.borrow().is_empty(), "opening a retry must not complete the save");
+        }
+        app.poll_file_dialog(&ctx, None);
+        let final_answer = (outcome != Err(CANCELLED.to_string())).then(|| FileDialogAnswer::SaveTo("cat.psd".into()));
+        answer(&open, final_answer);
+        app.poll_file_dialog(&ctx, None);
+        assert!(!app.file_dialog_open());
+        assert_eq!(*completed.borrow(), [outcome], "the continuation must receive the final result exactly once");
+    }
 }

@@ -635,6 +635,9 @@ pub struct Services {
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
+    /// Running in a Flatpak sandbox, detected once at launch: its document portal grants only the
+    /// exact filename a save dialog answered, so a save never writes a rewritten name (#9630).
+    pub sandboxed: bool,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file

@@ -221,10 +221,31 @@ fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
     Some(if bare { stem.to_string_lossy().into_owned() } else { name })
 }
 
+/// The portal Save dialog for `suggested` (already through [`netpbm_as_pnm`]), on its first type.
+/// A sandbox's portal grants the name as answered, so there the dialog gets the whole name: from
+/// the bare stem, the extension added afterwards names a file the portal never granted (#9630).
+#[cfg(target_os = "linux")]
+pub(crate) fn portal_request(suggested: &str, sandboxed: bool) -> crate::portal_save::SaveRequest {
+    crate::portal_save::SaveRequest {
+        parent: String::new(),
+        name: dialog_file_name(suggested, !sandboxed),
+        suggested: Path::new(suggested).file_name().map(|n| n.to_string_lossy().into_owned()),
+        folder: Path::new(suggested).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf),
+        filters: save_filters(suggested),
+        current: Some(0),
+    }
+}
+
+/// Whether this process runs in a Flatpak sandbox (Flatpak mounts `/.flatpak-info` in every one).
+pub(crate) fn in_flatpak() -> bool {
+    cfg!(target_os = "linux") && Path::new("/.flatpak-info").is_file()
+}
+
 /// Shows an Open or Save dialog without blocking the event loop (#673, #574): rfd's async dialog
 /// is created here, on the main thread, with the window as its parent (a sheet on macOS, an owned
 /// modal window elsewhere), and a helper thread waits for it and hands the answer to the app.
-fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, reply: FileDialogReply) {
+/// `sandboxed`: in a Flatpak ([`in_flatpak`], detected once at launch).
+fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, reply: FileDialogReply, sandboxed: bool) {
     let mut dialog = rfd::AsyncFileDialog::new();
     if let Some(parent) = parent {
         dialog = dialog.set_parent(parent);
@@ -275,22 +296,22 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             {
                 use eframe::wgpu::rwh::HasWindowHandle;
                 let parent = crate::portal_save::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
-                let req = crate::portal_save::SaveRequest {
-                    parent,
-                    name: dialog_file_name(&suggested, true),
-                    suggested: Path::new(&suggested).file_name().map(|n| n.to_string_lossy().into_owned()),
-                    folder: dir,
-                    filters,
-                    current: Some(0),
-                };
+                let req = crate::portal_save::SaveRequest { parent, ..portal_request(&suggested, sandboxed) };
                 Box::pin(async move {
                     let portal = zbus::blocking::connection::Builder::session()
                         .and_then(|b| b.build())
-                        .map_err(|e| e.to_string())
-                        .and_then(|conn| crate::portal_save::save_as(&conn, req));
+                        .map_err(|e| crate::portal_save::SaveError::Portal(e.to_string()))
+                        .and_then(|conn| crate::portal_save::save_as(&conn, req, sandboxed));
                     match portal {
                         Ok(path) => path.map(|p| answer_one(&p, true, FileDialogAnswer::SaveTo)),
-                        Err(e) => {
+                        Err(crate::portal_save::SaveError::NameNeedsExtension) => Some(FileDialogAnswer::Unavailable(
+                            "The selected name needs a different extension. Save again and enter the full filename with the extension for the selected format."
+                                .into(),
+                        )),
+                        Err(crate::portal_save::SaveError::Portal(e)) if sandboxed => {
+                            Some(FileDialogAnswer::Unavailable(format!("The save portal is unavailable: {e}")))
+                        }
+                        Err(crate::portal_save::SaveError::Portal(e)) => {
                             log::info!("portal save dialog unavailable ({e}), using rfd");
                             dialog.save_file().await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo))
                         }
@@ -299,7 +320,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = filters;
+                let _ = (filters, sandboxed);
                 let picked = dialog.save_file();
                 Box::pin(async move { picked.await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo)) })
             }
@@ -759,6 +780,7 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
+    let sandboxed = in_flatpak();
     let automation = self::automation(automation);
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -771,7 +793,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
         save_file: Some(Arc::new(save_file)),
-        file_dialog: Some(Box::new(show_file_dialog)),
+        file_dialog: Some(Box::new(move |request, parent, reply| show_file_dialog(request, parent, reply, sandboxed))),
+        sandboxed,
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         file_stamp: Some(Box::new(|path: &str| {
             // Follows a symlink, as Save writes through it to the file it points at.

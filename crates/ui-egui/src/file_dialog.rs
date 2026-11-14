@@ -186,8 +186,15 @@ impl PhotocraftApp {
         let suggested_ext = suggested.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
         let ext = suggested_ext.clone();
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
-            FileDialogAnswer::SaveTo(path) => {
-                let path = saved_path(app, &path, suggested_ext.as_deref());
+            FileDialogAnswer::SaveTo(answered) => {
+                let path = saved_path(app, &answered, suggested_ext.as_deref());
+                // A sandbox's document portal grants the chosen filename only: a save to the
+                // rewritten name could vanish after reporting success (#9630). Ask again under it.
+                if app.services.sandboxed && path != answered {
+                    app.ui.status = format!("Confirm the name {}: the file is saved under it.", display_name(&path));
+                    app.ui.status_error = false;
+                    return app.pick_save_in(&path, export, then);
+                }
                 // The web answers a download name, which has no folder to remember.
                 let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
                 // An export's folder only once it has exported: a failed one doesn't move where
@@ -207,7 +214,9 @@ impl PhotocraftApp {
             _ => Err(UNEXPECTED.into()),
         })?;
         if let Some(p) = self.file_dialog.as_mut() {
-            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
+            // A sandbox never writes a rewritten name (the dialog is asked again under it, and asks
+            // itself about replacing), so there is no other file to ask about here.
+            p.saved_path = Some(Box::new(move |app, path| if app.services.sandboxed { path.to_string() } else { saved_path(app, path, ext.as_deref()) }));
         }
         Ok(asked)
     }
@@ -337,6 +346,11 @@ impl PhotocraftApp {
         let then = std::mem::replace(&mut p.then, Box::new(|_, _| Ok(Value::Null)));
         p.then = Box::new(move |app, answer| {
             let r = then(app, answer);
+            if r.is_ok() && app.file_dialog_open() {
+                // A portal filename retry is still the same save: close/quit must wait.
+                app.after_file_dialog(next);
+                return r;
+            }
             next(app, r)
         });
         true

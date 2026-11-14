@@ -505,7 +505,7 @@ mod native {
             // The app-private cache does; TempDir still creates a private random directory
             // and removes it when syncing stops. Only Artwork.svg is shared with the editor.
             #[cfg(target_os = "linux")]
-            let cache = if Path::new("/.flatpak-info").is_file() {
+            let cache = if crate::services::in_flatpak() {
                 let cache = std::env::var_os("XDG_CACHE_HOME")
                     .map(PathBuf::from)
                     .filter(|path| path.is_absolute())
