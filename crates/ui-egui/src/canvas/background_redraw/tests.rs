@@ -798,3 +798,66 @@ fn a_flipped_view_records_why_it_draws_on_the_cpu() {
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g), "back on the GPU");
 }
+
+/// How far a dark diagonal stroke's edge wanders from a straight line on a screen image (`rgba`
+/// rows of `width` pixels): per screen column of the document's image area (`doc` on screen,
+/// inset), the darkness centroid, fitted to a line; returns the RMS distance from it in pixels
+/// and the line's slope. Columns near the stroke's ends (its round caps) are left out.
+fn stroke_wobble(rgba: &[u8], width: u32, doc: egui::Rect) -> (f32, f32) {
+    let inner = doc.shrink(4.0);
+    let (x0, x1) = (inner.min.x.ceil() as u32, inner.max.x.floor() as u32);
+    let (y0, y1) = (inner.min.y.ceil() as u32, inner.max.y.floor() as u32);
+    let columns: Vec<(f32, f32)> = (x0..x1)
+        .filter_map(|x| {
+            let (mut sum, mut moment) = (0.0f32, 0.0f32);
+            for y in y0..y1 {
+                let i = (y as usize * width as usize + x as usize) * 4;
+                let p = &rgba[i..i + 3];
+                let dark = 255.0 - (f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / 3.0;
+                sum += dark;
+                moment += dark * y as f32;
+            }
+            (sum > 255.0).then(|| (x as f32, moment / sum))
+        })
+        .collect();
+    assert!(columns.len() > 100, "the stroke is on screen: {} columns", columns.len());
+    let kept = &columns[25..columns.len() - 25];
+    let n = kept.len() as f32;
+    let (mx, my) = (kept.iter().map(|c| c.0).sum::<f32>() / n, kept.iter().map(|c| c.1).sum::<f32>() / n);
+    let slope = kept.iter().map(|c| (c.0 - mx) * (c.1 - my)).sum::<f32>() / kept.iter().map(|c| (c.0 - mx).powi(2)).sum::<f32>();
+    let rms = (kept.iter().map(|c| (c.1 - my - slope * (c.0 - mx)).powi(2)).sum::<f32>() / n).sqrt();
+    (rms, slope)
+}
+
+/// #13505: at the report's 108.3 % a flipped view (always the CPU canvas) magnified the document
+/// with nearest sampling, so one row and column in twelve showed twice and a diagonal stroke's
+/// edge went in steps, while the unflipped view (the GPU canvas, bilinear between 100 % and
+/// 200 %) showed it smooth. Both views now show the same stroke as smoothly.
+#[test]
+fn a_flipped_view_shows_a_stroke_as_smoothly_as_the_unflipped_one() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let app = g.harness.state_mut();
+    app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
+    app.run("paint.stroke", json!({"points": [[30, 60], [370, 190]], "size": 5, "hardness": 1.0, "color": "#000000"})).expect("stroke");
+    g.harness.run_steps(3);
+    let zoom = 1.083;
+    let view = &mut g.harness.state_mut().ui.views[0];
+    (view.fit_pending, view.zoom, view.center) = (false, zoom, [200.0, 150.0]);
+    g.harness.run_steps(3);
+    let shown = |g: &mut Gpu| {
+        let c = g.harness.state().last_canvas_rect.center();
+        let doc = egui::Rect::from_center_size(c, egui::vec2(400.0, 300.0) * zoom);
+        let img = g.harness.render().expect("render");
+        stroke_wobble(img.as_raw(), img.width(), doc)
+    };
+    assert!(on_gpu_canvas(&g), "{:?}", render_path_of(&g));
+    let (upright, slope) = shown(&mut g);
+    g.harness.state_mut().ui.view.flip_horizontal = true;
+    g.harness.run_steps(3);
+    assert_eq!(render_path_of(&g).0, Some("viewTransform"));
+    let (flipped, mirrored) = shown(&mut g);
+    eprintln!("edge wobble at {zoom}: unflipped {upright:.3} px, flipped {flipped:.3} px; slopes {slope:.4}, {mirrored:.4}");
+    assert!((slope + mirrored).abs() < 0.02 * slope.abs(), "the flipped view mirrors the stroke: {slope} vs {mirrored}");
+    assert!(flipped <= upright + 0.05, "flipped {flipped:.3} px from a straight edge, unflipped {upright:.3} px");
+}

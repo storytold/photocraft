@@ -936,7 +936,8 @@ fn cpu_canvas_textures_are_per_display() {
 
 #[test]
 fn cpu_canvas_shows_crisp_pixels_when_zoomed_in() {
-    // #4810: above 100% the CPU canvas shows each pixel as a square, like the GPU canvas's
+    // #4810: zoomed in (at 100% and other whole-number zooms, and from 200%; see
+    // sampling_tests.rs) the CPU canvas shows each pixel as a square, like the GPU canvas's
     // sharp nearest filter; below 100% it still filters. Both the first upload and a
     // damage-rect update carry the sampling, since the renderer takes it from each delta.
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

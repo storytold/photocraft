@@ -1,7 +1,7 @@
 use super::display::{canvas_display, display_image};
 use super::drag::Drag;
 use super::paint_thread::{PaintThread, Step};
-use super::textures::{canvas_texture_options, shown_as_document};
+use super::textures::{CRISP, shown_as_document};
 use super::view_xform::ViewXform;
 use super::{Color32, DRect, PhotocraftApp, Pos2, Stroke, Tool, json, pos2};
 
@@ -168,14 +168,14 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
         let brush = brush.cloned();
         match app.clone_preview.as_mut() {
             Some(cache) => {
-                cache.texture.set(image, canvas_texture_options(1));
+                cache.texture.set(image, CRISP);
                 cache.key = key;
                 cache.source_document = source_document;
                 cache.brush = brush;
                 cache.rect = rect;
             }
             None => {
-                let texture = painter.ctx().load_texture("clone-preview", image, canvas_texture_options(1));
+                let texture = painter.ctx().load_texture("clone-preview", image, CRISP);
                 app.clone_preview = Some(ClonePreviewCache { key, source_document, brush, rect, texture });
             }
         }
