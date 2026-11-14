@@ -83,11 +83,12 @@ pub(crate) struct Pending {
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
     then: Then,
-    /// For a save dialog, the path the save writes to for the dialog's answer.
+    /// For a save dialog, the path the save writes to for the dialog's answer. It is called once
+    /// per answer, and the save writes the path it returned.
     saved_path: Option<SavedPath>,
-    /// The save dialog's answer while the app asks whether to replace the file it writes to
-    /// (`replace_prompt`).
-    held: Option<FileDialogAnswer>,
+    /// The resolved path named by `replace_prompt`, held until the user answers. It must not be
+    /// recomputed after confirmation: the file system can change while the prompt is open.
+    held_path: Option<String>,
 }
 
 /// The error of a cancelled dialog: not reported, since backing out is the user's choice.
@@ -124,7 +125,7 @@ impl PhotocraftApp {
             Some(FileDialogAnswer::Unavailable(why)) => Err(why),
             Some(a) => then(app, a),
         });
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, saved_path: None, held: None });
+        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, saved_path: None, held_path: None });
         Ok(json!({ "fileDialog": kind }))
     }
 
@@ -138,10 +139,12 @@ impl PhotocraftApp {
         })
     }
 
-    /// Ask where to save: `then` gets the chosen path, with a lowercase extension when
-    /// Preferences ▸ File Handling › Lowercase Extension is on (its default). When that, or the
-    /// extension added to a bare name, changes the path to one where a file exists, the app asks
-    /// whether to replace it before `then` runs (`replace_prompt`).
+    /// Ask where to save: `then` gets the chosen path, with a lowercase extension for a new file
+    /// when Preferences ▸ File Handling › Lowercase Extension is on (its default). An existing
+    /// file keeps the spelling the save dialog confirmed, so it is actually replaced on a file
+    /// system where names differing only by case are distinct. When lowercasing a new name, or
+    /// adding an extension to a bare name, changes the path to one where a file exists, the app
+    /// asks whether to replace it before `then` runs (`replace_prompt`).
     ///
     /// A bare file name (export dialogs, an untitled document) starts in the folder the active
     /// document was last saved or exported to through a dialog, else beside the document
@@ -184,10 +187,11 @@ impl PhotocraftApp {
         // extensions are hidden, #5039) gets the suggested file's extension, as Photoshop's
         // Save As appends the extension of the chosen file type.
         let suggested_ext = suggested.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
-        let ext = suggested_ext.clone();
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
+            // `poll_file_dialog` has already turned the dialog's answer into the path to write
+            // (`Pending::saved_path`). It is not looked up again: the file system can change in
+            // between, and a second lookup could lowercase a name the first one kept.
             FileDialogAnswer::SaveTo(path) => {
-                let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
                 let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
                 // An export's folder only once it has exported: a failed one doesn't move where
@@ -207,7 +211,7 @@ impl PhotocraftApp {
             _ => Err(UNEXPECTED.into()),
         })?;
         if let Some(p) = self.file_dialog.as_mut() {
-            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
+            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, suggested_ext.as_deref())));
         }
         Ok(asked)
     }
@@ -233,20 +237,23 @@ impl PhotocraftApp {
         answered != path && stamp(path).is_some() && !self.services.same_file.as_ref().is_some_and(|same| same(answered, path))
     }
 
-    /// The question whether to replace a file is answered. Replace writes the save dialog's answer
-    /// as if the question had not been asked and returns what the save returns, its failure
-    /// included. Cancel ends the save like the dialog's Cancel.
+    /// The question whether to replace a file is answered. Replace writes the exact path named by
+    /// the question and returns what the save returns, its failure included. Cancel ends the save
+    /// like the dialog's Cancel.
     pub(crate) fn answer_replace(&mut self, replace: bool) -> Result<Value, String> {
-        let held = self.file_dialog.as_mut().and_then(|p| p.held.take()).ok_or("no save is waiting to replace a file")?;
-        match self.finish_file_dialog(replace.then_some(held)) {
+        let path = self.file_dialog.as_mut().and_then(|p| p.held_path.take()).ok_or("no save is waiting to replace a file")?;
+        match self.finish_file_dialog(replace.then_some(FileDialogAnswer::SaveTo(path))) {
             Err(e) if e == CANCELLED => Ok(json!({ "replaced": false })),
             r => r,
         }
     }
 
-    /// `X.PSD` → `X.psd`, only the extension: the stem and the folders keep the user's spelling.
+    /// `X.PSD` → `X.psd` for a new file, only the extension: the stem and the folders keep the
+    /// user's spelling. A file the save dialog found already keeps its exact name: the dialog has
+    /// just asked whether to replace that entry, and changing its case afterwards can target a
+    /// different entry on a case-sensitive volume.
     fn lowercased_extension(app: &PhotocraftApp, path: String) -> String {
-        if !app.session.prefs().file_handling.lowercase_extension {
+        if !app.session.prefs().file_handling.lowercase_extension || app.services.file_stamp.as_ref().is_some_and(|stamp| stamp(&path).is_some()) {
             return path;
         }
         let p = std::path::Path::new(&path);
@@ -371,7 +378,7 @@ impl PhotocraftApp {
     /// continues the action that asked once the answer is in. Its errors go to the status bar.
     pub fn poll_file_dialog(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
         let Some(p) = self.file_dialog.as_mut() else { return };
-        if p.held.is_some() {
+        if p.held_path.is_some() {
             // The question whether to replace answers through `answer_replace`. Closed without an
             // answer, it counts as Cancel.
             if !self.ui.dialogs.iter().any(|d| crate::replace_prompt::owns(&d.fields)) {
@@ -392,16 +399,21 @@ impl PhotocraftApp {
             // The reply was dropped unanswered: the dialog couldn't be shown.
             Some(Err(TryRecvError::Disconnected)) | None => None,
         };
-        if let Some(FileDialogAnswer::SaveTo(answered)) = &answer
+        // A save looks up the path it writes to once, and both the replace prompt and the save
+        // itself use that path.
+        let mut answer = answer;
+        if let Some(FileDialogAnswer::SaveTo(answered)) = &mut answer
             && let Some(path) = self.file_dialog.as_ref().and_then(|p| p.saved_path.as_ref()).map(|written| written(self, answered))
-            && self.replaces_unasked(answered, &path)
         {
-            crate::replace_prompt::open(self, answered, &path);
-            if let Some(p) = self.file_dialog.as_mut() {
-                p.answer = None;
-                p.held = answer;
+            if self.replaces_unasked(answered, &path) {
+                crate::replace_prompt::open(self, answered, &path);
+                if let Some(p) = self.file_dialog.as_mut() {
+                    p.answer = None;
+                    p.held_path = Some(path);
+                }
+                return;
             }
-            return;
+            *answered = path;
         }
         let _ = self.finish_file_dialog(answer);
     }
@@ -421,8 +433,9 @@ impl PhotocraftApp {
     }
 }
 
-/// The path a save writes to for the path the save dialog answered: its extension lowercased
-/// when Preferences ▸ File Handling › Lowercase Extension is on, and a name without one given
+/// The path a save writes to for the path the save dialog answered: a new file's extension is
+/// lowercased when Preferences ▸ File Handling › Lowercase Extension is on, while an existing
+/// file keeps the spelling the dialog confirmed. A name without an extension gets
 /// `suggested_ext`, the suggested file's.
 fn saved_path(app: &PhotocraftApp, answered: &str, suggested_ext: Option<&str>) -> String {
     let path = PhotocraftApp::lowercased_extension(app, answered.to_string());
