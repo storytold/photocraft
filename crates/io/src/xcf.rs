@@ -20,10 +20,6 @@ type Result<T> = std::result::Result<T, IoError>;
 #[cfg(test)]
 pub(crate) const MAX_SIDE: u32 = craft_xcf::MAX_SIDE;
 pub(crate) const MAX_PIXEL_BYTES: usize = craft_xcf::MAX_PIXEL_BYTES;
-#[cfg(test)]
-const MAX_STRING: usize = craft_xcf::MAX_STRING;
-#[cfg(test)]
-const TILE: u32 = craft_xcf::TILE;
 
 fn invalid(message: impl Into<String>) -> IoError {
     IoError::Xcf(message.into())
