@@ -220,3 +220,50 @@ fn the_instructions_show_while_nothing_is_being_edited() {
     press(&mut h, Key::Escape, Modifiers::NONE);
     assert!(h.query_by_label(text).is_some(), "and comes back");
 }
+
+/// CodeRabbit on #14835: the captured key is taken out of the frame's events whatever modifiers
+/// the capture's mask holds. A Shift released in the same frame left `Shift` in the mask, so an
+/// Enter without it stayed in the queue and also pressed the dialog's default button.
+#[test]
+fn the_captured_key_is_consumed_by_its_key_not_by_the_modifier_mask() {
+    let ctx = egui::Context::default();
+    let enter = Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    ctx.begin_pass(egui::RawInput { events: vec![enter], ..Default::default() });
+    // What the mask-based call did: it asks for Shift+Enter and so leaves a plain Enter.
+    assert!(!ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter)), "a plain Enter doesn't match a Shift mask");
+    ctx.input_mut(|i| super::consume_pressed_key(i, Key::Enter));
+    assert!(ctx.input(|i| !i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Enter, pressed: true, .. }))), "the key is gone");
+    ctx.end_pass().textures_delta.clear();
+}
+
+/// CodeRabbit on #14835: a command with as many further keys as it may have can't take another,
+/// so Accept and Go to Conflict leaves the key with the command that holds it.
+#[test]
+fn accept_and_go_to_conflict_keeps_the_key_where_it_is_when_the_command_cannot_take_it() {
+    let (mut h, id) = dialog("edit.cut");
+    let full: Vec<String> = (0..photocraft_engine::prefs::MAX_ALTERNATES).map(|k| format!("Cmd+Alt+Shift+F{}", k + 1)).collect();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("alternates".into(), json!({ "edit.cut": full }));
+    h.run_steps(3);
+    click(&mut h, "Add Shortcut");
+    press(&mut h, Key::C, Modifiers::COMMAND);
+    click(&mut h, "Accept and Go to Conflict");
+    assert_ne!(main_key(&h, id, "edit.copy"), json!(""), "Copy keeps Cmd+C: Cut could not take it");
+    let alts = field(&h, id, "alternates");
+    assert_eq!(alts["edit.cut"].as_array().map(Vec::len), Some(photocraft_engine::prefs::MAX_ALTERNATES), "Cut's keys are as they were");
+}
+
+/// CodeRabbit on #14835: Delete Shortcut, Use Default and Reset All end the open field and drop
+/// its pending key, so Accept can't put a deleted key back.
+#[test]
+fn binding_changing_actions_drop_the_pending_key() {
+    for action in ["Delete Shortcut", "Use Default", "Reset All to Defaults"] {
+        let (mut h, id) = dialog("edit.cut");
+        click_cell(&mut h, "Cmd+X");
+        press(&mut h, FREE.0, FREE.1);
+        assert_eq!(field(&h, id, super::PENDING), json!(FREE_TEXT));
+        click(&mut h, action);
+        assert_eq!(field(&h, id, "capture"), json!(false), "{action}: the field is closed");
+        assert!(!accept_enabled(&h), "{action}: nothing left to accept");
+        assert_ne!(main_key(&h, id, "edit.cut"), json!(FREE_TEXT), "{action}: the pending key did not come back");
+    }
+}
