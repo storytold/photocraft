@@ -276,6 +276,23 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_length,
             arrow_concavity,
         ),
+        // The Triangle tool's own radius (#13355) resets with that tool only, not with its siblings.
+        Tool::Triangle => {
+            reset!(
+                shape_mode,
+                shape_path_op,
+                shape_fill,
+                stroke_width,
+                shape_stroke,
+                shape_fill_gradient,
+                shape_stroke_gradient,
+                corner_radius,
+                triangle_corner_radius,
+                polygon_sides,
+                line_weight,
+                align_edges,
+            )
+        }
         // The Rectangle's gear settings are its own (#13343).
         Tool::Rectangle => reset!(
             shape_mode,
@@ -296,7 +313,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             rect_ratio_height,
             rect_from_center,
         ),
-        Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+        Tool::EllipseShape | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(
                 shape_mode,
                 shape_path_op,

@@ -122,6 +122,8 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
+    /// The Triangle tool's corner radius for the next triangle (#13355).
+    pub triangle_corner_radius: f32,
     /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
     /// Triangle tool shows it, enabled in Shape mode only (#13370); the other shape tools always snap.
     pub align_edges: bool,
@@ -533,6 +535,7 @@ impl Default for ToolOptions {
             shape_fill_gradient: None,
             shape_stroke_gradient: None,
             corner_radius: 0.0,
+            triangle_corner_radius: 0.0,
             align_edges: true,
             polygon_sides: 5,
             line_weight: 1.0,

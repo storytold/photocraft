@@ -101,7 +101,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
-    let (mut radius_alert, mut sides_alert) = (false, false);
+    let (mut radius_alert, mut sides_alert, mut invalid_alert) = (false, false, false);
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -122,6 +122,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             sides_alert = sides_field(ui, label, &mut o.polygon_sides);
         }
         Tool::Triangle => {
+            (radius_alert, invalid_alert) = triangle_radius(ui, o, &lbl);
             crate::widgets::vline(ui, 22.0);
             // Only a shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
             ui.add_enabled_ui(o.shape_mode == "shape", |ui| crate::widgets::checkbox(ui, &mut o.align_edges, tl!("Align Edges")));
@@ -201,13 +202,54 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     range_alert(app, radius_alert, RADIUS_RANGE_ALERT);
     range_alert(app, sides_alert, SIDES_RANGE_ALERT);
+    range_alert(app, invalid_alert, RADIUS_INVALID_ALERT);
 }
 
-/// The Rectangle tool's corner radius in px, as the reference takes it (#13336).
+/// The Triangle tool's Radius: its own radius for the next triangle (#13355); the active shape is
+/// not touched. Returns whether the range alert and the invalid-entry alert are owed.
+fn triangle_radius(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions, lbl: &dyn Fn(&mut egui::Ui, &str)) -> (bool, bool) {
+    crate::widgets::vline(ui, 22.0);
+    let label = tl!("Radius:");
+    lbl(ui, label);
+    let mut r = o.triangle_corner_radius;
+    let (resp, out_of_range) = crate::widgets::value_field_alerting(ui, label, &mut r, RADIUS_RANGE, "px", 62.0);
+    let invalid = invalid_entry_left(ui, &resp);
+    if resp.changed() {
+        o.triangle_corner_radius = r;
+    }
+    (out_of_range, invalid)
+}
+
+/// The Rectangle and Triangle tools' corner radius in px, as the reference takes it (#13336).
 pub(crate) const RADIUS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=150_000.0;
 
-/// The reference's alert for a Rectangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
+/// The reference's alert for a Rectangle or Triangle tool Radius typed past [`RADIUS_RANGE`] (#13336).
 pub(crate) const RADIUS_RANGE_ALERT: &str = "A value between 0.000 pixel and 150000.000 Pixels is required. Closest value inserted.";
+
+/// The reference's alert for text that is not a number, left in the Triangle tool's Radius
+/// (#13355). The field keeps its previous value.
+pub(crate) const RADIUS_INVALID_ALERT: &str =
+    "Invalid numeric entry. A number between 0.000 pixel and 150000.000 Pixels is required. Restored last valid value.";
+
+/// True on the pass `resp`'s field is left with text that is not a number in it (`abc`). A
+/// number typed after it, before the field is left, takes that back.
+fn invalid_entry_left(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    let no_number = resp.id.with("no-number-typed");
+    if resp.has_focus() {
+        match crate::widgets::typed_text_parses(ui.ctx(), resp.id) {
+            Some(false) => ui.ctx().data_mut(|d| {
+                d.insert_temp(no_number, true);
+            }),
+            Some(true) => ui.ctx().data_mut(|d| {
+                d.remove_temp::<bool>(no_number);
+            }),
+            None => {}
+        }
+        return false;
+    }
+    let owed = ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number)).unwrap_or(false);
+    owed && resp.lost_focus()
+}
 
 /// The Polygon tool's Sides: whole numbers 3..100. Returns true once the field is left with a
 /// value typed past them, so the caller shows [`SIDES_RANGE_ALERT`] (#13304).
@@ -270,3 +312,7 @@ pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: Pain
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "triangle_corner_radius_field_tests.rs"]
+mod triangle_corner_radius_field_tests;
