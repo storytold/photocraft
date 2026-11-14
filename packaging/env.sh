@@ -16,6 +16,8 @@ export ROOT
 # (`cargo xtask version` prints the same thing; awk avoids compiling xtask here.)
 workspace_version() {
   awk '
+    # Cargo.toml can use CRLF; match sections and values without its line-ending CR.
+    { sub(/\r$/, "") }
     /^\[/ { in_pkg = ($0 == "[workspace.package]") ; next }
     in_pkg && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }
   ' "$ROOT/Cargo.toml"
