@@ -397,6 +397,14 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         let bg = s.tools.background;
         s.set_active(src);
         s.edit("Cut Pixels", |doc, _| {
+            // Mirror `edit.cut`: a locked source keeps its pixels, so the clear below never runs
+            // on a layer the user locked. The snapshot in `prior_src` restores the source if the
+            // destination insert fails afterwards.
+            if mask_target {
+                crate::commands::check_all_unlocked(doc, cut_id)?;
+            } else {
+                crate::commands::check_pixels_unlocked(doc, cut_id)?;
+            }
             if let Some(parts) = &float_parts {
                 if parts.copied {
                     // A copy-created float leaves the original pixels in the source layer, so

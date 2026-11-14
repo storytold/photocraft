@@ -60,6 +60,18 @@ pub(crate) fn empty_at(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
 /// The pointer moves or is released while a marquee is dragged (unsnapped, unconstrained): true
 /// when the event was the marquee's.
 pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
+    if app.layer_box.is_none() {
+        return false;
+    }
+    // The window that began the marquee owns it: a second window's Move or Up must neither move
+    // the endpoint nor commit a selection against another document. A Down still falls through
+    // to the branch below, which drops the marquee.
+    if let (Some(owner), Some(here)) = (app.move_viewport, app.current_viewport)
+        && owner != here
+        && !matches!(ev, ToolEvent::Down { .. })
+    {
+        return false;
+    }
     let Some(b) = app.layer_box.as_mut() else { return false };
     match ev {
         // A press never continues a marquee (one left over from a lost release).

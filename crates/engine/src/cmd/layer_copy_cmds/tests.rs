@@ -878,3 +878,34 @@ fn failed_destination_insert_during_cut_restores_source_and_preserves_coalesced_
     doc(&s, 0).layer(paint).unwrap().surface().unwrap().read_pixel(5, 8, &mut px);
     assert_eq!(px, [1.0, 0.0, 0.0, 1.0], "undo reverts the earlier coalesced fill to red");
 }
+
+#[test]
+/// A cut from a source layer locked for pixels or locked with all fails before any clear, so the
+/// source keeps its pixels and the selection survives.
+fn a_cut_from_a_locked_source_fails_and_keeps_its_pixels() {
+    for (lock, name) in [(json!({"pixels": true}), "pixels"), (json!({"all": true}), "all")] {
+        let (mut s, paint) = two_docs(40, 30, 8);
+        s.execute("layer.select", json!({"layer": paint.0})).unwrap();
+        s.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+        s.execute("layer.lockLayers", lock).unwrap();
+        let locked = doc(&s, 0).layer(paint).unwrap().locks;
+        assert!(locked.pixels || locked.all, "the layer is locked for {name}");
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": true}));
+        assert!(r.is_err(), "a cut from a {name}-locked source fails: {r:?}");
+        let mut px = [0.0f32; 4];
+        doc(&s, 0).layer(paint).unwrap().surface().unwrap().read_pixel(7, 8, &mut px);
+        assert_eq!(px, [1.0, 0.0, 0.0, 1.0], "the {name}-locked source keeps its pixels");
+        assert!(doc(&s, 0).selection.is_some(), "the selection survives the refused cut");
+    }
+}
+
+#[test]
+/// Copying without a cut from a locked source succeeds: the lock guards the clear, not the copy.
+fn a_copy_from_a_locked_source_still_succeeds() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.select", json!({"layer": paint.0})).unwrap();
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    s.execute("layer.lockLayers", json!({"pixels": true})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": false}));
+    assert!(r.is_ok(), "a copy from a locked source succeeds: {r:?}");
+}
