@@ -297,6 +297,12 @@ pub(crate) fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs:
             app.jobs.close_after_saves = false;
             false
         }
+        (PREPARE_JOB, _) => {
+            // A failed or cancelled prepare never opens its dialog: nothing needs the kept layer
+            // (its worker can store it just before a cancel is accepted).
+            forget_layer_source();
+            false
+        }
         _ => false,
     }
 }
