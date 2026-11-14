@@ -562,6 +562,11 @@ fn main() -> eframe::Result {
     let started_note = plan.reason.clone();
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
+    // Set once the window has presented its first frames (`on_started`): an error before that is
+    // a failed start even when the app had been created (a compositor that disconnects while
+    // the first frames are drawn), and one after it is a window lost mid-session.
+    let window_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let shown_in_hook = window_shown.clone();
     let started_sentinel = sentinel.clone();
     let result = eframe::run_native(
         "PhotoCraft",
@@ -677,6 +682,7 @@ fn main() -> eframe::Result {
             // recovery-dialog choice may persist it (#3483).
             let remember = gpu_startup::backend_to_remember(&plan);
             app.on_started(move |app| {
+                shown_in_hook.store(true, std::sync::atomic::Ordering::Relaxed);
                 if let Some(s) = started_sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
                     s.finish();
                 }
@@ -840,9 +846,12 @@ fn main() -> eframe::Result {
     // file to attach (#7643). A terminal or automation launch can read standard error or the
     // exit status instead, so it keeps the silent exit.
     if let Err(error) = &result {
-        log::error!("PhotoCraft could not start: {error}");
+        // An error after the window has shown is a lost window (on Wayland, the compositor
+        // dropping a client that stopped answering), not a failed start.
+        let started = window_shown.load(std::sync::atomic::Ordering::Relaxed);
+        log::error!("{}: {error}", startup_report::log_headline(started));
         if startup_report::needs_dialog(control_port.is_some()) {
-            startup_report::show(&error.to_string(), &started_renderer, started_note.as_deref(), logger.and_then(logging::AppLogger::path).as_deref());
+            startup_report::show(&error.to_string(), &started_renderer, started_note.as_deref(), logger.and_then(logging::AppLogger::path).as_deref(), started);
         }
     }
     result
