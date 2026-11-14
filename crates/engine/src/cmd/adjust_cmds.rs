@@ -335,6 +335,64 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Color Lookup's refusals (#14429), measured against the reference: Grayscale, Indexed,
+/// Multichannel and Bitmap documents, a hidden pixel layer and a targeted layer mask answer
+/// [`COLOR_LOOKUP_UNAVAILABLE`] (and the menu entry is greyed); an empty pixel layer answers
+/// [`COLOR_LOOKUP_EMPTY_LAYER`]. CMYK and Lab keep the enabled check - the dialog opens - but
+/// applying returns the unavailable error. Unmeasured targets (a targeted alpha channel or
+/// Quick Mask, several layers, a hidden group, a layer empty only inside the selection) keep
+/// the plain adjustment checks.
+pub(crate) const COLOR_LOOKUP_UNAVAILABLE: &str = "The command \"Color Lookup\" is not currently available.";
+pub(crate) const COLOR_LOOKUP_EMPTY_LAYER: &str = "Could not complete the Color Lookup command because the active layer is empty.";
+
+/// The document-mode and visibility half of the Color Lookup checks, shared by the menu and
+/// by apply (#14429).
+fn color_lookup_target_ok(s: &Session) -> std::result::Result<(), String> {
+    has_adjustable(s)?;
+    let d = s.active().ok_or("no document open")?;
+    if matches!(
+        d.doc.mode,
+        photocraft_color::ColorMode::Grayscale
+            | photocraft_color::ColorMode::Indexed
+            | photocraft_color::ColorMode::Multichannel
+            | photocraft_color::ColorMode::Bitmap
+    ) {
+        return Err(COLOR_LOOKUP_UNAVAILABLE.into());
+    }
+    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    if !l.visible {
+        return Err(COLOR_LOOKUP_UNAVAILABLE.into());
+    }
+    Ok(())
+}
+
+/// The enabled check picked for `image.adjustments.colorLookup` (#14429).
+pub(crate) fn has_color_lookup_target(s: &Session) -> std::result::Result<(), String> {
+    color_lookup_target_ok(s)
+}
+
+/// The apply-time check for Color Lookup (#14429): the menu refusals answer the same text when
+/// a step runs anyway, a step targeting a layer mask is refused, CMYK and Lab fail here rather
+/// than at the menu, and an empty pixel layer gets its own message. Runs before the edit, so a
+/// refusal leaves no history state and no pixel touched.
+pub(crate) fn color_lookup_applicable(s: &Session, p: &Value) -> std::result::Result<(), String> {
+    color_lookup_target_ok(s)?;
+    if crate::commands::is_mask_target(p) {
+        return Err(COLOR_LOOKUP_UNAVAILABLE.into());
+    }
+    let d = s.active().ok_or("no document open")?;
+    if matches!(d.doc.mode, photocraft_color::ColorMode::Cmyk | photocraft_color::ColorMode::Lab) {
+        return Err(COLOR_LOOKUP_UNAVAILABLE.into());
+    }
+    if let Some(l) = d.active_layer.and_then(|id| d.doc.layer(id))
+        && let LayerContent::Raster(surf) = &l.content
+        && surf.content_bounds().is_empty()
+    {
+        return Err(COLOR_LOOKUP_EMPTY_LAYER.into());
+    }
+    Ok(())
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.
