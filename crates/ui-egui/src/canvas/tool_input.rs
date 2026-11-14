@@ -559,6 +559,10 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
 
     match ev {
         ToolEvent::Down { x, y, pressure } => {
+            // The pasteboard gesture only sets a preference, so it runs before any painting guard.
+            if tool == Tool::PaintBucket && bucket_pasteboard_click(app, x, y, mods) {
+                return;
+            }
             // Painting a type, shape, Smart Object or fill layer asks to rasterize it first
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
@@ -658,9 +662,7 @@ pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods:
                     return;
                 }
                 Tool::PaintBucket => {
-                    if !bucket_pasteboard_click(app, x, y, mods) {
-                        bucket_click(app, x, y);
-                    }
+                    bucket_click(app, x, y);
                     return;
                 }
                 Tool::RedEye => {

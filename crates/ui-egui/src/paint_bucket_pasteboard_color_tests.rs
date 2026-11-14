@@ -78,6 +78,22 @@ fn shift_click_on_the_pasteboard_adds_no_history_state_and_keeps_the_document() 
 }
 
 #[test]
+fn shift_click_on_the_pasteboard_with_a_type_layer_active_sets_the_colour_without_a_rasterize_prompt() {
+    // The active layer is a Type layer: a painting press on it would ask to rasterize it
+    // first, but this gesture only sets a preference, so it runs before that prompt and
+    // leaves the layer and the document alone.
+    let mut app = app();
+    app.run("type.create", json!({"x": 10, "y": 40, "text": "Hello"})).unwrap();
+    app.ui.tool = Tool::PaintBucket;
+    let (before_steps, before_revision) = (steps(&app), revision(&app));
+    click(&mut app, [-30.0, -30.0], Modifiers::SHIFT);
+    assert_eq!(pasteboard(&app), (CanvasColor::Custom, FOREGROUND.to_string()));
+    assert!(app.ui.dialogs.is_empty(), "no rasterize prompt: {:?}", app.ui.dialogs.iter().map(|d| &d.kind).collect::<Vec<_>>());
+    assert_eq!(steps(&app), before_steps, "no history state");
+    assert_eq!(revision(&app), before_revision, "the document did not change");
+}
+
+#[test]
 fn shift_click_on_the_image_fills_as_a_plain_click_does() {
     let mut app = app();
     let before = steps(&app);
