@@ -677,7 +677,7 @@ fn document_warnings(doc: &Document, warnings: &mut Warnings) {
         warnings.note("metadata (XMP, EXIF, text) is not saved to OpenRaster");
     }
     // Readers assume sRGB, so an sRGB document loses nothing by the missing tag.
-    let srgb = |bytes: &[u8]| photocraft_cms::Profile::parse(bytes).is_ok_and(|p| p.same_colors(photocraft_cms::Builtin::Srgb.profile()));
+    let srgb = |bytes: &[u8]| craft_cms::Profile::parse(bytes).is_ok_and(|p| p.same_colors(craft_cms::Builtin::Srgb.profile()));
     if doc.icc_profile.as_deref().is_some_and(|b| !srgb(b)) {
         warnings.note("the colour profile is not saved to OpenRaster; readers assume sRGB");
     }

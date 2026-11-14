@@ -96,7 +96,7 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     }
     document.layers.push(layer);
     document.icc_profile =
-        Some(if mode == ColorMode::Rgb { photocraft_cms::Builtin::LinearSrgb.profile().to_bytes() } else { photocraft_cms::builtin::linear_gray().to_bytes() });
+        Some(if mode == ColorMode::Rgb { craft_cms::Builtin::LinearSrgb.profile().to_bytes() } else { craft_cms::builtin::linear_gray().to_bytes() });
     let warnings = if info.all_half { vec!["16-bit float samples are stored as 32-bit float".into()] } else { Vec::new() };
     ctl.progress(1.0);
     Ok(Some(ImportResult { document, warnings, source_read_only: false, preview_only: false }))

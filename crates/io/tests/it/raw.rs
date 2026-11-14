@@ -18,7 +18,7 @@ fn dng_opens_as_16_bit_prophoto() {
     assert_eq!(d.depth, SampleType::U16);
     assert_eq!(d.layers.len(), 1);
     let icc = d.icc_profile.as_ref().expect("profile");
-    assert_eq!(icc.as_slice(), &photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
+    assert_eq!(icc.as_slice(), &craft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
     assert!(r.warnings.iter().any(|w| w.contains("DNG") && w.contains("ProPhoto")), "{:?}", r.warnings);
 }
 
@@ -225,8 +225,8 @@ fn nef_with_preview_exif(adobe_rgb: bool) -> Vec<u8> {
 fn a_preview_fallback_keeps_the_colour_space_the_raw_states() {
     let tagged = import("DSC_0001.NEF", &nef_with_preview_exif(true)).unwrap();
     let icc = tagged.document.icc_profile.as_deref().expect("an Adobe RGB preview opens tagged");
-    let profile = photocraft_cms::Profile::parse(icc).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    let profile = craft_cms::Profile::parse(icc).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::AdobeRgbCompat.profile()));
     // Unstated: untagged sRGB, as before.
     assert!(import("DSC_0001.NEF", &nef_with_preview()).unwrap().document.icc_profile.is_none());
 }
@@ -614,4 +614,75 @@ fn a_re_develop_keeps_the_fitted_look() {
     // The camera's brightening curve: mid-grey comes out lighter.
     let mid = curve.iter().find(|k| k[0] >= 0.18).unwrap();
     assert!(mid[1] > mid[0], "{mid:?}");
+}
+
+/// The open-time Camera Raw dialog decodes the file once, in the open: its preview curve and
+/// Open's re-develop reuse that decode and fitted look, and the developed pixels are those of
+/// decoding and fitting again (#9432).
+#[test]
+fn a_kept_decode_gives_the_same_pixels_and_decodes_once() {
+    use photocraft_io::raw::{
+        Demosaic, RawDecode, RawTuning, decodes_on_this_thread, import_raw_demosaic_keeping, import_raw_tuned, import_raw_tuned_from, take_kept_decode,
+    };
+    let pixels = |r: &photocraft_io::ImportResult| photocraft_io::document_to_image(&r.document, &mut Vec::new()).unwrap().data().to_vec();
+
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let nef = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let (dw, dh) = (40, 24);
+    let mut dng = DngSpec::cfa(dw, dh, mosaic(&scene(dw, dh), dw, [0, 1, 1, 2], 0, 65535));
+    dng.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let dng = dng.build();
+    let (cw, ch) = (48, 16);
+    let cr2 = Cr2Spec {
+        width: cw,
+        height: ch,
+        data: mosaic(&scene(cw, ch), cw, [0, 1, 1, 2], 256, 12000),
+        precision: 14,
+        components: 2,
+        slices: vec![24, 24],
+        borders: None,
+        wb_rggb: None,
+        orientation: 6,
+        model_id: None,
+    }
+    .build();
+
+    for (name, bytes) in [("a.nef", &nef), ("b.dng", &dng), ("c.cr2", &cr2)] {
+        // The open, keeping its decode: one decode in all.
+        let before = decodes_on_this_thread();
+        let opened = import_raw_demosaic_keeping(name, bytes, Demosaic::default()).unwrap();
+        assert_eq!(decodes_on_this_thread() - before, 1, "{name}: the open");
+        let kept = take_kept_decode(bytes).expect("the open kept its decode");
+        assert!(take_kept_decode(bytes).is_none(), "{name}: taking it removes it");
+        let mut reference = pixels(&import(name, bytes).unwrap());
+        assert_eq!(pixels(&opened), reference, "{name}: keeping changes nothing about the open");
+        assert_eq!(kept.tone_curve(), photocraft_io::raw::tone_curve(bytes), "{name}: curve");
+
+        for tuning in [
+            RawTuning::default(),
+            RawTuning { exposure: 0.5, temperature: 20.0, tint: -15.0, shadows: 30.0, clarity: 20.0, ..Default::default() },
+            RawTuning { demosaic: Demosaic::Bilinear, highlights: -40.0, ..Default::default() },
+        ] {
+            let (old, old_wb) = import_raw_tuned(name, bytes, &tuning).unwrap();
+            let before = decodes_on_this_thread();
+            let (new, new_wb) = import_raw_tuned_from(name, bytes, &tuning, &kept).unwrap();
+            assert_eq!(decodes_on_this_thread() - before, 0, "{name}: Open decodes nothing again");
+            assert_eq!((old_wb, &old.warnings), (new_wb, &new.warnings), "{name}");
+            reference = pixels(&old);
+            assert_eq!(pixels(&new), reference, "{name}: {tuning:?}");
+        }
+        // A decode made from the same bytes later (a miss of the open's) is as good.
+        let later = RawDecode::new(bytes).unwrap();
+        let (a, _) = import_raw_tuned_from(name, bytes, &RawTuning::default(), &later).unwrap();
+        assert_eq!(pixels(&a), pixels(&import_raw_tuned(name, bytes, &RawTuning::default()).unwrap().0));
+    }
+
+    // A decode of another file is not used for this one.
+    let other = RawDecode::new(&dng).unwrap();
+    let before = decodes_on_this_thread();
+    let (got, _) = import_raw_tuned_from("a.nef", &nef, &RawTuning::default(), &other).unwrap();
+    assert_eq!(decodes_on_this_thread() - before, 1);
+    assert_eq!(pixels(&got), pixels(&import_raw_tuned("a.nef", &nef, &RawTuning::default()).unwrap().0));
+    assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
 }

@@ -326,13 +326,13 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
             if icc.is_some() {
                 mapper.warnings.note("the linear-light image's own profile was replaced by linear gray");
             }
-            Some(photocraft_cms::builtin::linear_gray().to_bytes())
+            Some(craft_cms::builtin::linear_gray().to_bytes())
         }
         (true, icc, _) => {
             if icc.is_some() {
                 mapper.warnings.note("the linear-light image's own profile was replaced by linear sRGB");
             }
-            Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes())
+            Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes())
         }
         (false, Some(icc), _) => Some(Arc::new(icc)),
         (false, None, _) => None,

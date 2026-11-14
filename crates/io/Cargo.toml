@@ -23,16 +23,16 @@ pdf-editable = ["dep:kurbo"]
 [dependencies]
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
-photocraft-cms = { workspace = true }
+craft-cms = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-algo = { workspace = true }
-photocraft-psd = { workspace = true }
+craft-psd = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-formats = { workspace = true }
 photocraft-raw = { workspace = true }
-photocraft-affinity = { workspace = true }
+craft-affinity = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
@@ -50,7 +50,6 @@ thiserror = { workspace = true }
 ttf-parser = "0.25.1"
 serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
-# svg.rs inflates `.svgz` itself (with a size cap) so the XML can be checked before it is parsed;
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -68,9 +67,9 @@ lopdf = { version = "0.38", default-features = false }
 roxmltree = "0.21"
 miniz_oxide = "0.9"
 crc32fast = "1.5"
-photocraft-affinity = { workspace = true, features = ["synth"] }
+craft-affinity = { workspace = true, features = ["synth"] }
 flate2 = { workspace = true }
-photocraft-psd = { workspace = true, features = ["testgen"] }
+craft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 photocraft-testkit = { workspace = true }
 proptest = { workspace = true }

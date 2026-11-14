@@ -2,6 +2,8 @@
 //! every compression, precisions, groups, masks, channels, limits and malformed input.
 
 use super::*;
+use craft_xcf::{Compression, MAX_STRING, TILE};
+use photocraft_codecs::f16;
 use photocraft_raster::Interrupt;
 
 /// A small XCF writer for tests: version 11+ layout (64-bit pointers) by default.

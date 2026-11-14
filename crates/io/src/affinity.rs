@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use photocraft_affinity::model::{self as af, Align, Blend, Kind, Pixels};
-use photocraft_affinity::paint::{self as ap, Cap, GradientKind, Join};
+use craft_affinity::model::{self as af, Align, Blend, Kind, Pixels};
+use craft_affinity::paint::{self as ap, Cap, GradientKind, Join};
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::text::{CharStyle, ParagraphRun, ParagraphStyle, TextAlign, TextRun, TextShape};
 use photocraft_doc::vector::{Knot, LineCap, LineJoin, Path, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask};
@@ -19,7 +19,7 @@ use photocraft_raster::Surface;
 
 use crate::{ImportResult, IoError};
 
-pub use photocraft_affinity::is_affinity;
+pub use craft_affinity::is_affinity;
 
 /// Extensions recognized as Affinity documents.
 pub const EXTENSIONS: &[&str] = &["af", "afphoto", "afdesign", "afpub"];
@@ -38,7 +38,7 @@ pub fn has_extension(name: &str) -> bool {
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    match photocraft_affinity::read(bytes, photocraft_affinity::Limits::default()) {
+    match craft_affinity::read(bytes, craft_affinity::Limits::default()) {
         Ok(d) => {
             let mut b = Builder::new(name, &d)?;
             b.document(&d)?;
@@ -56,8 +56,8 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> 
 }
 
 /// The embedded preview, for files whose native document can't be read.
-fn preview(name: &str, bytes: &[u8], native: &photocraft_affinity::Error) -> Result<ImportResult, IoError> {
-    let p = photocraft_affinity::preview(bytes).map_err(|e| IoError::Unsupported(format!("{native}; its embedded preview can't be read either ({e})")))?;
+fn preview(name: &str, bytes: &[u8], native: &craft_affinity::Error) -> Result<ImportResult, IoError> {
+    let p = craft_affinity::preview(bytes).map_err(|e| IoError::Unsupported(format!("{native}; its embedded preview can't be read either ({e})")))?;
     let opts = photocraft_codecs::DecodeOptions {
         limits: photocraft_codecs::Limits { max_width: 4096, max_height: 4096, max_pixels: 4096 * 4096, max_alloc: 128 << 20 },
         ..Default::default()
@@ -692,7 +692,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, (width, height, pixels))| af::Node {
-                class: photocraft_affinity::synth::tag(b"ImgN"),
+                class: craft_affinity::synth::tag(b"ImgN"),
                 name: format!("Image {i}"),
                 visible: true,
                 locked: false,

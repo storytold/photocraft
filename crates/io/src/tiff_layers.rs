@@ -1,5 +1,5 @@
 //! Layered TIFF: Photoshop layer data carried in the TIFF tags 37724 (`ImageSourceData`) and
-//! 34377 (image resources), see [`photocraft_psd::tiff`].
+//! 34377 (image resources), see [`craft_psd::tiff`].
 //!
 //! Import rebuilds a PSD model from the TIFF's pixels plus those two tags and hands it to the
 //! PSD importer, so everything the PSD path understands (groups, masks, effects, type, shapes,
@@ -14,9 +14,9 @@ use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::Rect;
-use photocraft_psd::resources::ids;
-use photocraft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
-use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
+use craft_psd::resources::ids;
+use craft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
+use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 use photocraft_raster::Surface;
 
 use crate::flat::{csample, encode_image, image_to_document, layout_for, single_layer, try_buffer};
@@ -72,7 +72,7 @@ pub(crate) struct LayeredPlan {
 
 struct LayeredModel {
     /// The PSD model with an empty merged image: the TIFF's pixels replace it after decoding.
-    file: photocraft_psd::PsdFile,
+    file: craft_psd::PsdFile,
 }
 
 impl LayeredPlan {
@@ -389,7 +389,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // The layers move out of the model rather than being copied, and are freed once written
     // (#6607); the model keeps its header, resources and composite for the image below.
     let (layers, w) = match tiff_image_source(doc, &mut file, save_transparency && has_alpha).into_bytes(order) {
-        Err(photocraft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
+        Err(craft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
             let psb_opts = PsdExportOptions { force_psb: true, ..psd_opts };
             let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl));
             ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -421,9 +421,9 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // alpha channels. With it on, the samples are the PSD merged image's channels in order, so
     // the PSD model's channel resources (which list the transparency first) are kept as they are.
     let write_alpha = has_alpha && save_transparency;
-    photocraft_psd::tiff::layered::ifd_channel_resources(
+    craft_psd::tiff::layered::ifd_channel_resources(
         &mut resources,
-        photocraft_psd::tiff::layered::IfdChannels { color: cc, merged_alpha: has_alpha, write_alpha, extra: extra_n, kept },
+        craft_psd::tiff::layered::IfdChannels { color: cc, merged_alpha: has_alpha, write_alpha, extra: extra_n, kept },
     );
     let resources = resources_to_bytes(&resources)?;
     let ifd_channels = cc + usize::from(write_alpha);
@@ -459,20 +459,20 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
 /// Photoshop writes it. The layers, global mask and global blocks move out of `file` (the
 /// export's own model), which keeps its header, resources and merged image. `ifd_alpha`: the
 /// composite in the IFD keeps its transparency as the first extra sample (Save Transparency).
-fn tiff_image_source(_doc: &Document, file: &mut photocraft_psd::PsdFile, ifd_alpha: bool) -> ImageSourceData {
+fn tiff_image_source(_doc: &Document, file: &mut craft_psd::PsdFile, ifd_alpha: bool) -> ImageSourceData {
     ImageSourceData::for_tiff(file, ifd_alpha)
 }
 
 /// Filter-mask block (`FMsk`) Photoshop writes next to a layered TIFF: the same red 50%
-/// overlay as [`photocraft_psd::GlobalLayerMask::photoshop_default`], without the kind byte.
+/// overlay as [`craft_psd::GlobalLayerMask::photoshop_default`], without the kind byte.
 const FILTER_MASK_DEFAULT: &[u8] = &[0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 50];
 
 /// Removes the blocks a document kept verbatim from a little-endian TIFF because their layout
-/// is unknown ([`photocraft_psd::TaggedBlock::is_foreign_order`]) before `file` is written as a
+/// is unknown ([`craft_psd::TaggedBlock::is_foreign_order`]) before `file` is written as a
 /// PSD: their bytes are in the wrong order for a PSD and cannot be converted. Returns a warning
-/// per block dropped. A save back to TIFF keeps them (see [`photocraft_psd::tiff`]).
-pub fn strip_foreign_order_blocks(file: &mut photocraft_psd::PsdFile) -> Vec<String> {
-    photocraft_psd::tiff::layered::strip_foreign_order_blocks(file)
+/// per block dropped. A save back to TIFF keeps them (see [`craft_psd::tiff`]).
+pub fn strip_foreign_order_blocks(file: &mut craft_psd::PsdFile) -> Vec<String> {
+    craft_psd::tiff::layered::strip_foreign_order_blocks(file)
         .into_iter()
         .map(|block| {
             let owner = block
@@ -1038,7 +1038,7 @@ mod tests {
         let r = export(&doc, "x.tif", &ExportOptions { tiff_layers: true, ..Default::default() }).unwrap();
         let (_, layers) = photocraft_codecs::tiff_photoshop_tags(&r.bytes);
         let layers = layers.unwrap();
-        assert!(layers.starts_with(photocraft_psd::tiff::SIGNATURE), "{:?}", String::from_utf8_lossy(&layers[..36.min(layers.len())]));
+        assert!(layers.starts_with(craft_psd::tiff::SIGNATURE), "{:?}", String::from_utf8_lossy(&layers[..36.min(layers.len())]));
         assert!(!r.warnings.iter().any(|w| w.contains("PSB")), "{:?}", r.warnings);
         let back = crate::import("x.tif", &r.bytes).unwrap().document;
         assert_eq!(back.layers.len(), doc.layers.len());
@@ -1053,7 +1053,7 @@ mod tests {
         let doc = many_cheap_fills();
         let r = export(&doc, "x.tif", &ExportOptions { tiff_layers: true, force_psb: true, ..Default::default() }).unwrap();
         let (_, layers) = photocraft_codecs::tiff_photoshop_tags(&r.bytes);
-        assert!(layers.unwrap().starts_with(photocraft_psd::tiff::SIGNATURE_PSB));
+        assert!(layers.unwrap().starts_with(craft_psd::tiff::SIGNATURE_PSB));
     }
 
     /// The adaptive budget, not only the caller's pixel limit, decides a layered TIFF: a known

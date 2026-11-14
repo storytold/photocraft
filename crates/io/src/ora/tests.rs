@@ -545,7 +545,7 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
         // Not the bottom layer: with its transparency lock, `Base` would become the Background.
         ("position lock", with(&|d| d.layers[1].locks.position = true)),
         ("float", doc(SampleType::F32)),
-        ("profile", with(&|d| d.icc_profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes()))),
+        ("profile", with(&|d| d.icc_profile = Some(craft_cms::Builtin::DisplayP3.profile().to_bytes()))),
         ("metadata", with(&|d| d.metadata.xmp = Some("<x/>".into()))),
     ]
 }
@@ -567,7 +567,7 @@ fn plain_documents_lose_nothing() {
     for depth in [SampleType::U8, SampleType::U16] {
         let mut d = doc(depth);
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?}");
-        d.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        d.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} tagged sRGB");
         assert_eq!(export(&d).unwrap().warnings, Vec::<String>::new());
         // OpenRaster's edit-locked and alpha-preserve hold Lock All and Lock Transparent Pixels.
