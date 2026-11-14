@@ -72,15 +72,7 @@ fn nef_like_with_maker_tags() {
     let (w, h) = (24, 16);
     let data = mosaic(&scene(w, h), w, [2, 1, 1, 0], 0, 4095);
     // The explicit IFD0 Make overrides the generator's fallback identity.
-    let b = tiff_ep(
-        "NIKON",
-        w,
-        h,
-        &data,
-        [2, 1, 1, 0],
-        12,
-        vec![(271, Val::Ascii("NIKON CORPORATION".into()))],
-    );
+    let b = tiff_ep("NIKON", w, h, &data, [2, 1, 1, 0], 12, vec![(271, Val::Ascii("NIKON CORPORATION".into()))]);
     // TIFF/EP fixtures use a little-endian TIFF header; assert the IFD itself has one Make,
     // regardless of which duplicate-tag policy the decoder uses.
     let ifd0 = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) as usize;
