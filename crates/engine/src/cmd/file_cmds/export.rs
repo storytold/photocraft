@@ -95,7 +95,9 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
-        let name = format!("{}_{:04}_{}.{format}", sanitize(&prefix), index, sanitize(&l.name));
+        // PNG file names use dashes for spaces (measured); the other formats keep them.
+        let part = |text: &str| if format == "png" { sanitize(text).replace(' ', "-") } else { sanitize(text) };
+        let name = format!("{}_{:04}_{}.{format}", part(&prefix), index, part(&l.name));
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
