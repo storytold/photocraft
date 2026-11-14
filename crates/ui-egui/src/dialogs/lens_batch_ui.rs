@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use craft::ui::patterns::form_dialogs::{Param, ParamKind};
+use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, FieldValue, Param, ParamKind};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -26,21 +26,20 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
     list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(tl!(label)))).collect()
 }
 
-/// A folder field with its Browse button.
-fn folder(key: &str, label: &'static str, default: String) -> Param {
-    Param::new(key, label, ParamKind::text(default)).browse(PathKind::Folder)
-}
+/// Whether Source Files listed a file when [`follow_sources`] last looked.
+const HAD_SOURCES: &str = "hadSources";
 
-/// The rows of the dialog, writing the results to `<dir>/corrected`. They open with the reference defaults (#13980): Chromatic
+/// The rows of the dialog. The destination starts empty (#13982). They open with the reference defaults (#13980): Chromatic
 /// Aberration and Vignette off, File Type PSD; the command's own defaults for scripts and the CLI are unchanged. Correction Options lists the corrections, then scaling and
 /// the edge fill, as the reference's left and right columns read.
-pub(crate) fn rows(app: &PhotocraftApp, dir: String) -> Vec<Param> {
+pub(crate) fn rows(app: &PhotocraftApp) -> Vec<Param> {
     vec![
         Param::section(tl!("Source Files")),
         Param::files("input", tl!("Source Files")).folder_mode(true).open_files(saved_documents(app)),
         Param::section(tl!("Destination Folder")),
         Param::new("format", tl!("File Type"), ParamKind::choice(opts(&FORMATS), Some("psd".into()))),
-        folder("output", tl!("Output"), format!("{dir}/corrected")),
+        Param::new("output", tl!("Output"), ParamKind::text("")).browse(PathKind::Folder),
+        Param::custom(HAD_SOURCES, Label::Empty, follow_sources).companions(["output"]).full_width(),
         Param::section(tl!("Lens Correction Profile")),
         Param::new("profile", tl!("Profile"), ParamKind::choice(opts(&PROFILES), Some("auto".into()))),
         Param::section(tl!("Correction Options")),
@@ -63,8 +62,31 @@ pub(crate) fn listing(_app: &PhotocraftApp, folder: &Path) -> Vec<PathBuf> {
     photocraft_engine::file_cmds::list_images(&folder.to_string_lossy()).unwrap_or_default().into_iter().map(PathBuf::from).collect()
 }
 
+/// The first file added to an empty Source Files list (Browse…, Folder, Add Open Files, a list set through
+/// `ui.dialog.set`) sets an empty destination to `results` in that file's folder, as in the reference dialog. A
+/// destination already set (Choose…, typed, or set through `ui.dialog.set`) is kept. The row shows nothing.
+fn follow_sources(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomContext) -> egui::Response {
+    let first = fields.list("input").and_then(|list| {
+        list.iter().find_map(|v| match v {
+            FieldValue::Text(path) => Some(PathBuf::from(path)),
+            _ => None,
+        })
+    });
+    if fields.bool(HAD_SOURCES) != Some(true)
+        && fields.text("output").is_none_or(str::is_empty)
+        && let Some(results) = first.as_deref().and_then(Path::parent).map(|dir| dir.join("results"))
+    {
+        fields.set("output", results.to_string_lossy().into_owned());
+    }
+    if fields.bool(HAD_SOURCES) != Some(first.is_some()) {
+        fields.set(HAD_SOURCES, first.is_some());
+    }
+    ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
+}
+
 /// Source Files as the command's `input`: the folder in Folder mode, else the listed paths in list order.
 pub(crate) fn command_params(map: &mut Map<String, Value>) {
+    map.remove(HAD_SOURCES);
     let use_folder = map.remove("input.useFolder").and_then(|v| v.as_bool()).unwrap_or(false);
     let folder = map.remove("input.folder");
     if use_folder && let Some(folder) = folder.filter(|f| f.as_str().is_some_and(|f| !f.is_empty())) {

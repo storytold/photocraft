@@ -73,7 +73,7 @@ pub(super) fn source_folder() -> tempfile::TempDir {
 /// The options of the list row `key`, as their labels.
 fn labels(key: &str) -> Vec<String> {
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let rows = super::rows(&app, ".".into());
+    let rows = super::rows(&app);
     let row = rows.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("a {key} row"));
     let ParamKind::Choice { options, .. } = &row.kind else { panic!("{key} is a list") };
     options.iter().map(|(_, label)| label.as_str().to_owned()).collect()
@@ -120,7 +120,7 @@ fn ok_runs_the_command_with_the_same_params() {
     let (mut h, id) = opened();
     assert_eq!(
         params(&h, id),
-        json!({"input": [], "output": "./corrected", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
+        json!({"input": [], "output": "", "format": "psd", "profile": "auto", "correctDistortion": true, "correctVignette": false, "correctCA": false, "autoScale": true, "edge": "transparency"})
     );
     let sources = source_folder();
     let results = tempfile::tempdir().unwrap();
