@@ -646,8 +646,28 @@ RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens 
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
 then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
-sliders from the image's histogram, the panel's Auto button), `commit` and
-`cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
+sliders from the image's histogram, the Edit header's Auto button), `reset` (`"default"` or
+`"open"`: the Edit menu's Reset to Default / Reset to Open), `panels` (`{open?, hidden?}`: lists of
+panel ids `light`, `color`, `effects`, `curve`, `detail`, `colorMixer`, `colorGrading`, `optics`, `geometry`,
+`calibration`; a hidden panel, its eye button off, keeps its settings in the dialog but neither the
+preview nor commit applies them), `mixer` (`{adjust?: "hsl"|"color", tab?: "hue"|"saturation"|
+"luminance"|"all", color?: band name}`), `curve` (`"parametric"`, `"point"`, `"red"`, `"green"`,
+`"blue"`: the Curve panel's channel), `grading` (`"threeWay"`, `"shadows"`, `"midtones"`,
+`"highlights"`, `"global"`: the Color Grading view), `compare` (`"single"`, `"sideBySide"`, `"split"`:
+the preview's Before/After view, Before at the left), `masks` (the Masking panel: `open` and
+`overlay` booleans; `selected`, a mask index or null, and `component`, an index into the selected
+mask's components or null, checked after `selected` in the same request; `tool`: `"none"`,
+`"brush"`, `"linear"`, `"radial"`, `"colorPick"`, `"objects"` or `"guides"`; `overlayMode`:
+`"color"`, `"imageOnBlack"` or `"imageOnWhite"`; `brush`: `{size?, feather?, flow?, density?, erase?,
+autoMask?}`, with `size` clamped to 0.001–0.25 of the long side, `feather` and `density` to 0–100,
+`flow` to 1–100, and `erase` / `autoMask` booleans; unknown fields are errors; the masks
+themselves are the `masks` setting; the reply's `masking` describes the panel),
+`whiteBalance` (the Basic panel's White Balance menu: `"asShot"` (Temperature and Tint 0), `"auto"`
+or `{"sample": [x, y]}`, the White Balance tool's click at `x`, `y` in 0…1 across the shown image;
+a spot with no colour to read is an error, and explicit `set` values win), `whiteBalanceTool`
+(boolean: the White Balance tool, the I key; the reply's `panels.whiteBalanceTool`), `commit` and
+`cancel`, and while a raw file opens also `demosaic` (below). The reply's `panels` describes the
+panel state. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,

@@ -104,8 +104,8 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         // The dialog translates through the `cameraRaw` context; match it in any system language.
         let tr = |s| photocraft_ui_egui::i18n::tr_ctx(lang, "cameraRaw", s);
         let mut y = 0.0;
-        for label in [light, tr("Color"), tr("Effects"), tr("Curve"), tr("Color Mixer"), tr("Color Grading"), tr("Detail")] {
-            // egui 0.37 exposes a CollapsingHeader as a DisclosureTriangle, not a Button.
+        for label in [light, tr("Color"), tr("Effects"), tr("Curve"), tr("Detail"), tr("Color Mixer"), tr("Color Grading"), tr("Optics"), tr("Calibration")] {
+            // Camera Raw's panel order; each header is a DisclosureTriangle.
             let next = h.get_by_role_and_label(Role::DisclosureTriangle, label).rect().top();
             assert!(next > y, "section order: {label}");
             y = next;
@@ -133,8 +133,17 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         for label in ["Texture", "Clarity", "Dehaze"] {
             assert!(h.query_by_role_and_label(Role::Slider, tr(label)).is_some(), "effects control: {label}");
         }
-        assert!(h.query_by_role_and_label(Role::ComboBox, tr("Vignetting")).is_some(), "effects control: Vignetting");
-        assert!(h.query_by_role_and_label(Role::Label, tr("Grain")).is_some(), "effects control: Grain");
+        // Vignette and Grain are one slider each, their other settings folded under a triangle.
+        for label in ["Vignetting", "Grain"] {
+            assert!(h.query_by_role_and_label(Role::Slider, tr(label)).is_some(), "effects control: {label}");
+        }
+        assert!(h.query_by_role_and_label(Role::Slider, tr("Roughness")).is_none(), "grain options start folded");
+        h.get_by_role_and_label(Role::DisclosureTriangle, &format!("{} {}", tr("Grain"), tr("Options"))).click();
+        h.run_steps(4);
+        assert!(h.query_by_role_and_label(Role::Slider, tr("Roughness")).is_some(), "grain options unfold");
+        h.get_by_role_and_label(Role::DisclosureTriangle, &format!("{} {}", tr("Vignetting"), tr("Options"))).click();
+        h.run_steps(4);
+        assert!(h.query_by_role_and_label(Role::ComboBox, tr("Vignette Style")).is_some(), "vignette options unfold");
         let after = control::inspect(h.state(), &h.ctx);
         assert_eq!(after["cameraRaw"]["params"], before["params"]);
         assert_eq!(after["cameraRaw"]["previewRevision"], before["previewRevision"]);

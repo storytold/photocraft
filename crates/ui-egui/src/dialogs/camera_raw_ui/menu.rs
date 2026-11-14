@@ -34,7 +34,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" | "view" | "demosaic" => {}
+            "set" | "scope" | "view" | "demosaic" | "panels" | "mixer" | "curve" | "grading" | "compare" | "masks" | "whiteBalance" | "whiteBalanceTool"
+            | "reset" => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
                 return Some(Err(format!("RAW Develop {key} must be a boolean")));
@@ -78,14 +79,30 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     }
     let mut next_params = d.params.clone();
     // Auto (the Light panel's button): the tone sliders from the image's histogram.
+    if let Some(kind) = ui.get("reset") {
+        next_params = match super::panels::reset_params(kind, &d.params, &d.original) {
+            Ok(p) => p,
+            Err(e) => return Some(Err(e)),
+        };
+    }
     if ui.get("auto").and_then(Value::as_bool) == Some(true) {
         photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut next_params);
+    }
+    let mut next_panels = match d.panels.prepare(ui) {
+        Ok(p) => p,
+        Err(e) => return Some(Err(e)),
+    };
+    if let Some(v) = ui.get("whiteBalance")
+        && let Err(e) = white_balance(d, v, &mut next_params, &mut next_panels)
+    {
+        return Some(Err(e));
     }
     if let Some(set) = ui.get("set") {
         if !set.is_object() {
             return Some(Err("bad RAW Develop settings: expected an object".into()));
         }
-        let mut cur = serde_json::to_value(&d.params).unwrap_or(json!({}));
+        // On top of what this request already changed (reset, auto, whiteBalance).
+        let mut cur = serde_json::to_value(&next_params).unwrap_or(json!({}));
         if let (Value::Object(c), Value::Object(s)) = (&mut cur, set) {
             for (k, v) in s {
                 if !c.contains_key(k) {
@@ -124,6 +141,13 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
             None => return Some(Err("demosaic must be ahd, mhc or bilinear".into())),
         },
     };
+    // Masking last: every other part is valid, and "selected" sees the masks `set` brings. It
+    // changes nothing when it fails.
+    if let Some(v) = ui.get("masks")
+        && let Err(e) = super::masks_panel::control(ctx, &next_params, v)
+    {
+        return Some(Err(e));
+    }
     let d = app.camera_raw.as_mut()?;
     if let (Some(m), Some(raw)) = (demosaic, d.raw_open.as_mut()) {
         raw.demosaic = m;
@@ -131,9 +155,13 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if let Some(view) = navigation {
         app.ui.camera_raw_preview = view;
     }
-    if d.params.point_curve != next_params.point_curve {
+    if super::controls::curves_changed(&d.params, &next_params) || d.panels.curve_channel != next_panels.curve_channel {
         d.curve_state = Default::default();
     }
+    if d.panels.hidden != next_panels.hidden {
+        d.dirty = true;
+    }
+    d.panels = next_panels;
     if d.params != next_params {
         remember_edit(d);
         d.dirty = true;
@@ -151,6 +179,8 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("redo").and_then(Value::as_bool) == Some(true) {
         redo_edit(d);
     }
+    // The reply describes the masks the settings end with (after an undo, say).
+    super::masks_panel::reconcile(ctx, &d.params);
     if d.dirty {
         d.render(ctx);
     }
@@ -172,5 +202,34 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("done").and_then(Value::as_bool) == Some(true) {
         return Some(Ok(super::filmstrip::done(app)));
     }
-    Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
+    let mut result = app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null);
+    if result.is_object() {
+        result["masking"] = super::masks_panel::describe(ctx);
+    }
+    Some(Ok(result))
+}
+
+/// `{"ui": {"whiteBalance": …}}`: the White Balance menu ("asShot", "auto") or its tool on a
+/// point of the shown image (`{"sample": [x, y]}`, 0 … 1). Explicit `set` values still win.
+fn white_balance(d: &super::CameraRawDialog, v: &Value, next: &mut CameraRaw, panels: &mut super::panels::PanelState) -> Result<(), String> {
+    match v.as_str() {
+        Some("asShot") => (next.temperature, next.tint) = (0.0, 0.0),
+        Some("auto") => {
+            let auto = photocraft_algo::camera_raw::auto_white_balance(&d.proxy, next.encoding_gamma);
+            panels.wb_auto = Some(auto);
+            (next.temperature, next.tint) = auto;
+        }
+        _ => {
+            let point = v.get("sample").and_then(Value::as_array).and_then(|a| match a.as_slice() {
+                [x, y] => Some([x.as_f64()? as f32, y.as_f64()? as f32]),
+                _ => None,
+            });
+            let u = point
+                .filter(|u| u.iter().all(|c| (0.0..=1.0).contains(c)))
+                .ok_or("whiteBalance must be \"asShot\", \"auto\" or {\"sample\": [x, y]} with x, y in 0…1")?;
+            (next.temperature, next.tint) =
+                super::wb_picker::balance_at(d, u).ok_or("whiteBalance sample: that spot has no colour to neutralise (too dark, clipped or off the image)")?;
+        }
+    }
+    Ok(())
 }
