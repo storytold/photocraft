@@ -87,6 +87,26 @@ fn png24_writes_truecolour_pngs_with_alpha_where_transparent() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A Grayscale document's boards are still truecolour as PNG-24 (and keep their alpha), while
+/// plain `png` keeps writing Grayscale as before.
+#[test]
+fn png24_is_truecolour_for_a_grayscale_document() {
+    let mut s = boards();
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    let dir = out_dir("png24-gray");
+    let files = export(&mut s, &dir, "png24");
+    assert_eq!(files.len(), 3);
+    for f in &files {
+        assert!(matches!(png_color_type(f), 2 | 6), "{f} is not truecolour");
+    }
+    assert_eq!(png_color_type(&files[0]), 6, "the transparent board keeps its alpha");
+    assert_eq!(size_of(&files[2], "png"), (200, 150));
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Grayscale, "the document itself is unchanged");
+    let files = export(&mut s, &dir, "png");
+    assert!(files.iter().all(|f| matches!(png_color_type(f), 0 | 4)), "plain png stays Grayscale");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn targa_writes_tga_files() {
     let mut s = boards();

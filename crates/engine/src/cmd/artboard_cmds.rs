@@ -681,6 +681,8 @@ enum FileType {
     Save(String),
     /// One indexed (palette) PNG per board, as PNG-8.
     Png8,
+    /// One truecolour PNG per board, as PNG-24: a Grayscale or other non-RGB board becomes RGB.
+    Png24,
     /// One multi-page PDF, a page per board, bottom artboard first.
     Pdf,
 }
@@ -689,7 +691,7 @@ impl FileType {
     fn of(format: &str) -> Self {
         match format {
             "png8" | "png-8" => FileType::Png8,
-            "png24" | "png-24" => FileType::Save("png".into()),
+            "png24" | "png-24" => FileType::Png24,
             "targa" => FileType::Save("tga".into()),
             "pdf" => FileType::Pdf,
             ext => FileType::Save(ext.into()),
@@ -725,14 +727,19 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(json!({"files": [path]}));
         }
         FileType::Png8 => None,
+        FileType::Png24 => Some("png".to_string()),
         FileType::Save(ext) => Some(ext),
     };
+    let truecolour = matches!(FileType::of(&format), FileType::Png24);
     let mut files = Vec::new();
     for (i, one) in boards.into_iter().enumerate() {
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{}", ext.as_deref().unwrap_or("png")));
         match &ext {
+            Some(_) if truecolour && one.mode != ColorMode::Rgb => {
+                save_doc(&rgb_copy(&one)?, &path, save)?;
+            }
             Some(_) => {
                 save_doc(&one, &path, save)?;
             }
@@ -756,6 +763,12 @@ fn png8(one: &Document) -> Result<Vec<u8>> {
     let (wdoc, _, _) = web_document(one, &json!({}), &st)?;
     let buf = photocraft_compose::flatten(&wdoc);
     Ok(optimize(&buf.px, wdoc.size.width as usize, wdoc.bounds(), &st, None, None, None, wdoc.resolution_dpi, false)?.bytes)
+}
+
+/// `one` converted to RGB (its depth, layers and transparency kept), for a truecolour file.
+fn rgb_copy(one: &Document) -> Result<Document> {
+    use crate::web_cmds::{WebSettings, web_document};
+    Ok(web_document(one, &json!({}), &WebSettings { convert_to_srgb: false, ..WebSettings::default() })?.0)
 }
 
 /// `one` flattened over white as a JPEG, for a PDF page.
