@@ -706,3 +706,12 @@ fn gradient_map_source_params() {
         assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn color_of_rejects_plus_signs_in_hex() {
+    for s in ["#+f+f+f", "#+0+0+0", "#f+f+f+", "#zzzzzz"] {
+        assert!(color_of("photoFilter", "color", &json!(s)).is_err(), "{s} must be rejected");
+    }
+    let ok = color_of("photoFilter", "color", &json!("#ff8000")).unwrap();
+    assert_eq!(ok, [1.0, 128.0 / 255.0, 0.0]);
+}
