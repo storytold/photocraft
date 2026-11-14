@@ -48,7 +48,6 @@ fn image_processor_skips_non_images_and_can_find_images_in_subfolders() {
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("input");
     let nested = input.join("nested");
-    let output = root.path().join("output");
     fs::create_dir_all(&nested).unwrap();
     fs::write(input.join("notes.txt"), b"not an image").unwrap();
     fs::write(nested.join("manifest.txt"), b"not an image").unwrap();
@@ -56,6 +55,7 @@ fn image_processor_skips_non_images_and_can_find_images_in_subfolders() {
     let mut session = Session::new();
 
     for per_format in [false, true] {
+        let output = root.path().join(if per_format { "multi" } else { "single" });
         let mut params = settings(&input, &output, per_format);
         assert_eq!(session.execute(COMMAND, params.clone()), Err(EngineError::Other(NO_SOURCE.into())));
         params["includeSubfolders"] = json!(true);
@@ -114,13 +114,13 @@ fn missing_paths_and_missing_open_documents_keep_their_own_errors() {
 fn mixed_valid_and_corrupt_images_keep_the_corrupt_file_report() {
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("input");
-    let output = root.path().join("output");
     fs::create_dir(&input).unwrap();
     let corrupt = input.join("broken.jpg");
     fs::write(&corrupt, b"not an image").unwrap();
     write_image(&input.join("test.ppm")).unwrap();
     let mut session = Session::new();
     for per_format in [false, true] {
+        let output = root.path().join(if per_format { "multi" } else { "single" });
         let result = session.execute(COMMAND, settings(&input, &output, per_format)).unwrap();
         let mut expected = vec![output.join("test.jpg")];
         if per_format {
