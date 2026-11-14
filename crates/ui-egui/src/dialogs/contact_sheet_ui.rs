@@ -64,6 +64,11 @@ pub(crate) fn preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> 
     Err(message)
 }
 
+/// The dialog's defaults: what a first open and Reset… show.
+pub(crate) fn defaults() -> Value {
+    json!({"input": "", "units": "inches", "width": 8.0, "height": 10.0, "resolution": 300.0, "mode": "rgb", "depth": 8, "columns": 5, "rows": 6, "placeAcrossFirst": true, "autoSpacing": true, "rotateForBestFit": false, "caption": true, "font": photocraft_text::fonts::DEFAULT_FAMILY, "fontSize": 12.0, "flatten": false, "includeSubfolders": true, "groupByFolder": false})
+}
+
 /// The fields the dialog opens with: `defaults` under the values of the last OK (#13695), kept in
 /// the preferences so they survive a restart. Each stored value the dialog cannot show gives its
 /// default (see [`settings`]).
@@ -120,8 +125,8 @@ fn settings(f: &Map<String, Value>) -> Map<String, Value> {
     kept
 }
 
-/// The dialog body: one block per group.
-pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+/// The dialog body: one block per group, then Load…, Save… and Reset… (#13698).
+pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     let labels = ["Input:", "Units:", "Width:", "Height:", "Resolution:", "Mode:", "Bit Depth:", "Place:", "Columns:", "Rows:", "Font:", "Font size:"];
     let labels: Vec<&str> = labels.iter().map(|l| tl!(l)).collect();
     let w = crate::widgets::label_column_width(ui, &labels, 90.0, 160.0);
@@ -129,6 +134,99 @@ pub(crate) fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     document(ui, f, w);
     thumbnails(ui, f, w);
     caption(ui, f, w);
+    settings_buttons(app, ui, f, id);
+}
+
+/// Load… and Save… read and write the dialog's values as a settings file
+/// ([`settings_file`]) through the platform's file dialog; Reset… asks before restoring the
+/// defaults.
+fn settings_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &Map<String, Value>, id: u64) {
+    ui.add_space(8.0);
+    let r = ui
+        .horizontal(|ui| {
+            if crate::widgets::secondary_button(ui, tl!("Load…"), 0.0).clicked() {
+                return load(app, id);
+            }
+            if crate::widgets::secondary_button(ui, tl!("Save…"), 0.0).clicked() {
+                let bytes = settings_file::write(f, &settings_file::Stamp::now()).into_bytes();
+                return app.pick_save(settings_file::FILE_NAME, move |app, path| {
+                    let write = app.services.write.as_mut().ok_or("no writer configured")?;
+                    write(&path, &bytes)?;
+                    Ok(json!({"path": path}))
+                });
+            }
+            if crate::widgets::secondary_button(ui, tl!("Reset…"), 0.0).clicked() {
+                ask_reset(app, id);
+            }
+            Ok(Value::Null)
+        })
+        .inner;
+    if let Err(e) = r
+        && e != crate::file_dialog::CANCELLED
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// The largest settings file Load… reads: the reference's are under 1 KiB.
+const SETTINGS_FILE_MAX: usize = 1 << 20;
+
+/// Load…: the values of the chosen settings file the dialog can show go into dialog `id`; the
+/// others keep the dialog's (see [`settings`]). A file that is not a settings file shows an
+/// alert and changes nothing.
+fn load(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    app.pick_file_bytes_filtered(&["xml"], move |app, name, bytes| {
+        // The dialog may close while the picker is open; then there is nothing to fill.
+        let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) else { return Ok(Value::Null) };
+        let read = if bytes.len() > SETTINGS_FILE_MAX {
+            Err(tl!("too large").to_string())
+        } else {
+            std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|xml| settings_file::read(xml, &d.fields))
+        };
+        match read {
+            Ok(read) => d.fields.extend(settings(&read)),
+            // The alert reports it; an `Err` would repeat it in the status bar.
+            Err(e) => {
+                let message = format!("{}: {e}", crate::file_open::display_name(&name));
+                app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+            }
+        }
+        Ok(Value::Null)
+    })
+}
+
+/// Marks Reset…'s question; holds the id of the dialog it resets.
+const RESET: &str = "__contactSheetReset";
+
+/// Whether `f` is Reset…'s question.
+pub(crate) fn owns_reset(f: &Map<String, Value>) -> bool {
+    f.contains_key(RESET)
+}
+
+/// Reset… asks first, as the reference application's script alert does.
+fn ask_reset(app: &mut PhotocraftApp, id: u64) {
+    if app.ui.dialogs.iter().any(|d| owns_reset(&d.fields)) {
+        return;
+    }
+    let f = json!({ RESET: id, "__label": "Script Alert" });
+    app.ui.open_dialog(DialogKind::Command, f.as_object().cloned().unwrap_or_default());
+}
+
+pub(crate) fn reset_body(ui: &mut egui::Ui) {
+    ui.label(tl!("Restore default settings?"));
+}
+
+/// Yes: the dialog shows its defaults, with no folder chosen and no Files list. No (Cancel)
+/// changes nothing.
+pub(crate) fn confirm_reset(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let id = f.get(RESET).and_then(Value::as_u64).ok_or("no Contact Sheet II dialog to reset")?;
+    let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) else { return Ok(Value::Null) };
+    // The dialog's own markers stay; its values, the resolution unit included, go.
+    let mut fields: Map<String, Value> = d.fields.iter().filter(|(k, _)| k.starts_with("__") && *k != RES_UNIT).map(|(k, v)| (k.clone(), v.clone())).collect();
+    fields.extend(defaults().as_object().cloned().unwrap_or_default());
+    d.fields = fields;
+    Ok(Value::Null)
 }
 
 /// Source Images: the folder the images are read from, then Include Subfolders and Group Images
@@ -324,6 +422,9 @@ fn number(f: &Map<String, Value>, key: &str, d: f64) -> f64 {
 fn flag(f: &Map<String, Value>, key: &str, d: bool) -> bool {
     f.get(key).and_then(Value::as_bool).unwrap_or(d)
 }
+
+#[path = "contact_sheet_settings_file.rs"]
+mod settings_file;
 
 #[cfg(test)]
 #[path = "contact_sheet_layout_tests.rs"]
