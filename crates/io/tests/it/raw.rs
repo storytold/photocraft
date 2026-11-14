@@ -18,7 +18,7 @@ fn dng_opens_as_16_bit_prophoto() {
     assert_eq!(d.depth, SampleType::U16);
     assert_eq!(d.layers.len(), 1);
     let icc = d.icc_profile.as_ref().expect("profile");
-    assert_eq!(icc.as_slice(), &photocraft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
+    assert_eq!(icc.as_slice(), &craft_cms::Builtin::ProPhotoCompat.profile().to_bytes()[..]);
     assert!(r.warnings.iter().any(|w| w.contains("DNG") && w.contains("ProPhoto")), "{:?}", r.warnings);
 }
 
@@ -225,8 +225,8 @@ fn nef_with_preview_exif(adobe_rgb: bool) -> Vec<u8> {
 fn a_preview_fallback_keeps_the_colour_space_the_raw_states() {
     let tagged = import("DSC_0001.NEF", &nef_with_preview_exif(true)).unwrap();
     let icc = tagged.document.icc_profile.as_deref().expect("an Adobe RGB preview opens tagged");
-    let profile = photocraft_cms::Profile::parse(icc).unwrap();
-    assert!(profile.same_colors(photocraft_cms::Builtin::AdobeRgbCompat.profile()));
+    let profile = craft_cms::Profile::parse(icc).unwrap();
+    assert!(profile.same_colors(craft_cms::Builtin::AdobeRgbCompat.profile()));
     // Unstated: untagged sRGB, as before.
     assert!(import("DSC_0001.NEF", &nef_with_preview()).unwrap().document.icc_profile.is_none());
 }

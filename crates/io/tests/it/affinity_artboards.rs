@@ -5,7 +5,7 @@
 mod fixture;
 
 use fixture::{Marker, document};
-use photocraft_affinity::synth::Method;
+use craft_affinity::synth::Method;
 use photocraft_doc::Document;
 use photocraft_geom::Rect;
 use photocraft_io::{ExportOptions, export, import};
