@@ -62,8 +62,10 @@ fn names(names: &[String]) -> Vec<(String, Label)> {
 
 fn open_form(app: &mut PhotocraftApp, key: &'static str, title: &str, rows: Vec<Param>) -> DialogId {
     let title = Label::from(title.to_string());
+    // Contact Sheet II's Load…, Save… and Reset… (#13698).
+    let extra = if key == CONTACT_SHEET { crate::dialogs::contact_sheet_ui::footer_buttons() } else { Vec::new() };
     params::open_param(app, key, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
-        ParamDialog::command(key, title.clone(), rows.clone()).values(Bind::bound(fields))
+        ParamDialog::command(key, title.clone(), rows.clone()).values(Bind::bound(fields)).extra_buttons(extra.clone())
     })
 }
 

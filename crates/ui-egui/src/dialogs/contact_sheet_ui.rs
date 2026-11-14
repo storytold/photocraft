@@ -4,8 +4,11 @@
 //! The rows are the command's params, so OK, `ui.dialog.set` and `ui.dialog.confirm` work as for every form. Three
 //! of them are kept in the shape the dialog shows and turned into the command's at OK ([`command_params`]): the
 //! resolution's unit (the command takes pixels/inch), Bit Depth (`"8"` or `"16"`) and Place (`"across"` or `"down"`).
+//! Load…, Save… and Reset… in the footer read and write the values as a settings file and restore the defaults
+//! (#13698).
 
-use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, NumberUnit, Param, ParamKind, ParamResult};
+use craft::ui::dialog::{DialogId, PromptAnswer, PromptChoice, StandardPrompt};
+use craft::ui::patterns::form_dialogs::{CustomContext, DialogFields, FieldValue, HostedParamDialog, NumberUnit, Param, ParamKind, ParamResult};
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
 use photocraft_engine::prefs::Unit;
@@ -35,7 +38,11 @@ const KEPT_TEXT: [&str; 2] = ["input", "font"];
 /// The rows of the dialog. They open with the values of the last OK (#13695); a fresh dialog has no folder chosen
 /// (#13692): not the working folder, nor that of the document in front.
 pub(crate) fn rows(app: &PhotocraftApp) -> Vec<Param> {
-    let saved = app.session.prefs().dialogs.get(COMMAND).cloned().unwrap_or_default();
+    build(&app.session.prefs().dialogs.get(COMMAND).cloned().unwrap_or_default())
+}
+
+/// The rows over the folder and font `saved` keeps (`Null`: the defaults).
+fn build(saved: &Value) -> Vec<Param> {
     let kept = |key: &str, default: &str| saved.get(key).and_then(Value::as_str).unwrap_or(default).to_owned();
     let resolution = vec![
         NumberUnit::new("in", UnitKind::PixelsPerInch, tl!("pixels/inch"), 1.0),
@@ -141,6 +148,142 @@ pub(crate) fn command_params(map: &mut Map<String, Value>) {
     if let Some(place) = map.remove("place") {
         map.insert("placeAcrossFirst".into(), json!(place.as_str() != Some("down")));
     }
+}
+
+#[path = "contact_sheet_settings_file.rs"]
+mod settings_file;
+
+/// The footer buttons after OK and Cancel, as `(action, label)`.
+pub(crate) fn footer_buttons() -> Vec<(String, Label)> {
+    [("load", tl!("Load…")), ("save", tl!("Save…")), ("reset", tl!("Reset…"))].map(|(id, label)| (id.to_owned(), Label::from(label))).into()
+}
+
+/// The largest settings file Load… reads: the reference's are under 1 KiB.
+const SETTINGS_FILE_MAX: usize = 1 << 20;
+
+/// The `ParamFamily::footer` of the dialog: Load… and Save… read and write its values as a settings file through the
+/// platform's file dialog; Reset… asks before restoring the defaults.
+pub(crate) fn footer(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, action: &str) {
+    let outcome = match action {
+        "load" => {
+            let ctx = ctx.clone();
+            app.pick_file_bytes_filtered(&["xml"], move |app, name, bytes| {
+                load(app, &ctx, id, &name, &bytes);
+                Ok(Value::Null)
+            })
+        }
+        "save" => {
+            let Some(text) = settings_text(app, id) else { return };
+            app.pick_save(settings_file::FILE_NAME, move |app, path| {
+                let write = app.services.write.as_mut().ok_or("no writer configured")?;
+                write(&path, text.as_bytes())?;
+                Ok(json!({"path": path}))
+            })
+        }
+        "reset" => {
+            ask_reset(app, id);
+            Ok(Value::Null)
+        }
+        _ => Ok(Value::Null),
+    };
+    if let Err(e) = outcome
+        && e != crate::file_dialog::CANCELLED
+    {
+        crate::dialogs::alerts::report_error(app, e);
+    }
+}
+
+/// The values of dialog `id` as a settings file; `None` once it closed.
+fn settings_text(app: &PhotocraftApp, id: DialogId) -> Option<String> {
+    let fields = app.framework.dialogs.get_by_id::<HostedParamDialog>(id)?.fields();
+    Some(settings_file::write(&file_values(fields), &settings_file::Stamp::now()))
+}
+
+/// The dialog's values in the settings file's shape: the command's, with the resolution's unit.
+fn file_values(fields: &DialogFields) -> Map<String, Value> {
+    let mut map = match serde_json::to_value(fields) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    };
+    let unit = map.get(settings_file::RES_UNIT).cloned();
+    command_params(&mut map);
+    if let Some(unit) = unit {
+        map.insert(settings_file::RES_UNIT.into(), unit);
+    }
+    map
+}
+
+/// Load…: the values of the settings file `bytes` (named `name`) the dialog can show go into dialog `id`; the others
+/// keep the dialog's. A file that is not a settings file shows an alert and changes nothing.
+fn load(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, name: &str, bytes: &[u8]) {
+    // The dialog may close while the picker is open; then there is nothing to fill.
+    let Some(fields) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).map(|d| d.fields().clone()) else { return };
+    let read = if bytes.len() > SETTINGS_FILE_MAX {
+        Err(tl!("too large").to_string())
+    } else {
+        std::str::from_utf8(bytes).map_err(|e| e.to_string()).and_then(|xml| settings_file::read(xml, &file_values(&fields)))
+    };
+    match read {
+        Ok(read) => apply(app, ctx, id, read),
+        Err(e) => {
+            crate::dialogs::alerts::alert(app, format!("{}: {e}", crate::file_open::display_name(name)));
+        }
+    }
+}
+
+/// Sets the values `read` (the settings file's shape) on dialog `id`. A value its row cannot show keeps the current
+/// one. Width and Height come in the file's units, so they are not converted.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, read: Map<String, Value>) {
+    for (key, value) in read {
+        let (key, value) = match key.as_str() {
+            "depth" => ("depth".to_owned(), json!(value.as_u64().map(|d| d.to_string()))),
+            // The file's numbers read as reals; the grid rows hold whole numbers.
+            "columns" | "rows" => (key, value.as_f64().filter(|n| n.fract() == 0.0).map_or(value, |n| json!(n as i64))),
+            "placeAcrossFirst" => ("place".to_owned(), json!(if value.as_bool() == Some(false) { "down" } else { "across" })),
+            // No control yet (#13689).
+            "horizontal" | "vertical" => continue,
+            _ => (key, value),
+        };
+        let _ = app.framework.dialogs.set_json_field(ctx, id, &key, value);
+    }
+    if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+        && let Some(units) = d.fields().text("units").map(str::to_owned)
+    {
+        d.set_field(UNITS_SHOWN, FieldValue::Text(units));
+    }
+}
+
+/// The tag of Reset…'s question: the dialog it resets.
+struct ResetQuestion(DialogId);
+
+/// Reset… asks first, as the reference application's script alert does.
+fn ask_reset(app: &mut PhotocraftApp, id: DialogId) {
+    let prompt = StandardPrompt::custom(tl!("Restore default settings?"))
+        .title(tl!("Script Alert"))
+        .button(PromptChoice::Proceed, tl!("Yes"))
+        .button(PromptChoice::Cancel, tl!("No"))
+        .tag(ResetQuestion(id));
+    let _ = crate::dialogs::alerts::open_prompt(app, prompt);
+}
+
+/// The `PROMPTS` entry of Reset…'s question: Yes shows the defaults, with no folder chosen; No changes nothing. `false`
+/// for another prompt's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(ResetQuestion(id)) = answer.take_tag::<ResetQuestion>() else { return false };
+    if answer.choice == PromptChoice::Proceed
+        && let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
+    {
+        for param in build(&Value::Null) {
+            if let Some(value) = param.kind.default_value() {
+                d.set_field(param.key.clone(), value);
+            }
+            if let Some(unit) = param.unit_key() {
+                d.set_field(unit, FieldValue::Text("in".into()));
+            }
+        }
+        d.set_field(UNITS_SHOWN, FieldValue::Text("inches".into()));
+    }
+    true
 }
 
 #[cfg(test)]
