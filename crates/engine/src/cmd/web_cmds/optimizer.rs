@@ -4,7 +4,8 @@ use super::{Dither, Document, EngineError, Forced, PaletteKind, Rect, Result, Se
 // ---------- the image ----------
 
 /// The document as Save for Web sees it: RGB, resized by `"width"`/`"height"`/`"percent"`, and,
-/// when converting to sRGB, flattened first so the blend happens before the conversion. Returns the document and the scale factors.
+/// when converting to sRGB, flattened (transparency kept) first so the blend happens before the
+/// conversion. Returns the document and the scale factors.
 pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Document, f64, f64)> {
     let mut tmp = Session::new();
     tmp.add_document(doc.clone(), None);
@@ -31,19 +32,9 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
     if st.convert_to_srgb && doc.icc_profile.is_some() {
         // Documents without a profile are treated as sRGB already. The layers are blended in the
         // document's own space and the flattened image is converted, not each layer (#13796).
-        tmp.edit("Flatten for export", |d, active| {
-            let bounds = d.bounds();
-            if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
-                return Err(other("the canvas is too large to flatten for export"));
-            }
-            let format = d.pixel_format();
-            let surface = photocraft_compose::flatten_to_surface(d, format, None);
-            let mut flat = photocraft_doc::Layer::raster("Background", format);
-            *crate::pixels_mut(&mut flat)? = surface;
-            *active = Some(flat.id);
-            d.layers = vec![flat];
-            Ok(())
-        })?;
+        // Same flatten as Convert to Profile's Flatten option, but without a matte so
+        // transparency survives into the exported file.
+        tmp.edit("Flatten for export", |d, active| super::super::color_cmds::flatten_for_profile(d, active, None))?;
         tmp.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"}))?;
     }
     let out = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();

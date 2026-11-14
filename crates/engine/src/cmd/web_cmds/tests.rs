@@ -1652,10 +1652,34 @@ fn quick_export_converts_the_flattened_image_to_srgb() {
     s.execute("file.export.quickExport", json!({"path": path})).unwrap();
     let img = decode(&path);
     let blended = rgb_at(&img, 25, 125);
-    assert_ne!(blended, [117, 93, 12], "layers were converted and then blended");
     near(blended, [102, 95, 0], 2, "blend of red and half green");
     near(rgb_at(&img, 25, 75), [233, 24, 24], 2, "red");
     near(rgb_at(&img, 100, 75), [24, 24, 205], 2, "blue");
+}
+
+/// Flattening for the conversion adds no matte: empty canvas stays transparent in the PNG.
+#[test]
+fn quick_export_convert_to_srgb_keeps_transparency() {
+    let dir = tmp("srgb_alpha");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 20, "depth": 8, "name": "alpha.psd", "background": "transparent"})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    s.edit("paint", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut half = Layer::raster("Half", fmt);
+        half.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 10, 20), &photocraft_raster::from_rgba(&fmt, [0.8, 0.1, 0.1, 1.0]));
+        *active = Some(doc.insert_above(None, half));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png", "convertToSrgb": true})).unwrap();
+    let path = format!("{dir}/a.png");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    let img = decode(&path);
+    let px = img.to_rgba8();
+    let alpha = |x: usize, y: usize| px[(y * img.width() as usize + x) * 4 + 3];
+    assert_eq!(alpha(5, 10), 255, "painted half stays opaque");
+    assert_eq!(alpha(15, 10), 0, "empty half stays transparent");
 }
 
 #[test]
