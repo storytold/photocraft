@@ -137,3 +137,17 @@ fn the_buttons_are_cancel_then_dont_crop_and_enter_picks_cancel() {
     assert!(alerts(h.state()).is_empty(), "Enter answers");
     assert_eq!(h.state().ui.perspective_crop, Some(CROSSED), "with Cancel");
 }
+
+/// CodeRabbit on #14793: answering the "Crop the image?" prompt with Crop on a quad the crop can't
+/// use opens the same alert, and keeps the quad and the Perspective Crop tool.
+#[test]
+fn crop_on_the_switch_prompt_with_a_crossed_quad_opens_the_alert() {
+    let mut app = setup(CROSSED);
+    let before = steps(&app);
+    assert!(ask_before_switch(&mut app, Tool::Brush));
+    let prompt = app.ui.dialogs.iter().find(|d| owns_switch(&d.fields)).map(|d| d.id).unwrap();
+    crate::dialogs::confirm(&mut app, prompt).unwrap();
+    assert_eq!(alerts(&app).len(), 1, "the alert opens");
+    assert_eq!((app.ui.tool, app.ui.perspective_crop), (Tool::PerspectiveCrop, Some(CROSSED)), "the tool and the quad stay");
+    assert_eq!((steps(&app), size(&app)), (before, (160, 120)), "the document is untouched");
+}
