@@ -18,6 +18,47 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 #[test]
+fn partial_cmyk_fill_blends_native_inks_and_alpha() {
+    let inks = [0.6_f32, 0.4, 0.4, 1.0];
+    let initial = [0.1_f32, 0.2, 0.3, 0.0];
+    for depth in [8, 16, 32] {
+        for alpha in [0.0_f32, 0.5, 1.0] {
+            for preserve in [false, true] {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "depth": depth, "background": "transparent"})).unwrap();
+                s.edit("seed", |doc, _| {
+                    let surf = doc.layers[0].surface_mut().unwrap();
+                    surf.write_pixel(1, 1, &[initial[0], initial[1], initial[2], initial[3], alpha]);
+                    let mut selection = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                    selection.write_pixel(1, 1, &[0.5]);
+                    doc.selection = Some(selection);
+                    Ok(())
+                })
+                .unwrap();
+                let before = s.active().unwrap().doc.layers[0].surface().unwrap().read_region(Rect::new(1, 1, 2, 2));
+                s.execute(CMD, json!({"contents": "color", "color": [0.0, 0.0, 0.0], "colorCmyk": inks, "opacity": 50, "preserveTransparency": preserve}))
+                    .unwrap();
+                let got = s.active().unwrap().doc.layers[0].surface().unwrap().read_region(Rect::new(1, 1, 2, 2));
+                let coverage = (128.0_f32 / 255.0) * 0.5;
+                let out_alpha = coverage + before[4] * (1.0 - coverage);
+                let weight = if preserve { coverage } else { coverage / out_alpha };
+                let tolerance = if depth == 8 { 0.005 } else { 0.0001 };
+                for i in 0..4 {
+                    let expected = before[i] * (1.0 - weight) + inks[i] * weight;
+                    // Preserving fully transparent pixels leaves them untouched.
+                    if !preserve || before[4] > 0.0 {
+                        assert!((got[i] - expected).abs() < tolerance, "depth {depth}, alpha {alpha}, preserve {preserve}: {got:?}");
+                    }
+                }
+                assert!((got[4] - if preserve { before[4] } else { out_alpha }).abs() < tolerance);
+                assert!(s.undo());
+                assert_eq!(s.active().unwrap().doc.layers[0].surface().unwrap().read_region(Rect::new(1, 1, 2, 2)), before);
+            }
+        }
+    }
+}
+
+#[test]
 fn history_fill_reads_only_the_selection_inside_the_canvas() {
     let mut s = session();
     s.edit("selection", |doc, _| {

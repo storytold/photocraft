@@ -2647,28 +2647,33 @@ fn legacy_cmyk_picks_merge_preserves_other_windows_foreground() {
     });
 
     let store = Arc::new(Mutex::new(Some(legacy.to_string())));
-    let (mut a, mut b) = (
-        app_on(&store, Arc::default()),
-        app_on(&store, Arc::default()),
-    );
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
 
     assert_eq!(a.session.tools.picked_role_cmyk(0), Some(old_inks));
     assert_eq!(b.session.tools.picked_role_cmyk(0), Some(old_inks));
 
     // Window A changes foreground RGB and native CMYK.
-    a.run("tools.setColors", json!({
-        "foreground": new_rgb,
-        "foregroundCmyk": new_inks
-    })).unwrap();
+    a.run(
+        "tools.setColors",
+        json!({
+            "foreground": new_rgb,
+            "foregroundCmyk": new_inks
+        }),
+    )
+    .unwrap();
 
     crate::tool_memory::save_on_exit(&mut a).unwrap();
 
     // Window B still holds legacy preferences.
     // It changes only background.
-    b.run("tools.setColors", json!({
-        "background": [0.3, 0.6, 0.7],
-        "backgroundCmyk": bg_inks
-    })).unwrap();
+    b.run(
+        "tools.setColors",
+        json!({
+            "background": [0.3, 0.6, 0.7],
+            "backgroundCmyk": bg_inks
+        }),
+    )
+    .unwrap();
 
     crate::tool_memory::save_on_exit(&mut b).unwrap();
 
@@ -2676,36 +2681,15 @@ fn legacy_cmyk_picks_merge_preserves_other_windows_foreground() {
 
     let picks = &restored.session.tools.cmyk_picks;
 
-    assert!(
-        picks.contains(&(old_rgb, old_inks)),
-        "Legacy CMYK pick must survive"
-    );
-    assert!(
-        picks.contains(&(new_rgb, new_inks)),
-        "Window A CMYK pick must survive"
-    );
-    assert!(
-        picks.contains(&([0.3, 0.6, 0.7], bg_inks)),
-        "Window B CMYK pick must survive"
-    );
+    assert!(picks.contains(&(old_rgb, old_inks)), "Legacy CMYK pick must survive");
+    assert!(picks.contains(&(new_rgb, new_inks)), "Window A CMYK pick must survive");
+    assert!(picks.contains(&([0.3, 0.6, 0.7], bg_inks)), "Window B CMYK pick must survive");
 
-    assert_eq!(
-        &restored.session.tools.foreground[..3],
-        &new_rgb,
-        "Foreground RGB from window A must survive"
-    );
+    assert_eq!(&restored.session.tools.foreground[..3], &new_rgb, "Foreground RGB from window A must survive");
 
-    assert_eq!(
-        restored.session.tools.picked_role_cmyk(0),
-        Some(new_inks),
-        "Foreground native CMYK from window A must survive"
-    );
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some(new_inks), "Foreground native CMYK from window A must survive");
 
-    assert_eq!(
-        restored.session.tools.picked_role_cmyk(1),
-        Some(bg_inks),
-        "Background native CMYK from window B must survive"
-    );
+    assert_eq!(restored.session.tools.picked_role_cmyk(1), Some(bg_inks), "Background native CMYK from window B must survive");
 }
 #[test]
 fn cmyk_picks_merge_same_rgb_keeps_latest_local_inks() {
@@ -2718,24 +2702,54 @@ fn cmyk_picks_merge_same_rgb_keeps_latest_local_inks() {
     let ours = json!([[rgb, b_inks]]);
     let mut theirs = json!([[rgb, a_inks]]);
 
-    super::save::merge_changes(
-        &json!({"cmykPicks": base}),
-        &json!({"cmykPicks": ours}),
-        &mut {
-            let mut result = json!({"cmykPicks": theirs.clone()});
-            super::save::merge_changes(
-                &json!({"cmykPicks": [[rgb, old_inks]]}),
-                &json!({"cmykPicks": [[rgb, b_inks]]}),
-                &mut result,
-            );
-            theirs = result["cmykPicks"].clone();
-            result
-        },
-    );
+    super::save::merge_changes(&json!({"cmykPicks": base}), &json!({"cmykPicks": ours}), &mut {
+        let mut result = json!({"cmykPicks": theirs.clone()});
+        super::save::merge_changes(&json!({"cmykPicks": [[rgb, old_inks]]}), &json!({"cmykPicks": [[rgb, b_inks]]}), &mut result);
+        theirs = result["cmykPicks"].clone();
+        result
+    });
 
-    let picks: Vec<([f32; 3], [f32; 4])> =
-        serde_json::from_value(theirs).unwrap();
+    let picks: Vec<([f32; 3], [f32; 4])> = serde_json::from_value(theirs).unwrap();
 
     assert_eq!(picks.len(), 1, "Same RGB must not be duplicated");
     assert_eq!(picks[0], (rgb, b_inks));
+}
+
+#[test]
+fn legacy_mask_selection_survives_another_windows_pixel_edit() {
+    let store = Arc::new(Mutex::new(Some(
+        json!({"toolColors": {
+        "foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]
+        }})
+        .to_string(),
+    )));
+    let mut a = app_on(&store, Arc::default());
+    let mut b = app_on(&store, Arc::default());
+    a.session.tools.target_mask(true);
+    a.run("tools.setColors", json!({"foreground": [0.3, 0.3, 0.3], "foregroundCmyk": [0.1, 0.2, 0.3, 0.4]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut a).unwrap();
+    b.run("tools.setColors", json!({"background": [0.2, 0.4, 0.6]})).unwrap();
+    crate::tool_memory::save_on_exit(&mut b).unwrap();
+    let mut restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.background, b.session.tools.background);
+    restored.session.tools.target_mask(true);
+    assert_eq!(restored.session.tools.foreground, [0.3, 0.3, 0.3, 1.0]);
+    assert_eq!(restored.session.tools.picked_role_cmyk(0), Some([0.1, 0.2, 0.3, 0.4]));
+}
+
+#[test]
+fn reselected_cmyk_pick_survives_save_restore_and_eviction() {
+    let (mut app, store) = app_with_store();
+    let inks = [0.1, 0.2, 0.3, 0.4];
+    for i in 0..photocraft_engine::ToolState::CMYK_PICKS {
+        app.session.tools.remember_cmyk([i as f32 / 16.0, 0.2, 0.3], inks);
+    }
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let oldest = app.session.tools.cmyk_picks[0];
+    app.session.tools.remember_cmyk(oldest.0, oldest.1);
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let mut restored = app_on(&store, Arc::default());
+    assert_eq!(restored.session.tools.cmyk_picks.last(), Some(&oldest));
+    restored.session.tools.remember_cmyk([0.9, 0.8, 0.7], inks);
+    assert_eq!(restored.session.tools.picked_cmyk(oldest.0), Some(oldest.1));
 }

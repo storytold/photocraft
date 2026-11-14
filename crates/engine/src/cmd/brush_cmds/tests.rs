@@ -738,6 +738,44 @@ fn eraser_on_background_layer_paints_the_background_colour() {
 }
 
 #[test]
+fn replacing_a_stroke_with_background_replaces_its_native_inks() {
+    for depth in [8, 16, 32] {
+        for auto_erase in [false, true] {
+            for native_background in [false, true] {
+                let fg_inks = [0.6, 0.4, 0.4, 1.0];
+                let bg_inks = [0.0, 0.0, 0.0, 1.0];
+                let rgb = photocraft_color::convert::cmyk_to_rgb(fg_inks).map(|v| v.clamp(0.0, 1.0));
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 20, "height": 20, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
+                let mut colors = json!({"foreground": rgb, "foregroundCmyk": fg_inks, "background": rgb});
+                if native_background {
+                    colors["backgroundCmyk"] = json!(bg_inks);
+                }
+                s.execute("tools.setColors", colors).unwrap();
+                if auto_erase {
+                    s.execute("paint.pencil", json!({"points": [[10, 10]], "size": 8})).unwrap();
+                }
+                let cmd = if auto_erase { "paint.pencil" } else { "paint.stroke" };
+                let p = json!({"points": [[10, 10]], "size": 8, "erase": !auto_erase, "autoErase": auto_erase, "smoothing": 0.0});
+                let expected = if native_background { bg_inks } else { photocraft_color::convert::rgb_to_cmyk(rgb) };
+                let live = LiveStroke::begin_with(&s, cmd, &p).unwrap();
+                let check = |surf: &Surface| {
+                    let got = surf.read_region(Rect::new(10, 10, 11, 11));
+                    let tolerance = if depth == 8 { 0.005 } else { 0.0001 };
+                    assert!(
+                        got.iter().take(4).zip(expected).all(|(a, b)| (a - b).abs() < tolerance),
+                        "depth {depth}, auto {auto_erase}, native {native_background}: {got:?}"
+                    );
+                };
+                check(live.doc.layers[0].surface().unwrap());
+                s.execute(cmd, p).unwrap();
+                check(&surface(&s));
+            }
+        }
+    }
+}
+
+#[test]
 fn live_stroke_matches_the_committed_stroke() {
     // The canvas previews strokes with `LiveStroke`; it must show what `paint.stroke` commits
     // (soft edge, scatter seed), not a stand-in.
@@ -1225,13 +1263,14 @@ fn strokes_convert_through_the_documents_cmyk_profile() {
     // A synthetic uncoated-like profile: heavier dot gain than the built-in coated CMYK (whose
     // params are the defaults here), so painted ink differs from the default conversion. The
     // compositors and composite exports enter the document's space; the stroke must too (#583).
-    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+    let profile = craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
         description: "Stroke Test Uncoated".into(),
         tvi: [0.26, 0.26, 0.26, 0.3],
         grid_a2b: 5,
         grid_b2a: 9,
         ..Default::default()
     })
+    .unwrap()
     .to_bytes();
     let cmyk_session = |tagged: bool| {
         let mut s = Session::new();

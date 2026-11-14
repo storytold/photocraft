@@ -121,7 +121,11 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
             // Normalize legacy swatches through f32, as restore_colors does.
             // Otherwise JSON values such as 0.2 differ from restored f32 values.
             if let Some(colors) = base.get_mut("toolColors").and_then(Value::as_object_mut) {
+                let defaults = crate::tool_memory::default_colors();
                 for key in ["foreground", "background", "maskForeground", "maskBackground"] {
+                    if let Some(default) = defaults.get(key) {
+                        colors.entry(key).or_insert_with(|| default.clone());
+                    }
                     if let Some(value) = colors.get_mut(key)
                         && let Ok(color) = serde_json::from_value::<[f32; 4]>(value.clone())
                         && color.iter().all(|v| v.is_finite())
@@ -292,11 +296,18 @@ fn merge_cmyk_picks(base: &Value, ours: &Value, theirs: &mut Value) -> bool {
         return true;
     }
 
+    // Unchanged picks form a prefix in their original order. Everything after the
+    // first moved/new pick was selected locally and must become recent in storage.
+    let mut old_position = 0;
+    let mut changed_suffix = false;
     for &(rgb, inks) in &local {
-        if !old.iter().any(|&(old_rgb, old_inks)| old_rgb == rgb && old_inks == inks) {
-            stored.retain(|(existing_rgb, _)| *existing_rgb != rgb);
-            stored.push((rgb, inks));
+        if !changed_suffix && let Some(offset) = old.iter().skip(old_position).position(|pick| *pick == (rgb, inks)) {
+            old_position += offset + 1;
+            continue;
         }
+        changed_suffix = true;
+        stored.retain(|(existing_rgb, _)| *existing_rgb != rgb);
+        stored.push((rgb, inks));
     }
 
     let extra = stored.len().saturating_sub(photocraft_engine::ToolState::CMYK_PICKS);

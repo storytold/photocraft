@@ -58,14 +58,9 @@ fn display_color(c: [f32; 3]) -> Color32 {
 }
 
 /// Share the same CMYK sampling decision between the comparison ring and the click.
-fn picked_eyedropper_color(
-    app: &mut PhotocraftApp,
-    x: f64,
-    y: f64,
-) -> Option<([f32; 3], Option<[f32; 4]>)> {
+fn picked_eyedropper_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<([f32; 3], Option<[f32; 4]>)> {
     if let Some((surface, canvas)) = eyedropper_mask_source(app) {
-        return sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
-            .map(|rgb| (rgb, None));
+        return sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size).map(|rgb| (rgb, None));
     }
 
     if super::paint_target(app) == json!("pixels") {
@@ -76,11 +71,7 @@ fn picked_eyedropper_color(
     }
 
     let rgb = eyedropper_color(app, x, y)?;
-    let rgb = if super::paint_target(app) == json!("pixels") {
-        rgb
-    } else {
-        [photocraft_color::convert::rgb_to_gray(rgb); 3]
-    };
+    let rgb = if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] };
     Some((rgb, None))
 }
 /// The Eyedropper ring's two colours at document point (x, y): the colour under the pointer
@@ -417,11 +408,7 @@ fn sampled_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modif
         )
         .is_ok()
     } else {
-        app.run(
-            "tools.setColors",
-            json!({ key: [rgb[0], rgb[1], rgb[2], 1.0] }),
-        )
-        .is_ok()
+        app.run("tools.setColors", json!({ key: [rgb[0], rgb[1], rgb[2], 1.0] })).is_ok()
     }
 }
 /// Only the Eyedropper's Current Layer and Current & Below modes pick the targeted raster mask.

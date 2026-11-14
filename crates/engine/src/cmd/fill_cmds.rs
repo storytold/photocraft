@@ -506,6 +506,30 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             for (c, v) in px.iter_mut().enumerate().take(n) {
                 *v = photocraft_color::read_sample(pb, fmt.sample, c);
             }
+            // Normal CMYK fills blend the chosen separation directly. Converting
+            // through the display RGB would discard it at partial opacity/coverage.
+            if fmt.mode == photocraft_color::ColorMode::Cmyk
+                && mode == BlendMode::Normal
+                && let Source::Cmyk { cmyk, .. } = source
+            {
+                let alpha = if fmt.alpha { px[4] } else { 1.0 };
+                let out_alpha = k + alpha * (1.0 - k);
+                let weight = if keep_alpha || !fmt.alpha {
+                    k
+                } else if out_alpha > 0.0 {
+                    k / out_alpha
+                } else {
+                    0.0
+                };
+                for (channel, ink) in cmyk.iter().enumerate() {
+                    enc[channel] = px[channel] * (1.0 - weight) + ink * weight;
+                }
+                if fmt.alpha {
+                    enc[4] = if keep_alpha { alpha } else { out_alpha };
+                }
+                photocraft_raster::encode_pixel(fmt, &enc[..n.min(8)], pb);
+                continue;
+            }
             let d = to_rgba(fmt, &px[..n.min(8)]);
             let mut c = source.at(x, y);
             if mode == BlendMode::Dissolve {

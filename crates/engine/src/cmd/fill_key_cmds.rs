@@ -370,38 +370,40 @@ mod tests {
 
     #[test]
     fn foreground_and_background_with_same_rgb_fill_distinct_native_cmyk_inks() {
-        let mut s = Session::new();
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
 
-        s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
-        s.execute("image.mode.cmyk", json!({})).unwrap();
+            s.execute("file.new", json!({"width": 4, "height": 4, "depth": depth})).unwrap();
+            s.execute("image.mode.cmyk", json!({})).unwrap();
 
-        let foreground = [0.0, 0.0, 0.0, 1.0];
-        let background = [0.5, 0.5, 0.5, 1.0];
+            let foreground = [0.0, 0.0, 0.0, 1.0];
+            let background = [0.5, 0.5, 0.5, 1.0];
 
-        s.execute(
-            "tools.setColors",
-            json!({
-                "foreground": "#000000",
-                "background": "#000000",
-                "foregroundCmyk": foreground,
-                "backgroundCmyk": background
-            }),
-        )
-        .unwrap();
+            s.execute(
+                "tools.setColors",
+                json!({
+                    "foreground": "#000000",
+                    "background": "#000000",
+                    "foregroundCmyk": foreground,
+                    "backgroundCmyk": background
+                }),
+            )
+            .unwrap();
 
-        for (command, expected) in [("edit.fillForeground", foreground), ("edit.fillBackground", background)] {
-            s.execute(command, json!({})).unwrap();
-            let got = inks(&s);
-            assert!(got.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command}: expected {expected:?}, got {got:?}");
-        }
+            for (command, expected) in [("edit.fillForeground", foreground), ("edit.fillBackground", background)] {
+                s.execute(command, json!({})).unwrap();
+                let got = inks(&s);
+                assert!(got.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command}: expected {expected:?}, got {got:?}");
+            }
 
-        // Swapping RGB colours must also swap their native ink separations.
-        s.execute("tools.swapColors", json!({})).unwrap();
+            // Swapping RGB colours must also swap their native ink separations.
+            s.execute("tools.swapColors", json!({})).unwrap();
 
-        for (command, expected) in [("edit.fillForeground", background), ("edit.fillBackground", foreground)] {
-            s.execute(command, json!({})).unwrap();
-            let got = inks(&s);
-            assert!(got.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command} after swap: expected {expected:?}, got {got:?}");
+            for (command, expected) in [("edit.fillForeground", background), ("edit.fillBackground", foreground)] {
+                s.execute(command, json!({})).unwrap();
+                let got = inks(&s);
+                assert!(got.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command} after swap: expected {expected:?}, got {got:?}");
+            }
         }
     }
     #[test]
