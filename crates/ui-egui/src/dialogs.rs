@@ -23,7 +23,9 @@ pub(crate) fn is_folder_field(key: &str) -> bool {
 fn browse_field(app: &mut PhotocraftApp, id: u64, fields: &serde_json::Map<String, Value>, key: &str) {
     let key = key.to_string();
     let r = if is_folder_field(&key) {
-        app.ask_folder(move |app, path| fill_field(app, id, &key, path))
+        let title = (key == "dir" && fields.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToFiles"))
+            .then(|| tl!("Select Destination").to_owned());
+        app.ask_folder_with_title(title, move |app, path| fill_field(app, id, &key, path))
     } else if fields.get("__command").and_then(Value::as_str) == Some("plugin.install") {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
         let request = crate::file_dialog::FileDialogRequest::Open { multiple: false, initial_dir, extensions: Some(vec!["wasm".into()]) };
@@ -577,6 +579,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
+    } else if d.fields.get("__command").and_then(Value::as_str) == Some("file.export.artboardsToFiles") {
+        tl!("Run")
     } else if d.fields.contains_key("__export") {
         tl!("Export")
     } else {
@@ -895,7 +899,7 @@ pub fn title(d: &Dialog) -> String {
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
-        DialogKind::Error => "Error".into(),
+        DialogKind::Error => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Error").into(),
     }
 }
 
@@ -990,6 +994,23 @@ fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
     crate::notices::file_failures(app, &what, &lines);
 }
 
+/// Show the completion alert, or restore the same form behind a destination error.
+fn artboards_export_alert(app: &mut PhotocraftApp, d: &Dialog, params: &Value, result: &Result<Value, String>) {
+    let message = match result {
+        Ok(_) => {
+            let dir = params["dir"].as_str().unwrap_or_default();
+            let message = format!("{}\n{dir}", tl!("Artboards To Files was successful."));
+            app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("__label".into(), json!("Artboards to Files")), ("message".into(), json!(message))]));
+            return;
+        }
+        Err(e) if e == "Choose a destination folder." => tl!("Choose a destination folder.").to_string(),
+        Err(e) if e.starts_with("Destination does not exist: ") => e.clone(),
+        Err(_) => return,
+    };
+    app.ui.dialogs.push(d.clone());
+    app.ui.open_dialog(DialogKind::Error, Fields::from_iter([("message".into(), json!(message))]));
+}
+
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
 fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Value, String> {
@@ -1034,6 +1055,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Val
     let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
     if let Ok(r) = &result {
         report_file_errors(app, &d, r);
+    }
+    if cmd == "file.export.artboardsToFiles" {
+        artboards_export_alert(app, &d, &params, &result);
     }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.

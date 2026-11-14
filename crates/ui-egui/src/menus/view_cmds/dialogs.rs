@@ -500,16 +500,26 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
             )
         }
-        "file.export.layerCompsToFiles" | "file.export.artboardsToFiles" => {
+        "file.export.layerCompsToFiles" => {
             let (_, _, name) = doc?;
             let prefix = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            let fields = if id == "file.export.layerCompsToFiles" {
+            dialog(
+                app,
                 json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
-                    "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
-            } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
-            };
-            dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
+                    "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]}),
+                json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
+            )
+        }
+        "file.export.artboardsToFiles" => {
+            let (_, _, name) = doc?;
+            let prefix = std::path::Path::new(&name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(&name);
+            dialog(
+                app,
+                json!({"dir": "", "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10,
+                    "__order": ["dir", "prefix", "format", "quality"],
+                    "__labels": {"dir": tl!("Destination:"), "prefix": tl!("File Name Prefix:")}}),
+                json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
+            )
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
@@ -765,3 +775,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "../../artboards_to_files_labels_tests.rs"]
+mod artboards_to_files_labels_tests;

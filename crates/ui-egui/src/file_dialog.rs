@@ -27,8 +27,8 @@ pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
     Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
-    /// Which folder to read from. Starts in `initial_dir` when available.
-    Folder { initial_dir: Option<String> },
+    /// Which folder to pick. Starts in `initial_dir` and uses a custom `title` when provided.
+    Folder { initial_dir: Option<String>, title: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
 }
@@ -131,8 +131,16 @@ impl PhotocraftApp {
     /// Ask the user to choose a folder, starting in the folder of the most recent file when known.
     /// `then` receives the selected path when the dialog is answered.
     pub(crate) fn ask_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_folder_with_title(None, then)
+    }
+
+    pub(crate) fn ask_folder_with_title(
+        &mut self,
+        title: Option<String>,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Folder { initial_dir }, move |app, answer| match answer {
+        self.ask_file(FileDialogRequest::Folder { initial_dir, title }, move |app, answer| match answer {
             FileDialogAnswer::FolderTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),
         })

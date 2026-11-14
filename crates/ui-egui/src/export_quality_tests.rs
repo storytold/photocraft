@@ -46,7 +46,12 @@ fn params(h: &mut Harness<'_, PhotocraftApp>, dialog: u64) -> Value {
 }
 
 fn exported(h: &mut Harness<'_, PhotocraftApp>, dialog: u64) -> Vec<u8> {
+    let artboards = h.state_mut().ui.dialog_mut(dialog).unwrap().fields["__command"] == ARTBOARDS;
     let r = crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    if artboards {
+        let alert = h.state().ui.dialogs.last().unwrap().id;
+        crate::dialogs::confirm(h.state_mut(), alert).unwrap();
+    }
     std::fs::read(r["files"][0].as_str().unwrap()).unwrap()
 }
 
