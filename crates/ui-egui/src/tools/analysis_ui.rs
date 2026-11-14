@@ -25,6 +25,9 @@ use crate::theme::Tokens;
 #[cfg(test)]
 #[path = "count_readout_tests.rs"]
 mod count_readout_tests;
+#[cfg(test)]
+#[path = "note_icon_cursor_tests.rs"]
+mod note_icon_cursor_tests;
 
 /// The Count tool options bar's number (#11764): with one group (or none), its markers; with two
 /// or more, the markers of the visible groups, then the current group's in brackets (0 while it
@@ -300,6 +303,56 @@ pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Val
     Ok(result)
 }
 
+/// The side of a note's icon in screen points (#11794): the reference draws it about 20 × 20 at
+/// every zoom, its top-left on the note's position.
+pub(crate) const NOTE_ICON: f32 = 20.0;
+
+/// Where a note at document `position` draws its icon on screen.
+pub(crate) fn note_icon_rect(xf: &ViewXform, position: [f64; 2]) -> egui::Rect {
+    egui::Rect::from_min_size(xf.to_screen(position[0] as f32, position[1] as f32), vec2(NOTE_ICON, NOTE_ICON))
+}
+
+/// The topmost note whose drawn icon covers document point `p` at `zoom` screen points per
+/// document pixel, edges included, so a click anywhere on the icon picks it (#11794).
+pub(crate) fn note_at(notes: &[photocraft_doc::analysis::Note], p: [f64; 2], zoom: f64) -> Option<usize> {
+    let side = f64::from(NOTE_ICON) / zoom.max(0.01);
+    notes.iter().rposition(|n| (0.0..=side).contains(&(p[0] - n.position[0])) && (0.0..=side).contains(&(p[1] - n.position[1])))
+}
+
+/// A note's icon (#11794): a sheet in the note colour with a drop shadow and its bottom-right
+/// corner folded over. The open note's icon also shows text lines and a pencil, as the
+/// reference's does. Our own drawing; the shadow's offset and the pencil's exact shape were not
+/// measured.
+fn draw_note_icon(painter: &egui::Painter, r: egui::Rect, fill: Color32, selected: bool) {
+    let fold = 6.0;
+    let sheet = |r: egui::Rect| vec![r.left_top(), r.right_top(), pos2(r.right(), r.bottom() - fold), pos2(r.right() - fold, r.bottom()), r.left_bottom()];
+    let edge = Stroke::new(1.0, Color32::from_black_alpha(220));
+    painter.add(egui::Shape::convex_polygon(sheet(r.translate(vec2(1.0, 2.0))), Color32::from_black_alpha(70), Stroke::NONE));
+    painter.add(egui::Shape::convex_polygon(sheet(r), fill, edge));
+    let shade = |c: u8| (u16::from(c) * 3 / 4) as u8;
+    let flap = vec![pos2(r.right() - fold, r.bottom()), pos2(r.right() - fold, r.bottom() - fold), pos2(r.right(), r.bottom() - fold)];
+    painter.add(egui::Shape::convex_polygon(flap, Color32::from_rgb(shade(fill.r()), shade(fill.g()), shade(fill.b())), edge));
+    if selected {
+        let ink = Stroke::new(1.0, Color32::from_black_alpha(200));
+        for (k, len) in [9.0, 7.0, 5.0].into_iter().enumerate() {
+            let y = r.top() + 6.0 + 3.5 * k as f32;
+            painter.line_segment([pos2(r.left() + 4.0, y), pos2(r.left() + 4.0 + len, y)], ink);
+        }
+        draw_pencil(painter, r);
+    }
+}
+
+/// The open note's pencil: solid, its point inside the sheet and its end past the top-right
+/// corner.
+fn draw_pencil(painter: &egui::Painter, r: egui::Rect) {
+    let d = std::f32::consts::FRAC_1_SQRT_2;
+    let (along, side) = (vec2(d, -d), vec2(d, d) * 2.0);
+    let tip = r.left_top() + vec2(9.0, 14.0);
+    let (wood, end) = (tip + along * 4.5, tip + along * 20.0);
+    let halo = Stroke::new(1.0, Color32::from_white_alpha(200));
+    painter.add(egui::Shape::convex_polygon(vec![tip, wood - side, end - side, end + side, wood + side], Color32::BLACK, halo));
+}
+
 /// Pointer input for the Ruler, Count, Note and Color Sampler tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let tool = app.active_tool();
@@ -386,22 +439,17 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 let _ = app.run("count.move", json!({"group": g, "index": i, "to": [x, y]}));
             }
         }
-        (Tool::Note, ToolEvent::Down { x, y, .. }) => {
-            let z = f64::from(app.point_zoom().max(0.01));
-            let hit =
-                doc.notes.iter().rposition(|n| x >= n.position[0] && x <= n.position[0] + 16.0 / z && y >= n.position[1] && y <= n.position[1] + 20.0 / z);
-            match hit {
-                Some(i) => {
-                    app.ui.analysis.note_selected = Some(i);
-                    app.ui.analysis.notes = true;
-                    show_note_options(app, i);
-                    app.ui.analysis.drag = Some(Drag::Note(i, [x - doc.notes[i].position[0], y - doc.notes[i].position[1]]));
-                }
-                None => {
-                    let _ = create_note(app, x, y);
-                }
+        (Tool::Note, ToolEvent::Down { x, y, .. }) => match note_at(&doc.notes, [x, y], f64::from(app.point_zoom())) {
+            Some(i) => {
+                app.ui.analysis.note_selected = Some(i);
+                app.ui.analysis.notes = true;
+                show_note_options(app, i);
+                app.ui.analysis.drag = Some(Drag::Note(i, [x - doc.notes[i].position[0], y - doc.notes[i].position[1]]));
             }
-        }
+            None => {
+                let _ = create_note(app, x, y);
+            }
+        },
         (Tool::Note, ToolEvent::Up { x, y }) => {
             if let Some(Drag::Note(i, off)) = app.ui.analysis.drag.take() {
                 let to = [(x - off[0]).round(), (y - off[1]).round()];
@@ -536,24 +584,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     if v.shows(v.show.notes) {
         for (i, n) in doc.notes.iter().enumerate() {
-            let p = xf.to_screen(n.position[0] as f32, n.position[1] as f32);
-            let r = egui::Rect::from_min_size(p, vec2(16.0, 20.0));
-            let fill = color32(n.color.to_rgb());
-            painter.rect_filled(r, CornerRadius::same(2), fill);
-            let sel = app.ui.analysis.note_selected == Some(i);
-            painter.rect_stroke(
-                r,
-                CornerRadius::same(2),
-                Stroke::new(if sel { 2.0 } else { 1.0 }, if sel { Color32::WHITE } else { Color32::from_black_alpha(200) }),
-                egui::StrokeKind::Outside,
-            );
-            // Folded corner and text lines.
-            let ink = Color32::from_black_alpha(140);
-            painter.line_segment([r.right_top() + vec2(-5.0, 0.0), r.right_top() + vec2(0.0, 5.0)], Stroke::new(1.0, ink));
-            for k in 0..3 {
-                let y = r.top() + 7.0 + 4.0 * k as f32;
-                painter.line_segment([pos2(r.left() + 3.0, y), pos2(r.right() - 3.0, y)], Stroke::new(1.0, ink));
-            }
+            draw_note_icon(painter, note_icon_rect(xf, n.position), color32(n.color.to_rgb()), app.ui.analysis.note_selected == Some(i));
         }
     }
     // Color Sampler points (#1046): persistent numbered markers, drawn whatever the active tool is.
