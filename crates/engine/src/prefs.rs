@@ -77,8 +77,7 @@ choice!(
 );
 choice!(
     /// Linux display server of the desktop app's window (applies at next launch). `x11` runs
-    /// PhotoCraft through XWayland on a Wayland session, where native file drag and drop works
-    /// (winit 0.30 has none on Wayland, issue #386); fractional scaling may then look softer.
+    /// PhotoCraft through XWayland on a Wayland session; fractional scaling may then look softer.
     /// It needs an X server (`DISPLAY`); without one PhotoCraft starts as `auto`. Other
     /// platforms ignore it.
     LinuxDisplayServer { Auto = "auto", X11 = "x11" } default Auto

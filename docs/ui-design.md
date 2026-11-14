@@ -186,9 +186,8 @@ Wayland window, where the window is drawn at the display's physical resolution
 (`wp_fractional_scale_v1`). Through Xwayland the compositor enlarges a lower-resolution window, so
 everything is blurred and looks larger than the chosen scale (#1072). The window opens through
 Xwayland when a pen is attached (#639), with Preferences › Performance › Linux display server =
-X11, or with `WAYLAND_DISPLAY=` cleared; those are also the ways to get file drag and drop, which
-native Wayland lacks (#386). Sharp text or drag and drop: on such a desktop it is one or the other
-until winit supports Wayland drops.
+X11, or with `WAYLAND_DISPLAY=` cleared. File drag and drop works in a native Wayland window too
+(`storytold/winit`, #386).
 
 Interface → UI Font Size changes interface text independently of UI Scale and canvas zoom.
 Tiny, Small (the default), Medium and Large use 10/12, 1, 14/12 and 16/12 of the theme's original
