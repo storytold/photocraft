@@ -377,6 +377,27 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// HDR Toning is greyed with an active selection and in CMYK, Lab and Indexed Color documents
+/// (#14735). RGB and Grayscale keep it; Duotone and Multichannel were not measured and keep
+/// today's behaviour (`Session::precondition` refuses Bitmap for every adjustment but Invert).
+fn hdr_toning_enabled(s: &Session) -> std::result::Result<(), String> {
+    use photocraft_color::ColorMode;
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.selection.is_some() {
+        return Err("HDR Toning works on the whole image: deselect first".into());
+    }
+    let mode = match d.doc.mode {
+        ColorMode::Cmyk => Some("CMYK Color"),
+        ColorMode::Lab => Some("Lab Color"),
+        ColorMode::Indexed => Some("Indexed Color"),
+        _ => None,
+    };
+    match mode {
+        Some(m) => Err(format!("HDR Toning needs an RGB or Grayscale document (this one is {m})")),
+        None => Ok(()),
+    }
+}
+
 // ---------- commands ----------
 
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
@@ -701,7 +722,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "HDR Toning…",
             ["Image", "Adjustments"],
             r##"{"radius":1..500=30,"strength":0.1..4=0.5,"gamma":0.1..2=1,"exposure":-5..5=0,"detail":-100..300=30,"shadow":-100..100=0,"highlight":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=20,"curve":[[in,out],…] 0..255} (flattens the image)"##,
-            has_doc,
+            hdr_toning_enabled,
             hdr_toning
         ),
         CommandSpec {
@@ -851,5 +872,7 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Object(crate::adjust_params::HUE_RANGES.iter().zip(w).map(|(k, v)| ((*k).to_string(), json!(v))).collect()))
 }
 
+#[cfg(test)]
+mod hdr_toning_enabled_tests;
 #[cfg(test)]
 mod tests;
