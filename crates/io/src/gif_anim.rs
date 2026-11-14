@@ -1,7 +1,8 @@
 //! Animated GIF output for a document with a frame animation (Window › Timeline): each frame is
 //! the layers it shows, flattened and quantised to its own palette, held for its own delay.
 
-use photocraft_codecs::web::{self, GifFrame, GifLoops};
+use craft_gif::write::{AnimationWriter, Disposal, Options, PreparedFrame, prepare_frame};
+use photocraft_codecs::web::GifFrame;
 use photocraft_codecs::{ChannelLayout, Format, Image};
 use photocraft_doc::{Document, LoopCount};
 use photocraft_raster::Interrupt;
@@ -49,13 +50,16 @@ pub fn delay_cs(delay_ms: u32) -> u16 {
     ((f64::from(delay_ms) / 10.0).round() as u64).min(u64::from(u16::MAX)) as u16
 }
 
-/// The loop count as the encoder takes it.
-pub fn loops(l: LoopCount) -> GifLoops {
-    // `Times(0)` is forever and `Times(1)` once, as everywhere else.
+/// Whether the shared writer can write `loops` as it is: it has "once" and "forever", no play count yet
+/// (storytold/craft-libs#1319). A count is saved as forever, with a warning.
+fn writer_loops(l: LoopCount, warnings: &mut Vec<String>) -> bool {
     match l.normalized() {
-        LoopCount::Once => GifLoops::Once,
-        LoopCount::Forever => GifLoops::Forever,
-        LoopCount::Times(n) => GifLoops::Times(u16::try_from(n).unwrap_or(u16::MAX)),
+        LoopCount::Once => false,
+        LoopCount::Forever => true,
+        LoopCount::Times(n) => {
+            warnings.push(format!("the GIF format writer cannot yet store a play count of {n}; the animation was saved to loop forever"));
+            true
+        }
     }
 }
 
@@ -69,10 +73,13 @@ pub const MAX_STAGED_BYTES: u64 = 1 << 30;
 /// 2000 × 2000 exports), so this leaves some room for busier pictures.
 pub const WORKING_BYTES_PER_PIXEL: u64 = 64;
 
-/// The document's frame animation as an animated GIF, or `None` when it has none. Reports progress
-/// through `ctl` and stops between frames when it is cancelled.
-pub fn export(doc: &Document, ctl: &Interrupt) -> Result<Option<Vec<u8>>, IoError> {
-    export_stepped(doc, &mut |done, total| {
+/// An animated GIF and the warnings of the export that wrote it.
+pub type GifExport = (Vec<u8>, Vec<String>);
+
+/// The document's frame animation as an animated GIF with the warnings of the export, or `None` when it has
+/// none. Reports progress through `ctl` and stops between frames when it is cancelled.
+pub fn export(doc: &Document, ctl: &Interrupt) -> Result<Option<GifExport>, IoError> {
+    export_stepped(doc, ctl, &mut |done, total| {
         ctl.progress(done as f32 / total as f32 * 0.95);
         ctl.check().is_ok()
     })
@@ -106,7 +113,7 @@ pub fn check_size_in(w: usize, h: usize, total: usize, canvas: (usize, usize)) -
 
 /// [`export`] for a caller with its own progress: `step(done, total)` is called before the first frame
 /// and after each one, and the export stops with [`IoError::Cancelled`] when it returns false.
-pub fn export_stepped(doc: &Document, step: &mut dyn FnMut(usize, usize) -> bool) -> Result<Option<Vec<u8>>, IoError> {
+pub fn export_stepped(doc: &Document, ctl: &Interrupt, step: &mut dyn FnMut(usize, usize) -> bool) -> Result<Option<GifExport>, IoError> {
     let Some(a) = &doc.frame_animation else { return Ok(None) };
     // As a still export does: a Duotone document is written as the RGB its inks print as, not as gray.
     let shown = crate::flat::duotone_as_rgb(doc);
@@ -115,7 +122,11 @@ pub fn export_stepped(doc: &Document, step: &mut dyn FnMut(usize, usize) -> bool
     let (w, h) = (bounds.width() as usize, bounds.height() as usize);
     let total = a.frames.len();
     check_size(w, h, total)?;
-    let mut frames = Vec::with_capacity(total);
+    let writer_err = |e: craft_gif::write::Error| IoError::Unsupported(e.to_string());
+    let speed = Options::default().speed;
+    // Each frame is quantised as it is rendered, so only its indexed pixels are kept until the file is written.
+    let mut frames: Vec<(PreparedFrame, u16)> = Vec::with_capacity(total);
+    let mut transparent = false;
     if !step(0, total) {
         return Err(IoError::Cancelled);
     }
@@ -124,19 +135,31 @@ pub fn export_stepped(doc: &Document, step: &mut dyn FnMut(usize, usize) -> bool
         a.apply(i, &mut d.layers);
         // The colours a still GIF of this frame would have: converted from the document's profile to
         // sRGB (CMYK through its own profile), since the file can't carry the profile.
-        let (img, _) = crate::flat::flat_image(&d, Format::Gif, &ExportOptions::default(), &Interrupt::NONE)?;
+        let (img, _) = crate::flat::flat_image(&d, Format::Gif, &ExportOptions::default(), ctl)?;
         let px = rgba_pixels(&img);
         if px.len() != w * h {
             return Err(IoError::Unsupported("a frame did not render at the size of the canvas".into()));
         }
-        frames.push(quantized_frame(px, w, delay_cs(f.delay_ms))?);
+        let rgba: Vec<u8> = px.iter().flat_map(|p| p.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+        transparent |= rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        frames.push((prepare_frame(w as u32, h as u32, rgba, speed).map_err(writer_err)?, delay_cs(f.delay_ms)));
         if !step(i + 1, total) {
             return Err(IoError::Cancelled);
         }
     }
-    // Compressing every frame takes a while on a long animation: the caller can stop it there too.
-    let bytes = web::encode_gif_animated_stepped(w as u32, h as u32, &frames, loops(a.loops), &mut |_, n| step(n, n))?;
-    bytes.map(Some).ok_or(IoError::Cancelled)
+    let mut warnings = Vec::new();
+    // One disposal for the file (storytold/craft-libs#1319 asks for it per frame): frames with holes must
+    // not show what was drawn before them, and frames without any are fine either way.
+    let options = Options {
+        loop_forever: writer_loops(a.loops, &mut warnings),
+        disposal: if transparent { Disposal::Background } else { Disposal::Keep },
+        speed,
+    };
+    let mut writer = AnimationWriter::new(Vec::new(), w as u32, h as u32, options).map_err(writer_err)?;
+    for (frame, delay) in frames {
+        writer.write_prepared_frame(frame, delay).map_err(writer_err)?;
+    }
+    Ok(Some((writer.finish().map_err(writer_err)?, warnings)))
 }
 
 #[cfg(test)]

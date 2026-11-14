@@ -558,7 +558,8 @@ fn onion_skin_settings_survive_the_saved_ui_state() {
 fn onion_skin_is_off_the_bar_until_the_options_menu_turns_it_on() {
     let mut h = harness();
     assert!(h.query_all_by_label_contains("Onion Skin").next().is_none(), "not shown by default");
-    h.get_by_label("Options").click();
+    // The window has another "Options" (the options bar): the Timeline's is the lowest, at the panel's header.
+    h.query_all_by_label("Options").max_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("the Timeline's Options menu").click();
     h.run_steps(4);
     h.query_all_by_label_contains("Onion Skin").next().expect("the checkbox").click();
     h.run_steps(4);
